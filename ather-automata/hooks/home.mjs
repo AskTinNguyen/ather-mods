@@ -124,18 +124,18 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
  *   lock: import('./model.mjs').EditorLock, recurring: readonly { id: string, title: string, fix: string, count: number }[],
  *   issues: readonly import('./issues.mjs').Issue[], last?: string | null, sent: readonly string[], workers: number, now: number, tz: number,
- *   skills?: readonly { name: string, description: string }[]
+ *   skills?: readonly { name: string, description: string }[], prs?: import('./model.mjs').PrStates
  * }} HomeInput
  */
 
 // What to work on, in one list: your open intents, then your GitHub issues that have no intent
 // yet (most urgent, then most recent), then teammates' intents you could follow.
-/** @param {readonly Intent[]} intents @param {readonly import('./issues.mjs').Issue[]} issues @param {string} me @param {string} area @param {number} now @param {string} [role] @returns {Work[]} */
-export const workList = (intents, issues, me, area, now, role = 'set') => {
+/** @param {readonly Intent[]} intents @param {readonly import('./issues.mjs').Issue[]} issues @param {string} me @param {string} area @param {number} now @param {string} [role] @param {import('./model.mjs').PrStates} [prs] @returns {Work[]} */
+export const workList = (intents, issues, me, area, now, role = 'set', prs = {}) => {
   const linked = new Set(intents.map(one => one.issue).filter(Boolean))
   const ranked = pickCandidates(intents, me, area)
   /** @param {Intent} one @returns {Work} */
-  const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me), isMine: isMine(one, me), area: one.area })
+  const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area })
   return [
     ...ranked.filter(one => isMine(one, me)).map(toIntent),
     ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role), isMine: true, area: issue.area }))),
@@ -146,13 +146,14 @@ export const workList = (intents, issues, me, area, now, role = 'set') => {
 /** @param {HomeInput} input */
 export const buildHome = input => {
   const { intents, pinned, me, evidence, away, now, tz } = input
+  const prs = input.prs ?? {}
   // Unset ('') until the person says it: then any role's proof counts, and the Editor is assumed not needed.
   const role = input.role
   const intent = intents.find(one => one.slug === pinned)
   const owned = ownedIntents(intents, me, pinned)
   // New until they take the tour, skip it or say their role, and while they own no intent.
   const isNewcomer = me !== '' && !input.tourDone && input.role === '' && owned.length === 0
-  const stage = currentStage(intent, evidence, role)
+  const stage = currentStage(intent, evidence, role, prs)
   const roleText = input.role ? `${ROLE_LABELS[/** @type {keyof typeof ROLE_LABELS} */ (input.role)] ?? input.role}` : isNewcomer ? '' : 'Role not set · /ather role'
   const decisions = away.phase === 'off' ? [] : windowDecisions(input.ledger)
   const lock = input.lock
@@ -212,8 +213,8 @@ export const buildHome = input => {
   }
   const open = items.filter(one => !input.sent.includes(one.id))
   // Work handed to the session in this session (an issue being started) leaves the list.
-  const work = workList(intents, input.issues, me, input.area, now, role).filter(one => !input.sent.includes(one.id))
-  const step = nextStep(role, intent, evidence, input.workers, me)
+  const work = workList(intents, input.issues, me, input.area, now, role, prs).filter(one => !input.sent.includes(one.id))
+  const step = nextStep(role, intent, evidence, input.workers, me, prs)
   const lastWork = work.find(one => one.kind === 'intent' && one.slug === input.last && one.isMine)
   /** @type {Next | undefined} */
   let next
@@ -274,20 +275,23 @@ export const buildHome = input => {
   }
 }
 
+const STAGE_ORDER = ['plan', 'build', 'prove', 'ship']
+// How far along the four stages the work is; shipped, and ready to close, are past Ship.
+/** @param {string} stage */
+const stageIndex = stage => (stage === 'shipped' || stage === 'close' ? STAGE_ORDER.length : STAGE_ORDER.indexOf(stage))
+
 // Each stage with where the work is: done, now or to do; the pane colours them.
 /** @param {string} stage @returns {{ label: string, state: 'done' | 'now' | 'todo' }[]} */
 const stageList = stage => {
-  const order = ['plan', 'build', 'prove', 'ship']
-  const at = stage === 'shipped' ? order.length : order.indexOf(stage)
-  return order.map((key, index) => ({ label: STAGE_LABELS[/** @type {keyof typeof STAGE_LABELS} */ (key)], state: index < at ? 'done' : index === at ? 'now' : 'todo' }))
+  const at = stageIndex(stage)
+  return STAGE_ORDER.map((key, index) => ({ label: STAGE_LABELS[/** @type {keyof typeof STAGE_LABELS} */ (key)], state: index < at ? 'done' : index === at ? 'now' : 'todo' }))
 }
 
 // "Plan ✓  Build ✓  Prove ●  Ship ○": where the work is, at a glance.
 /** @param {string} stage */
 const stageTrack = stage => {
-  const order = ['plan', 'build', 'prove', 'ship']
-  const at = stage === 'shipped' ? order.length : order.indexOf(stage)
-  return order.map((key, index) => `${STAGE_LABELS[/** @type {keyof typeof STAGE_LABELS} */ (key)]} ${index < at ? '✓' : index === at ? '●' : '○'}`).join('  ')
+  const at = stageIndex(stage)
+  return STAGE_ORDER.map((key, index) => `${STAGE_LABELS[/** @type {keyof typeof STAGE_LABELS} */ (key)]} ${index < at ? '✓' : index === at ? '●' : '○'}`).join('  ')
 }
 
 const PROOF_WORDS = { build: 'build', automation: 'tests', readback: 'read-back', pie: 'PIE', editor: 'Editor check' }

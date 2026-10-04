@@ -39,9 +39,9 @@ const sandbox = () => {
   return root
 }
 
-const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues } = {}) => {
+const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs } = {}) => {
   const root = sandbox()
-  const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues })
+  const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues, ghPrs })
   for (const [key, value] of Object.entries({ tz: tzFor(hour), ...store })) engine.store.set(key, value)
   register(engine.on, { briefGate: 'warn' })
   await engine.start()
@@ -865,6 +865,59 @@ const hasFocus = tree => {
   find(list, 'skill:talab')?.props.onPress({})
   await engine.flush()
   expect('a skill hands the session its run, for the tracked intent', engine.record.submits.some(text => /Run the talab skill \(\.agents\/skills\/talab\/SKILL\.md\) for intent fluid-snow-sand-look/.test(text)), engine.record.submits)
+  done()
+}
+
+// ---------------------------------------------------------------- intent completion from one source each (0.0.6)
+
+{
+  // prompt.md lists ids (no boxes), progress.md's Acceptance table says met, progress.md's "- PR:" names the PR.
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer', 'tour:tinnguyen': { isDone: true } }, ghPrs: { 50001: 'MERGED', 50002: 'OPEN', 50003: 'MERGED' } })
+  const write = (slug, prompt, progress) => {
+    const dir = path.join(root, 'docs/intent', slug)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'prompt.md'), prompt)
+    if (progress !== null) fs.writeFileSync(path.join(dir, 'progress.md'), progress)
+    return dir
+  }
+  const prompt = (ids, status = 'active') => `# Board\n\n- Status: ${status}\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n${ids.map(id => `- ${id}: Thing ${id}. Proof: tests.`).join('\n')}\n`
+  const progress = (rows, pr) => `# Board: Progress\n\n- Working under rev: 1\n- PR: ${pr}\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n${rows.map(([id, verdict]) => `| ${id} | ${verdict} | proof/${id} |`).join('\n')}\n\n## Steps\n`
+  const SIX = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6']
+  write('zz-board', prompt(SIX), progress(SIX.map(id => [id, 'met']), '#50001'))
+  write('zz-legacy', '# Legacy\n\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: One.\n- [ ] A2: Two.\n', null)
+  const extra = write('zz-extra', prompt(['B1', 'B2']), progress([['B1', 'met'], ['B2', 'open'], ['Z9', 'met']], '#50002'))
+  write('zz-closed', prompt(['B1'], 'completed'), progress([['B1', 'met']], '#50003'))
+  const status = async slug => {
+    await run(engine, [], 'ather', `intent ${slug}`)
+    await engine.flush()
+    return JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result).tracked
+  }
+  const board = await status('zz-board')
+  expect('ids without boxes and a progress table with every row met read 6/6, not 0/6 or "no checklist"', board?.checklist === '6/6', board)
+  expect('all met, its PR merged and Status active: the stage is Ready to close', board?.stage === 'Ready to close' && board?.prs.join(',') === '#50001 MERGED', board)
+  expect("the PR's state was read with gh pr view, read-only", engine.record.ghRuns.includes('gh pr view 50001 --json state,mergedAt') && !engine.record.ghRuns.some(text => /gh pr (merge|edit|close|comment)/.test(text)), engine.record.ghRuns)
+  const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
+  screens.push(['Terminal · an intent ready to close (72 columns)', pane.lines.join('\n')])
+  const text = pane.lines.join('\n')
+  expect('the pane heads it Ready to close with every stage ticked, and Next closes it', /Ready to close/.test(text) && /Plan ✓ ─ Build ✓ ─ Prove ✓ ─ Ship ✓/.test(text) && /N E X T\nn: Close the intent/.test(text) && pane.problems.length === 0, pane.lines.slice(0, 14))
+  engine.setSurfaces?.([])
+  const menu = await run(engine, [pick('Next: Close the intent')])
+  expect('Close asks the session to close it the intent skill\'s way; Ather writes nothing in the intent', menu.sent.length === 1 && /\.agents\/skills\/intent\/SKILL\.md/.test(menu.sent[0] ?? '') && /Status: completed/.test(menu.sent[0] ?? '') && /^- Status: active$/m.test(fs.readFileSync(path.join(root, 'docs/intent/zz-board/prompt.md'), 'utf8')), menu.sent)
+  engine.setSurfaces?.(['terminal'])
+  const legacy = await status('zz-legacy')
+  expect('a legacy intent with boxes only still counts its boxes', legacy?.checklist === '1/2' && legacy?.stage === 'Build', legacy)
+  const extraRow = await status('zz-extra')
+  expect('a progress row for an id prompt.md does not list is ignored; an open PR is not ready to close', extraRow?.checklist === '1/2' && extraRow?.stage !== 'Ready to close', extraRow)
+  const closed = await status('zz-closed')
+  expect('a Status of completed wins over ready to close, and its PR is not asked about', closed?.stage === 'Ship' && !engine.record.ghRuns.includes('gh pr view 50003 --json state,mergedAt'), closed)
+  // An edit that turns a progress row met is one line in the band, as a ticked box was.
+  await run(engine, [], 'ather', 'intent zz-extra')
+  const file = path.join(extra, 'progress.md')
+  await engine.modelTool({ tool: 'Edit', file_path: file, old_string: '| B2 | open |', new_string: '| B2 | met |' })
+  await engine.flush()
+  const band = check(await engine.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band'), 110).lines.join('')
+  expect('an edit that turns a progress row met says so in the band', /◆ Intent: met B2/.test(band), band)
+  expect('no hook threw in the single-source scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }
 

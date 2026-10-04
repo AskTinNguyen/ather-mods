@@ -499,7 +499,15 @@ describe('what the intent recorded', () => {
     expect(intentChanges('findings.md', before, decided)[0].text.startsWith('Decided F-1')).toBe(true)
   })
 
-  test('only an intent\'s prompt and findings count', () => {
+  test('a ready intent heads the pane as Ready to close, every stage ticked, with Close as Next', () => {
+    const ready = parseIntent({ slug: 'board', prompt: prompt({ Status: 'active', Area: 'Tools', Owner: 'Tin Nguyen' }, '- B1: One.'), findings: '', progress: '# P\n\n- PR: #7\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| B1 | met | t |\n', files: [], hasDebrief: false, mtimeMs: 1 })
+    const model = buildHome(base({ intents: [ready], pinned: 'board', away: OFF, prs: { 7: 'MERGED' } }))
+    expect([model.header.stage, model.header.progress, model.header.track]).toEqual(['Ready to close', '1 of 1 done', 'Plan ✓  Build ✓  Prove ✓  Ship ✓'])
+    expect(model.next?.id).toBe('next:board:close')
+  })
+
+  test('only an intent\'s prompt, findings and progress count', () => {
+    expect(intentFileOf('E:/S2_/docs/intent/snow/progress.md')).toEqual({ slug: 'snow', file: 'progress.md' })
     expect(intentFileOf('E:/S2_/docs/intent/snow/prompt.md')).toEqual({ slug: 'snow', file: 'prompt.md' })
     expect(intentFileOf('E:\\S2_\\docs\\intent\\snow\\findings.md')).toEqual({ slug: 'snow', file: 'findings.md' })
     expect(intentFileOf('E:/S2_/docs/intent/snow/log.md')).toBe(null)

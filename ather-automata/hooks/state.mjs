@@ -36,6 +36,8 @@ const KEY = {
   last: (/** @type {string} */ me) => `last:${personId(me)}`,
   // What edits recorded in an intent, newest last: shared by every session on the machine.
   changes: (/** @type {string} */ slug) => `changes:${slug}`,
+  // What gh last said about the PRs intents name: shared by every session on the machine.
+  prs: 'prStates',
   tz: 'tz',
   hits: 'gotchaHits',
   ruled: 'gotchaRuled',
@@ -167,6 +169,11 @@ export const readIssues = async (io, me) => {
   const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me)))
   return cached?.list && Date.now() - (cached.at ?? 0) < ISSUES_TTL_MS ? cached.list : []
 }
+/** @param {Io} io @returns {Promise<Record<string, import('./issues.mjs').PrRecord>>} */
+export const readPrRecords = async io => /** @type {Record<string, import('./issues.mjs').PrRecord>} */ ((await io.get(KEY.prs)) ?? {})
+// PR number → its last read state, for the pure readers in model.mjs.
+/** @param {Io} io @returns {Promise<import('./model.mjs').PrStates>} */
+export const readPrStates = async io => Object.fromEntries(Object.entries(await readPrRecords(io)).map(([number, record]) => [number, record.state]))
 /** @param {Io} io @param {string} me @returns {Promise<string | null>} */
 export const readLast = async (io, me) => /** @type {string | null} */ ((await io.get(KEY.last(me))) ?? null)
 /** @param {Io} io */
@@ -178,6 +185,19 @@ export const readScore = async io => /** @type {Record<string, number>} */ ((awa
 export const setIssues = (io, me, issues) =>
   serial(async () => {
     await io.set(KEY.issues(me), { at: Date.now(), list: issues })
+    changed(io)
+  })
+
+// A PR record not read again for this long is dropped: its intent has closed or moved on.
+const PRS_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+// What gh just said about some PRs ('UNREAD' when it could not say), each stamped `at`.
+/** @param {Io} io @param {Readonly<Record<string, string>>} states @param {number} at */
+export const setPrStates = (io, states, at) =>
+  serial(async () => {
+    if (Object.keys(states).length === 0) return
+    const kept = Object.entries(await readPrRecords(io)).filter(([, record]) => at - record.at < PRS_TTL_MS)
+    await io.set(KEY.prs, { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
     changed(io)
   })
 

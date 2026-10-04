@@ -1,8 +1,45 @@
 // @ts-check
-// Ather Automata: the GitHub issues assigned to the person, as things to work on.
-// Read with `gh issue list --assignee @me`; Ather never writes to GitHub. Pure: no `$`.
+// Ather Automata: the GitHub issues assigned to the person, as things to work on, and whether
+// an intent's PRs are merged. Read with `gh issue list --assignee @me` and `gh pr view`; Ather
+// never writes to GitHub. Pure: no `$`.
 
 import { durationText } from './model.mjs'
+
+// ---------------------------------------------------------------- an intent's PRs
+
+// A PR that is not merged yet (or could not be read) is asked about again after this; a merged one never.
+export const PR_EVERY_MS = 15 * 60 * 1000
+
+/** @typedef {{ state: string, at: number }} PrRecord what gh last said about a PR ('UNREAD' when it could not say), and when */
+
+// The PRs worth asking gh about: those of open intents whose every item is met (only they can be
+// ready to close), not merged when last read, and not read in the last PR_EVERY_MS.
+/** @param {readonly import('./model.mjs').Intent[]} intents @param {Readonly<Record<string, PrRecord>>} records @param {number} now @returns {number[]} */
+export const prsToRead = (intents, records, now) => {
+  const numbers = intents.filter(one => one.status !== 'completed' && one.acceptanceTotal > 0 && one.acceptanceDone === one.acceptanceTotal).flatMap(one => one.prs)
+  return [...new Set(numbers)].filter(number => {
+    const record = records[number]
+    return record?.state !== 'MERGED' && !(record && now - record.at < PR_EVERY_MS)
+  })
+}
+
+// `gh pr view <n> --json state,mergedAt` output: 'MERGED', 'OPEN' or 'CLOSED', or null when unreadable.
+/** @param {string} json @returns {'MERGED' | 'OPEN' | 'CLOSED' | null} */
+export const parsePrState = json => {
+  /** @type {any} */
+  let row
+  try {
+    row = JSON.parse(json)
+  } catch {
+    return null
+  }
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+  // `state` alone decides: an unmerged PR's mergedAt may be null or a zero date, depending on the gh version.
+  const found = String(row.state ?? '').toUpperCase()
+  return found === 'MERGED' || found === 'OPEN' || found === 'CLOSED' ? found : null
+}
+
+// ---------------------------------------------------------------- assigned issues
 
 /** @typedef {{ number: number, title: string, name: string, url: string, labels: string[], updatedAt: number, area: string, isUrgent: boolean }} Issue */
 

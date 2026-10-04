@@ -10,7 +10,7 @@
 
 import { ALLOWED_TEXT, clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
 import { HELD_KINDS, HELD_LABELS, HELD_NOUNS, automationResult, briefIssues, buildResult, explainGuard, gitFolders, heldShell, isAssetSave, isAutomationCommand, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isPiped, isSearchCommand, matchGotchas, mcpKind, mcpServer } from './guards.mjs'
-import { AREAS, ROLES, STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, normalizeArea, parseEditorLock, parseIntent, parseTzOffset } from './model.mjs'
+import { AREAS, ROLES, STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, normalizeArea, parseEditorLock, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 import { intentChanges, intentFileOf } from './changes.mjs'
@@ -161,7 +161,7 @@ export function register(on, options) {
     const intent = typeof path === 'string' && /^(Write|Edit|NotebookEdit)$/.test(tool) ? /docs[\\/]intent[\\/]([^\\/]+)[\\/]/.exec(path)?.[1] : undefined
     // The intent this session writes to becomes its tracked one; reading another does not.
     if (intent) void laneOf($).then(({ root }) => state.track(io($), root, intent, { onlyIfNone: true })).catch(() => undefined)
-    // An edit to an intent's prompt or findings: what it changed, read off the file before and after.
+    // An edit to an intent's prompt, findings or progress: what it changed, read off the file before and after.
     const intentFile = /^(Write|Edit|MultiEdit)$/.test(tool) ? intentFileOf(path) : null
     const before = intentFile ? ((await readFile($, String(path))) ?? '') : ''
     const ran = await next(e)
@@ -179,11 +179,13 @@ async function readFile($, path) {
   return io($).read(full)
 }
 
-/** @param {Engine} $ @param {{ slug: string, file: 'prompt.md' | 'findings.md' }} target @param {string} path @param {string} before */
+/** @param {Engine} $ @param {{ slug: string, file: import('./changes.mjs').IntentFile }} target @param {string} path @param {string} before */
 async function noteIntentEdit($, target, path, before) {
   const after = (await readFile($, path)) ?? ''
-  const prompt = target.file === 'findings.md' ? ((await readFile($, path.replace(/findings\.md$/i, 'prompt.md'))) ?? '') : ''
-  await state.noteChanges(io($), target.slug, intentChanges(target.file, before, after, prompt), Date.now())
+  // The edited file's sibling, as it is now: prompt.md for findings and progress, progress.md for prompt.
+  const sibling = async (/** @type {string} */ name) => (await readFile($, path.replace(/[^\\/]+\.md$/i, name))) ?? ''
+  const intent = target.file === 'prompt.md' ? { progress: await sibling('progress.md') } : { prompt: await sibling('prompt.md') }
+  await state.noteChanges(io($), target.slug, intentChanges(target.file, before, after, intent), Date.now())
 }
 
 // ---------------------------------------------------------------- intents and the lane
@@ -305,8 +307,9 @@ async function laneText($) {
   const intent = slug ? await readIntent($, slug) : undefined
   if (intent) {
     const { role } = await state.readProfile(io($), me)
-    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($))), role)]
-    lines.push(`Tracked intent: ${intent.slug} (docs/intent/${intent.slug}/), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}, open director calls ${directorCalls(intent).length}.`)
+    const prs = await state.readPrStates(io($))
+    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($))), role, prs)]
+    lines.push(`Tracked intent: ${intent.slug} (docs/intent/${intent.slug}/), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
   }
   const lock = parseEditorLock(await io($).read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(Date.now(), tz))
   if (lock.state === 'held') lines.push(`Editor owner lock: held by ${lock.holder || 'another lane'}${lock.until ? ` until ${lock.until}` : ''}.`)
@@ -416,12 +419,15 @@ async function statusText($) {
   const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)))
   const away = await state.readAway(io($))
   const tz = await state.readTz(io($))
+  const prs = await state.readPrStates(io($))
   return JSON.stringify(
     {
       me,
       role,
       area,
-      tracked: intent ? { slug: intent.slug, status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer')], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) } : null,
+      tracked: intent
+        ? { slug: intent.slug, status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer', prs)], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, prs: prStatusList(intent, prs), directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) }
+        : null,
       evidence,
       editorLock: parseEditorLock(await io($).read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(Date.now(), tz)).raw,
       peers: (await peers($)).map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`),

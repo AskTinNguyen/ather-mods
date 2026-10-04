@@ -6,7 +6,7 @@ export const ROLES = /** @type {const} */ (['engineer', 'techart', 'designer'])
 export const ROLE_LABELS = { engineer: 'Engineer', techart: 'Tech artist', designer: 'Designer' }
 export const OWNERS = 'Tin Nguyen, CanhNguyen and VuTruong'
 const RUNG_LABELS = { build: 'a build that succeeded', automation: 'passing tests', readback: 'a read-back check', pie: 'a PIE proof', editor: 'your own Editor check' }
-export const STAGE_LABELS = { plan: 'Plan', build: 'Build', prove: 'Prove', ship: 'Ship', shipped: 'Shipped' }
+export const STAGE_LABELS = { plan: 'Plan', build: 'Build', prove: 'Prove', ship: 'Ship', close: 'Ready to close', shipped: 'Shipped' }
 
 // The studio's intent areas (docs/intent/README.md#areas, decided 2026-10-03).
 export const AREAS = ['Tools', 'Combat', 'AI', 'Enemies', 'Bosses', 'Characters & Animation', 'VFX', 'World & Levels', 'Audio', 'UI', 'Pipeline', 'Optimization']
@@ -142,6 +142,95 @@ export const parseFindings = (findings, prompt) => {
     .map(({ isOpen: _open, ...one }) => one)
 }
 
+// ---------------------------------------------------------------- acceptance and PRs
+//
+// One writer per fact (.agents/skills/intent/SKILL.md): prompt.md's Acceptance lists the items
+// ("- A1: ..."), progress.md's Acceptance table says which are met, progress.md's "- PR:" line
+// names the PRs. Intents from before that rule tick "- [x]" boxes in prompt.md instead.
+
+// "A1", "B3", "SL15", "A12a": an acceptance id at the start of an item or a table cell.
+const ITEM_ID = /^\**([A-Z]{1,3}[0-9]+[a-z]?)\**(?=[\s:.(]|$)/
+// A verdict that counts as met: its leading word ("met on main", "Pass", "done", "✓").
+const MET = /^(met|pass|done|✓)(?![\p{L}\p{N}])/iu
+
+// progress.md's Acceptance table as id → verdict, or null when it has none (or no rows yet).
+// The verdict column is the one headed Verdict, Status or Result, else the second.
+/** @param {string} progress */
+const acceptanceVerdicts = progress => {
+  const rows = section(progress, 'Acceptance')
+    .split(/\r?\n/)
+    .filter(line => /^\s*\|/.test(line))
+    .map(line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => plainText(cell)))
+  const header = rows[0]
+  if (!header) return null
+  const named = header.findIndex(cell => /^(verdict|status|result)$/i.test(cell))
+  const column = named < 0 ? 1 : named
+  /** @type {Map<string, string>} */
+  const verdicts = new Map()
+  for (const row of rows.slice(1)) {
+    const id = ITEM_ID.exec(row[0] ?? '')?.[1]
+    if (id) verdicts.set(id, row[column] ?? '')
+  }
+  return verdicts.size > 0 ? verdicts : null
+}
+
+/** @typedef {{ id: string, text: string, isDone: boolean }} AcceptanceItem `text` is what follows the id ('' id: a legacy box without one) */
+
+// "A2 (owed): Sand look." → { id: 'A2', text: '(owed): Sand look.' }
+/** @param {string} line */
+const splitItem = line => {
+  const match = ITEM_ID.exec(line)
+  return { id: match?.[1] ?? '', text: match ? line.slice(match[0].length).trim() : line }
+}
+
+// The acceptance items and which are done. Ids come from prompt.md's top-level items; met-ness
+// from progress.md's table, whose rows for ids prompt.md does not list are ignored. Without a
+// table, legacy "- [x]" boxes count as before; without either, every listed item is open.
+/** @param {string} prompt @param {string} progress @returns {AcceptanceItem[]} */
+export const acceptanceItems = (prompt, progress) => {
+  const lines = section(prompt, 'Acceptance').split(/\r?\n/)
+  /** @type {Map<string, string>} */
+  const listed = new Map()
+  for (const line of lines) {
+    const item = splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')
+    if (item.id !== '' && !listed.has(item.id)) listed.set(item.id, item.text)
+  }
+  const verdicts = acceptanceVerdicts(progress)
+  if (verdicts && listed.size > 0) return [...listed].map(([id, text]) => ({ id, text, isDone: MET.test(verdicts.get(id) ?? '') }))
+  const boxes = lines.flatMap(line => {
+    const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
+    return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
+  })
+  if (boxes.length > 0) return boxes
+  return [...listed].map(([id, text]) => ({ id, text, isDone: false }))
+}
+
+// The text before a file's first "## " heading: where its "- Field:" lines live.
+/** @param {string} text */
+const headerOf = text => text.split(/^##\s/m)[0] ?? ''
+
+// The PR numbers on progress.md's "- PR:" line, then any on a legacy prompt.md one.
+// "- PR: #32372, #32398", "- PRs: sipherxyz/s2#1", "- PR: none yet".
+/** @param {string} progress @param {string} prompt @returns {number[]} */
+export const intentPrs = (progress, prompt) => {
+  const numbers = [progress, prompt].flatMap(text =>
+    [...headerOf(text).matchAll(/^\s*-\s*PRs?\s*:\s*(.+)$/gim)].flatMap(line => [...(line[1] ?? '').matchAll(/#(\d+)|pull\/(\d+)/g)].map(match => Number(match[1] ?? match[2]))),
+  )
+  return [...new Set(numbers)]
+}
+
+/** @typedef {Readonly<Record<string, string>>} PrStates PR number → 'MERGED' | 'OPEN' | 'CLOSED', as gh last said */
+
+// Every item met and every named PR merged, yet not closed: the orchestrator's Close step is owed.
+// An intent with no PR named is not ready: nothing says the work has landed.
+/** @param {Intent} intent @param {PrStates} prs */
+export const isReadyToClose = (intent, prs) =>
+  intent.status !== 'completed' && intent.acceptanceTotal > 0 && intent.acceptanceDone === intent.acceptanceTotal && intent.prs.length > 0 && intent.prs.every(number => prs[number] === 'MERGED')
+
+// "#32372 MERGED", "#32398 not read yet": each PR the intent names, with what gh last said.
+/** @param {Intent} intent @param {PrStates} prs */
+export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number} ${prs[number] ?? 'not read yet'}`)
+
 /**
  * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, mtimeMs: number }} IntentFiles
  * @typedef {ReturnType<typeof parseIntent>} Intent
@@ -152,7 +241,7 @@ export const parseIntent = input => {
   const { prompt, progress } = input
   // "parked: weather presets merged…" is a status too: take the leading word.
   const status = /^[a-z]+/.exec(field(prompt, 'Status').toLowerCase())?.[0] ?? 'unknown'
-  const boxes = [...section(prompt, 'Acceptance').matchAll(/^\s*-\s*\[( |x|X)\]/gm)]
+  const items = acceptanceItems(prompt, progress)
   return {
     slug: input.slug,
     title: /^#\s+(.+)$/m.exec(prompt)?.[1]?.trim() ?? input.slug,
@@ -161,8 +250,9 @@ export const parseIntent = input => {
     owner: field(prompt, 'Owner'),
     issue: issueNumber(field(prompt, 'Issue')),
     status,
-    acceptanceDone: boxes.filter(box => box[1] !== ' ').length,
-    acceptanceTotal: boxes.length,
+    acceptanceDone: items.filter(item => item.isDone).length,
+    acceptanceTotal: items.length,
+    prs: intentPrs(progress, prompt),
     findings: parseFindings(input.findings, prompt),
     hasReview: input.files.some(name => /review/i.test(name)) || /\b(plan|opus|design)[- ]review\b|reviewed by|after (an? )?(opus )?review/i.test(prompt + progress.slice(0, 20000)),
     hasWorker: /^\s*[-*]?\s*\**worker\**\s*[:=-]\s*\S/im.test(progress) || /^(###\s+S\d+|-\s+S\d+\b)/m.test(progress),
@@ -204,11 +294,11 @@ export const searchIntents = (intents, text) => {
   })
 }
 
-/** @param {Intent} one @param {string} me */
-export const intentLabel = (one, me) => {
+/** @param {Intent} one @param {string} me @param {PrStates} [prs] */
+export const intentLabel = (one, me, prs = {}) => {
   const mine = isMine(one, me)
   const calls = mine ? directorCalls(one).length : 0
-  const progress = one.acceptanceTotal > 0 ? `${one.acceptanceDone}/${one.acceptanceTotal}` : 'no checklist'
+  const progress = one.acceptanceTotal > 0 ? `${one.acceptanceDone}/${one.acceptanceTotal}${isReadyToClose(one, prs) ? ' · ready to close' : ''}` : 'no checklist'
   return `${one.slug} · ${one.area} · ${progress}${calls > 0 ? ` · ${calls} need${calls === 1 ? 's' : ''} you` : ''}${!mine && one.owner ? ` · ${one.owner}` : ''}${one.status === 'parked' ? ' · parked' : ''}`
 }
 
@@ -280,10 +370,12 @@ export const emptyEvidence = () => ({
 /** @param {string} role @returns {Array<keyof Evidence>} */
 const requiredRungs = role => (role === 'engineer' ? ['build', 'automation'] : role === 'techart' ? ['editor', 'pie'] : ['pie'])
 
-/** @param {Intent | undefined} intent @param {Evidence} evidence @param {string} role @returns {keyof typeof STAGE_LABELS} */
-export const currentStage = (intent, evidence, role) => {
+// A Status of completed wins; then every item met with every PR merged is ready to close, whatever proof this session saw.
+/** @param {Intent | undefined} intent @param {Evidence} evidence @param {string} role @param {PrStates} [prs] @returns {keyof typeof STAGE_LABELS} */
+export const currentStage = (intent, evidence, role, prs = {}) => {
   if (intent?.status === 'completed') return intent.hasDebrief ? 'shipped' : 'ship'
   if (!intent || intent.acceptanceTotal === 0) return 'plan'
+  if (isReadyToClose(intent, prs)) return 'close'
   if (intent.acceptanceDone < intent.acceptanceTotal) return 'build'
   return isProven(evidence, role) ? 'ship' : 'prove'
 }
@@ -295,18 +387,27 @@ const isProven = (evidence, role) =>
 
 /**
  * The one next step for the tracked intent and the person's role.
- * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me
+ * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me @param {PrStates} [prs]
  * @returns {{ key: string, label: string, prompt: string, hint: string, isDraft?: boolean } | undefined}
  */
-export const nextStep = (role, intent, evidence, workers, me) => {
+export const nextStep = (role, intent, evidence, workers, me, prs = {}) => {
   if (!intent) return { key: 'start', label: 'Start an intent', prompt: '/intent ', hint: 'Type what you want after /intent; the intent skill takes it from there.', isDraft: true }
   const slug = intent.slug
   if (!isMine(intent, me)) {
     return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: `Explain intent ${slug} to me in under ten lines: what it is for, which stage it is in (Plan, Build, Prove, Ship) and why, which decisions are open and whose they are, and what the next step would be. Read docs/intent/${slug}/ only; change nothing.` }
   }
-  const stage = currentStage(intent, evidence, role)
+  const stage = currentStage(intent, evidence, role, prs)
+  if (stage === 'close') {
+    const named = andList(intent.prs.map(number => `#${number}`))
+    return {
+      key: 'close',
+      label: 'Close the intent',
+      hint: `Every item is met and ${intent.prs.length === 1 ? `PR ${named} is` : `PRs ${named} are`} merged; the session closes it the intent skill's way.`,
+      prompt: `Close intent ${slug} as step 5 (Close) of .agents/skills/intent/SKILL.md says. Ather reads every acceptance row in docs/intent/${slug}/progress.md as met and ${intent.prs.length === 1 ? `PR ${named} as` : `PRs ${named} as`} merged: confirm both from the files and gh first, and stop and tell me if either is not so. Then set Status: completed in prompt.md, add the changelog line, and commit as the skill says.`,
+    }
+  }
   if (stage === 'plan') {
-    return { key: 'checklist', label: 'Write the "done" checklist', hint: 'The session drafts it and shows you before any work starts.', prompt: `Draft the acceptance checklist for intent ${slug} in docs/intent/${slug}/prompt.md: checkable items, each with the proof that will show it is done. Show it to me before the worker starts.` }
+    return { key: 'checklist', label: 'Write the "done" checklist', hint: 'The session drafts it and shows you before any work starts.', prompt: `Draft the acceptance checklist for intent ${slug} in docs/intent/${slug}/prompt.md: items with ids (A1, A2, ...), each with the proof that will show it is done, and no checkboxes (whether an item is met lives in progress.md). Show it to me before the worker starts.` }
   }
   if (stage === 'build') {
     if (!intent.hasReview && !intent.hasWorker && intent.acceptanceDone === 0 && workers === 0) {

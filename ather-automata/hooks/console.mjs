@@ -11,7 +11,7 @@
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
 import { CREATE_GROUPS, CREATE_SHOWN, SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome } from './home.mjs'
-import { issuePrompt, parseIssues } from './issues.mjs'
+import { issuePrompt, parseIssues, parsePrState, prsToRead } from './issues.mjs'
 import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents } from './model.mjs'
 import * as state from './state.mjs'
 import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, classifyWorker, modelWord, propSvg, trailWords, workerState } from './squad.mjs'
@@ -55,6 +55,8 @@ let closedHint = /** @type {string | null} */ (null)
 let isIssuesWarned = false
 let isWhoWarned = false
 let issueRetries = 0
+// A PR read is running: the minute's refresh does not start a second.
+let isPrsReading = false
 // The ↻ button: true while a refresh it started is running.
 let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
@@ -237,7 +239,8 @@ async function refresh($) {
         slug: entry.name,
         prompt,
         findings: isOpen ? ((await files.read(`${dir}/findings.md`)) ?? '') : '',
-        progress: isPinned ? ((await files.read(`${dir}/progress.md`)) ?? '') : '',
+        // Every open intent's (and the tracked one's): its Acceptance table says how much is met, its header names the PRs.
+        progress: isOpen || isPinned ? ((await files.read(`${dir}/progress.md`)) ?? '') : '',
         files: isPinned ? (await $.fs.list(dir).catch(() => [])).map(one => one.name) : [],
         hasDebrief: isPinned && (await files.exists(`${root}/Saved/AtherAutomata/debriefs/${entry.name}.md`)),
         mtimeMs: Math.max(...stats),
@@ -256,6 +259,27 @@ async function refresh($) {
   skills = found
   stale()
   $.ui.invalidate('ui.render')
+  void refreshPrs($).catch(() => undefined)
+}
+
+// Whether the PRs of intents with every item met are merged, read with gh in the background.
+// Each PR is asked about at most once per PR_EVERY_MS, a merged one never again. Never writes to GitHub.
+/** @param {Engine} $ */
+async function refreshPrs($) {
+  if (isPrsReading) return
+  isPrsReading = true
+  try {
+    const { root } = await laneOf($)
+    /** @type {Record<string, string>} */
+    const read = {}
+    for (const number of prsToRead(intents, await state.readPrRecords(io($)), Date.now())) {
+      const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
+      read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
+    }
+    await state.setPrStates(io($), read, Date.now())
+  } finally {
+    isPrsReading = false
+  }
 }
 
 function stale() {
@@ -310,6 +334,7 @@ async function home($) {
     lock: parseEditorLock(await files.read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(now, tz)),
     recurring: await state.readRecurring(files),
     issues: await state.readIssues(files, me),
+    prs: await state.readPrStates(files),
     last: await state.readLast(files, me),
     sent: [...sent],
     skills,
