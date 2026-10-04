@@ -520,6 +520,12 @@ const GH_ISSUES = [
   const all = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · Everything open (72 columns)', all.lines.join('\n')])
   expect('"Everything open" groups your GitHub issues first, then intents by area', /Y O U R   G I T H U B   I S S U E S\n1: #28887/.test(all.lines.join('\n')) && all.problems.length === 0, all.problems)
+  const allTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const reads = engine.record.ghRuns.filter(text => text.startsWith('gh issue list')).length
+  expect('"Everything open" has a refresh button for the GitHub issues (r)', find(allTree, 'issues-refresh')?.props.hotkey === 'r' && /Refresh GitHub issues/.test(all.lines.join('\n')), find(allTree, 'issues-refresh')?.props)
+  find(allTree, 'issues-refresh')?.props.onPress({})
+  await engine.flush()
+  expect('refresh reads the assigned issues from GitHub again and says how many', engine.record.ghRuns.filter(text => text.startsWith('gh issue list')).length === reads + 1 && engine.record.toasts.some(text => /2 open GitHub issues assigned to you/.test(text)), engine.record.toasts)
   done()
 }
 

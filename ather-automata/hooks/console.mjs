@@ -55,6 +55,8 @@ let closedHint = /** @type {string | null} */ (null)
 let isIssuesWarned = false
 let isWhoWarned = false
 let issueRetries = 0
+// The ↻ button: true while a refresh it started is running.
+let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
 let isAwake = null
 /** @type {{ version: number, at: number, model: Home | null }} */
@@ -696,6 +698,28 @@ function press($, run, keepOpen) {
       .catch(error => $.ui.toast(`Ather: ${String(error)}`))
 }
 
+// Reads the assigned issues again now, and says what came back.
+/** @param {any} el @param {Engine} $ */
+function refreshIssuesButton(el, $) {
+  const onPress = () => {
+    if (isIssuesRefreshing) return
+    isIssuesRefreshing = true
+    $.ui.invalidate('ui.render')
+    void refreshIssues($)
+      .catch(error => String(error))
+      .then(async failure => {
+        const count = failure ? 0 : (await state.readIssues(io($), me)).length
+        $.ui.toast(failure ? `Ather: could not read your GitHub issues: ${failure}` : `Ather: ${count === 0 ? 'no open GitHub issues are assigned to you' : `${count} open GitHub issue${count === 1 ? '' : 's'} assigned to you`}.`)
+      })
+      .finally(() => {
+        isIssuesRefreshing = false
+        stale()
+        $.ui.invalidate('ui.render')
+      })
+  }
+  return el.Box({ key: 'issues-refresh-row', marginTop: 1, children: [el.Button({ key: 'issues-refresh', label: isIssuesRefreshing ? '↻ Refreshing…' : '↻ Refresh GitHub issues', hotkey: hotkeyFor('r'), plain: true, dimColor: true, onPress })] })
+}
+
 /** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} mode */
 function show($, mode) {
   return () => {
@@ -1041,8 +1065,9 @@ function paneView(el, $, model, columns, surface, crew = []) {
         index += 1
         return choice(el, { key: `pick-${one.id}`, title: workTitle(one), detail: workDetail(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : press($, () => startWork($, one), false) })
       })
-      rows.push(section(el, `group-${group}`, [label(el, `group-${group}-label`, group, width), ...list]))
+      rows.push(section(el, `group-${group}`, [label(el, `group-${group}-label`, group, width), ...list, ...(group === 'Your GitHub issues' ? [refreshIssuesButton(el, $)] : [])]))
     }
+    if (!groups.has('Your GitHub issues')) rows.push(section(el, 'group-issues-none', [label(el, 'group-issues-none-label', 'Your GitHub issues', width), Text({ key: 'issues-none', color: QUIET, children: 'None assigned to you right now.' }), refreshIssuesButton(el, $)]))
     rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
