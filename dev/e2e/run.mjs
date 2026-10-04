@@ -28,7 +28,7 @@ const sandbox = () => {
   // The skills the quick actions may name.
   fs.mkdirSync(path.join(root, '.agents/skill-library/visuals/show-me'), { recursive: true })
   fs.writeFileSync(path.join(root, '.agents/skill-library/visuals/show-me/SKILL.md'), '---\nname: show-me\ndescription: Help the user understand the topic visually.\n---\n')
-  for (const skill of ['intent', 'issue-preflight', 'thermo-nuclear-code-quality-review', 'editor-video-walkthrough', 'talab']) {
+  for (const skill of ['intent', 'issue-preflight', 'thermo-nuclear-code-quality-review', 'editor-video-walkthrough', 'talab', 'bt-graph', 'boss-bt-authoring', 'team-move-rule-book-authoring', 's2-goai-config-authoring', 'qte-content-authoring', 'level-cinematics-authoring', 'unreal-niagara-mcp']) {
     fs.mkdirSync(path.join(root, '.agents/skills', skill), { recursive: true })
     fs.writeFileSync(path.join(root, '.agents/skills', skill, 'SKILL.md'), `---\nname: ${skill}\ndescription: What ${skill} does. Use it when it fits.\n---\n`)
   }
@@ -742,6 +742,26 @@ const hasFocus = tree => {
   expect('/ather issues reads them on the spot and says why when it cannot, or that there are none', /Could not read your GitHub issues|No open GitHub issues are assigned to you|N E X T|Pick/.test(issuesNow.out + issuesNow.dialogs.map(one => one.question).join(' ')) , issuesNow.out)
   expect('the desktop pane carries the Ather mark, is clicked (no hotkeys drawn) and lays out cleanly; the terminal draws no mark', find(desk, 'Svg')?.props.alt === 'Ather' && deskPane.problems.length === 0 && !/\b[a-z0-9]: /.test(deskPane.lines.join('\n')) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'Svg'), deskPane.problems)
   expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\nSix short steps/.test(pane.lines.join('\n')) && /F O L L O W   A   T E A M M A T E\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
+  done()
+}
+
+{
+  // Create: making things in the Editor, grouped by what is made, three per group, More for the rest.
+  const { engine, done } = await boot({ surfaces: ['terminal'], user: 'Lan Vo', store: { 'role:lanvo': 'designer', 'tour:lanvo': { isDone: true } } })
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  await run(engine, [])
+  findKey(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'action:create')?.props.onPress({})
+  const firstTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const first = check(firstTree, 72)
+  screens.push(['Terminal · Create (72 columns, a designer)', first.lines.join('\n')])
+  const text = first.lines.join('\n')
+  expect('Create leads with the Editor lock, then the designer\'s groups, three rows each', /C R E A T E\nMake it in the Editor\nEditor free: the session takes the lock and starts\./.test(text) && /A I   A N D   E N C O U N T E R S\n1: Edit a Behavior Tree/.test(text) && /3: Make a Team Move rule book for a squad/.test(text) && !/Set up GOAI NPC behaviour/.test(text) && /More… \(2\)/.test(text) && first.problems.length === 0, first.lines)
+  findKey(firstTree, 'create-AI and encounters-more')?.props.onPress({})
+  const opened = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  expect('More shows the rest of the group', /Set up GOAI NPC behaviour/.test(opened) && /Add a QTE/.test(opened) && !/More… \(2\)/.test(opened), opened)
+  findKey(firstTree, 'create:bt-graph')?.props.onPress({})
+  await engine.flush()
+  expect('a row hands the session a guided creation: ask first, intent, the lock, then build', engine.record.submits.some(text => /I want to edit a Behavior Tree in the Unreal Editor\. Use the bt-graph skill/.test(text) && /First ask me what I want/.test(text) && /record it as an intent/.test(text)), engine.record.submits)
   done()
 }
 

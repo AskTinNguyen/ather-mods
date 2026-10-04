@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome } from './home.mjs'
+import { CREATE_GROUPS, CREATE_SHOWN, SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents } from './model.mjs'
 import * as state from './state.mjs'
@@ -39,7 +39,10 @@ let me = ''
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
 const sent = new Set()
-let paneMode = /** @type {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent'} */ ('home')
+let paneMode = /** @type {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} */ ('home')
+// Create groups opened past their first three.
+/** @type {Set<string>} */
+const createOpen = new Set()
 // Intent changes after this were not seen yet: they make the band's notice.
 let intentSeenAt = 0
 // The issue whose card is open (paneMode 'issue'), and the view to go back to.
@@ -172,6 +175,7 @@ async function openConsole($, folder) {
   view = { version: -1, at: 0, model: null }
   closedHint = null
   intentSeenAt = Date.now()
+  createOpen.clear()
   cwd = folder
   for (const command of [
     { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name>]' },
@@ -241,7 +245,7 @@ async function refresh($) {
   intents = read.sort((a, b) => b.mtimeMs - a.mtimeMs)
   // The listed skills that exist here, each with the first sentence of its own description.
   const found = []
-  for (const name of SKILL_GROUPS.flatMap(one => one.names)) {
+  for (const name of new Set([...SKILL_GROUPS.flatMap(one => one.names), ...CREATE_GROUPS.flatMap(one => one.items.map(item => item.name))])) {
     const text = await files.read(`${root}/${skillFolder(name)}/SKILL.md`)
     if (text === null) continue
     const description = (/^description:\s*(.+)$/m.exec(text)?.[1] ?? '').trim().replace(/^["']|["']$/g, '')
@@ -673,7 +677,7 @@ async function presetQuestion($, goal) {
 
 // ---------------------------------------------------------------- the pane (terminal)
 
-/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent'} mode */
+/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} mode */
 async function openPane($, mode) {
   paneMode = mode
   await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
@@ -692,7 +696,7 @@ function press($, run, keepOpen) {
       .catch(error => $.ui.toast(`Ather: ${String(error)}`))
 }
 
-/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent'} mode */
+/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} mode */
 function show($, mode) {
   return () => {
     paneMode = mode
@@ -1113,6 +1117,33 @@ function paneView(el, $, model, columns, surface, crew = []) {
       return Box({ flexDirection: 'column', children: rows })
     }
     paneMode = 'home'
+  }
+
+  if (paneMode === 'create') {
+    const { editor } = model
+    const editorLine = editor.isHeld ? `Editor held by ${editor.holder || 'another lane'}${editor.until ? ` until ${editor.until}` : ''}: the session asks for a window first.` : editor.isFree ? 'Editor free: the session takes the lock and starts.' : 'The session checks the Editor lock first.'
+    rows.push(masthead(el, [label(el, 'brand', 'Create', width), Text({ key: 'title', bold: true, children: 'Make it in the Editor' }), Text({ key: 'meta', color: editor.isHeld ? '#f2a516' : QUIET, wrap: 'wrap', children: editorLine })], surface))
+    let index = 0
+    for (const { group, items } of model.create) {
+      const isOpen = createOpen.has(group)
+      const shown = isOpen ? items : items.slice(0, CREATE_SHOWN)
+      const more = items.length - shown.length
+      rows.push(
+        section(el, `create-${group}`, [
+          label(el, `create-${group}-label`, group, width),
+          ...shown.map(one => {
+            index += 1
+            return choice(el, { key: one.id, title: one.verb, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => { handOff($, [], one.prompt); return `sent to the session: ${one.verb}` }, false) })
+          }),
+          ...(more > 0
+            ? [Button({ key: `create-${group}-more`, label: `More… (${more})`, plain: true, dimColor: true, onPress: () => { createOpen.add(group); $.ui.invalidate('ui.render') } })]
+            : []),
+        ]),
+      )
+    }
+    rows.push(section(el, 'create-back', [Button({ key: 'create-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+    rows.push(...foot)
+    return Box({ flexDirection: 'column', children: rows })
   }
 
   if (paneMode === 'skills') {

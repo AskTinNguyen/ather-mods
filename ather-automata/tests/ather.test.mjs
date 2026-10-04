@@ -548,6 +548,30 @@ describe('the worker squad', () => {
   })
 })
 
+describe('create in the Editor', () => {
+  const home = (over = {}) => buildHome(/** @type {any} */ (base({ away: OFF, pinned: null, ...over })))
+  const present = ['bt-graph', 'boss-bt-authoring', 'team-move-rule-book-authoring', 'qte-content-authoring', 'unreal-niagara-mcp', 'level-cinematics-authoring'].map(name => ({ name, description: `What ${name} does.` }))
+
+  test('Create appears when Editor skills are present, grouped and ordered by role', () => {
+    const designer = home({ role: 'designer', skills: present })
+    expect(designer.actions.map(one => one.label)).toEqual(['＋ New intent', '✦ Create'])
+    expect(designer.create.map(one => one.group)).toEqual(['AI and encounters', 'Levels and cinematics', 'VFX and look'])
+    expect(designer.create[0].items.map(one => one.verb)).toEqual(['Edit a Behavior Tree', 'Design a boss or elite fight', 'Make a Team Move rule book for a squad', 'Add a QTE'])
+    expect(home({ role: 'techart', skills: present }).create[0].group).toBe('VFX and look')
+    expect(home({ role: 'designer', skills: [] }).actions.map(one => one.label)).toEqual(['＋ New intent'])
+  })
+
+  test('the request asks first, records an intent, and respects a held Editor lock', () => {
+    const free = home({ role: 'designer', skills: present, lock: parseEditorLock('free since 14:18', 600) })
+    expect(free.create[0].items[0].prompt).toContain('First ask me what I want')
+    expect(free.create[0].items[0].prompt).toContain('.agents/skills/bt-graph/SKILL.md')
+    expect(free.create[0].items[0].prompt).not.toContain('held by')
+    const held = home({ role: 'designer', skills: present, lock: parseEditorLock('held by lane-7 until 23:00', 600) })
+    expect(held.editor.isHeld).toBe(true)
+    expect(held.create[0].items[0].prompt).toContain('held by lane-7 until 23:00: ask that lane for a window first')
+  })
+})
+
 describe('quick actions', () => {
   test('New intent always; Skills opens the short list, grouped, of the listed skills present here', () => {
     const home = (over = {}) => buildHome(/** @type {any} */ (base({ away: OFF, ...over })))

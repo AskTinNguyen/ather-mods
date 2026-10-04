@@ -74,6 +74,7 @@ Tests: `tests/ather.test.mjs` ships with the plugin. An end-to-end run in the ma
 
 ## Changes
 
+- **0.0.4** ✦ Create: the skills that make content in the Unreal Editor, grouped by what is made (VFX and look, characters and animation, AI and encounters, enemies, levels and cinematics, audio), led by what they do, three per group with More for the rest, ordered by role; each asks what you want first, records an intent and respects the Editor lock.
 - **0.0.3** The intent at a glance: after a turn that changed the intent, one line above the prompt (ticked A12 · new decision F-11) with See; the Intent view lists today's changes (✓ done, ◆ yours, ✎ changed) and explains any of them on a click.
 - **0.0.2** The worker squad: each background worker with an avatar (body and colour for its kind, a ring for its state, the prop it holds for what it is doing), a trail of what finished workers did, a summary strip (checklist, workers running, decisions waiting on you) and the proof in colour.
 - **0.0.1** First shared release. The pane (terminal and desktop side panel) with what needs you, Next, your intents and assigned GitHub issues, New intent and a curated Skills list; issue cards (start an intent, open on GitHub, copy link); the band with away, open and close; away windows with held merges and a decision ledger; evidence read from tool output; the newcomer tour.

@@ -38,6 +38,57 @@ export const SKILL_GROUPS = [
   { group: 'Explain it to me', names: ['bro', '.agents/skill-library/visuals/show-me'] },
 ]
 
+// Making things in the Editor: the skills that build content through MCP, grouped by what is made,
+// each led by what it does. The first three of a group show; the rest wait behind More.
+export const CREATE_GROUPS = [
+  { group: 'VFX and look', items: [
+    { name: 'unreal-niagara-mcp', verb: 'Make or tune a Niagara effect' },
+    { name: 'sw-environment-preset-from-reference', verb: 'Build a weather and sky preset from a reference image' },
+    { name: 'metahuman-groom-wardrobe', verb: 'Turn grooms into MetaHuman wardrobe items' },
+    { name: '.agents/skill-library/vfx/arena-pattern-vfx-designer', verb: 'Design arena pattern telegraphs' },
+  ] },
+  { group: 'Characters and animation', items: [
+    { name: 'author-child-visual-montage-sync', verb: 'Sync a child visual montage to its parent' },
+    { name: 'author-curve3d-motion-profiles', verb: 'Author a motion profile (Curve3D)' },
+    { name: '.agents/skill-library/animation/ninetails-tail-shape-authoring', verb: 'Shape the NineTails tails' },
+    { name: '.agents/skill-library/animation/ninetails-tail-animation-bake', verb: 'Bake NineTails tail animation' },
+  ] },
+  { group: 'AI and encounters', items: [
+    { name: 'bt-graph', verb: 'Edit a Behavior Tree' },
+    { name: 'boss-bt-authoring', verb: 'Design a boss or elite fight' },
+    { name: 'team-move-rule-book-authoring', verb: 'Make a Team Move rule book for a squad' },
+    { name: 's2-goai-config-authoring', verb: 'Set up GOAI NPC behaviour' },
+    { name: 'qte-content-authoring', verb: 'Add a QTE' },
+    { name: '.agents/skill-library/ai-enemy/behavior-tree-pattern-template-authoring', verb: 'Make a reusable Behavior Tree pattern' },
+    { name: '.agents/skill-library/testing/map-session-test-setup', verb: 'Set up a boss-room test session' },
+  ] },
+  { group: 'Enemies', items: [
+    { name: '.agents/skill-library/ai-enemy/enemy-qualification-verifier', verb: 'Check an enemy against its GDD' },
+    { name: 'maintain-sipher-montage-tools', verb: 'Tune enemy montage frame data' },
+  ] },
+  { group: 'Levels and cinematics', items: [
+    { name: 'level-cinematics-authoring', verb: 'Direct a Level Cinematic' },
+    { name: 'traversal-module-authoring', verb: 'Build traversal modules' },
+    { name: 'unreal-demo-gym-authoring', verb: 'Make a demo or test gym level' },
+    { name: 'sipher-navmesh-bake', verb: 'Bake navmesh for a level' },
+    { name: '.agents/skill-library/authoring/sipher-smart-object-mcp-workflow', verb: 'Author Smart Objects' },
+  ] },
+  { group: 'Audio', items: [{ name: '.agents/skill-library/audio/ability-beat-audio-authoring', verb: 'Time combat SFX to ability beats' }] },
+  { group: 'Anything else', items: [{ name: 'unreal-mcp', verb: 'Edit any live asset' }] },
+]
+export const CREATE_SHOWN = 3
+
+// Which groups come first, by role: what each role makes most.
+const CREATE_ORDER = {
+  techart: ['VFX and look', 'Characters and animation', 'Levels and cinematics', 'AI and encounters', 'Enemies', 'Audio', 'Anything else'],
+  designer: ['AI and encounters', 'Enemies', 'Levels and cinematics', 'Characters and animation', 'VFX and look', 'Audio', 'Anything else'],
+  engineer: ['AI and encounters', 'Levels and cinematics', 'VFX and look', 'Characters and animation', 'Enemies', 'Audio', 'Anything else'],
+}
+
+/** @param {string} verb @param {string} name @param {{ isHeld: boolean, holder: string, until: string }} editor */
+const createPrompt = (verb, name, editor) =>
+  `I want to ${verb.charAt(0).toLowerCase()}${verb.slice(1)} in the Unreal Editor. Use the ${name.split('/').pop()} skill (${skillFolder(name)}/SKILL.md). First ask me what I want, one question at a time and at most three. Then record it as an intent with the intent skill, take the Editor owner lock as AGENTS.md says${editor.isHeld ? ` (it is held by ${editor.holder || 'another lane'}${editor.until ? ` until ${editor.until}` : ''}: ask that lane for a window first)` : ''}, build it in the Editor, and show me the result.`
+
 /** @param {string} name */
 export const skillFolder = name => (name.includes('/') ? name : `.agents/skills/${name}`)
 
@@ -112,7 +163,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { actions: [], skills: [], header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -182,12 +233,22 @@ export const buildHome = input => {
   const skills = SKILL_GROUPS.flatMap(({ group, names }) =>
     names.filter(name => present.has(name)).map(name => ({ id: `skill:${name.split('/').pop()}`, group, name: name.split('/').pop() ?? name, description: present.get(name) ?? '', prompt: skillPrompt(name, intent ? `for intent ${intent.slug}` : '') })),
   )
-  /** @type {{ id: string, label: string, prompt?: string, opens?: 'skills', isPrimary?: boolean }[]} */
+  // The Editor's state decides what the session does first when making something there.
+  const editor = { isHeld: lock.state === 'held' && !lock.isStale, isFree: lock.state === 'free', holder: lock.holder, until: lock.until }
+  const order = CREATE_ORDER[/** @type {keyof typeof CREATE_ORDER} */ (role)] ?? CREATE_ORDER.designer
+  const create = [...CREATE_GROUPS]
+    .sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group))
+    .map(({ group, items }) => ({ group, items: items.filter(item => present.has(item.name)).map(item => ({ id: `create:${item.name.split('/').pop()}`, name: item.name.split('/').pop() ?? item.name, verb: item.verb, description: present.get(item.name) ?? '', prompt: createPrompt(item.verb, item.name, editor) })) }))
+    .filter(one => one.items.length > 0)
+  /** @type {{ id: string, label: string, prompt?: string, opens?: 'skills' | 'create', isPrimary?: boolean }[]} */
   const actions = [{ id: 'action:new-intent', label: '＋ New intent', prompt: NEW_INTENT_PROMPT, isPrimary: true }]
   if (skills.length > 0) actions.push({ id: 'action:skills', label: '▶ Skills', opens: 'skills' })
+  if (create.length > 0) actions.push({ id: 'action:create', label: '✦ Create', opens: 'create' })
   return {
     actions,
     skills,
+    create,
+    editor,
     header: {
       title: intent?.slug ?? 'Ather',
       // A checklist with nothing done and no one working yet is planned, not being built.
