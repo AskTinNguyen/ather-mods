@@ -111,6 +111,15 @@ export const section = (text, heading) => {
   return end ? rest.slice(0, end.index) : rest
 }
 
+// Every section headed so, in order: "## Acceptance" and a later "## Acceptance, rev 2" both count.
+/** @param {string} text @param {string} heading */
+const sections = (text, heading) =>
+  text
+    .split(/^(?=##\s)/m)
+    .filter(part => new RegExp(`^##\\s+${heading}\\b`, 'i').test(part))
+    .map(part => part.replace(/^.*$/m, ''))
+    .join('\n')
+
 const CLOSED = /\b(accepted|rejected|resolved|closed|superseded|withdrawn|answered)\b/i
 
 // Open findings. Template heading: "## F-<n> (date, rev r) | blocking: yes|no | status: open (owner)".
@@ -150,8 +159,8 @@ export const parseFindings = (findings, prompt) => {
 
 // "A1", "B3", "SL15", "A12a": an acceptance id at the start of an item or a table cell.
 const ITEM_ID = /^\**([A-Z]{1,3}[0-9]+[a-z]?)\**(?=[\s:.(]|$)/
-// A verdict that counts as met: its leading word ("met on main", "Pass", "done", "✓").
-const MET = /^(met|pass|done|✓)(?![\p{L}\p{N}])/iu
+// A verdict that counts as met: its leading word ("met on main", "Pass", "passed", "done", "✓", "✅").
+const MET = /^(met|pass|passed|done|✓|✔|✅)(?![\p{L}\p{N}])/iu
 
 // progress.md's Acceptance table as id → verdict, or null when it has none (or no rows yet).
 // The verdict column is the one headed Verdict, Status or Result, else the second.
@@ -188,7 +197,7 @@ const splitItem = line => {
 // table, legacy "- [x]" boxes count as before; without either, every listed item is open.
 /** @param {string} prompt @param {string} progress @returns {AcceptanceItem[]} */
 export const acceptanceItems = (prompt, progress) => {
-  const lines = section(prompt, 'Acceptance').split(/\r?\n/)
+  const lines = sections(prompt, 'Acceptance').split(/\r?\n/)
   /** @type {Map<string, string>} */
   const listed = new Map()
   for (const line of lines) {
@@ -219,17 +228,23 @@ export const intentPrs = (progress, prompt) => {
   return [...new Set(numbers)]
 }
 
-/** @typedef {Readonly<Record<string, string>>} PrStates PR number → 'MERGED' | 'OPEN' | 'CLOSED', as gh last said */
+/**
+ * @typedef {'MERGED' | 'OPEN' | 'CLOSED' | 'UNREAD'} PrState what gh last said about a PR; UNREAD when it could not say
+ * @typedef {Readonly<Record<string, PrState>>} PrStates PR number → its last read state
+ */
+
+// Open, with a checklist whose every item is met: the only intents whose PRs decide anything.
+/** @param {Intent} intent */
+export const isAllMet = intent => intent.status !== 'completed' && intent.acceptanceTotal > 0 && intent.acceptanceDone === intent.acceptanceTotal
 
 // Every item met and every named PR merged, yet not closed: the orchestrator's Close step is owed.
 // An intent with no PR named is not ready: nothing says the work has landed.
 /** @param {Intent} intent @param {PrStates} prs */
-export const isReadyToClose = (intent, prs) =>
-  intent.status !== 'completed' && intent.acceptanceTotal > 0 && intent.acceptanceDone === intent.acceptanceTotal && intent.prs.length > 0 && intent.prs.every(number => prs[number] === 'MERGED')
+export const isReadyToClose = (intent, prs) => isAllMet(intent) && intent.prs.length > 0 && intent.prs.every(number => prs[number] === 'MERGED')
 
 // "#32372 MERGED", "#32398 not read yet": each PR the intent names, with what gh last said.
 /** @param {Intent} intent @param {PrStates} prs */
-export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number} ${prs[number] ?? 'not read yet'}`)
+export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number} ${prs[number] === 'UNREAD' ? 'could not be read' : (prs[number] ?? 'not read yet')}`)
 
 /**
  * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, mtimeMs: number }} IntentFiles

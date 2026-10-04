@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import * as changes from '../hooks/changes.mjs'
-import * as issues from '../hooks/issues.mjs'
+import * as prs from '../hooks/prs.mjs'
 import * as model from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
 
@@ -50,15 +50,21 @@ describe('acceptance from one source', () => {
     expect([intent.acceptanceDone, intent.acceptanceTotal]).toEqual([1, 2])
   })
 
-  test('a verdict counts as met by its leading word: met, pass, done or ✓; a missing row is open', () => {
-    const prompt = promptOf(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'].map(id => `- ${id}: x.`).join('\n'))
-    const progress = progressOf([['A1', 'met on main (#1)'], ['A2', 'Pass'], ['A3', '**Done**'], ['A4', '✓'], ['A5', 'not done'], ['A6', 'partly done'], ['A7', 'metric pending']])
-    expect(model.acceptanceItems(prompt, progress).map(item => item.isDone)).toEqual([true, true, true, true, false, false, false, false])
+  test('a verdict counts as met by its leading word: met, pass, passed, done, ✓ or ✅; a missing row is open', () => {
+    const prompt = promptOf(['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10'].map(id => `- ${id}: x.`).join('\n'))
+    const progress = progressOf([['A1', 'met on main (#1)'], ['A2', 'Pass'], ['A3', '**Done**'], ['A4', '✓'], ['A5', 'not done'], ['A6', 'partly done'], ['A7', 'metric pending'], ['A8', 'PASSED'], ['A9', '✅ S6']])
+    expect(model.acceptanceItems(prompt, progress).map(item => item.isDone)).toEqual([true, true, true, true, false, false, false, true, true, false])
   })
 
   test('the verdict column is found by its heading; an id leads a longer Item cell', () => {
     const progress = '# P\n\n## Acceptance evidence\n\n| Item | Status | Evidence |\n| --- | --- | --- |\n| B1 model and builder | met | S1 |\n| B2 tab | met (PR #32372, not merged) | S6 |\n'
     expect(parsed(promptOf('- [ ] B1: Model.\n- [ ] B2: Tab.'), progress).acceptanceDone).toBe(2)
+  })
+
+  test('items added under a later "## Acceptance, rev 2" heading count too', () => {
+    const prompt = `${promptOf('- SL1: One.')}\n## Acceptance, rev 2 (L-3)\n\n- SL15: Two.\n`
+    const intent = parsed(prompt, progressOf([['SL1', 'Pass'], ['SL15', 'passed']]))
+    expect([intent.acceptanceDone, intent.acceptanceTotal]).toEqual([2, 2])
   })
 
   test('ids with no table and no boxes are all open, not "no checklist"', () => {
@@ -75,19 +81,19 @@ describe('the PRs an intent names', () => {
   })
 
   test("gh's answer is read for state only, and anything else is unreadable", () => {
-    expect(issues.parsePrState('{"mergedAt":"2026-10-04T01:31:16Z","state":"MERGED"}')).toBe('MERGED')
-    expect(issues.parsePrState('{"mergedAt":null,"state":"OPEN"}')).toBe('OPEN')
-    expect(issues.parsePrState('[{"number":1}]')).toBe(null)
-    expect(issues.parsePrState('gh: not found')).toBe(null)
+    expect(prs.parsePrState('{"mergedAt":"2026-10-04T01:31:16Z","state":"MERGED"}')).toBe('MERGED')
+    expect(prs.parsePrState('{"mergedAt":null,"state":"OPEN"}')).toBe('OPEN')
+    expect(prs.parsePrState('[{"number":1}]')).toBe(null)
+    expect(prs.parsePrState('gh: not found')).toBe(null)
   })
 
   test('only the PRs of open intents with every item met are read, a merged one never again', () => {
     const ready = parsed(NEW_PROMPT, progressOf(IDS.map(id => [id, 'met']), '- PR: #1, #2, #3'))
     const building = parsed(NEW_PROMPT, progressOf([['B1', 'met']], '- PR: #4'))
     const closed = parsed(promptOf('- B1: x.', 'completed'), progressOf([['B1', 'met']], '- PR: #5'))
-    const now = 10 * issues.PR_EVERY_MS
-    const records = { 1: { state: 'MERGED', at: 0 }, 2: { state: 'OPEN', at: now - 1000 }, 3: { state: 'UNREAD', at: now - issues.PR_EVERY_MS } }
-    expect(issues.prsToRead([ready, building, closed], records, now)).toEqual([3])
+    const now = 10 * prs.PR_EVERY_MS
+    const records = { 1: { state: 'MERGED', at: 0 }, 2: { state: 'OPEN', at: now - 1000 }, 3: { state: 'UNREAD', at: now - prs.PR_EVERY_MS } }
+    expect(prs.prsToRead([ready, building, closed], records, now)).toEqual([3])
   })
 })
 
@@ -102,6 +108,7 @@ describe('ready to close', () => {
     expect(step?.prompt).toContain('.agents/skills/intent/SKILL.md')
     expect(step?.prompt).toContain('Status: completed')
     expect(model.intentLabel(ready, ME, MERGED)).toContain('ready to close')
+    expect(model.prStatusList(parsed(NEW_PROMPT, progressOf([], '- PR: #1, #2, #3')), { 1: 'MERGED', 2: 'UNREAD' })).toEqual(['#1 MERGED', '#2 could not be read', '#3 not read yet'])
   })
 
   test('not while a PR is open or unread, nor with no PR named; a Status of completed wins', () => {

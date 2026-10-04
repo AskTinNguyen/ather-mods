@@ -11,7 +11,8 @@
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
 import { CREATE_GROUPS, CREATE_SHOWN, SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome } from './home.mjs'
-import { issuePrompt, parseIssues, parsePrState, prsToRead } from './issues.mjs'
+import { issuePrompt, parseIssues } from './issues.mjs'
+import { parsePrState, prsToRead } from './prs.mjs'
 import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents } from './model.mjs'
 import * as state from './state.mjs'
 import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, classifyWorker, modelWord, propSvg, trailWords, workerState } from './squad.mjs'
@@ -270,7 +271,7 @@ async function refreshPrs($) {
   isPrsReading = true
   try {
     const { root } = await laneOf($)
-    /** @type {Record<string, string>} */
+    /** @type {Record<string, import('./model.mjs').PrState>} */
     const read = {}
     for (const number of prsToRead(intents, await state.readPrRecords(io($)), Date.now())) {
       const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)

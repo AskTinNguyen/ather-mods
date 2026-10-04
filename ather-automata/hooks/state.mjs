@@ -169,8 +169,8 @@ export const readIssues = async (io, me) => {
   const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me)))
   return cached?.list && Date.now() - (cached.at ?? 0) < ISSUES_TTL_MS ? cached.list : []
 }
-/** @param {Io} io @returns {Promise<Record<string, import('./issues.mjs').PrRecord>>} */
-export const readPrRecords = async io => /** @type {Record<string, import('./issues.mjs').PrRecord>} */ ((await io.get(KEY.prs)) ?? {})
+/** @param {Io} io @returns {Promise<Record<string, import('./prs.mjs').PrRecord>>} */
+export const readPrRecords = async io => /** @type {Record<string, import('./prs.mjs').PrRecord>} */ ((await io.get(KEY.prs)) ?? {})
 // PR number → its last read state, for the pure readers in model.mjs.
 /** @param {Io} io @returns {Promise<import('./model.mjs').PrStates>} */
 export const readPrStates = async io => Object.fromEntries(Object.entries(await readPrRecords(io)).map(([number, record]) => [number, record.state]))
@@ -192,7 +192,7 @@ export const setIssues = (io, me, issues) =>
 const PRS_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 // What gh just said about some PRs ('UNREAD' when it could not say), each stamped `at`.
-/** @param {Io} io @param {Readonly<Record<string, string>>} states @param {number} at */
+/** @param {Io} io @param {import('./model.mjs').PrStates} states @param {number} at */
 export const setPrStates = (io, states, at) =>
   serial(async () => {
     if (Object.keys(states).length === 0) return
