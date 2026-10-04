@@ -746,6 +746,32 @@ const hasFocus = tree => {
 }
 
 {
+  // What the intent recorded: one line per change, a notice after the turn, the Intent view on See.
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' } })
+  await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
+  const file = path.join(root, 'docs/intent/fluid-snow-sand-look/prompt.md')
+  const unticked = /^- \[ \] (A\d+)/m.exec(fs.readFileSync(file, 'utf8'))
+  await engine.modelTool({ tool: 'Edit', file_path: file, old_string: `- [ ] ${unticked[1]}:`, new_string: `- [x] ${unticked[1]}:` })
+  await engine.flush()
+  const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  const band = await engine.render('AbovePrompt', props, 'band')
+  const bandText = check(band, 110).lines.join('')
+  expect('after an edit ticks a checklist item, the band says so in one line, with See', new RegExp(`◆ Intent: ticked ${unticked[1]}`).test(bandText) && Boolean(findKey(band, 'ather-intent-see')), bandText)
+  findKey(band, 'ather-intent-see').props.onPress({})
+  await engine.flush()
+  const viewTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const view = check(viewTree, 72)
+  screens.push(['Terminal · the Intent view (72 columns)', view.lines.join('\n')])
+  expect('See opens the Intent view: the goal, today\'s line with its time, and Next', /I N T E N T\nfluid-snow-sand-look/.test(view.lines.join('\n')) && new RegExp(`T O D A Y\\n✓ Ticked ${unticked[1]} · .+ \\d\\d:\\d\\d`).test(view.lines.join('\n')) && /N E X T/.test(view.lines.join('\n')) && view.problems.length === 0, view.lines)
+  expect('once seen, the notice leaves the band', !/◆ Intent:/.test(check(await engine.render('AbovePrompt', props, 'band'), 110).lines.join('')))
+  findKey(viewTree, 'change-0-press').props.onPress({})
+  await engine.flush()
+  expect('pressing a line asks the session to explain it, briefly, with your own words as the why', engine.record.submits.some(text => new RegExp(`explain in at most four lines what "Ticked ${unticked[1]}`).test(text) && /Quote what I said/.test(text)), engine.record.submits)
+  done()
+}
+
+{
   // The worker squad: each worker's kind from its dispatch, what it is doing from its tool calls.
   const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' } })
   await run(engine, [], 'ather', 'intent fluid-snow-sand-look')

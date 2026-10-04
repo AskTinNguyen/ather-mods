@@ -34,6 +34,8 @@ const KEY = {
   windows: (/** @type {string} */ person) => `windows:${person}`,
   issues: (/** @type {string} */ me) => `issues:${personId(me)}`,
   last: (/** @type {string} */ me) => `last:${personId(me)}`,
+  // What edits recorded in an intent, newest last: shared by every session on the machine.
+  changes: (/** @type {string} */ slug) => `changes:${slug}`,
   tz: 'tz',
   hits: 'gotchaHits',
   ruled: 'gotchaRuled',
@@ -176,6 +178,25 @@ export const readScore = async io => /** @type {Record<string, number>} */ ((awa
 export const setIssues = (io, me, issues) =>
   serial(async () => {
     await io.set(KEY.issues(me), { at: Date.now(), list: issues })
+    changed(io)
+  })
+
+const CHANGES_KEPT = 20
+const CHANGES_TTL_MS = 36 * 60 * 60 * 1000
+
+/** @typedef {import('./changes.mjs').Change & { at: number }} Recorded */
+
+// The lines an intent gained, newest first, from `since` on (the start of the person's day).
+/** @param {Io} io @param {string} slug @param {number} since @returns {Promise<Recorded[]>} */
+export const readChanges = async (io, slug, since) => (/** @type {Recorded[]} */ ((await io.get(KEY.changes(slug))) ?? [])).filter(one => one.at >= since).reverse()
+
+// An edit's lines join the intent's; the same line again (a re-tick, a rewrite) replaces the older one.
+/** @param {Io} io @param {string} slug @param {readonly import('./changes.mjs').Change[]} lines @param {number} at */
+export const noteChanges = (io, slug, lines, at) =>
+  serial(async () => {
+    if (lines.length === 0) return
+    const kept = /** @type {Recorded[]} */ ((await io.get(KEY.changes(slug))) ?? []).filter(one => at - one.at < CHANGES_TTL_MS && !lines.some(line => line.kind === one.kind && line.id === one.id))
+    await io.set(KEY.changes(slug), [...kept, ...lines.map(line => ({ ...line, at }))].slice(-CHANGES_KEPT))
     changed(io)
   })
 

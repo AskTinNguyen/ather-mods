@@ -16,6 +16,7 @@ import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseE
 import * as state from './state.mjs'
 import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, classifyWorker, modelWord, propSvg, trailWords, workerState } from './squad.mjs'
 import { recordEnd, workerOf } from './workers.mjs'
+import { changeGlyph } from './changes.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {ReturnType<typeof buildHome>} Home */
@@ -38,7 +39,9 @@ let me = ''
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
 const sent = new Set()
-let paneMode = /** @type {'home' | 'pick' | 'away' | 'skills' | 'issue'} */ ('home')
+let paneMode = /** @type {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent'} */ ('home')
+// Intent changes after this were not seen yet: they make the band's notice.
+let intentSeenAt = 0
 // The issue whose card is open (paneMode 'issue'), and the view to go back to.
 let issueShown = 0
 let issueBack = /** @type {'home' | 'pick'} */ ('home')
@@ -122,7 +125,8 @@ export function register(on) {
     if (e.props.hasSurvey || !(await laneOf($)).isS2) return next(e)
     void wake($)
     const model = await home($)
-    const hint = bandHint(model)
+    const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
+    const hint = fresh.length > 0 ? `◆ Intent: ${fresh.slice(0, 2).map(one => one.text.split(' · ')[0].replace(/^./, first => first.toLowerCase())).join(' · ')}${fresh.length > 2 ? ` · +${fresh.length - 2}` : ''}` : bandHint(model)
     // Closed with ✕: stays away until there is something new to say.
     if (closedHint !== null && (hint === '' || hint === closedHint)) return next(e)
     closedHint = null
@@ -133,10 +137,12 @@ export function register(on) {
       gap: 2,
       children: [
         Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: hint ? undefined : true, wrap: 'truncate', children: hint || '◆ Ather Automata' })] }),
+        ...(fresh.length > 0 ? [Button({ key: 'ather-intent-see', label: 'See', plain: true, onPress: () => void seeIntent($) })] : []),
         Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
         Button({ key: 'ather-open', label: '⤢', plain: true, dimColor: true, onPress: () => void openPane($, 'home') }),
         Button({ key: 'ather-close', label: '✕', plain: true, dimColor: true, role: 'dismiss', onPress: () => {
           closedHint = hint
+          intentSeenAt = Date.now()
           $.ui.invalidate('ui.render')
           $.ui.toast('Ather hidden until something needs you. /ather brings it back.')
         } }),
@@ -144,7 +150,7 @@ export function register(on) {
     })
   })
 
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => (e.requestId === PANE_ID ? (void wake($), paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf($))) : next(e)))
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => (e.requestId === PANE_ID ? (void wake($), (intentToday = await todayChanges($)), paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf($))) : next(e)))
 
   on('ui.close', ($, e, next) => {
     if (e.id === PANE_ID) paneMode = 'home'
@@ -165,6 +171,7 @@ async function openConsole($, folder) {
   isAwake = null
   view = { version: -1, at: 0, model: null }
   closedHint = null
+  intentSeenAt = Date.now()
   cwd = folder
   for (const command of [
     { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name>]' },
@@ -666,7 +673,7 @@ async function presetQuestion($, goal) {
 
 // ---------------------------------------------------------------- the pane (terminal)
 
-/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue'} mode */
+/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent'} mode */
 async function openPane($, mode) {
   paneMode = mode
   await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
@@ -685,7 +692,7 @@ function press($, run, keepOpen) {
       .catch(error => $.ui.toast(`Ather: ${String(error)}`))
 }
 
-/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue'} mode */
+/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent'} mode */
 function show($, mode) {
   return () => {
     paneMode = mode
@@ -827,6 +834,37 @@ function masthead(el, lines, surface) {
 const workTitle = one => (one.kind === 'intent' ? one.slug : one.label)
 /** @param {Work} one */
 const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug} · `, '') : one.hint)
+
+// ---------------------------------------------------------------- what the intent recorded
+
+/** @type {{ kind: 'done' | 'yours' | 'changed', text: string, time: string }[]} */
+let intentToday = []
+
+// The tracked intent's lines since the start of the person's day, newest first, with their time.
+/** @param {Engine} $ */
+async function todayChanges($) {
+  const files = io($)
+  const slug = await state.readPinned(files)
+  if (!slug) return []
+  const tz = await state.readTz(files)
+  const now = Date.now()
+  const lines = await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000)
+  return lines.map(one => ({ kind: one.kind, text: one.text, time: clockText(one.at, tz) }))
+}
+
+// The tracked intent's lines this session has not shown yet: the band's notice.
+/** @param {Engine} $ */
+async function unseenChanges($) {
+  const files = io($)
+  const slug = await state.readPinned(files)
+  return slug ? state.readChanges(files, slug, intentSeenAt + 1) : []
+}
+
+/** @param {Engine} $ */
+async function seeIntent($) {
+  intentSeenAt = Date.now()
+  await openPane($, 'intent')
+}
 
 // ---------------------------------------------------------------- workers
 
@@ -1042,6 +1080,41 @@ function paneView(el, $, model, columns, surface, crew = []) {
     paneMode = 'home'
   }
 
+  if (paneMode === 'intent') {
+    const slug = header.title
+    const intent = intents.find(one => one.slug === slug)
+    if (intent) {
+      intentSeenAt = Date.now()
+      rows.push(masthead(el, [label(el, 'brand', 'Intent', width), Text({ key: 'title', bold: true, children: fit(slug, width) }), ...(intent.goal ? [Text({ key: 'goal', wrap: 'wrap', children: intent.goal })] : [])], surface))
+      const today = intentToday.slice(0, 5)
+      rows.push(
+        section(el, 'intent-today', [
+          label(el, 'intent-today-label', 'Today', width),
+          ...(today.length === 0
+            ? [Text({ key: 'intent-none', color: QUIET, children: 'Nothing recorded yet today.' })]
+            : today.map((one, index) =>
+                Box({
+                  key: `change-${index}`,
+                  flexDirection: 'row',
+                  gap: 1,
+                  width: '100%',
+                  children: [
+                    Text({ color: one.kind === 'done' ? '#3ccf7a' : one.kind === 'yours' ? LIME : '#8fb8ff', children: changeGlyph(one.kind) }),
+                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => { handOff($, [], `In intent ${slug}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`); return 'asked the session about that change' }, false) })] }),
+                    Text({ color: QUIET, children: one.time }),
+                  ],
+                }),
+              )),
+        ]),
+      )
+      if (model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
+      rows.push(section(el, 'intent-back', [Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+      rows.push(...foot)
+      return Box({ flexDirection: 'column', children: rows })
+    }
+    paneMode = 'home'
+  }
+
   if (paneMode === 'skills') {
     rows.push(masthead(el, [label(el, 'brand', 'Skills', width), Text({ key: 'title', bold: true, children: 'Run a skill' }), Text({ key: 'meta', color: QUIET, children: header.title === 'Ather' ? 'The session reads it, says what it will do, then follows it.' : `For ${header.title}: the session reads it, says what it will do, then follows it.` })], surface))
     let index = 0
@@ -1084,7 +1157,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       el,
       [
         label(el, 'brand', 'Ather Automata', width),
-        Text({ key: 'title', bold: true, children: fit(title, width) }),
+        isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: show($, 'intent') }),
         ...(status ? [Text({ key: 'status', children: fit(status, width) })] : []),
         ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
         ...(meta ? [metaRow(el, header)] : []),

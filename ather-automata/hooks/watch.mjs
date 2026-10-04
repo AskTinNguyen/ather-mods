@@ -13,6 +13,7 @@ import { HELD_KINDS, HELD_LABELS, HELD_NOUNS, automationResult, briefIssues, bui
 import { AREAS, ROLES, STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, normalizeArea, parseEditorLock, parseIntent, parseTzOffset } from './model.mjs'
 import * as state from './state.mjs'
 import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
+import { intentChanges, intentFileOf } from './changes.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -160,10 +161,29 @@ export function register(on, options) {
     const intent = typeof path === 'string' && /^(Write|Edit|NotebookEdit)$/.test(tool) ? /docs[\\/]intent[\\/]([^\\/]+)[\\/]/.exec(path)?.[1] : undefined
     // The intent this session writes to becomes its tracked one; reading another does not.
     if (intent) void laneOf($).then(({ root }) => state.track(io($), root, intent, { onlyIfNone: true })).catch(() => undefined)
+    // An edit to an intent's prompt or findings: what it changed, read off the file before and after.
+    const intentFile = /^(Write|Edit|MultiEdit)$/.test(tool) ? intentFileOf(path) : null
+    const before = intentFile ? ((await readFile($, String(path))) ?? '') : ''
     const ran = await next(e)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
+    if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
     return ran
   })
+}
+
+// ---------------------------------------------------------------- what an intent edit recorded
+
+/** @param {Engine} $ @param {string} path */
+async function readFile($, path) {
+  const full = /^([A-Za-z]:|[\\/])/.test(path) ? path : `${(await laneOf($)).root}/${path}`
+  return io($).read(full)
+}
+
+/** @param {Engine} $ @param {{ slug: string, file: 'prompt.md' | 'findings.md' }} target @param {string} path @param {string} before */
+async function noteIntentEdit($, target, path, before) {
+  const after = (await readFile($, path)) ?? ''
+  const prompt = target.file === 'findings.md' ? ((await readFile($, path.replace(/findings\.md$/i, 'prompt.md'))) ?? '') : ''
+  await state.noteChanges(io($), target.slug, intentChanges(target.file, before, after, prompt), Date.now())
 }
 
 // ---------------------------------------------------------------- intents and the lane

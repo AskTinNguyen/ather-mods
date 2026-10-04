@@ -9,6 +9,7 @@ import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, next
 import * as state from '../hooks/state.mjs'
 import { KINDS, avatarSvg, classifyWorker, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
 import { recordSpawn, recordTool, resetWorkers, workerOf } from '../hooks/workers.mjs'
+import { intentChanges, intentFileOf } from '../hooks/changes.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
 const EVENING = Date.UTC(2026, 9, 3, 14, 0) // 21:00 at UTC+7
@@ -475,6 +476,33 @@ describe('home', () => {
     const { io } = memoryIo()
     await state.settleItem(io, rules[0])
     expect(await io.get('gotchaRuled')).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('what the intent recorded', () => {
+  const PROMPT = '# X\n\n## Goal\n\nSnow that takes footprints.\n\n## Scope\n\nSnow and sand.\n\n## Acceptance\n\n- [ ] A1: Snow look. Real depth.\n- [ ] A2 (owed): Sand look. Grain.\n'
+
+  test('a ticked item, a new goal, a narrower scope: one plain line each', () => {
+    expect(intentChanges('prompt.md', PROMPT, PROMPT.replace('- [ ] A2', '- [x] A2'))).toEqual([{ kind: 'done', id: 'A2', text: 'Ticked A2 · Sand look' }])
+    expect(intentChanges('prompt.md', PROMPT, PROMPT.replace('Snow that takes footprints.', 'Snow and sand that take footprints.')).map(one => one.text)).toEqual(['Goal changed'])
+    expect(intentChanges('prompt.md', PROMPT, PROMPT.replace('Snow and sand.\n', 'Snow only.\n')).map(one => one.text)).toEqual(['Scope changed'])
+    expect(intentChanges('prompt.md', PROMPT, PROMPT.replace('Real depth.', 'Real depth and a rim.'))).toEqual([])
+    expect(intentChanges('prompt.md', '', PROMPT)).toEqual([])
+  })
+
+  test('a new decision for the person, and a decision taken', () => {
+    const before = '## F-1 (2026-10-01) | blocking: no | status: open (engineering)\nUse the snow material for sand?\n'
+    const asked = `${before}\n## F-2 (2026-10-04) | blocking: yes | status: open (director)\nKeep sand trails in PIE only?\n`
+    expect(intentChanges('findings.md', before, asked).map(one => one.text)).toEqual(['New decision F-2 · yours'])
+    const decided = before.replace('status: open (engineering)', 'status: resolved (engineering)')
+    expect(intentChanges('findings.md', before, decided).map(one => one.kind)).toEqual(['changed'])
+    expect(intentChanges('findings.md', before, decided)[0].text.startsWith('Decided F-1')).toBe(true)
+  })
+
+  test('only an intent\'s prompt and findings count', () => {
+    expect(intentFileOf('E:/S2_/docs/intent/snow/prompt.md')).toEqual({ slug: 'snow', file: 'prompt.md' })
+    expect(intentFileOf('E:\\S2_\\docs\\intent\\snow\\findings.md')).toEqual({ slug: 'snow', file: 'findings.md' })
+    expect(intentFileOf('E:/S2_/docs/intent/snow/log.md')).toBe(null)
   })
 })
 

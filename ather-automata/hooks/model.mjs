@@ -103,7 +103,7 @@ export const shortTitle = (text, max = 80) => {
 const field = (text, name) => new RegExp(`^\\s*-\\s*${name}:\\s*(.+)$`, 'mi').exec(text)?.[1]?.trim() ?? ''
 
 /** @param {string} text @param {string} heading */
-const section = (text, heading) => {
+export const section = (text, heading) => {
   const start = new RegExp(`^##\\s+${heading}\\b.*$`, 'mi').exec(text)
   if (!start) return ''
   const rest = text.slice(start.index + start[0].length)
@@ -156,6 +156,7 @@ export const parseIntent = input => {
   return {
     slug: input.slug,
     title: /^#\s+(.+)$/m.exec(prompt)?.[1]?.trim() ?? input.slug,
+    goal: shortTitle(/^(.+?[.!?])(\s|$)/.exec(section(prompt, 'Goal').replace(/\s+/g, ' ').trim())?.[1] ?? section(prompt, 'Goal').replace(/\s+/g, ' ').trim(), 110),
     area: normalizeArea(field(prompt, 'Area')),
     owner: field(prompt, 'Owner'),
     issue: issueNumber(field(prompt, 'Issue')),
