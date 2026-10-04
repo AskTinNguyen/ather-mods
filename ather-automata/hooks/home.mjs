@@ -112,7 +112,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { actions: [], skills: [], header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', sentence: so, lock: lockText, role: roleText }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -196,6 +196,8 @@ export const buildHome = input => {
       track: intent ? stageTrack(stage) : '',
       stages: intent ? stageList(stage) : [],
       proof: proofText(evidence),
+      done: intent?.acceptanceDone ?? 0,
+      total: intent?.acceptanceTotal ?? 0,
       sentence: away.phase === 'review' || isNewcomer ? '' : open.length > 0 ? 'waiting on you' : input.workers > 0 ? 'agents working' : intent ? '' : 'no intent yet',
       lock: lockText,
       role: roleText,

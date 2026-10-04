@@ -74,4 +74,5 @@ Tests: `tests/ather.test.mjs` ships with the plugin. An end-to-end run in the ma
 
 ## Changes
 
+- **0.0.2** The worker squad: each background worker with an avatar (body and colour for its kind, a ring for its state, the prop it holds for what it is doing), a trail of what finished workers did, a summary strip (checklist, workers running, decisions waiting on you) and the proof in colour.
 - **0.0.1** First shared release. The pane (terminal and desktop side panel) with what needs you, Next, your intents and assigned GitHub issues, New intent and a curated Skills list; issue cards (start an intent, open on GitHub, copy link); the band with away, open and close; away windows with held merges and a decision ledger; evidence read from tool output; the newcomer tour.

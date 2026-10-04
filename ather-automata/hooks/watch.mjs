@@ -12,6 +12,7 @@ import { ALLOWED_TEXT, clampHours, isHolding, mandateText, offAway, windowEndTex
 import { HELD_KINDS, HELD_LABELS, HELD_NOUNS, automationResult, briefIssues, buildResult, explainGuard, gitFolders, heldShell, isAssetSave, isAutomationCommand, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isPiped, isSearchCommand, matchGotchas, mcpKind, mcpServer } from './guards.mjs'
 import { AREAS, ROLES, STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, normalizeArea, parseEditorLock, parseIntent, parseTzOffset } from './model.mjs'
 import * as state from './state.mjs'
+import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -60,6 +61,7 @@ export function register(on, options) {
     seenTraps.clear()
     lastTools.clear()
     idleWarned.clear()
+    resetWorkers()
     lastPersonAt = 0
     cwd = e.cwd
     try {
@@ -137,8 +139,16 @@ export function register(on, options) {
     }
   })
 
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    if (spawned.agentId) recordSpawn({ agentId: spawned.agentId, subagentType: e.subagentType, prompt: e.prompt, description: e.description, model: spawned.model, at: Date.now() })
+    return spawned
+  })
+
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
+    // A worker's tool call: what it is doing now, for its avatar and trail.
+    if (e.agentId) recordTool(e.agentId, tool, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), Date.now())
     const isMcp = tool.startsWith('mcp__') && !tool.startsWith('mcp__ather-automata__')
     const input = JSON.stringify(e).slice(0, 4000)
     if (e.agentId) lastTools.set(e.agentId, { tool, at: Date.now() })

@@ -36,6 +36,14 @@ export const draw = (node, width) => {
   if (typeof node === 'string' || typeof node === 'number') return wrap(String(node), width)
   if (node.type === 'Box') {
     if (node.props.flexDirection === 'row') {
+      // A column beside something (a glyph, then a worker's three lines): lay the parts side by side.
+      if (node.children.some(child => child && child.type === 'Box' && child.props.flexDirection !== 'row' && child.children.length > 1)) {
+        const gap = ' '.repeat(node.props.gap ?? 0)
+        const parts = node.children.map(child => draw(child, width))
+        const widths = parts.map(part => Math.max(0, ...part.map(line => line.length)))
+        const height = Math.max(...parts.map(part => part.length))
+        return Array.from({ length: height }, (_, row) => parts.map((part, index) => (part[row] ?? '').padEnd(index < parts.length - 1 ? widths[index] : 0)).join(gap).trimEnd())
+      }
       const line = node.children.map(textOf).join(node.props.gap ? ' '.repeat(node.props.gap) : '')
       return node.props.flexWrap === 'wrap' ? wrap(line, width) : [line]
     }

@@ -14,6 +14,8 @@ const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select',
 
 export const createEngine = ({ root, surfaces, user, ghIssues }) => {
   const store = new Map()
+  // Background workers the session dispatched, as $.agent.list() reports them.
+  const agents = []
   const hooks = []
   const timers = []
   const record = { ghRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
@@ -178,7 +180,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues }) => {
       },
       call: async input => dispatch('tool.call', input, toolBottom, 'ather-automata'),
     },
-    agent: { list: async () => [] },
+    agent: { list: async () => agents.map(one => ({ ...one })) },
   }
 
   return {
@@ -218,6 +220,17 @@ export const createEngine = ({ root, surfaces, user, ghIssues }) => {
       await new Promise(resolve => setTimeout(resolve, 100))
     },
     modelTool: input => dispatch('tool.call', input, toolBottom, 'engine'),
+    // A background worker: dispatched with a brief, then calling tools in its own loop.
+    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5' }) => {
+      const result = await dispatch('agent.spawn', { tool_use_id: `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model }, () => ({ model, agentId }))
+      agents.push({ id: agentId, description, type: subagentType, status: 'running' })
+      return result
+    },
+    agentTool: (agentId, input) => dispatch('tool.call', { ...input, agentId }, toolBottom, 'engine'),
+    setAgentStatus: (agentId, status) => {
+      const agent = agents.find(one => one.id === agentId)
+      if (agent) agent.status = status
+    },
     // The person types a prompt and presses Enter.
     type: text => dispatch('prompt.submit', { text, wait: false, origin: { kind: 'composer' } }, e => ({ text: e.text })),
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),

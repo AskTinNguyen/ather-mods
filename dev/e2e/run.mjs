@@ -746,6 +746,34 @@ const hasFocus = tree => {
 }
 
 {
+  // The worker squad: each worker's kind from its dispatch, what it is doing from its tool calls.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' } })
+  await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
+  await engine.spawn({ agentId: 'w-build', description: 'A13 Sand footprints fade', prompt: 'Implement A13: footprints fade over 4 seconds. Edit the material function and build S2Editor.' })
+  await engine.agentTool('w-build', { tool: 'Edit', file_path: 'Plugins/Fluid/Source/Footprints.cpp', old_string: 'a', new_string: 'b' })
+  await engine.agentTool('w-build', { tool: 'Bash', command: 'Build.bat S2Editor Win64 Development' })
+  await engine.spawn({ agentId: 'w-review', description: 'Review the snow material change', prompt: 'Run the thermo-nuclear review on the snow material change and report findings.' })
+  await engine.agentTool('w-review', { tool: 'Read', file_path: 'Plugins/Fluid/Source/Footprints.cpp' })
+  await engine.agentTool('w-review', { tool: 'Skill', skill: 'thermo-nuclear-code-quality-review' })
+  engine.setAgentStatus('w-review', 'completed')
+  const term = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
+  screens.push(['Terminal · the worker squad (72 columns)', term.lines.join('\n')])
+  const text = term.lines.join('\n')
+  expect('the summary strip shows the checklist, workers running and decisions waiting', /Checklist 8\/17 ━+ · Workers 1 · Decisions \d+ waiting/.test(text), term.lines.slice(0, 8))
+  expect('a running worker shows its kind from the brief and what it is doing from its last tool call', /W O R K E R S   ·   R U N N I N G   1\n● A13 Sand footprints fade\n  Builder · Opus · building\n  running \d+:\d\d · 2 tool calls/.test(text) && term.problems.length === 0, term.lines)
+  expect('a finished worker shows its trail and how it ended', /D O N E   1\n✓ Review the snow material change\n  Reviewer · Opus · finished\n  read → review ✓ · took \d+:\d\d · 2 tool calls/.test(text), term.lines)
+  const find = (node, test) => (!node || typeof node !== 'object' ? [] : [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => find(child, test))])
+  const desk = await engine.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
+  const avatars = find(desk, node => node.type === 'Svg' && /, (running|done)$/.test(node.props.alt))
+  expect('on the desktop each worker has its avatar: the running Builder animated, the done Reviewer still', avatars.map(one => one.props.alt).join(' | ') === 'Builder, running | Reviewer, done' && avatars[0].props.isInteractive === true && !avatars[1].props.isInteractive && /#2f8cf0/.test(avatars[0].props.source) && /#ddff00/.test(avatars[0].props.source) && /#f2d27a/.test(avatars[1].props.source) && /#3ccf7a/.test(avatars[1].props.source), avatars.map(one => one.props.alt))
+  expect("on the desktop a finished worker's trail is drawn as props", find(desk, node => node.type === 'Svg' && /^(reading|reviewing)$/.test(node.props.alt)).length === 2)
+  find(term.lines ? await engine.render('Pane', { bodyColumns: 72 }, 'ather') : null, node => node.props?.key === 'worker-w-build')[0]?.props.onPress({})
+  await engine.flush()
+  expect('pressing a worker asks the session for its status, without stopping it', engine.record.submits.some(text => /five-line status of the background worker "A13 Sand footprints fade" \(agent w-build\)/.test(text) && /Do not stop/.test(text)), engine.record.submits)
+  done()
+}
+
+{
   // Nothing to say: the band shows the quiet name and its three icons; ✕ hides it until something is new.
   const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
   const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }

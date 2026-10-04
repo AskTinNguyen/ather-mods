@@ -7,6 +7,8 @@ import { buildHome, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
+import { KINDS, avatarSvg, classifyWorker, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
+import { recordSpawn, recordTool, resetWorkers, workerOf } from '../hooks/workers.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
 const EVENING = Date.UTC(2026, 9, 3, 14, 0) // 21:00 at UTC+7
@@ -473,6 +475,48 @@ describe('home', () => {
     const { io } = memoryIo()
     await state.settleItem(io, rules[0])
     expect(await io.get('gotchaRuled')).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('the worker squad', () => {
+  test('a worker\'s kind comes from its dispatch: the agent type, then what the brief asks for', () => {
+    expect(classifyWorker({ subagentType: 'Explore', prompt: 'Find every caller of Foo.' })).toBe('scout')
+    expect(classifyWorker({ subagentType: 'general-purpose', prompt: 'Run the thermo-nuclear review on the diff.' })).toBe('reviewer')
+    expect(classifyWorker({ subagentType: 'general-purpose', prompt: 'Take the Editor owner lock first, then set the material params.' })).toBe('editor')
+    expect(classifyWorker({ subagentType: 'general-purpose', prompt: 'Prove A11 in PIE with the MainChar test simulation.' })).toBe('tester')
+    expect(classifyWorker({ subagentType: 'general-purpose', prompt: 'Implement the footprint fade and build S2Editor.' })).toBe('builder')
+    expect(classifyWorker({ subagentType: 'general-purpose', prompt: 'Summarise yesterday.' })).toBe('general')
+  })
+
+  test('what a worker is doing comes from its tool calls; a call that says nothing keeps the last', () => {
+    expect(propForTool('Grep', {})).toBe('reading')
+    expect(propForTool('Edit', {})).toBe('editing')
+    expect(propForTool('Bash', { command: 'Build.bat S2Editor Win64 Development' })).toBe('building')
+    expect(propForTool('Bash', { command: 'Run-S2Automation -Filter Snow' })).toBe('testing')
+    expect(propForTool('mcp__unreal-mcp__StartPIE', {})).toBe('testing')
+    expect(propForTool('mcp__unreal-mcp__set_material_param', { value: 1 })).toBe('editor')
+    expect(propForTool('Skill', { skill: 'thermo-nuclear-code-quality-review' })).toBe('reviewing')
+    expect(propForTool('Bash', { command: 'echo hi' })).toBe(null)
+  })
+
+  test('the kind is fixed at dispatch; the trail keeps each distinct step, in order', () => {
+    resetWorkers()
+    recordSpawn({ agentId: 'a', subagentType: 'general-purpose', prompt: 'Implement it and build.', description: 'A13', model: 'claude-opus-5-5', at: 0 })
+    for (const [tool, input] of [['Read', {}], ['Grep', {}], ['Edit', {}], ['Bash', { command: 'Build.bat S2Editor' }], ['Bash', { command: 'Run-S2Automation' }], ['Bash', { command: 'echo done' }]]) recordTool('a', tool, input, 1)
+    const worker = workerOf('a')
+    expect(worker?.kind).toBe('builder')
+    expect(worker?.tools).toBe(6)
+    expect(worker?.prop).toBe('testing')
+    expect(trailWords(worker?.trail ?? [])).toBe('read → edit → build → test')
+  })
+
+  test('statuses read as states; an avatar wears its kind\'s colour and its state\'s ring', () => {
+    expect(['running', 'completed', 'failed', 'killed', 'pending'].map(workerState)).toEqual(['running', 'done', 'failed', 'failed', 'waiting'])
+    const svg = avatarSvg('tester', 'testing', 'done')
+    expect(svg).toContain(KINDS.tester.fill)
+    expect(svg).toContain('#3ccf7a')
+    expect(svg.startsWith('<svg')).toBe(true)
+    expect(avatarSvg('builder', null, 'running')).toContain('animateTransform')
   })
 })
 

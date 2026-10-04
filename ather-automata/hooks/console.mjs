@@ -14,6 +14,8 @@ import { SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHo
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents } from './model.mjs'
 import * as state from './state.mjs'
+import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, classifyWorker, modelWord, propSvg, trailWords, workerState } from './squad.mjs'
+import { recordEnd, workerOf } from './workers.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {ReturnType<typeof buildHome>} Home */
@@ -99,6 +101,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (!e.agentId && (await laneOf($)).isS2) await refresh($).catch(() => undefined)
+    if (e.agentId) $.ui.invalidate('ui.render')
     return result
   })
 
@@ -141,7 +144,7 @@ export function register(on) {
     })
   })
 
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => (e.requestId === PANE_ID ? (void wake($), paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface)) : next(e)))
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => (e.requestId === PANE_ID ? (void wake($), paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf($))) : next(e)))
 
   on('ui.close', ($, e, next) => {
     if (e.id === PANE_ID) paneMode = 'home'
@@ -825,8 +828,156 @@ const workTitle = one => (one.kind === 'intent' ? one.slug : one.label)
 /** @param {Work} one */
 const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug} · `, '') : one.hint)
 
-/** @param {any} el @param {Engine} $ @param {Home} model @param {number} columns @param {string} [surface] */
-function paneView(el, $, model, columns, surface) {
+// ---------------------------------------------------------------- workers
+
+/**
+ * @typedef {{ id: string, title: string, kind: import('./squad.mjs').Kind, model: string, state: import('./squad.mjs').WorkerState,
+ *   prop: import('./squad.mjs').Prop | null, trail: import('./squad.mjs').Prop[], elapsed: number, tools: number }} Crew
+ */
+
+const IDLE_MS = 90000
+const DONE_SHOWN = 3
+
+// The session's own workers, newest first: what Claude Code says of each (status), and what the
+// watch half saw (kind, model, tool calls). A worker started before Ather loaded has no trail.
+/** @param {Engine} $ @returns {Promise<Crew[]>} */
+async function crewOf($) {
+  const now = Date.now()
+  const agents = (await $.agent.list().catch(() => [])).filter(agent => agent.parentId === undefined)
+  /** @type {Crew[]} */
+  const crew = []
+  for (const agent of agents) {
+    const seen = workerOf(agent.id)
+    const state = workerState(agent.status)
+    if (state === 'done' || state === 'failed') recordEnd(agent.id, now)
+    const started = seen?.startedAt ?? now
+    const isIdle = state === 'running' && seen !== undefined && now - seen.lastAt > IDLE_MS
+    crew.push({
+      id: agent.id,
+      title: seen?.title ?? agent.description,
+      kind: seen?.kind ?? classifyWorker({ subagentType: agent.type, prompt: '', description: agent.description }),
+      model: modelWord(seen?.model ?? ''),
+      state,
+      prop: isIdle ? 'idle' : state === 'running' ? (seen?.prop ?? null) : (seen?.trail.at(-1) ?? null),
+      trail: seen?.trail ?? [],
+      elapsed: (workerOf(agent.id)?.endedAt ?? now) - started,
+      tools: seen?.tools ?? 0,
+    })
+  }
+  return crew.reverse()
+}
+
+/** @param {number} ms */
+const clock = ms => {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  return seconds >= 3600 ? `${Math.floor(seconds / 3600)}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}h` : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+// Running workers, then the last few done: avatar, title, kind and model, and how it went.
+/** @param {any} el @param {Engine} $ @param {Crew[]} crew @param {number} width */
+function crewSections(el, $, crew, width) {
+  const running = crew.filter(one => one.state === 'running' || one.state === 'waiting')
+  const done = crew.filter(one => one.state === 'done' || one.state === 'failed').slice(0, DONE_SHOWN)
+  const sections = []
+  if (running.length > 0) sections.push(section(el, 'workers', [label(el, 'workers-label', `Workers · running ${running.length}`, width), ...running.map(one => crewRow(el, $, one, width))]))
+  if (done.length > 0) sections.push(section(el, 'workers-done', [label(el, 'workers-done-label', `Done ${done.length}`, width), ...done.map(one => crewRow(el, $, one, width))]))
+  return sections
+}
+
+/** @param {any} el @param {Engine} $ @param {Crew} one @param {number} width */
+function crewRow(el, $, one, width) {
+  const look = KINDS[one.kind]
+  const isLive = one.state === 'running' || one.state === 'waiting'
+  const doing = isLive ? (one.prop ? PROP_WORDS[one.prop] : 'starting') : one.state === 'done' ? 'finished' : 'stopped'
+  const kindLine = el.Box({ key: `${one.id}-kind`, flexDirection: 'row', children: [el.Text({ color: look.fill, bold: true, children: look.word }), el.Text({ color: QUIET, children: ` · ${[one.model, doing].filter(Boolean).join(' · ')}` })] })
+  const tools = `${one.tools} tool call${one.tools === 1 ? '' : 's'}`
+  const how = isLive
+    ? el.Text({ key: `${one.id}-how`, color: QUIET, children: `running ${clock(one.elapsed)} · ${tools}` })
+    : el.Box({
+        key: `${one.id}-how`,
+        flexDirection: 'row',
+        children: [
+          ...(isClicked && one.trail.length > 0
+            ? one.trail.flatMap((prop, index) => [...(index > 0 ? [el.Text({ color: QUIET, children: ' → ' })] : []), el.Svg({ source: propSvg(prop), alt: PROP_WORDS[prop], width: 22, height: 22 })])
+            : one.trail.length > 0 ? [el.Text({ color: QUIET, children: trailWords(one.trail) })] : []),
+          el.Text({ color: STATE_COLOURS[one.state], children: `${one.trail.length > 0 ? ' ' : ''}${STATE_GLYPHS[one.state]}` }),
+          el.Text({ color: QUIET, children: ` · ${one.state === 'done' ? 'took' : 'stopped at'} ${clock(one.elapsed)} · ${tools}` }),
+        ],
+      })
+  const words = el.Box({
+    key: `${one.id}-words`,
+    flexDirection: 'column',
+    flexGrow: 1,
+    children: [el.Button({ key: `worker-${one.id}`, label: fit(one.title, width - 8), plain: true, onPress: press($, async () => { handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`); return `asked the session about ${one.title}` }, false) }), kindLine, how],
+  })
+  const glyph = el.Text({ key: `${one.id}-glyph`, color: STATE_COLOURS[one.state], children: STATE_GLYPHS[one.state] })
+  // The desktop draws the worker's avatar; the terminal leads with its state glyph.
+  return isClicked
+    ? el.Box({ key: `crew-${one.id}`, flexDirection: 'row', gap: 2, width: '100%', alignItems: 'center', marginTop: 1, children: [el.Svg({ source: avatarSvg(one.kind, one.prop, one.state), alt: `${look.word}, ${one.state}`, width: 40, height: 40, isInteractive: one.state === 'running' ? true : undefined }), words, glyph] })
+    : el.Box({ key: `crew-${one.id}`, flexDirection: 'row', gap: 1, children: [glyph, words] })
+}
+
+// ---------------------------------------------------------------- the summary strip
+
+// Ten segments, lit in lime as far as the checklist is done.
+/** @param {any} el @param {string} key @param {number} done @param {number} total */
+function bar(el, key, done, total) {
+  const lit = total > 0 ? Math.round((done / total) * 10) : 0
+  return el.Box({ key, flexDirection: 'row', children: [el.Text({ color: LIME, children: '━'.repeat(lit) }), el.Text({ color: '#3a3c36', children: '━'.repeat(10 - lit) })] })
+}
+
+// How it is going, before anything is read: the checklist, workers running, decisions waiting on you.
+/** @param {any} el @param {Home} model @param {Crew[]} crew @param {number} width */
+function summaryStrip(el, model, crew, width) {
+  const { header } = model
+  const running = crew.filter(one => one.state === 'running').length
+  const decisions = model.open.filter(one => one.kind === 'call' || one.kind === 'review').length
+  const first = header.total > 0 ? { key: 'Checklist', value: `${header.done}/${header.total}`, extra: bar(el, 'strip-bar', header.done, header.total) } : { key: 'Yours', value: String(model.work.filter(one => one.isMine).length), extra: el.Text({ color: QUIET, children: 'intents and issues' }) }
+  const cards = [
+    { ...first, isHot: false },
+    { key: 'Workers', value: String(running), extra: el.Text({ color: QUIET, children: 'running' }), isHot: false },
+    { key: 'Decisions', value: String(decisions), extra: el.Text({ color: decisions > 0 ? LIME : QUIET, children: 'waiting on you' }), isHot: decisions > 0 },
+  ]
+  if (isClicked) {
+    return el.Box({
+      key: 'strip',
+      flexDirection: 'row',
+      gap: 1,
+      width: '100%',
+      marginTop: 1,
+      children: cards.map(card => el.Box({ key: `strip-${card.key}`, flexDirection: 'column', flexGrow: 1, borderStyle: 'round', borderColor: card.isHot ? LIME : '#3a3c36', paddingX: 1, children: [el.Text({ color: QUIET, children: card.key }), el.Text({ bold: true, color: card.isHot ? LIME : undefined, children: card.value }), card.extra] })),
+    })
+  }
+  // The terminal: one line.
+  return el.Box({
+    key: 'strip',
+    flexDirection: 'row',
+    marginTop: 1,
+    children: [
+      el.Text({ color: QUIET, children: `${first.key} ` }),
+      el.Text({ bold: true, children: first.value }),
+      ...(header.total > 0 ? [el.Text({ children: ' ' }), bar(el, 'strip-bar', header.done, header.total)] : []),
+      el.Text({ color: QUIET, children: ` · Workers ` }),
+      el.Text({ bold: true, children: String(running) }),
+      el.Text({ color: QUIET, children: ' · Decisions ' }),
+      el.Text({ bold: true, color: decisions > 0 ? LIME : undefined, children: `${decisions} waiting` }),
+    ],
+  })
+}
+
+// Role, proof and the Editor lock; each proof is green when it passed and red when it failed.
+/** @param {any} el @param {Home['header']} header */
+function metaRow(el, header) {
+  const parts = [
+    ...(header.role ? [el.Text({ color: QUIET, children: header.role })] : []),
+    ...(header.proof ? header.proof.split(' · ').map(piece => el.Text({ color: piece.endsWith('✗') ? '#ff5a45' : piece.endsWith('✓') ? '#3ccf7a' : QUIET, children: piece })) : []),
+    ...(header.lock ? [el.Text({ color: QUIET, children: header.lock })] : []),
+  ]
+  return el.Box({ key: 'meta', flexDirection: 'row', flexWrap: 'wrap', children: parts.flatMap((part, index) => (index > 0 ? [el.Text({ color: QUIET, children: ' · ' }), part] : [part])) })
+}
+
+/** @param {any} el @param {Engine} $ @param {Home} model @param {number} columns @param {string} [surface] @param {Crew[]} [crew] */
+function paneView(el, $, model, columns, surface, crew = []) {
   const { Box, Text, Button } = el
   isClicked = surface === 'desktop'
   const width = isClicked ? 1000 : Math.max(30, columns - 4)
@@ -936,11 +1087,12 @@ function paneView(el, $, model, columns, surface) {
         Text({ key: 'title', bold: true, children: fit(title, width) }),
         ...(status ? [Text({ key: 'status', children: fit(status, width) })] : []),
         ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
-        ...(meta ? [Text({ key: 'meta', color: QUIET, children: fit(meta, width) })] : []),
+        ...(meta ? [metaRow(el, header)] : []),
       ],
       surface,
     ),
   )
+  rows.push(summaryStrip(el, model, crew, width))
   if (model.actions.length > 0) {
     // Start something new, or run the skill that fits now: one press each.
     rows.push(Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => { handOff($, [one.id], one.prompt ?? ''); return `sent to the session: ${one.label.replace(/^\S+ /, '')}` }, false) })) }))
@@ -969,6 +1121,8 @@ function paneView(el, $, model, columns, surface) {
     })
     rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width), card]))
   }
+
+  rows.push(...crewSections(el, $, crew, width))
 
   if (isUntracked) {
     const mine = model.picks.filter(one => one.isMine)
