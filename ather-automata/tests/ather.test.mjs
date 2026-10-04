@@ -545,6 +545,8 @@ describe('the worker squad', () => {
     expect(svg).toContain('#3ccf7a')
     expect(svg.startsWith('<svg')).toBe(true)
     expect(avatarSvg('builder', null, 'running')).toContain('animateTransform')
+    // A running avatar is framed; a frame whose colour scheme differs from the app's paints a white square behind it.
+    expect(avatarSvg('builder', null, 'running')).toContain('color-scheme: light dark')
   })
 })
 
