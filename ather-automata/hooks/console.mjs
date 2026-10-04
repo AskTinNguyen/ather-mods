@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_GROUPS, CREATE_SHOWN, SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome } from './home.mjs'
+import { CREATE_GROUPS, CREATE_SHOWN, SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome, parseWeek } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents } from './model.mjs'
@@ -36,6 +36,9 @@ const ISSUES_EVERY_MS = 15 * 60 * 1000
 
 let cwd = ''
 let me = ''
+// The person's home folder, where the week-calendar plugin keeps ~/.calendar/latest.json.
+/** @type {string | null} */
+let userHome = null
 /** @type {import('./model.mjs').Intent[]} */
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
@@ -323,6 +326,9 @@ async function home($) {
   const now = Date.now()
   const away = await state.readAway(files)
   const profile = await state.readProfile(files, me)
+  if (userHome === null) {
+    try { userHome = ((await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || '').replace(/\\/g, '/') } catch { userHome = '' }
+  }
   const model = buildHome({
     intents,
     pinned: await state.readPinned(files),
@@ -336,6 +342,7 @@ async function home($) {
     recurring: await state.readRecurring(files),
     issues: await state.readIssues(files, me),
     prs: await state.readPrStates(files),
+    week: userHome ? parseWeek(await files.read(`${userHome}/.calendar/latest.json`), now) : null,
     last: await state.readLast(files, me),
     sent: [...sent],
     skills,
@@ -1057,13 +1064,14 @@ function summaryStrip(el, model, crew, width) {
   })
 }
 
-// Role, proof and the Editor lock; each proof is green when it passed and red when it failed.
+// Role, proof, the Editor lock and this week's figures; each proof is green when it passed and red when it failed.
 /** @param {any} el @param {Home['header']} header */
 function metaRow(el, header) {
   const parts = [
     ...(header.role ? [el.Text({ color: QUIET, children: header.role })] : []),
     ...(header.proof ? header.proof.split(' · ').map(piece => el.Text({ color: piece.endsWith('✗') ? '#ff5a45' : piece.endsWith('✓') ? '#3ccf7a' : QUIET, children: piece })) : []),
     ...(header.lock ? [el.Text({ color: QUIET, children: header.lock })] : []),
+    ...(header.week ? [el.Text({ color: QUIET, children: header.week })] : []),
   ]
   return el.Box({ key: 'meta', flexDirection: 'row', flexWrap: 'wrap', children: parts.flatMap((part, index) => (index > 0 ? [el.Text({ color: QUIET, children: ' · ' }), part] : [part])) })
 }
@@ -1233,7 +1241,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   const isUntracked = header.title === 'Ather'
   const title = isUntracked ? (model.isNewcomer ? 'Welcome' : 'What next?') : header.title
   const status = [header.stage, header.progress, header.sentence === 'waiting on you' ? '' : header.sentence].filter(Boolean).join(' · ')
-  const meta = [header.role, header.proof, header.lock].filter(Boolean).join(' · ')
+  const meta = [header.role, header.proof, header.lock, header.week].filter(Boolean).join(' · ')
   rows.push(
     masthead(
       el,

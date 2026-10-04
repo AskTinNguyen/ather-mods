@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { buildHome, workList } from '../hooks/home.mjs'
+import { buildHome, parseWeek, weekText, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
@@ -657,5 +657,24 @@ describe('GitHub issues as work', () => {
     expect(await state.readIssues(io, 'Lan Vo')).toHaveLength(2)
     store.set('issues:lanvo', { at: Date.now() - 25 * 3600 * 1000, list: issues })
     expect(await state.readIssues(io, 'Lan Vo')).toHaveLength(0)
+  })
+})
+
+describe('the week figures from week-calendar', () => {
+  const week = (over = {}) => JSON.stringify({ week: { startMs: NOON - 2 * 86400000, endMs: NOON + 5 * 86400000 }, metrics: { prsMerged: 3 }, machineHours: { productiveUtilization: 0.684 }, ...over })
+
+  test('read while their week is running; nothing otherwise', () => {
+    expect(parseWeek(week(), NOON)).toEqual({ prsMerged: 3, productive: 0.684 })
+    expect(parseWeek(week(), NOON + 6 * 86400000)).toBe(null)
+    expect(parseWeek(null, NOON)).toBe(null)
+    expect(parseWeek('{', NOON)).toBe(null)
+    expect(parseWeek(week({ metrics: undefined }), NOON)).toBe(null)
+  })
+
+  test('one quiet line in the header, only when there are figures', () => {
+    expect(weekText({ prsMerged: 3, productive: 0.684 })).toBe('This week: 3 PRs merged · 68% productive')
+    expect(weekText({ prsMerged: 1, productive: null })).toBe('This week: 1 PR merged')
+    expect(buildHome(/** @type {any} */ (base({ away: OFF, week: parseWeek(week(), NOON) }))).header.week).toBe('This week: 3 PRs merged · 68% productive')
+    expect(buildHome(/** @type {any} */ (base({ away: OFF }))).header.week).toBe('')
   })
 })
