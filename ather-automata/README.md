@@ -12,16 +12,16 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 
 | Where | What |
 |---|---|
-| Terminal | `/ather` opens one pane: where your work is (Plan ✓ Build ● Prove ○ Ship ○) and the proof so far, what needs you, then Next, then other work you could pick up. Enter hands a row to the session. |
-| Desktop app | `/ather` asks one question: where things stand, and the few things worth doing now. Pick one and the session takes it from there; it never loops. |
-| Above the prompt | One line, only when something needs you, a window is running, or you are new. Otherwise nothing. |
+| Terminal | `/ather` opens one pane: where your work is (Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○) and the proof so far, what needs you, then Next, then other work you could pick up. Enter hands a row to the session. |
+| Desktop app | `/ather` opens the same pane in the side panel; click a row to hand it to the session. |
+| Above the prompt | One line: what needs you, a running window, or just the name; then ☾ away, ⤢ open the pane, ✕ hide it until something is new. |
 | Pop-ups | A known trap with its fix, a build that really failed, a merge that dropped your edits, a worker gone quiet, a thin worker brief. |
 
 ## What to work on
 
 Each session works on one intent. A new session offers to continue the one you last worked on. With nothing tracked, Ather offers one list: your open intents, then the GitHub issues assigned to you that have no intent yet (high priority first), then teammates' intents you could follow (read-only: their decisions stay theirs).
 
-Picking an issue asks the session to check for overlapping work first (the issue preflight), then draft an intent linked to it (`- Issue: #28887`) and show you the plan before anything is built. Ather reads your issues with `gh` and never writes to GitHub. `/ather issues` lists them; `/ather issue 28887` or `#28887` starts one.
+Clicking an issue opens its card: **Start an intent**, **Open on GitHub** or **Copy link**. Starting one asks the session to check for overlapping work first (the issue preflight), then draft an intent linked to it (`- Issue: #28887`) and show you the plan before anything is built. Ather reads your issues with `gh` and never writes to GitHub. `/ather issues` lists them; `/ather issue 28887` or `#28887` starts one.
 
 ## Going away
 
@@ -62,7 +62,7 @@ Setting: `briefGate` (`warn`, `enforce` or `off`) for worker briefs that lack pa
 
 ## Limits
 
-- The desktop app gives plugins no drawing surface, so there `/ather` is a question, not a pane; option descriptions may not show, so labels stand alone.
+- Where a surface has no pane (the mobile app), `/ather` asks one question instead; option descriptions may not show there, so labels stand alone.
 - Your role, the tour, trap counts and the issue list are kept on your machine, not shared across the team.
 - It never merges, commits or pushes on its own. It is a safety net, not a permission system, and it does not stop tree-rewriting git in the shared checkout (`deny_root_paths.py` does that, outside this plugin).
 
@@ -74,9 +74,4 @@ Tests: `tests/ather.test.mjs` ships with the plugin. An end-to-end run in the ma
 
 ## Changes
 
-- **0.9.5** Calmer: nothing focused while away (no stray Enter ends a window), a stage track and the proof in the header, "Continue" your last intent, a tech artist's Editor check in one press, teammates' work marked read-only.
-- **0.9.4** First-day polish: welcome back after a night away, questions resume when you type, "I'm back" in one step, plain times for `/away`, the role asked when you skip the tour, proof kept with the intent for a day, your own issue offered beside the tour.
-- **0.9.3** GitHub issues as work, in one list with your intents.
-- **0.9.2** Holds last until you review the window; teammates' intents are read-only; honest test evidence; a new session picks up last night's window.
-- **0.9.1** One owner for shared state, after a strict structural review.
-- **0.9.0** Rewrite into one pane and one question, after the example mods in anthropics/claude-code-playground.
+- **0.0.1** First shared release. The pane (terminal and desktop side panel) with what needs you, Next, your intents and assigned GitHub issues, New intent and a curated Skills list; issue cards (start an intent, open on GitHub, copy link); the band with away, open and close; away windows with held merges and a decision ledger; evidence read from tool output; the newcomer tour.

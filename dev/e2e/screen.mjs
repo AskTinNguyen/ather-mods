@@ -7,6 +7,7 @@ const textOf = node => {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
   if (node.type === 'Button') return buttonText(node)
   if (node.type === 'Input') return `${node.props.label ?? ''}[${node.props.value || node.props.placeholder || ''}]`
+  if (node.type === 'Link') return node.props.label ?? node.props.href
   return node.children.map(textOf).join(node.type === 'Box' && node.props.gap ? ' '.repeat(node.props.gap) : '')
 }
 

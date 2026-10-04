@@ -4,7 +4,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { buildHome, workList } from '../hooks/home.mjs'
-import { areaFromLabels, issueLabel, issuePrompt, parseIssues } from '../hooks/issues.mjs'
+import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
 
@@ -397,7 +397,7 @@ describe('shared state: one owner, one change at a time', () => {
     expect((await state.readAway(io)).phase).toBe('review')
     await state.closeAway(io)
     expect((await state.readAway(io)).phase).toBe('off')
-    await state.settleItem(io, { kind: 'rule', ruleId: 'live-coding', id: 'x', label: '', title: '', question: '', prompt: '' })
+    await state.settleItem(io, { kind: 'rule', ruleIds: ['live-coding'], id: 'x', label: '', title: '', question: '', prompt: '' })
     expect(await io.get('gotchaRuled')).toEqual(['live-coding'])
   })
 })
@@ -411,7 +411,9 @@ describe('home', () => {
     expect(model.items.map(one => one.id)).toEqual(['call:spawner:F-1'])
     expect(model.items[0]?.title).toBe('F-1 · Drops only or full respawn?')
     expect(model.items[0]?.label).toBe('Decide F-1 on spawner')
-    expect(model.header.role).toBe('as Engineer')
+    expect(model.header.role).toBe('Engineer')
+    // The pane's coloured stages say what the track says.
+    expect(model.header.stages.map(one => `${one.label} ${one.state === 'done' ? '✓' : one.state === 'now' ? '●' : '○'}`).join('  ')).toBe(model.header.track)
     expect(model.open).toHaveLength(1)
     expect(home({ sent: ['call:spawner:F-1'] }).open).toHaveLength(0)
   })
@@ -419,7 +421,13 @@ describe('home', () => {
   test('a newcomer gets the tour as Next and no hand-over offer, even in the evening', () => {
     const model = home({ me: 'Minh Tran', role: '', pinned: null, tourDone: false, now: EVENING })
     expect(model.isNewcomer).toBe(true)
-    expect(model.header.role).toBe('role not set (/ather role)')
+    // The tour asks the role and is said once, by Next: the header repeats neither.
+    expect(model.header.role).toBe('')
+    expect(model.header.sentence).toBe('')
+    expect(model.next?.label).toBe('Take the tour')
+    // Until the git name is read, nobody is a newcomer and a teammate's role line stays.
+    expect(home({ me: '', role: '', pinned: null, tourDone: false }).isNewcomer).toBe(false)
+    expect(home({ me: 'Lan Vo', role: '', pinned: null, tourDone: true }).header.role).toBe('Role not set · /ather role')
     // Saying a role is enough to stop being new.
     expect(home({ me: 'Minh Tran', role: 'engineer', pinned: null, tourDone: false }).isNewcomer).toBe(false)
     expect(model.next?.isTour).toBe(true)
@@ -455,9 +463,40 @@ describe('home', () => {
     expect(model.items.map(one => one.kind)).toEqual(['lost', 'call', 'editor', 'rule'])
     expect(model.items.find(one => one.kind === 'rule')?.prompt).toContain('do not commit')
   })
+
+  test('many problems that keep coming back wait as one item, which settles them all', async () => {
+    const recurring = ['a', 'b', 'c'].map(id => ({ id, title: `Trap ${id}`, fix: 'Fix.', count: 3 }))
+    const rules = home({ recurring }).items.filter(one => one.kind === 'rule')
+    expect(rules).toHaveLength(1)
+    expect(rules[0].title).toBe('3 problems keep coming back: make them rules?')
+    expect(rules[0].prompt).toContain('multiSelect')
+    const { io } = memoryIo()
+    await state.settleItem(io, rules[0])
+    expect(await io.get('gotchaRuled')).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('quick actions', () => {
+  test('New intent always; Skills opens the short list, grouped, of the listed skills present here', () => {
+    const home = (over = {}) => buildHome(/** @type {any} */ (base({ away: OFF, ...over })))
+    const model = home({ pinned: null, skills: [{ name: 'talab', description: 'Test a TechArt job.' }, { name: 'thermo-nuclear-code-quality-review', description: 'Strict review.' }, { name: 'night-watch', description: 'Not listed.' }] })
+    expect(model.actions.map(one => one.label)).toEqual(['＋ New intent', '▶ Skills'])
+    expect(model.skills.map(one => `${one.group}: ${one.name}`)).toEqual(['Review and proof: thermo-nuclear-code-quality-review', 'Agentic testing: talab'])
+    expect(home({ pinned: null, skills: [] }).actions.map(one => one.label)).toEqual(['＋ New intent'])
+  })
 })
 
 describe('GitHub issues as work', () => {
+  test('a row shows the words of a title, and its tags fill in a missing area', () => {
+    expect(issueName('[QA][Steam][PRE-PROD: BOSS-ENE][BVT][Phase 3]: Boss shield stays up after the phase change').name).toBe('Boss shield stays up after the phase change')
+    expect(issueName('task_S02_VFX_rain-particles-on-low-settings').name).toBe('Rain particles on low settings')
+    expect(issueName('Plain title').name).toBe('Plain title')
+    const [issue] = parseIssues(JSON.stringify([{ number: 1, title: '[QA][PRE-PROD: BOSS-ENE]: Boss shakes', labels: [], updatedAt: '2026-09-01T00:00:00Z' }]))
+    expect(issue.area).toBe('Bosses')
+    expect(issue.title).toBe('[QA][PRE-PROD: BOSS-ENE]: Boss shakes')
+    expect(issueLabel({ ...issue, area: 'Unsorted' }, Date.parse('2026-09-01T12:00:00Z'))).toBe('today')
+  })
+
   const GH = JSON.stringify([
     { number: 31360, title: 'Cheaper rain particles on low settings', url: 'https://github.com/sipherxyz/s2/issues/31360', labels: [], updatedAt: '2026-09-15T11:52:35Z' },
     { number: 28887, title: '[BUG] Dodge cancels the wrong montage', url: 'u', labels: [{ name: 'combat' }, { name: 'animation-code' }, { name: 'priority:high' }], updatedAt: '2026-07-21T02:57:12Z' },
@@ -498,7 +537,7 @@ describe('GitHub issues as work', () => {
   test('with no intent of your own, Next starts your most urgent issue', () => {
     const model = buildHome(/** @type {any} */ (base({ away: OFF, me: 'Lan Vo', role: 'engineer', pinned: null, issues })))
     expect(model.next?.label).toBe('Start issue #28887')
-    expect(model.next?.hint).toBe('[BUG] Dodge cancels the wrong montage · high priority · Combat · 2 months ago')
+    expect(model.next?.hint).toBe('Dodge cancels the wrong montage · high priority · Combat · 2 months ago')
     expect(model.next?.prompt).toContain('issue-preflight')
     expect(model.picks[0]?.id).toBe('issue:31360')
     // Once started, it leaves Next for the rest of the session.

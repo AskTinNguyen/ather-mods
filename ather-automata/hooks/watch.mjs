@@ -41,7 +41,7 @@ function io($) {
     exists: path => $.fs.exists(path).catch(() => false),
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
-    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd, timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
   }
 }

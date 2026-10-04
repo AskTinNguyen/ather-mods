@@ -25,7 +25,8 @@ if (types) {
   const config = path.join(WORK, 'tsconfig.json')
   fs.writeFileSync(config, JSON.stringify({
     compilerOptions: { target: 'es2023', lib: ['es2023'], types: [], module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
-    include: [types.replace(/\\/g, '/'), path.join(MOD, 'hooks/*.mjs').replace(/\\/g, '/')],
+    // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
+    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs')).map(f => f.replace(/\\/g, '/')),
   }))
   sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')

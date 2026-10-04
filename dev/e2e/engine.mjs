@@ -10,13 +10,13 @@ const DISMISSED = '[User dismissed — do not proceed, wait for next instruction
 
 // Elements are called as functions: Text({ ... }) returns a node.
 const element = type => (props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
-const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Markdown', 'Link', 'Code'].map(name => [name, element(name)]))
+const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Markdown', 'Link', 'Code', 'Svg'].map(name => [name, element(name)]))
 
 export const createEngine = ({ root, surfaces, user, ghIssues }) => {
   const store = new Map()
   const hooks = []
   const timers = []
-  const record = { hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
+  const record = { ghRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -80,6 +80,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues }) => {
       },
       after: (ms, fn) => {
         const timer = setTimeout(fn, ms)
+        // A long timer (a retry a minute out) must not keep the run alive after the checks.
+        if (ms >= 10000) timer.unref?.()
         return { cancel: () => clearTimeout(timer) }
       },
       sleep: async () => undefined,
@@ -114,6 +116,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues }) => {
       run: async (argv, init = {}) => {
         if (user !== undefined && argv.join(' ') === 'git config user.name') return { exitCode: 0, stdout: `${user}\n`, stderr: '' }
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
+        if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
         if (argv[0] === 'gh') return ghIssues === undefined ? { exitCode: 1, stdout: '', stderr: 'gh: To get started with GitHub CLI, please run: gh auth login' } : { exitCode: 0, stdout: JSON.stringify(ghIssues), stderr: '' }
         try {
           const stdout = execFileSync(argv[0], argv.slice(1), { cwd: init.cwd ?? root, env: { ...process.env, ...(init.env ?? {}) }, encoding: 'utf8', timeout: init.timeoutMs ?? 30000, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -132,6 +135,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues }) => {
     ui: {
       resolve: () => ELEMENTS,
       toast: text => record.toasts.push(text),
+      copy: async ({ text }) => {
+        record.copies.push(text)
+        return { isCopied: true }
+      },
       status: text => record.status.push(text),
       log: text => record.logs.push(text),
       invalidate: () => {
@@ -203,6 +210,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues }) => {
         holding -= 1
       }
     },
+    // Which surfaces the session draws on from now (the desktop app attaches after start).
+    setSurfaces: list => surfaces.splice(0, surfaces.length, ...list),
     flush: () => new Promise(resolve => setTimeout(resolve, 200)),
     timers: async () => {
       for (const fn of timers) await fn()
@@ -214,7 +223,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues }) => {
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),
     start: (isInteractive = true) => dispatch('session.start', { cwd: root, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
     turnEnd: () => dispatch('turn.complete', { reason: 'answer' }, () => ({ text: '' })),
-    render: (component, props, requestId) => dispatch('ui.render', { component, surface: 'terminal', requestId, props }, () => null),
+    render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
     close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),
   }
 }

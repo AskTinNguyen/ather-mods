@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { TOUR_PROMPT, askPrompt, batchPrompt, buildHome } from './home.mjs'
+import { SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents } from './model.mjs'
 import * as state from './state.mjs'
@@ -36,8 +36,19 @@ let me = ''
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
 const sent = new Set()
-let paneMode = /** @type {'home' | 'pick'} */ ('home')
+let paneMode = /** @type {'home' | 'pick' | 'away' | 'skills' | 'issue'} */ ('home')
+// The issue whose card is open (paneMode 'issue'), and the view to go back to.
+let issueShown = 0
+let issueBack = /** @type {'home' | 'pick'} */ ('home')
+/** @type {{ name: string, description: string }[]} */
+let skills = []
+// The band's ✕: hidden until it has something new to say.
+let closedHint = /** @type {string | null} */ (null)
 let isIssuesWarned = false
+let isWhoWarned = false
+let issueRetries = 0
+/** @type {Promise<void> | null} */
+let isAwake = null
 /** @type {{ version: number, at: number, model: Home | null }} */
 let view = { version: -1, at: 0, model: null }
 
@@ -54,7 +65,7 @@ function io($) {
     exists: path => $.fs.exists(path).catch(() => false),
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
-    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd, timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
   }
 }
@@ -68,33 +79,20 @@ const NOT_S2 = 'Ather Automata works in S2 checkouts (a docs/intent folder); non
 
 /** @param {import('claude-code').On} on */
 export function register(on) {
-  // Only sessions with a person at them get the console (watch.mjs starts in every session).
+  // The desktop app runs sessions the way the SDK does: not interactive at start, no surface yet.
+  // So the commands are registered in every session, and the work behind the console (reading
+  // intents and issues on timers) starts the first time someone draws or uses it, never in a
+  // scripted run nobody watches.
   on('session.start', { isInteractive: true }, async ($, e, next) => {
     const result = await next(e)
-    sent.clear()
-    paneMode = 'home'
-    isIssuesWarned = false
-    view = { version: -1, at: 0, model: null }
-    cwd = e.cwd
-    try {
-      await $.command.register({ name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name>]' })
-      await $.command.register({ name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' })
-      const lane = await laneOf($)
-      me = lane.me
-      if (!lane.isS2) return result
-      await refresh($)
-      $.clock.every(60000, () => void refresh($).catch(() => undefined))
-      // watch.mjs may pick up last night's window just after this; show it.
-      $.clock.after(1500, () => void refresh($).catch(() => undefined))
-      void refreshIssues($).catch(() => undefined)
-      $.clock.every(ISSUES_EVERY_MS, () => void refreshIssues($).catch(() => undefined))
-      if ((await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
-        $.ui.toast('Ather: new here? Type /ather tour for a six-step tour of how S2 works with Claude Code.', { timeoutMs: 12000 })
-        await state.setProfile(io($), me, { isNudged: true })
-      }
-    } catch (error) {
-      $.ui.log(`Ather console: start failed: ${String(error)}`, { to: 'debug' })
-    }
+    await openConsole($, e.cwd)
+    await wake($)
+    return result
+  })
+
+  on('session.start', { isInteractive: false }, async ($, e, next) => {
+    const result = await next(e)
+    await openConsole($, e.cwd)
     return result
   })
 
@@ -106,22 +104,44 @@ export function register(on) {
 
   on('command.run', { command: 'ather' }, async ($, e) => {
     if (!(await laneOf($)).isS2) return { text: NOT_S2 }
+    await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }
   })
 
-  on('command.run', { command: 'away' }, async ($, e) => ({ text: (await laneOf($)).isS2 ? await awayCommand($, e.args.trim()) : NOT_S2 }))
+  on('command.run', { command: 'away' }, async ($, e) => {
+    if (!(await laneOf($)).isS2) return { text: NOT_S2 }
+    await wake($)
+    return { text: await awayCommand($, e.args.trim()) }
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await laneOf($)).isS2) return next(e)
-    const hint = bandHint(await home($))
-    // The band is shared with other mods: draw only when there is something to say.
-    if (hint === '') return next(e)
+    void wake($)
+    const model = await home($)
+    const hint = bandHint(model)
+    // Closed with ✕: stays away until there is something new to say.
+    if (closedHint !== null && (hint === '' || hint === closedHint)) return next(e)
+    closedHint = null
     const { Box, Text, Button } = $.ui.resolve(e)
-    return Box({ flexDirection: 'row', gap: 2, children: [Text({ color: 'cyan', children: hint }), Button({ key: 'ather-open', label: 'Open', plain: true, dimColor: true, onPress: () => void openPane($, 'home') })] })
+    const isAway = model.header.stage === 'Away'
+    return Box({
+      flexDirection: 'row',
+      gap: 2,
+      children: [
+        Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: hint ? undefined : true, wrap: 'truncate', children: hint || '◆ Ather Automata' })] }),
+        Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
+        Button({ key: 'ather-open', label: '⤢', plain: true, dimColor: true, onPress: () => void openPane($, 'home') }),
+        Button({ key: 'ather-close', label: '✕', plain: true, dimColor: true, role: 'dismiss', onPress: () => {
+          closedHint = hint
+          $.ui.invalidate('ui.render')
+          $.ui.toast('Ather hidden until something needs you. /ather brings it back.')
+        } }),
+      ],
+    })
   })
 
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => (e.requestId === PANE_ID ? paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80) : next(e)))
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => (e.requestId === PANE_ID ? (void wake($), paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface)) : next(e)))
 
   on('ui.close', ($, e, next) => {
     if (e.id === PANE_ID) paneMode = 'home'
@@ -129,12 +149,62 @@ export function register(on) {
   })
 }
 
+// ---------------------------------------------------------------- starting
+
+// Every session: fresh module state and the two commands.
+/** @param {Engine} $ @param {string} folder */
+async function openConsole($, folder) {
+  sent.clear()
+  paneMode = 'home'
+  isIssuesWarned = false
+  isWhoWarned = false
+  issueRetries = 0
+  isAwake = null
+  view = { version: -1, at: 0, model: null }
+  closedHint = null
+  cwd = folder
+  for (const command of [
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name>]' },
+    { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
+  ]) {
+    // One refused command must not take the other, or anything after, with it.
+    await $.command.register(command).catch(error => $.ui.log(`Ather console: /${command.name} not registered: ${String(error)}`, { to: 'debug' }))
+  }
+}
+
+// Once someone is there (a REPL start, the first draw, the first command): read intents and
+// issues, keep them fresh, and tell a newcomer about the tour. Runs once per session.
+/** @param {Engine} $ @returns {Promise<void>} */
+function wake($) {
+  if (!isAwake) isAwake = startConsoleWork($).catch(error => $.ui.log(`Ather console: start failed: ${String(error)}`, { to: 'debug' }))
+  return isAwake
+}
+
+/** @param {Engine} $ */
+async function startConsoleWork($) {
+  const lane = await laneOf($)
+  if (lane.me !== '') me = lane.me
+  if (!lane.isS2) return
+  await refresh($)
+  $.clock.every(60000, () => void refresh($).catch(() => undefined))
+  // watch.mjs may pick up last night's window just after this; show it.
+  $.clock.after(1500, () => void refresh($).catch(() => undefined))
+  void refreshIssues($).catch(() => undefined)
+  $.clock.every(ISSUES_EVERY_MS, () => void refreshIssues($).catch(() => undefined))
+  if ((await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
+    $.ui.toast('Ather: new here? Type /ather tour for a six-step tour of how S2 works with Claude Code.', { timeoutMs: 12000 })
+    await state.setProfile(io($), me, { isNudged: true })
+  }
+}
+
 // ---------------------------------------------------------------- the view model
 
 // Re-reads the intents; the rest comes from shared state when the view is rebuilt.
 /** @param {Engine} $ */
 async function refresh($) {
-  const { root } = await laneOf($)
+  const { root, me: who } = await laneOf($)
+  if (who !== me) stale()
+  me = who
   const files = io($)
   const pinned = await state.readPinned(files)
   const read = []
@@ -159,9 +229,16 @@ async function refresh($) {
     )
   }
   intents = read.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  // The listed skills that exist here, each with the first sentence of its own description.
+  const found = []
+  for (const name of SKILL_GROUPS.flatMap(one => one.names)) {
+    const text = await files.read(`${root}/${skillFolder(name)}/SKILL.md`)
+    if (text === null) continue
+    const description = (/^description:\s*(.+)$/m.exec(text)?.[1] ?? '').trim().replace(/^["']|["']$/g, '')
+    found.push({ name, description: /^(.+?[.!?])(\s|$)/.exec(description)?.[1] ?? description })
+  }
+  skills = found
   stale()
-  const hint = bandHint(await home($))
-  $.ui.status(hint === '' ? undefined : hint)
   $.ui.invalidate('ui.render')
 }
 
@@ -171,7 +248,7 @@ function stale() {
 
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
-/** @param {Engine} $ */
+/** @param {Engine} $ @returns {Promise<string>} why the read failed, or '' when it worked */
 async function refreshIssues($) {
   const { root } = await laneOf($)
   const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
@@ -180,9 +257,17 @@ async function refreshIssues($) {
     if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [])
     if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
     isIssuesWarned = true
-    return
+    // A slow first start or a network blip is tried again in a minute, three times at most:
+    // without gh at all, the 15-minute refresh is enough.
+    if (issueRetries < 3) {
+      issueRetries += 1
+      $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
+    }
+    return (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
   }
+  issueRetries = 0
   await state.setIssues(io($), me, parseIssues(run.stdout))
+  return ''
 }
 
 /** @param {Engine} $ @returns {Promise<Home>} */
@@ -190,7 +275,9 @@ async function home($) {
   const version = state.stateVersion()
   if (view.model && view.version === version && Date.now() - view.at < VIEW_TTL_MS) return view.model
   const files = io($)
-  const { root } = await laneOf($)
+  const { root, me: who } = await laneOf($)
+  if (who !== '') me = who
+  else if (!isWhoWarned && (isWhoWarned = true)) $.ui.log('Ather: git user.name could not be read; the pane treats nobody as you until it is.', { to: 'debug' })
   const tz = await state.readTz(files)
   const now = Date.now()
   const away = await state.readAway(files)
@@ -209,12 +296,12 @@ async function home($) {
     issues: await state.readIssues(files, me),
     last: await state.readLast(files, me),
     sent: [...sent],
+    skills,
     workers: (await $.agent.list().catch(() => [])).filter(agent => agent.status === 'running' && agent.parentId === undefined).length,
     now,
     tz,
   })
   view = { version, at: now, model }
-  $.ui.status(bandHint(model) || undefined)
   return model
 }
 
@@ -223,7 +310,7 @@ function bandHint(model) {
   const { header } = model
   if (header.stage === 'Away') return `🌙 Away ${header.progress} · ${header.sentence} · /ather`
   if (model.open.some(one => one.kind === 'review')) return '☀ Welcome back · review the away window · /ather'
-  if (model.isNewcomer) return '◆ New here? /ather tour'
+  if (model.isNewcomer) return '◆ New here? Take the tour'
   if (model.open.length > 0) return `◆ ${header.title} · ${model.open.length} need${model.open.length === 1 ? 's' : ''} you · /ather`
   return ''
 }
@@ -333,7 +420,7 @@ async function startIssue($, number, isInQuestion = false) {
     handOff($, [`issue:${number}`], issuePrompt(assigned, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
   }
-  const issue = { number, title: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
+  const issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
   const go = async () => {
     handOff($, [`issue:${number}`], issuePrompt(issue, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
@@ -390,8 +477,9 @@ async function typed($, text, isInQuestion = true) {
 // ---------------------------------------------------------------- commands
 
 /** @param {Engine} $ */
-async function isTerminal($) {
-  return (/** @type {readonly string[]} */ (await $.session.surfaces().catch(() => []))).includes('terminal')
+async function hasPane($) {
+  const surfaces = /** @type {readonly string[]} */ (await $.session.surfaces().catch(() => []))
+  return surfaces.includes('terminal') || surfaces.includes('desktop')
 }
 
 /** @param {Engine} $ */
@@ -427,12 +515,21 @@ async function atherCommand($, args) {
     await state.setRung(io($), await state.evidenceScope(io($)), 'editor', { state: 'pass', detail: 'checked by you in the Editor' })
     return 'Recorded: you checked it in the Editor.'
   }
-  if (word === 'pick' || word === 'issues') return (await isTerminal($)) ? openPane($, 'pick') : workQuestion($)
+  if (word === 'issues') {
+    // Read them now: a list that never showed up is explained here instead of staying empty.
+    const failure = await refreshIssues($).catch(error => String(error))
+    if (failure) return `Could not read your GitHub issues: ${failure}`
+    if ((await state.readIssues(io($), me)).length === 0) return 'No open GitHub issues are assigned to you.'
+    return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
+  }
+  if (word === 'pick') return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
   // "/ather tuor": a typo of a command word is pointed out, never run ("ship" is one letter from "skip").
   const meant = rest === '' ? closestWord(word, COMMAND_WORDS) : null
   if (meant && searchIntents(intents, word).length === 0) return `Did you mean /ather ${meant}?`
   if (word !== '') return typed($, args, false)
-  return (await isTerminal($)) ? openPane($, 'home') : menuQuestion($)
+  // /ather also brings back a band closed with ✕.
+  closedHint = null
+  return (await hasPane($)) ? openPane($, 'home') : menuQuestion($)
 }
 
 /** @param {Engine} $ @param {string} args */
@@ -499,7 +596,7 @@ async function menuQuestion($) {
   if (next?.isTour) {
     choices.push({ label: 'Take the tour (Recommended)', description: next.hint, run: () => doNext($, next) })
     const [mine] = model.work.filter(one => one.isMine)
-    if (mine) choices.push({ label: cut(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.title}` : `Pick up ${mine.slug}`, 40), description: mine.hint, run: () => startWork($, mine) })
+    if (mine) choices.push({ label: cut(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.slug}`, 40), description: mine.hint, run: () => startWork($, mine) })
     choices.push({ label: 'Skip the tour', description: 'You know your way around; Ather asks your role instead.', run: () => skipTour($) })
   }
   // What happened while the person was away is reviewed on its own, before anything else.
@@ -520,7 +617,7 @@ async function menuQuestion($) {
       : review
         ? `Welcome back. ${review.question}.`
         : model.isNewcomer
-          ? `${me ? `Hi ${me.split(/\s+/)[0]}, new` : 'New'} to Ather? The tour shows how S2 works with Claude Code in six short steps and ends with your first intent started.`
+          ? `${me ? `Hi ${me.split(/\s+/)[0]}, new` : 'New'} to Ather? Start with the tour.`
           : header.title === 'Ather'
             ? model.work.some(one => one.kind === 'intent' && one.isMine)
               ? 'Nothing tracked in this session.'
@@ -566,10 +663,10 @@ async function presetQuestion($, goal) {
 
 // ---------------------------------------------------------------- the pane (terminal)
 
-/** @param {Engine} $ @param {'home' | 'pick'} mode */
+/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue'} mode */
 async function openPane($, mode) {
   paneMode = mode
-  await $.ui.open({ id: PANE_ID, title: 'Ather', focus: true, closeOnEscape: true, rows: 22 })
+  await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
   $.ui.invalidate('ui.render')
   return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
 }
@@ -585,7 +682,7 @@ function press($, run, keepOpen) {
       .catch(error => $.ui.toast(`Ather: ${String(error)}`))
 }
 
-/** @param {Engine} $ @param {'home' | 'pick'} mode */
+/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue'} mode */
 function show($, mode) {
   return () => {
     paneMode = mode
@@ -605,13 +702,140 @@ function fit(text, width) {
   return clean.length <= width ? clean : `${clean.slice(0, Math.max(1, width - 1))}…`
 }
 
-/** @param {any} el @param {Engine} $ @param {Home} model @param {number} columns */
-function paneView(el, $, model, columns) {
+// ---------------------------------------------------------------- the pane
+
+// Ather's look: near-black, one lime accent, quiet grey for everything secondary.
+const LIME = '#DDFF00'
+const QUIET = '#8E918A'
+
+// The Ather mark: the A, its lime I, and the 5 raised as a power.
+const MARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100"><polygon points="6,98 40,14 60,14 94,98 76,98 50,36 24,98" fill="#C9CCCC"/><rect x="47.5" y="56" width="5" height="28" fill="#DDFF00"/><text x="86" y="40" font-family="Arial Black, Impact, sans-serif" font-weight="900" font-size="40" fill="#DDFF00">5</text></svg>'
+
+// A section label, spaced out as the studio's are ("N E E D S   Y O U"), plain when too wide.
+/** @param {any} el @param {string} key @param {string} text @param {number} width */
+function label(el, key, text, width) {
+  const spaced = text.toUpperCase().split('').join(' ')
+  return el.Text({ key, color: LIME, bold: true, children: spaced.length <= width ? spaced : fit(text.toUpperCase(), width) })
+}
+
+// On the desktop the pane is clicked, and its keys reach it only once it is clicked into (opened from
+// the band it never takes the keyboard): letters there promise what they cannot do, so none are drawn.
+let isClicked = false
+/** @param {string | undefined} hotkey */
+const hotkeyFor = hotkey => (isClicked ? undefined : hotkey)
+
+// One choice: its key and what it does, then one quiet line of detail beneath.
+/**
+ * @param {any} el
+ * @param {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQuiet?: boolean, autoFocus?: boolean, width: number, onPress: () => void }} row
+ */
+function choice(el, row) {
+  const title = `${row.isSent ? '✓ sent · ' : ''}${row.title}`
+  return el.Box({
+    key: `row-${row.key}`,
+    flexDirection: 'column',
+    width: '100%',
+    children: [
+      el.Button({ key: row.key, label: fit(title, row.width - 3), hotkey: hotkeyFor(row.hotkey), plain: true, dimColor: row.isSent || row.isQuiet ? true : undefined, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }),
+      ...(row.detail ? [el.Box({ key: `${row.key}-detail`, paddingLeft: isClicked ? 1 : 3, children: [el.Text({ color: QUIET, wrap: 'wrap', children: row.detail })] })] : []),
+    ],
+  })
+}
+
+// An issue's address, when it is one a Link may carry (https, printable ASCII); else none.
+/** @param {string} url */
+function linkOf(url) {
+  try {
+    const href = new URL(url).href
+    return href.startsWith('https://') && /^[\x21-\x7e]+$/.test(href) && href.length <= 2048 ? href : ''
+  } catch {
+    return ''
+  }
+}
+
+/** @param {Engine} $ @param {number} number @param {string} link */
+function openIssue($, number, link) {
+  return () =>
+    void laneOf($)
+      .then(({ root }) => $.process.run(['gh', 'issue', 'view', String(number), '--web'], { cwd: root, timeoutMs: 20000 }))
+      .then(run => $.ui.toast(run.exitCode === 0 ? `Ather: opened issue #${number} in your browser.` : `Ather: could not open the browser; the link is ${link}`))
+      .catch(() => $.ui.toast(`Ather: could not open the browser; the link is ${link}`))
+}
+
+// Open on GitHub: a link the desktop opens on a click; in the terminal, a button.
+/** @param {any} el @param {Engine} $ @param {import('./issues.mjs').Issue} issue @param {string} link @param {{ key: string, label: string, hotkey?: string, isQuiet?: boolean }} look */
+function openControl(el, $, issue, link, look) {
+  return isClicked ? el.Link({ key: look.key, href: link, label: look.label }) : el.Button({ key: look.key, label: look.label, plain: true, hotkey: look.hotkey, dimColor: look.isQuiet ? true : undefined, onPress: openIssue($, issue.number, link) })
+}
+
+/** @param {Engine} $ @param {string} link */
+function copyLink($, link) {
+  return (/** @type {{ surface?: string }} */ pressed) =>
+    void $.ui
+      .copy({ text: link, surface: /** @type {any} */ (pressed)?.surface })
+      .then(result => $.ui.toast(result.isCopied ? 'Ather: issue link copied.' : `Ather: could not copy the link (${result.reason}).`))
+      .catch(error => $.ui.toast(`Ather: could not copy the link: ${String(error)}`))
+}
+
+/** @param {Engine} $ @param {number} number @param {'home' | 'pick'} back */
+function showIssue($, number, back) {
+  return () => {
+    issueShown = number
+    issueBack = back
+    paneMode = 'issue'
+    $.ui.invalidate('ui.render')
+  }
+}
+
+// A choice with an issue's open and copy icons: beside it on the desktop, beneath it in the terminal.
+/** @param {any} el @param {Engine} $ @param {import('./issues.mjs').Issue | null} issue @param {any} row */
+function withIssueIcons(el, $, issue, row) {
+  const link = issue ? linkOf(issue.url) : ''
+  if (!link) return [row]
+  const icons = el.Box({ key: 'next-icons', flexDirection: 'row', gap: 2, children: [el.Link({ key: 'next-open', href: link, label: '↗' }), el.Button({ key: 'next-copy', label: '⧉', plain: true, dimColor: true, onPress: copyLink($, link) })] })
+  return isClicked ? [el.Box({ key: 'next-with-icons', flexDirection: 'row', width: '100%', children: [el.Box({ key: 'next-main', flexGrow: 1, children: [row] }), icons] })] : [row, el.Box({ key: 'next-icons-row', paddingLeft: 3, children: [el.Box({ key: 'next-icons-words', flexDirection: 'row', gap: 2, children: [openControl(el, $, /** @type {import('./issues.mjs').Issue} */ (issue), link, { key: 'next-open', label: '↗ Open on GitHub', hotkey: 'o', isQuiet: true }), el.Button({ key: 'next-copy', label: '⧉ Copy link', plain: true, hotkey: 'y', dimColor: true, onPress: copyLink($, link) })] })] })]
+}
+
+/** @param {any} el @param {string} key @param {any[]} children */
+function section(el, key, children) {
+  return el.Box({ key, flexDirection: 'column', width: '100%', marginTop: 1, children })
+}
+
+// Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○, lit up to where the work is.
+/** @param {any} el @param {Home['header']['stages']} stages */
+function stageRow(el, stages) {
+  return el.Box({
+    key: 'stages',
+    flexDirection: 'row',
+    children: stages.flatMap((one, index) => [
+      ...(index > 0 ? [el.Text({ key: `stage-gap-${index}`, color: QUIET, children: ' ─ ' })] : []),
+      el.Text({ key: `stage-${index}`, color: one.state === 'todo' ? QUIET : LIME, bold: one.state === 'now', children: `${one.label} ${one.state === 'done' ? '✓' : one.state === 'now' ? '●' : '○'}` }),
+    ]),
+  })
+}
+
+/** @param {any} el @param {any[]} lines @param {string | undefined} surface */
+function masthead(el, lines, surface) {
+  const words = el.Box({ key: 'head-words', flexDirection: 'column', children: lines })
+  return surface === 'desktop' && el.Svg ? el.Box({ key: 'head', flexDirection: 'row', gap: 2, alignItems: 'center', children: [el.Svg({ source: MARK, alt: 'Ather', width: 48, height: 40 }), words] }) : words
+}
+
+/** @param {Work} one */
+const workTitle = one => (one.kind === 'intent' ? one.slug : one.label)
+/** @param {Work} one */
+const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug} · `, '') : one.hint)
+
+/** @param {any} el @param {Engine} $ @param {Home} model @param {number} columns @param {string} [surface] */
+function paneView(el, $, model, columns, surface) {
   const { Box, Text, Button } = el
-  const width = Math.max(30, columns - 4)
+  isClicked = surface === 'desktop'
+  const width = isClicked ? 1000 : Math.max(30, columns - 4)
+  const { header } = model
   const rows = []
+  const foot = isClicked ? [] : [section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Enter chooses · Esc closes' })])]
+
   if (paneMode === 'pick') {
-    rows.push(Text({ key: 'pick-title', bold: true, children: 'Everything open (yours first)' }))
+    rows.push(masthead(el, [label(el, 'brand', 'Ather Automata', width), Text({ key: 'title', bold: true, children: 'Everything open' }), Text({ key: 'status', color: QUIET, children: 'Yours first' })], surface))
     /** @type {Map<string, Work[]>} */
     const groups = new Map()
     for (const one of model.work) {
@@ -620,66 +844,149 @@ function paneView(el, $, model, columns) {
     }
     let index = 0
     for (const group of ['Your GitHub issues', ...AREAS, 'Unsorted'].filter(name => groups.has(name))) {
-      rows.push(Text({ key: `group-${group}`, dimColor: true, children: group }))
-      for (const one of groups.get(group) ?? []) {
+      const list = (groups.get(group) ?? []).map(one => {
         index += 1
-        rows.push(Button({ key: `pick-${one.id}`, label: fit(workRow(one), width - 4), hotkey: index < 10 ? String(index) : undefined, plain: true, autoFocus: index === 1 ? true : undefined, onPress: press($, () => startWork($, one), false) }))
-      }
+        return choice(el, { key: `pick-${one.id}`, title: workTitle(one), detail: workDetail(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : press($, () => startWork($, one), false) })
+      })
+      rows.push(section(el, `group-${group}`, [label(el, `group-${group}-label`, group, width), ...list]))
     }
-    rows.push(Button({ key: 'pick-back', label: 'Back', hotkey: '0', plain: true, dimColor: true, onPress: show($, 'home') }))
+    rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
-  const { header } = model
+
   if (header.stage === 'Away') {
     // Nothing is focused: one stray Enter must not end the window and lift its holds.
     const [end] = model.items
-    rows.push(Text({ key: 'title', bold: true, children: fit(`${header.title === 'Ather' ? 'Ather' : header.title} · 🌙 away ${header.progress}`, width) }))
-    rows.push(Text({ key: 'so', dimColor: true, children: fit(`So far: ${header.sentence}.`, width) }))
-    rows.push(Text({ key: 'gap-end', children: ' ' }))
-    if (end) rows.push(Button({ key: 'end', label: end.title, hotkey: 'e', plain: true, onPress: press($, () => act($, end), false) }))
-    rows.push(Text({ key: 'gap-foot', children: ' ' }))
-    rows.push(Text({ key: 'foot', dimColor: true, children: 'Esc closes' }))
+    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: fit(header.title === 'Ather' ? 'The session is working' : header.title, width) }), Text({ key: 'status', children: fit(`🌙 ${header.progress}`, width) }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: `So far: ${header.sentence}.` })], surface))
+    if (end) rows.push(section(el, 'end', [choice(el, { key: 'end', title: end.title, hotkey: 'e', width, onPress: press($, () => act($, end), false) })]))
+    if (!isClicked) rows.push(section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Esc closes' })]))
     return Box({ flexDirection: 'column', children: rows })
   }
-  const status = [header.stage, header.progress, header.sentence].filter(Boolean).join(' · ')
-  rows.push(Text({ key: 'title', bold: true, children: fit(`${header.title}${status ? ` · ${status}` : ''}`, width) }))
-  rows.push(Text({ key: 'track', dimColor: true, children: fit([header.track, header.role, header.proof, header.lock].filter(Boolean).join('   '), width) }))
-  if (model.items.length > 0) {
-    rows.push(Text({ key: 'gap-items', children: ' ' }))
-    rows.push(Text({ key: 'needs', bold: true, children: `Needs you (${model.open.length})` }))
-    model.items.slice(0, 9).forEach((one, index) => {
-      const isSent = !model.open.includes(one)
-      rows.push(Button({ key: `item-${one.id}`, label: fit(`${isSent ? '✓ sent · ' : ''}${one.title}`, width), hotkey: String(index + 1), plain: true, dimColor: isSent ? true : undefined, autoFocus: one === model.open[0] ? true : undefined, onPress: press($, () => act($, one), false) }))
-    })
+
+  if (paneMode === 'issue') {
+    const one = model.work.find(work => work.kind === 'issue' && work.issue.number === issueShown)
+    if (one?.kind === 'issue') {
+      const { issue } = one
+      rows.push(masthead(el, [label(el, 'brand', `Issue #${issue.number}`, width), Text({ key: 'title', bold: true, wrap: 'wrap', children: issue.name }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: one.hint })], surface))
+      const link = linkOf(issue.url)
+      rows.push(
+        section(el, 'issue-actions', [
+          Box({
+            key: 'issue-buttons',
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 3,
+            children: [
+              Button({ key: 'issue-start', label: '＋ Start an intent', variant: 'primary', hotkey: hotkeyFor('1'), autoFocus: true, onPress: press($, () => startWork($, one), false) }),
+              ...(link ? [openControl(el, $, issue, link, { key: 'issue-open', label: '↗ Open on GitHub', hotkey: '2' }), Button({ key: 'issue-copy', label: '⧉ Copy link', plain: true, hotkey: hotkeyFor('3'), onPress: copyLink($, link) })] : []),
+            ],
+          }),
+          Text({ key: 'issue-note', color: QUIET, wrap: 'wrap', children: 'Start an intent: the session checks for overlapping work first, then drafts an intent linked to this issue and shows you the plan. Nothing is written to GitHub.' }),
+        ]),
+      )
+      rows.push(section(el, 'issue-back', [Button({ key: 'issue-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, issueBack) })]))
+      rows.push(...foot)
+      return Box({ flexDirection: 'column', children: rows })
+    }
+    paneMode = 'home'
   }
+
+  if (paneMode === 'skills') {
+    rows.push(masthead(el, [label(el, 'brand', 'Skills', width), Text({ key: 'title', bold: true, children: 'Run a skill' }), Text({ key: 'meta', color: QUIET, children: header.title === 'Ather' ? 'The session reads it, says what it will do, then follows it.' : `For ${header.title}: the session reads it, says what it will do, then follows it.` })], surface))
+    let index = 0
+    for (const { group } of SKILL_GROUPS) {
+      const list = model.skills.filter(one => one.group === group)
+      if (list.length === 0) continue
+      rows.push(
+        section(el, `skills-${group}`, [
+          label(el, `skills-${group}-label`, group, width),
+          ...list.map(one => {
+            index += 1
+            return choice(el, { key: one.id, title: one.name, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => { handOff($, [one.id], one.prompt); return `sent to the session: ${one.name}` }, false) })
+          }),
+        ]),
+      )
+    }
+    rows.push(section(el, 'skills-back', [Button({ key: 'skills-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+    rows.push(...foot)
+    return Box({ flexDirection: 'column', children: rows })
+  }
+
+  if (paneMode === 'away') {
+    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: 'Heading off?' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: 'The session keeps working; merges and pushes to main wait for your review.' })], surface))
+    rows.push(
+      section(el, 'away-choices', [
+        ...AWAY_PRESETS.map((preset, index) => choice(el, { key: `away-${preset.hotkey}`, title: preset.label, detail: preset.choice.untilDone ? 'Ends when the work is done, 24 hours at most.' : `Ends in ${preset.label}.`, hotkey: String(index + 1), autoFocus: index === 0, width, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) })),
+      ]),
+    )
+    rows.push(section(el, 'away-back', [Button({ key: 'away-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+    rows.push(...foot)
+    return Box({ flexDirection: 'column', children: rows })
+  }
+
+  const isUntracked = header.title === 'Ather'
+  const title = isUntracked ? (model.isNewcomer ? 'Welcome' : 'What next?') : header.title
+  const status = [header.stage, header.progress, header.sentence === 'waiting on you' ? '' : header.sentence].filter(Boolean).join(' · ')
+  const meta = [header.role, header.proof, header.lock].filter(Boolean).join(' · ')
+  rows.push(
+    masthead(
+      el,
+      [
+        label(el, 'brand', 'Ather Automata', width),
+        Text({ key: 'title', bold: true, children: fit(title, width) }),
+        ...(status ? [Text({ key: 'status', children: fit(status, width) })] : []),
+        ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
+        ...(meta ? [Text({ key: 'meta', color: QUIET, children: fit(meta, width) })] : []),
+      ],
+      surface,
+    ),
+  )
+  if (model.actions.length > 0) {
+    // Start something new, or run the skill that fits now: one press each.
+    rows.push(Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => { handOff($, [one.id], one.prompt ?? ''); return `sent to the session: ${one.label.replace(/^\S+ /, '')}` }, false) })) }))
+  }
+
+  if (model.items.length > 0) {
+    rows.push(
+      section(el, 'needs', [
+        label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width),
+        ...model.items.slice(0, 9).map((one, index) => choice(el, { key: `item-${one.id}`, title: one.title, hotkey: String(index + 1), isSent: !model.open.includes(one), autoFocus: one === model.open[0], width, onPress: press($, () => act($, one), false) })),
+      ]),
+    )
+  }
+
   const next = model.next
   if (next) {
-    const isSent = sent.has(next.id)
-    rows.push(Text({ key: 'gap-next', children: ' ' }))
-    rows.push(Button({ key: 'next', label: fit(`NEXT  ${isSent ? '✓ sent · ' : ''}${next.label}`, width), hotkey: 'n', plain: true, dimColor: isSent ? true : undefined, autoFocus: model.open.length === 0 && !next.action ? true : undefined, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') }))
-    rows.push(Text({ key: 'next-hint', dimColor: true, wrap: 'wrap', children: `      ${next.hint}` }))
+    // The one thing to do now, set apart in a lime frame.
+    const card = Box({
+      key: 'next-card',
+      flexDirection: 'column',
+      width: '100%',
+      borderStyle: 'round',
+      borderColor: LIME,
+      paddingX: 1,
+      children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })),
+    })
+    rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width), card]))
   }
-  if (header.title === 'Ather') {
-    rows.push(Text({ key: 'gap-picks', children: ' ' }))
+
+  if (isUntracked) {
     const mine = model.picks.filter(one => one.isMine)
     const theirs = model.picks.filter(one => !one.isMine)
     let index = 0
-    for (const [key, heading, list] of /** @type {const} */ ([['mine', model.isNewcomer ? 'Or pick something of yours' : 'Also yours', mine], ['theirs', 'Follow a teammate (read-only)', theirs]])) {
-      if (list.length === 0) continue
-      rows.push(Text({ key: `picks-${key}`, bold: true, children: heading }))
-      for (const one of list) {
-        rows.push(Button({ key: `work-${one.id}`, label: fit(workRow(one), width), plain: true, hotkey: String.fromCharCode(97 + index), onPress: press($, () => startWork($, one), one.kind === 'intent') }))
-        index += 1
-      }
-    }
-    rows.push(Button({ key: 'all', label: 'Everything open…', hotkey: 'i', plain: true, dimColor: true, onPress: show($, 'pick') }))
+    /** @param {Work} one */
+    const pick = one => choice(el, { key: `work-${one.id}`, title: workTitle(one), detail: workDetail(one), hotkey: String.fromCharCode(97 + index++), width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'home') : press($, () => startWork($, one), one.kind === 'intent') })
+    if (mine.length > 0) rows.push(section(el, 'picks-mine', [label(el, 'picks-mine-label', model.isNewcomer ? 'Or pick your own' : 'Also yours', width), ...mine.map(pick)]))
+    // Without a name to compare, nobody's work is called a teammate's.
+    if (theirs.length > 0) rows.push(section(el, 'picks-theirs', [label(el, 'picks-theirs-label', me ? 'Follow a teammate' : 'Open intents', width), ...(me ? [Text({ key: 'picks-theirs-note', color: QUIET, children: 'Read-only: their decisions stay theirs.' })] : []), ...theirs.map(pick)]))
+    rows.push(Box({ key: 'all-row', marginTop: mine.length + theirs.length > 0 ? 0 : 1, children: [Button({ key: 'all', label: 'Everything open…', hotkey: hotkeyFor('i'), plain: true, dimColor: true, onPress: show($, 'pick') })] }))
   }
+
   if (model.offerAway) {
-    rows.push(Text({ key: 'gap-away', children: ' ' }))
-    const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: preset.hotkey === 'u' ? 'u' : undefined, plain: true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
-    rows.push(Box({ key: 'away', flexDirection: 'row', gap: 2, children: [Text({ bold: true, children: '🌙 Heading off?' }), ...presets] }))
+    const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
+    rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
   }
-  rows.push(Text({ key: 'gap-foot', children: ' ' }))
-  rows.push(Text({ key: 'foot', dimColor: true, children: fit(model.isNewcomer ? 'Enter chooses · Esc closes · /ather tour' : 'Enter chooses · Esc closes · /away when you leave', width) }))
+
+  rows.push(...foot)
   return Box({ flexDirection: 'column', children: rows })
 }

@@ -80,6 +80,10 @@ export const lane = (io, cwd) => {
     return { root, isS2: await io.exists(`${root}/docs/intent`), me: await io.gitUser().catch(() => '') }
   })()
   lanes.set(cwd, read)
+  // A git name that failed to read (a slow first start) is asked again next time, never kept.
+  void read.then(found => {
+    if (found.me === '' && lanes.get(cwd) === read) lanes.delete(cwd)
+  })
   return read
 }
 
@@ -258,7 +262,7 @@ export const settleItem = (io, item) =>
   serial(async () => {
     const sid = await io.sessionId()
     if (item.kind === 'lost') await io.remove(KEY.lost(sid))
-    if (item.kind === 'rule') await io.set(KEY.ruled, [.../** @type {string[]} */ ((await io.get(KEY.ruled)) ?? []), item.ruleId])
+    if (item.kind === 'rule') await io.set(KEY.ruled, [.../** @type {string[]} */ ((await io.get(KEY.ruled)) ?? []), ...item.ruleIds])
     changed(io)
   })
 

@@ -25,6 +25,13 @@ const tzFor = hour => {
 const sandbox = () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-e2e-'))
   fs.cpSync(path.join(S2_ROOT, 'docs/intent'), path.join(root, 'docs/intent'), { recursive: true })
+  // The skills the quick actions may name.
+  fs.mkdirSync(path.join(root, '.agents/skill-library/visuals/show-me'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.agents/skill-library/visuals/show-me/SKILL.md'), '---\nname: show-me\ndescription: Help the user understand the topic visually.\n---\n')
+  for (const skill of ['intent', 'issue-preflight', 'thermo-nuclear-code-quality-review', 'editor-video-walkthrough', 'talab']) {
+    fs.mkdirSync(path.join(root, '.agents/skills', skill), { recursive: true })
+    fs.writeFileSync(path.join(root, '.agents/skills', skill, 'SKILL.md'), `---\nname: ${skill}\ndescription: What ${skill} does. Use it when it fits.\n---\n`)
+  }
   fs.mkdirSync(path.join(root, 'Saved'), { recursive: true })
   fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'free since 14:18')
   fs.mkdirSync(path.join(root, '.git'), { recursive: true })
@@ -94,7 +101,24 @@ const pressIn = (tree, label) => {
   const quiet = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen' })
   register(quiet.on, {})
   await quiet.start(false)
-  expect('a non-interactive session gets the guards but no console commands', quiet.record.commands.length === 0 && quiet.record.registeredTools.length === 3, quiet.record.commands)
+  // The desktop app starts sessions as the SDK does (not interactive, no surface): the commands are
+  // there at once, and the console's reading starts the first time it is drawn, never before.
+  const quietReads = () => quiet.record.logs.length + quiet.record.invalidations
+  const before = quietReads()
+  expect('a session the desktop app starts (not interactive) still gets /ather and /away, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away' && quiet.record.registeredTools.length === 3 && quietReads() === before, quiet.record.commands)
+  const desk = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen', ghIssues: [{ number: 28887, title: '[BUG][GAS] Dodge cancels the wrong montage', url: 'https://github.com/sipherxyz/s2/issues/28887', labels: [{ name: 'combat' }], updatedAt: new Date().toISOString() }] })
+  register(desk.on, {})
+  await desk.start(false)
+  await desk.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band', 'desktop')
+  await new Promise(resolve => setTimeout(resolve, 1500))
+  const deskPane = check(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 70)
+  const narrow = check(await desk.render('Pane', { bodyColumns: 30 }, 'ather', 'desktop'), 1000)
+  expect('on the desktop nothing is cut by column count: the full issue title shows, and rows span the panel', narrow.lines.some(line => line.includes('#28887 Dodge cancels the wrong montage')) && narrow.lines.some(line => line.startsWith('F-10') && line.length > 60), narrow.lines)
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'work-issue:28887')?.props.onPress({})
+  const deskCard = await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
+  expect("the desktop's issue card opens GitHub with a real link", findKey(deskCard, 'issue-open')?.type === 'Link' && findKey(deskCard, 'issue-open')?.props.href === 'https://github.com/sipherxyz/s2/issues/28887', findKey(deskCard, 'issue-open'))
+  expect('on the desktop, the first draw starts the console: the assigned issue shows in the pane', /Dodge cancels the wrong montage/.test(deskPane.lines.join('\n')), deskPane.lines)
 }
 
 // ---------------------------------------------------------------- desktop: one question, never a loop
@@ -473,11 +497,29 @@ const GH_ISSUES = [
   await run(engine, [])
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · /ather with assigned GitHub issues (72 columns)', pane.lines.join('\n')])
-  expect('the pane shows Next as the urgent issue and the other issue under "Also open for you", cleanly', /NEXT {2}Start issue #28887/.test(pane.lines.join('\n')) && /#31360/.test(pane.lines.join('\n')) && pane.problems.length === 0, pane.problems)
+  expect('the pane shows Next as the urgent issue and the other issue under "Also open for you", cleanly', /N E X T\nn: Start issue #28887/.test(pane.lines.join('\n')) && /#31360/.test(pane.lines.join('\n')) && pane.problems.length === 0, pane.problems)
+  // Next carries the issue's open and copy icons; an issue row opens its card.
+  const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
+  const home = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  expect("in the terminal Next's issue carries Open on GitHub and Copy link as plain presses (no ctrl+click)", find(home, 'next-open')?.type === 'Button' && find(home, 'next-open')?.props.hotkey === 'o' && find(home, 'next-copy')?.props.hotkey === 'y', find(home, 'next-open')?.props)
+  find(home, 'next-open')?.props.onPress({})
+  await engine.flush()
+  expect('Open on GitHub asks gh to open the issue in the browser, a read', engine.record.ghRuns.includes('gh issue view 28887 --web'), engine.record.ghRuns)
+  find(home, 'work-issue:31360')?.props.onPress({})
+  const cardTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const card = check(cardTree, 72)
+  screens.push(['Terminal · an issue card (72 columns)', card.lines.join('\n')])
+  expect('an issue row opens its card: Start an intent, Open on GitHub, Copy link, Back', /I S S U E   # 3 1 3 6 0\nCheaper rain particles on low settings/.test(card.lines.join('\n')) && find(cardTree, 'issue-open')?.type === 'Button' && find(cardTree, 'issue-open')?.props.hotkey === '2' && find(cardTree, 'issue-copy')?.props.hotkey === '3' && Boolean(find(cardTree, 'issue-start')) && Boolean(find(cardTree, 'issue-back')) && card.problems.length === 0, card.lines)
+  find(cardTree, 'issue-copy')?.props.onPress({ surface: 'terminal' })
+  await engine.flush()
+  expect('Copy link copies the issue URL and says so', engine.record.copies.includes('https://github.com/sipherxyz/s2/issues/31360') && engine.record.toasts.some(text => /issue link copied/.test(text)), engine.record.copies)
+  find(cardTree, 'issue-start')?.props.onPress({})
+  await engine.flush()
+  expect('Start an intent hands the issue to the session (preflight first)', engine.record.submits.some(text => /issue #31360/.test(text) && /issue-preflight/.test(text)), engine.record.submits)
   pressIn(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'Everything open')
   const all = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · Everything open (72 columns)', all.lines.join('\n')])
-  expect('"Everything open" groups your GitHub issues first, then intents by area', /Your GitHub issues/.test(all.lines.join('\n')) && all.problems.length === 0, all.problems)
+  expect('"Everything open" groups your GitHub issues first, then intents by area', /Y O U R   G I T H U B   I S S U E S\n1: #28887/.test(all.lines.join('\n')) && all.problems.length === 0, all.problems)
   done()
 }
 
@@ -557,7 +599,7 @@ const GH_ISSUES = [
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · a merge lost an edit (72 columns)', pane.lines.join('\n')])
   const text = pane.lines.join('\n')
-  expect('with a merge loss unreviewed, Next waits and Needs you comes first, naming the asset', !/NEXT/.test(text) && /Needs you \(\d\)\n1: A merge dropped your edits to BP_Sash/.test(text) && /A merge dropped your edits to BP_Sash/.test(text) && pane.problems.length === 0, pane.problems)
+  expect('with a merge loss unreviewed, Next waits and Needs you comes first, naming the asset', !/N E X T/.test(text) && /N E E D S   Y O U   ·   \d\n1: A merge dropped your edits to BP_Sash/.test(text) && /A merge dropped your edits to BP_Sash/.test(text) && pane.problems.length === 0, pane.problems)
   done()
 }
 
@@ -600,6 +642,7 @@ const hasFocus = tree => {
   const paneTree = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
   const nextButton = (function find(node) { if (!node || typeof node !== 'object') return null; if (node.props?.key === 'next') return node; for (const child of node.children ?? []) { const hit = find(child); if (hit) return hit } return null })(paneTree)
   expect('"I checked it in the Editor" is never focused by default in the pane', nextButton && /I checked it in the Editor/.test(nextButton.props.label) && !nextButton.props.autoFocus, nextButton?.props)
+  engine.setSurfaces?.([])
   const menu = await run(engine, [pick('I checked it in the Editor')])
   expect("a tech artist's last proof is offered as one press, and recorded", (menu.dialogs[0]?.options ?? []).some(o => o.label === 'I checked it in the Editor') && engine.store.get('evidence:snow-trail-lod-pop')?.editor?.state === 'pass', menu.dialogs[0]?.options.map(o => o.label))
   // The next session offers to continue it.
@@ -647,7 +690,7 @@ const hasFocus = tree => {
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · tracked intent with proof and a sent decision (72 columns)', pane.lines.join('\n')])
   const text = pane.lines.join('\n')
-  expect('the header shows the stage track and the proof so far, a failed test included', /Plan ✓ {2}Build ● {2}Prove ○ {2}Ship ○/.test(text) && /build ✓ · tests ✗/.test(text), pane.lines.slice(0, 3))
+  expect('the header shows the stage track and the proof so far, a failed test included', /Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○/.test(text) && /build ✓ · tests ✗/.test(text), pane.lines.slice(0, 3))
   expect('a sent decision is marked in front, so a cut row still says so; the footer drops the tour', /✓ sent · F-10/.test(text) && !/\/ather tour/.test(text) && pane.problems.length === 0, pane.problems)
   done()
 }
@@ -668,12 +711,12 @@ const hasFocus = tree => {
     expect(`terminal band @${width}: one line when something needs you`, rail.lines.length === 1 && /needs? you · \/ather/.test(rail.lines[0] ?? ''), rail.lines)
   }
   const home = check(await pane(110), 110).lines.join('\n')
-  expect('the pane offers the hand-over in the evening', /Heading off\?/.test(home), home)
-  expect('NEXT leads and is focused', /n: NEXT {2}Pick up /.test(home), home)
+  expect('the pane offers the hand-over in the evening', /H E A D I N G   O F F \?/.test(home), home)
+  expect('NEXT leads and is focused', /N E X T\nn: Pick up /.test(home), home)
   pressIn(await pane(110), 'Everything open')
   const all = check(await pane(72), 72)
   screens.push(['Terminal · All intents (72 columns)', all.lines.join('\n')])
-  expect('All intents lists every open intent by area, cleanly', all.problems.length === 0 && /Everything open \(yours first\)/.test(all.lines.join('\n')), all.problems)
+  expect('All intents lists every open intent by area, cleanly', all.problems.length === 0 && /Everything open\nYours first/.test(all.lines.join('\n')), all.problems)
   pressIn(await pane(110), 'Back')
   const tree = await pane(110)
   pressIn(tree, 'F-')
@@ -687,19 +730,61 @@ const hasFocus = tree => {
 {
   const { engine, done } = await boot({ surfaces: ['terminal'], user: 'Minh Tran' })
   const band = check(await engine.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band'), 110)
-  expect('a newcomer band points at the tour', /New here\? \/ather tour/.test(band.lines.join('')), band.lines)
+  expect('a newcomer band points at the tour', /New here\? Take the tour/.test(band.lines.join('')), band.lines)
   await run(engine, [])
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · newcomer /ather (72 columns)', pane.lines.join('\n')])
-  expect("a newcomer's pane leads with the tour and offers teammates' intents", /NEXT {2}New here\? Take the tour/.test(pane.lines.join('\n')) && /Follow a teammate \(read-only\)/.test(pane.lines.join('\n')) && pane.problems.length === 0, pane.problems)
+  const find = (node, type) => (!node || typeof node !== 'object' ? null : node.type === type ? node : (node.children ?? []).map(child => find(child, type)).find(Boolean) ?? null)
+  const desk = await engine.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
+  const deskPane = check(desk, 70)
+  expect('the pane is headed with the full name, Ather Automata', /^A T H E R   A U T O M A T A$/m.test(pane.lines.join('\n')) && engine.record.opens.some(one => one.title === 'ATHER AUTOMATA'), engine.record.opens)
+  const issuesNow = await run(engine, [], 'ather', 'issues')
+  expect('/ather issues reads them on the spot and says why when it cannot, or that there are none', /Could not read your GitHub issues|No open GitHub issues are assigned to you|N E X T|Pick/.test(issuesNow.out + issuesNow.dialogs.map(one => one.question).join(' ')) , issuesNow.out)
+  expect('the desktop pane carries the Ather mark, is clicked (no hotkeys drawn) and lays out cleanly; the terminal draws no mark', find(desk, 'Svg')?.props.alt === 'Ather' && deskPane.problems.length === 0 && !/\b[a-z0-9]: /.test(deskPane.lines.join('\n')) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'Svg'), deskPane.problems)
+  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\nSix short steps/.test(pane.lines.join('\n')) && /F O L L O W   A   T E A M M A T E\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
   done()
 }
 
 {
-  // Nothing to say: the band is left to other mods.
+  // Nothing to say: the band shows the quiet name and its three icons; ✕ hides it until something is new.
   const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
-  const band = await engine.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band')
-  expect('with nothing to say the band stays empty for other mods', band === null, band)
+  const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
+  const band = await engine.render('AbovePrompt', props, 'band')
+  const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
+  const icons = ['ather-away', 'ather-open', 'ather-close'].map(key => find(band, key))
+  expect('the band carries three icons, away, open and close, and nothing more', icons.every(Boolean) && icons.map(one => one.props.label).join('') === '☾⤢✕' && icons[2].props.role === 'dismiss' && check(band, 110).problems.length === 0, icons.map(one => one?.props.label))
+  icons[2].props.onPress({})
+  expect('✕ hides the band while it has nothing new to say', (await engine.render('AbovePrompt', props, 'band')) === null)
+  engine.setSurfaces?.(['desktop'])
+  const reopened = await run(engine, [], 'ather')
+  expect('on the desktop, /ather opens the pane, and brings back a band closed with ✕', reopened.dialogs.length === 0 && engine.record.opens.some(one => one.id === 'ather') && (await engine.render('AbovePrompt', props, 'band')) !== null, reopened)
+  engine.setSurfaces?.(['terminal'])
+  icons[0].props.onPress({})
+  await engine.flush()
+  const away = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
+  screens.push(['Terminal · the band ☾ opens the away choices (72 columns)', away.lines.join('\n')])
+  expect('☾ opens the pane on the away choices', engine.record.opens.some(one => one.id === 'ather') && /Heading off\?/.test(away.lines.join('\n')) && /Until done/.test(away.lines.join('\n')) && /8 hours/.test(away.lines.join('\n')) && away.problems.length === 0, away.lines)
+  done()
+}
+
+{
+  // The quick actions under the header: a new intent, and Skills, which opens the short list.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' } })
+  await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
+  const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
+  const tree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const fresh = find(tree, 'action:new-intent')
+  const skillsButton = find(tree, 'action:skills')
+  expect('the pane offers New intent and Skills', fresh?.props.label === '＋ New intent' && fresh.props.variant === 'primary' && skillsButton?.props.label === '▶ Skills' && check(tree, 72).problems.length === 0, [fresh?.props.label, skillsButton?.props.label])
+  skillsButton?.props.onPress({})
+  const list = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const listed = check(list, 72)
+  screens.push(['Terminal · Skills (72 columns)', listed.lines.join('\n')])
+  expect('Skills lists the present skills by group, each with the first sentence of its description', /R E V I E W   A N D   P R O O F\n1: thermo-nuclear-code-quality-review\nWhat thermo-nuclear-code-quality-review does\.\n2: editor-video-walkthrough/.test(listed.lines.join('\n')) && /A G E N T I C   T E S T I N G\n3: talab/.test(listed.lines.join('\n')) && !/Use it when/.test(listed.lines.join('\n')) && listed.problems.length === 0, listed.lines)
+  expect('a skill from the manual library is listed under Explain it to me', /E X P L A I N   I T   T O   M E\n\d: show-me\nHelp the user understand the topic visually\./.test(listed.lines.join('\n')), listed.lines)
+  find(list, 'skill:talab')?.props.onPress({})
+  await engine.flush()
+  expect('a skill hands the session its run, for the tracked intent', engine.record.submits.some(text => /Run the talab skill \(\.agents\/skills\/talab\/SKILL\.md\) for intent fluid-snow-sand-look/.test(text)), engine.record.submits)
   done()
 }
 

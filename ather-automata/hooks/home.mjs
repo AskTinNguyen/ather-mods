@@ -25,6 +25,26 @@ const reviewPrompt = (away, decisions) =>
     .filter(Boolean)
     .join(' ')
 
+export const NEW_INTENT_PROMPT =
+  'Start a new intent with the intent skill (.agents/skills/intent/SKILL.md). Interview me first, one question at a time and at most three: what I want to make or change, how I will know it is done, and what it must not break. Then start it with my area and my name as Owner, and show me its prompt.md before anything is built.'
+
+// The skills worth one press, by what they are for. Only those present in .agents/skills show.
+// A name is a folder under .agents/skills; a path names one elsewhere (the manual library).
+export const SKILL_GROUPS = [
+  { group: 'Review and proof', names: ['thermo-nuclear-code-quality-review', 'editor-video-walkthrough'] },
+  { group: 'Authoring', names: ['unreal-editor-agent-authoring'] },
+  { group: 'Agentic testing', names: ['mainchar-test-simulation', 'talab', 'unreal-pie-character-measurement', 'unreal-agent-feature-harness', 'unreal-test-harness', 'unreal-insights-pie-frame-capture'] },
+  { group: 'Git and pull requests', names: ['pr-to-main', 'babysit-pr', 's2-github-pr-review', 's2-worktree-cleanup', 'git-poller-storm'] },
+  { group: 'Explain it to me', names: ['bro', '.agents/skill-library/visuals/show-me'] },
+]
+
+/** @param {string} name */
+export const skillFolder = name => (name.includes('/') ? name : `.agents/skills/${name}`)
+
+/** @param {string} name @param {string} target */
+const skillPrompt = (name, target) =>
+  `Run the ${name.split('/').pop()} skill (${skillFolder(name)}/SKILL.md)${target ? ` ${target}` : ''}: read it, tell me in two lines what it will do here, then follow it.`
+
 export const TOUR_PROMPT = 'Give me the Ather tour: follow .agents/skills/ather-tour/SKILL.md step by step.'
 
 /** @param {string} question */
@@ -40,7 +60,7 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * What waits on the person. Every item goes to the session with its prompt; `kind`
  * says what else changes once it has been delivered (see settleItem in state.mjs).
  * @typedef {{ id: string, label: string, title: string, question: string, prompt: string }} ItemText
- * @typedef {ItemText & ({ kind: 'call' } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleId: string } | { kind: 'away-end' })} Item
+ * @typedef {ItemText & ({ kind: 'call' } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
 
 /**
@@ -52,7 +72,8 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
  *   lock: import('./model.mjs').EditorLock, recurring: readonly { id: string, title: string, fix: string, count: number }[],
- *   issues: readonly import('./issues.mjs').Issue[], last?: string | null, sent: readonly string[], workers: number, now: number, tz: number
+ *   issues: readonly import('./issues.mjs').Issue[], last?: string | null, sent: readonly string[], workers: number, now: number, tz: number,
+ *   skills?: readonly { name: string, description: string }[]
  * }} HomeInput
  */
 
@@ -66,7 +87,7 @@ export const workList = (intents, issues, me, area, now, role = 'set') => {
   const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me), isMine: isMine(one, me), area: one.area })
   return [
     ...ranked.filter(one => isMine(one, me)).map(toIntent),
-    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.title}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role), isMine: true, area: issue.area }))),
+    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role), isMine: true, area: issue.area }))),
     ...ranked.filter(one => !isMine(one, me)).map(toIntent),
   ]
 }
@@ -79,9 +100,9 @@ export const buildHome = input => {
   const intent = intents.find(one => one.slug === pinned)
   const owned = ownedIntents(intents, me, pinned)
   // New until they take the tour, skip it or say their role, and while they own no intent.
-  const isNewcomer = !input.tourDone && input.role === '' && owned.length === 0
+  const isNewcomer = me !== '' && !input.tourDone && input.role === '' && owned.length === 0
   const stage = currentStage(intent, evidence, role)
-  const roleText = input.role ? `as ${ROLE_LABELS[/** @type {keyof typeof ROLE_LABELS} */ (input.role)] ?? input.role}` : 'role not set (/ather role)'
+  const roleText = input.role ? `${ROLE_LABELS[/** @type {keyof typeof ROLE_LABELS} */ (input.role)] ?? input.role}` : isNewcomer ? '' : 'Role not set · /ather role'
   const decisions = away.phase === 'off' ? [] : windowDecisions(input.ledger)
   const lock = input.lock
   const lockText = lock.state === 'free' ? 'Editor free' : lock.state === 'held' ? `Editor: ${lock.holder || 'held'}${lock.until ? ` until ${lock.until}` : ''}` : ''
@@ -91,7 +112,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', proof: '', sentence: so, lock: lockText, role: roleText }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', sentence: so, lock: lockText, role: roleText }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -114,15 +135,28 @@ export const buildHome = input => {
     const holder = lock.holder || 'another lane'
     items.push({ kind: 'editor', id: 'editor', label: 'Ask for the Editor', title: `Editor held by ${holder}${lock.until ? ` until ${lock.until}` : ''}: ask for a window`, question: `The Editor is held by ${holder}`, prompt: `Find the session that holds the Editor owner lock (${lock.raw}) and ask it for a short window for my next step. Wait for its answer before touching the Editor.` })
   }
-  for (const one of input.recurring) {
+  // Problems that keep coming back wait as one item, however many: eight rows of them buried the rest.
+  const recurring = input.recurring
+  if (recurring.length === 1) {
+    const [one] = recurring
     items.push({
       kind: 'rule',
-      ruleId: one.id,
+      ruleIds: [one.id],
       id: `rule:${one.id}`,
       label: 'Turn a repeated problem into a rule?',
-      title: `Keeps happening: ${one.title} (${one.count} sessions)`,
+      title: `Keeps coming back: ${one.title}`,
       question: `"${one.title}" has come up in ${one.count} sessions`,
       prompt: `The trap "${one.title}" has come up in ${one.count} separate sessions. Its fix each time: ${one.fix} Ask me with a question dialog whether to make it a rule. If yes, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diff for review by the owners (${OWNERS}); do not commit.`,
+    })
+  } else if (recurring.length > 1) {
+    items.push({
+      kind: 'rule',
+      ruleIds: recurring.map(one => one.id),
+      id: `rule:${recurring.map(one => one.id).join('+')}`,
+      label: 'Turn repeated problems into rules?',
+      title: `${recurring.length} problems keep coming back: make them rules?`,
+      question: `${recurring.length} problems have each come up in 3 or more sessions`,
+      prompt: `These traps keep coming back, each in several separate sessions: ${recurring.map((one, index) => `(${index + 1}) "${one.title}", ${one.count} sessions; its fix each time: ${one.fix}`).join(' ')} Ask me in one question dialog (multiSelect, one option per trap, labels short enough to stand alone) which to make rules. For each I pick, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diffs for review by the owners (${OWNERS}); do not commit.`,
     })
   }
   const open = items.filter(one => !input.sent.includes(one.id))
@@ -134,24 +168,35 @@ export const buildHome = input => {
   let next
   const isLostOpen = open.some(one => one.kind === 'lost')
   if (isLostOpen) next = undefined
-  else if (isNewcomer && !intent) next = { id: 'next:tour', label: 'New here? Take the tour', hint: 'How S2 works with Claude Code, in six short steps, ending with your first intent started.', prompt: TOUR_PROMPT, isTour: true }
+  else if (isNewcomer && !intent) next = { id: 'next:tour', label: 'Take the tour', hint: 'Six short steps. Ends with your first intent started.', prompt: TOUR_PROMPT, isTour: true }
   // A tech artist with PIE proven has one proof left that only they can give: their own Editor check.
   else if (intent && stage === 'prove' && role === 'techart' && evidence.pie.state === 'pass' && evidence.editor.state !== 'pass') next = { id: `next:${intent.slug}:checked`, label: 'I checked it in the Editor', hint: 'PIE proof ✓ · your own Editor check is the last proof.', prompt: '', action: 'checked' }
   else if (intent && step) next = { id: `next:${intent.slug}:${step.key}`, ...step }
   // Nothing tracked in this session: offer to continue the intent the person last worked on.
   else if (!intent && lastWork) next = { id: lastWork.id, label: `Continue ${lastWork.label}`, hint: lastWork.hint, prompt: '', work: lastWork }
   else if (!intent && work[0]?.kind === 'intent') next = { id: work[0].id, label: `Pick up ${work[0].slug}`, hint: work[0].hint, prompt: '', work: work[0] }
-  else if (!intent && work[0]?.kind === 'issue') next = { id: work[0].id, label: `Start issue #${work[0].issue.number}`, hint: `${work[0].issue.title} · ${work[0].hint}`, prompt: work[0].prompt, work: work[0] }
+  else if (!intent && work[0]?.kind === 'issue') next = { id: work[0].id, label: `Start issue #${work[0].issue.number}`, hint: `${work[0].issue.name} · ${work[0].hint}`, prompt: work[0].prompt, work: work[0] }
   else if (step) next = { id: 'next:start', ...step }
+  // The quick actions under the header: start something new, or pick a skill from the short list.
+  const present = new Map((input.skills ?? []).map(one => [one.name, one.description]))
+  const skills = SKILL_GROUPS.flatMap(({ group, names }) =>
+    names.filter(name => present.has(name)).map(name => ({ id: `skill:${name.split('/').pop()}`, group, name: name.split('/').pop() ?? name, description: present.get(name) ?? '', prompt: skillPrompt(name, intent ? `for intent ${intent.slug}` : '') })),
+  )
+  /** @type {{ id: string, label: string, prompt?: string, opens?: 'skills', isPrimary?: boolean }[]} */
+  const actions = [{ id: 'action:new-intent', label: '＋ New intent', prompt: NEW_INTENT_PROMPT, isPrimary: true }]
+  if (skills.length > 0) actions.push({ id: 'action:skills', label: '▶ Skills', opens: 'skills' })
   return {
+    actions,
+    skills,
     header: {
       title: intent?.slug ?? 'Ather',
       // A checklist with nothing done and no one working yet is planned, not being built.
       stage: !intent ? '' : stage === 'build' && intent.acceptanceDone === 0 && !intent.hasWorker && input.workers === 0 ? 'Planned' : STAGE_LABELS[stage],
       progress: intent && intent.acceptanceTotal > 0 ? `${intent.acceptanceDone} of ${intent.acceptanceTotal} done` : '',
       track: intent ? stageTrack(stage) : '',
+      stages: intent ? stageList(stage) : [],
       proof: proofText(evidence),
-      sentence: away.phase === 'review' ? '' : isNewcomer ? 'new here? start with the tour' : open.length > 0 ? 'waiting on you' : input.workers > 0 ? 'agents working' : intent ? '' : 'no intent yet',
+      sentence: away.phase === 'review' || isNewcomer ? '' : open.length > 0 ? 'waiting on you' : input.workers > 0 ? 'agents working' : intent ? '' : 'no intent yet',
       lock: lockText,
       role: roleText,
     },
@@ -164,6 +209,14 @@ export const buildHome = input => {
     isNewcomer,
     offerAway: !isNewcomer && away.phase === 'off' && (isEvening(now, tz) || (input.workers > 0 && open.length === 0)),
   }
+}
+
+// Each stage with where the work is: done, now or to do; the pane colours them.
+/** @param {string} stage @returns {{ label: string, state: 'done' | 'now' | 'todo' }[]} */
+const stageList = stage => {
+  const order = ['plan', 'build', 'prove', 'ship']
+  const at = stage === 'shipped' ? order.length : order.indexOf(stage)
+  return order.map((key, index) => ({ label: STAGE_LABELS[/** @type {keyof typeof STAGE_LABELS} */ (key)], state: index < at ? 'done' : index === at ? 'now' : 'todo' }))
 }
 
 // "Plan ✓  Build ✓  Prove ●  Ship ○": where the work is, at a glance.

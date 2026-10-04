@@ -4,7 +4,7 @@
 
 import { durationText } from './model.mjs'
 
-/** @typedef {{ number: number, title: string, url: string, labels: string[], updatedAt: number, area: string, isUrgent: boolean }} Issue */
+/** @typedef {{ number: number, title: string, name: string, url: string, labels: string[], updatedAt: number, area: string, isUrgent: boolean }} Issue */
 
 // Labels to studio areas (docs/intent/README.md#areas): the first label that names one wins.
 const AREA_LABELS = [
@@ -28,6 +28,22 @@ export const areaFromLabels = labels => {
   return 'Unsorted'
 }
 
+// The words of a title, without its bracket tags or task prefix: "[QA][Steam][BVT]: Boss shield
+// stays up" is "Boss shield stays up"; "task_S02_VFX_rain-particles-on-low-settings" is "Rain particles
+// on low settings". The tags it drops are returned too, since they often name the area.
+/** @param {string} title @returns {{ name: string, tags: string[] }} */
+export const issueName = title => {
+  const tags = [...title.matchAll(/\[([^\]]+)\]/g)].map(match => match[1])
+  let name = title.replace(/\[[^\]]*\]/g, ' ').replace(/^[\s:\-–—]+/, '')
+  const task = /^task_S\d+_((?:[A-Za-z]+_)*?)([a-z0-9][a-z0-9-]*)$/.exec(name.trim())
+  if (task) {
+    tags.push(...task[1].split('_').filter(Boolean))
+    name = task[2].replace(/-/g, ' ')
+  }
+  name = name.replace(/\s+/g, ' ').trim()
+  return { name: name ? name.charAt(0).toUpperCase() + name.slice(1) : title.trim(), tags }
+}
+
 // `gh issue list --json number,title,url,labels,updatedAt` output, most urgent then most recent first.
 /** @param {string} json @returns {Issue[]} */
 export const parseIssues = json => {
@@ -43,13 +59,16 @@ export const parseIssues = json => {
     .filter(row => Number.isInteger(row?.number) && typeof row?.title === 'string')
     .map(row => {
       const labels = (Array.isArray(row.labels) ? row.labels : []).map((/** @type {any} */ label) => String(label?.name ?? label)).filter(Boolean)
+      const { name, tags } = issueName(row.title)
       return {
         number: row.number,
         title: row.title.trim(),
+        name,
         url: String(row.url ?? ''),
         labels,
         updatedAt: Date.parse(String(row.updatedAt ?? '')) || 0,
-        area: areaFromLabels(labels),
+        // Labels first; without one, the title's own tags ("BOSS-ENE", "VFX") often say it.
+        area: areaFromLabels(labels) === 'Unsorted' ? areaFromLabels(tags) : areaFromLabels(labels),
         isUrgent: labels.some(label => /priority:\s*(high|urgent|critical)|\bP0\b|\bP1\b|blocker/i.test(label)),
       }
     })
@@ -62,7 +81,7 @@ export const issueLabel = (issue, now) => {
   const age = now - issue.updatedAt
   const days = Math.floor(age / 86400000)
   const when = days >= 60 ? `${Math.floor(days / 30)} months ago` : days >= 2 ? `${days} days ago` : days === 1 ? 'yesterday' : durationText(age) === '0m' ? 'just now' : 'today'
-  return `${issue.isUrgent ? 'high priority · ' : ''}${issue.area} · ${when}`
+  return [issue.isUrgent ? 'high priority' : '', issue.area === 'Unsorted' ? '' : issue.area, when].filter(Boolean).join(' · ')
 }
 
 // What the session is asked when the person picks an issue to work on.
