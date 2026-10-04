@@ -1,0 +1,5 @@
+# Written by the engine on each machine when a mod loads.
+.claude-plugin/types/
+ather-automata/.claude-plugin/types/
+dev/e2e/out/
+node_modules/

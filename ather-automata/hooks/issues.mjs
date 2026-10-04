@@ -1,0 +1,79 @@
+// @ts-check
+// Ather Automata: the GitHub issues assigned to the person, as things to work on.
+// Read with `gh issue list --assignee @me`; Ather never writes to GitHub. Pure: no `$`.
+
+import { durationText } from './model.mjs'
+
+/** @typedef {{ number: number, title: string, url: string, labels: string[], updatedAt: number, area: string, isUrgent: boolean }} Issue */
+
+// Labels to studio areas (docs/intent/README.md#areas): the first label that names one wins.
+const AREA_LABELS = [
+  [/\bboss/i, 'Bosses'],
+  [/\benem(y|ies)\b/i, 'Enemies'],
+  [/\bcombat\b/i, 'Combat'],
+  [/\bai\b|behavior.?tree/i, 'AI'],
+  [/anim|character|locomotion|traversal/i, 'Characters & Animation'],
+  [/\bvfx\b|niagara|effects?\b/i, 'VFX'],
+  [/level|world|environment|map\b/i, 'World & Levels'],
+  [/audio|sound|music/i, 'Audio'],
+  [/\bui\b|\bux\b|hud|menu/i, 'UI'],
+  [/perf|optimi[sz]/i, 'Optimization'],
+  [/pipeline|build|\bci\b|jenkins/i, 'Pipeline'],
+  [/tool|editor/i, 'Tools'],
+]
+
+/** @param {readonly string[]} labels */
+export const areaFromLabels = labels => {
+  for (const [pattern, area] of AREA_LABELS) if (labels.some(label => /** @type {RegExp} */ (pattern).test(label))) return /** @type {string} */ (area)
+  return 'Unsorted'
+}
+
+// `gh issue list --json number,title,url,labels,updatedAt` output, most urgent then most recent first.
+/** @param {string} json @returns {Issue[]} */
+export const parseIssues = json => {
+  /** @type {any[]} */
+  let rows
+  try {
+    rows = JSON.parse(json)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(rows)) return []
+  return rows
+    .filter(row => Number.isInteger(row?.number) && typeof row?.title === 'string')
+    .map(row => {
+      const labels = (Array.isArray(row.labels) ? row.labels : []).map((/** @type {any} */ label) => String(label?.name ?? label)).filter(Boolean)
+      return {
+        number: row.number,
+        title: row.title.trim(),
+        url: String(row.url ?? ''),
+        labels,
+        updatedAt: Date.parse(String(row.updatedAt ?? '')) || 0,
+        area: areaFromLabels(labels),
+        isUrgent: labels.some(label => /priority:\s*(high|urgent|critical)|\bP0\b|\bP1\b|blocker/i.test(label)),
+      }
+    })
+    .sort((a, b) => Number(b.isUrgent) - Number(a.isUrgent) || b.updatedAt - a.updatedAt)
+}
+
+// "high priority · Combat · 3 months ago": what matters first, so a cut row keeps it.
+/** @param {Issue} issue @param {number} now */
+export const issueLabel = (issue, now) => {
+  const age = now - issue.updatedAt
+  const days = Math.floor(age / 86400000)
+  const when = days >= 60 ? `${Math.floor(days / 30)} months ago` : days >= 2 ? `${days} days ago` : days === 1 ? 'yesterday' : durationText(age) === '0m' ? 'just now' : 'today'
+  return `${issue.isUrgent ? 'high priority · ' : ''}${issue.area} · ${when}`
+}
+
+// What the session is asked when the person picks an issue to work on.
+/** @param {Issue} issue @param {string} me @param {string} [role] '' when the person has not said it */
+export const issuePrompt = (issue, me, role = 'set') =>
+  [
+    `Start an intent from GitHub issue #${issue.number} ("${issue.title}"${issue.url ? `, ${issue.url}` : ''}).`,
+    `First run the issue preflight (.agents/skills/issue-preflight/SKILL.md) with --issue ${issue.number}; if it finds overlapping work, stop and tell me what it found.`,
+    `Otherwise start the intent with the intent skill (.agents/skills/intent/SKILL.md): Owner: ${me || 'me'}, Area: ${issue.area === 'Unsorted' ? 'ask me' : issue.area}, and the header line "- Issue: #${issue.number}". Draft the goal and the done checklist from the issue (gh issue view ${issue.number}).`,
+    'Show me prompt.md before anything is built. Do not comment on, assign or close the issue.',
+    role === '' ? 'Ather does not know my role yet: ask me (designer, tech artist or engineer) and record it with the mcp__ather-automata__profile tool.' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')

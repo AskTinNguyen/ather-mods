@@ -1,0 +1,17 @@
+{
+  "name": "ather-automata",
+  "version": "0.9.5",
+  "description": "Ather Automata: what needs you and what is next in every S2 session (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
+  "author": {
+    "name": "Tin Nguyen"
+  },
+  "userConfig": {
+    "briefGate": {
+      "type": "string",
+      "title": "Worker brief gate",
+      "description": "What happens when a worker brief lacks paths, acceptance checks or the shared-tree rule: warn adds a reminder, enforce refuses the Agent call, off does nothing. Read-only agents (Explore, Plan) are never gated.",
+      "default": "warn",
+      "options": ["warn", "enforce", "off"]
+    }
+  }
+}
