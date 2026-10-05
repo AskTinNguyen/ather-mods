@@ -5,7 +5,7 @@ import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nex
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { buildHome, parseWeek, weekText, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, shortTitle } from '../hooks/model.mjs'
+import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
 import { KINDS, avatarSvg, classifyWorker, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
 import { recordSpawn, recordTool, resetWorkers, workerOf } from '../hooks/workers.mjs'
@@ -686,5 +686,28 @@ describe('the week figures from week-calendar', () => {
     expect(weekText({ prsMerged: 1, productive: null })).toBe('This week: 1 PR merged')
     expect(buildHome(/** @type {any} */ (base({ away: OFF, week: parseWeek(week(), NOON) }))).header.week).toBe('This week: 3 PRs merged · 68% productive')
     expect(buildHome(/** @type {any} */ (base({ away: OFF }))).header.week).toBe('')
+  })
+})
+
+describe('the second panel review (0.0.8)', () => {
+  test('a lock that says no agent holds it is free; a held one names its session', () => {
+    const free = parseEditorLock('Editor open on main be77a0955406 (Development) launched by Claude session b3ebb2cb at 20:38 for Tin; free for Tin to use; no agent holds it since 20:40', 21 * 60)
+    expect(free.state).toBe('free')
+    expect(free.until).toBe('20:40')
+    const held = parseEditorLock('Editor held by Claude session 1a2b3c4d for the snow proof until 23:00', 21 * 60)
+    expect(held.state).toBe('held')
+    expect(held.session).toBe('1a2b3c4d')
+    expect(held.until).toBe('23:00')
+  })
+  test("a session's name is its last title the person set, else the last generated one", () => {
+    expect(sessionTitle('"aiTitle":"Mock test"\n"customTitle":"💬 Snow proof"\n"customTitle":"🟢 Snow proof"\n')).toBe('🟢 Snow proof')
+    expect(sessionTitle('"aiTitle":"Old"\n"aiTitle":"Mock test with agents"\n')).toBe('Mock test with agents')
+    expect(sessionTitle('')).toBe('')
+  })
+  test('a parked intent says why; a decision keeps its whole text beside its short title', () => {
+    const parked = intent('x', { Status: 'parked: waiting on the weather presets', Area: 'vfx', Owner: 'Lan Vo' })
+    expect(intentLabel(parked, 'Tin Nguyen')).toContain('parked: Waiting on the weather presets')
+    const [first] = parseFindings('# Findings\n\n## F-1 (2026-10-01) | blocking: no | status: open (director)\n\nFound: the snow lab cannot drive either hook from its production path. A second sentence explains why.\n', '')
+    expect(first?.full).toBe('The snow lab cannot drive either hook from its production path. A second sentence explains why.')
   })
 })

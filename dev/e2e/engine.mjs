@@ -12,7 +12,7 @@ const DISMISSED = '[User dismissed — do not proceed, wait for next instruction
 const element = type => (props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
 const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Markdown', 'Link', 'Code', 'Svg'].map(name => [name, element(name)]))
 
-export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs }) => {
+export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => {
   const store = new Map()
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
@@ -119,6 +119,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs }) => {
       delete: async key => void store.delete(key),
       keys: async () => [...store.keys()],
     },
+    // Environment variables: only what the test names (no HOME: the person's real files stay out).
+    env: { get: async name => env?.[name] },
     process: {
       run: async (argv, init = {}) => {
         if (user !== undefined && argv.join(' ') === 'git config user.name') return { exitCode: 0, stdout: `${user}\n`, stderr: '' }

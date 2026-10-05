@@ -97,6 +97,14 @@ export const shortTitle = (text, max = 80) => {
   return `${(space > 20 ? cut.slice(0, space) : cut).replace(/[,;:\s]+$/, '')}…`
 }
 
+// The same text whole, for a surface that wraps it: no label, every sentence, cut only past `max`.
+/** @param {string} text @param {number} [max] */
+export const fullTitle = (text, max = 400) => {
+  const plain = plainText(text).replace(/^(found|finding|problem|issue|question|context|summary|note|observed)\s*:\s*/i, '').trim()
+  const capital = plain.charAt(0).toUpperCase() + plain.slice(1)
+  return capital.length <= max ? capital : `${capital.slice(0, max - 1)}…`
+}
+
 // ---------------------------------------------------------------- intents
 
 /** @param {string} text @param {string} name */
@@ -145,7 +153,9 @@ export const parseFindings = (findings, prompt) => {
       const isDirectorCall = owner ? /director|producer|design|production|user/i.test(owner) : /\(a\)\s/.test(body) || /director|design lead|production call/i.test(body)
       const headTitle = shortTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
       const bodyTitle = shortTitle(body.trim().split('\n').find(line => line.trim() !== '' && !line.trim().startsWith('#')) ?? '')
-      return { id, title: headTitle || bodyTitle || id, isBlocking, isDirectorCall, isOpen: !isClosed }
+      const headFull = fullTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
+      const bodyFull = fullTitle(body.trim().split('\n').find(line => line.trim() !== '' && !line.trim().startsWith('#')) ?? '')
+      return { id, title: headTitle || bodyTitle || id, full: headFull || bodyFull || id, isBlocking, isDirectorCall, isOpen: !isClosed }
     })
     .filter(one => one.isOpen)
     .map(({ isOpen: _open, ...one }) => one)
@@ -265,6 +275,8 @@ export const parseIntent = input => {
     owner: field(prompt, 'Owner'),
     issue: issueNumber(field(prompt, 'Issue')),
     status,
+    // Why it is parked (or blocked): what follows the status word.
+    statusNote: field(prompt, 'Status').replace(/^[a-z]+\s*[:\-–—]?\s*/i, '').trim(),
     acceptanceDone: items.filter(item => item.isDone).length,
     acceptanceTotal: items.length,
     prs: intentPrs(progress, prompt),
@@ -314,7 +326,7 @@ export const intentLabel = (one, me, prs = {}) => {
   const mine = isMine(one, me)
   const calls = mine ? directorCalls(one).length : 0
   const progress = one.acceptanceTotal > 0 ? `${one.acceptanceDone}/${one.acceptanceTotal}${isReadyToClose(one, prs) ? ' · ready to close' : ''}` : 'no checklist'
-  return `${one.slug} · ${one.area} · ${progress}${calls > 0 ? ` · ${calls} need${calls === 1 ? 's' : ''} you` : ''}${!mine && one.owner ? ` · ${one.owner}` : ''}${one.status === 'parked' ? ' · parked' : ''}`
+  return `${one.slug} · ${one.area} · ${progress}${calls > 0 ? ` · ${calls} need${calls === 1 ? 's' : ''} you` : ''}${!mine && one.owner ? ` · ${one.owner}` : ''}${one.status === 'parked' ? ` · parked${one.statusNote ? `: ${shortTitle(one.statusNote, 90)}` : ''}` : ''}`
 }
 
 // ---------------------------------------------------------------- time and the Editor lock
@@ -351,21 +363,46 @@ export const isEvening = (ms, tz) => {
 }
 
 /**
- * @typedef {{ state: 'free' | 'held' | 'unknown', holder: string, until: string, isStale: boolean, raw: string }} EditorLock
+ * @typedef {{ state: 'free' | 'held' | 'unknown', holder: string, until: string, isStale: boolean, raw: string, session: string }} EditorLock `session`: the first 8 hex of the Claude session named in it, or ''
  * @param {string | null} raw @param {number} nowMinutes @returns {EditorLock}
  */
 export const parseEditorLock = (raw, nowMinutes) => {
   const text = (raw ?? '').trim()
-  if (text === '') return { state: 'unknown', holder: '', until: '', isStale: false, raw: text }
+  const session = /\bsession\s+([0-9a-f]{8})/i.exec(text)?.[1]?.toLowerCase() ?? ''
+  if (text === '') return { state: 'unknown', holder: '', until: '', isStale: false, raw: text, session }
   const free = /free\s+since\s+(\d{1,2}:\d{2})/i.exec(text)
-  if (free || /^free\b/i.test(text)) return { state: 'free', holder: '', until: free?.[1] ?? '', isStale: false, raw: text }
+  // "…launched by Claude session b3ebb2cb; free for Tin to use; no agent holds it since 20:40" is free too.
+  if (free || /^free\b/i.test(text) || /\bfree (for|to use)\b|\bno (agent|one|lane) holds it\b/i.test(text)) return { state: 'free', holder: '', until: free?.[1] ?? /holds it since\s+(\d{1,2}:\d{2})/i.exec(text)?.[1] ?? '', isStale: false, raw: text, session }
   const until = /until\s+(\d{1,2}:\d{2})/i.exec(text)?.[1] ?? ''
   const named = /(?:holder|owner)\s*[:=]\s*([^,;\n]+)|held by\s+([^,;\n]+)/i.exec(text)
   const holder = (named?.[1] ?? named?.[2] ?? text.split(/\r?\n/)[0] ?? '').replace(/\buntil\b.*$/i, '').trim()
   const end = /^(\d{1,2}):(\d{2})$/.exec(until)
   const endMinutes = end ? Number(end[1]) * 60 + Number(end[2]) : null
   const isStale = endMinutes !== null && nowMinutes - endMinutes > 30 && nowMinutes - endMinutes < 12 * 60
-  return { state: 'held', holder: holder.slice(0, 60), until, isStale, raw: text }
+  return { state: 'held', holder: holder.slice(0, 60), until, isStale, raw: text, session }
+}
+
+// A session's name from Claude Code's record of it (the lines a grep for its titles found):
+// the last title the person or the session set, else the last one Claude Code generated.
+/** @param {string} lines @returns {string} */
+export const sessionTitle = lines => {
+  const rows = lines.split(/\r?\n/)
+  /** @param {string} kind */
+  const last = kind => {
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const found = new RegExp(`"${kind}":"([^"]*)"`).exec(rows[index] ?? '')
+      if (found) return found[1] ?? ''
+    }
+    return ''
+  }
+  const raw = last('customTitle') || last('aiTitle')
+  let title = raw
+  try {
+    title = JSON.parse(`"${raw}"`)
+  } catch {
+    // an escape grep cut in half: the raw text is close enough
+  }
+  return title.replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, 60)
 }
 
 // ---------------------------------------------------------------- stages and the next step

@@ -39,9 +39,9 @@ const sandbox = () => {
   return root
 }
 
-const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs } = {}) => {
+const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env } = {}) => {
   const root = sandbox()
-  const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues, ghPrs })
+  const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues, ghPrs, env })
   for (const [key, value] of Object.entries({ tz: tzFor(hour), ...store })) engine.store.set(key, value)
   register(engine.on, { briefGate: 'warn' })
   await engine.start()
@@ -113,7 +113,7 @@ const pressIn = (tree, label) => {
   await new Promise(resolve => setTimeout(resolve, 1500))
   const deskPane = check(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 70)
   const narrow = check(await desk.render('Pane', { bodyColumns: 30 }, 'ather', 'desktop'), 1000)
-  expect('on the desktop nothing is cut by column count: the full issue title shows, and rows span the panel', narrow.lines.some(line => line.includes('#28887 Dodge cancels the wrong montage')) && narrow.lines.some(line => line.startsWith('F-10') && line.length > 60), narrow.lines)
+  expect('on the desktop nothing is cut by column count: the full issue title shows, and rows span the panel', narrow.lines.some(line => line.includes('#28887')) && narrow.lines.some(line => line.includes('Dodge cancels the wrong montage')) &&narrow.lines.some(line => /^\s+In the snow\/sand lab/.test(line) && line.length > 60), narrow.lines)
   const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
   findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'work-issue:28887')?.props.onPress({})
   const deskCard = await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
@@ -605,7 +605,7 @@ const GH_ISSUES = [
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · a merge lost an edit (72 columns)', pane.lines.join('\n')])
   const text = pane.lines.join('\n')
-  expect('with a merge loss unreviewed, Next waits and Needs you comes first, naming the asset', !/N E X T/.test(text) && /N E E D S   Y O U   ·   \d\n1: A merge dropped your edits to BP_Sash/.test(text) && /A merge dropped your edits to BP_Sash/.test(text) && pane.problems.length === 0, pane.problems)
+  expect('with a merge loss unreviewed, Next waits and Needs you comes first, naming the asset', !/N E X T/.test(text) && /N E E D S   Y O U   ·   \d\n◆ 1: See what a merge lost\n\s+A merge dropped your edits to BP_Sash\n\n◆ 2: /.test(text) && /A merge dropped your edits to BP_Sash/.test(text) && pane.problems.length === 0, pane.problems)
   done()
 }
 
@@ -691,13 +691,13 @@ const hasFocus = tree => {
   await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Succeeded' })
   await engine.modelTool({ tool: 'Bash', command: 'Run-S2Automation -Filter Snow', __text: 'EXIT CODE: 0\n2 tests failed' })
   await engine.flush()
-  pressIn(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'F-10')
+  pressIn(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'Decide F-10')
   await engine.flush()
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · tracked intent with proof and a sent decision (72 columns)', pane.lines.join('\n')])
   const text = pane.lines.join('\n')
   expect('the header shows the stage track and the proof so far, a failed test included', /Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○/.test(text) && /build ✓ · tests ✗/.test(text), pane.lines.slice(0, 3))
-  expect('a sent decision is marked in front, so a cut row still says so; the footer drops the tour', /✓ sent · F-10/.test(text) && !/\/ather tour/.test(text) && pane.problems.length === 0, pane.problems)
+  expect('a sent decision is marked in front, so a cut row still says so; the footer drops the tour', /✓ sent · Decide F-10/.test(text) && !/\/ather tour/.test(text) && pane.problems.length === 0, pane.problems)
   done()
 }
 
@@ -718,6 +718,8 @@ const hasFocus = tree => {
   }
   const home = check(await pane(110), 110).lines.join('\n')
   expect('the pane offers the hand-over in the evening', /H E A D I N G   O F F \?/.test(home), home)
+  expect('Heading off says what it is for: let AI work while you zZz', /H E A D I N G   O F F \?\nLet AI work while you zZz\n/.test(home), home)
+  expect("a teammate's name sits in its own column at the right edge, out of the detail line", home.split('\n').some(line => /^a: heavy-attack-gpu-crash {2,}Cinematic$/.test(line) && line.length === 110) && !/VFX · 2\/6 · Cinematic/.test(home), home)
   expect('NEXT leads and is focused', /N E X T\nn: Pick up /.test(home), home)
   pressIn(await pane(110), 'Everything open')
   const all = check(await pane(72), 72)
@@ -725,7 +727,7 @@ const hasFocus = tree => {
   expect('All intents lists every open intent by area, cleanly', all.problems.length === 0 && /Everything open\nYours first/.test(all.lines.join('\n')), all.problems)
   pressIn(await pane(110), 'Back')
   const tree = await pane(110)
-  pressIn(tree, 'F-')
+  pressIn(tree, 'Decide F-')
   await engine.flush()
   expect('pressing a Needs-you row hands it to the session and closes the pane', engine.record.submits.length === 1 && engine.record.closes.some(one => one.id === 'ather'), engine.record.submits)
   await engine.close('ather')
@@ -811,7 +813,7 @@ const hasFocus = tree => {
   const term = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · the worker squad (72 columns)', term.lines.join('\n')])
   const text = term.lines.join('\n')
-  expect('the summary strip shows the checklist, workers running and decisions waiting', /Checklist 8\/17 ━+ · Workers 1 · Decisions \d+ waiting/.test(text), term.lines.slice(0, 8))
+  expect('the summary strip shows the checklist, workers running and the same Needs you count as the section', /Checklist 8\/17 ━+ · Workers 1 · Needs you \d+/.test(text) && Number(/Needs you (\d+)/.exec(text)?.[1]) === Number(/N E E D S   Y O U   ·   (\d+)/.exec(text)?.[1] ?? 0), term.lines.slice(0, 8))
   expect('a running worker shows its kind from the brief and what it is doing from its last tool call', /W O R K E R S   ·   R U N N I N G   1\n● A13 Sand footprints fade\n  Builder · Opus · building\n  running \d+:\d\d · 2 tool calls/.test(text) && term.problems.length === 0, term.lines)
   expect('a finished worker shows its trail and how it ended', /D O N E   1\n✓ Review the snow material change\n  Reviewer · Opus · finished\n  read → review ✓ · took \d+:\d\d · 2 tool calls/.test(text), term.lines)
   const find = (node, test) => (!node || typeof node !== 'object' ? [] : [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => find(child, test))])
@@ -919,6 +921,27 @@ const hasFocus = tree => {
   expect('an edit that turns a progress row met says so in the band', /◆ Intent: met B2/.test(band), band)
   expect('no hook threw in the single-source scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
+}
+
+{
+  // The header names the session that holds the Editor by its title, read from Claude Code's record of it.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-home-'))
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' }, env: { USERPROFILE: home } })
+  const records = path.join(home, '.claude/projects', root.replace(/[^a-zA-Z0-9]/g, '-'))
+  fs.mkdirSync(records, { recursive: true })
+  fs.writeFileSync(path.join(records, '1a2b3c4d-0000-4000-8000-000000000000.jsonl'), '{"type":"ai-title","aiTitle":"Snow work"}\n{"type":"user","message":"hi"}\n{"type":"custom-title","customTitle":"🟢 Snow proof"}\n')
+  fs.mkdirSync(path.join(root, 'Saved'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'Editor held by Claude session 1a2b3c4d for the snow proof until 23:00\n')
+  await run(engine, [])
+  const held = check(await engine.render('Pane', { bodyColumns: 100 }, 'ather'), 100).lines.join('\n')
+  expect('a held Editor shows the name of the session holding it', /Editor busy · "🟢 Snow proof" until 23:00/.test(held), held.split('\n').slice(0, 5))
+  fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'Editor open on main launched by Claude session 1a2b3c4d at 20:38 for Tin; free for Tin to use; no agent holds it since 20:40\n')
+  await new Promise(resolve => setTimeout(resolve, 16000))
+  await run(engine, [])
+  const free = check(await engine.render('Pane', { bodyColumns: 100 }, 'ather'), 100).lines.join('\n')
+  expect('a lock that says no agent holds it reads as free', /Editor free/.test(free) && !/Editor busy/.test(free), free.split('\n').slice(0, 5))
+  done()
+  fs.rmSync(home, { recursive: true, force: true })
 }
 
 // ---------------------------------------------------------------- report

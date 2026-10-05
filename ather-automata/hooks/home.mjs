@@ -110,14 +110,14 @@ export const batchPrompt = items => `Take me through these one at a time, with a
 /**
  * What waits on the person. Every item goes to the session with its prompt; `kind`
  * says what else changes once it has been delivered (see settleItem in state.mjs).
- * @typedef {{ id: string, label: string, title: string, question: string, prompt: string }} ItemText
+ * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string }} ItemText `detail`: the pane's second line under `label`
  * @typedef {ItemText & ({ kind: 'call' } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
 
 /**
  * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked' }} Next
  * Something to work on: an open intent to track, or an assigned GitHub issue to start an intent from.
- * @typedef {{ id: string, kind: 'intent', slug: string, label: string, hint: string, isMine: boolean, area: string }
+ * @typedef {{ id: string, kind: 'intent', slug: string, label: string, hint: string, isMine: boolean, area: string, owner: string }
  *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, label: string, hint: string, prompt: string, isMine: true, area: string }} Work
  * @typedef {{
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
@@ -160,7 +160,7 @@ export const workList = (intents, issues, me, area, now, role = 'set', prs = {})
   const linked = new Set(intents.map(one => one.issue).filter(Boolean))
   const ranked = pickCandidates(intents, me, area)
   /** @param {Intent} one @returns {Work} */
-  const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area })
+  const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area, owner: one.owner })
   return [
     ...ranked.filter(one => isMine(one, me)).map(toIntent),
     ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role), isMine: true, area: issue.area }))),
@@ -182,7 +182,7 @@ export const buildHome = input => {
   const roleText = input.role ? `${ROLE_LABELS[/** @type {keyof typeof ROLE_LABELS} */ (input.role)] ?? input.role}` : isNewcomer ? '' : 'Role not set · /ather role'
   const decisions = away.phase === 'off' ? [] : windowDecisions(input.ledger)
   const lock = input.lock
-  const lockText = lock.state === 'free' ? 'Editor free' : lock.state === 'held' ? `Editor: ${lock.holder || 'held'}${lock.until ? ` until ${lock.until}` : ''}` : ''
+  const lockText = lock.state === 'free' ? 'Editor free' : lock.state === 'held' ? `Editor busy · ${lock.holder || 'another session'}${lock.until ? ` until ${lock.until}` : ''}` : ''
 
   if (away.phase === 'running') {
     const so = decisions.length + away.parked.length === 0 ? 'nothing for you yet' : `${plural(decisions.length, 'decision')} · ${away.parked.length} held`
@@ -205,7 +205,7 @@ export const buildHome = input => {
   }
   for (const one of owned) {
     for (const finding of directorCalls(one)) {
-      items.push({ kind: 'call', id: `call:${one.slug}:${finding.id}`, label: `Decide ${finding.id} on ${one.slug}`, title: `${finding.id} · ${one.slug === pinned ? '' : `${one.slug} · `}${finding.title}`, question: `${finding.id} on ${one.slug}: ${finding.title}`, prompt: callPrompt(one, finding) })
+      items.push({ kind: 'call', id: `call:${one.slug}:${finding.id}`, label: `Decide ${finding.id} on ${one.slug}`, title: `${finding.id} · ${one.slug === pinned ? '' : `${one.slug} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.slug}: ${finding.title}`, prompt: callPrompt(one, finding) })
     }
   }
   if (intent && (role === 'techart' || role === 'designer') && (stage === 'build' || stage === 'prove') && lock.state === 'held' && !lock.isStale) {
@@ -222,6 +222,7 @@ export const buildHome = input => {
       id: `rule:${one.id}`,
       label: 'Turn a repeated problem into a rule?',
       title: `Keeps coming back: ${one.title}`,
+      detail: `"${one.title}" has come up in ${one.count} sessions.`,
       question: `"${one.title}" has come up in ${one.count} sessions`,
       prompt: `The trap "${one.title}" has come up in ${one.count} separate sessions. Its fix each time: ${one.fix} Ask me with a question dialog whether to make it a rule. If yes, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diff for review by the owners (${OWNERS}); do not commit.`,
     })
@@ -232,6 +233,7 @@ export const buildHome = input => {
       id: `rule:${recurring.map(one => one.id).join('+')}`,
       label: 'Turn repeated problems into rules?',
       title: `${recurring.length} problems keep coming back: make them rules?`,
+      detail: `${recurring.length} problems have each come up in 3 or more sessions.`,
       question: `${recurring.length} problems have each come up in 3 or more sessions`,
       prompt: `These traps keep coming back, each in several separate sessions: ${recurring.map((one, index) => `(${index + 1}) "${one.title}", ${one.count} sessions; its fix each time: ${one.fix}`).join(' ')} Ask me in one question dialog (multiSelect, one option per trap, labels short enough to stand alone) which to make rules. For each I pick, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diffs for review by the owners (${OWNERS}); do not commit.`,
     })

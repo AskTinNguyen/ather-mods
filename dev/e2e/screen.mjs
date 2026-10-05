@@ -33,6 +33,8 @@ const wrap = (text, width) => {
 
 export const draw = (node, width) => {
   if (node === null || node === undefined || node === false) return []
+  // A blank line above, as marginTop draws it.
+  if (node.type === 'Box' && node.props.marginTop > 0) return [...Array(node.props.marginTop).fill(''), ...draw({ ...node, props: { ...node.props, marginTop: 0 } }, width)]
   if (typeof node === 'string' || typeof node === 'number') return wrap(String(node), width)
   if (node.type === 'Box') {
     if (node.props.flexDirection === 'row') {
@@ -43,6 +45,11 @@ export const draw = (node, width) => {
         const widths = parts.map(part => Math.max(0, ...part.map(line => line.length)))
         const height = Math.max(...parts.map(part => part.length))
         return Array.from({ length: height }, (_, row) => parts.map((part, index) => (part[row] ?? '').padEnd(index < parts.length - 1 ? widths[index] : 0)).join(gap).trimEnd())
+      }
+      // Two parts pushed apart (a title, then a name at the right edge).
+      if (node.props.justifyContent === 'space-between' && node.children.length === 2) {
+        const [left, right] = node.children.map(textOf)
+        return [`${left}${' '.repeat(Math.max(2, width - left.length - right.length))}${right}`]
       }
       const line = node.children.map(textOf).join(node.props.gap ? ' '.repeat(node.props.gap) : '')
       return node.props.flexWrap === 'wrap' ? wrap(line, width) : [line]

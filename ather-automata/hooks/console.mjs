@@ -13,7 +13,7 @@ import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } 
 import { CREATE_GROUPS, CREATE_SHOWN, SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome, parseWeek } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents } from './model.mjs'
+import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents, sessionTitle } from './model.mjs'
 import * as state from './state.mjs'
 import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, classifyWorker, modelWord, propSvg, trailWords, workerState } from './squad.mjs'
 import { recordEnd, workerOf } from './workers.mjs'
@@ -179,6 +179,8 @@ async function openConsole($, folder) {
   isIssuesWarned = false
   isWhoWarned = false
   issueRetries = 0
+  userHome = null
+  sessionNames.clear()
   isAwake = null
   view = { version: -1, at: 0, model: null }
   closedHint = null
@@ -338,7 +340,7 @@ async function home($) {
     away,
     ledger: away.phase === 'off' ? '' : ((await files.read(away.ledgerPath)) ?? ''),
     lost: await state.readLost(files),
-    lock: parseEditorLock(await files.read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(now, tz)),
+    lock: await namedLock($, root, parseEditorLock(await files.read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(now, tz))),
     recurring: await state.readRecurring(files),
     issues: await state.readIssues(files, me),
     prs: await state.readPrStates(files),
@@ -352,6 +354,43 @@ async function home($) {
   })
   view = { version, at: now, model }
   return model
+}
+
+// A held lock that names a Claude session shows that session's name, as its tab shows it.
+/** @param {Engine} $ @param {string} root @param {import('./model.mjs').EditorLock} lock */
+async function namedLock($, root, lock) {
+  if (lock.state !== 'held' || !lock.session) return lock
+  const name = await sessionName($, root, lock.session).catch(() => '')
+  return { ...lock, holder: name ? `"${name}"` : `session ${lock.session}` }
+}
+
+/** @type {Map<string, { name: string, at: number }>} */
+const sessionNames = new Map()
+const SESSION_NAME_TTL_MS = 5 * 60 * 1000
+
+// Claude Code keeps each session's record as <config>/projects/<checkout path, dashed>/<session id>.jsonl;
+// its titles are lines in it. Read with grep (or PowerShell where there is none), never whole: records run to many MB.
+/** @param {Engine} $ @param {string} root @param {string} prefix the first 8 hex of the session id */
+async function sessionName($, root, prefix) {
+  const hit = sessionNames.get(prefix)
+  if (hit && Date.now() - hit.at < SESSION_NAME_TTL_MS) return hit.name
+  if (!userHome) return ''
+  let config = `${userHome}/.claude`
+  try { config = ((await $.env.get('CLAUDE_CONFIG_DIR')) || config).replace(/\\/g, '/') } catch { /* the default */ }
+  const dir = `${config}/projects/${root.replace(/[^a-zA-Z0-9]/g, '-')}`
+  const file = (await $.fs.list(dir).catch(() => [])).find(entry => entry.kind === 'file' && entry.name.startsWith(prefix) && entry.name.endsWith('.jsonl'))
+  const name = file ? sessionTitle(await titleLines($, `${dir}/${file.name}`)) : ''
+  sessionNames.set(prefix, { name, at: Date.now() })
+  return name
+}
+
+/** @param {Engine} $ @param {string} path */
+async function titleLines($, path) {
+  const pattern = '"(customTitle|aiTitle)":"[^"]*"'
+  const grep = await $.process.run(['grep', '-oE', pattern, path], { timeoutMs: 15000 }).catch(() => undefined)
+  if (grep && (grep.exitCode === 0 || grep.exitCode === 1)) return grep.stdout
+  const ps = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${pattern}' -AllMatches | ForEach-Object { $_.Matches.Value }`], { timeoutMs: 20000 }).catch(() => undefined)
+  return ps?.exitCode === 0 ? ps.stdout : ''
 }
 
 /** @param {Home} model */
@@ -798,19 +837,23 @@ const hotkeyFor = hotkey => (isClicked ? undefined : hotkey)
 // One choice: its key and what it does, then one quiet line of detail beneath.
 /**
  * @param {any} el
- * @param {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQuiet?: boolean, autoFocus?: boolean, width: number, onPress: () => void }} row
+ * @param {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQuiet?: boolean, autoFocus?: boolean, aside?: string, lead?: string, mark?: string, marginTop?: number, width: number, onPress: () => void }} row
  */
 function choice(el, row) {
   const title = `${row.isSent ? '✓ sent · ' : ''}${row.title}`
-  return el.Box({
-    key: `row-${row.key}`,
-    flexDirection: 'column',
-    width: '100%',
-    children: [
-      el.Button({ key: row.key, label: fit(title, row.width - 3), hotkey: hotkeyFor(row.hotkey), plain: true, dimColor: row.isSent || row.isQuiet ? true : undefined, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }),
-      ...(row.detail ? [el.Box({ key: `${row.key}-detail`, paddingLeft: isClicked ? 1 : 3, children: [el.Text({ color: QUIET, wrap: 'wrap', children: row.detail })] })] : []),
-    ],
-  })
+  // A right-hand column (a teammate's name) takes its width from the title, never the other way.
+  const aside = row.aside ? fit(row.aside, 24) : ''
+  const button = el.Button({ key: row.key, label: fit(title, row.width - 3 - (aside ? aside.length + 2 : 0) - (row.mark ? 2 : 0)), hotkey: hotkeyFor(row.hotkey), plain: true, dimColor: row.isSent || row.isQuiet ? true : undefined, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress })
+  const body = [
+    aside ? el.Box({ key: `${row.key}-line`, flexDirection: 'row', justifyContent: 'space-between', gap: 2, width: '100%', children: [el.Box({ key: `${row.key}-main`, flexGrow: 1, flexShrink: 1, children: [button] }), el.Text({ key: `${row.key}-aside`, color: QUIET, children: aside })] }) : button,
+    // The whole name, wrapped, where a button's one line would cut it (the desktop).
+    ...(row.lead ? [el.Box({ key: `${row.key}-lead`, paddingLeft: isClicked ? 1 : 3, children: [el.Text({ wrap: 'wrap', children: row.lead })] })] : []),
+    // The desktop wraps the detail whole; the terminal keeps it to three lines.
+    ...(row.detail ? [el.Box({ key: `${row.key}-detail`, paddingLeft: isClicked ? 1 : 3, children: [el.Text({ color: QUIET, wrap: 'wrap', children: isClicked ? row.detail : fit(row.detail, 3 * Math.max(20, row.width - 4)) })] })] : []),
+  ]
+  // A marked row (something that needs you) hangs its text beside the mark.
+  if (row.mark) return el.Box({ key: `row-${row.key}`, flexDirection: 'row', width: '100%', marginTop: row.marginTop, children: [el.Text({ key: `${row.key}-mark`, color: row.isSent ? QUIET : LIME, children: `${row.mark} ` }), el.Box({ key: `${row.key}-body`, flexDirection: 'column', flexGrow: 1, flexShrink: 1, children: body })] })
+  return el.Box({ key: `row-${row.key}`, flexDirection: 'column', width: '100%', marginTop: row.marginTop, children: body })
 }
 
 // An issue's address, when it is one a Link may carry (https, printable ASCII); else none.
@@ -895,6 +938,12 @@ function masthead(el, lines, surface) {
 const workTitle = one => (one.kind === 'intent' ? one.slug : one.label)
 /** @param {Work} one */
 const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug} · `, '') : one.hint)
+// A teammate's intent: their name moves out of the detail into the right-hand column.
+/** @param {Work} one @returns {{ detail: string, aside?: string }} */
+const asideOf = one => (one.kind === 'intent' && !one.isMine && one.owner ? { detail: workDetail(one).replace(` · ${one.owner}`, ''), aside: one.owner } : { detail: workDetail(one) })
+// A work row's text. On the desktop an issue's button says its number and its whole title wraps beneath.
+/** @param {Work} one */
+const workRowProps = one => ({ title: one.kind === 'issue' && isClicked ? `#${one.issue.number}` : workTitle(one), ...(one.kind === 'issue' && isClicked ? { lead: one.issue.name } : {}), ...asideOf(one) })
 
 // ---------------------------------------------------------------- what the intent recorded
 
@@ -1030,12 +1079,13 @@ function bar(el, key, done, total) {
 function summaryStrip(el, model, crew, width) {
   const { header } = model
   const running = crew.filter(one => one.state === 'running').length
-  const decisions = model.open.filter(one => one.kind === 'call' || one.kind === 'review').length
+  // The same count as the Needs you section beneath: a rule to make waits on you as much as a decision.
+  const decisions = model.open.length
   const first = header.total > 0 ? { key: 'Checklist', value: `${header.done}/${header.total}`, extra: bar(el, 'strip-bar', header.done, header.total) } : { key: 'Yours', value: String(model.work.filter(one => one.isMine).length), extra: el.Text({ color: QUIET, children: 'intents and issues' }) }
   const cards = [
     { ...first, isHot: false },
     { key: 'Workers', value: String(running), extra: el.Text({ color: QUIET, children: 'running' }), isHot: false },
-    { key: 'Decisions', value: String(decisions), extra: el.Text({ color: decisions > 0 ? LIME : QUIET, children: 'waiting on you' }), isHot: decisions > 0 },
+    { key: 'Needs you', value: String(decisions), extra: el.Text({ color: decisions > 0 ? LIME : QUIET, children: decisions === 1 ? 'thing waiting' : 'things waiting' }), isHot: decisions > 0 },
   ]
   if (isClicked) {
     return el.Box({
@@ -1058,8 +1108,8 @@ function summaryStrip(el, model, crew, width) {
       ...(header.total > 0 ? [el.Text({ children: ' ' }), bar(el, 'strip-bar', header.done, header.total)] : []),
       el.Text({ color: QUIET, children: ` · Workers ` }),
       el.Text({ bold: true, children: String(running) }),
-      el.Text({ color: QUIET, children: ' · Decisions ' }),
-      el.Text({ bold: true, color: decisions > 0 ? LIME : undefined, children: `${decisions} waiting` }),
+      el.Text({ color: QUIET, children: ' · Needs you ' }),
+      el.Text({ bold: true, color: decisions > 0 ? LIME : undefined, children: String(decisions) }),
     ],
   })
 }
@@ -1097,7 +1147,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     for (const group of ['Your GitHub issues', ...AREAS, 'Unsorted'].filter(name => groups.has(name))) {
       const list = (groups.get(group) ?? []).map(one => {
         index += 1
-        return choice(el, { key: `pick-${one.id}`, title: workTitle(one), detail: workDetail(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : press($, () => startWork($, one), false) })
+        return choice(el, { key: `pick-${one.id}`, ...workRowProps(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : press($, () => startWork($, one), false) })
       })
       rows.push(section(el, `group-${group}`, [label(el, `group-${group}-label`, group, width), ...list, ...(group === 'Your GitHub issues' ? [refreshIssuesButton(el, $)] : [])]))
     }
@@ -1265,7 +1315,8 @@ function paneView(el, $, model, columns, surface, crew = []) {
     rows.push(
       section(el, 'needs', [
         label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width),
-        ...model.items.slice(0, 9).map((one, index) => choice(el, { key: `item-${one.id}`, title: one.title, hotkey: String(index + 1), isSent: !model.open.includes(one), autoFocus: one === model.open[0], width, onPress: press($, () => act($, one), false) })),
+        // Each its own block: a lime mark, what to do, then what it is about, a blank line apart.
+        ...model.items.slice(0, 9).map((one, index) => choice(el, { key: `item-${one.id}`, title: one.label, detail: one.detail ?? (one.title === one.label ? '' : one.title), mark: '◆', marginTop: index === 0 ? undefined : 1, hotkey: String(index + 1), isSent: !model.open.includes(one), autoFocus: one === model.open[0], width, onPress: press($, () => act($, one), false) })),
       ]),
     )
   }
@@ -1292,16 +1343,16 @@ function paneView(el, $, model, columns, surface, crew = []) {
     const theirs = model.picks.filter(one => !one.isMine)
     let index = 0
     /** @param {Work} one */
-    const pick = one => choice(el, { key: `work-${one.id}`, title: workTitle(one), detail: workDetail(one), hotkey: String.fromCharCode(97 + index++), width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'home') : press($, () => startWork($, one), one.kind === 'intent') })
+    const pick = one => choice(el, { key: `work-${one.id}`, ...workRowProps(one), hotkey: String.fromCharCode(97 + index++), width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'home') : press($, () => startWork($, one), one.kind === 'intent') })
     if (mine.length > 0) rows.push(section(el, 'picks-mine', [label(el, 'picks-mine-label', model.isNewcomer ? 'Or pick your own' : 'Also yours', width), ...mine.map(pick)]))
     // Without a name to compare, nobody's work is called a teammate's.
     if (theirs.length > 0) rows.push(section(el, 'picks-theirs', [label(el, 'picks-theirs-label', me ? 'Follow a teammate' : 'Open intents', width), ...(me ? [Text({ key: 'picks-theirs-note', color: QUIET, children: 'Read-only: their decisions stay theirs.' })] : []), ...theirs.map(pick)]))
-    rows.push(Box({ key: 'all-row', marginTop: mine.length + theirs.length > 0 ? 0 : 1, children: [Button({ key: 'all', label: 'Everything open…', hotkey: hotkeyFor('i'), plain: true, dimColor: true, onPress: show($, 'pick') })] }))
+    rows.push(Box({ key: 'all-row', marginTop: mine.length + theirs.length > 0 ? 0 : 1, children: [Button({ key: 'all', label: 'Everything open…', hotkey: hotkeyFor('i'), plain: isClicked ? undefined : true, dimColor: isClicked ? undefined : true, onPress: show($, 'pick') })] }))
   }
 
   if (model.offerAway) {
-    const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
-    rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
+    const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: isClicked ? undefined : true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
+    rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
   }
 
   rows.push(...foot)
