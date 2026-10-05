@@ -8,7 +8,7 @@
 // only be passed to functions in the file that holds it.
 
 import { isHolding, isRecordingQuestions, ledgerWithWindow, newWindow, nextLedgerId, nextParkId, offAway, pendingEntry } from './away.mjs'
-import { countGotcha, recurringGotchas } from './guards.mjs'
+import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 
 /**
@@ -162,8 +162,18 @@ export const readProfile = async (io, me) => ({
   tourDone: /** @type {{ isDone?: boolean } | undefined} */ (await io.get(KEY.tour(me)))?.isDone === true,
   isNudged: (await io.get(KEY.nudged(me))) === true,
 })
+// A trap whose rule is already written in the checkout is not offered again, however many sessions hit it.
 /** @param {Io} io */
-export const readRecurring = async io => recurringGotchas(/** @type {any} */ ((await io.get(KEY.hits)) ?? {}), /** @type {string[]} */ ((await io.get(KEY.ruled)) ?? []))
+export const readRecurring = async io => {
+  const recurring = recurringGotchas(/** @type {any} */ ((await io.get(KEY.hits)) ?? {}), /** @type {string[]} */ ((await io.get(KEY.ruled)) ?? []))
+  if (recurring.length === 0) return recurring
+  const root = await io.root().catch(() => '')
+  const isWritten = await Promise.all(recurring.map(async one => {
+    const rule = writtenRuleOf(one.id)
+    return Boolean(rule && root && (await io.read(`${root}/${rule.file}`))?.includes(rule.text))
+  }))
+  return recurring.filter((_, index) => !isWritten[index])
+}
 /** @param {Io} io @param {string} me @returns {Promise<import('./issues.mjs').Issue[]>} */
 export const readIssues = async (io, me) => {
   const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me)))

@@ -403,6 +403,16 @@ describe('shared state: one owner, one change at a time', () => {
     await state.settleItem(io, { kind: 'rule', ruleIds: ['live-coding'], id: 'x', label: '', title: '', question: '', prompt: '' })
     expect(await io.get('gotchaRuled')).toEqual(['live-coding'])
   })
+
+  test('a trap whose rule is already written in the checkout is not offered as a rule', async () => {
+    const { io, store, files } = memoryIo()
+    const hit = { title: 't', fix: 'f', count: 4 }
+    store.set('gotchaHits', { 'index-lock': hit, 'restore-packages': hit, disk: hit })
+    expect((await state.readRecurring(io)).map(one => one.id).sort()).toEqual(['disk', 'index-lock', 'restore-packages'])
+    files.set('R/docs/skills/git-lfs-traffic-control.md', 'On index.lock errors, find the holder first with `Get-CimInstance Win32_Process -Filter ...`')
+    files.set('R/.agents/skills/unreal-mcp/SKILL.md', 'nothing about restore data yet')
+    expect((await state.readRecurring(io)).map(one => one.id).sort()).toEqual(['disk', 'restore-packages'])
+  })
 })
 
 describe('home', () => {
