@@ -231,3 +231,41 @@ function ctx(home) {
   const lookbackStart = range.start - 28 * 24 * 60 * MIN
   return { cfg, sessions: readSessions(cfg.projectsDir, lookbackStart), git: createGit(), gh: noGitHub, range, lookbackStart, now: cfg.now }
 }
+
+test('a pull does not claim teammates\' commits dated inside it; its own identity\'s commits still count', () => {
+  const home = tmpHome()
+  const repo = makeRepo(home)
+  const theirs = commitAt(repo, T0 + 10 * MIN + 30000, 'teammate work', 'mate@example.com')
+  const mine = commitAt(repo, T0 + 10 * MIN + 60000, 'my merge', 'me@example.com')
+  sessionLog(home, 'sess-pull', repo).typed(T0, 'sync').assistant(T0 + MIN)
+    .bash(T0 + 10 * MIN, T0 + 12 * MIN, 'git pull --no-rebase').assistant(T0 + 13 * MIN).write()
+  const r = run(home, NOW)
+  assert.deepEqual(r.sessions[0].commits.map(c => c.hash), [mine])
+  assert.ok(!r.sessions[0].commits.some(c => c.hash === theirs))
+})
+
+test('routine runs: short commitless sessions that recur, or that nobody typed in, are automated', () => {
+  const home = tmpHome()
+  const repo = makeRepo(home)
+  for (let i = 0; i < 5; i++) {
+    sessionLog(home, `butler-${i}`, repo).title(`PC1 💬🧹 Session Butler run (${i})`)
+      .typed(T0 + i * 30 * MIN, 'rename sessions').assistant(T0 + i * 30 * MIN + MIN).write()
+  }
+  sessionLog(home, 'once', repo).title('PC1 Quick question').typed(T0 + 5 * MIN, 'what is x?').assistant(T0 + 6 * MIN).write()
+  const silent = sessionLog(home, 'silent', repo).title('PC1 Nightly check').scheduled(T0 + 7 * MIN)
+  silent.assistant(T0 + 8 * MIN).write()
+  sessionLog(home, 'work', repo).title('PC1 Real work').typed(T0, 'build it').assistant(T0 + 20 * MIN).write()
+  let r = run(home, NOW)
+  const by = id => r.sessions.find(s => s.sessionId === id)
+  for (let i = 0; i < 5; i++) {
+    assert.equal(by(`butler-${i}`).automated, true)
+    assert.match(by(`butler-${i}`).excludeReason, /recurred 5 times/)
+  }
+  assert.equal(by('silent').automated, true, 'nobody typed')
+  assert.equal(by('once').automated, false, 'a one-off typed question is real work')
+  assert.equal(by('work').excluded, false)
+  assert.ok(r.machineHours.automated > 0)
+  fs.mkdirSync(path.join(home, '.calendar'), { recursive: true })
+  r = analyze({ ...ctx(home), overrides: { include: ['butler-0'] } })
+  assert.equal(r.sessions.find(s => s.sessionId === 'butler-0').automated, false, 'include wins')
+})

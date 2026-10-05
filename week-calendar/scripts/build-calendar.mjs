@@ -51,7 +51,8 @@ const survey = readSurvey(cfg, isoWeek)
 const sessions = readSessions(cfg.projectsDir, lookbackStart)
 const git = createGit()
 const gh = createGitHub(cfg)
-const common = { cfg, sessions, git, gh, lookbackStart, now: cfg.now, overrides, savedTitles, survey }
+const githubLogin = cfg.githubLogin || (gh.login ? gh.login() : null)
+const common = { cfg, sessions, git, gh, lookbackStart, now: cfg.now, overrides, savedTitles, survey, githubLogin }
 const snaps = snapshotCommits(cfg, isoWeek)
 
 const shown = analyze({ ...common, range: display, snapshotCommits: snaps })
@@ -68,6 +69,7 @@ const data = {
   generatedAt: new Date().toISOString(),
   timeZone: tz,
   machine: cfg.machine,
+  githubLogin: shown.githubLogin,
   week: { start: display.startDate, end: display.endDate, startMs: display.start, endMs: display.end, isoWeek: isoWeekLabel(display.start) },
   prefs: cfg.prefs,
   totalHours: shown.totalHours,
@@ -119,7 +121,9 @@ process.stdout.write(JSON.stringify({
   week: data.week,
   timeZone: tz,
   machine: cfg.machine,
-  prsMerged: shown.prsMerged.map(p => ({ repo: p.repo, number: p.number, title: p.title, mergedAt: p.mergedAt })),
+  githubLogin: shown.githubLogin,
+  prsAuthored: m.prsAuthored,
+  prsMerged: shown.prsMerged.map(p => ({ repo: p.repo, number: p.number, title: p.title, author: p.author, yours: p.yours, mergedAt: p.mergedAt })),
   hours: { available: h.available, busy: h.busy, productive: h.productive, waitingOnPerson: h.waitingOnPerson, automated: h.automated, idle: h.idle },
   productiveUtilization: h.productiveUtilization,
   metrics: { costUsd: m.costUsd, noCommitRate: m.noCommitRate, typedPromptsPerBusyHour: m.typedPromptsPerBusyHour, commits: m.commits, commitsByAttribution: m.commitsByAttribution },

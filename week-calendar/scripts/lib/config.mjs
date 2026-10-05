@@ -22,6 +22,12 @@ export function parseArgs(argv) {
   return out
 }
 
+// "owner/name" is a GitHub shorthand; anything else (https, ssh, a local path) is used as given.
+export const repoUrl = v => {
+  const s = String(v || '').trim()
+  return /^[\w.-]+\/[\w.-]+$/.test(s) ? `https://github.com/${s.replace(/\.git$/, '')}.git` : s
+}
+
 const list = v => (Array.isArray(v) ? v : String(v ?? '').split(','))
   .map(s => String(s).trim()).filter(Boolean)
 
@@ -54,7 +60,8 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env) {
     availableHoursPerWeek: Number(pick('available-hours', 'availableHoursPerWeek', 168)) || 168,
     ignoreFolders: list(pick('ignore', 'ignoreFolders', ['AppData\\Local\\Temp', 'AppData/Local/Temp', '/tmp/'])),
     gitEmails: list(pick('git-emails', 'gitEmails', [])).map(s => s.toLowerCase()),
-    reportsRepoUrl: String(pick('reports-repo-url', 'reportsRepoUrl', 'https://github.com/AskTinNguyen/agent-reports.git')),
+    reportsRepoUrl: repoUrl(pick('reports-repo-url', 'reportsRepoUrl', 'https://github.com/AskTinNguyen/agent-reports.git')),
+    githubLogin: String(pick('github-login', 'githubLogin', '') || '').trim(),
     reportsRepoPath: String(pick('reports-repo-path', 'reportsRepoPath', '') || path.join(outDir, 'agent-reports')),
     github: !args['no-github'] && file.github !== false,
     autoExclude: !args['no-auto-exclude'],

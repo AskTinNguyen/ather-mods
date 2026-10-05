@@ -55,7 +55,9 @@ ${build} --theme <dark|light> --accent <#rrggbb> --color-by <project|task> --wee
   It writes ${home}/.calendar/latest.html and latest.json, and with --export the weekly snapshot ${home}/.calendar/reports/<isoWeek>.json.
   It prints a JSON summary that includes isoWeek.
 - Outliers: a session that ran 4h+ where 80%+ of its turns started by themselves (scheduled tasks, loops, plugin or SDK drivers)
-  is excluded from totals and reports automatically; it stays on the calendar, greyed out. Add --no-auto-exclude only when asked.
+  is excluded from totals and reports automatically; it stays on the calendar, greyed out. So are routine runs: commitless sessions of
+  3 minutes or less whose title recurs 5+ times in the week (butlers, schedulers) or in which nobody typed; the calendar draws them as
+  ticks on each day's edge. Add --no-auto-exclude only when asked.
 ${publish} [--week-offset -1]
 - Pushes ${home}/.calendar/reports/<isoWeek>.json (secrets redacted) to the agent-reports repo. Run it only when the request asks
   to publish, or after saving a survey.
@@ -119,6 +121,7 @@ export const register: Register = (on, options) => {
     if (str('operator')) config.operator = str('operator')
     if (Number(options.availableHoursPerWeek) > 0) config.availableHoursPerWeek = Number(options.availableHoursPerWeek)
     if (str('reportsRepoUrl')) config.reportsRepoUrl = str('reportsRepoUrl')
+    if (str('githubLogin')) config.githubLogin = str('githubLogin')
     if (str('ignoreFolders')) config.ignoreFolders = str('ignoreFolders').split(',').map(s => s.trim()).filter(Boolean)
     if (str('gitEmails')) config.gitEmails = str('gitEmails').split(',').map(s => s.trim()).filter(Boolean)
     try { await $.fs.write(`${home}/.calendar/config.json`, JSON.stringify(config, null, 2) + '\n') } catch {}
@@ -184,12 +187,13 @@ export const register: Register = (on, options) => {
       '   color by project or task type, week starts Monday or Sunday), then call it again with the answers in the prompt.',
       `2. Read ${home}/.calendar/latest.json (sessions, totals, metrics, machineHours, prsMerged, noCommitSessions, survey).`,
       '3. Reply with exactly 3 lines, then the calendar path on a 4th line:',
-      '   Line 1: what the user mainly got done this week (from merged PR titles, session titles and commit subjects), with the number of PRs merged.',
+      '   Line 1: what the user mainly got done this week (from merged PR titles, session titles and commit subjects), with the number of PRs they authored',
+      '   (metrics.prsAuthored; prsMerged entries with yours: true) and how many teammate PRs they contributed commits to.',
       '   Line 2: which project took the most time, with its hours (parallel sessions counted once, excluded sessions left out), and the productive time percent.',
       '   Line 3: which no-commit sessions to pick up first next week (most recent and longest first, by title).',
       '4. Unless latest.json survey.answered is true, run the weekly survey with AskUserQuestion, one call with three questions:',
       '   rating ("5 Excellent", "4 Good", "3 Okay", "1-2 Poor"); most valuable session (the three sessions with the most busyHours, by title);',
-      '   most wasted session (up to three of the longest no-commit or excluded sessions, plus "None"). If there are no-commit sessions, a second call',
+      '   most wasted session (up to three of the longest no-commit or excluded sessions that are not automated, plus "None"). If there are no-commit sessions, a second call',
       '   asks the reason for up to four of the longest: blocked, exploratory, abandoned or parked.',
       `   Then call the Agent tool with subagent_type "${AGENT_TYPE}": "Save the weekly survey for <survey.isoWeek>: <the answers as JSON with sessionIds>. Then rebuild and publish."`,
       '   If the user dismisses the survey, skip it without asking again in this conversation.',
