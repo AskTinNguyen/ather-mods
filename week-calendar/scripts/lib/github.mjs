@@ -69,6 +69,15 @@ export function createGitHub(cfg) {
     return shas
   }
 
+  // The GitHub login gh is signed in as, so the calendar can tell your PRs from teammates'.
+  function login() {
+    if (cache.login) return cache.login
+    if (!enabled) return null
+    const body = api(['user'])
+    if (body?.login) cache.login = body.login
+    return cache.login || null
+  }
+
   function save() {
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -76,5 +85,5 @@ export function createGitHub(cfg) {
     } catch {}
   }
 
-  return { mergedPrs, prCommits, save, stats: () => ({ enabled, calls, errors }) }
+  return { mergedPrs, prCommits, login, save, stats: () => ({ enabled, calls, errors }) }
 }

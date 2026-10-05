@@ -41,6 +41,7 @@ export function buildReport({ cfg, analysis, range, isoWeek, survey, cliVersions
     generatedAt: new Date().toISOString(),
     machine: cfg.machine,
     operator: cfg.operator,
+    githubLogin: analysis.githubLogin ?? null,
     pluginVersion: pluginVersion(),
     cliVersions,
     week: {

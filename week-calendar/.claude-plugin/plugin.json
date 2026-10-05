@@ -1,6 +1,6 @@
 {
   "name": "week-calendar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Weekly calendar and agent-effectiveness report of Claude Code sessions: PRs merged and productive agent time per machine, published to a team repo",
   "author": { "name": "Tin Nguyen" },
   "repository": "https://github.com/AskTinNguyen/ather-mods",
@@ -10,6 +10,7 @@
     "availableHoursPerWeek": { "type": "number", "title": "Available hours per week", "description": "Hours this PC is available to agents each week; 168 for a dedicated PC.", "default": 168 },
     "reportsRepoUrl": { "type": "string", "title": "Reports repo", "description": "Git URL of the team's agent-reports repo.", "default": "https://github.com/AskTinNguyen/agent-reports.git" },
     "ignoreFolders": { "type": "string", "title": "Ignored folders", "description": "Comma-separated folder fragments whose sessions are left out (temp benchmarks, scratch).", "default": "AppData/Local/Temp,/tmp/" },
+    "githubLogin": { "type": "string", "title": "GitHub login", "description": "Your GitHub username, to tell your merged PRs from teammates' PRs you committed to. Empty: the account gh is signed in as.", "default": "" },
     "gitEmails": { "type": "string", "title": "Extra git emails", "description": "Comma-separated commit emails that count as this PC's (e.g. the AI agent account), beside each repo's user.email.", "default": "" }
   }
 }

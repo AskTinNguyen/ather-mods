@@ -14,6 +14,8 @@ const UNFINISHED_CALL_MS = 10 * 60 * 1000   // a git call with no recorded resul
 const OUTLIER_MIN_MS = 4 * HOUR
 const OUTLIER_AUTO_SHARE = 0.8
 const OUTLIER_MIN_AUTO_TURNS = 10
+const ROUTINE_MAX_MS = 3 * 60 * 1000        // a commitless run this short is automated when it recurs or nobody typed
+const ROUTINE_MIN_REPEATS = 5
 const COMMIT_OPS = new Set(['commit', 'rebase', 'cherry-pick', 'merge', 'pull', 'revert', 'am'])
 
 const TASK_TYPES = [
@@ -53,7 +55,15 @@ function waitingIntervals(s) {
   return mergeIntervals(out)
 }
 
-export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, overrides = {}, savedTitles = {}, snapshotCommits = [], survey = {} }) {
+// A title reduced to what repeats between runs of one routine: no status icons, no machine word,
+// no parenthesised detail. `machineWord` is the first word most titles share, when there is one.
+export function routineKey(title, machineWord = '') {
+  let t = String(title || '').toLowerCase().replace(/\(.*?\)/g, ' ').replace(/[^\p{L}\p{N}\s]+/gu, ' ').replace(/\s+/g, ' ').trim()
+  if (machineWord && t.startsWith(machineWord + ' ')) t = t.slice(machineWord.length + 1)
+  return t
+}
+
+export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, overrides = {}, savedTitles = {}, snapshotCommits = [], survey = {}, githubLogin = null }) {
   const R0 = range.start, R1 = range.end
   const elapsedEnd = Math.min(now.getTime(), R1)
   const forceExclude = new Set(overrides.exclude || []), forceInclude = new Set(overrides.include || [])
@@ -79,6 +89,7 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
 
   // ---------- commit attribution: each commit-producing git call claims the commits made while it ran ----------
   const claims = new Map() // repoKey|hash -> { session, repo, commit, via }
+  const idsOf = repo => new Set([...repo.emails, ...cfg.gitEmails])
   const knownRepos = () => git.repos()
   const commitsWindow = [lookbackStart - DAY, R1 + DAY]
   for (const a of all) {
@@ -87,12 +98,14 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
       const lo = call.tUse - COMMIT_SLACK_BEFORE
       const hi = (call.tEnd ?? call.tUse + UNFINISHED_CALL_MS) + COMMIT_SLACK_AFTER
       const candidates = [...new Set([...call.dirs, call.cwd, a.mainCwd].map(d => git.repoOf(d)).filter(Boolean))]
+      // By timing alone, only commits by this PC's identities: a pull, merge or rebase also brings
+      // in teammates' commits whose dates fall inside the call.
       const tryRepos = list => {
         let found = 0
         for (const repo of list) {
           for (const c of git.commitsOf(repo, ...commitsWindow)) {
             const byHash = call.hashes.some(h => c.hash.startsWith(h))
-            if (!byHash && (c.t < lo || c.t > hi)) continue
+            if (!byHash && (c.t < lo || c.t > hi || !idsOf(repo).has(c.email))) continue
             const k = `${repo.key}|${c.hash}`
             const prev = claims.get(k)
             if (!prev || (byHash && prev.via !== 'output')) claims.set(k, { session: a, repo, commit: c, via: byHash ? 'output' : 'call' })
@@ -113,7 +126,7 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
     a.activity = mergeIntervals(iv)
   }
   for (const repo of new Set(inRange.map(a => a.repo).filter(Boolean))) {
-    const ids = new Set([...repo.emails, ...cfg.gitEmails])
+    const ids = idsOf(repo)
     const repoSessions = inRange.filter(a => a.repo === repo)
     for (const c of git.commitsOf(repo, ...commitsWindow)) {
       if (claims.has(`${repo.key}|${c.hash}`) || !ids.has(c.email)) continue
@@ -160,6 +173,19 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
 
   // ---------- sessions of this range ----------
   const projectName = (repo, cwd) => repo ? repo.name : path.basename(cwd || 'unknown')
+  const titleOf = s => s.customTitle || s.aiTitle || savedTitles[s.id] || null
+  const firstWords = new Map()
+  for (const a of inRange) {
+    const w = routineKey(titleOf(a.s)).split(' ')[0]
+    if (w) firstWords.set(w, (firstWords.get(w) || 0) + 1)
+  }
+  const [topWord, topCount] = [...firstWords.entries()].sort((x, y) => y[1] - x[1])[0] || ['', 0]
+  const machineWord = topCount > inRange.length / 2 ? topWord : ''
+  const repeats = new Map()
+  for (const a of inRange) {
+    const k = routineKey(titleOf(a.s), machineWord)
+    if (k) repeats.set(k, (repeats.get(k) || 0) + 1)
+  }
   const sessionsOut = []
   const blocks = []
   for (const a of inRange) {
@@ -178,7 +204,7 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
     const auto = autoTurns.length
     const kinds = [...new Set(autoTurns.map(x => x.kind))].join(', ')
     const firstPrompt = s.prompts[0]?.text || ''
-    const title = s.customTitle || s.aiTitle || savedTitles[s.id] || null
+    const title = titleOf(s)
 
     // blocks: runs of activity split at gaps over 30 minutes
     const runs = []
@@ -191,11 +217,17 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
     const activeMs = runs.reduce((n, r) => n + Math.max(r.end - r.start, 60000), 0)
     const turns = typed + auto
     const mostlyAuto = activeMs >= OUTLIER_MIN_MS && auto >= OUTLIER_MIN_AUTO_TURNS && auto / Math.max(1, turns) >= OUTLIER_AUTO_SHARE
-    let excluded = false, excludeReason = null
+    // Routine runs (schedulers, butlers, loops): short, commitless, and recurring or untyped.
+    const repeat = repeats.get(routineKey(title, machineWord)) || 0
+    const routine = myClaims.length === 0 && activeMs <= ROUTINE_MAX_MS && (repeat >= ROUTINE_MIN_REPEATS || typed === 0)
+    let excluded = false, excludeReason = null, automated = false
     if (forceExclude.has(s.id)) { excluded = true; excludeReason = 'Excluded by you' }
-    else if (cfg.autoExclude && mostlyAuto && !forceInclude.has(s.id)) {
-      excluded = true
+    else if (cfg.autoExclude && !forceInclude.has(s.id) && mostlyAuto) {
+      excluded = automated = true
       excludeReason = `Mostly automated: ${auto} of ${turns} turns (${kinds}) over ${(activeMs / HOUR).toFixed(1)} h`
+    } else if (cfg.autoExclude && !forceInclude.has(s.id) && routine) {
+      excluded = automated = true
+      excludeReason = repeat >= ROUTINE_MIN_REPEATS ? `Automated: a short run that recurred ${repeat} times` : 'Automated: a short run nobody typed in'
     }
 
     const sessionBlocks = runs.map(run => {
@@ -232,7 +264,7 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
 
     const anyGit = sessionBlocks.some(b => b.isGitRepo)
     const noCommit = anyGit && myClaims.length === 0
-    for (const b of sessionBlocks) Object.assign(b, { noCommit, excluded, excludeReason, productive })
+    for (const b of sessionBlocks) Object.assign(b, { noCommit, excluded, excludeReason, automated, productive })
     blocks.push(...sessionBlocks)
     sessionsOut.push({
       sessionId: s.id,
@@ -254,6 +286,7 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
       noCommitReason: survey.noCommitReasons?.[s.id] || null,
       excluded,
       excludeReason,
+      automated,
       humanTurns: typed,
       autoTurns: auto,
       models: [...new Set(sessionBlocks.flatMap(b => b.models))],
@@ -294,18 +327,23 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
 
   // ---------- PRs merged in range ----------
   const busyBySession = new Map(all.map(a => [a.s.id, a]))
-  const prsMerged = [...prs.values()]
-    .filter(e => e.pr.mergedAt && Date.parse(e.pr.mergedAt) >= R0 && Date.parse(e.pr.mergedAt) < R1)
+  const merged = [...prs.values()].filter(e => e.pr.mergedAt && Date.parse(e.pr.mergedAt) >= R0 && Date.parse(e.pr.mergedAt) < R1)
+  // A session that fed several PRs shares its busy time and cost between them instead of giving each all of it.
+  const prsPerSession = new Map()
+  for (const e of merged) for (const id of e.sessions) prsPerSession.set(id, (prsPerSession.get(id) || 0) + 1)
+  const login = githubLogin ? String(githubLogin).toLowerCase() : null
+  const prsMerged = merged
     .map(e => {
       const ss = [...e.sessions].map(id => busyBySession.get(id)).filter(Boolean)
       const first = ss.length ? Math.min(...ss.map(a => a.firstT)) : null
-      const agentMs = totalMs(ss.flatMap(a => a.busy))
+      const agentMs = ss.reduce((n, a) => n + totalMs(a.busy) / prsPerSession.get(a.s.id), 0)
       return {
         repo: e.pr.repo, number: e.pr.number, title: e.pr.title, url: e.pr.url, author: e.pr.author,
+        yours: login ? String(e.pr.author || '').toLowerCase() === login : null,
         mergedAt: e.pr.mergedAt, createdAt: e.pr.createdAt, headRef: e.pr.headRef,
         sessions: [...e.sessions], commits: [...e.commits],
         agentHours: hours(agentMs),
-        costUsd: +ss.reduce((n, a) => n + a.s.costUsd, 0).toFixed(2),
+        costUsd: +ss.reduce((n, a) => n + a.s.costUsd / prsPerSession.get(a.s.id), 0).toFixed(2),
         leadTimeHours: first ? hours(Date.parse(e.pr.mergedAt) - first) : null,
       }
     })
@@ -326,6 +364,7 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
   const gitSessions = counted.filter(x => x.isGitRepo)
   const metrics = {
     prsMerged: prsMerged.length,
+    prsAuthored: login ? prsMerged.filter(p => p.yours).length : null,
     productiveUtilization: machineHours.productiveUtilization,
     utilization: machineHours.utilization,
     agentHoursPerMergedPr: prsMerged.length ? +(machineHours.busy / prsMerged.length).toFixed(2) : null,
@@ -341,7 +380,7 @@ export function analyze({ cfg, sessions, git, gh, range, lookbackStart, now, ove
   }
 
   for (const x of sessionsOut) { delete x._busy; delete x._waiting }
-  return { blocks: blocks.sort((x, y) => x.start - y.start), sessions: sessionsOut.sort((x, y) => x.start - y.start), totals, totalHours, machineHours, metrics, prsMerged, prsOpen }
+  return { githubLogin: login, blocks: blocks.sort((x, y) => x.start - y.start), sessions: sessionsOut.sort((x, y) => x.start - y.start), totals, totalHours, machineHours, metrics, prsMerged, prsOpen }
 }
 
 function median(xs) {

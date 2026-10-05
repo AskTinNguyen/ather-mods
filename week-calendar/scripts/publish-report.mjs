@@ -3,7 +3,7 @@
 // ~/.calendar/reports/<isoWeek>.json -> <clone>/reports/<isoWeek>/<machine>.json, secrets redacted,
 // then commit and push (retrying with backoff, rebasing on a rejected push).
 //
-// node publish-report.mjs [--week-offset 0|-1] [--iso-week 2026-W40] [--dry-run]
+// node publish-report.mjs [--week-offset 0|-1] [--iso-week 2026-W40] [--dry-run] [--allow-any-repo]
 //
 // The clone lives at ~/.calendar/agent-reports unless reportsRepoPath says otherwise.
 
@@ -28,6 +28,13 @@ const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0,
 function fail(msg) {
   process.stdout.write(JSON.stringify({ ok: false, error: msg, isoWeek }) + '\n')
   process.exit(1)
+}
+
+// The reports repo holds only reports. A code repo here (a wrong setting) would mean cloning it and
+// pushing a report into it, so a URL whose repo name does not mention reports needs --allow-any-repo.
+const repoName = String(cfg.reportsRepoUrl).replace(/[\\/]+$/, '').split(/[\\/:]/).pop().replace(/\.git$/, '')
+if (!/report/i.test(repoName) && !cfg.args['allow-any-repo']) {
+  fail(`Reports repo "${cfg.reportsRepoUrl}" does not look like an agent-reports repo. Set the plugin's Reports repo to the team's agent-reports repo (default https://github.com/AskTinNguyen/agent-reports.git), or pass --allow-any-repo.`)
 }
 
 if (!fs.existsSync(source)) fail(`No report for ${isoWeek} at ${source}. Run build-calendar.mjs --export first.`)

@@ -15,7 +15,7 @@
     {
       "name": "week-calendar",
       "description": "Weekly calendar and agent-effectiveness report for agent PCs: PRs merged and productive agent time, published to the team's agent-reports repo.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "author": { "name": "Tin Nguyen" },
       "category": "productivity",
       "source": "./week-calendar"

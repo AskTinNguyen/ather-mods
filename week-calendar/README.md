@@ -37,7 +37,8 @@ Set them in Claude Code's plugin config menu (each is optional):
 | Machine name | the computer name | The PC's name in team reports |
 | Operator | your global git user.name | Who runs the PC |
 | Available hours per week | 168 | Denominator of productive time |
-| Reports repo | `https://github.com/AskTinNguyen/agent-reports.git` | Where the weekly report goes |
+| Reports repo | `https://github.com/AskTinNguyen/agent-reports.git` | Where the weekly report goes. `owner/name` means a GitHub repo; publishing refuses a repo whose name does not mention reports |
+| GitHub login | the account `gh` is signed in as | Tells your merged PRs from teammates' PRs you committed to |
 | Ignored folders | Temp folders | Sessions in these folders are left out |
 | Extra git emails | none | Commit emails that count as this PC's, e.g. the AI agent account |
 
@@ -49,11 +50,13 @@ Set them in Claude Code's plugin config menu (each is optional):
 
 ## How it measures
 
-- **Commits** are credited to the session (or subagent) whose `git commit`, `rebase`, `merge`, `pull`, `cherry-pick`, `revert` or `am` call made them: the commits created while that call ran, or the hash git printed. This holds when parallel sessions share a repo. A commit no call claims is credited by time only when exactly one session was active in that repo.
+- **Commits** are credited to the session (or subagent) whose `git commit`, `rebase`, `merge`, `pull`, `cherry-pick`, `revert` or `am` call made them: the hash git printed, or the commits created while that call ran by this PC's git identities (the repo's `user.email` and Extra git emails). A pull or merge brings in teammates' commits dated inside the call; those are not yours. This holds when parallel sessions share a repo. A commit no call claims is credited by time only when exactly one session was active in that repo.
 - **Productive**: a session that pushed successfully, or whose commits are on a remote branch. Main takes no direct commits, so a push is where work becomes productive.
-- **PRs merged**: PRs merged that week (GitHub search) whose commits include one this PC made, in that week or the four before.
+- **PRs merged**: PRs merged that week (GitHub search) whose commits include one this PC made, in that week or the four before. Those whose author is your GitHub login are **yours** (`metrics.prsAuthored`); the rest are teammates' PRs you committed to. A session that fed several PRs shares its agent hours and cost between them.
 - **Busy time**: every gap between consecutive log records of a session or its subagents, unless the later record starts a turn; one step counts for at most 90 minutes. **Waiting on a person**: from the record before a typed prompt to that prompt, up to 8 hours.
 - **Outliers**: a session of 4+ hours where 80%+ of turns started by themselves (schedules, loops, plugin or SDK drivers) is excluded from totals.
+- **Routine runs**: a commitless session of 3 minutes or less whose title recurs 5+ times that week (butlers, schedulers), or in which nobody typed, is automated: left out of totals and no-commit counts, counted as automated hours, and drawn as ticks on each day's edge.
+- **The calendar** leads with agent-busy hours. With one project it colors sessions by workstream (sessions sharing a PR or a title); pieces of a session under 30 minutes apart are one bar; clicking a bar opens its details; on a phone it shows one day at a time.
 - Weeks in reports are ISO weeks (Monday start) in the PC's local time.
 
 ## Files
@@ -82,5 +85,6 @@ claude plugin validate .
 
 ## Changes
 
+- **0.3.0** Calendar redesign: full width, routine runs as ticks, one bar per stretch of a session, workstream colors, details in a side drawer, one-day view on phones, agent-busy headline. Commits a pull or merge brought in are no longer credited by timing unless they carry this PC's git identity; merged PRs split into yours (new GitHub login setting) and teammates' PRs you committed to; a session's hours are shared across the PRs it fed. Reports repo accepts `owner/name` and refuses a repo that is not a reports repo.
 - **0.2.0** Joins the `ather` marketplace. Commits credited to the session (or subagent) whose git call made them; push and merged-PR status; busy, productive, waiting and idle machine hours; automated sessions left out of totals; weekly survey; secret-scanned weekly report pushed to agent-reports; Monday scheduled job.
 - **0.1.0** The weekly calendar: one block per session, commits and changed files, no-commit sessions, hours per project with parallel sessions counted once.

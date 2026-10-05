@@ -114,3 +114,37 @@ test('publish writes the redacted report into the reports repo and pushes it', (
   const again = JSON.parse(node('publish-report.mjs', []))
   assert.equal(again.changed, false)
 })
+
+test('merged PRs: yours by GitHub login, and a session that fed several PRs splits its hours between them', () => {
+  const { home, repo, hash } = fixture()
+  const git = createGit()
+  const real = git.repoOf
+  git.repoOf = d => { const r = real(d); if (r) r.github = 'acme/game'; return r }
+  const pr = (number, author) => ({ repo: 'acme/game', number, title: `PR ${number}`, url: 'u', state: 'closed', author, createdAt: new Date(T0).toISOString(), mergedAt: new Date(T0 + 60 * MIN).toISOString() })
+  const gh = {
+    mergedPrs: slug => slug === 'acme/game' ? [pr(7, 'Me-Dev'), pr(8, 'mate')] : [],
+    prCommits: () => [hash],
+    save() {}, stats: () => ({ enabled: true, calls: 0, errors: 0 }),
+  }
+  const cfg = loadConfig(['--home', home, '--now', NOW, '--ignore', '__none__'], {})
+  const range = weekRange(cfg.now, 'monday', 0)
+  const lookbackStart = range.start - 28 * 24 * 60 * MIN
+  const a = analyze({ cfg, sessions: readSessions(cfg.projectsDir, lookbackStart), git, gh, range, lookbackStart, now: cfg.now, githubLogin: 'me-dev' })
+  const busy = a.sessions.find(s => s.sessionId === 'sess-1').busyHours
+  assert.deepEqual(a.prsMerged.map(p => [p.number, p.yours]).sort(), [[7, true], [8, false]])
+  assert.equal(a.metrics.prsAuthored, 1)
+  for (const p of a.prsMerged) assert.ok(Math.abs(p.agentHours - busy / 2) <= 0.01, `PR ${p.number} gets half the session`)
+  assert.equal(a.githubLogin, 'me-dev')
+})
+
+test('reports repo: owner/name is GitHub shorthand, and publish refuses a repo that is not a reports repo', () => {
+  assert.equal(loadConfig(['--reports-repo-url', 'acme/agent-reports'], {}).reportsRepoUrl, 'https://github.com/acme/agent-reports.git')
+  assert.equal(loadConfig(['--reports-repo-url', 'https://x.test/a/b.git'], {}).reportsRepoUrl, 'https://x.test/a/b.git')
+  const { home } = fixture()
+  let out = ''
+  try {
+    execFileSync(process.execPath, [path.join(here, '..', 'publish-report.mjs'), '--home', home, '--now', NOW, '--reports-repo-url', 'sipherxyz/s2'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch (err) { out = String(err.stdout) }
+  assert.match(out, /does not look like an agent-reports repo/)
+  assert.ok(!fs.existsSync(path.join(home, '.calendar', 'agent-reports')), 'nothing was cloned')
+})
