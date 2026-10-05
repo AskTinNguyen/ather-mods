@@ -1,0 +1,15 @@
+{
+  "name": "week-calendar",
+  "version": "0.2.0",
+  "description": "Weekly calendar and agent-effectiveness report of Claude Code sessions: PRs merged and productive agent time per machine, published to a team repo",
+  "author": { "name": "Tin Nguyen" },
+  "repository": "https://github.com/AskTinNguyen/ather-mods",
+  "userConfig": {
+    "machineName": { "type": "string", "title": "Machine name", "description": "Name of this agent PC in team reports. Empty: the computer name.", "default": "" },
+    "operator": { "type": "string", "title": "Operator", "description": "Who runs this PC. Empty: your global git user.name.", "default": "" },
+    "availableHoursPerWeek": { "type": "number", "title": "Available hours per week", "description": "Hours this PC is available to agents each week; 168 for a dedicated PC.", "default": 168 },
+    "reportsRepoUrl": { "type": "string", "title": "Reports repo", "description": "Git URL of the team's agent-reports repo.", "default": "https://github.com/AskTinNguyen/agent-reports.git" },
+    "ignoreFolders": { "type": "string", "title": "Ignored folders", "description": "Comma-separated folder fragments whose sessions are left out (temp benchmarks, scratch).", "default": "AppData/Local/Temp,/tmp/" },
+    "gitEmails": { "type": "string", "title": "Extra git emails", "description": "Comma-separated commit emails that count as this PC's (e.g. the AI agent account), beside each repo's user.email.", "default": "" }
+  }
+}
