@@ -17,6 +17,8 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 | Above the prompt | One line: what needs you, a running window, or just the name; then ☾ away, ⤢ open the pane, ✕ hide it until something is new. |
 | Pop-ups | A known trap with its fix, a build that really failed, a merge that dropped your edits, a worker gone quiet, a thin worker brief. |
 
+On a PC that also runs [week-calendar](../week-calendar/README.md), the pane's line under the title adds this week's figures: PRs merged and productive agent time.
+
 ## What to work on
 
 Each session works on one intent. A new session offers to continue the one you last worked on. With nothing tracked, Ather offers one list: your open intents, then the GitHub issues assigned to you that have no intent yet (high priority first), then teammates' intents you could follow (read-only: their decisions stay theirs).
@@ -74,6 +76,7 @@ Tests: `tests/ather.test.mjs` ships with the plugin. An end-to-end run in the ma
 
 ## Changes
 
+- **0.0.7** This week's figures from week-calendar (PRs merged, productive agent time) on the pane's meta line, when that plugin runs on the PC.
 - **0.0.4** ✦ Create: the skills that make content in the Unreal Editor, grouped by what is made (VFX and look, characters and animation, AI and encounters, enemies, levels and cinematics, audio), led by what they do, three per group with More for the rest, ordered by role; each asks what you want first, records an intent and respects the Editor lock.
 - **0.0.3** The intent at a glance: after a turn that changed the intent, one line above the prompt (ticked A12 · new decision F-11) with See; the Intent view lists today's changes (✓ done, ◆ yours, ✎ changed) and explains any of them on a click.
 - **0.0.2** The worker squad: each background worker with an avatar (body and colour for its kind, a ring for its state, the prop it holds for what it is doing), a trail of what finished workers did, a summary strip (checklist, workers running, decisions waiting on you) and the proof in colour.

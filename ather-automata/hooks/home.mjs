@@ -124,9 +124,34 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
  *   lock: import('./model.mjs').EditorLock, recurring: readonly { id: string, title: string, fix: string, count: number }[],
  *   issues: readonly import('./issues.mjs').Issue[], last?: string | null, sent: readonly string[], workers: number, now: number, tz: number,
- *   skills?: readonly { name: string, description: string }[], prs?: import('./model.mjs').PrStates
+ *   skills?: readonly { name: string, description: string }[], prs?: import('./model.mjs').PrStates, week?: Week | null
  * }} HomeInput
  */
+
+/**
+ * This week's figures from the week-calendar plugin, when this PC runs it.
+ * @typedef {{ prsMerged: number, productive: number | null }} Week
+ */
+
+// ~/.calendar/latest.json, written by week-calendar: its figures while its week is still running.
+/** @param {string | null} text @param {number} now @returns {Week | null} */
+export const parseWeek = (text, now) => {
+  if (!text) return null
+  try {
+    const data = JSON.parse(text)
+    const start = Number(data?.week?.startMs), end = Number(data?.week?.endMs)
+    if (!(now >= start && now < end) || !data.metrics) return null
+    const productive = data.machineHours?.productiveUtilization
+    return { prsMerged: Number(data.metrics.prsMerged) || 0, productive: typeof productive === 'number' ? productive : null }
+  } catch {
+    return null
+  }
+}
+
+// "This week: 3 PRs merged · 68% productive"
+/** @param {Week | null | undefined} week */
+export const weekText = week =>
+  week ? [`This week: ${plural(week.prsMerged, 'PR')} merged`, week.productive === null ? '' : `${Math.round(week.productive * 100)}% productive`].filter(Boolean).join(' · ') : ''
 
 // What to work on, in one list: your open intents, then your GitHub issues that have no intent
 // yet (most urgent, then most recent), then teammates' intents you could follow.
@@ -164,7 +189,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week) }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now), picks: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -263,6 +288,7 @@ export const buildHome = input => {
       sentence: away.phase === 'review' || isNewcomer ? '' : open.length > 0 ? 'waiting on you' : input.workers > 0 ? 'agents working' : intent ? '' : 'no intent yet',
       lock: lockText,
       role: roleText,
+      week: weekText(input.week),
     },
     items,
     open,
