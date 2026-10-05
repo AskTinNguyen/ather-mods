@@ -173,19 +173,23 @@ export const briefIssues = (prompt, type) => {
 
 // ---------------------------------------------------------------- known traps
 
+// `rule`: where the repository already prevents the trap, as a file under the checkout and a phrase
+// only that rule contains. Once the phrase is there, the trap is not offered as a rule again.
+
 const GOTCHAS = [
-  { id: 'live-coding', pattern: /Unable to build while Live Coding is active/i, title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor, or use Wait-ForS2EditorCloseAndBuild.ps1 when another lane holds it. UHT success at the top of the log means nothing here.' },
-  { id: 'port-8000', pattern: /HttpListener unable to bind/i, title: 'MCP port 8000 still held (TIME_WAIT)', fix: 'Stop the Editor, wait until Get-NetTCPConnection -LocalPort 8000 returns nothing in any state, then relaunch and check the listener PID.' },
-  { id: 'restore-packages', pattern: /Restore Packages/i, title: 'Restore Packages dialog blocks startup', fix: 'Stop the Editor and move Saved/Autosaves/PackageRestoreData.json aside (rename, never delete) before relaunching.' },
-  { id: 'mcp-session', pattern: /Unknown session id|no session id/i, title: 'Stale MCP session id', fix: 'Delete the cached MCP session file after an Editor relaunch, and run MCP clients one at a time.' },
-  { id: 'asset-missing', pattern: /Asset does not exist/i, title: '"Asset does not exist" from every Editor tool', fix: 'Check McpPieTools GetPIEStatus first: a harness that threw before StopPIE leaves PIE running. In a fresh Editor verify saves by mtime and git.' },
-  { id: 'index-lock', pattern: /index\.lock/i, title: 'Git index.lock in the shared checkout', fix: 'Find the holder with Get-CimInstance Win32_Process git.exe. Only a stale lock may be renamed aside, in the same command as the next git call.' },
+  { id: 'live-coding', pattern: /Unable to build while Live Coding is active/i, title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor, or use Wait-ForS2EditorCloseAndBuild.ps1 when another lane holds it. UHT success at the top of the log means nothing here.', rule: { file: '.agents/skills/s2-unreal-engine/SKILL.md', text: 'A running Editor with Live Coding blocks Build.bat' } },
+  { id: 'port-8000', pattern: /HttpListener unable to bind/i, title: 'MCP port 8000 still held (TIME_WAIT)', fix: 'Stop the Editor, wait until Get-NetTCPConnection -LocalPort 8000 returns nothing in any state, then relaunch and check the listener PID.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'Get-NetTCPConnection -LocalPort 8000' } },
+  { id: 'restore-packages', pattern: /Restore Packages/i, title: 'Restore Packages dialog blocks startup', fix: 'Stop the Editor and move Saved/Autosaves/PackageRestoreData.json aside (rename, never delete) before relaunching.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'PackageRestoreData.json' } },
+  { id: 'mcp-session', pattern: /Unknown session id|no session id/i, title: 'Stale MCP session id', fix: 'Delete the cached MCP session file after an Editor relaunch, and run MCP clients one at a time.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'Unknown session id' } },
+  { id: 'asset-missing', pattern: /Asset does not exist/i, title: '"Asset does not exist" from every Editor tool', fix: 'Check McpPieTools GetPIEStatus first: a harness that threw before StopPIE leaves PIE running. In a fresh Editor verify saves by mtime and git.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'GetPIEStatus' } },
+  { id: 'index-lock', pattern: /index\.lock/i, title: 'Git index.lock in the shared checkout', fix: 'Find the holder with Get-CimInstance Win32_Process git.exe. Only a stale lock may be renamed aside, in the same command as the next git call.', rule: { file: 'docs/skills/git-lfs-traffic-control.md', text: 'Get-CimInstance Win32_Process' } },
   { id: 'disk', pattern: /No space left on device/i, title: 'Disk allowance spent', fix: 'Load .agents/skills/s2-free-disk-space/SKILL.md; never fall back to mutating the shared tree.' },
   { id: 'mixed-tree', pattern: /\bLNK20(01|19)\b/, title: 'Unresolved externals (possible mixed tree)', fix: 'If files were just restored, verify every path against HEAD before building; restore in one batched checkout.' },
-  { id: 'ps-redirect', pattern: /NativeCommandError/, title: 'PowerShell wrapped native stderr as an error', fix: 'Do not redirect 2>&1 on native executables in Windows PowerShell 5.1; read the exit code instead.' },
+  { id: 'ps-redirect', pattern: /NativeCommandError/, title: 'PowerShell wrapped native stderr as an error', fix: 'Do not redirect 2>&1 on native executables in Windows PowerShell 5.1; read the exit code instead.', rule: { file: 'AGENTS.md', text: 'do not redirect `2>&1` on native executables' } },
 ]
 
-/** @typedef {{ id: string, title: string, fix: string }} Trap */
+/** @typedef {{ file: string, text: string }} WrittenRule */
+/** @typedef {{ id: string, title: string, fix: string, rule?: WrittenRule }} Trap */
 /** @typedef {Record<string, { title: string, fix: string, count: number }>} TrapHits */
 
 /** @param {string} text */
@@ -203,3 +207,6 @@ export const recurringGotchas = (hits, ruled) =>
     .filter(([id, hit]) => hit.count >= RULE_AFTER_SESSIONS && !ruled.includes(id))
     .map(([id, hit]) => ({ id, ...hit }))
     .sort((a, b) => b.count - a.count)
+
+/** @param {string} id @returns {WrittenRule | undefined} */
+export const writtenRuleOf = id => GOTCHAS.find(one => one.id === id)?.rule
