@@ -4,7 +4,7 @@
 - Worker: `web-pack-worker`
 - Current step: none (stopped for review)
 - Next step: orchestrator reviews the PR (A7's review half) and merges; then han-viet adds `.ather/local/` to `.gitignore` (F-2)
-- PR: none yet
+- PR: https://github.com/AskTinNguyen/ather-mods/pull/5
 
 ## Acceptance
 
