@@ -2,8 +2,8 @@
 
 - Working under rev: 2
 - Worker: Claude worker session (2026-10-06)
-- Current step: S8, README, rules, version 0.4.0, final gates (A7, A8)
-- Next step: report to the orchestrator
+- Current step: done for rev 2 (S8 committed); waiting on the A8 review and the F-2/F-3 calls
+- Next step: the orchestrator reviews A8 (README, version) and resolves F-2/F-3; Hai switches `CLAUDE_CODE_PLUGIN_DIRS` to `D:/Projects/ather-mods/hai-flow` and pushes
 - PR: none
 
 ## Acceptance
@@ -18,8 +18,8 @@
 | A4 | met | S4 engine tests with mocked probes (cleanup before a grant: reaper < 14 GB, LiveCodingConsole only without an Editor, others named not killed; launch gate options/panel; open Editor reused; PIE abort < 3 GB and disk < 20 GB notices once) + existing "Editor: PIE needs 5 GB free RAM"; `66 pass 0 fail` |
 | A5 | met | S1 unit tests (timeline, merge-tree parse, rule 11, freeze git-write detection) + S5 engine tests `tests/sync-engine.test.ts` (cutoff notice to every A5 session once, deferral of crossing grants, dry-run conflicts to owners with self/foreign wording, freeze of git writes and Editor use for non-holders, holder exempt, done/abort lift told once, holder-only changes, takeover); `76 pass 0 fail` |
 | A6 | met | S3/S5/S6 engine tests: one idle prompt per event (queue, lease end/overrun, yield, cutoff, lift), mid-turn notices on the main loop's next result only, waiting notices on Hai's next prompt once, Edit/Write/MultiEdit and shell writes of a `hai-flow ·` line into docs/intent (progress, findings, log) refused; `78 pass 0 fail` |
-| A7 | open | |
-| A8 | open | |
+| A7 | met | S8: `git diff --stat main -- ather-automata` empty; `✔ Validation passed`; tsc exit 0; `82 pass 0 fail` including the 0.3 A5 tests (worktree scope, worker stop-and-report, Ather proof in `Verified:`) unchanged in `a5.test.ts` / `hai-flow.test.ts` |
+| A8 | open | ready for review: `plugin.json` 0.4.0; `hai-flow/README.md` (what A5 adds, the three tools, notices, commands, model tools, options, install from `D:/Projects/ather-mods/hai-flow` first in `CLAUDE_CODE_PLUGIN_DIRS`). Proof is a review, not yet done by anyone but the author |
 
 ## Steps
 
@@ -38,6 +38,8 @@
 - S6 (rev 2, 2026-10-06): notices reviewed against D6. Gaps closed: a shell command that writes a `hai-flow ·` line into `docs/intent/**` (redirect, tee, Out-File/Set-Content/Add-Content, heredoc bodies included) is refused like an Edit/Write/MultiEdit; the "rides Hai's next prompt as context" path is tested. Tests added: "notices: one waiting for the next turn rides Hai's next prompt as context, once"; "notices: Ather's intent log and findings never take a hai-flow line, by edit or by shell" (log.md by MultiEdit, findings.md by `echo >>`, log.md by `Add-Content`; a plain progress line passes). With S3/S5: one idle prompt per event (queue, lease, yield, cutoff, lift tests), mid-turn context on the main loop's result and never a worker's, no cross-session sends between hai-flow sessions. Evidence: `✔ Validation passed`; tsc exit 0; `78 pass 0 fail`; commit below. Acceptance: A6 met.
 
 - S7 (rev 2, 2026-10-06): pane (A5 on only). One row of three tiles under Ather's `strip`: **Editor holder** (holder, until / min left or over, this session's place: "you: next", "you: 2nd in the queue · waiting on RAM", or the queue size), **Memory** (free GB with the meter, launch verdict against the launch gate and the fixed PIE gate, the gate in force and whether it was set on the panel, the last cleanup, disk under 20 GB; Buttons −1 GB / +1 GB / Reset write the shared store gate), **Sync main** (branch behind/ahead and fetch age, the next sync, its holder and phase, dry-run conflicts; Buttons: three preset Plan times when none is open; −30 min / +30 min / Cancel for the holder before the freeze; Done / Abort for the holder during it; Take over when the holder is gone; Refresh). Terminal: one line per tile (`short` segments) with the same Buttons. The old 0.3 "Sync" preflight button (paused s2-sync-main Phase 0/1 prompt) is replaced by the plan controls; the branch icon sweeps while a sync is frozen. Tests `tests/pane.test.ts` (2 × terminal/desktop): tile contents, Button labels, pressing gate up/reset and plan/later/cancel with the files and redraws checked; a sync held elsewhere shows phase and conflicts without this session's controls. Evidence: `✔ Validation passed`; tsc exit 0; `82 pass 0 fail`; commit below. Acceptance: A2 met.
+
+- S8 (rev 2, 2026-10-06): release. `plugin.json` 0.4.0 with a new description and the two launch-gate options; `/a5` help names the sync subcommands and `/a5 status` adds the Editor/RAM/Sync summary while A5 is on; `rules-a5.md` gains the Sync main bullet (cutoff, freeze, conflicts, never stash/reset to get past it) and tells the model that `hai-flow ·` messages come from the coordination layer, are acted on, and are never logged into docs/intent; `rules-flow.md` keeps only 🟥/⏯️ (S2). README rewritten for 0.4: A5 off vs on, install from `D:/Projects/ather-mods/hai-flow` first in `CLAUDE_CODE_PLUGIN_DIRS` (`;`-separated on Windows), the three tools, notices, commands, model tools, options, coordination files, liveness, limits. Final gates: `claude plugin validate` → `✔ Validation passed`; `npx -y -p typescript@5.6 tsc -p hai-flow` → exit 0; `claude plugin test hai-flow` → `82 pass 0 fail` (6 files); `git -C D:/Projects/ather-mods diff --stat main -- ather-automata` → empty (0 lines), no branch commit touches `ather-automata/`. Evidence: commit below. Acceptance: A7 met; A8 ready for review.
 
 ## Engineering decisions (inside the intent's scope)
 

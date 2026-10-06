@@ -1160,7 +1160,11 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const res = await next(e)
-    await $.command.register({ name: 'a5', description: 'A5: /a5 on · /a5 off · /a5 status (on: the five rules, the report gate, the red seal and gold accent)' })
+    await $.command.register({
+      name: 'a5',
+      description: 'A5: /a5 on · /a5 off · /a5 status · /a5 sync HH:MM [for <session>] | move HH:MM | cancel | done | abort | takeover (on: the five rules, the report gate, Editor holder, RAM and Sync main)',
+      argumentHint: 'on | off | status | sync HH:MM',
+    })
     await readA5($)
     a5FlipAt = 0 // a session that starts with A5 already on does not stamp the seal
     isS2 = await $.fs.exists(`${(await $.session.root()).replace(/\\/g, '/')}/S2.uproject`)
@@ -1191,7 +1195,11 @@ export const register: Register = (on, options) => {
     }
     await readA5($)
     const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put hai-flow first in CLAUDE_CODE_PLUGIN_DIRS`
-    return { text: `A5 is ${a5On ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. hai-flow sits ${where2}.` }
+    const coord =
+      a5On && isS2
+        ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${syncPhase(syncFile, nowMs)} (holder ${syncFile.holder.lane})` : 'none planned'}.`
+        : ''
+    return { text: `A5 is ${a5On ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. hai-flow sits ${where2}.${coord}` }
   })
 
   on('tool.call', async ($, e, next) => {

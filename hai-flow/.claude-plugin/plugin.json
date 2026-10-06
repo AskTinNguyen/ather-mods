@@ -1,7 +1,7 @@
 {
   "name": "hai-flow",
-  "version": "0.3.0",
-  "description": "Hai's S2 flow beside Ather Automata: A5 rules and report gate behind /a5, fitted to Ather's intent flow and proof (gold accent and red seal when on); the Editor lock and PIE RAM gate; 🟥/⏯️ (Ather's Needs you for intent calls, PENDING.md for the rest); Editor, Memory and Branch tiles in Ather's pane.",
+  "version": "0.4.0",
+  "description": "Hai's S2 flow beside Ather Automata, which it never changes. A5 off: Ather exactly as it ships, plus the 🟥/⏯️ title marks. /a5 on: the five rules and the report gate fitted to Ather's intent flow and proof, and coordination for the sessions sharing one S2 checkout: Editor holder (queue, leases, the S2 standard's lock lines), RAM (safe cleanup, launch and PIE gates), Sync main holder (cutoff, freeze, conflicts to their owners), with hai-flow notices that never enter intent files and three tiles in Ather's pane.",
   "author": { "name": "HaiHuynh" },
   "userConfig": {
     "a5WhenPresent": {
