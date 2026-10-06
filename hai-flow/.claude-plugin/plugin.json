@@ -1,0 +1,34 @@
+{
+  "name": "hai-flow",
+  "version": "0.3.0",
+  "description": "Hai's S2 flow beside Ather Automata: A5 rules and report gate behind /a5, fitted to Ather's intent flow and proof (gold accent and red seal when on); the Editor lock and PIE RAM gate; 🟥/⏯️ (Ather's Needs you for intent calls, PENDING.md for the rest); Editor, Memory and Branch tiles in Ather's pane.",
+  "author": { "name": "HaiHuynh" },
+  "userConfig": {
+    "a5WhenPresent": {
+      "type": "string",
+      "title": "A5 approvals when you are here",
+      "description": "ask: a dialog asks you before a destructive git/fs command or a shared-config edit runs; deny: the agent is refused and must ask you to run it. A worker (subagent) is never asked: it is refused and reports. During an Ather away window the question goes to its ledger as a D-<n> and the call is refused.",
+      "default": "ask",
+      "options": ["ask", "deny"]
+    },
+    "editorLock": {
+      "type": "string",
+      "title": "Editor owner lock file",
+      "description": "The shared S2 checkout's lock (AGENTS.md).",
+      "default": "E:/Projects/s2/Saved/EDITOR_OWNER.txt"
+    },
+    "motion": {
+      "type": "string",
+      "title": "Pixel motion in Ather's pane",
+      "description": "on: a tile's pixel icon dithers in when its state turns over, the Branch icon sweeps while a sync runs, the A5 seal stamps in; off: every icon stays still.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "pendingFile": {
+      "type": "string",
+      "title": "Pending decisions file",
+      "description": "Where 🟥 decisions outside Ather's records are appended (an intent's director call is in Ather's Needs you instead); empty means %USERPROFILE%/.claude/PENDING.md.",
+      "default": ""
+    }
+  }
+}

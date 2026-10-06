@@ -1,0 +1,361 @@
+import { expect, mock, test } from 'claude-code/testing'
+import { CONFIG } from './config.fixture.ts'
+
+// Through the engine: the plugin's hooks sit above; the test's `on` hooks stand for the engine
+// beneath it: an in-memory file system, the session, the store, the clock, processes and the tools.
+const PROJ = 'E:/proj'
+const LOCK = 'E:/s2/Saved/EDITOR_OWNER.txt'
+const PENDING = 'C:/Users/hai.huynh/.claude/PENDING.md'
+const ME = 'ab12cd34-5678-4000-8000-000000000000'
+const ENV = { TEMP: 'C:/Users/HAI~1.HUY/AppData/Local/Temp', LOCALAPPDATA: 'C:/Users/hai.huynh/AppData/Local', USERPROFILE: 'C:/Users/hai.huynh' }
+const opts = (a5WhenPresent = 'deny') => ({ options: { a5WhenPresent, editorLock: LOCK, pendingFile: PENDING } })
+const BAT = '"D:/GameEditors/5.8/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development'
+const NOW = new Date(2026, 9, 6, 14, 40).getTime()
+const LIME = '#DDFF00'
+
+type Rec = Record<string, unknown>
+type Tree = { type?: string; props?: Rec; children?: unknown[] }
+const k = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+/** Why the plugin refused a call, or undefined when it let it run. */
+const refused = (ran: { deny?: string; isError?: boolean; text?: string }): string | undefined => ran.deny ?? (ran.isError ? ran.text : undefined)
+const keys = (t: unknown): string[] => ((t as Tree).children ?? []).map(c => String((c as Tree).props?.key ?? ''))
+const find = (t: unknown, key: string): Tree | undefined => {
+  const n = t as Tree
+  if (n?.props?.key === key) return n
+  for (const c of n?.children ?? []) {
+    const hit = find(c, key)
+    if (hit) return hit
+  }
+  return undefined
+}
+/** The color of the first Text inside the keyed Box. */
+const firstText = (t: unknown, key: string): unknown => ((find(t, key)?.children ?? [])[0] as Tree | undefined)?.props?.color
+const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as Tree)?.children ?? []).map(text).join(''))
+
+/** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints. */
+function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true } = {}) {
+  const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
+  const seen: Rec[] = []
+  const value = (v: unknown) => ({ value: v })
+  mock.env(on, ENV)
+  mock.store(on, { a5: { on: a5 } })
+  const clock = mock.clock(on, { now: NOW })
+  on('fs.read', async (_$: unknown, e: { path: string }) => {
+    if (k(e.path).endsWith('/a5/config.json')) return value(JSON.stringify(CONFIG))
+    if (k(e.path).endsWith('/a5/rules-a5.md')) return value('A5 RULES {SESSION8}')
+    if (k(e.path).endsWith('/a5/rules-flow.md')) return value('FLOW RULES {SESSION8}')
+    const t = files.get(k(e.path))
+    return t === undefined ? { deny: `ENOENT: ${e.path}` } : value(t)
+  })
+  on('fs.write', async (_$: unknown, e: { path: string; text: string }) => {
+    files.set(k(e.path), e.text)
+    return value(undefined)
+  })
+  on('fs.exists', async (_$: unknown, e: { path: string }) => value([...files.keys()].some(p => p === k(e.path) || p.startsWith(`${k(e.path)}/`))))
+  on('fs.stat', async (_$: unknown, e: { path: string }) =>
+    k(e.path).endsWith('fetch_head') ? value({ kind: 'file', size: 1, mtimeMs: NOW - 90 * 60_000, isLink: false }) : { deny: 'ENOENT' })
+  on('session.id', async () => value(ME))
+  on('session.cwd', async () => value(PROJ))
+  on('session.root', async () => value(PROJ))
+  on('session.messages', async () => value([]))
+  on('session.start', async () => ({ cwd: PROJ }))
+  on('process.run', async (_$: unknown, e: { argv: string[] }) => {
+    const argv = e.argv.join(' ')
+    const stdout = argv.includes('Get-Process') ? '20.5;15;4;31.2'
+      : argv.includes('rev-parse') ? 'HaiHuynh/20261005'
+        : argv.includes('rev-list') ? '3\t12'
+          : argv.includes('--merges') ? 'def5678 · 3 days ago'
+            : argv.includes('origin/main') ? 'abc1234 · 2 hours ago'
+              : ram
+    return value({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+  })
+  for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'prompt.submit']) on(ev, async () => value(undefined))
+  on('classic.Stop', async () => ({}))
+  on('tool.call', async (_$: unknown, e: Rec) => {
+    seen.push(e)
+    const t = out[String(e.command ?? e.tool)] ?? (e.tool === 'mcp__ccd_session_mgmt__get_session' ? '{"title":"3️⃣ Loco fix"}' : 'ok')
+    return { result: { stdout: t, stderr: '', interrupted: false }, text: t }
+  })
+  return { files, seen, clock, put: (p: string, t: string) => files.set(k(p), t) }
+}
+
+/** What Ather draws for its pane: masthead, the home strip (home view only), the foot. */
+const atherTree = (home: boolean): never => ({
+  type: 'Box',
+  props: { flexDirection: 'column' },
+  children: [
+    { type: 'Box', props: { key: 'head-words', flexDirection: 'column' }, children: [{ type: 'Text', props: { color: LIME, bold: true }, children: ['A T H E R'] }] },
+    ...(home ? [{ type: 'Box', props: { key: 'strip', borderStyle: 'round', borderColor: '#3a3c36' }, children: [{ type: 'Text', props: { color: '#8E918A' }, children: ['Checklist'] }] }] : []),
+    { type: 'Box', props: { key: 'foot', flexDirection: 'column' }, children: [{ type: 'Text', props: { color: '#8E918A' }, children: ['Enter chooses · Esc closes'] }] },
+  ],
+}) as never
+const PANE = { surface: 'terminal', component: 'Pane', requestId: 'ather', props: { title: 'ATHER AUTOMATA', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 22 }, view: {} } }
+
+// ---------- A5 ----------
+test('A5 on: a refused command never reaches the tool', opts(), async ($, on) => {
+  const w = world(on)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('hai-flow · A5 D1/D5')
+  expect(w.seen.length).toBe(0)
+})
+
+test('A5 off: the rules and the report gate rest; the Editor gate stays', opts(), async ($, on) => {
+  const w = world(on, { a5: false })
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2; // A5TMP\n')
+  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5TMP' })
+  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
+  w.put(LOCK, '1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n')
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets' } as never))).toContain('hai-flow · Editor lock')
+})
+
+test('/a5 on and /a5 off flip the switch every session reads', opts(), async ($, on) => {
+  world(on, { a5: false })
+  expect((await $.command.run({ command: 'a5', args: 'on' } as never)).text).toContain('A5 on')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('hai-flow · A5')
+  expect((await $.command.run({ command: 'a5', args: 'off' } as never)).text).toContain('A5 off')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
+})
+
+test('recursive delete: free in TEMP, needs Hai elsewhere', opts(), async ($, on) => {
+  world(on)
+  expect(refused(await $.tool.call({ tool: 'PowerShell', command: 'Remove-Item -Recurse -Force $env:TEMP\\probe' }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'rm -rf E:/Projects/s2/Saved/Logs' }))).toContain("needs Hai's approval")
+})
+
+test('ask mode with nobody to answer (Ather away window) refuses and says why', opts('ask'), async ($, on) => {
+  world(on)
+  on('tool.call', { tool: 'AskUserQuestion' }, async () => ({ deny: 'The user is away until 07:00 (Ather autonomy window).' }))
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('nobody could approve it')
+})
+
+test('shared config edit in a git project needs Hai', opts(), async ($, on) => {
+  world(on)
+  expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Config/DefaultGame.ini`, content: '[x]' }))).toContain('Config/*.ini')
+})
+
+test('report gate: a failed Build.bat reported as fine keeps the turn going', opts(), async ($, on) => {
+  const w = world(on, { out: { [BAT]: 'Building...\nResult: Failed (OtherCompilationError)' } })
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
+  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5TMP' })
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2; // A5TMP\n')
+  await $.tool.call({ tool: 'Bash', command: BAT })
+  const first = await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Changed: foo.cpp\nVerified: Build.bat ok\nRisk: none\nOpen: none' })
+  expect(first.block).toContain('FAILED')
+  expect(first.block).toContain('A5TMP')
+  expect(first.block).not.toContain('must list')
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2;\n')
+  const second = await $.classic.Stop({ stop_hook_active: true, last_assistant_message: 'Changed: Foo.cpp\nVerified: FAILED: Build.bat S2Editor\nRisk: build broken\nOpen: fix the compile error' })
+  expect(second.block).toBeUndefined()
+})
+
+test('report gate: memory and scratch files outside a git project need no report', opts(), async ($, on) => {
+  world(on)
+  await $.tool.call({ tool: 'Write', file_path: 'C:/Users/hai.huynh/.claude/projects/x/memory/m.md', content: 'x' })
+  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Đã lưu.' })).block).toBeUndefined()
+})
+
+// ---------- A5 inside Ather's intent flow ----------
+const STATUS_TOOL = 'mcp__ather-automata__status'
+const status = (o: Rec) => JSON.stringify({ me: 'hai', role: 'techart', area: 'VFX', ...o })
+
+test('a worker\'s own worktree: git and repository config there are its own (the shared checkout still asks)', opts(), async ($, on) => {
+  const w = world(on)
+  w.put('E:/wt/x/.git', 'gitdir: E:/proj/.git/worktrees/x')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x checkout -b HaiHuynh/tail-vfx origin/main' }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x reset --hard' }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Write', file_path: 'E:/wt/x/Config/DefaultGame.ini', content: '[x]' }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain("needs Hai's approval")
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x add .' }))).toContain("needs Hai's approval")
+})
+
+test('a worker (subagent) is never put to Hai: refused at once with stop-and-report, no dialog', opts('ask'), async ($, on) => {
+  const w = world(on)
+  const asked: Rec[] = []
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_$: unknown, e: Rec) => {
+    asked.push(e)
+    return { result: {}, text: 'Cho chạy lần này' }
+  })
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard', agentId: 'worker-1' } as never))).toContain('a worker does not ask Hai')
+  expect(asked.length).toBe(0)
+  expect(w.seen.length).toBe(0)
+})
+
+test('the report covers this loop\'s edits; a worker\'s edits are its own report', opts(), async ($, on) => {
+  const w = world(on)
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
+  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2;', agentId: 'worker-1' } as never)
+  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Worker báo xong bước 2.' })).block).toBeUndefined()
+})
+
+test('intent tracked: Verified answers to Ather\'s proof, and says chưa until the role\'s proof is complete', opts(), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status({ tracked: { slug: 'tail-vfx', directorCalls: [] }, evidence: { pie: { state: 'pass', detail: 'PIE started' }, editor: { state: 'none', detail: '' } } }) } })
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
+  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2;' })
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2;\n')
+  const claim = await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Changed: Foo.cpp\nVerified: PIE ✓, build ✓\nRisk: low\nOpen: none' })
+  expect(claim.block).toContain('claims build')
+  expect(claim.block).toContain('Editor check')
+  const honest = await $.classic.Stop({ stop_hook_active: true, last_assistant_message: 'Changed: Foo.cpp\nVerified: PIE ✓ · chưa: Editor check (Hai: /ather checked)\nRisk: low\nOpen: none' })
+  expect(honest.block).toBeUndefined()
+})
+
+test('🟥 that relays an intent\'s director call: Ather lists it, so no PENDING.md line; title and unread still mark it', opts(), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status({ tracked: { slug: 'tail-vfx', directorCalls: ['F-3: Tail VFX colour: gold or red'] }, evidence: {} }) } })
+  w.put(PENDING, '')
+  on('turn.complete', async () => ({ text: '' }))
+  const answer = 'Worker dừng ở F-3.\n\n> 🟥 **NEEDS DECISION** — F-3: tail VFX gold or red? / Default if no answer: gold'
+  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(w.files.get(k(PENDING)) ?? '').not.toContain('tail VFX')
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' && e.title === '🟥 3️⃣ Loco fix')).toBe(true)
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_sidebar__set_unread' && e.unread === true)).toBe(true)
+})
+
+test('🟥 after a worker added a director call this turn: no PENDING.md line', opts(), async ($, on) => {
+  const w = world(on)
+  on('turn.complete', async () => ({ text: '' }))
+  const findings = `${PROJ}/docs/intent/tail-vfx/findings.md`
+  w.put(findings, '# Findings\n')
+  await $.tool.call({ tool: 'Write', file_path: findings, content: '# Findings\n\n## F-4 (2026-10-06) | blocking: yes | status: open (director)\nGold or red?\n', agentId: 'worker-1' } as never)
+  const answer = '> 🟥 **NEEDS DECISION** — Tail colour? / Default if no answer: gold'
+  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(w.files.get(k(PENDING)) ?? '').not.toContain('Tail colour')
+})
+
+// ---------- the Editor ----------
+test('Editor: writes need the lock to name this session; reads pass; never save-all', opts(), async ($, on) => {
+  const w = world(on)
+  const save = { tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets', arguments: { paths: ['/Game/X'] } }
+  w.put(LOCK, '1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n')
+  expect(refused(await $.tool.call(save as never))).toContain('hai-flow · Editor lock')
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'get_actor' } as never))).toBeUndefined()
+  w.put(LOCK, `1006-me-s1 (this lane) since 14:30, expected end 15:10. session ${ME.slice(0, 8)}\n`)
+  expect(refused(await $.tool.call(save as never))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'SaveAll' } as never))).toContain('save each one by exact path')
+  w.put(LOCK, 'free since 15:20\n')
+  expect(refused(await $.tool.call(save as never))).toContain('free')
+})
+
+test('Editor: PIE needs 5 GB free RAM', opts(), async ($, on) => {
+  const w = world(on, { ram: '3.2' })
+  w.put(LOCK, `slot since 14:30. session ${ME.slice(0, 8)}\n`)
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'McpPieToolset.StartPIE' } as never))).toContain('5 GB')
+})
+
+// ---------- 🟥 ----------
+test('🟥 at the end of a turn: PENDING.md once, title marked, unread', opts(), async ($, on) => {
+  const w = world(on)
+  w.put(PENDING, '- [x] old line\n')
+  const answer = 'Phần A xong.\n\n> 🟥 **NEEDS DECISION** — Merge PR #1 now or after the train? / Default if no answer: after the train'
+  on('turn.complete', async () => ({ text: answer }))
+  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't2', reason: 'answer' })
+  const pending = w.files.get(k(PENDING)) ?? ''
+  expect(pending.split('\n').filter(l => l.includes('Merge PR #1')).length).toBe(1)
+  expect(pending).toContain('· 3️⃣ Loco fix · Merge PR #1 now or after the train? · default: after the train')
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' && e.title === '🟥 3️⃣ Loco fix')).toBe(true)
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_sidebar__set_unread' && e.unread === true)).toBe(true)
+})
+
+// ---------- Ather's pane ----------
+const GOLD = '#E8B84A'
+/** The brand label's color: the first Text of the masthead, or of the brand row once A5 adds its seal. */
+const brandColor = (t: unknown): unknown => firstText(t, 'hai-brand') ?? firstText(t, 'head-words')
+
+test('pane, A5 off: one row of Editor · Memory · Main tiles right under Ather\'s strip; Ather\'s look untouched', opts(), async ($, on) => {
+  const w = world(on, { a5: false })
+  w.put(LOCK, '1006-walkerext-s9 (artifact-any-legs-worker) since 14:30, expected end 15:10. Build S2Editor, headless tests. Waiting: 1006-loco-s3\n')
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
+  await $.ui.render(PANE as never)
+  await w.clock.advance(50) // the sync read runs off the render
+  const tree = await $.ui.render(PANE as never)
+  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'foot'])
+  expect(text(find(tree, 'hai-tile-editor'))).toContain('1006-walkerext-s9')
+  expect(text(find(tree, 'hai-tile-editor'))).toContain('until 15:10 · 30 min left')
+  expect(text(find(tree, 'hai-tile-memory'))).toContain('20.5 GB free')
+  expect(text(find(tree, 'hai-tile-main'))).toContain('12 behind')
+  expect(brandColor(tree)).toBe(LIME)
+  expect(find(tree, 'hai-brand')).toBeUndefined()
+  expect(find(tree, 'hai-a5-rules')).toBeUndefined()
+})
+
+test('pane on the desktop: the tiles are cards in Ather\'s strip language', opts(), async ($, on) => {
+  world(on, { a5: false })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
+  const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  expect(find(tree, 'hai-tile-editor')?.props?.borderStyle).toBe('round')
+  expect(find(tree, 'hai-tile-main-buttons')).toBeDefined()
+})
+
+test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand, the five rules sit at the foot', opts(), async ($, on) => {
+  world(on, { a5: true })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
+  const tree = await $.ui.render(PANE as never)
+  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-a5-rules', 'foot'])
+  expect(text(find(tree, 'hai-brand'))).toContain('★ A5')
+  expect(brandColor(tree)).toBe(GOLD)
+  expect(find(tree, 'strip')?.props?.borderColor).toBe('#3a3c36')
+  expect(text(find(tree, 'hai-a5-rules'))).toContain('Yêu Tổ quốc')
+  expect(text(find(tree, 'hai-a5-rules'))).toContain('Thật thà')
+})
+
+test('pane: views other than home get no tiles (A5 still seals and recolors them)', opts(), async ($, on) => {
+  world(on, { a5: true })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(false))
+  await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
+  const tree = await $.ui.render(PANE as never)
+  expect(keys(tree)).toEqual(['head-words', 'hai-a5-rules', 'foot'])
+  expect(brandColor(tree)).toBe(GOLD)
+})
+
+// ---------- one inbox, Ather's proof, icons, motion ----------
+test('A5: a PIE start after an edit is the verify run (Ather\'s proof counts)', opts(), async ($, on) => {
+  const w = world(on)
+  w.put(LOCK, `slot since 14:30. session ${ME.slice(0, 8)}\n`)
+  w.put(`${PROJ}/Config/Tuning.json`, '{"a":1}\n')
+  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Config/Tuning.json`, old_string: '"a":1', new_string: '"a":2' })
+  await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'McpPieToolset.StartPIE' } as never)
+  const res = await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Changed: Tuning.json\nVerified: PIE started, MC moves\nRisk: low\nOpen: none' })
+  expect(res.block).toBeUndefined()
+})
+
+test('pane on the desktop: each tile carries a pixel icon; still unless its state just turned over', opts(), async ($, on) => {
+  const w = world(on, { a5: false })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
+  const first = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const svg = (find(first, 'hai-tile-editor-head')?.children ?? [])[0] as Tree
+  expect(svg?.type).toBe('Svg')
+  expect(svg?.props?.isInteractive).toBeUndefined()
+  w.put(LOCK, `1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n`)
+  await w.clock.advance(60_000) // the minute refresh reads the new holder
+  const changed = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const moving = (find(changed, 'hai-tile-editor-head')?.children ?? [])[0] as Tree
+  expect(moving?.props?.isInteractive).toBe(true)
+  expect(String(moving?.props?.source)).toContain('<set attributeName="fill"')
+})
+
+test('A5 seal on the desktop: stamps in once when A5 comes on, still afterwards', opts(), async ($, on) => {
+  const w = world(on, { a5: false })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
+  await $.command.run({ command: 'a5', args: 'on' } as never)
+  const stamp = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const seal = (find(stamp, 'hai-brand')?.children ?? [])[1] as Tree
+  expect(seal?.type).toBe('Svg')
+  expect(seal?.props?.isInteractive).toBe(true)
+  await w.clock.advance(3_000)
+  const still = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  expect(((find(still, 'hai-brand')?.children ?? [])[1] as Tree)?.props?.isInteractive).toBeUndefined()
+})
+
+test('motion off: every icon stays still', { options: { a5WhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+  world(on, { a5: false })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
+  await $.command.run({ command: 'a5', args: 'on' } as never)
+  const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  expect(((find(tree, 'hai-brand')?.children ?? [])[1] as Tree)?.props?.isInteractive).toBeUndefined()
+})
