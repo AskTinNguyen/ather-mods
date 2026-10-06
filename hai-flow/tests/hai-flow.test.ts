@@ -69,14 +69,19 @@ function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 =
               : ram
     return value({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   })
-  for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'prompt.submit']) on(ev, async () => value(undefined))
+  const calls: Record<string, unknown[]> = {}
+  for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'prompt.submit', 'tool.register'])
+    on(ev, async (_$: unknown, e: unknown) => {
+      ;(calls[ev] ??= []).push(e)
+      return value(ev === 'tool.register' ? { tool: `mcp__hai-flow__${String((e as Rec).name)}` } : undefined)
+    })
   on('classic.Stop', async () => ({}))
   on('tool.call', async (_$: unknown, e: Rec) => {
     seen.push(e)
     const t = out[String(e.command ?? e.tool)] ?? (e.tool === 'mcp__ccd_session_mgmt__get_session' ? '{"title":"3️⃣ Loco fix"}' : 'ok')
     return { result: { stdout: t, stderr: '', interrupted: false }, text: t }
   })
-  return { files, seen, clock, put: (p: string, t: string) => files.set(k(p), t) }
+  return { files, seen, clock, calls, put: (p: string, t: string) => files.set(k(p), t) }
 }
 
 /** What Ather draws for its pane: masthead, the home strip (home view only), the foot. */
@@ -98,14 +103,35 @@ test('A5 on: a refused command never reaches the tool', opts(), async ($, on) =>
   expect(w.seen.length).toBe(0)
 })
 
-test('A5 off: the rules and the report gate rest; the Editor gate stays', opts(), async ($, on) => {
+test('A5 off: the rules, the report gate and the Editor gate all rest (D1)', opts(), async ($, on) => {
   const w = world(on, { a5: false })
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
   w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2; // A5TMP\n')
   await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5TMP' })
   expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
   w.put(LOCK, '1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n')
-  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets' } as never))).toContain('hai-flow · Editor lock')
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets' } as never))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'SaveAll' } as never))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toBeUndefined()
+})
+
+test('A5 off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; 🟥 still marks the title', opts(), async ($, on) => {
+  const w = world(on, { a5: false, ram: '2.1' })
+  w.put(LOCK, '1006-other-s9 (worker) since 13:30, expected end 14:00. session ffffffff\n') // over its lease, RAM under the PIE gate
+  w.put(PENDING, '')
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  on('turn.complete', async () => ({ text: '' }))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+    await w.clock.advance(120_000)
+    expect(await $.ui.render({ ...PANE, surface } as never)).toEqual(atherTree(true))
+    expect(await $.ui.render({ ...PANE, surface } as never)).toEqual(atherTree(true))
+  }
+  await $.turn.complete({ answer: '> 🟥 **NEEDS DECISION** — Merge now? / Default if no answer: later', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect((w.calls['ui.status'] ?? []).filter(e => (e as Rec).text !== undefined)).toEqual([])
+  expect(w.calls['ui.toast'] ?? []).toEqual([])
+  expect(w.calls['tool.register'] ?? []).toEqual([])
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' && e.title === '🟥 3️⃣ Loco fix')).toBe(true)
 })
 
 test('/a5 on and /a5 off flip the switch every session reads', opts(), async ($, on) => {
@@ -261,26 +287,23 @@ const GOLD = '#E8B84A'
 /** The brand label's color: the first Text of the masthead, or of the brand row once A5 adds its seal. */
 const brandColor = (t: unknown): unknown => firstText(t, 'hai-brand') ?? firstText(t, 'head-words')
 
-test('pane, A5 off: one row of Editor · Memory · Main tiles right under Ather\'s strip; Ather\'s look untouched', opts(), async ($, on) => {
-  const w = world(on, { a5: false })
+test('pane, A5 on: one row of Editor · Memory · Main tiles right under Ather\'s strip', opts(), async ($, on) => {
+  const w = world(on, { a5: true })
   w.put(LOCK, '1006-walkerext-s9 (artifact-any-legs-worker) since 14:30, expected end 15:10. Build S2Editor, headless tests. Waiting: 1006-loco-s3\n')
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   await $.ui.render(PANE as never)
   await w.clock.advance(50) // the sync read runs off the render
   const tree = await $.ui.render(PANE as never)
-  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'foot'])
+  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-a5-rules', 'foot'])
   expect(text(find(tree, 'hai-tile-editor'))).toContain('1006-walkerext-s9')
   expect(text(find(tree, 'hai-tile-editor'))).toContain('until 15:10 · 30 min left')
   expect(text(find(tree, 'hai-tile-memory'))).toContain('20.5 GB free')
   expect(text(find(tree, 'hai-tile-main'))).toContain('12 behind')
-  expect(brandColor(tree)).toBe(LIME)
-  expect(find(tree, 'hai-brand')).toBeUndefined()
-  expect(find(tree, 'hai-a5-rules')).toBeUndefined()
 })
 
 test('pane on the desktop: the tiles are cards in Ather\'s strip language', opts(), async ($, on) => {
-  world(on, { a5: false })
+  world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
@@ -322,7 +345,7 @@ test('A5: a PIE start after an edit is the verify run (Ather\'s proof counts)', 
 })
 
 test('pane on the desktop: each tile carries a pixel icon; still unless its state just turned over', opts(), async ($, on) => {
-  const w = world(on, { a5: false })
+  const w = world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const first = await $.ui.render({ ...PANE, surface: 'desktop' } as never)

@@ -61,6 +61,7 @@ let sync: Sync | undefined
 let syncAt = 0
 let isReadingGit = false
 let isSyncRunning = false
+let isStatusShown = false
 const seen = new Map<string, { sig: string; color: string; at: number; from: string }>() // each tile's state, and when it last turned over
 let chain: string[] | null = null // the plugins beneath this one on a tool call: Ather there means the pane can be wrapped
 
@@ -257,7 +258,7 @@ async function applyMarker($: Engine, opts: Opts, m: NonNullable<Marker>, isInFi
       const pending = await $.fs.read(file).catch(() => '')
       if (!isPending(pending, m.question)) await $.fs.write(file, `${pending.replace(/\s*$/, '')}\n${pendingLine(stampOf(new Date()), label, m.question, m.fallback)}\n`)
     }
-    $.ui.toast(`🟥 Waiting on Hai${isInFindings ? ' (Ather: Needs you)' : ''}: ${m.question.slice(0, 80)}`, { timeoutMs: 12_000 })
+    if (a5On) $.ui.toast(`🟥 Waiting on Hai${isInFindings ? ' (Ather: Needs you)' : ''}: ${m.question.slice(0, 80)}`, { timeoutMs: 12_000 })
     await callTool($, { tool: 'mcp__ccd_sidebar__set_unread', session_id: 'self', unread: true }).catch(() => '')
   }
   const sign = m.kind === 'decision' ? '🟥' : '⏯️'
@@ -276,6 +277,12 @@ async function lastAssistantText($: Engine): Promise<string> {
 /** The line under the prompt says only what the pane would not tell at a glance: ★ A5 while it is on, and
  * an Editor lease run over or RAM under the PIE gate. The normal state is silence (the pane has it). */
 function showStatus($: Engine): void {
+  // A5 off: the status line is Ather's alone (D1); a line this mod set earlier is taken down once.
+  if (!a5On) {
+    if (isStatusShown) $.ui.status(undefined)
+    isStatusShown = false
+    return
+  }
   const end = toMin(lockView?.until)
   const isOver = Boolean(lockView && !lockView.isFree && !lockView.isMissing && end !== undefined && end < nowMin)
   const parts = [
@@ -284,16 +291,21 @@ function showStatus($: Engine): void {
     isS2 && vitals && ramBand(vitals.freeGb) !== 'ok' ? `RAM ${vitals.freeGb} GB free` : '',
   ].filter(Boolean)
   $.ui.status(parts.length ? parts.join(' · ') : undefined)
+  isStatusShown = parts.length > 0
 }
 
 /** The lock and the machine, every minute in an S2 session; a toast when the Editor comes free or RAM falls. */
 async function refreshEditor($: Engine, opts: Opts): Promise<void> {
+  // A5 off: nothing is probed, drawn or toasted (D1).
+  if (!(await readA5($))) {
+    showStatus($)
+    return
+  }
   const [raw, probe, now] = await Promise.all([
     $.fs.read(opts.editorLock).catch(() => null),
     $.process.run(VITALS_PROBE, { timeoutMs: 15_000 }).catch(() => null),
     $.clock.now(),
   ])
-  await readA5($)
   const d = new Date(now)
   nowMin = d.getHours() * 60 + d.getMinutes()
   lockView = parseLockView(raw)
@@ -372,6 +384,7 @@ function motionFor(key: string, sig: string, color: string, now: number, running
  * rules sit at the foot. Nothing else of Ather's is moved or hidden. */
 async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bodyColumns?: number } }, tree: RenderElement): Promise<RenderElement> {
   const on = await readA5($)
+  if (!on) return tree // A5 off: Ather's pane exactly as Ather drew it (D1)
   const el = $.ui.resolve(e as never) as never as Parameters<typeof icon>[0] & Parameters<typeof tilesRow>[0]
   const isDesktop = e.surface === 'desktop'
   const now = await $.clock.now()
@@ -443,7 +456,7 @@ export const register: Register = (on, options) => {
       return {
         text: a5On
           ? '★ A5 on: the five rules and the report gate apply in every session from its next tool call; Ather\'s pane takes the red seal and the gold accent.'
-          : 'A5 off: the rules and the report gate stop (the Editor lock gate and 🟥 stay); Ather\'s pane keeps its own look.',
+          : 'A5 off: the rules, the report gate, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
       }
     }
     await readA5($)
@@ -457,7 +470,8 @@ export const register: Register = (on, options) => {
     const a5 = await load($)
     const isOn = await readA5($)
 
-    const editor = await editorProblem($, opts, tool, input)
+    // The Editor gate is A5's (D1): with A5 off nothing of hai-flow's refuses an Editor call.
+    const editor = isOn ? await editorProblem($, opts, tool, input) : null
     if (editor) return { deny: blocked('Editor lock', editor.split(' → ')[0] ?? editor, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
 
     let d: Decision | null = null

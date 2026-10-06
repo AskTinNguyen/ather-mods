@@ -2,8 +2,8 @@
 
 - Working under rev: 2
 - Worker: Claude worker session (2026-10-06)
-- Current step: S2, A1 (everything new and the existing Editor gate, tiles, status line and toasts only while A5 is on; 🟥/⏯️ always)
-- Next step: S3, Editor holder wiring (model tool `editor`, minute timer, notices)
+- Current step: S3, Editor holder wiring (model tool `editor`, minute timer reading the files, grant by read-compare-write, yield, lease-end/overrun, recovery, lock writes refused) with notice delivery (D6)
+- Next step: S4, RAM cleanup and gates
 - PR: none
 
 ## Acceptance
@@ -12,7 +12,7 @@
 
 | Item | Verdict | Evidence |
 | --- | --- | --- |
-| A1 | open | |
+| A1 | met | S2: `claude plugin test hai-flow` → test "A5 off: Ather's pane tree, status line and toasts are exactly Ather's; 🟥 still marks the title" (deep-equal with Ather's tree, terminal and desktop) and "A5 off: … the Editor gate all rest (D1)" pass; `50 pass 0 fail` (re-run at final gates) |
 | A2 | open | |
 | A3 | open | |
 | A4 | open | |
@@ -27,6 +27,8 @@
 
 - S0 (rev 1, 2026-10-06): hai-flow 0.3 moved from the S2 session's scratch folder into `hai-flow/` unchanged (A5 fitted to Ather's intent flow: shared-checkout-only git rules, worker stop-and-report, Ather proof in `Verified:`; 🟥 to Needs you or PENDING.md). Before the move: `claude plugin validate` → `✔ Validation passed`; type-check exit 0; `claude plugin test` → `35 pass 0 fail`. Evidence: this commit. Acceptance: none (baseline).
 - S1 (rev 2, 2026-10-06): pure core `hooks/coord.ts`: session files (`Saved/HaiFlow/editor/<id8>.json`, heartbeat, want, holding, yield asks, delivered notice ids), liveness from files (Ather lane ended or > 10 min, session file > 3 min with no fresh lane; neither file = unknown, never gone), deterministic queue (first requested first served, sync holder first in cutoff/freeze), `decide` (head only, free lock, slot ends by the cutoff, launch gate only when no Editor runs, stale-lease recovery only with holder gone and no Editor), `mayAskYield` (≤ 20 min, no build, head, pausable live holder, once per holder per hour), D2 `heldLine`/`freeLine` with `safeNote` so no reader mistakes a note for a field, `parseLockLine` (HELD/HANDED/FREE and older lines), RAM probe argv + parse + `cleanupPlan`, sync timeline (planned → cutoff → frozen → done/aborted/cancelled), merge-tree parse and rule-11 classification, freeze `gitWrites`, `writesLock`, notice texts and ids. Unit tests `tests/coord.test.ts` (14), including a verbatim copy of Ather's `parseEditorLock` reading holder/until/session from the D2 lines. Probe run once for real on this machine (read-only): JSON parsed, 12 processes. merge-tree `--name-only` output shape checked in a scratch repo (git 2.45.1). Evidence: `✔ Validation passed`; tsc exit 0; `49 pass 0 fail`; commit below. Acceptance: A3/A5 unit parts (engine parts open).
+
+- S2 (rev 2, 2026-10-06): A1. With A5 off: the Editor gate (lock, PIE RAM, save-all) refuses nothing; the pane hook returns Ather's tree untouched; the status line is cleared once and then left to Ather; the minute timer probes nothing; no toast (the 🟥 toast included); the Editor section of the model's rules moved from `rules-flow.md` to `rules-a5.md`. 🟥/⏯️ title marks, unread and PENDING.md stay. Tests: `A5 off: the rules, the report gate and the Editor gate all rest (D1)`; `A5 off: Ather's pane tree, status line and toasts are exactly Ather's; 🟥 still marks the title` (deep-equal with Ather's tree on terminal and desktop, no `ui.status` text, no `ui.toast`, no `tool.register`); the pane tests that expected tiles now run with A5 on. Evidence: `✔ Validation passed`; tsc exit 0; `50 pass 0 fail`; commit below. Acceptance: A1 met (re-run at the final gates).
 
 ## Engineering decisions (inside the intent's scope)
 

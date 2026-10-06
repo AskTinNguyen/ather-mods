@@ -13,3 +13,8 @@ Verified: <what Ather or the tool output showed pass> | FAILED: <what> | chưa: 
 Risk: <what can break, who>
 Open: <remaining work, TODOs, unrelated issues>
 ```
+
+## The shared Editor (A5)
+PIE, asset saves and every Unreal MCP write need this session to hold Saved/EDITOR_OWNER.txt. When you take the lock, write your slot, `session {SESSION8}` and your end time; release by overwriting with `free since HH:MM`. PIE starts only with 5 GB free RAM (fixed). Never save-all.
+
+Refusals from hai-flow read `hai-flow · <gate> — <why> → <what next>`: do what follows the arrow; do not retry the same call.
