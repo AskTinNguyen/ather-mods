@@ -10,10 +10,11 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_GROUPS, CREATE_SHOWN, SKILL_GROUPS, TOUR_PROMPT, skillFolder, askPrompt, batchPrompt, buildHome, parseWeek } from './home.mjs'
+import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, parseWeek } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { AREAS, ROLES, ROLE_LABELS, clockText, closestWord, localMinutes, parseEditorLock, parseIntent, parseRole, searchIntents, sessionTitle } from './model.mjs'
+import { clockText, closestWord, localMinutes, parseIntent, searchIntents, sessionTitle } from './model.mjs'
+import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, classifyWorker, modelWord, propSvg, trailWords, workerState } from './squad.mjs'
 import { recordEnd, workerOf } from './workers.mjs'
@@ -67,6 +68,9 @@ let isIssuesRefreshing = false
 let isAwake = null
 /** @type {{ version: number, at: number, model: Home | null }} */
 let view = { version: -1, at: 0, model: null }
+// The pack this checkout's lane chose (packs/index.mjs), for the drawing; set whenever the view is rebuilt.
+/** @type {import('./packs/index.mjs').Pack} */
+let pack = unreal
 
 // The store, files and session as closures: `$` cannot be handed to state.mjs itself.
 /** @param {Engine} $ @returns {import('./state.mjs').Io} */
@@ -83,6 +87,7 @@ function io($) {
     root: () => $.session.root(),
     gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
+    list: path => $.fs.list(path),
   }
 }
 
@@ -90,8 +95,6 @@ function io($) {
 function laneOf($) {
   return state.lane(io($), cwd)
 }
-
-const NOT_S2 = 'Ather Automata works in S2 checkouts (a docs/intent folder); none here.'
 
 /** @param {import('claude-code').On} on */
 export function register(on) {
@@ -120,14 +123,14 @@ export function register(on) {
   })
 
   on('command.run', { command: 'ather' }, async ($, e) => {
-    if (!(await laneOf($)).isS2) return { text: NOT_S2 }
+    if (!(await laneOf($)).isS2) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }
   })
 
   on('command.run', { command: 'away' }, async ($, e) => {
-    if (!(await laneOf($)).isS2) return { text: NOT_S2 }
+    if (!(await laneOf($)).isS2) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     return { text: await awayCommand($, e.args.trim()) }
   })
@@ -208,6 +211,7 @@ function wake($) {
 async function startConsoleWork($) {
   const lane = await laneOf($)
   if (lane.me !== '') me = lane.me
+  pack = lane.pack
   if (!lane.isS2) return
   await refresh($)
   $.clock.every(60000, () => void refresh($).catch(() => undefined))
@@ -216,7 +220,7 @@ async function startConsoleWork($) {
   void refreshIssues($).catch(() => undefined)
   $.clock.every(ISSUES_EVERY_MS, () => void refreshIssues($).catch(() => undefined))
   if ((await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
-    $.ui.toast('Ather: new here? Type /ather tour for a six-step tour of how S2 works with Claude Code.', { timeoutMs: 12000 })
+    $.ui.toast(lane.pack.prompts.tourToast, { timeoutMs: 12000 })
     await state.setProfile(io($), me, { isNudged: true })
   }
 }
@@ -226,9 +230,10 @@ async function startConsoleWork($) {
 // Re-reads the intents; the rest comes from shared state when the view is rebuilt.
 /** @param {Engine} $ */
 async function refresh($) {
-  const { root, me: who } = await laneOf($)
+  const { root, me: who, pack: chosen } = await laneOf($)
   if (who !== me) stale()
   me = who
+  pack = chosen
   const files = io($)
   const pinned = await state.readPinned(files)
   const read = []
@@ -248,15 +253,15 @@ async function refresh($) {
         // Every open intent's (and the tracked one's): its Acceptance table says how much is met, its header names the PRs.
         progress: isOpen || isPinned ? ((await files.read(`${dir}/progress.md`)) ?? '') : '',
         files: isPinned ? (await $.fs.list(dir).catch(() => [])).map(one => one.name) : [],
-        hasDebrief: isPinned && (await files.exists(`${root}/Saved/AtherAutomata/debriefs/${entry.name}.md`)),
+        hasDebrief: isPinned && (await files.exists(`${root}/${chosen.debriefPath(entry.name)}`)),
         mtimeMs: Math.max(...stats),
-      }),
+      }, chosen),
     )
   }
   intents = read.sort((a, b) => b.mtimeMs - a.mtimeMs)
   // The listed skills that exist here, each with the first sentence of its own description.
   const found = []
-  for (const name of new Set([...SKILL_GROUPS.flatMap(one => one.names), ...CREATE_GROUPS.flatMap(one => one.items.map(item => item.name))])) {
+  for (const name of new Set([...chosen.skillGroups.flatMap(one => one.names), ...chosen.createGroups.flatMap(one => one.items.filter(item => !item.isGlobal).map(item => item.name))])) {
     const text = await files.read(`${root}/${skillFolder(name)}/SKILL.md`)
     if (text === null) continue
     const description = (/^description:\s*(.+)$/m.exec(text)?.[1] ?? '').trim().replace(/^["']|["']$/g, '')
@@ -321,13 +326,14 @@ async function home($) {
   const version = state.stateVersion()
   if (view.model && view.version === version && Date.now() - view.at < VIEW_TTL_MS) return view.model
   const files = io($)
-  const { root, me: who } = await laneOf($)
+  const { root, me: who, pack: chosen } = await laneOf($)
+  pack = chosen
   if (who !== '') me = who
   else if (!isWhoWarned && (isWhoWarned = true)) $.ui.log('Ather: git user.name could not be read; the pane treats nobody as you until it is.', { to: 'debug' })
   const tz = await state.readTz(files)
   const now = Date.now()
   const away = await state.readAway(files)
-  const profile = await state.readProfile(files, me)
+  const profile = await state.readProfile(files, me, chosen)
   if (userHome === null) {
     try { userHome = ((await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || '').replace(/\\/g, '/') } catch { userHome = '' }
   }
@@ -336,12 +342,12 @@ async function home($) {
     pinned: await state.readPinned(files),
     me,
     ...profile,
-    evidence: await state.readEvidence(files, await state.evidenceScope(files)),
+    evidence: await state.readEvidence(files, await state.evidenceScope(files), chosen),
     away,
     ledger: away.phase === 'off' ? '' : ((await files.read(away.ledgerPath)) ?? ''),
     lost: await state.readLost(files),
-    lock: await namedLock($, root, parseEditorLock(await files.read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(now, tz))),
-    recurring: await state.readRecurring(files),
+    lock: await namedLock($, root, chosen.parseLock(chosen.lockFile ? await files.read(`${root}/${chosen.lockFile}`) : null, localMinutes(now, tz))),
+    recurring: await state.readRecurring(files, chosen),
     issues: await state.readIssues(files, me),
     prs: await state.readPrStates(files),
     week: userHome ? parseWeek(await files.read(`${userHome}/.calendar/latest.json`), now) : null,
@@ -351,6 +357,7 @@ async function home($) {
     workers: (await $.agent.list().catch(() => [])).filter(agent => agent.status === 'running' && agent.parentId === undefined).length,
     now,
     tz,
+    pack: chosen,
   })
   view = { version, at: now, model }
   return model
@@ -489,7 +496,7 @@ async function doNext($, next) {
 
 /** @param {Engine} $ */
 async function startTour($) {
-  handOff($, ['next:tour'], TOUR_PROMPT, () => state.setProfile(io($), me, { tourDone: true }))
+  handOff($, ['next:tour'], pack.prompts.tour, () => state.setProfile(io($), me, { tourDone: true }))
   return 'Starting the Ather tour.'
 }
 
@@ -542,12 +549,12 @@ async function track($, text) {
 /** @param {Engine} $ @param {import('./away.mjs').WindowChoice} choice */
 async function startAway($, choice) {
   const tz = await state.readTz(io($))
-  const away = await state.startAway(io($), choice, { root: (await laneOf($)).root, me, tz, now: Date.now() })
+  const away = await state.startAway(io($), choice, { root: (await laneOf($)).root, me, tz, now: Date.now(), pack })
   if (away === null) return 'An away window is already running or waiting for your review: /ather shows it.'
   const { root } = await laneOf($)
   const ledger = away.ledgerPath.startsWith(root) ? away.ledgerPath.slice(root.length + 1) : away.ledgerPath
   handOff($, ['away-start'], `I am away ${windowEndText(away, tz)}. Goal: ${choice.goal || 'continue the active work'}. Work through it without waiting for me and record every decision you take for me in ${ledger}.`)
-  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. The session may push branches and open PRs; nothing merges until you are back.`
+  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}`
 }
 
 // Text typed instead of picking: an intent, a question for the session, or nothing.
@@ -558,7 +565,7 @@ async function typed($, text, isInQuestion = true) {
   if (number) return startIssue($, Number(number[1] ?? number[2]), isInQuestion)
   if (searchIntents(intents, text).length > 0) return track($, text)
   const question = /^(help|\?)$/i.test(text.trim()) ? 'What can Ather do for me?' : text
-  void deliver($, askPrompt(question)).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
+  void deliver($, askPrompt(question, pack)).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
   return 'Sent your question to the session.'
 }
 
@@ -576,8 +583,8 @@ async function skipTour($) {
   return ask($, {
     header: 'Your role',
     question: 'Tour skipped (/ather tour brings it back). What kind of work do you do? It decides what proof Ather asks for.',
-    choices: ROLES.map(role => ({ label: ROLE_LABELS[role], description: role === 'engineer' ? 'Builds and automation tests.' : role === 'techart' ? 'A PIE proof and your own Editor check.' : 'A PIE proof.', run: () => atherCommand($, `role ${role}`) })),
-    fallback: 'Tour skipped. Say your role any time with /ather role designer, tech artist or engineer.',
+    choices: pack.roles.map(role => ({ label: pack.roleLabels[role] ?? role, description: pack.roleDescriptions[role] ?? '', run: () => atherCommand($, `role ${role}`) })),
+    fallback: pack.roleFallback,
     onTyped: text => atherCommand($, `role ${text}`),
   })
 }
@@ -594,14 +601,16 @@ async function atherCommand($, args) {
   if ((word === 'intent' || word === 'pick') && rest) return track($, rest)
   if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
   if (word === 'role') {
-    const role = parseRole(rest)
-    if (!role) return 'Which role? /ather role designer, /ather role tech artist or /ather role engineer.'
-    await state.setProfile(io($), me, { role })
-    return `Your role is ${ROLE_LABELS[role]}. It shapes the next step and what Prove asks for.`
+    const role = pack.parseRole(rest)
+    if (!role) return pack.roleHelp
+    await state.setProfile(io($), me, { role }, pack)
+    return `Your role is ${pack.roleLabels[role] ?? role}. It shapes the next step and what Prove asks for.`
   }
   if (word === 'checked') {
-    await state.setRung(io($), await state.evidenceScope(io($)), 'editor', { state: 'pass', detail: 'checked by you in the Editor' })
-    return 'Recorded: you checked it in the Editor.'
+    const own = pack.ownCheck
+    if (!own) return 'Nothing to record by hand here: Ather reads every proof from tool output.'
+    await state.setRung(io($), await state.evidenceScope(io($)), own.rung, { state: 'pass', detail: own.detail })
+    return own.reply
   }
   if (word === 'issues') {
     // Read them now: a list that never showed up is explained here instead of staying empty.
@@ -1144,7 +1153,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       groups.set(group, [...(groups.get(group) ?? []), one])
     }
     let index = 0
-    for (const group of ['Your GitHub issues', ...AREAS, 'Unsorted'].filter(name => groups.has(name))) {
+    for (const group of [...new Set(['Your GitHub issues', ...pack.areas, 'Unsorted', ...groups.keys()])].filter(name => groups.has(name))) {
       const list = (groups.get(group) ?? []).map(one => {
         index += 1
         return choice(el, { key: `pick-${one.id}`, ...workRowProps(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : press($, () => startWork($, one), false) })
@@ -1230,8 +1239,8 @@ function paneView(el, $, model, columns, surface, crew = []) {
 
   if (paneMode === 'create') {
     const { editor } = model
-    const editorLine = editor.isHeld ? `Editor held by ${editor.holder || 'another lane'}${editor.until ? ` until ${editor.until}` : ''}: the session asks for a window first.` : editor.isFree ? 'Editor free: the session takes the lock and starts.' : 'The session checks the Editor lock first.'
-    rows.push(masthead(el, [label(el, 'brand', 'Create', width), Text({ key: 'title', bold: true, children: 'Make it in the Editor' }), Text({ key: 'meta', color: editor.isHeld ? '#f2a516' : QUIET, wrap: 'wrap', children: editorLine })], surface))
+    const editorLine = pack.createMeta(editor)
+    rows.push(masthead(el, [label(el, 'brand', 'Create', width), Text({ key: 'title', bold: true, children: pack.createTitle }), Text({ key: 'meta', color: editor.isHeld ? '#f2a516' : QUIET, wrap: 'wrap', children: editorLine })], surface))
     let index = 0
     for (const { group, items } of model.create) {
       const isOpen = createOpen.has(group)
@@ -1258,7 +1267,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   if (paneMode === 'skills') {
     rows.push(masthead(el, [label(el, 'brand', 'Skills', width), Text({ key: 'title', bold: true, children: 'Run a skill' }), Text({ key: 'meta', color: QUIET, children: header.title === 'Ather' ? 'The session reads it, says what it will do, then follows it.' : `For ${header.title}: the session reads it, says what it will do, then follows it.` })], surface))
     let index = 0
-    for (const { group } of SKILL_GROUPS) {
+    for (const { group } of pack.skillGroups) {
       const list = model.skills.filter(one => one.group === group)
       if (list.length === 0) continue
       rows.push(
@@ -1277,7 +1286,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'away') {
-    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: 'Heading off?' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: 'The session keeps working; merges and pushes to main wait for your review.' })], surface))
+    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: 'Heading off?' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: pack.mandate.pane })], surface))
     rows.push(
       section(el, 'away-choices', [
         ...AWAY_PRESETS.map((preset, index) => choice(el, { key: `away-${preset.hotkey}`, title: preset.label, detail: preset.choice.untilDone ? 'Ends when the work is done, 24 hours at most.' : `Ends in ${preset.label}.`, hotkey: String(index + 1), autoFocus: index === 0, width, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) })),

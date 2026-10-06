@@ -14,9 +14,15 @@ const MOD = path.resolve(HERE, '../ather-automata')
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-test-'))
 const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: 'inherit' })
 
+// Copies a folder: .mjs files rewritten, everything else as it is, subfolders too (packs/, fixtures/).
 const copy = (from, to, rewrite = s => s) => {
   fs.mkdirSync(to, { recursive: true })
-  for (const name of fs.readdirSync(from).filter(f => f.endsWith('.mjs'))) fs.writeFileSync(path.join(to, name), rewrite(fs.readFileSync(path.join(from, name), 'utf8')))
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const source = path.join(from, entry.name)
+    if (entry.isDirectory()) copy(source, path.join(to, entry.name), rewrite)
+    else if (entry.name.endsWith('.mjs')) fs.writeFileSync(path.join(to, entry.name), rewrite(fs.readFileSync(source, 'utf8')))
+    else fs.copyFileSync(source, path.join(to, entry.name))
+  }
 }
 
 // `node --test ather-automata/tests/*.test.mjs` resolves 'claude-code/testing' through this link.
@@ -33,7 +39,7 @@ if (types) {
   fs.writeFileSync(config, JSON.stringify({
     compilerOptions: { target: 'es2023', lib: ['es2023'], types: [], module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
     // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
-    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs')).map(f => f.replace(/\\/g, '/')),
+    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs')).map(f => f.replace(/\\/g, '/')),
   }))
   sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')

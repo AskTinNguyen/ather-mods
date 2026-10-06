@@ -10,13 +10,17 @@
 import { isHolding, isRecordingQuestions, ledgerWithWindow, newWindow, nextLedgerId, nextParkId, offAway, pendingEntry } from './away.mjs'
 import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
+import { packFor } from './packs/index.mjs'
+import { unreal } from './packs/unreal.mjs'
 
 /**
  * @typedef {{
  *   get: (key: string) => Promise<unknown>, set: (key: string, value: unknown) => Promise<void>, remove: (key: string) => Promise<void>, keys: () => Promise<string[]>,
  *   read: (path: string) => Promise<string | null>, write: (path: string, text: string) => Promise<void>, exists: (path: string) => Promise<boolean>,
- *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: () => Promise<string>, redraw: () => void
+ *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: () => Promise<string>, redraw: () => void,
+ *   list?: (path: string) => Promise<{ name: string, kind: string }[]>
  * }} Io
+ * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
  * @typedef {import('./model.mjs').Evidence} Evidence
  */
@@ -26,7 +30,8 @@ const KEY = {
   pinned: (/** @type {string} */ sid) => `pinned:${sid}`,
   evidence: (/** @type {string} */ sid) => `evidence:${sid}`,
   lost: (/** @type {string} */ sid) => `lost:${sid}`,
-  role: (/** @type {string} */ me) => `role:${personId(me)}`,
+  // A pack's roles are its own: a tech artist in S2 is not a role in a web repository. The Unreal pack's key is unprefixed.
+  role: (/** @type {string} */ me, /** @type {string} */ prefix = '') => `role:${prefix}${personId(me)}`,
   area: (/** @type {string} */ me) => `area:${personId(me)}`,
   tour: (/** @type {string} */ me) => `tour:${personId(me)}`,
   nudged: (/** @type {string} */ me) => `nudged:${personId(me)}`,
@@ -71,17 +76,20 @@ const changed = io => {
 
 // ---------------------------------------------------------------- the lane
 
-/** @type {Map<string, Promise<{ root: string, isS2: boolean, me: string }>>} */
+/** @type {Map<string, Promise<{ root: string, isS2: boolean, me: string, pack: Pack }>>} */
 const lanes = new Map()
 
-// Who and where, read once per checkout and shared by both halves.
+// Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
+// (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session).
 /** @param {Io} io @param {string} cwd */
 export const lane = (io, cwd) => {
   const cached = lanes.get(cwd)
   if (cached) return cached
   const read = (async () => {
     const root = (await io.root().catch(() => cwd)) || cwd
-    return { root, isS2: await io.exists(`${root}/docs/intent`), me: await io.gitUser().catch(() => '') }
+    const list = io.list ?? (async () => [])
+    const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
+    return { root, isS2: await io.exists(`${root}/docs/intent`), me: await io.gitUser().catch(() => ''), pack }
   })()
   lanes.set(cwd, read)
   // A git name that failed to read (a slow first start) is asked again next time, never kept.
@@ -134,11 +142,11 @@ export const evidenceScope = async io => {
 // Proof older than this no longer counts: the code has likely moved on since.
 const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
 
-/** @param {Io} io @param {string} scope from evidenceScope @returns {Promise<Evidence>} */
-export const readEvidence = async (io, scope) => {
+/** @param {Io} io @param {string} scope from evidenceScope @param {Pack} [pack] @returns {Promise<Evidence>} */
+export const readEvidence = async (io, scope, pack = unreal) => {
   const stored = /** @type {Record<string, { state: string, detail: string, at?: number }>} */ ((await io.get(KEY.evidence(scope))) ?? {})
   const fresh = Object.fromEntries(Object.entries(stored).filter(([, rung]) => Date.now() - (rung.at ?? 0) < EVIDENCE_TTL_MS))
-  return /** @type {Evidence} */ ({ ...emptyEvidence(), ...fresh })
+  return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh })
 }
 
 // Writes one scope's evidence, each record stamped with when it was seen.
@@ -155,21 +163,21 @@ export const readPinned = async io => /** @type {string | null} */ ((await io.ge
 export const readLost = async io => /** @type {any} */ ((await io.get(KEY.lost(await io.sessionId()))) ?? null)
 /** @param {Io} io */
 export const readTz = async io => Number(await io.get(KEY.tz)) || 0
-/** @param {Io} io @param {string} me */
-export const readProfile = async (io, me) => ({
-  role: String((await io.get(KEY.role(me))) ?? ''),
+/** @param {Io} io @param {string} me @param {Pack} [pack] */
+export const readProfile = async (io, me, pack = unreal) => ({
+  role: String((await io.get(KEY.role(me, pack.roleKey))) ?? ''),
   area: String((await io.get(KEY.area(me))) ?? ''),
   tourDone: /** @type {{ isDone?: boolean } | undefined} */ (await io.get(KEY.tour(me)))?.isDone === true,
   isNudged: (await io.get(KEY.nudged(me))) === true,
 })
 // A trap whose rule is already written in the checkout is not offered again, however many sessions hit it.
-/** @param {Io} io */
-export const readRecurring = async io => {
-  const recurring = recurringGotchas(/** @type {any} */ ((await io.get(KEY.hits)) ?? {}), /** @type {string[]} */ ((await io.get(KEY.ruled)) ?? []))
+/** @param {Io} io @param {Pack} [pack] */
+export const readRecurring = async (io, pack = unreal) => {
+  const recurring = recurringGotchas(/** @type {any} */ ((await io.get(KEY.hits)) ?? {}), /** @type {string[]} */ ((await io.get(KEY.ruled)) ?? []), pack)
   if (recurring.length === 0) return recurring
   const root = await io.root().catch(() => '')
   const isWritten = await Promise.all(recurring.map(async one => {
-    const rule = writtenRuleOf(one.id)
+    const rule = writtenRuleOf(one.id, pack)
     return Boolean(rule && root && (await io.read(`${root}/${rule.file}`))?.includes(rule.text))
   }))
   return recurring.filter((_, index) => !isWritten[index])
@@ -243,10 +251,10 @@ export const migrateRole = (io, me) =>
     await io.remove('coach')
   })
 
-/** @param {Io} io @param {string} me @param {{ role?: string, area?: string, tourDone?: boolean, isNudged?: boolean }} fields */
-export const setProfile = (io, me, fields) =>
+/** @param {Io} io @param {string} me @param {{ role?: string, area?: string, tourDone?: boolean, isNudged?: boolean }} fields @param {Pack} [pack] */
+export const setProfile = (io, me, fields, pack = unreal) =>
   serial(async () => {
-    if (fields.role !== undefined) await io.set(KEY.role(me), fields.role)
+    if (fields.role !== undefined) await io.set(KEY.role(me, pack.roleKey), fields.role)
     if (fields.area !== undefined) await io.set(KEY.area(me), fields.area)
     if (fields.tourDone !== undefined) await io.set(KEY.tour(me), { isDone: fields.tourDone })
     if (fields.isNudged !== undefined) await io.set(KEY.nudged(me), fields.isNudged)
@@ -338,7 +346,7 @@ const withAway = (io, change) =>
 
 /**
  * Opens a window, unless one is running or waiting for review.
- * @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {{ root: string, tz: number, now: number, me: string }} at
+ * @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {{ root: string, tz: number, now: number, me: string, pack?: Pack }} at
  * @returns {Promise<Away | null>}
  */
 export const startAway = (io, choice, at) =>
@@ -347,9 +355,9 @@ export const startAway = (io, choice, at) =>
     const pinned = /** @type {string | undefined} */ (await io.get(KEY.pinned(await io.sessionId())))
     const owner = pinned ? intentOwner((await io.read(`${at.root}/docs/intent/${pinned}/prompt.md`)) ?? '') : ''
     const stamp = new Date(at.now + at.tz * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-    const ledgerPath = pinned && isSamePerson(owner, at.me) ? `${at.root}/docs/intent/${pinned}/decisions.md` : `${at.root}/Saved/AtherAutomata/away/${stamp}.md`
-    const started = newWindow(choice, at.now, ledgerPath, { person: personId(at.me), root: at.root })
-    await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz))
+    const ledgerPath = pinned && isSamePerson(owner, at.me) ? `${at.root}/docs/intent/${pinned}/decisions.md` : `${at.root}/${(at.pack ?? unreal).localDir}/away/${stamp}.md`
+    const started = newWindow({ ...choice, held: choice.held ?? [...(at.pack ?? unreal).held.defaults] }, at.now, ledgerPath, { person: personId(at.me), root: at.root })
+    await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz, at.pack ?? unreal))
     return { away: started, result: started }
   })
 

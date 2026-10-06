@@ -36,6 +36,8 @@ const sandbox = () => {
   }
   fs.mkdirSync(path.join(root, 'Saved'), { recursive: true })
   fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'free since 14:18')
+  // The marker an S2 checkout has at its root: it selects the Unreal pack (packs/index.mjs).
+  fs.writeFileSync(path.join(root, 'S2.uproject'), '{}\n')
   fs.mkdirSync(path.join(root, '.git'), { recursive: true })
   fs.writeFileSync(path.join(root, '.git/HEAD'), 'ref: refs/heads/main\n')
   return root
