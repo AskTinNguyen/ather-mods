@@ -26,7 +26,7 @@ test('editor request: the head takes a free lock in the S2 standard\'s line, whi
   const w = world(on, { ram: '40' })
   w.put(LOCK, 'free since 14:20\n')
   await $.session.start(START)
-  expect((w.calls['tool.register'] ?? []).map(e => (e as Rec).name)).toEqual(['editor'])
+  expect((w.calls['tool.register'] ?? []).map(e => (e as Rec).name)).toEqual(['editor', 'sync'])
   const ran = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX check' } as never))
   expect(ran).toContain('hai-flow · Editor — granted to this session until 15:00')
   const line = w.read(LOCK).trim()

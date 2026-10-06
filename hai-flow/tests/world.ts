@@ -89,11 +89,16 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return value({ exitCode: hit?.exitCode ?? 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
   })
   const calls: Record<string, unknown[]> = {}
-  for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'prompt.submit', 'tool.register'])
+  for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'tool.register'])
     on(ev, async (_$: unknown, e: unknown) => {
       ;(calls[ev] ??= []).push(e)
       return value(ev === 'tool.register' ? { tool: `mcp__hai-flow__${String((e as Rec).name)}` } : undefined)
     })
+  // A prompt the plugin submits enters as it was sent (an event: it answers { text }).
+  on('prompt.submit', async (_$: unknown, e: { text: string; context?: string[] }) => {
+    ;(calls['prompt.submit'] ??= []).push(e)
+    return { text: e.text, ...(e.context ? { context: e.context } : {}) }
+  })
   on('classic.Stop', async () => ({}))
   on('tool.call', async (_$: unknown, e: Rec) => {
     seen.push(e)
