@@ -14,7 +14,7 @@ import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMin
 import * as state from './state.mjs'
 import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
-import { untrackText } from './home.mjs'
+import { heldByLine, untrackText } from './home.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -300,15 +300,17 @@ async function laneText($) {
   const tz = await state.readTz(io($))
   const slug = await state.readPinned(io($))
   const intent = slug ? await readIntent($, slug) : undefined
+  const live = await peers($)
   if (intent) {
     const { role } = await state.readProfile(io($), me, pack)
     const prs = await state.readPrStates(io($))
     const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), pack), role, prs, pack)]
     lines.push(`Tracked intent: ${intent.slug} (docs/intent/${intent.slug}/), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
+    const held = heldByLine(live, intent.slug, Date.now())
+    if (held) lines.push(`${held}.`)
   }
   const lock = pack.parseLock(pack.lockFile ? await io($).read(`${root}/${pack.lockFile}`) : null, localMinutes(Date.now(), tz))
   if (lock.state === 'held') lines.push(`Editor owner lock: held by ${lock.holder || 'another lane'}${lock.until ? ` until ${lock.until}` : ''}.`)
-  const live = await peers($)
   if (live.length > 0) lines.push(`Live peer lanes on this checkout: ${live.map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`).join('; ')}.`)
   const away = await state.readAway(io($))
   if (isHolding(away)) lines.push(mandateText(away, tz, pack))

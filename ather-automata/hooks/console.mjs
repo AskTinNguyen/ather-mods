@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, parseWeek, untrackText } from './home.mjs'
+import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, untrackText } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { clockText, closestWord, localMinutes, parseIntent, searchIntents, sessionTitle } from './model.mjs'
@@ -53,6 +53,9 @@ let intentSeenAt = 0
 // The issue whose card is open (paneMode 'issue'), and the view to go back to.
 let issueShown = 0
 let issueBack = /** @type {'home' | 'pick'} */ ('home')
+// The intent whose view is open (paneMode 'intent'; '' is the tracked one), and the view to go back to.
+let intentShown = ''
+let intentBack = /** @type {'home' | 'pick'} */ ('home')
 /** @type {{ name: string, description: string }[]} */
 let skills = []
 // The band's ✕: hidden until it has something new to say.
@@ -164,7 +167,12 @@ export function register(on) {
     })
   })
 
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => (e.requestId === PANE_ID ? (void wake($), (intentToday = await todayChanges($)), paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf($))) : next(e)))
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== PANE_ID) return next(e)
+    void wake($)
+    if (paneMode === 'intent') await readIntentView($)
+    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf($))
+  })
 
   on('ui.close', ($, e, next) => {
     if (e.id === PANE_ID) paneMode = 'home'
@@ -188,6 +196,8 @@ async function openConsole($, folder) {
   view = { version: -1, at: 0, model: null }
   closedHint = null
   intentSeenAt = Date.now()
+  intentShown = ''
+  intentBack = 'home'
   createOpen.clear()
   cwd = folder
   for (const command of [
@@ -502,7 +512,7 @@ async function startTour($) {
 
 /** @param {Engine} $ @param {Work} work */
 async function startWork($, work) {
-  if (work.kind === 'intent') return track($, work.slug)
+  if (work.kind === 'intent') return trackSlug($, work.slug)
   handOff($, [work.id], work.prompt)
   return `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`
 }
@@ -534,16 +544,54 @@ async function startIssue($, number, isInQuestion = false) {
   })
 }
 
-// Tracks an intent by its folder name, or by the one intent a few words match.
-/** @param {Engine} $ @param {string} text */
-async function track($, text) {
+// Tracks an intent by its folder name: the deliberate act (Work on this here, Next, /ather intent <name>).
+/** @param {Engine} $ @param {string} slug */
+async function trackSlug($, slug) {
   const { root } = await laneOf($)
-  const matches = searchIntents(intents, text)
-  const slug = intents.some(one => one.slug === text) ? text : matches.length === 1 && matches[0] ? matches[0].slug : null
-  if (slug === null) return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.slug).join(', ')}.` : `No open intent matches "${text}".`
   if (!(await state.track(io($), root, slug, { me }))) return `No intent named "${slug}" in docs/intent.`
   await refresh($)
   return `Now tracking ${slug}.`
+}
+
+// /ather intent <name> and /ather pick <name>: an exact folder name tracks it; words show the one intent they match.
+/** @param {Engine} $ @param {string} text */
+async function pickIntent($, text) {
+  return intents.some(one => one.slug === text) ? trackSlug($, text) : lookUp($, text)
+}
+
+// Words that match one intent show it and never track it; several are listed; none is said.
+/** @param {Engine} $ @param {string} text */
+async function lookUp($, text) {
+  const matches = searchIntents(intents, text)
+  const [only] = matches
+  if (matches.length === 1 && only) return showIntent($, only.slug)
+  return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.slug).join(', ')}.` : `No open intent matches "${text}".`
+}
+
+// Looking at an intent: its view in the pane, where Work on this here tracks it. Without a pane,
+// where it stands and the command that tracks it.
+/** @param {Engine} $ @param {string} slug */
+async function showIntent($, slug) {
+  if (await hasPane($)) {
+    intentShown = slug
+    intentBack = 'home'
+    return openPane($, 'intent')
+  }
+  const pinned = await state.readPinned(io($))
+  const one = (await home($)).work.find(work => work.kind === 'intent' && work.slug === slug)
+  const where = one ? one.hint : slug
+  return slug === pinned ? `${where}. This session tracks it.` : `${where}. To work on it in this session: /ather intent ${slug}`
+}
+
+// A row's press: the intent's view, never tracking it.
+/** @param {Engine} $ @param {string} slug @param {'home' | 'pick'} back */
+function viewIntent($, slug, back) {
+  return () => {
+    intentShown = slug
+    intentBack = back
+    paneMode = 'intent'
+    $.ui.invalidate('ui.render')
+  }
 }
 
 // Stops tracking the session's intent: /ather untrack, and Stop tracking in the Intent view.
@@ -571,7 +619,7 @@ async function typed($, text, isInQuestion = true) {
   if (/^tours?$/i.test(text.trim())) return startTour($)
   const number = /^#(\d+)$|^(\d{3,7})$/.exec(text.trim())
   if (number) return startIssue($, Number(number[1] ?? number[2]), isInQuestion)
-  if (searchIntents(intents, text).length > 0) return track($, text)
+  if (searchIntents(intents, text).length > 0) return lookUp($, text)
   const question = /^(help|\?)$/i.test(text.trim()) ? 'What can Ather do for me?' : text
   void deliver($, askPrompt(question, pack)).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
   return 'Sent your question to the session.'
@@ -607,7 +655,7 @@ async function atherCommand($, args) {
   if (word === 'tour' || word === 'tours') return startTour($)
   if (word === 'skip') return skipTour($)
   if (word === 'untrack' && rest === '') return untrackHere($)
-  if ((word === 'intent' || word === 'pick') && rest) return track($, rest)
+  if ((word === 'intent' || word === 'pick') && rest) return pickIntent($, rest)
   if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
   if (word === 'role') {
     const role = pack.parseRole(rest)
@@ -835,6 +883,8 @@ function fit(text, width) {
 // Ather's look: near-black, one lime accent, quiet grey for everything secondary.
 const LIME = '#DDFF00'
 const QUIET = '#8E918A'
+// A notice that is not a fault: the Editor held, another session on the same intent.
+const AMBER = '#f2a516'
 
 // The Ather mark: the A, its lime I, and the 5 raised as a power.
 const MARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100"><polygon points="6,98 40,14 60,14 94,98 76,98 50,36 24,98" fill="#C9CCCC"/><rect x="47.5" y="56" width="5" height="28" fill="#DDFF00"/><text x="86" y="40" font-family="Arial Black, Impact, sans-serif" font-weight="900" font-size="40" fill="#DDFF00">5</text></svg>'
@@ -968,16 +1018,28 @@ const workRowProps = one => ({ title: one.kind === 'issue' && isClicked ? `#${on
 /** @type {{ kind: 'done' | 'yours' | 'changed', text: string, time: string }[]} */
 let intentToday = []
 
-// The tracked intent's lines since the start of the person's day, newest first, with their time.
+// What the Intent view shows beside the intent's files: whether this session tracks it, its proof
+// (each record another session wrote named by it), the other live sessions tracking it.
+/** @type {{ slug: string, isHere: boolean, proof: string, heldBy: string }} */
+let intentView = { slug: '', isHere: false, proof: '', heldBy: '' }
+
+// The shown intent (the tracked one unless a row or words chose another): its lines since the start
+// of the person's day, newest first, with their time; and the rest of what its view shows.
 /** @param {Engine} $ */
-async function todayChanges($) {
+async function readIntentView($) {
   const files = io($)
-  const slug = await state.readPinned(files)
-  if (!slug) return []
+  const { root, pack: chosen } = await laneOf($)
+  const pinned = await state.readPinned(files)
+  const slug = intentShown || pinned || ''
   const tz = await state.readTz(files)
   const now = Date.now()
-  const lines = await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000)
-  return lines.map(one => ({ kind: one.kind, text: one.text, time: clockText(one.at, tz) }))
+  const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000) : []
+  intentToday = lines.map(one => ({ kind: one.kind, text: one.text, time: clockText(one.at, tz) }))
+  const mine = state.shortSession(await state.sessionId(files))
+  const evidence = await state.readEvidence(files, slug || mine, chosen)
+  const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
+  const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName($, root, by).catch(() => '')])))
+  intentView = { slug, isHere: slug !== '' && slug === pinned, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
@@ -991,6 +1053,8 @@ async function unseenChanges($) {
 /** @param {Engine} $ */
 async function seeIntent($) {
   intentSeenAt = Date.now()
+  intentShown = ''
+  intentBack = 'home'
   await openPane($, 'intent')
 }
 
@@ -1165,7 +1229,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     for (const group of [...new Set(['Your GitHub issues', ...pack.areas, 'Unsorted', ...groups.keys()])].filter(name => groups.has(name))) {
       const list = (groups.get(group) ?? []).map(one => {
         index += 1
-        return choice(el, { key: `pick-${one.id}`, ...workRowProps(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : press($, () => startWork($, one), false) })
+        return choice(el, { key: `pick-${one.id}`, ...workRowProps(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : viewIntent($, one.slug, 'pick') })
       })
       rows.push(section(el, `group-${group}`, [label(el, `group-${group}-label`, group, width), ...list, ...(group === 'Your GitHub issues' ? [refreshIssuesButton(el, $)] : [])]))
     }
@@ -1212,11 +1276,26 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'intent') {
-    const slug = header.title
+    const { slug, isHere } = intentView
     const intent = intents.find(one => one.slug === slug)
     if (intent) {
-      intentSeenAt = Date.now()
-      rows.push(masthead(el, [label(el, 'brand', 'Intent', width), Text({ key: 'title', bold: true, children: fit(slug, width) }), ...(intent.goal ? [Text({ key: 'goal', wrap: 'wrap', children: intent.goal })] : [])], surface))
+      // Seeing the tracked intent's view settles the band's notice; another intent's view does not.
+      if (isHere) intentSeenAt = Date.now()
+      rows.push(
+        masthead(
+          el,
+          [
+            label(el, 'brand', 'Intent', width),
+            Text({ key: 'title', bold: true, children: fit(slug, width) }),
+            ...(intent.goal ? [Text({ key: 'goal', wrap: 'wrap', children: intent.goal })] : []),
+            ...(intentView.proof ? [Text({ key: 'proof', color: QUIET, wrap: 'wrap', children: `Proof: ${intentView.proof}` })] : []),
+            ...(intentView.heldBy ? [Text({ key: 'held-by', color: AMBER, wrap: 'wrap', children: intentView.heldBy })] : []),
+          ],
+          surface,
+        ),
+      )
+      // Looking never tracks: working on it here is its own press.
+      if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', marginTop: 1, children: [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] }))
       const today = intentToday.slice(0, 5)
       rows.push(
         section(el, 'intent-today', [
@@ -1238,8 +1317,11 @@ function paneView(el, $, model, columns, surface, crew = []) {
               )),
         ]),
       )
-      if (model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
-      rows.push(section(el, 'intent-back', [Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+      if (isHere && model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
+      const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
+      // Stop tracking keeps the view on this intent, which then offers Work on this here again.
+      const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = slug), untrackHere($)), true) })
+      rows.push(section(el, 'intent-back', isHere ? [Box({ key: 'intent-back-row', flexDirection: 'row', gap: 3, children: [stop, back] })] : [back]))
       rows.push(...foot)
       return Box({ flexDirection: 'column', children: rows })
     }
@@ -1315,7 +1397,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       el,
       [
         label(el, 'brand', 'Ather Automata', width),
-        isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: show($, 'intent') }),
+        isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') }),
         ...(status ? [Text({ key: 'status', children: fit(status, width) })] : []),
         ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
         ...(meta ? [metaRow(el, header)] : []),
@@ -1361,7 +1443,8 @@ function paneView(el, $, model, columns, surface, crew = []) {
     const theirs = model.picks.filter(one => !one.isMine)
     let index = 0
     /** @param {Work} one */
-    const pick = one => choice(el, { key: `work-${one.id}`, ...workRowProps(one), hotkey: String.fromCharCode(97 + index++), width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'home') : press($, () => startWork($, one), one.kind === 'intent') })
+    // A row shows its intent (or its issue's card); only the view's Work on this here tracks it.
+    const pick = one => choice(el, { key: `work-${one.id}`, ...workRowProps(one), hotkey: String.fromCharCode(97 + index++), width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'home') : viewIntent($, one.slug, 'home') })
     if (mine.length > 0) rows.push(section(el, 'picks-mine', [label(el, 'picks-mine-label', model.isNewcomer ? 'Or pick your own' : 'Also yours', width), ...mine.map(pick)]))
     // Without a name to compare, nobody's work is called a teammate's.
     if (theirs.length > 0) rows.push(section(el, 'picks-theirs', [label(el, 'picks-theirs-label', me ? 'Follow a teammate' : 'Open intents', width), ...(me ? [Text({ key: 'picks-theirs-note', color: QUIET, children: 'Read-only: their decisions stay theirs.' })] : []), ...theirs.map(pick)]))
