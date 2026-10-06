@@ -329,10 +329,14 @@ export const heavyList = (probe: Probe, max = 4): string => {
   return rows.length ? rows.map(([k, v]) => `${k}${v.n > 1 ? ` ×${v.n}` : ''} ${round(v.gb)} GB`).join(', ') : 'no heavy process'
 }
 
+/** D8: whether the session holding a sync is gone (files only; unknown is not gone). */
+export const isSyncHolderGone = (s: SyncFile | null, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): boolean =>
+  Boolean(s) && livenessOf(s?.holder.id8 ?? '', files, lanes, now) === 'gone'
+
 /** The order every session computes alike: live waiting requests, first requested first served, the sync holder
  * first while a sync is in its cutoff or freeze. */
 export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, sync: SyncFile | null): SessionFile[] => {
-  const phase = syncPhase(sync, now)
+  const phase = syncPhase(sync, now, isSyncHolderGone(sync, files, lanes, now))
   const first = phase === 'cutoff' || phase === 'frozen' ? sync?.holder.id8 : undefined
   const rank = (f: SessionFile) => (first && f.id8 === first ? 0 : 1)
   return files
@@ -383,7 +387,7 @@ export const decide = (x: GrantInput): Decision => {
   if (queue[0]?.id8 !== me8) return wait('queue', `the Editor is free but ${queue[0]?.lane ?? 'another session'} asked first`, `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile`)
   const want = mine.want
   const end = now + want.minutes * 60_000
-  const phase = syncPhase(sync, now)
+  const phase = syncPhase(sync, now, isSyncHolderGone(sync, x.files, x.lanes, now))
   if (sync && phase === 'planned' && end > sync.at - CUTOFF_MS) {
     const room = Math.floor((sync.at - CUTOFF_MS - now) / 60_000)
     return wait('sync', `a ${want.minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
@@ -419,7 +423,11 @@ export const ueRequestLine = (lane: string, minutes: number, what: string, waitU
   `UE request: ${lane} cần Editor ~${minutes} phút để ${what.replace(/\s+/g, ' ').slice(0, 120)}, build=no, chờ được tới ${hhmm(waitUntil)}.`
 
 // ---------- the sync timeline (Saved/HaiFlow/sync.json, written by the holder alone) ----------
-export type SyncState = 'planned' | 'done' | 'aborted' | 'cancelled'
+export type SyncState = 'planned' | 'done' | 'aborted' | 'cancelled' | 'expired'
+/** D8: how long a freeze may last past T (its hard end), by default: a merge, or a merge with a build. */
+export const SYNC_MERGE_MIN = 45
+export const SYNC_BUILD_MIN = 90
+export const HARD_END_WARN_MS = 10 * 60_000 // the holder is told this long before the hard end
 export type Conflict = { path: string; kind: 'self' | 'foreign'; match?: string }
 export type SyncHolder = { session: string; id8: string; lane: string }
 export type SyncFile = {
@@ -435,31 +443,64 @@ export type SyncFile = {
   /** Paths origin/main adds that already exist on disk in the shared checkout (A11): the merge would refuse or
    * overwrite them, and merge-tree does not see them. Null until the holder's dry-run lists them. */
   untracked: string[] | null
+  /** D8: the sync includes a build; its freeze may last longer. */
+  build: boolean
+  /** D8: the freeze's hard end (T + 45 min, T + 90 min with a build): past it the sync expires. */
+  hardEnd: number
+  /** D7: the sync worker the holder's hai-flow spawned at T (once per sync), and when. */
+  workerId: string | null
+  workerAt: number | null
+  /** A16: sessions without hai-flow 0.4 the holder has sent the standard message to (by session id). */
+  messaged: string[]
   endedAt: number | null
   note: string
   updatedAt: number
 }
-export type Phase = 'none' | 'planned' | 'cutoff' | 'frozen' | 'done' | 'aborted' | 'cancelled'
+export type Phase = 'none' | 'planned' | 'cutoff' | 'frozen' | 'done' | 'aborted' | 'cancelled' | 'expired'
 
 export const parseSyncFile = (text: string | null): SyncFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SyncFile>
     if (typeof v?.at !== 'number' || !v.holder || typeof v.holder.id8 !== 'string') return null
-    return { v: 1, id: String(v.id ?? `sync-${v.at}`), at: v.at, holder: v.holder, plannedBy: String(v.plannedBy ?? ''), state: (v.state as SyncState) ?? 'planned', conflicts: v.conflicts ?? null, conflictsAt: v.conflictsAt ?? null, conflictsSource: v.conflictsSource ?? null, untracked: Array.isArray(v.untracked) ? v.untracked.map(String) : null, endedAt: v.endedAt ?? null, note: String(v.note ?? ''), updatedAt: Number(v.updatedAt ?? 0) }
+    const build = v.build === true
+    return {
+      v: 1,
+      id: String(v.id ?? `sync-${v.at}`),
+      at: v.at,
+      holder: v.holder,
+      plannedBy: String(v.plannedBy ?? ''),
+      state: (v.state as SyncState) ?? 'planned',
+      conflicts: v.conflicts ?? null,
+      conflictsAt: v.conflictsAt ?? null,
+      conflictsSource: v.conflictsSource ?? null,
+      untracked: Array.isArray(v.untracked) ? v.untracked.map(String) : null,
+      build,
+      hardEnd: typeof v.hardEnd === 'number' ? v.hardEnd : v.at + (build ? SYNC_BUILD_MIN : SYNC_MERGE_MIN) * 60_000, // a 0.4 file: the default end
+      workerId: typeof v.workerId === 'string' ? v.workerId : null,
+      workerAt: typeof v.workerAt === 'number' ? v.workerAt : null,
+      messaged: Array.isArray(v.messaged) ? v.messaged.map(String) : [],
+      endedAt: v.endedAt ?? null,
+      note: String(v.note ?? ''),
+      updatedAt: Number(v.updatedAt ?? 0),
+    }
   } catch {
     return null
   }
 }
 
-/** planned → cutoff at T − 30 → frozen at T → done / aborted (or cancelled before T). */
-export const syncPhase = (s: SyncFile | null, now: number): Phase => {
+/** planned → cutoff at T − 30 → frozen at T → done / aborted (or cancelled before T). D8: the freeze is a lease:
+ * past its hard end, or once the holder session is gone while frozen, it is `expired` for every reader at once,
+ * whoever writes that down first. */
+export const syncPhase = (s: SyncFile | null, now: number, isHolderGone = false): Phase => {
   if (!s) return 'none'
   if (s.state !== 'planned') return s.state
-  return now < s.at - CUTOFF_MS ? 'planned' : now < s.at ? 'cutoff' : 'frozen'
+  if (now < s.at - CUTOFF_MS) return 'planned'
+  if (now < s.at) return 'cutoff'
+  return now >= s.hardEnd || isHolderGone ? 'expired' : 'frozen'
 }
 export const isOpenPhase = (p: Phase): boolean => p === 'planned' || p === 'cutoff' || p === 'frozen'
 
-export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: number): SyncFile => ({
+export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: number, build = false, freezeMin = build ? SYNC_BUILD_MIN : SYNC_MERGE_MIN): SyncFile => ({
   v: 1,
   id: `sync-${ymd(at).replace(/-/g, '')}-${hhmm(at).replace(':', '')}-${holder.id8}`,
   at,
@@ -470,17 +511,25 @@ export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: 
   conflictsAt: null,
   conflictsSource: null,
   untracked: null,
+  build,
+  hardEnd: at + freezeMin * 60_000,
+  workerId: null,
+  workerAt: null,
+  messaged: [],
   endedAt: null,
   note: '',
   updatedAt: now,
 })
-/** A move keeps the sync's id; its notices are keyed by its time too, so a moved sync gets them again. */
-export const movedSync = (s: SyncFile, at: number, now: number): SyncFile => ({ ...s, at, conflicts: null, conflictsAt: null, conflictsSource: null, untracked: null, updatedAt: now })
+/** A move keeps the sync's id and the length of its freeze; its notices are keyed by its time too, so a moved
+ * sync gets them again. */
+export const movedSync = (s: SyncFile, at: number, now: number): SyncFile => ({ ...s, at, hardEnd: at + (s.hardEnd - s.at), conflicts: null, conflictsAt: null, conflictsSource: null, untracked: null, messaged: [], updatedAt: now })
+/** The build flag of a planned sync, with its freeze length to match (D8). */
+export const withBuild = (s: SyncFile, build: boolean, freezeMin: number, now: number): SyncFile => ({ ...s, build, hardEnd: s.at + freezeMin * 60_000, updatedAt: now })
 export const withUntracked = (s: SyncFile, paths: readonly string[], now: number): SyncFile => ({ ...s, untracked: [...paths], updatedAt: now })
 
 /** `git diff --name-only -z --diff-filter=A HEAD origin/main`: the paths main adds, NUL-separated (no quoting). */
 export const parseAdded = (stdout: string): string[] => [...new Set(stdout.split('\0').map(p => p.replace(/[\r\n]+/g, '').trim()).filter(Boolean))]
-export const endedSync = (s: SyncFile, state: 'done' | 'aborted' | 'cancelled', note: string, now: number): SyncFile => ({ ...s, state, note: note.slice(0, 200), endedAt: now, updatedAt: now })
+export const endedSync = (s: SyncFile, state: 'done' | 'aborted' | 'cancelled' | 'expired', note: string, now: number): SyncFile => ({ ...s, state, note: note.slice(0, 200), endedAt: now, updatedAt: now })
 export const withConflicts = (s: SyncFile, conflicts: Conflict[], source: 'merge-tree' | 'holder', now: number): SyncFile => ({ ...s, conflicts, conflictsAt: now, conflictsSource: source, updatedAt: now })
 
 /** `git merge-tree --write-tree --name-only HEAD origin/main`: the tree, then the conflicted paths up to the
@@ -634,6 +683,11 @@ export const NOTICES = {
     noticeText('Sync main', `origin/main adds ${paths.join(', ')}, which already ${paths.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout and ${paths.length === 1 ? 'was' : 'were'} written by this session; the merge at ${hhmm(s.at)} would refuse to overwrite ${paths.length === 1 ? 'it' : 'them'} (merge-tree does not see this)`, `before ${hhmm(s.at)}: commit ${paths.length === 1 ? 'it' : 'them'} with exact paths (then it is an ordinary conflict, yours to settle) or move ${paths.length === 1 ? 'it' : 'them'} out of the tree; never delete a file that may be someone else's`),
   holderUntracked: (s: SyncFile, rows: { path: string; owners: string[] }[]): string =>
     noticeText('Sync main', `origin/main adds ${plural(rows.length, 'file')} that already ${rows.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout ("untracked would be overwritten"): ${rows.map(r => `${r.path} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')}`, `the owners are told to commit or move theirs before ${hhmm(s.at)}; owner unknown → 🟥 to Hai; never delete or overwrite one to get the merge through`),
+  hardEndSoon: (s: SyncFile): string =>
+    noticeText('Sync main', `the freeze of the sync at ${hhmm(s.at)} ends at ${hhmm(s.hardEnd)} (its hard end) and the sync is not done`, 'finish it with done or abort before then; at the hard end it expires, git and the Editor open again for every session, and Hai is asked'),
+  expired: (s: SyncFile): string =>
+    noticeText('Sync main', `the sync at ${hhmm(s.at)} expired at ${hhmm(s.endedAt ?? s.updatedAt)} without done or abort (${s.note || 'its lease ran out'})`, 'git and the Editor are open again (a merge left in .git/MERGE_HEAD still blocks git writes: leave it to its holder and Hai); your work stays as it is'),
+  expiredRed: (s: SyncFile, why: string): string => `Sync main ${hhmm(s.at)} (holder ${s.holder.lane}) expired without done or abort: ${why}. Check the shared checkout (git status, .git/MERGE_HEAD) and decide: finish the merge, abort it, or plan a new sync`,
   syncHolderNamed: (s: SyncFile): string => noticeText('Sync main', `you were named holder of the sync at ${hhmm(s.at)} (planned by ${s.plannedBy})`, `at ${hhmm(s.at - CUTOFF_MS)} the cutoff notice reaches every session; at ${hhmm(s.at)} run s2-sync-main, then call the sync tool with done or abort`),
 } as const
 
@@ -653,6 +707,7 @@ export const noticeIds = {
   lifted: (s: SyncFile) => `sync:${s.id}:${s.at}:${s.state}`,
   conflicts: (s: SyncFile, paths: readonly string[]) => `sync:${s.id}:${s.at}:conflicts:${paths.slice().sort().join('|').length}:${hash(paths.slice().sort().join('|'))}`,
   holderNamed: (s: SyncFile) => `sync:${s.id}:named`,
+  hardEndSoon: (s: SyncFile) => `sync:${s.id}:${s.at}:hard-end-soon:${s.hardEnd}`,
   untracked: (s: SyncFile, paths: readonly string[]) => `sync:${s.id}:${s.at}:untracked:${hash(paths.slice().sort().join('|'))}`,
 } as const
 

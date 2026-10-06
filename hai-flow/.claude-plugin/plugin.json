@@ -36,6 +36,18 @@
       "description": "Free RAM, after the safe cleanup, a slot without PIE needs before the Editor is launched.",
       "default": 28
     },
+    "syncMergeMinutes": {
+      "type": "number",
+      "title": "A5 Sync main: freeze length for a merge (minutes)",
+      "description": "The freeze from the sync time is a lease: past this many minutes without done or abort the sync expires, git and the Editor open again for every session, and Hai gets a 🟥.",
+      "default": 45
+    },
+    "syncBuildMinutes": {
+      "type": "number",
+      "title": "A5 Sync main: freeze length for a merge with a build (minutes)",
+      "description": "The same hard end for a sync planned with a build (/a5 sync HH:MM build, or Build: yes on the panel).",
+      "default": 90
+    },
     "pendingFile": {
       "type": "string",
       "title": "Pending decisions file",

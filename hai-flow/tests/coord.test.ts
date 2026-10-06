@@ -147,7 +147,12 @@ test('the sync timeline: planned → cutoff at T−30 → frozen at T → done o
   expect(syncPhase(s, T(15, 29))).toBe('planned')
   expect(syncPhase(s, T(16, 0) - CUTOFF_MS)).toBe('cutoff')
   expect(syncPhase(s, T(16, 0))).toBe('frozen')
-  expect(syncPhase(s, T(18, 0))).toBe('frozen') // until the holder says done or abort
+  expect(syncPhase(s, T(16, 44))).toBe('frozen') // until done or abort, at the latest the hard end (D8)
+  expect(s.hardEnd).toBe(T(16, 45))
+  expect(syncPhase(s, T(16, 45))).toBe('expired')
+  expect(syncPhase(s, T(16, 10), true)).toBe('expired') // the holder is gone
+  expect(syncPhase(s, T(15, 40), true)).toBe('cutoff') // before T a gone holder can still be taken over
+  expect(newSync(T(16, 0), s.holder, 'b', NOW, true).hardEnd).toBe(T(17, 30)) // with a build
   expect(syncPhase(endedSync(s, 'done', 'merged', T(16, 20)), T(16, 21))).toBe('done')
   expect(syncPhase(endedSync(s, 'aborted', 'asset conflict', T(16, 20)), T(16, 21))).toBe('aborted')
   expect(noticeIds.cutoff(s)).not.toBe(noticeIds.cutoff({ ...s, at: T(16, 30) })) // a moved sync gets its notices again

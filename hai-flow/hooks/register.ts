@@ -3,12 +3,12 @@ import { A5, freshTurn, gitTargets, newLines, norm, under, type A5Config, type D
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
-  CUTOFF_MS, DIR, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
+  CUTOFF_MS, DIR, HARD_END_WARN_MS, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
   syncPhase, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
-  type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
+  type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
 import { A5_LOOK, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
@@ -36,7 +36,7 @@ import { editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, til
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5WhenPresent: string; editorLock: string; pendingFile: string; motion: string; launchGatePieGb?: number; launchGateGb?: number }
+type Opts = { a5WhenPresent: string; editorLock: string; pendingFile: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -337,7 +337,7 @@ function showStatus($: Engine): void {
     a5On ? '★ A5' : '',
     isS2 && isOver ? `Editor: ${lockView?.who ?? 'held'} over its lease` : '',
     isS2 && vitals && ramBand(vitals.freeGb) !== 'ok' ? `RAM ${vitals.freeGb} GB free` : '',
-    isS2 && syncFile && ['cutoff', 'frozen'].includes(syncPhase(syncFile, nowMs)) ? `Sync ${clockOf(syncFile.at)} ${syncPhase(syncFile, nowMs)}` : '',
+    isS2 && syncFile && ['cutoff', 'frozen'].includes(phaseOf(syncFile, nowMs)) ? `Sync ${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)}` : '',
   ].filter(Boolean)
   $.ui.status(parts.length ? parts.join(' · ') : undefined)
   isStatusShown = parts.length > 0
@@ -545,12 +545,13 @@ async function ensureTools($: Engine): Promise<void> {
     name: 'sync',
     description:
       'hai-flow A5 Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
-      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout. The holder runs the merge itself (s2-sync-main), then calls done or abort. ' +
-      '"plan" (at HH:MM, holder: a session id8 or lane, default this session; a sync this session holds is moved), "move", "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "done" (note), "abort" (note: why), "status". Only the holder changes a planned sync.',
+      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and Hai is asked. At the sync time the holder\'s hai-flow starts the sync worker, which runs the merge and ends with done or abort. ' +
+      '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "done" (note), "abort" (note: why), "status". Only the holder changes a planned sync.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['plan', 'move', 'cancel', 'conflicts', 'done', 'abort', 'status'] },
+        action: { type: 'string', enum: ['plan', 'move', 'build', 'cancel', 'conflicts', 'done', 'abort', 'status'] },
+        build: { type: 'boolean', description: 'plan, move, build: the sync includes a build (a longer freeze).' },
         at: { type: 'string', description: 'plan, move: the sync time, HH:MM (the next time it comes round).' },
         holder: { type: 'string', description: 'plan: the session that will run the merge (its first 8 hex or its lane); default this session.' },
         paths: { type: 'array', items: { type: 'string' }, description: 'conflicts: repo-relative conflicted paths.' },
@@ -707,6 +708,41 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
 // ---------- Sync main holder: Saved/HaiFlow/sync.json, written by the holder alone ----------
 const syncPath = (opts: Opts): string => `${hfDir(opts)}/sync.json`
 const isLive = (id8: string, now: number): boolean => livenessOf(id8, me ? [me, ...peers] : peers, lanes, now) !== 'gone'
+/** The sync's phase for every reader alike, the freeze lease included (D8: hard end, holder gone). */
+const phaseOf = (s: SyncFile | null, now: number): Phase => syncPhase(s, now, isSyncHolderGone(s, me ? [me, ...peers] : peers, lanes, now))
+/** D8: how long a freeze may last past T, from the plugin options. */
+const freezeMinutes = (opts: Opts, build: boolean): number => {
+  const v = Number(build ? opts.syncBuildMinutes : opts.syncMergeMinutes)
+  return Number.isFinite(v) && v >= 10 && v <= 480 ? Math.round(v) : build ? SYNC_BUILD_MIN : SYNC_MERGE_MIN
+}
+
+/** One session raises an alert that every session sees (a 🟥 for Hai): the first to create its alert file wins. */
+async function claimAlert($: Engine, opts: Opts, key: string): Promise<boolean> {
+  const path = `${hfDir(opts)}/alerts/${key.replace(/[^\w.-]+/g, '_')}.json`
+  if (await $.fs.exists(path)) return false
+  const mine = JSON.stringify({ by: me8, at: await $.clock.now() })
+  await $.fs.write(path, mine).catch(() => undefined)
+  return (await readJson($, path)) === mine
+}
+
+/** A 🟥 for Hai from the coordination layer: the title, unread and one PENDING.md line (decision.ts). */
+async function raiseRed($: Engine, opts: Opts, question: string, fallback: string): Promise<void> {
+  await applyMarker($, opts, { kind: 'decision', question, fallback }, false).catch(err => $.ui.log(`hai-flow: 🟥 not raised: ${String(err)}`, { to: 'debug' }))
+}
+
+/** D8: a freeze past its hard end, or whose holder is gone, is written down as expired (a terminal state any
+ * session may write, read-compare-write; writing it twice is harmless), and the session whose alert file wins
+ * raises the 🟥. */
+async function expireSync($: Engine, opts: Opts, s: SyncFile, now: number): Promise<SyncFile> {
+  const why = now >= s.hardEnd ? `its hard end ${clockOf(s.hardEnd)} passed` : `its holder ${s.holder.lane} (session ${s.holder.id8}) is gone`
+  const cur = parseSyncFile(await readJson($, syncPath(opts)))
+  if (!cur || cur.id !== s.id || cur.state !== 'planned') return cur ?? s
+  const ended = endedSync(cur, 'expired', why, now)
+  await $.fs.write(syncPath(opts), JSON.stringify(ended))
+  syncFile = ended
+  if (await claimAlert($, opts, `sync-expired-${s.id}-${s.at}`)) await raiseRed($, opts, NOTICES.expiredRed(ended, why), 'git and the Editor stay open; nobody touches the merge state until Hai decides')
+  return ended
+}
 
 /** Writes the sync plan, unless another session has become its holder since this one read it (one writer). */
 async function writeSync($: Engine, opts: Opts, next: SyncFile, prior: SyncFile | null): Promise<boolean> {
@@ -777,10 +813,15 @@ async function addedOnDisk($: Engine, opts: Opts, s: SyncFile): Promise<string[]
 /** The sync's timeline for this session: who holds it, the cutoff, release by T − 10, the freeze, the conflicts
  * that touch this session's paths, and the lift; the holder also dry-runs the merge at the cutoff. */
 async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const s = syncFile
+  let s = syncFile
   if (!s || !me) return
-  const phase = syncPhase(s, now)
+  let phase = phaseOf(s, now)
+  if (s.state === 'planned' && phase === 'expired') {
+    s = await expireSync($, opts, s, now)
+    phase = phaseOf(s, now)
+  }
   const isHolder = s.holder.id8 === me8
+  if (isHolder && phase === 'frozen' && now >= s.hardEnd - HARD_END_WARN_MS) push({ id: noticeIds.hardEndSoon(s), text: NOTICES.hardEndSoon(s), isActionable: true })
   if (isHolder && isOpenPhase(phase) && !s.plannedBy.includes(me8)) push({ id: noticeIds.holderNamed(s), text: NOTICES.syncHolderNamed(s), isActionable: true })
   if (phase === 'cutoff') push({ id: noticeIds.cutoff(s), text: NOTICES.cutoff(s, isHolder, holdsLock()), isActionable: true })
   if (!isHolder && holdsLock() && ((phase === 'cutoff' && now >= s.at - RELEASE_BEFORE_MS) || phase === 'frozen')) push({ id: noticeIds.releaseBy(s), text: NOTICES.releaseBy(s), isActionable: true })
@@ -793,7 +834,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
       // The lift supersedes what this session was still to be told about the same sync.
       for (const id of stale) if (pending.some(n => n.id === id)) delivered.add(id)
       pending = pending.filter(n => !stale.includes(n.id))
-      push({ id: noticeIds.lifted(s), text: NOTICES.lifted(s), isActionable: true })
+      push({ id: noticeIds.lifted(s), text: s.state === 'expired' ? NOTICES.expired(s) : NOTICES.lifted(s), isActionable: true })
     }
     return
   }
@@ -824,7 +865,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
 }
 
 /** Plan, move, cancel, take over, record conflicts, end: the one place sync.json changes (panel, /a5 sync, tool). */
-async function syncAction($: Engine, opts: Opts, action: string, a: { at?: string; holder?: string; note?: string; paths?: string[] }): Promise<string> {
+async function syncAction($: Engine, opts: Opts, action: string, a: { at?: string; holder?: string; note?: string; paths?: string[]; build?: boolean }): Promise<string> {
   const gate = 'Sync main'
   if (!(await readA5($))) return blocked(gate, 'A5 is off', 'turn A5 on (/a5 on) to plan a sync')
   if (!(await $.fs.exists(s2Root(opts)))) return blocked(gate, `no S2 checkout at ${s2Root(opts)}`, 'set the editorLock option to the checkout\'s Saved/EDITOR_OWNER.txt')
@@ -833,34 +874,36 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   const now = await $.clock.now()
   await readWorld($, opts)
   const s = syncFile
-  const phase = syncPhase(s, now)
+  const phase = phaseOf(s, now)
   const open = isOpenPhase(phase)
   const isMine = s?.holder.id8 === me8
   const isGone = s ? !isLive(s.holder.id8, now) : false
   const when = (x: SyncFile) => `the sync at ${clockOf(x.at)} (holder ${x.holder.lane}, session ${x.holder.id8})`
   const notHolder = (x: SyncFile) => blocked(gate, `${when(x)} is held by another live session; only its holder changes it`, `ask that session (${x.holder.lane}) to ${action === 'cancel' ? 'cancel' : action === 'move' || action === 'plan' ? 'move' : 'end'} it`)
   const planned = (x: SyncFile) =>
-    `${when(x)}: cutoff ${clockOf(x.at - CUTOFF_MS)} (every session commits its own paths, writes its resume note, releases the Editor by ${clockOf(x.at - RELEASE_BEFORE_MS)}); from ${clockOf(x.at)} git writes and the Editor freeze for everyone but the holder until done or abort.`
+    `${when(x)}${x.build ? ', with a build' : ''}: cutoff ${clockOf(x.at - CUTOFF_MS)} (every session commits its own paths, writes its resume note, releases the Editor by ${clockOf(x.at - RELEASE_BEFORE_MS)}); from ${clockOf(x.at)} git writes and the Editor freeze for everyone but the holder until done or abort, at the latest until ${clockOf(x.hardEnd)} (its hard end: then it expires and Hai is asked).`
   if (action === 'plan' || action === 'move') {
     const at = atNext(a.at ?? '', now)
     if (at === null) return blocked(gate, `"${a.at ?? ''}" is not a time`, 'give HH:MM, for example /a5 sync 16:00')
     if (s && open) {
       if (!isMine && !isGone) return notHolder(s)
       if (phase === 'frozen') return blocked(gate, `${when(s)} is frozen already`, 'finish it with done or abort first')
-      const moved = movedSync({ ...s, holder: isMine ? s.holder : { session: me.session, id8: me8, lane: me.lane } }, at, now)
+      const base = movedSync({ ...s, holder: isMine ? s.holder : { session: me.session, id8: me8, lane: me.lane } }, at, now)
+      const moved = a.build === undefined ? base : withBuild(base, a.build, freezeMinutes(opts, a.build), now)
       if (!(await writeSync($, opts, moved, s))) return blocked(gate, 'sync.json changed while moving it', 'read it with status and try again')
       return `moved: ${planned(moved)}`
     }
     if (action === 'move') return blocked(gate, 'no sync is planned', 'plan one with /a5 sync HH:MM or the panel')
     const holder = holderFor(a.holder ?? '', now)
     if (!holder) return blocked(gate, `no live session named "${a.holder}"`, 'name a session by its first 8 hex or its lane, or leave it out to hold the sync yourself')
-    const next = newSync(at, holder, `${me.lane} (session ${me8})`, now)
+    const build = a.build === true
+    const next = newSync(at, holder, `${me.lane} (session ${me8})`, now, build, freezeMinutes(opts, build))
     if (!(await writeSync($, opts, next, s))) return blocked(gate, 'sync.json changed while planning', 'read it with status and try again')
     return `planned: ${planned(next)}${at - now < CUTOFF_MS ? ' The cutoff is already past: every session is told now.' : ''}`
   }
   if (action === 'status') {
     if (!s) return 'No sync planned. Plan one on the A5 panel or with /a5 sync HH:MM.'
-    return `${when(s)}: ${phase}${isGone ? ' (its holder is gone: take it over from the panel or with /a5 sync takeover)' : ''}${s.conflicts ? ` · conflicts: ${s.conflicts.length ? s.conflicts.map(c => `${c.path} (${c.kind})`).join(', ') : 'none'}` : ''}${s.untracked ? ` · untracked main would overwrite: ${s.untracked.length ? s.untracked.join(', ') : 'none'}` : ''}${s.note ? ` · ${s.note}` : ''}`
+    return `${when(s)}: ${phase}${isOpenPhase(phase) ? ` (freeze ${clockOf(s.at)}–${clockOf(s.hardEnd)}${s.build ? ', with a build' : ''})` : ''}${isGone && isOpenPhase(phase) ? ' (its holder is gone: take it over from the panel or with /a5 sync takeover)' : ''}${s.conflicts ? ` · conflicts: ${s.conflicts.length ? s.conflicts.map(c => `${c.path} (${c.kind})`).join(', ') : 'none'}` : ''}${s.untracked ? ` · untracked main would overwrite: ${s.untracked.length ? s.untracked.join(', ') : 'none'}` : ''}${s.note ? ` · ${s.note}` : ''}`
   }
   if (!s || !open) return blocked(gate, 'no sync is planned', 'plan one with /a5 sync HH:MM or the panel')
   if (action === 'takeover') {
@@ -877,6 +920,12 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     if (!(await writeSync($, opts, next, s))) return blocked(gate, 'sync.json changed', 'read it with status and try again')
     return `recorded ${paths.length} conflicted path${paths.length === 1 ? '' : 's'}: ${(next.conflicts ?? []).map(c => `${c.path} (${c.kind}${c.match ? `, main holds our ${c.match}` : ''})`).join(', ') || 'none'}; the sessions that edited them are told at their next tick`
   }
+  if (action === 'build') {
+    if (phase === 'frozen') return blocked(gate, `${when(s)} is frozen already`, 'its hard end stays as it is')
+    const build = a.build ?? !s.build
+    const next = withBuild(mine, build, freezeMinutes(opts, build), now)
+    return (await writeSync($, opts, next, s)) ? `${build ? 'with' : 'without'} a build: ${planned(next)}` : blocked(gate, 'sync.json changed', 'read it with status')
+  }
   if (action === 'cancel') {
     if (phase === 'frozen') return blocked(gate, `${when(s)} is frozen already`, 'end it with done or abort')
     return (await writeSync($, opts, endedSync(mine, 'cancelled', a.note ?? '', now), s)) ? `cancelled ${when(s)}; every session told of it hears it is off` : blocked(gate, 'sync.json changed', 'read it with status')
@@ -891,15 +940,18 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   return blocked(gate, `unknown action "${action}"`, 'use plan, move, cancel, takeover, conflicts, done, abort or status')
 }
 
-/** /a5 sync …: HH:MM [for <session>] · move HH:MM · cancel · done [note] · abort <why> · takeover · (status). */
+/** /a5 sync …: HH:MM [build] [for <session>] · move HH:MM · build on|off · cancel · done [note] · abort <why> ·
+ * takeover · (status). */
 async function syncCommand($: Engine, opts: Opts, rest: string): Promise<string> {
   const [verb = '', ...tail] = rest.trim().split(/\s+/)
   const word = verb.toLowerCase()
   if (/^\d{1,2}:\d{2}$/.test(verb)) {
+    const build = tail.some(t => t.toLowerCase() === 'build')
     const forAt = tail.findIndex(t => t.toLowerCase() === 'for')
-    return syncAction($, opts, 'plan', { at: verb, holder: forAt >= 0 ? tail.slice(forAt + 1).join(' ') : '' })
+    return syncAction($, opts, 'plan', { at: verb, build, holder: forAt >= 0 ? tail.slice(forAt + 1).filter(t => t.toLowerCase() !== 'build').join(' ') : '' })
   }
   if (word === 'move') return syncAction($, opts, 'move', { at: tail[0] ?? '' })
+  if (word === 'build') return syncAction($, opts, 'build', { build: (tail[0] ?? 'on').toLowerCase() !== 'off' })
   if (['cancel', 'done', 'abort', 'takeover'].includes(word)) return syncAction($, opts, word, { note: tail.join(' ') })
   return syncAction($, opts, 'status', {})
 }
@@ -913,7 +965,7 @@ async function freezeProblem($: Engine, opts: Opts, a5: A5, tool: string, input:
   if (!isEditorUse && writes.length === 0) return null
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   const now = await $.clock.now()
-  if (!s || syncPhase(s, now) !== 'frozen') return null
+  if (!s || phaseOf(s, now) !== 'frozen') return null
   if (s.holder.id8 === (await $.session.id()).slice(0, 8).toLowerCase()) return null
   const why = `${s.holder.lane} merges origin/main since ${clockOf(s.at)}`
   if (isEditorUse) return blocked('Sync main freeze', `${why}: the Editor waits until the sync is done`, 'do work that needs no Editor; you will be told when it lifts')
@@ -1054,7 +1106,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     if (now >= h.end) return blocked('Editor', `the lease ended at ${clockOf(h.end)}; an extension is asked before the end`, 'release now and ask again for the rest')
     const add = Math.max(5, Math.min(120, Math.round(Number(e.minutes) || 15)))
     const end = h.end + add * 60_000
-    const phase = syncPhase(syncFile, now)
+    const phase = phaseOf(syncFile, now)
     if (syncFile && phase === 'planned' && end > syncFile.at - 30 * 60_000) return blocked('Editor', `the lease would end at ${clockOf(end)}, past the sync cutoff ${clockOf(syncFile.at - 30 * 60_000)}`, 'finish by the cutoff, or ask after the sync is done')
     if (syncFile && (phase === 'cutoff' || phase === 'frozen') && syncFile.holder.id8 !== me8) return blocked('Editor', `the sync at ${clockOf(syncFile.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, `release by ${clockOf(syncFile.at - 10 * 60_000)}`)
     const waiting = queueOf([me, ...peers], lanes, now, syncFile).length
@@ -1075,7 +1127,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
         me: placeText(decision),
         queue: queue.map((f, n) => `${n + 1}. ${f.lane} (session ${f.id8}): ${f.want?.minutes} min${f.want?.pie ? ', PIE' : ''}${f.want?.build ? ', build' : ''}: ${f.want?.what}`),
         memory: probe ? { freeGb: probe.freeGb, launchGate: { withPie: gates.pieGb, withoutPie: gates.nopieGb, setOn: gates.source }, pie: 'start ≥ 5 GB, abort < 3 GB (fixed)', diskGb: probe.diskGb, cleanup: cleanupNote || 'none yet' } : 'probe did not answer',
-        sync: syncFile ? { at: clockOf(syncFile.at), phase: syncPhase(syncFile, now), holder: syncFile.holder.lane } : 'none planned',
+        sync: syncFile ? { at: clockOf(syncFile.at), phase: phaseOf(syncFile, now), holder: syncFile.holder.lane } : 'none planned',
       },
       null,
       1,
@@ -1131,18 +1183,18 @@ const placeShort = (d: GrantDecision | null): string => {
 /** The Sync main tile's words for the planned sync: when, by whom, its phase, its conflicts. */
 function syncData(now: number): SyncData {
   const s = syncFile
-  const phase = syncPhase(s, now)
+  const phase = phaseOf(s, now)
   if (!s) return { line: 'no sync planned', conflicts: '', isRunning: false }
   const by = s.holder.id8 === me8 ? 'this session' : s.holder.lane
   const gone = isOpenPhase(phase) && !isLive(s.holder.id8, now) ? ' · holder gone' : ''
   const cs = isOpenPhase(phase) ? s.conflicts : null
   const line =
     phase === 'planned'
-      ? `next sync ${clockOf(s.at)} by ${by} · cutoff ${clockOf(s.at - CUTOFF_MS)}`
+      ? `next sync ${clockOf(s.at)}${s.build ? ' with build' : ''} by ${by} · cutoff ${clockOf(s.at - CUTOFF_MS)} · freeze to ${clockOf(s.hardEnd)} at most`
       : phase === 'cutoff'
         ? `sync ${clockOf(s.at)} by ${by} · cutoff: commit, release the Editor by ${clockOf(s.at - RELEASE_BEFORE_MS)}`
         : phase === 'frozen'
-          ? `sync ${clockOf(s.at)}: ${by} merging · git and the Editor frozen`
+          ? `sync ${clockOf(s.at)}: ${by} merging · git and the Editor frozen to ${clockOf(s.hardEnd)} at most`
           : `last sync ${clockOf(s.at)} ${phase}${s.endedAt ? ` at ${clockOf(s.endedAt)}` : ''} · none planned`
   const un = isOpenPhase(phase) ? (s.untracked ?? []) : []
   const parts = [
@@ -1185,8 +1237,8 @@ function gateButtons($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean): u
  * ends it during the freeze; a gone holder's sync can be taken over. Every press goes through syncAction. */
 function syncButtons($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean, now: number): unknown[] {
   const s = syncFile
-  const phase = syncPhase(s, now)
-  const act = (action: string, a: { at?: string; note?: string }) => () =>
+  const phase = phaseOf(s, now)
+  const act = (action: string, a: { at?: string; note?: string; build?: boolean }) => () =>
     void (async () => {
       const text = await syncAction($, opts, action, a)
       $.ui.toast(text.length > 200 ? `${text.slice(0, 197)}…` : text, { timeoutMs: 8_000 })
@@ -1211,6 +1263,7 @@ function syncButtons($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean, no
   return [
     ...(s.at - 30 * 60_000 > now ? [el.Button({ key: 'hai-sync-earlier', label: '−30 min', plain, onPress: act('move', { at: clockOf(s.at - 30 * 60_000) }) })] : []),
     el.Button({ key: 'hai-sync-later', label: '+30 min', plain, onPress: act('move', { at: clockOf(s.at + 30 * 60_000) }) }),
+    el.Button({ key: 'hai-sync-build', label: s.build ? 'Build: yes' : 'Build: no', plain, onPress: act('build', { build: !s.build }) }),
     el.Button({ key: 'hai-sync-cancel', label: 'Cancel', plain, onPress: act('cancel', { note: 'cancelled on the panel' }) }),
     refresh,
   ]
@@ -1329,7 +1382,7 @@ export const register: Register = (on, options) => {
     const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put hai-flow first in CLAUDE_CODE_PLUGIN_DIRS`
     const coord =
       a5On && isS2
-        ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${syncPhase(syncFile, nowMs)} (holder ${syncFile.holder.lane})` : 'none planned'}.`
+        ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)} (holder ${syncFile.holder.lane})` : 'none planned'}.`
         : ''
     return { text: `A5 is ${a5On ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. hai-flow sits ${where2}.${coord}` }
   })
@@ -1344,7 +1397,7 @@ export const register: Register = (on, options) => {
     if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
     if (tool === SYNC_TOOL) {
       const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
-      const text = await syncAction($, opts, str(input.action), { at: str(input.at), holder: str(input.holder), note: str(input.note), paths })
+      const text = await syncAction($, opts, str(input.action), { at: str(input.at), holder: str(input.holder), note: str(input.note), paths, build: typeof input.build === 'boolean' ? input.build : undefined })
       return { result: [text, ...drain()].join('\n') }
     }
     const a5 = await load($)

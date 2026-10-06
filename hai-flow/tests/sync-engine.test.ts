@@ -187,9 +187,9 @@ test('the holder is not frozen: it is told to run the merge, then ends the sync 
   expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c'])
 })
 
-test('a sync whose holder is gone can be taken over (the freeze never outlives it unseen)', opts(), async ($, on) => {
+test('a planned sync whose holder is gone can be taken over before its freeze', opts(), async ($, on) => {
   const w = world(on)
-  w.put(SYNC, JSON.stringify(newSync(T(14, 30), B, 'sync-lane (session bbbbbbbb)', NOW - 30 * MIN)))
+  w.put(SYNC, JSON.stringify(newSync(T(15, 0), B, 'sync-lane (session bbbbbbbb)', NOW - 30 * MIN)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: NOW - 10 * MIN }))
   await $.session.start(START)
   expect(await a5($, 'sync')).toContain('its holder is gone: take it over')
