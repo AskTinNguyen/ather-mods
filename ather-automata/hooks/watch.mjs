@@ -78,6 +78,7 @@ export function register(on, options) {
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
       if (adopted) $.ui.toast(adopted.isOver ? 'Ather: welcome back. Your away window has ended; merges stay held until you review it. Type /ather.' : 'Ather: your away window from an earlier session is still running. Type /ather to see it, or /away end.', { timeoutMs: 15000 })
+      if (adopted) await stillTracking($)
       // The timezone probe starts a process; it must not hold the session's first prompt.
       void detectTz($).catch(() => undefined)
       $.clock.every(30000, () => void tick($).catch(() => undefined))
@@ -324,12 +325,19 @@ function followClear($, oldSid, tries) {
     void $.session
       .id()
       .then(sid => {
-        if (sid !== oldSid) return state.moveLane(io($), oldSid, sid)
+        if (sid !== oldSid) return state.moveLane(io($), oldSid, sid).then(() => stillTracking($))
         if (tries > 0) return followClear($, oldSid, tries - 1)
         $.ui.log('Ather watch: the session id did not change within 5 s of /clear; the lane stays under the old id.', { to: 'debug' })
       })
       .catch(() => undefined)
   })
+}
+
+// After /clear or an adopted away window the session keeps the intent it tracked: say so, and how to stop.
+/** @param {Engine} $ */
+async function stillTracking($) {
+  const slug = await state.readPinned(io($))
+  if (slug) $.ui.toast(`Ather: Still tracking ${slug} · /ather untrack`, { timeoutMs: 12000 })
 }
 
 // Every 30 seconds: the heartbeat, quiet workers, and the end of an autonomy window.

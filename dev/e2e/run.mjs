@@ -1097,6 +1097,32 @@ const hasFocus = tree => {
   done()
 }
 
+{
+  // A6: /clear and an adopted away window keep the pin, and say so with the way out.
+  const { engine, done } = await boot({ store: { 'role:tinnguyen': 'engineer' } })
+  const still = 'Ather: Still tracking box-scale-tool · /ather untrack'
+  await engine.end('clear')
+  engine.setSessionId('harness-session-0002')
+  await new Promise(resolve => setTimeout(resolve, 1400))
+  expect('after /clear with nothing tracked, nothing is said', !engine.record.toasts.some(text => /Still tracking/.test(text)), engine.record.toasts)
+  await run(engine, [], 'ather', 'intent box-scale-tool')
+  await engine.end('clear')
+  engine.setSessionId('harness-session-0003')
+  await new Promise(resolve => setTimeout(resolve, 1400))
+  expect('after /clear the session keeps its intent and says "Still tracking <slug> · /ather untrack"', engine.store.get('pinned:harness-session-0003') === 'box-scale-tool' && engine.record.toasts.includes(still), engine.record.toasts.slice(-2))
+  await run(engine, [], 'away', '4h')
+  await engine.end('exit')
+  engine.setSessionId('harness-session-morning')
+  engine.record.toasts.length = 0
+  await engine.start()
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect('a new session that takes over an away window keeps its intent and says "Still tracking <slug> · /ather untrack"', engine.store.get('pinned:harness-session-morning') === 'box-scale-tool' && engine.record.toasts.some(text => /away window from an earlier session/.test(text)) && engine.record.toasts.includes(still), engine.record.toasts)
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+  expect('no hook threw in the /clear and adoption scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
 // ---------------------------------------------------------------- the web pack, on a han-viet checkout
 //
 // HANVIET_ROOT: a checkout of AskTinNguyen/han-viet. Its profile, package.json, AGENTS.md and intents
