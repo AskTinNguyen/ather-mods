@@ -64,6 +64,64 @@ test('A14: a merge left behind with no sync open is one 🟥 for Hai; the holder
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge --abort' }))).toBeUndefined()
 })
 
+// ---------- A12: the sync worker ----------
+const spawns = (w: ReturnType<typeof world>) => (w.calls['agent.spawn'] ?? []) as Rec[]
+const planMine = async ($: any, _w: ReturnType<typeof world>) => {
+  expect(await a5($, 'sync 14:45')).toContain('planned')
+  await idle($)
+}
+
+test('A12: at T the holder\'s hai-flow spawns the sync worker once, with the non-interactive procedure; the model is never offered it', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put(LOCK, 'free since 14:20\n')
+  await $.session.start(START)
+  const spec = (w.calls['agent.register'] ?? [])[0] as Rec
+  expect([spec?.name, spec?.background]).toEqual(['sync', true])
+  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'mcp__hai-flow__sync'])
+    expect([must, String(spec?.prompt).includes(must)]).toEqual([must, true])
+  expect(await $.agent.offer({ agent: 'hai-flow:sync', description: 'x', source: 'plugin', provider: { plugin: 'hai-flow', tier: 'user' } } as never)).toEqual({ isOffered: false })
+  await planMine($, w)
+  await w.clock.advance(4 * MIN)
+  expect(spawns(w)).toEqual([])
+  await idle($)
+  await w.clock.advance(MIN) // 14:45
+  expect(spawns(w).length).toBe(1)
+  expect(spawns(w)[0]?.subagent_type ?? spawns(w)[0]?.subagentType).toBe('hai-flow:sync')
+  expect(String(spawns(w)[0]?.prompt)).toContain('Run the sync of origin/main planned for 14:45 in E:/s2 (holder 3️⃣-Loco-fix, session ab12cd34). Hard end 15:30')
+  expect([syncOf(w)?.workerId, syncOf(w)?.workerAt]).toEqual(['w-sync', T(14, 45)])
+  await w.clock.advance(3 * MIN)
+  expect(spawns(w).length).toBe(1)
+})
+
+test('A12: a worker that ends without done or abort aborts the sync for it; the holder is told; the freeze lifts', opts(), async ($, on) => {
+  const w = world(on)
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  await $.session.start(START)
+  await planMine($, w)
+  await w.clock.advance(5 * MIN) // 14:45: the worker runs
+  await idle($)
+  await $.turn.complete({ agentId: 'w-sync', answer: 'Stopped: git reset --hard was refused.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
+  expect(syncOf(w)?.state).toBe('aborted')
+  expect(syncOf(w)?.note).toBe('the sync worker ended without done or abort: Stopped: git reset --hard was refused.')
+  expect(prompts(w).some(p => p.includes('hai-flow · Sync main — the sync worker ended without done or abort, so the sync at 14:45 was aborted for it'))).toBe(true)
+})
+
+test('A12: the worker ends the sync with done: the sync is done and its end is no abort', opts(), async ($, on) => {
+  const w = world(on)
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  await $.session.start(START)
+  await planMine($, w)
+  await w.clock.advance(5 * MIN)
+  expect(out(await $.tool.call({ tool: 'mcp__hai-flow__sync', action: 'done', note: 'merged 1a2b3c (pre-merge 9f8e7d)', agentId: 'w-sync' } as never))).toContain('done: git and the Editor are open again')
+  await $.turn.complete({ agentId: 'w-sync', answer: 'Merged 1a2b3c.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
+  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c (pre-merge 9f8e7d)'])
+  expect(prompts(w).some(p => p.includes('worker ended without done'))).toBe(false)
+})
+
 // ---------- A15: the sync's own commands pass A5 ----------
 const MINE = { session: ME, id8: ME8, lane: '3️⃣-Loco-fix' }
 const OURS = 'git -C E:/s2 checkout --ours -- Source/S2/Foo.cpp'

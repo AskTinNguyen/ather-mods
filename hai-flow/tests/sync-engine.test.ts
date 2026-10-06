@@ -60,7 +60,7 @@ test('named holder: its own hai-flow tells it once that it holds the sync', opts
   const w = world(on)
   w.put(SYNC, JSON.stringify(newSync(T(16, 0), { session: ME, id8: ME8, lane: '3️⃣-Loco-fix' }, 'sync-lane (session bbbbbbbb)', NOW)))
   await $.session.start(START)
-  expect(prompts(w)).toEqual(['hai-flow · Sync main — you were named holder of the sync at 16:00 (planned by sync-lane (session bbbbbbbb)) → at 15:30 the cutoff notice reaches every session; at 16:00 run s2-sync-main, then call the sync tool with done or abort'])
+  expect(prompts(w)).toEqual(['hai-flow · Sync main — you were named holder of the sync at 16:00 (planned by sync-lane (session bbbbbbbb)) → at 15:30 the cutoff notice reaches every session; at 16:00 this session\'s hai-flow starts the sync worker, which ends the sync with done or abort (at the latest 16:45); keep this session open until then'])
   await w.clock.advance(MIN)
   expect(prompts(w).length).toBe(1)
 })
@@ -169,7 +169,7 @@ test('freeze: from T until done, a non-holder makes no git write in the shared c
   expect(prompts(w).length).toBe(2)
 })
 
-test('the holder is not frozen: it is told to run the merge, then ends the sync with the sync tool', opts(), async ($, on) => {
+test('the holder is not frozen: its worker runs the merge (D7), then the sync ends with the sync tool', opts(), async ($, on) => {
   const w = world(on)
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
@@ -180,9 +180,10 @@ test('the holder is not frozen: it is told to run the merge, then ends the sync 
   await w.clock.advance(4 * MIN) // 14:44: the cutoff notice was one prompt; that turn ends
   expect(prompts(w).map(p => p.startsWith('hai-flow · Sync main — cutoff: you hold the sync at 14:45 →'))).toEqual([true])
   await idle($)
-  await w.clock.advance(MIN) // 14:45
-  expect(prompts(w)[1]).toBe('hai-flow · Sync main — it is 14:45: every other session\'s git writes and Editor use are held for your sync → run s2-sync-main now (merge origin/main, self-conflicts to ours per rule 11, abort on a logic or .uasset/.umap conflict), then call the sync tool with done or abort')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge origin/main' }))).toBeUndefined()
+  await w.clock.advance(MIN) // 14:45: the worker starts; the holder's own conversation is not prompted
+  expect(prompts(w).length).toBe(1)
+  expect(syncOf(w)?.workerId).toBe('w-sync')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge origin/main', agentId: 'w-sync' } as never))).toBeUndefined()
   expect(out(await $.tool.call({ tool: 'mcp__hai-flow__sync', action: 'done', note: 'merged 1a2b3c' } as never))).toContain('done: git and the Editor are open again')
   expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c'])
 })

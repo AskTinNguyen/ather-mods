@@ -100,6 +100,17 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
       ;(calls[ev] ??= []).push(e)
       return value(ev === 'tool.register' ? { tool: `mcp__hai-flow__${String((e as Rec).name)}` } : undefined)
     })
+  // D7: an agent type registers; a spawned subagent starts as `w-sync` (its end is the test's turn.complete).
+  on('agent.register', async (_$: unknown, e: Rec) => {
+    ;(calls['agent.register'] ??= []).push(e)
+    return value({ agent: `hai-flow:${String(e.name)}` })
+  })
+  on('agent.spawn', async (_$: unknown, e: Rec) => {
+    ;(calls['agent.spawn'] ??= []).push(e)
+    return { model: 'claude-test', agentId: 'w-sync' }
+  })
+  // The session's agents: the sync worker once one was spawned (the harness drops a spawn's agentId).
+  on('agent.list', async () => value((calls['agent.spawn'] ?? []).length > 0 ? [{ id: 'w-sync', description: 'Sync main', type: 'hai-flow:sync', status: 'running', spawnedBy: 'hai-flow' }] : []))
   // A prompt the plugin submits enters as it was sent (an event: it answers { text }).
   on('prompt.submit', async (_$: unknown, e: { text: string; context?: string[] }) => {
     ;(calls['prompt.submit'] ??= []).push(e)

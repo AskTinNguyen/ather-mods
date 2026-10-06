@@ -7,7 +7,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  syncPhase, isSyncCommandOnly, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
@@ -81,6 +81,7 @@ let chain: string[] | null = null // the plugins beneath this one on a tool call
 // A5's coordination: what this session last read from the files and the machine (coord.ts decides).
 const EDITOR_TOOL = 'mcp__hai-flow__editor'
 const SYNC_TOOL = 'mcp__hai-flow__sync'
+const SYNC_AGENT = 'hai-flow:sync' // D7: the sync worker's agent type
 const CLEANUP_EVERY_MS = 5 * 60_000 // while a slot waits on RAM, the safe cleanup runs at most this often
 const PIE_STOP = /StopPIE|EndPIE|StopPlayInEditor|EndPlayMap|RequestEndPlayMap/i
 const EDITOR_WORK = /Build\.(bat|sh|cmd)\b|UnrealEditor|RunUAT/i
@@ -528,6 +529,7 @@ async function ensureTools($: Engine): Promise<void> {
         action: { type: 'string', enum: ['request', 'release', 'extend', 'status'] },
         minutes: { type: 'number', description: 'request: how long you need the Editor (5–180, default 30; ≤ 20 without a build may ask the holder to yield). extend: how many more minutes.' },
         pie: { type: 'boolean', description: 'request: the slot starts PIE (the launch gate is higher).' },
+        launch: { type: 'boolean', description: 'request: false when the slot never launches the Editor (it holds the lock to keep the Editor down, as the sync worker does): the RAM launch gate is skipped.' },
         build: { type: 'boolean', description: 'request: the Editor must be closed for a build (one window ≤ 45 min).' },
         what: { type: 'string', description: 'request: what the slot is for, one line.' },
         lane: { type: 'string', description: 'request: the lane name written into the lock (default: this session\'s title).' },
@@ -560,6 +562,42 @@ async function ensureTools($: Engine): Promise<void> {
       required: ['action'],
     },
   }).catch(err => $.ui.log(`hai-flow: sync tool not registered: ${String(err)}`, { to: 'debug' }))
+  // D7: the sync worker's agent type, spawned by this mod at the sync time and hidden from the model (agent.offer).
+  await $.agent.register({ name: 'sync', description: 'hai-flow sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by hai-flow only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`hai-flow: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
+}
+
+/** D7: at T the holder's hai-flow starts the sync worker, once per sync (sync.json records it before the spawn,
+ * so a reload or a second tick never starts another). */
+async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
+  if (!(await writeSync($, opts, { ...s, workerAt: now, updatedAt: now }, s))) return
+  const claimed = syncFile ?? s
+  const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(opts), (lockRaw ?? '').trim()) }).catch(err => ({ deny: String(err) }))
+  if (ran.deny !== undefined) {
+    push({ id: `sync:${s.id}:${s.at}:worker-failed`, text: NOTICES.workerFailed(claimed, ran.deny), isActionable: true })
+    return
+  }
+  // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
+  const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'hai-flow').pop()?.id
+  if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
+}
+
+/** A12: the worker's turn ended; if the sync is still open it ended without done or abort, so the sync is aborted
+ * for it and the holder told (the freeze must never outlive its worker). */
+async function workerEnded($: Engine, opts: Opts, agentId: string, answer: string): Promise<void> {
+  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  if (!s || s.state !== 'planned' || s.workerAt === null || s.holder.id8 !== me8) return
+  if (s.workerId !== agentId) {
+    // No id was recorded (or another agent ended): it is the worker only if the agent list says it ran as one.
+    if (s.workerId !== null) return
+    const agent = (await $.agent.list().catch(() => [])).find(a => a.id === agentId)
+    if (agent?.type !== SYNC_AGENT) return
+  }
+  const now = await $.clock.now()
+  const ended = endedSync(s, 'aborted', `the sync worker ended without done or abort${answer ? `: ${answer.replace(/\s+/g, ' ').slice(0, 140)}` : ''}`, now)
+  await $.fs.write(syncPath(opts), JSON.stringify(ended))
+  syncFile = ended
+  delivered.add(noticeIds.lifted(ended)) // the holder hears the worker's end instead of the lift
+  push({ id: `sync:${s.id}:${s.at}:worker-ended`, text: NOTICES.workerEnded(ended), isActionable: true })
 }
 
 /** One minute tick, serialized with the tool's own runs: read, decide, write this session's files, notify. */
@@ -826,7 +864,11 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (isHolder && isOpenPhase(phase) && !s.plannedBy.includes(me8)) push({ id: noticeIds.holderNamed(s), text: NOTICES.syncHolderNamed(s), isActionable: true })
   if (phase === 'cutoff') push({ id: noticeIds.cutoff(s), text: NOTICES.cutoff(s, isHolder, holdsLock()), isActionable: true })
   if (!isHolder && holdsLock() && ((phase === 'cutoff' && now >= s.at - RELEASE_BEFORE_MS) || phase === 'frozen')) push({ id: noticeIds.releaseBy(s), text: NOTICES.releaseBy(s), isActionable: true })
-  if (phase === 'frozen') push(isHolder ? { id: noticeIds.frozen(s), text: NOTICES.frozenHolder(s), isActionable: true } : { id: noticeIds.frozen(s), text: NOTICES.frozen(s), isActionable: false })
+  if (phase === 'frozen') push({ id: noticeIds.frozen(s), text: isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s), isActionable: false })
+  if (isHolder && phase === 'frozen' && s.workerAt === null) {
+    await spawnWorker($, opts, s, now)
+    s = syncFile ?? s
+  }
   if (!isOpenPhase(phase)) {
     // The lift reaches the sessions that were told of this sync, and only for a while after it ended.
     const stale = [noticeIds.cutoff(s), noticeIds.frozen(s), noticeIds.releaseBy(s)]
@@ -1106,6 +1148,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       pausable: e.pausable !== false,
       nextSafe: str(e.next_safe) || 'after save',
       requestedAt: me.want?.requestedAt ?? now, // asking again keeps the place in the queue
+      ...(e.launch === false ? { launch: false } : {}),
     }
     me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
     await saveMe($, opts, now)
@@ -1385,6 +1428,9 @@ export const register: Register = (on, options) => {
     return res
   })
 
+  // D7: the sync worker is this mod's to start, never the model's.
+  on('agent.offer', { agent: SYNC_AGENT }, async () => ({ isOffered: false }))
+
   // A /clear goes on under a new session id: this session's lease, request and sync follow it (A10).
   on('session.end', async ($, e, next) => {
     const res = await next(e)
@@ -1556,6 +1602,11 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const res = await next(e)
+    // A12: the sync worker's run ended; without done or abort the sync is aborted for it.
+    if (e.agentId !== undefined && isS2 && (await readA5($))) {
+      await workerEnded($, opts, e.agentId, 'answer' in e && typeof e.answer === 'string' ? e.answer : '').catch(err => $.ui.log(`hai-flow: worker end: ${String(err)}`, { to: 'debug' }))
+      if (!isBusy) await deliverIdle($, opts)
+    }
     if (e.agentId === undefined) {
       const wrote = wroteDirectorCall
       wroteDirectorCall = false

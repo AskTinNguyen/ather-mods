@@ -98,6 +98,7 @@ test('the grant: only the head takes a free lock, the slot fits before the cutof
   const low = decide(input({ files: [pie], probe: PROBE(30, [{ name: 'git', pid: 1, gb: 0.1, parentAlive: false }]) }))
   expect(low.kind === 'wait' && low.code === 'ram' && low.why.includes('31 GB') && low.next.includes('git')).toBe(true)
   expect(decide(input({ files: [sess('aaaaaaaa', { want: want({ pie: false }) })], probe: PROBE(30) })).kind).toBe('grant')
+  expect(decide(input({ files: [sess('aaaaaaaa', { want: want({ launch: false }) })], probe: PROBE(9) })).kind).toBe('grant') // never launches: no launch gate
   const reuse = decide(input({ files: [pie], probe: PROBE(9, [{ name: 'UnrealEditor', pid: 77, gb: 25, parentAlive: true }]) }))
   expect(reuse.kind === 'grant' && reuse.reuse === 77).toBe(true)
   expect(decide(input({ files: [pie], probe: null })).kind).toBe('wait')
