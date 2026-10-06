@@ -5,7 +5,8 @@ import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKin
 import {
   CUTOFF_MS, DIR, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
-  movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
+  movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
+  PROBE_FRESH_MS,
   syncPhase, ueRequestLine, withConflicts, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
@@ -371,18 +372,44 @@ async function readJson($: Engine, path: string): Promise<string | null> {
   return $.fs.read(path).catch(() => null)
 }
 
+/** A fresh machine reading (a grant, the cleanup, a release), published to the shared probe file for the others. */
+async function freshProbe($: Engine, opts: Opts): Promise<Probe | null> {
+  const ran = await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null)
+  const p = ran ? parseProbe(ran.stdout) : null
+  if (p) await $.fs.write(`${hfDir(opts)}/probe.json`, JSON.stringify({ at: await $.clock.now(), by: me8, probe: p })).catch(() => undefined)
+  return p
+}
+
+/** A9: the machine reading every A5 session shares. A session probes only when Saved/HaiFlow/probe.json is older
+ * than 50 s, and only after claiming it by read-compare-write and a re-read, so two sessions rarely both probe;
+ * everyone else reads the file. */
+async function sharedProbe($: Engine, opts: Opts, now: number): Promise<Probe | null> {
+  const path = `${hfDir(opts)}/probe.json`
+  const raw = await readJson($, path)
+  const cur = parseSharedProbe(raw)
+  if (cur?.probe && now - cur.at < PROBE_FRESH_MS) return cur.probe
+  const claim = JSON.stringify({ at: now, by: me8, probe: cur?.probe ?? null })
+  const again = await readJson($, path)
+  if (again !== raw) return parseSharedProbe(again)?.probe ?? cur?.probe ?? null // another session claimed it first
+  await $.fs.write(path, claim).catch(() => undefined)
+  const mine = await readJson($, path)
+  if (mine !== claim) return parseSharedProbe(mine)?.probe ?? cur?.probe ?? null
+  return (await freshProbe($, opts)) ?? cur?.probe ?? null
+}
+
 /** Everything the decisions read: the lock, every session file, Ather's lanes, the sync plan, the touch files
- * and the machine probe. */
+ * and the shared machine reading. */
 async function readWorld($: Engine, opts: Opts): Promise<void> {
   const root = s2Root(opts)
   const dir = hfDir(opts)
-  const [raw, list, laneList, syncText, touchList, ran] = await Promise.all([
+  const now = await $.clock.now()
+  const [raw, list, laneList, syncText, touchList, shared] = await Promise.all([
     $.fs.read(opts.editorLock).catch(() => null),
     $.fs.list(`${dir}/editor`).catch(() => []),
     $.fs.list(`${root}/Saved/AtherAutomata/lanes`).catch(() => []),
     readJson($, `${dir}/sync.json`),
     $.fs.list(`${dir}/touch`).catch(() => []),
-    $.process.run(ramProbe(root.slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null),
+    sharedProbe($, opts, now),
   ])
   lockRaw = raw
   lock = parseLockLine(raw)
@@ -403,7 +430,7 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
   ).filter((l): l is LaneBeat => l !== null)
   syncFile = parseSyncFile(syncText)
   touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
-  probe = ran ? parseProbe(ran.stdout) : null
+  probe = shared
 }
 
 /** Queues a notice for this session, once per id (D6). */
@@ -554,6 +581,11 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
     if (await writeLock($, opts, line)) push({ id: noticeIds.recovered(d.holder, now), text: NOTICES.recovered(d.holder), isActionable: false })
     d = decide(grantInput(now))
   }
+  if (d.kind === 'grant') {
+    // A grant reads the machine itself, not the shared reading (A9).
+    probe = (await freshProbe($, opts)) ?? probe
+    d = decide(grantInput(now))
+  }
   if (d.kind === 'grant' || (d.kind === 'wait' && d.code === 'ram')) {
     const plan = probe ? cleanupPlan(probe) : null
     if (plan && (plan.reap || plan.stopLiveCoding.length > 0) && (d.kind === 'grant' || now - cleanupAt >= CLEANUP_EVERY_MS)) {
@@ -603,7 +635,7 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
   const before = probe?.freeGb ?? 0
   const done: string[] = []
   if (plan.stopLiveCoding.length > 0) {
-    const fresh = parseProbe((await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null))?.stdout ?? '')
+    const fresh = await freshProbe($, opts)
     if (fresh && editorPid(fresh) === null) {
       await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `Stop-Process -Id ${plan.stopLiveCoding.join(',')} -ErrorAction SilentlyContinue`], { timeoutMs: 15_000 }).catch(() => null)
       done.push(`stopped LiveCodingConsole (pid ${plan.stopLiveCoding.join(', ')})`)
@@ -613,7 +645,7 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
     await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `${s2Root(opts)}/.agents/skills/git-poller-storm/scripts/reap-orphan-git.ps1`], { timeoutMs: 60_000 }).catch(() => null)
     done.push('ran the orphan-git reaper')
   }
-  probe = parseProbe((await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null))?.stdout ?? '') ?? probe
+  probe = (await freshProbe($, opts)) ?? probe
   cleanupAt = now
   cleanupNote = [`${clockOf(now)} ${done.join(', ') || 'nothing to clean'}: free ${before} → ${probe?.freeGb ?? '?'} GB`, ...plan.report].join('; ')
 }
@@ -919,7 +951,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       return tail(blocked('Editor', 'the lock does not name this session', 'nothing to release (any request of this session is withdrawn)'))
     }
     if (isPieRunning && e.pie_stopped !== true) return blocked('Editor', 'this session started PIE and no stop was seen', 'stop PIE first (or call release with pie_stopped: true once it has ended)')
-    const fresh = parseProbe((await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null))?.stdout ?? '')
+    const fresh = await freshProbe($, opts)
     const pid = editorPid(fresh)
     const dont = Array.isArray(e.dont_save) ? e.dont_save.map(String).filter(Boolean) : []
     const note = [pid ? `Editor open PID ${pid}, reusable` : 'Editor closed', dont.length ? `Don't-Save: ${dont.join(', ')}` : '', str(e.note)].filter(Boolean).join('; ')

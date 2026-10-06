@@ -266,6 +266,20 @@ export const parseProbe = (stdout: string): Probe | null => {
   }
 }
 
+/** Saved/HaiFlow/probe.json: the last machine reading, shared by every A5 session (A9). A session probes only when
+ * it is older than this; the session probing writes it (a claim first, then the reading). */
+export const PROBE_FRESH_MS = 50_000
+export type SharedProbe = { at: number; by: string; probe: Probe | null }
+export const parseSharedProbe = (text: string | null): SharedProbe | null => {
+  try {
+    const v = JSON.parse(text ?? '') as { at?: unknown; by?: unknown; probe?: unknown }
+    if (typeof v?.at !== 'number') return null
+    return { at: v.at, by: String(v.by ?? ''), probe: v.probe ? parseProbe(JSON.stringify(v.probe)) : null }
+  } catch {
+    return null
+  }
+}
+
 /** One PowerShell probe: free RAM, the checkout drive's free space, and the heavy processes (pid, working set,
  * whether the parent is alive), as one JSON line. */
 export const ramProbe = (drive: string): string[] => [

@@ -278,3 +278,38 @@ test('notices: Ather\'s intent log and findings never take a hai-flow line, by e
   expect(refused(await $.tool.call({ tool: 'Bash', command: `echo "S5 done" >> ${PROJ}/docs/intent/tail-vfx/progress.md` }))).toBeUndefined()
   expect(w.read(log)).toBe('# Log\n')
 })
+
+// ---------- A9: one machine probe shared by every A5 session ----------
+const PROBE = `${HF}/probe.json`
+const sharedBy = (by: string, at: number, freeGb: number) => JSON.stringify({ at, by, probe: { freeGb, diskGb: 50, procs: [] } })
+const probes = (w: ReturnType<typeof world>) => w.runs.filter(r => r.includes('ConvertTo-Json')).length
+
+test('A9: while another session keeps the shared reading fresh, this one never probes; once it is stale, it probes once per period and shares it', opts(), async ($, on) => {
+  const w = world(on, { ram: '33' })
+  w.put(PROBE, sharedBy('bbbbbbbb', NOW - 10_000, 40))
+  await $.session.start(START)
+  for (let n = 1; n <= 3; n += 1) {
+    w.put(PROBE, sharedBy('bbbbbbbb', NOW + n * MIN - 5_000, 40), NOW + n * MIN - 5_000)
+    await w.clock.advance(MIN)
+  }
+  expect(probes(w)).toBe(0)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain('"freeGb": 40')
+  await w.clock.advance(MIN) // the other session stopped: the file is 65 s old
+  expect(probes(w)).toBe(1)
+  expect(JSON.parse(w.read(PROBE))).toEqual({ at: NOW + 4 * MIN, by: ME8, probe: { freeGb: 33, diskGb: 40, procs: [] } })
+  await w.clock.advance(MIN)
+  expect(probes(w)).toBe(2) // alone, one probe per tick (each ≥ 50 s apart)
+})
+
+test('A9: a grant reads the machine itself, even when the shared reading is fresh', opts(), async ($, on) => {
+  const w = world(on, { ram: '20' })
+  w.put(PROBE, sharedBy('bbbbbbbb', NOW - 5_000, 40)) // says 40 GB free
+  w.put(LOCK, 'free since 14:20\n')
+  await $.session.start(START)
+  expect(probes(w)).toBe(0)
+  const ran = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))
+  expect(probes(w)).toBe(1)
+  expect(ran).toContain('free RAM is 20 GB after cleanup, under the launch gate of 28 GB')
+  expect(w.read(LOCK)).toBe('free since 14:20\n')
+  expect(JSON.parse(w.read(PROBE)).probe.freeGb).toBe(20) // the fresh reading is shared
+})
