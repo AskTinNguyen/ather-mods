@@ -201,7 +201,7 @@ test('pane, A5 on: one row of Editor · Memory · Main tiles right under Ather\'
   await $.ui.render(PANE as never)
   await w.clock.advance(50) // the sync read runs off the render
   const tree = await $.ui.render(PANE as never)
-  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-a5-rules', 'foot'])
+  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-overview', 'hai-a5-rules', 'foot'])
   expect(text(find(tree, 'hai-tile-editor'))).toContain('1006-walkerext-s9')
   expect(text(find(tree, 'hai-tile-editor'))).toContain('until 15:10 · 30 min left')
   expect(text(find(tree, 'hai-tile-memory'))).toContain('20.5 GB free')
@@ -222,7 +222,7 @@ test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand, th
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const tree = await $.ui.render(PANE as never)
-  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-a5-rules', 'foot'])
+  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-overview', 'hai-a5-rules', 'foot'])
   expect(text(find(tree, 'hai-brand'))).toContain('★ A5')
   expect(brandColor(tree)).toBe(GOLD)
   expect(find(tree, 'strip')?.props?.borderColor).toBe('#3a3c36')

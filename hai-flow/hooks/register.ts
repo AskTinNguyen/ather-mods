@@ -7,11 +7,11 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
-import { A5_LOOK, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
 import { editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
@@ -111,6 +111,10 @@ let decision: GrantDecision | null = null
 const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run this holder has started
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
+const CLIENTS_EVERY_MS = 5 * 60_000 // A16: the client's session list is read at most this often
+let clients: ClientRow[] | null = null // A16: null when the client's list tool is missing or refused
+let clientsAt = 0
+const s2Cwds = new Map<string, boolean>() // A16: whether a client session's folder is the S2 checkout or one of its worktrees
 const MAX_CLASSIFIED = 40 // conflicted paths checked against rule 11; the rest count as foreign
 const MAX_ADDED_CHECKED = 5_000 // paths origin/main adds that are checked on disk at the cutoff (A11)
 
@@ -473,10 +477,10 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
   peers = files.filter((f): f is SessionFile => f !== null && f.id8 !== me8)
   lanes = (
     await Promise.all(
-      jsons<{ name: string; mtimeMs: number }>(laneList).map(async f => {
+      jsons<{ name: string; mtimeMs: number }>(laneList).map(async (f): Promise<LaneBeat | null> => {
         try {
-          const v = JSON.parse((await readJson($, `${root}/Saved/AtherAutomata/lanes/${f.name}`)) ?? '') as { sessionId?: string; hasEnded?: boolean }
-          return { sessionId: String(v.sessionId ?? f.name.replace(/\.json$/, '')), hasEnded: v.hasEnded === true, mtimeMs: f.mtimeMs }
+          const v = JSON.parse((await readJson($, `${root}/Saved/AtherAutomata/lanes/${f.name}`)) ?? '') as { sessionId?: string; hasEnded?: boolean; intent?: unknown; branch?: unknown }
+          return { sessionId: String(v.sessionId ?? f.name.replace(/\.json$/, '')), hasEnded: v.hasEnded === true, mtimeMs: f.mtimeMs, intent: typeof v.intent === 'string' ? v.intent : '', branch: typeof v.branch === 'string' ? v.branch : '' }
         } catch {
           return null // a half-written heartbeat; the next tick reads it
         }
@@ -618,6 +622,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   nowMs = now
   await readWorld($, opts)
   gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
+  await refreshClients($, opts, now)
   await editorStep($, opts, now)
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
@@ -881,6 +886,10 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
     }
     return
   }
+  if (isHolder && (phase === 'cutoff' || phase === 'frozen')) {
+    await messageNoMod($, opts, s, now)
+    s = syncFile ?? s
+  }
   if (isHolder && phase !== 'planned' && s.conflicts === null && !dryRuns.has(`${s.id}:${s.at}`)) {
     dryRuns.add(`${s.id}:${s.at}`)
     await dryRun($, opts, s, now)
@@ -997,6 +1006,33 @@ async function syncCommand($: Engine, opts: Opts, rest: string): Promise<string>
   if (word === 'build') return syncAction($, opts, 'build', { build: (tail[0] ?? 'on').toLowerCase() !== 'off' })
   if (['cancel', 'done', 'abort', 'takeover'].includes(word)) return syncAction($, opts, word, { note: tail.join(' ') })
   return syncAction($, opts, 'status', {})
+}
+
+/** A16: the client's own session list (the desktop app's `list_sessions`, as `get_session` is already called), at
+ * most every 5 minutes; without the tool (another client, a refusal) the overview falls back to lanes and files. */
+async function refreshClients($: Engine, opts: Opts, now: number): Promise<void> {
+  if (clientsAt > 0 && now - clientsAt < CLIENTS_EVERY_MS) return
+  clientsAt = now
+  const text = await callTool($, { tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 50 }).catch(() => '')
+  clients = text ? parseClients(text) : null
+  for (const r of clients ?? []) {
+    const key = r.cwd.toLowerCase()
+    if (!s2Cwds.has(key)) s2Cwds.set(key, under(r.cwd, s2Root(opts)) || (r.cwd !== '' && (await $.fs.exists(`${r.cwd}/S2.uproject`).catch(() => false))))
+  }
+}
+
+/** A16: at the cutoff the holder sends each live S2 session without hai-flow 0.4 the standard message once (they
+ * cannot be frozen), records them in sync.json, and its own notice names them. */
+async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
+  const targets = withoutModOf(me8, me ? [me, ...peers] : peers, lanes, now).filter(n => !s.messaged.includes(n.sessionId))
+  if (targets.length === 0) return
+  const rows: { n: NoMod; isDelivered: boolean }[] = []
+  for (const n of targets) {
+    const sent = await $.session.send({ to: { sessionId: n.sessionId }, text: noModMessage(s, s2Root(opts)) }).catch(err => ({ isDelivered: false as const, reason: String(err) }))
+    rows.push({ n, isDelivered: sent.isDelivered })
+  }
+  await writeSync($, opts, { ...s, messaged: [...s.messaged, ...targets.map(t => t.sessionId)], updatedAt: now }, s)
+  push({ id: noticeIds.withoutMod(s, targets.map(t => t.id8)), text: NOTICES.holderWithoutMod(s, rows), isActionable: false })
 }
 
 /** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */
@@ -1394,6 +1430,10 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
       t.icon = icon(el, name, color, motionFor(t.key, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
     kids.splice(stripAt + 1, 0, tilesRow(el, tiles, isDesktop))
+    // A16: one line under the tiles: the sessions on this machine, who holds what, who runs without hai-flow 0.4.
+    const overview = overviewOf({ me8: id8, files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now) })
+    const line = overviewLine(overview)
+    kids.splice(stripAt + 2, 0, el.Box({ key: 'hai-overview', flexDirection: 'row', width: '100%', marginTop: isDesktop ? 1 : 0, children: [el.Text({ color: overview.withoutMod.length > 0 ? STATUS.warn : ATHER.quiet, ...(isDesktop ? { wrap: 'wrap' } : {}), children: line })] }))
   }
   if (on) {
     // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.

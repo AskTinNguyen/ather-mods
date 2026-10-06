@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, newSync, parseSyncFile, type SessionFile, type SyncFile } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PENDING, PROJ, opts, refused, world, type Rec } from './world.ts'
+import { LOCK, ME, NOW, PANE, PENDING, PROJ, atherTree, find, opts, refused, text, world, type Rec } from './world.ts'
 
 // Rev 4 through the engine: the freeze as a lease (A13), the merge guard (A14), the sync's own commands (A15),
 // the sync worker (A12) and the session overview (A16). Other sessions are only their files.
@@ -150,6 +150,61 @@ test('A15: before T (and for any session not holding the sync) the same commands
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
   expect(refused(await $.tool.call({ tool: 'Bash', command: OURS, agentId: 'w-sync' } as never))).toContain('Sync main freeze')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit --no-edit' }))).toContain('Sync main freeze')
+})
+
+// ---------- A16: the session overview ----------
+const LANES = 'E:/s2/Saved/AtherAutomata/lanes'
+const SID_B = 'bbbbbbbb-1111-4000-8000-000000000000'
+const SID_D = 'dddddddd-2222-4000-8000-000000000000'
+const laneFile = (sessionId: string, intent: string) => JSON.stringify({ sessionId, intent, branch: 'HaiHuynh/20261005', updatedAt: NOW, hasEnded: false })
+const ago = (ms: number) => new Date(NOW - ms).toISOString()
+const CLIENTS = JSON.stringify([
+  { sessionId: 'local_1', title: 'Loco', cwd: 'E:\\s2', isArchived: false, isRunning: true, lastActivityAt: ago(MIN) },
+  { sessionId: 'local_2', title: 'Mods', cwd: 'D:\\Projects\\ather-mods', isArchived: false, isRunning: false, lastActivityAt: ago(5 * MIN) },
+  { sessionId: 'local_3', title: 'Old', cwd: 'E:\\s2', isArchived: false, isRunning: false, lastActivityAt: ago(3 * 3_600_000) },
+])
+/** Two S2 sessions besides this one: B runs hai-flow 0.4 (a fresh session file) and holds the Editor; D runs only Ather. */
+const machine = (w: ReturnType<typeof world>) => {
+  w.put(`${LANES}/${SID_B}.json`, laneFile(SID_B, 'tail-vfx'))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
+  w.put(`${LANES}/${SID_D}.json`, laneFile(SID_D, 'loco'))
+  w.put(LOCK, 'HELD lane=sync-lane session=sync-lane since=14:30 2026-10-06 pid=none end=15:10 mode=interactive pausable=yes next_safe=after save note=capture · held by sync-lane, session bbbbbbbb, until 15:10\n')
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`A16 (${surface}): the panel counts the sessions, by intent, names who holds what and who runs without hai-flow 0.4`, opts(), async ($, on) => {
+    const w = world(on, { out: { mcp__ccd_session_mgmt__list_sessions: CLIENTS } })
+    on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+    machine(w)
+    await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+    const tree = await $.ui.render({ ...PANE, surface } as never)
+    expect(text(find(tree, 'hai-overview'))).toBe('Sessions: 3 active · S2 3 · elsewhere 1 · by intent: loco 1, no intent 1, tail-vfx 1 · Editor: sync-lane · Sync: none · without hai-flow 0.4: loco (session dddddddd)')
+  })
+}
+
+test('A16: without the client\'s session list the overview falls back to Ather\'s lanes and hai-flow\'s files', opts(), async ($, on) => {
+  const w = world(on, { out: { mcp__ccd_session_mgmt__list_sessions: 'Error: No such tool available: mcp__ccd_session_mgmt__list_sessions' } })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  machine(w)
+  await $.session.start(START)
+  const tree = await $.ui.render(PANE as never)
+  expect(text(find(tree, 'hai-overview')).startsWith('Sessions: S2 3 live (client list unavailable) · by intent: loco 1, no intent 1, tail-vfx 1 · Editor: sync-lane')).toBe(true)
+})
+
+test('A16: at the cutoff the holder sends each live S2 session without hai-flow 0.4 one standard message, and its notice names them', opts(), async ($, on) => {
+  const w = world(on)
+  repo(w, 'E:/s2')
+  machine(w)
+  await $.session.start(START)
+  expect(await a5($, 'sync 15:00')).toContain('The cutoff is already past')
+  await advance(w, 1)
+  expect(w.sent.length).toBe(1)
+  expect(JSON.stringify(w.sent[0])).toContain(SID_D)
+  expect(String(w.sent[0]?.text)).toBe('Sync main (hai-flow): 3️⃣-Loco-fix merges origin/main into E:/s2 at 15:00. This session runs without hai-flow 0.4, so nothing freezes it: before 15:00 commit your own paths (exact paths), write your resume note, stop PIE and release the Editor by 14:50; from 15:00 until the holder is done (at the latest 15:45) make no git writes in that checkout and do not use the Editor.')
+  expect(syncOf(w)?.messaged).toEqual([SID_D])
+  expect(prompts(w)[0]).toContain('hai-flow · Sync main — 1 live S2 session without hai-flow 0.4 cannot be frozen for the sync at 15:00: loco (session dddddddd, HaiHuynh/20261005)')
+  await advance(w, 2)
+  expect(w.sent.length).toBe(1) // once per sync
 })
 
 // ---------- A13: the freeze is a lease ----------

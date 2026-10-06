@@ -113,8 +113,9 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   }
 }
 
-/** Ather's lane heartbeat (Saved/AtherAutomata/lanes/<sessionId>.json), as far as liveness needs it. */
-export type LaneBeat = { sessionId: string; hasEnded: boolean; mtimeMs: number }
+/** Ather's lane heartbeat (Saved/AtherAutomata/lanes/<sessionId>.json): liveness, and the intent and branch it
+ * names (A16). */
+export type LaneBeat = { sessionId: string; hasEnded: boolean; mtimeMs: number; intent?: string; branch?: string }
 export type Liveness = 'alive' | 'gone' | 'unknown'
 
 /** Whether the session named by its first 8 hex is alive, from files only: Ather's lane says ended or is older
@@ -733,6 +734,8 @@ export const NOTICES = {
     noticeText('Sync main', `origin/main adds ${paths.join(', ')}, which already ${paths.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout and ${paths.length === 1 ? 'was' : 'were'} written by this session; the merge at ${hhmm(s.at)} would refuse to overwrite ${paths.length === 1 ? 'it' : 'them'} (merge-tree does not see this)`, `before ${hhmm(s.at)}: commit ${paths.length === 1 ? 'it' : 'them'} with exact paths (then it is an ordinary conflict, yours to settle) or move ${paths.length === 1 ? 'it' : 'them'} out of the tree; never delete a file that may be someone else's`),
   holderUntracked: (s: SyncFile, rows: { path: string; owners: string[] }[]): string =>
     noticeText('Sync main', `origin/main adds ${plural(rows.length, 'file')} that already ${rows.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout ("untracked would be overwritten"): ${rows.map(r => `${r.path} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')}`, `the owners are told to commit or move theirs before ${hhmm(s.at)}; owner unknown → 🟥 to Hai; never delete or overwrite one to get the merge through`),
+  holderWithoutMod: (s: SyncFile, rows: { n: NoMod; isDelivered: boolean }[]): string =>
+    noticeText('Sync main', `${plural(rows.length, 'live S2 session')} without hai-flow 0.4 cannot be frozen for the sync at ${hhmm(s.at)}: ${rows.map(r => `${r.n.intent} (session ${r.n.id8}${r.n.branch ? `, ${r.n.branch}` : ''})${r.isDelivered ? '' : ' — the message did not reach it'}`).join('; ')}`, `each got the standard message once; before the merge check that their paths are committed and that they are off git and the Editor; one that is not → tell Hai before ${hhmm(s.at)}`),
   hardEndSoon: (s: SyncFile): string =>
     noticeText('Sync main', `the freeze of the sync at ${hhmm(s.at)} ends at ${hhmm(s.hardEnd)} (its hard end) and the sync is not done`, 'finish it with done or abort before then; at the hard end it expires, git and the Editor open again for every session, and Hai is asked'),
   expired: (s: SyncFile): string =>
@@ -758,8 +761,83 @@ export const noticeIds = {
   conflicts: (s: SyncFile, paths: readonly string[]) => `sync:${s.id}:${s.at}:conflicts:${paths.slice().sort().join('|').length}:${hash(paths.slice().sort().join('|'))}`,
   holderNamed: (s: SyncFile) => `sync:${s.id}:named`,
   hardEndSoon: (s: SyncFile) => `sync:${s.id}:${s.at}:hard-end-soon:${s.hardEnd}`,
+  withoutMod: (s: SyncFile, ids: readonly string[]) => `sync:${s.id}:${s.at}:without-mod:${hash(ids.slice().sort().join('|'))}`,
   untracked: (s: SyncFile, paths: readonly string[]) => `sync:${s.id}:${s.at}:untracked:${hash(paths.slice().sort().join('|'))}`,
 } as const
+
+// ---------- A16: the session overview ----------
+/** One row of the client's own session list (`mcp__ccd_session_mgmt__list_sessions`); its id is the client's, not
+ * the CLI session id the files use. */
+export type ClientRow = { id: string; title: string; cwd: string; isRunning: boolean; lastActivityAt: number; isArchived: boolean }
+export const CLIENT_ACTIVE_MS = 30 * 60_000 // a client session active within this counts as running
+
+/** The client's session list, or null when the tool is missing, refused or answered something else. */
+export const parseClients = (text: string): ClientRow[] | null => {
+  try {
+    const v = JSON.parse(text) as unknown
+    const rows = Array.isArray(v) ? v : Array.isArray((v as { sessions?: unknown })?.sessions) ? (v as { sessions: unknown[] }).sessions : null
+    if (!rows) return null
+    return rows
+      .map(r => r as Record<string, unknown>)
+      .filter(r => typeof r.sessionId === 'string')
+      .map(r => ({ id: String(r.sessionId), title: String(r.title ?? ''), cwd: String(r.cwd ?? '').replace(/\\/g, '/'), isRunning: r.isRunning === true, lastActivityAt: Date.parse(String(r.lastActivityAt ?? '')) || 0, isArchived: r.isArchived === true }))
+  } catch {
+    return null
+  }
+}
+
+export type NoMod = { sessionId: string; id8: string; intent: string; branch: string }
+export type Overview = { active: number | null; s2: number; elsewhere: number | null; intents: [string, number][]; editor: string; waiting: string[]; sync: string; withoutMod: NoMod[] }
+
+/** Live S2 sessions that run without hai-flow 0.4: a fresh Ather lane with no fresh hai-flow session file. */
+export const withoutModOf = (me8: string, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): NoMod[] => {
+  const fresh = new Set(files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.id8))
+  return lanes
+    .filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
+    .map(l => ({ sessionId: l.sessionId, id8: l.sessionId.slice(0, 8).toLowerCase(), intent: l.intent || 'no intent', branch: l.branch ?? '' }))
+    .filter(l => l.id8 !== me8 && !fresh.has(l.id8))
+}
+
+/** What the panel says about the sessions on this machine: how many run (the client's list), how many in S2 (Ather's
+ * lanes and hai-flow's files), by intent, who holds or waits for the Editor, who holds the sync, and the live S2
+ * sessions without hai-flow 0.4. */
+export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase }): Overview => {
+  const { now } = x
+  const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
+  const ids = new Set<string>([x.me8, ...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...x.files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.id8)].filter(Boolean))
+  const intentOf = (id8: string) => liveLanes.find(l => l.sessionId.toLowerCase().startsWith(id8))?.intent || 'no intent'
+  const counts = new Map<string, number>()
+  for (const id8 of ids) counts.set(intentOf(id8), (counts.get(intentOf(id8)) ?? 0) + 1)
+  const active = x.clients?.filter(r => !r.isArchived && (r.isRunning || now - r.lastActivityAt <= CLIENT_ACTIVE_MS)) ?? null
+  const laneOf = (id8: string) => x.files.find(f => f.id8 === id8)?.lane ?? id8
+  const editor = x.lock.kind === 'free' ? 'free' : x.lock.kind === 'missing' ? 'lock missing' : `${x.lock.lane || 'held'}${x.lock.id8 === x.me8 ? ' (this session)' : ''}`
+  return {
+    active: active ? active.length + 1 : null, // the list leaves out the session reading it
+    s2: ids.size,
+    elsewhere: active ? active.filter(r => !x.isS2Cwd(r.cwd)).length : null,
+    intents: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+    editor,
+    waiting: queueOf(x.files, x.lanes, now, x.sync).map(f => laneOf(f.id8)),
+    sync: x.sync && isOpenPhase(x.phase) ? `${x.sync.holder.id8 === x.me8 ? 'this session' : x.sync.holder.lane} ${hhmm(x.sync.at)} ${x.phase}` : 'none',
+    withoutMod: withoutModOf(x.me8, x.files, x.lanes, now),
+  }
+}
+
+/** The overview in one line (the terminal) or the same words wrapped (the desktop). */
+export const overviewLine = (o: Overview): string =>
+  [
+    o.active === null ? `Sessions: S2 ${o.s2} live (client list unavailable)` : `Sessions: ${o.active} active · S2 ${o.s2} · elsewhere ${o.elsewhere ?? 0}`,
+    o.intents.length ? `by intent: ${o.intents.map(([i, n]) => `${i} ${n}`).join(', ')}` : '',
+    `Editor: ${o.editor}${o.waiting.length ? ` (waiting: ${o.waiting.join(', ')})` : ''}`,
+    `Sync: ${o.sync}`,
+    o.withoutMod.length ? `without hai-flow 0.4: ${o.withoutMod.map(n => `${n.intent} (session ${n.id8})`).join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+/** A16: the one standard message a live S2 session without hai-flow 0.4 gets at the cutoff (it cannot be frozen). */
+export const noModMessage = (s: SyncFile, checkout: string): string =>
+  `Sync main (hai-flow): ${s.holder.lane} merges origin/main into ${checkout} at ${hhmm(s.at)}. This session runs without hai-flow 0.4, so nothing freezes it: before ${hhmm(s.at)} commit your own paths (exact paths), write your resume note, stop PIE and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; from ${hhmm(s.at)} until the holder is done (at the latest ${hhmm(s.hardEnd)}) make no git writes in that checkout and do not use the Editor.`
 
 /** D7: the sync worker's system prompt, the procedure of runbook-sync-lane and s2-sync-main as A12 fixes it. */
 export const SYNC_WORKER_PROMPT = [
