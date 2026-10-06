@@ -10,7 +10,7 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 **Resolution:** <decision and resulting rev, filled by the orchestrator>
 -->
 
-## F-1 (2026-10-06, rev 1) | blocking: no | status: open (Hai or Tin: a workflow call)
+## F-1 (2026-10-06, rev 1) | blocking: no | status: accepted (director)
 
 **Found:** Without a pane (the phone path), "Pick something to work on" asks one question: "What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number." (`console.mjs`, `workQuestion`). Its four choices still track (A2: the phone path is unchanged), but under A2 a name typed in that same dialog only says where the intent stands and the command that tracks it ("… To work on it in this session: /ather intent <slug>"). So a choice and a typed name now behave differently in one dialog, and "Or type a name" reads as if typing picks. Built as the prompt says (S3); the e2e check "without a pane, part of an intent name typed in the dialog says where it stands …" covers it.
 
@@ -23,4 +23,4 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 
 **Proposed amendment:** A2, "words typed in an Ather dialog or after `/ather` that match one intent open the Intent view" → "words typed in an Ather dialog (other than the Work question, 'What should this session work on?', whose typed name tracks as its choices do) or after `/ather` …".
 
-**Resolution:**
+**Resolution:** (b), decided under Hai's away window (ledger D-2, the recommended option; L-3). Folded into A2 at rev 2.
