@@ -2,8 +2,8 @@
 
 - Working under rev: 1
 - Worker: `web-pack-worker`
-- Current step: S4: the web pane in `dev/test-all.mjs` against a han-viet checkout (A6)
-- Next step: release 0.1.0 (A7)
+- Current step: S5: release 0.1.0 (A7)
+- Next step: open the PR
 - PR: none yet
 
 ## Acceptance
@@ -17,7 +17,7 @@
 | A3 | met | S3: "web proof from tool output (A3)" over 14 outputs captured from han-viet `b5379e5` in a scratch worktree (`tests/fixtures/web/`: node --test, ESLint, tsc, next build, vinext build, Playwright ui:verify, each passing and failing) through the han-viet profile and scripts; vitest and jest from their documented summaries (han-viet has neither). `ℹ pass 105 ℹ fail 0`; `dev/test-all.mjs` → `105/105 passed` |
 | A4 | met | S3: "web held actions while away (A4)": vercel/wrangler production deploys, non-local migrations (local ones pass), vercel env / wrangler secret / gh secret and `gh api -X PUT …/actions/secrets`, npm publish, terraform apply, chained commands and `npm run <script>` bodies, merges by `gh pr merge`, `gh api …/pulls/N/merge` and GraphQL `mergePullRequest` held until proven (with-proof), never a push to main or a deploy; S2 still holds merges with proof. `ℹ pass 105 ℹ fail 0` |
 | A5 | met | S3: "web traps (A5)": 9 traps (EADDRINUSE, POSIX env on Windows, hydration, stale .next/Vite cache, lockfile drift, Node engines, NEXT_PUBLIC_*, Playwright browsers, .next lock), each with a fix, each matched alone (EADDRINUSE and POSIX env from real han-viet output), none on passing runs; Unreal and web traps never cross. `ℹ pass 105 ℹ fail 0` |
-| A6 | open | unit part done (S3: Prove names `npm test` / `npm run ui:verify`, Ship names every gate and the Vercel production check, Create offers the five web skills); the e2e layout against `HANVIET_ROOT` is next |
+| A6 | met | S4: `HANVIET_ROOT=C:/Users/Admin/src/han-viet S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s4b` → `105/105 passed`, `199/199 passed`: the web pane (profile, package.json, AGENTS.md and intents of han-viet main `5b71d7f` in a sandbox) laid out at 72 and 110 columns with no line too wide; Prove names `npm test`, `npm run lint`, `npm run build` (designer: the browser check); Ship names every gate, with-proof and the Vercel production check; Create offers frontend-design, run, code-review, security-review, simplify; no S2Editor, PIE, Unreal or Editor-lock wording; captured outputs read as tests, build, lint and ui passed; away holds `npx vercel deploy --prod` and lets a proven merge through. S2 layouts unchanged (the 72 and 110 dumps start with the base's, byte for byte). |
 | A7 | open | |
 
 ## Steps
@@ -29,6 +29,8 @@
 - S2 (rev 1, 2026-10-06): the Unreal specifics moved behind a pack interface. `hooks/packs/unreal.mjs` holds roles and their labels, areas, the five rungs with their detectors (`readShell`, `mcpKind`), required rungs per role, prove/brief/ship/tour/ask prompts, traps, the Editor owner lock (`lockFile`, `parseLock`, `lockRoles`, `ownCheck`), the Skills and Create catalogs, held Editor actions and the mandate words; `hooks/shell.mjs` the shared command-line reading; `hooks/packs/index.mjs` the `Pack` typedef and selection; `core.mjs` and `web.mjs` the other two packs. `model`, `guards`, `home`, `away`, `issues`, `state`, `watch` and `console` take the lane's pack (default `unreal`, so every existing export and test is unchanged). The e2e sandbox gets an `S2.uproject` marker, as a real S2 checkout has. Evidence: this commit; `node --test ather-automata/tests/*.test.mjs` → `ℹ pass 75 ℹ fail 0`; `S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-new2` → `75/75 passed`, `185/185 passed`; base worktree at `02b9f38` run on the same S2 state → layouts-72 and layouts-110 identical (`diff -q` silent). Type-check with the engine types reports the same 3 errors as the base (AskUserQuestion missing from this build's tool list), none new. Acceptance: A1.
 
 - S3 (rev 1, 2026-10-06): `tests/web.test.mjs` (30 tests) and fixtures. Captured in a scratch `git worktree add --detach` of han-viet at `origin/main` (`b5379e5`, removed after), with `npm_config_script_shell` set to Git Bash; Playwright from the agent-workflow harness (now han-viet main `5b71d7f`) copied into the scratch copy. Failing runs came from temporary files in the scratch copy only (a failing node test, a conditional hook plus a type error, a broken import, an extra 404 route). Machine paths replaced by `<repo>` and `<home>`. Detector fixes the real outputs asked for: ANSI colour codes stripped, vinext's "Build complete." read as a pass, cmd.exe's `'WRANGLER_LOG_PATH' is not recognized` as the POSIX-env trap. Evidence: this commit; `node --test ather-automata/tests/*.test.mjs` → `ℹ pass 105 ℹ fail 0`; `S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s3` → `105/105 passed`, `185/185 passed`, layouts still identical to the base. Acceptance: A2, A3, A4, A5.
+
+- S4 (rev 1, 2026-10-06): the web scenario in `dev/e2e/run.mjs`, run when `HANVIET_ROOT` names a han-viet checkout (read only: copied into a sandbox). 14 checks and six screens (Prove, Ship, Create at 72 and 110). Missing proofs now read "a, b and c" (two items read as before). `.gitattributes` keeps fixture bytes as captured. Evidence: this commit; `HANVIET_ROOT=… S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s4b` → `105/105 passed`, `199/199 passed`; `node --test ather-automata/tests/*.test.mjs` → `ℹ pass 105 ℹ fail 0`. Acceptance: A6.
 
 ## Decisions (worker)
 

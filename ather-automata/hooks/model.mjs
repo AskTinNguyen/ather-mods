@@ -433,7 +433,7 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = u
     const missing = role === '' ? [pack.anyProofText] : pack.requiredRungs(role).filter(rung => evidence[rung]?.state !== 'pass').map(rung => pack.rungLabels[rung] ?? rung)
     const prompt = pack.prompts.prove(role, slug)
     const own = pack.ownCheck && role === pack.ownCheck.role ? pack.ownCheck.proveHint : ''
-    return { key: 'prove', label: 'Prove it works', hint: `Still needed: ${missing.join(' and ')}. Ather reads this from tool output, not from what the session says.${own}`, prompt }
+    return { key: 'prove', label: 'Prove it works', hint: `Still needed: ${andList(missing)}. Ather reads this from tool output, not from what the session says.${own}`, prompt }
   }
   if (stage === 'ship' && intent.status === 'completed') {
     return {

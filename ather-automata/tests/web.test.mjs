@@ -267,7 +267,7 @@ describe('web words: Next, Prove and Create (A6)', () => {
     expect(engineer?.key).toBe('prove')
     expect(engineer?.prompt ?? '').toMatch(/`npm test`/)
     expect(engineer?.prompt ?? '').not.toMatch(/S2Editor|PIE|Editor/)
-    expect(engineer?.hint ?? '').toMatch(/Still needed: passing tests and a clean lint and typecheck and a build that succeeded/)
+    expect(engineer?.hint ?? '').toMatch(/Still needed: passing tests, a clean lint and typecheck and a build that succeeded/)
     const designer = nextStep('designer', intent, emptyEvidence(WEB), 0, 'Tin Nguyen', {}, WEB)
     expect(designer?.prompt ?? '').toMatch(/`npm run ui:verify`/)
   })

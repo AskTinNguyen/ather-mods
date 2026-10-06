@@ -1,0 +1,2 @@
+# Tool outputs captured as they were printed: keep their bytes.
+ather-automata/tests/fixtures/** -text
