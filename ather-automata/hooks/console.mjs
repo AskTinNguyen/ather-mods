@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, parseWeek } from './home.mjs'
+import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, parseWeek, untrackText } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { clockText, closestWord, localMinutes, parseIntent, searchIntents, sessionTitle } from './model.mjs'
@@ -191,7 +191,7 @@ async function openConsole($, folder) {
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name>]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -546,6 +546,14 @@ async function track($, text) {
   return `Now tracking ${slug}.`
 }
 
+// Stops tracking the session's intent: /ather untrack, and Stop tracking in the Intent view.
+/** @param {Engine} $ */
+async function untrackHere($) {
+  const outcome = await state.untrack(io($), me)
+  if (outcome.result === 'untracked') await refresh($)
+  return untrackText(outcome)
+}
+
 /** @param {Engine} $ @param {import('./away.mjs').WindowChoice} choice */
 async function startAway($, choice) {
   const tz = await state.readTz(io($))
@@ -590,7 +598,7 @@ async function skipTour($) {
 }
 
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'issues', 'issue', 'intent', 'role', 'checked']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -598,6 +606,7 @@ async function atherCommand($, args) {
   const rest = args.slice(word.length).trim()
   if (word === 'tour' || word === 'tours') return startTour($)
   if (word === 'skip') return skipTour($)
+  if (word === 'untrack' && rest === '') return untrackHere($)
   if ((word === 'intent' || word === 'pick') && rest) return track($, rest)
   if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
   if (word === 'role') {

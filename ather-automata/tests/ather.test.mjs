@@ -3,13 +3,14 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { buildHome, parseWeek, weekText, workList } from '../hooks/home.mjs'
+import { buildHome, heldByLine, parseWeek, proofLine, untrackText, weekText, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
 import { KINDS, avatarSvg, classifyWorker, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
 import { recordSpawn, recordTool, resetWorkers, workerOf } from '../hooks/workers.mjs'
 import { intentChanges, intentFileOf } from '../hooks/changes.mjs'
+import { unreal } from '../hooks/packs/unreal.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
 const EVENING = Date.UTC(2026, 9, 3, 14, 0) // 21:00 at UTC+7
@@ -84,6 +85,8 @@ const memoryIo = (sid = 's1') => {
       root: async () => 'R',
       gitUser: async () => 'Tin Nguyen',
       redraw: () => undefined,
+      // The files directly in a folder, written just now.
+      list: async dir => [...files.keys()].filter(path => path.startsWith(`${dir}/`) && !path.slice(dir.length + 1).includes('/')).map(path => ({ name: path.slice(dir.length + 1), kind: 'file', mtimeMs: Date.now() })),
     },
   }
 }
@@ -709,5 +712,115 @@ describe('the second panel review (0.0.8)', () => {
     expect(intentLabel(parked, 'Tin Nguyen')).toContain('parked: Waiting on the weather presets')
     const [first] = parseFindings('# Findings\n\n## F-1 (2026-10-01) | blocking: no | status: open (director)\n\nFound: the snow lab cannot drive either hook from its production path. A second sentence explains why.\n', '')
     expect(first?.full).toBe('The snow lab cannot drive either hook from its production path. A second sentence explains why.')
+  })
+})
+
+describe('track guard', () => {
+  test('untrack (A1): the pin goes, "Continue …" goes when it names the same intent, the proof stays with the intent', async () => {
+    const { io, files } = memoryIo()
+    files.set('R/docs/intent/spawner/prompt.md', '# S')
+    await state.track(io, 'R', 'spawner', { me: 'Tin Nguyen' })
+    await state.setRung(io, await state.evidenceScope(io), 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    expect(await state.readLast(io, 'Tin Nguyen')).toBe('spawner')
+    const outcome = await state.untrack(io, 'Tin Nguyen')
+    expect(outcome).toEqual({ result: 'untracked', slug: 'spawner' })
+    expect(untrackText(outcome)).toBe('Stopped tracking spawner. Its proof so far stays with the intent.')
+    expect(await state.readPinned(io)).toBe(null)
+    expect(await state.readLast(io, 'Tin Nguyen')).toBe(null)
+    expect((await state.readEvidence(io, 'spawner')).build.state).toBe('pass')
+    expect(await state.evidenceScope(io)).toBe('s1')
+    const again = await state.untrack(io, 'Tin Nguyen')
+    expect(again.result).toBe('none')
+    expect(untrackText(again)).toBe('Nothing is tracked in this session.')
+  })
+
+  test('untrack keeps "Continue …" when it names another intent', async () => {
+    const { io, files } = memoryIo()
+    files.set('R/docs/intent/spawner/prompt.md', '# S')
+    files.set('R/docs/intent/pause-ai/prompt.md', '# P')
+    await state.track(io, 'R', 'spawner', { me: 'Tin Nguyen' })
+    await state.track(io, 'R', 'pause-ai')
+    await state.untrack(io, 'Tin Nguyen')
+    expect(await state.readLast(io, 'Tin Nguyen')).toBe('spawner')
+  })
+
+  test('a write does not track again an intent this session stopped tracking; tracking it on purpose does, and lifts the stop', async () => {
+    const { io, files, store } = memoryIo()
+    files.set('R/docs/intent/spawner/prompt.md', '# S')
+    files.set('R/docs/intent/pause-ai/prompt.md', '# P')
+    await state.track(io, 'R', 'spawner')
+    await state.untrack(io, 'Tin Nguyen')
+    expect(await state.track(io, 'R', 'spawner', { isAuto: true, onlyIfNone: true })).toBe(false)
+    expect(await state.track(io, 'R', 'spawner', { isAuto: true })).toBe(false)
+    expect(await state.readPinned(io)).toBe(null)
+    // Another intent still tracks from a write.
+    expect(await state.track(io, 'R', 'pause-ai', { isAuto: true, onlyIfNone: true })).toBe(true)
+    expect(await state.track(io, 'R', 'spawner')).toBe(true)
+    expect(store.has('untracked:s1')).toBe(false)
+    // The stop follows the lane after /clear.
+    await state.untrack(io, 'Tin Nguyen')
+    await state.moveLane(io, 's1', 's2')
+    expect(store.get('untracked:s2')).toEqual(['spawner'])
+  })
+
+  test('untrack is refused while an away window runs; once it has ended, it goes through', async () => {
+    const { io, files } = memoryIo()
+    files.set('R/docs/intent/spawner/prompt.md', '# S\n\n- Owner: Tin Nguyen\n')
+    await state.track(io, 'R', 'spawner')
+    await state.startAway(io, { hours: 8, untilDone: false, goal: '' }, { root: 'R', tz: 0, now: NOON, me: 'Tin Nguyen' })
+    const refused = await state.untrack(io, 'Tin Nguyen')
+    expect(refused).toEqual({ result: 'away', slug: 'spawner' })
+    expect(untrackText(refused)).toBe('End the away window first.')
+    expect(await state.readPinned(io)).toBe('spawner')
+    await state.endAway(io)
+    expect((await state.untrack(io, 'Tin Nguyen')).result).toBe('untracked')
+    expect((await state.readAway(io)).phase).toBe('review')
+  })
+
+  test('the heartbeat is written again at once on track and untrack (D4), with the last activity', async () => {
+    const { io, files } = memoryIo()
+    files.set('R/docs/intent/spawner/prompt.md', '# S')
+    state.markActive(NOON)
+    await state.writeHeartbeat(io, { root: 'R', localDir: 'L', branch: 'main', hasEnded: false })
+    const lane = () => JSON.parse(files.get('R/L/lanes/s1.json') ?? '{}')
+    expect(lane().intent).toBe(null)
+    expect(lane().lastActiveAt).toBe(NOON)
+    await state.track(io, 'R', 'spawner')
+    expect(lane().intent).toBe('spawner')
+    await state.untrack(io, 'Tin Nguyen')
+    expect(lane().intent).toBe(null)
+    expect(lane().branch).toBe('main')
+    state.markActive()
+  })
+
+  test('held by (A4): the live sessions on this checkout tracking the same intent, as one line', async () => {
+    const memory = memoryIo('me')
+    const now = Date.now()
+    const write = (/** @type {string} */ sid, /** @type {object} */ lane) => memory.files.set(`R/L/lanes/${sid}.json`, JSON.stringify({ sessionId: sid, branch: 'main', updatedAt: now, away: 'off', hasEnded: false, ...lane }))
+    write('me', { intent: 'spawner' })
+    write('p1', { intent: 'spawner', lastActiveAt: now - 5 * 60000 })
+    write('p2', { intent: 'pause-ai', lastActiveAt: now })
+    write('p3', { intent: 'spawner', hasEnded: true })
+    const peers = await state.readPeers(memory.io, 'R', 'L')
+    expect(peers.map(one => one.sessionId).sort()).toEqual(['p1', 'p2'])
+    expect(heldByLine(peers, 'spawner', now)).toBe('Also tracked in 1 other session · active 5m ago')
+    expect(heldByLine([...peers, { intent: 'spawner', updatedAt: now, lastActiveAt: now - 20000 }], 'spawner', now)).toBe('Also tracked in 2 other sessions · active now')
+    expect(heldByLine(peers, 'box-scale-tool', now)).toBe('')
+    expect(heldByLine([{ intent: null, updatedAt: now }], '', now)).toBe('')
+  })
+
+  test('proof attribution (A5): every record is stamped with the session that wrote it, and names it when it is not this one', async () => {
+    const memory = memoryIo('1a2b3c4d-0000-4000-8000-000000000000')
+    await state.setRung(memory.io, 'spawner', 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    await state.noteMcp(memory.io, 'spawner', 'pie', 'L_SnowLab', true)
+    memory.switchSession('9f8e7d6c-0000-4000-8000-000000000000')
+    await state.noteMcp(memory.io, 'spawner', 'write', 'unreal', true)
+    await state.noteMcp(memory.io, 'spawner', 'read', 'unreal', true)
+    const evidence = await state.readEvidence(memory.io, 'spawner')
+    expect([evidence.build.by, evidence.pie.by, evidence.readback.by]).toEqual(['1a2b3c4d', '1a2b3c4d', '9f8e7d6c'])
+    expect(proofLine(evidence, unreal, '9f8e7d6c')).toBe('build ✓ by session 1a2b3c4d · read-back ✓ · PIE ✓ by session 1a2b3c4d')
+    expect(proofLine(evidence, unreal, '1a2b3c4d', { '9f8e7d6c': 'Snow proof' })).toBe('build ✓ · read-back ✓ by "Snow proof" · PIE ✓')
+    // Records from before the stamp name nobody.
+    expect(proofLine({ ...emptyEvidence(), build: { state: 'fail', detail: 'x' } }, unreal, 'abc')).toBe('build ✗')
   })
 })

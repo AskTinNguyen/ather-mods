@@ -14,10 +14,10 @@ import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMin
 import * as state from './state.mjs'
 import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 import { intentChanges, intentFileOf } from './changes.mjs'
+import { untrackText } from './home.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
-const LANE_STALE_MS = 10 * 60 * 1000
 const IDLE_MS = 10 * 60 * 1000
 
 let cwd = ''
@@ -69,6 +69,7 @@ export function register(on, options) {
     resetWorkers()
     lastPersonAt = 0
     sessionStartedAt = Date.now()
+    state.markActive()
     cwd = e.cwd
     try {
       const { me, root, isS2, pack } = await laneOf($)
@@ -97,6 +98,8 @@ export function register(on, options) {
   on('prompt.submit', async ($, e, next) => {
     // Typed at the terminal or the desktop, or sent from a phone over Remote Control: the person is back.
     if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') lastPersonAt = Date.now()
+    // Any prompt, or any tool call below, is the lane's last activity (its heartbeat says when).
+    state.markActive()
     return next(e)
   })
 
@@ -153,6 +156,7 @@ export function register(on, options) {
 
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
+    state.markActive()
     // A worker's tool call: what it is doing now, for its avatar and trail.
     if (e.agentId) recordTool(e.agentId, tool, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), Date.now())
     const isMcp = tool.startsWith('mcp__') && !tool.startsWith('mcp__ather-automata__')
@@ -247,10 +251,7 @@ async function branchesFor($, command) {
 async function heartbeat($, hasEnded) {
   const { root, isS2, pack } = await laneOf($)
   if (!isS2) return
-  const sid = await state.sessionId(io($))
-  const away = await state.readAway(io($))
-  const lane = { sessionId: sid, intent: await state.readPinned(io($)), branch: await readBranch($), updatedAt: Date.now(), away: away.phase, hasEnded }
-  await $.fs.write(`${root}/${pack.localDir}/lanes/${sid}.json`, JSON.stringify(lane))
+  await state.writeHeartbeat(io($), { root, localDir: pack.localDir, branch: await readBranch($), hasEnded })
 }
 
 // A session this checkout can vouch has gone: its heartbeat is here and says ended, or is stale.
@@ -258,24 +259,16 @@ async function heartbeat($, hasEnded) {
 /** @param {Engine} $ @param {string} sid */
 async function isLaneGone($, sid) {
   const { root, pack } = await laneOf($)
-  try {
-    const lane = JSON.parse((await io($).read(`${root}/${pack.localDir}/lanes/${sid}.json`)) ?? '')
-    return lane.hasEnded === true || Date.now() - Number(lane.updatedAt) >= LANE_STALE_MS
-  } catch {
-    return false
-  }
+  const lane = await state.readLane(io($), root, pack.localDir, sid)
+  return lane !== null && !state.isLaneLive(lane)
 }
 
 // Another session is alive while its heartbeat is fresh and has not said it ended.
 /** @param {Engine} $ @param {string} sid */
 async function isLaneAlive($, sid) {
   const { root, pack } = await laneOf($)
-  try {
-    const lane = JSON.parse((await io($).read(`${root}/${pack.localDir}/lanes/${sid}.json`)) ?? '')
-    return !lane.hasEnded && Date.now() - Number(lane.updatedAt) < LANE_STALE_MS
-  } catch {
-    return false
-  }
+  const lane = await state.readLane(io($), root, pack.localDir, sid)
+  return lane !== null && state.isLaneLive(lane)
 }
 
 // Where this session's evidence goes: the tracked intent at its current commit, or the session.
@@ -287,19 +280,7 @@ async function scopeOf($) {
 /** @param {Engine} $ */
 async function peers($) {
   const { root, pack } = await laneOf($)
-  const dir = `${root}/${pack.localDir}/lanes`
-  const sid = await state.sessionId(io($))
-  const out = []
-  for (const entry of await $.fs.list(dir).catch(() => [])) {
-    if (entry.kind !== 'file' || entry.name === `${sid}.json` || Date.now() - entry.mtimeMs > LANE_STALE_MS) continue
-    try {
-      const lane = JSON.parse((await io($).read(`${dir}/${entry.name}`)) ?? '')
-      if (!lane.hasEnded) out.push(lane)
-    } catch {
-      // a half-written heartbeat; the next tick reads it
-    }
-  }
-  return out
+  return state.readPeers(io($), root, pack.localDir)
 }
 
 // What every prompt is told about this lane: the tracked intent, the Editor lock, live peers, the window's mandate.
@@ -407,7 +388,9 @@ async function profileTool($, input) {
     await state.setProfile(io($), me, { role, area }, pack)
     done.push([role ? `Role set to ${role}.` : '', area ? `Area set to ${area}.` : ''].filter(Boolean).join(' '))
   }
-  if (typeof input.track === 'string' && input.track.trim() !== '') {
+  if (typeof input.track === 'string' && input.track.trim().toLowerCase() === 'none') {
+    done.push(untrackText(await state.untrack(io($), me)))
+  } else if (typeof input.track === 'string' && input.track.trim() !== '') {
     const slug = input.track.trim()
     if (!(await state.track(io($), root, slug))) return `No intent named "${slug}" in docs/intent.`
     done.push(`This session now tracks intent ${slug}.`)
@@ -477,7 +460,7 @@ async function registerTools($, pack) {
       properties: {
         role: { type: 'string', enum: [...pack.roles] },
         ...(pack.areas.length > 0 ? { area: { type: 'string', enum: [...pack.areas] } } : { area: { type: 'string' } }),
-        track: { type: 'string', description: 'The folder name of an intent under docs/intent for this session to track.' },
+        track: { type: 'string', description: 'The folder name of an intent under docs/intent for this session to track, or "none" to stop tracking.' },
       },
     },
   })

@@ -948,6 +948,40 @@ const hasFocus = tree => {
   fs.rmSync(home, { recursive: true, force: true })
 }
 
+// ---------------------------------------------------------------- track guard (0.1.1)
+
+{
+  // A1: untrack from /ather and from the profile tool; refused while an away window runs; the proof stays with the intent.
+  const { engine, root, done } = await boot({ store: { 'role:tinnguyen': 'engineer' } })
+  const pinned = () => engine.store.get('pinned:harness-session-0001')
+  const laneFile = path.join(root, 'Saved/AtherAutomata/lanes/harness-session-0001.json')
+  const lane = () => JSON.parse(fs.readFileSync(laneFile, 'utf8'))
+  await engine.timers()
+  await run(engine, [], 'ather', 'intent box-scale-tool')
+  expect('tracking writes the lane heartbeat at once, with the last activity', lane().intent === 'box-scale-tool' && typeof lane().lastActiveAt === 'number', lane())
+  await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Succeeded' })
+  const waiting = async () => /Waiting on you: [^.]*\./.exec((await run(engine, [dismiss])).dialogs[0]?.question ?? '')?.[0] ?? ''
+  const before = await waiting()
+  await engine.spawn({ agentId: 'w-guard', description: 'A2 worker', prompt: 'Implement A2.' })
+  await run(engine, [], 'away', '4h')
+  const refused = await run(engine, [], 'ather', 'untrack')
+  expect('/ather untrack is refused while an away window runs', refused.out === 'End the away window first.' && pinned() === 'box-scale-tool', refused.out)
+  await run(engine, [], 'away', 'end')
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+  const untracked = await run(engine, [], 'ather', 'untrack')
+  expect('/ather untrack stops tracking: the pin and "Continue …" go, the heartbeat says so at once, the proof stays with the intent', untracked.out === 'Stopped tracking box-scale-tool. Its proof so far stays with the intent.' && pinned() === undefined && engine.store.get('last:tinnguyen') === undefined && lane().intent === null && engine.store.get('evidence:box-scale-tool')?.build?.state === 'pass', [untracked.out, pinned(), lane().intent])
+  expect('untracking leaves running workers and Needs you as they were', (await engine.$.agent.list()).some(one => one.id === 'w-guard' && one.status === 'running') && before !== '' && (await waiting()) === before, before)
+  const nothing = await run(engine, [], 'ather', 'untrack')
+  expect('/ather untrack with nothing tracked says so', nothing.out === 'Nothing is tracked in this session.', nothing.out)
+  await engine.modelTool({ tool: 'mcp__ather-automata__profile', track: 'box-scale-tool' })
+  const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
+  expect('the status tool shows which session produced each proof (by: its first 8 characters)', status.tracked?.slug === 'box-scale-tool' && status.evidence.build.state === 'pass' && status.evidence.build.by === 'harness-', status.evidence.build)
+  const none = await engine.modelTool({ tool: 'mcp__ather-automata__profile', track: 'none' })
+  expect('the profile tool\'s track "none" stops tracking', pinned() === undefined && /^Stopped tracking box-scale-tool\. Its proof so far stays with the intent\.$/.test(none.result), none.result)
+  expect('no hook threw in the untrack scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
 // ---------------------------------------------------------------- the web pack, on a han-viet checkout
 //
 // HANVIET_ROOT: a checkout of AskTinNguyen/han-viet. Its profile, package.json, AGENTS.md and intents
