@@ -1,0 +1,53 @@
+▲ Next.js 16.2.6 (Turbopack)
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 4.2s
+  Running TypeScript ...
+  Finished TypeScript in 5.7s ...
+  Collecting page data using 31 workers ...
+  Generating static pages using 31 workers (0/31) ...
+  Generating static pages using 31 workers (7/31) 
+  Generating static pages using 31 workers (15/31) 
+  Generating static pages using 31 workers (23/31) 
+✓ Generating static pages using 31 workers (31/31) in 252ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ƒ /
+├ ƒ /_not-found
+├ ƒ /bridge
+├ ƒ /characters
+├ ƒ /explore
+├ ƒ /glossary
+├ ƒ /go
+├ ƒ /learn
+├ ƒ /library
+├ ƒ /listen
+├ ƒ /podcast
+├ ƒ /practice
+├ ƒ /practice/lists/[id]
+├ ƒ /progress
+├ ƒ /radicals
+├ ƒ /radio
+├ ƒ /radio/learn
+├ ƒ /tests
+├ ƒ /tests/2026-W31/review
+├ ƒ /tests/2026-W32/recap
+├ ƒ /tests/2026-W32/review
+├ ƒ /tests/2026-W33/recap
+├ ƒ /tests/2026-W33/review
+├ ƒ /tests/2026-W34/recap
+├ ƒ /tests/2026-W34/review
+├ ƒ /tests/2026-W35/recap
+├ ƒ /tests/2026-W35/review
+├ ƒ /tests/2026-W38/recap
+├ ƒ /tests/2026-W38/review
+├ ƒ /tests/sample
+├ ƒ /tests/sample/results/[attemptId]
+├ ƒ /tests/sample/review/[attemptId]
+├ ƒ /tests/sample/take/[attemptId]
+└ ƒ /today
+
+
+ƒ  (Dynamic)  server-rendered on demand
+

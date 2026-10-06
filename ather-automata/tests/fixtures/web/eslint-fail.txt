@@ -1,0 +1,10 @@
+
+> site-creator-vinext-starter@0.1.0 lint
+> eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work
+
+
+<repo>\app\zz-lint-fixture.tsx
+  4:21  error  React Hook "useState" is called conditionally. React Hooks must be called in the exact same order in every component render. Did you accidentally call a React Hook after an early return?  react-hooks/rules-of-hooks
+
+✖ 1 problem (1 error, 0 warnings)
+

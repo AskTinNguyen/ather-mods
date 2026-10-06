@@ -1,0 +1,38 @@
+
+> site-creator-vinext-starter@0.1.0 build
+> WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build
+
+
+  vinext build  (Vite 8.0.13)
+
+[34m[1/5] analyze client references...[39m
+[2Ktransforming...✓ 255 modules transformed.
+[31m✗[39m Build failed in 895ms
+[31mBuild failed with 1 error:
+
+[31m[UNRESOLVED_IMPORT] [0mCould not resolve './does-not-exist-fixture' in app/page.tsx
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m app/page.tsx:1:8 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m1 │[0m [38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m [0m"./does-not-exist-fixture"[38;5;249m;[0m
+ [38;5;240m  │[0m        ─────────────┬────────────  
+ [38;5;240m  │[0m                     ╰────────────── Module not found.
+ [38;5;240m  │[0m 
+ [38;5;240m  │[0m [38;5;115mHelp[0m: 'app/page.tsx' is imported by the following path:
+ [38;5;240m  │[0m         - app/page.tsx
+ [38;5;240m  │[0m         - \0virtual:vinext-rsc-entry
+ [38;5;240m  │[0m         - node_modules/vinext/dist/server/app-router-entry.js
+ [38;5;240m  │[0m         - worker/index.ts
+ [38;5;240m  │[0m         - \0virtual:cloudflare/worker-entry
+[38;5;246m───╯[0m
+[39m
+    at aggregateBindingErrorsIntoJsError (file:///<repo>/node_modules/rolldown/dist/shared/error-CkdMJ9ps.mjs:48:18)
+    at unwrapBindingResult (file:///<repo>/node_modules/rolldown/dist/shared/error-CkdMJ9ps.mjs:18:128)
+    at #build (file:///<repo>/node_modules/rolldown/dist/shared/rolldown-build-BVD3dIdE.mjs:3275:34)
+    at async buildEnvironment (file:///<repo>/node_modules/vite/dist/node/chunks/node.js:33133:64)
+    at async Object.build (file:///<repo>/node_modules/vite/dist/node/chunks/node.js:33555:19)
+    at async buildApp (file:///<repo>/node_modules/@vitejs/plugin-rsc/dist/plugin-BhzHKRFo.js:621:3)
+    at async BasicMinimalPluginContext.handler (file:///<repo>/node_modules/@vitejs/plugin-rsc/dist/plugin-BhzHKRFo.js:749:43)
+    at async Object.buildApp (file:///<repo>/node_modules/vite/dist/node/chunks/node.js:33549:5)
+    at async buildApp (file:///<repo>/node_modules/vinext/dist/cli.js:225:2) {
+  errors: [Getter/Setter]
+}

@@ -1,0 +1,84 @@
+
+> site-creator-vinext-starter@0.1.0 build
+> WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build
+
+
+  vinext build  (Vite 8.0.13)
+
+[34m[1/5] analyze client references...[39m
+[2Ktransforming...✓ 255 modules transformed.
+rendering chunks...
+[33m[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugins. Here is a breakdown:
+  - rsc:virtual-client-package (12%)
+  - vinext:react-canary (11%)
+  - rsc:scan-strip (8%)
+  - vinext:strip-server-exports (7%)
+  - vinext:google-fonts (7%)
+See https://rolldown.rs/options/checks#plugintimings for more details.
+[39m
+[32m✓ built in 6.80s[39m
+[34m[2/5] analyze server references...[39m
+[2Ktransforming...✓ 112 modules transformed.
+rendering chunks...
+[32m✓ built in 402ms[39m
+[34m[3/5] build rsc environment...[39m
+[2Ktransforming...✓ 261 modules transformed.
+rendering chunks...
+computing gzip size...
+[32m✓ built in 1.96s[39m
+[34m[4/5] build client environment...[39m
+[2Ktransforming...✓ 119 modules transformed.
+rendering chunks...
+computing gzip size...
+[33m[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `vite:prepare-out-dir`. See https://rolldown.rs/options/checks#plugintimings for more details.
+[39m
+[32m✓ built in 3.35s[39m
+[34m[5/5] build ssr environment...[39m
+[2Ktransforming...✓ 118 modules transformed.
+rendering chunks...
+computing gzip size...
+[32m✓ built in 347ms[39m
+[0m
+  Route (app)
+  ┌ ? /                               
+  ├ ? /bridge                         
+  ├ ? /characters                     
+  ├ ? /explore                        
+  ├ ? /glossary                       
+  ├ ? /go                             
+  ├ ? /learn                          
+  ├ ? /library                        
+  ├ ? /listen                         
+  ├ ? /podcast                        
+  ├ ? /practice                       
+  ├ ƒ /practice/lists/:id             
+  ├ ? /progress                       
+  ├ ? /radicals                       
+  ├ ? /radio                          
+  ├ ? /radio/learn                    
+  ├ ? /tests                          
+  ├ ? /tests/2026-W31/review          
+  ├ ? /tests/2026-W32/recap           
+  ├ ? /tests/2026-W32/review          
+  ├ ? /tests/2026-W33/recap           
+  ├ ? /tests/2026-W33/review          
+  ├ ? /tests/2026-W34/recap           
+  ├ ? /tests/2026-W34/review          
+  ├ ? /tests/2026-W35/recap           
+  ├ ? /tests/2026-W35/review          
+  ├ ? /tests/2026-W38/recap           
+  ├ ? /tests/2026-W38/review          
+  ├ ? /tests/sample                   
+  ├ ƒ /tests/sample/results/:attemptId
+  ├ ƒ /tests/sample/review/:attemptId 
+  ├ ƒ /tests/sample/take/:attemptId   
+  └ ? /today                          
+
+  ƒ Dynamic  ? Unknown
+
+  ? Some routes could not be classified. vinext currently uses static analysis
+    and cannot detect dynamic API usage (headers(), cookies(), etc.) at build time.
+    Automatic classification will be improved in a future release.
+
+  Build complete. Run `vinext start` to start the production server.
+
