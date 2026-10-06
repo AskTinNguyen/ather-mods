@@ -1,0 +1,41 @@
+{
+  "name": "site-creator-vinext-starter",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node scripts/vinext.mjs dev",
+    "build": "node scripts/vinext.mjs build",
+    "start": "node scripts/vinext.mjs start",
+    "test": "npm run behavior:verify && npm run profile:verify && npm run study:verify && npm run characters:verify && npm run learner:test && npm run schedule:verify && npm run release:verify && npm run audio:pilot:verify && npm run audio:legacy:qwen:verify && npm run radio:verify && npm run learning-radio:verify && npm run recap:weekly && npm run test:weekly && npm run review:weekly && npm run build && node --test tests/rendered-html.test.mjs",
+    "behavior:verify": "node scripts/verify-agent-behaviors.mjs",
+    "test:weekly": "node scripts/verify-weekly-test.mjs",
+    "review:weekly": "node scripts/verify-weekly-review.mjs && node scripts/verify-weekly-review-w33.mjs && node scripts/verify-weekly-review-w34.mjs && node scripts/verify-weekly-review-w35.mjs && node scripts/verify-weekly-review-w38.mjs",
+    "recap:weekly": "node scripts/verify-weekly-recap.mjs",
+    "schedule:verify": "node scripts/verify-learning-schedule.mjs",
+    "release:audio": "node scripts/generate-release-audio.mjs",
+    "release:verify": "node scripts/verify-releases.mjs && node scripts/build-release-catalog.mjs --check",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work",
+    "curriculum:build": "node scripts/build-curriculum.mjs",
+    "audio:build": "node scripts/generate-audio.mjs",
+    "audio:pilot:verify": "node scripts/verify-qwen-audio-pilot.mjs",
+    "audio:legacy:qwen:verify:staged": "node scripts/verify-legacy-audio-qwen.mjs --staged",
+    "audio:legacy:qwen:verify": "node scripts/verify-legacy-audio-qwen.mjs",
+    "radio:verify": "node scripts/verify-radio.mjs",
+    "learning-radio:verify": "node scripts/verify-learning-radio.mjs",
+    "curriculum:verify": "node scripts/verify-curriculum.mjs && node scripts/verify-study-layer.mjs && node scripts/verify-character-layer.mjs",
+    "hanviet:build": "node scripts/build-hanviet-readings.mjs",
+    "study:build": "node scripts/build-study-index.mjs",
+    "lookup:build": "node scripts/build-lookup-dictionary.mjs",
+    "study:verify": "node scripts/verify-study-layer.mjs && node scripts/verify-lookup.mjs",
+    "characters:build": "node scripts/build-character-components.mjs",
+    "characters:verify": "node scripts/verify-character-layer.mjs",
+    "learner:test": "node --experimental-strip-types --no-warnings --import ./tests/support/ts-resolve.mjs --test tests/learner-engine.test.mjs tests/exercises-sound.test.mjs tests/pinyin-search.test.mjs tests/radical-practice.test.mjs tests/recall-aids.test.mjs tests/sentence-typing.test.mjs tests/recall-drills.test.mjs tests/journey-state.test.mjs tests/audio-ownership.test.mjs",
+    "db:generate": "drizzle-kit generate",
+    "build:next": "next build",
+    "releases:catalog": "node scripts/build-release-catalog.mjs",
+    "ui:verify": "npm run build:next && npm run ui:verify:run",
+    "ui:verify:run": "playwright test",
+    "profile:verify": "node --test tests/ather-profile.test.mjs"
+  }
+}

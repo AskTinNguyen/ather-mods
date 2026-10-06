@@ -85,14 +85,14 @@ export const issueLabel = (issue, now) => {
 }
 
 // What the session is asked when the person picks an issue to work on.
-/** @param {Issue} issue @param {string} me @param {string} [role] '' when the person has not said it */
-export const issuePrompt = (issue, me, role = 'set') =>
+/** @param {Issue} issue @param {string} me @param {string} [role] '' when the person has not said it @param {string} [roleWords] the pack's roles, in words */
+export const issuePrompt = (issue, me, role = 'set', roleWords = 'designer, tech artist or engineer') =>
   [
     `Start an intent from GitHub issue #${issue.number} ("${issue.title}"${issue.url ? `, ${issue.url}` : ''}).`,
     `First run the issue preflight (.agents/skills/issue-preflight/SKILL.md) with --issue ${issue.number}; if it finds overlapping work, stop and tell me what it found.`,
     `Otherwise start the intent with the intent skill (.agents/skills/intent/SKILL.md): Owner: ${me || 'me'}, Area: ${issue.area === 'Unsorted' ? 'ask me' : issue.area}, and the header line "- Issue: #${issue.number}". Draft the goal and the done checklist from the issue (gh issue view ${issue.number}).`,
     'Show me prompt.md before anything is built. Do not comment on, assign or close the issue.',
-    role === '' ? 'Ather does not know my role yet: ask me (designer, tech artist or engineer) and record it with the mcp__ather-automata__profile tool.' : '',
+    role === '' ? `Ather does not know my role yet: ask me (${roleWords}) and record it with the mcp__ather-automata__profile tool.` : '',
   ]
     .filter(Boolean)
     .join(' ')

@@ -1,0 +1,14 @@
+▲ Next.js 16.2.6 (Turbopack)
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 1895ms
+  Running TypeScript ...
+Failed to type check.
+
+./app/zz-type-fixture.ts:1:14
+Type error: Type 'string' is not assignable to type 'number'.
+
+[31m[1m>[0m [90m1 |[0m [36mexport[0m [36mconst[0m broken: number = [32m"three"[0m;
+  [90m  |[0m              [31m[1m^[0m
+  [90m2 |[0m
+Next.js build worker exited with code: 1 and signal: null

@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "pack": "web",
+  "project": "han-viet",
+  "packageManager": "npm",
+  "gates": [
+    {
+      "id": "test",
+      "command": "npm test",
+      "proofs": ["tests", "build"],
+      "proves": "Full suite: behavior, study, character, learner, schedule, release, audio, radio, weekly checks, the vinext build and the rendered-HTML test."
+    },
+    {
+      "id": "lint",
+      "command": "npm run lint",
+      "proofs": ["lint"],
+      "proves": "ESLint with the Next.js core-web-vitals and TypeScript rules."
+    },
+    {
+      "id": "curriculum",
+      "command": "npm run curriculum:verify",
+      "proofs": ["tests"],
+      "proves": "Curriculum, study-layer and character-layer structural checks (schema, references, HSK membership, Pinyin format)."
+    },
+    {
+      "id": "learner",
+      "command": "npm run learner:test",
+      "proofs": ["tests"],
+      "proves": "node --test unit tests for the device-local learner engine and practice modes."
+    },
+    {
+      "id": "build",
+      "command": "npm run build",
+      "proofs": ["build"],
+      "proves": "vinext production build."
+    },
+    {
+      "id": "build-next",
+      "command": "npm run build:next",
+      "proofs": ["build", "typecheck"],
+      "proves": "next build, the build Vercel runs, including the TypeScript check."
+    },
+    {
+      "id": "ui",
+      "command": "npm run ui:verify",
+      "proofs": ["ui"],
+      "proves": "Playwright + axe (WCAG 2.2 A/AA), page errors, failed same-origin requests and horizontal overflow on the primary routes at 390, 780 and 1365 px and 200% zoom, against next build + next start."
+    }
+  ],
+  "production": {
+    "host": "vercel",
+    "branch": "main",
+    "deployment": "The Vercel Production deployment for the merge commit reports READY (gh api repos/AskTinNguyen/han-viet/commits/<sha>/status).",
+    "probe": {
+      "url": "https://han-viet-asktinnguyens-projects.vercel.app/",
+      "expectStatus": 200
+    }
+  },
+  "mergePolicy": "with-proof",
+  "devPorts": {
+    "base": 3100,
+    "perWorktree": 10,
+    "env": "UI_VERIFY_PORT"
+  }
+}

@@ -4,9 +4,11 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { AFK, createEngine } from './engine.mjs'
-import { check } from './screen.mjs'
+import { check, layouts } from './screen.mjs'
 
 const OUT = process.argv[2]
+// --layouts <dir>: write every pane and band laid out at 72 and 110 columns, to diff two runs.
+const LAYOUTS = process.argv.includes('--layouts') ? process.argv[process.argv.indexOf('--layouts') + 1] : null
 // The intents come from an S2 checkout: its docs/intent is copied into a sandbox per run.
 const S2_ROOT = process.env.S2_ROOT
 if (!S2_ROOT || !fs.existsSync(path.join(S2_ROOT, 'docs/intent'))) throw new Error('Set S2_ROOT to an S2 checkout (the folder holding docs/intent).')
@@ -34,6 +36,8 @@ const sandbox = () => {
   }
   fs.mkdirSync(path.join(root, 'Saved'), { recursive: true })
   fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'free since 14:18')
+  // The marker an S2 checkout has at its root: it selects the Unreal pack (packs/index.mjs).
+  fs.writeFileSync(path.join(root, 'S2.uproject'), '{}\n')
   fs.mkdirSync(path.join(root, '.git'), { recursive: true })
   fs.writeFileSync(path.join(root, '.git/HEAD'), 'ref: refs/heads/main\n')
   return root
@@ -944,6 +948,98 @@ const hasFocus = tree => {
   fs.rmSync(home, { recursive: true, force: true })
 }
 
+// ---------------------------------------------------------------- the web pack, on a han-viet checkout
+//
+// HANVIET_ROOT: a checkout of AskTinNguyen/han-viet. Its profile, package.json, AGENTS.md and intents
+// are copied into a sandbox (nothing is written to the checkout); an intent of the person's own with
+// every item met puts Prove next. Laid out at 72 and 110 columns like the S2 panes.
+
+const HANVIET_ROOT = process.env.HANVIET_ROOT
+if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json'))) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-web-'))
+  for (const name of ['.ather/profile.json', 'package.json', 'AGENTS.md']) {
+    fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true })
+    fs.copyFileSync(path.join(HANVIET_ROOT, name), path.join(root, name))
+  }
+  if (fs.existsSync(path.join(HANVIET_ROOT, 'docs/intent'))) fs.cpSync(path.join(HANVIET_ROOT, 'docs/intent'), path.join(root, 'docs/intent'), { recursive: true })
+  fs.mkdirSync(path.join(root, '.git'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.git/HEAD'), 'ref: refs/heads/intent/zz-web-lens\n')
+  const dir = path.join(root, 'docs/intent/zz-web-lens')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'prompt.md'), '# Word engine lens\n\n- Rev: 1\n- Status: active\n- Area: Platform\n- Owner: Tin Nguyen\n\n## Goal\n\nA lens over the word engine.\n\n## Acceptance\n\n- A1: The lens opens.\n- A2: It reads the word.\n')
+  fs.writeFileSync(path.join(dir, 'progress.md'), '# zz-web-lens: Progress\n\n- Worker: `lens-worker`\n- PR: none yet\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | x |\n| A2 | met | y |\n')
+  const engine = createEngine({ root, surfaces: ['terminal'], user: 'Tin Nguyen' })
+  engine.store.set('tz', tzFor(12))
+  engine.store.set('role:web:tinnguyen', 'engineer')
+  register(engine.on, { briefGate: 'warn' })
+  await engine.start()
+  await new Promise(resolve => setTimeout(resolve, 1500))
+  engine.store.set('tz', tzFor(12))
+  await run(engine, [], 'ather', 'intent zz-web-lens')
+  const bad = /S2Editor|\bPIE\b|Unreal|Editor (free|busy|owner)/
+  for (const width of [72, 110]) {
+    const pane = check(await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
+    screens.push([`Web (han-viet) · an intent to prove, engineer (${width} columns)`, pane.lines.join('\n')])
+    const text = pane.lines.join('\n')
+    expect(`web pane at ${width} columns: Prove is next, it names what is still needed, and nothing is wider than the pane`, /Prove it works/.test(text) && /passing tests/.test(text) && pane.problems.length === 0, pane.problems.length > 0 ? pane.problems : pane.lines.slice(0, 16))
+    expect(`web pane at ${width} columns: no S2Editor, PIE, Unreal or Editor lock wording`, !bad.test(text), text.split('\n').filter(line => bad.test(line)))
+  }
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  const submits = engine.record.submits.length
+  findKey(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'next')?.props.onPress()
+  await engine.flush()
+  const prove = engine.record.submits.slice(submits).join('\n')
+  expect("the web Prove prompt names the profile's gates: npm test, npm run lint, npm run build", /`npm test`/.test(prove) && /`npm run lint`/.test(prove) && /`npm run build`/.test(prove) && !bad.test(prove), prove)
+  // A designer proves with the browser check.
+  engine.store.set('role:web:tinnguyen', 'designer')
+  await run(engine, [], 'ather', 'intent zz-web-lens')
+  const designerPane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  expect('for a designer, Prove waits on the browser check', /a passing browser check/.test(designerPane), designerPane.split('\n').slice(0, 16))
+  // Proof read from tool output: the gates pass, and Ship lands with proof and checks production.
+  engine.store.set('role:web:tinnguyen', 'engineer')
+  // Outputs captured from han-viet runs, the unit tests' fixtures.
+  const fixture = name => fs.readFileSync(new URL(`../../ather-automata/tests/fixtures/web/${name}`, import.meta.url), 'utf8')
+  await engine.modelTool({ tool: 'Bash', command: 'npm test', __text: fixture('node-test-pass.txt') })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run lint', __text: fixture('eslint-pass.txt') })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run ui:verify', __text: fixture('playwright-pass.txt') })
+  await engine.flush()
+  const evidence = evidenceOf(engine)
+  expect('npm test, lint and ui:verify outputs are read as tests, build, lint and ui passed', ['tests', 'build', 'lint', 'ui'].every(rung => evidence?.[rung]?.state === 'pass'), evidence)
+  await run(engine, [], 'ather', 'intent zz-web-lens')
+  for (const width of [72, 110]) {
+    const pane = check(await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
+    screens.push([`Web (han-viet) · proven, ready to ship (${width} columns)`, pane.lines.join('\n')])
+    expect(`web pane at ${width} columns: proven, Ship is next and the proof line shows tests, lint, build and UI`, /Ship it/.test(pane.lines.join('\n')) && /tests ✓ · lint ✓ · build ✓ · UI ✓/.test(pane.lines.join('\n')) && pane.problems.length === 0, pane.lines.slice(0, 16))
+  }
+  const shipped = engine.record.submits.length
+  findKey(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'next')?.props.onPress()
+  await engine.flush()
+  const ship = engine.record.submits.slice(shipped).join('\n')
+  expect('the web Ship prompt names every gate, merges with proof and runs the Vercel production check', /`npm run ui:verify`/.test(ship) && /with-proof/.test(ship) && /Vercel deployment for the merge commit READY/.test(ship), ship)
+  // ✦ Create: the web skills.
+  findKey(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'action:create')?.props.onPress()
+  for (const width of [72, 110]) {
+    const pane = check(await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
+    screens.push([`Web (han-viet) · Create (${width} columns)`, pane.lines.join('\n')])
+    const text = pane.lines.join('\n')
+    expect(`web Create at ${width} columns offers frontend-design, run, code-review, security-review and simplify, no Editor`, /Design or restyle a page or component/.test(text) && /Review the change for security issues/.test(text) && /Clean up the changed code/.test(text) && /Run the app and see the change working/.test(text) && /Review the current change for bugs/.test(text) && !bad.test(text) && pane.problems.length === 0, pane.lines)
+  }
+  // Away: a production deploy is held; a merge passes with every gate proven.
+  await run(engine, [], 'away', '8h ship the lens')
+  const deploy = await engine.modelTool({ tool: 'Bash', command: 'npm run build && npx vercel deploy --prod' })
+  const merge = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
+  expect('while away, a production deploy is held and a merge with every gate proven goes through (with-proof)', typeof deploy.deny === 'string' && /Production deploys/.test(deploy.deny) && merge.deny === undefined, [deploy.deny, merge.deny])
+  // Proof from before this session (an hour old, still within the day evidence is kept) does not let a merge through.
+  const stored = engine.store.get('evidence:zz-web-lens')
+  engine.store.set('evidence:zz-web-lens', Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...value, at: Date.now() - 3600000 }])))
+  const stale = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
+  expect("a merge on proof from before this session is held (D2: passed in this session's tool output)", typeof stale.deny === 'string' && /Merges/.test(stale.deny), stale.deny)
+  expect('no hook threw in the web scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  fs.rmSync(root, { recursive: true, force: true })
+} else if (HANVIET_ROOT) {
+  expect('HANVIET_ROOT names a han-viet checkout with .ather/profile.json', false, HANVIET_ROOT)
+}
+
 // ---------------------------------------------------------------- report
 
 const passed = results.filter(one => one.ok).length
@@ -952,5 +1048,13 @@ for (const one of results) lines.push(`- ${one.ok ? '✅' : '❌'} ${one.name}${
 lines.push('', '# Screens', '')
 for (const [title, body] of screens) lines.push(`## ${title}`, '', '```text', body, '```', '')
 fs.writeFileSync(OUT, lines.join('\n'))
+if (LAYOUTS) {
+  fs.mkdirSync(LAYOUTS, { recursive: true })
+  for (const width of [72, 110]) {
+    const drawn = layouts.map((one, index) => [one, index]).filter(([one]) => one.width === width)
+    fs.writeFileSync(path.join(LAYOUTS, `layouts-${width}.txt`), drawn.map(([one, index]) => `=== #${index} (${width} columns)\n${one.lines.join('\n')}\n`).join('\n'))
+  }
+  console.log(`layouts: ${LAYOUTS}`)
+}
 console.log(`${passed}/${results.length} passed`)
 for (const one of results.filter(r => !r.ok)) console.log(`FAIL ${one.name}\n     ${one.detail.slice(0, 400)}`)

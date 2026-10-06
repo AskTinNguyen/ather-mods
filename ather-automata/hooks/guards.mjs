@@ -4,11 +4,29 @@
 // output, MCP calls that count as evidence, thin worker briefs, known traps.
 // Pure: no `$`.
 
-export const HELD_LABELS = { merge: 'Merges', 'push-main': 'Pushes to main', 'editor-restart': 'Editor restarts', 'asset-save': 'Asset saves through MCP' }
+import { unreal } from './packs/unreal.mjs'
+import { WEB_HELD, makeWebPack } from './packs/web.mjs'
+import { MAIN, pushTarget, withFolders } from './shell.mjs'
+
+/** @typedef {import('./packs/index.mjs').Pack} Pack */
+
+// Every pack's held actions, by kind: a parked action reads the same whichever pack parked it.
+const WEB = makeWebPack(null, null)
+/** @type {Record<string, string>} */
+export const HELD_LABELS = { merge: 'Merges', 'push-main': 'Pushes to main', ...unreal.held.labels, ...WEB.held.labels }
 // For one held action in a sentence: "held a merge until you are back".
-export const HELD_NOUNS = { merge: 'a merge', 'push-main': 'a push to main', 'editor-restart': 'an Editor restart', 'asset-save': 'an asset save' }
-/** @typedef {keyof typeof HELD_LABELS} HeldKind */
-export const HELD_KINDS = /** @type {HeldKind[]} */ (Object.keys(HELD_LABELS))
+/** @type {Record<string, string>} */
+export const HELD_NOUNS = { merge: 'a merge', 'push-main': 'a push to main', ...unreal.held.nouns, ...WEB.held.nouns }
+/** @typedef {string} HeldKind merge, push-main, or one of a pack's held kinds */
+// The Unreal pack's kinds, as before packs.
+export const HELD_KINDS = /** @type {HeldKind[]} */ (['merge', 'push-main', 'editor-restart', 'asset-save'])
+/** @param {Pack} pack @returns {string[]} */
+export const heldKindsOf = pack => ['merge', 'push-main', ...pack.held.kinds]
+export { WEB_HELD }
+
+// The Unreal pack's readers, kept here for the modules and tests that read them from the guards.
+export { automationResult, buildResult, isAssetSave, isAutomationCommand, isBuildCommand, isEditorBuild, isLogRead, mcpKind } from './packs/unreal.mjs'
+export { gitFolders, isPiped, isSearchCommand } from './shell.mjs'
 
 const GIT_REWRITE = /\bgit\b(?:\s+-[cC]\s+\S+)*\s+(stash(?!\s+(list|show)\b)|clean\b|reset\s+--hard|sparse-checkout(?!\s+(list|disable)\b)|checkout\b|switch\b|restore\b|rebase\b)/i
 
@@ -23,134 +41,30 @@ export const explainGuard = command => {
   return `git ${kind} rewrites the working tree that other sessions share. ${safe}`
 }
 
-// A heredoc's body is text being written, not a command being run.
-/** @param {string} command */
-const withoutHeredocs = command => command.replace(/<<-?\s*['"]?(\w+)['"]?[\s\S]*?\n\1\b/g, '')
-
-/** @param {string} command */
-export const isBuildCommand = command => /Build\.(bat|sh|cmd)\b|UnrealBuildTool|RunUAT|Wait-ForS2EditorCloseAndBuild|\bbuild\.cmd\b/i.test(withoutHeredocs(command))
-
-// Only a build of the Editor target is evidence for an intent; a tool or shader build is not.
-/** @param {string} command */
-export const isEditorBuild = command => isBuildCommand(command) && /\bS2Editor\b/i.test(command)
-
-/** @param {string} command */
-export const isPiped = command => /\|\s*(tail|head|grep|Select-String|Select-Object|findstr|tee|sls)\b/i.test(command)
-
-/** @param {string} text @returns {'pass' | 'fail' | null} */
-export const buildResult = text => {
-  const lines = [...text.matchAll(/Result:\s*(Succeeded|Failed[^\r\n]*)/g)]
-  const last = lines[lines.length - 1]?.[1]
-  return last === undefined ? null : last.startsWith('Succeeded') ? 'pass' : 'fail'
-}
-
-/** @param {string} command */
-export const isAutomationCommand = command => /Automation\s+RunTests|RunAutomationTests|ExecCmds=.{0,40}Automation|ue-run-automation|Run-S2Automation/i.test(command)
-
-/** @param {string} text @returns {'pass' | 'fail' | null} */
-// A pass needs tests that ran and passed; no tests, any failure or any non-zero exit is a fail.
-export const automationResult = text => {
-  if (/EXIT CODE:\s*-?[1-9]|Result=\{?Fail|\b[1-9]\d* (tests? )?failed\b|\bno (automation )?tests? (were )?(found|matched|run)\b|\b0 tests? (found|ran|run|executed|passed)\b/i.test(text)) return 'fail'
-  if (/\b[1-9]\d* (tests? )?passed\b|\b([1-9]\d*)\/\1 (tests? )?pass|\ball [1-9]\d* tests? passed\b/i.test(text)) return 'pass'
-  return null
-}
-
 /** @param {string} command */
 // A merge or a pull (which merges); never `merge-base` or `merge --abort`.
 export const isMergeCommand = command => /\bgit\b(?:\s+-C\s+\S+)?\s+(merge(?![-\w])|pull\b)(?!.*--abort)/i.test(command)
 
-// The commands of a chain: split only outside quotes, heredoc bodies dropped, quotes removed.
-// `git commit -m "fix; git push origin main"` is one commit command, not a push.
-/** @param {string} command */
-const segments = command => {
-  const text = withoutHeredocs(command)
-  const out = []
-  let current = ''
-  let quote = ''
-  for (let at = 0; at < text.length; at += 1) {
-    const char = text[at] ?? ''
-    if (quote !== '') {
-      if (char === quote) quote = ''
-      else current += char
-    } else if (char === '"' || char === "'") quote = char
-    else if (text.startsWith('&&', at) || text.startsWith('||', at)) {
-      out.push(current)
-      current = ''
-      at += 1
-    } else if (char === ';' || char === '|' || char === '\n') {
-      out.push(current)
-      current = ''
-    } else current += char
-  }
-  out.push(current)
-  return out.map(part => part.trim()).filter(Boolean)
-}
-
-// Each segment with the folder it runs in: its own `git -C`, else the last `cd` before it, else null (the session's folder).
-/** @param {string} command */
-const withFolders = command => {
-  /** @type {string | null} */
-  let cwd = null
-  return segments(command).map(segment => {
-    const cd = /^(?:cd|Set-Location|pushd)\s+(\S+)/i.exec(segment)
-    if (cd?.[1]) cwd = cd[1]
-    return { segment, folder: /^git\s+-C\s+(\S+)/i.exec(segment)?.[1] ?? cwd }
-  })
-}
-
-// The folders a command's git segments run in, for the caller to look up their branches.
-/** @param {string} command */
-export const gitFolders = command => [...new Set(withFolders(command).filter(one => /^git\b/i.test(one.segment)).map(one => one.folder))]
-
-const MAIN = /^(?:refs\/heads\/)?(main|master)$/
-
-// Where a `git push` sends: its refspec's destination, or the current branch when it names none.
-/** @param {string} segment @param {string} branch */
-const pushTarget = (segment, branch) => {
-  const words = segment.split(/\s+/)
-  const refspec = words.slice(words.indexOf('push') + 1).filter(word => !word.startsWith('-'))[1]
-  if (refspec === undefined) return branch
-  const destination = refspec.replace(/^\+/, '').split(':').pop() ?? ''
-  return destination === 'HEAD' ? branch : destination
-}
-
-// Searches over source and docs: a trap's text in their output is someone looking it up, not hitting it.
-// Reading a build log is different: that is where the traps show up.
-const SEARCHERS = /^(grep|rg|ag|ack|findstr|Select-String|sls)\b/i
-
-/** @param {string} command */
-export const isSearchCommand = command => segments(command).every(segment => SEARCHERS.test(segment))
-
-// Reading a build's log file, where its Result line is.
-/** @param {string} command */
-export const isLogRead = command => /\.log\b/i.test(command) && !isBuildCommand(command)
-
 // A shell command the window holds, if any. `branchOf` gives the branch checked out in a folder
 // (null: the session's folder), or '' when it cannot be told; then only an explicit main is held.
-/** @param {string} command @param {readonly string[]} held @param {(folder: string | null) => string} branchOf @returns {HeldKind | null} */
-export const heldShell = (command, held, branchOf) => {
+// With the web pack's with-proof policy (D2), a merge passes once every gate the profile requires has passed:
+// `context.isProven` says so, read from this session's evidence by the caller.
+/**
+ * @param {string} command @param {readonly string[]} held @param {(folder: string | null) => string} branchOf
+ * @param {Pack} [pack] @param {import('./packs/index.mjs').HeldContext} [context] @returns {string | null}
+ */
+export const heldShell = (command, held, branchOf, pack = unreal, context = {}) => {
+  const merges = !(pack.mergePolicy === 'with-proof' && context.isProven === true)
   for (const { segment, folder } of withFolders(command)) {
     const branch = branchOf(folder)
     const isPrMerge = /^gh\s+pr\s+merge\b/i.test(segment) || /^gh\s+api\b.*\bpulls\/\d+\/merge\b/i.test(segment)
     // A local merge matters only into main; merging main into a feature branch is ordinary work.
     const isMainMerge = /^git\b(?:\s+-C\s+\S+)?\s+merge\s+(?!--abort)/i.test(segment) && MAIN.test(branch)
-    if (held.includes('merge') && (isPrMerge || isMainMerge)) return 'merge'
+    if (held.includes('merge') && merges && (isPrMerge || isMainMerge)) return 'merge'
     if (held.includes('push-main') && /^git\b(?:\s+-C\s+\S+)?\s+push\b/i.test(segment) && MAIN.test(pushTarget(segment, branch))) return 'push-main'
-    if (held.includes('editor-restart') && /(Stop-Process|taskkill|kill)\b.*UnrealEditor|Start-Process.*UnrealEditor|UnrealEditor(\.exe)?\s+.*\.uproject/i.test(segment)) return 'editor-restart'
+    const kind = pack.heldSegment(segment, held, { ...context, scripts: context.scripts ?? pack.scripts })
+    if (kind && (kind !== 'merge' || merges)) return kind
   }
-  return null
-}
-
-/** @param {string} input an MCP call's arguments as text */
-export const isAssetSave = input => /save_assets|save_asset\b|save_actor|save_level|SaveAssets|SavePackage/i.test(input)
-
-// What an MCP call is evidence of. PIE counts only when PIE or a test run is started,
-// never for any console command.
-/** @param {string} input @returns {'write' | 'read' | 'pie' | null} */
-export const mcpKind = input => {
-  if (/StartPIE|PlayInEditor|RunTestSimulation|Sipher\.Bench\.Combo\.Start\b/i.test(input)) return 'pie'
-  if (/\b(set_|create_|connect_|break_|add_|delete|remove_|compile|save_|write_|update_|SetRowField)/i.test(input)) return 'write'
-  if (/\b(get_|read_|find_|list_|exists|describe|GetPIEStatus)/i.test(input)) return 'read'
   return null
 }
 
@@ -159,12 +73,12 @@ export const mcpKind = input => {
 export const mcpServer = tool => tool.split('__')[1] ?? tool
 
 // Only briefs for workers that will change files or the Editor are checked.
-/** @param {string} prompt @param {string | undefined} type */
-export const briefIssues = (prompt, type) => {
+/** @param {string} prompt @param {string | undefined} type @param {Pack} [pack] */
+export const briefIssues = (prompt, type, pack = unreal) => {
   if (type !== undefined && /^(Explore|Plan|statusline-setup|claude-code-guide)$/i.test(type)) return []
   if (!/\b(edit|write|implement|fix|change|modify|refactor|add|create|delete|remove|rename|commit|save|build|compile|wire|author)\b/i.test(prompt) || /\bread-only\b|do not (edit|modify|change)|no edits/i.test(prompt)) return []
   const issues = []
-  if (!/[A-Za-z]:[\\/]|\b(Source|Content|Plugins|Config|docs|tools|scripts)\/|\/Game\/|\.(cpp|h|cs|py|md|uasset|umap|ini)\b/.test(prompt)) issues.push('exact paths')
+  if (!pack.briefPaths.test(prompt)) issues.push('exact paths')
   if (!/acceptance|accept when|done when|success criteria|verify|evidence|proof|report format|deliverable|final (message|report)|report back|return (a|the) (list|report|summary)/i.test(prompt)) issues.push('acceptance checks')
   // A worker kept to its own folder, or told to leave git alone, already respects the shared tree.
   if (!/shared (checkout|tree|worktree)|git -C|worktree|no commits|do not commit|don't commit|never (stash|switch|clean)|no git (changes|commands)|work only in|edit nothing (else|outside)/i.test(prompt)) issues.push('the shared-tree rule')
@@ -173,27 +87,12 @@ export const briefIssues = (prompt, type) => {
 
 // ---------------------------------------------------------------- known traps
 
-// `rule`: where the repository already prevents the trap, as a file under the checkout and a phrase
-// only that rule contains. Once the phrase is there, the trap is not offered as a rule again.
-
-const GOTCHAS = [
-  { id: 'live-coding', pattern: /Unable to build while Live Coding is active/i, title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor, or use Wait-ForS2EditorCloseAndBuild.ps1 when another lane holds it. UHT success at the top of the log means nothing here.', rule: { file: '.agents/skills/s2-unreal-engine/SKILL.md', text: 'A running Editor with Live Coding blocks Build.bat' } },
-  { id: 'port-8000', pattern: /HttpListener unable to bind/i, title: 'MCP port 8000 still held (TIME_WAIT)', fix: 'Stop the Editor, wait until Get-NetTCPConnection -LocalPort 8000 returns nothing in any state, then relaunch and check the listener PID.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'Get-NetTCPConnection -LocalPort 8000' } },
-  { id: 'restore-packages', pattern: /Restore Packages/i, title: 'Restore Packages dialog blocks startup', fix: 'Stop the Editor and move Saved/Autosaves/PackageRestoreData.json aside (rename, never delete) before relaunching.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'PackageRestoreData.json' } },
-  { id: 'mcp-session', pattern: /Unknown session id|no session id/i, title: 'Stale MCP session id', fix: 'Delete the cached MCP session file after an Editor relaunch, and run MCP clients one at a time.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'Unknown session id' } },
-  { id: 'asset-missing', pattern: /Asset does not exist/i, title: '"Asset does not exist" from every Editor tool', fix: 'Check McpPieTools GetPIEStatus first: a harness that threw before StopPIE leaves PIE running. In a fresh Editor verify saves by mtime and git.', rule: { file: '.agents/skills/unreal-mcp/SKILL.md', text: 'GetPIEStatus' } },
-  { id: 'index-lock', pattern: /index\.lock/i, title: 'Git index.lock in the shared checkout', fix: 'Find the holder with Get-CimInstance Win32_Process git.exe. Only a stale lock may be renamed aside, in the same command as the next git call.', rule: { file: 'docs/skills/git-lfs-traffic-control.md', text: 'Get-CimInstance Win32_Process' } },
-  { id: 'disk', pattern: /No space left on device/i, title: 'Disk allowance spent', fix: 'Load .agents/skills/s2-free-disk-space/SKILL.md; never fall back to mutating the shared tree.' },
-  { id: 'mixed-tree', pattern: /\bLNK20(01|19)\b/, title: 'Unresolved externals (possible mixed tree)', fix: 'If files were just restored, verify every path against HEAD before building; restore in one batched checkout.' },
-  { id: 'ps-redirect', pattern: /NativeCommandError/, title: 'PowerShell wrapped native stderr as an error', fix: 'Do not redirect 2>&1 on native executables in Windows PowerShell 5.1; read the exit code instead.', rule: { file: 'AGENTS.md', text: 'do not redirect `2>&1` on native executables' } },
-]
-
 /** @typedef {{ file: string, text: string }} WrittenRule */
 /** @typedef {{ id: string, title: string, fix: string, rule?: WrittenRule }} Trap */
 /** @typedef {Record<string, { title: string, fix: string, count: number }>} TrapHits */
 
-/** @param {string} text */
-export const matchGotchas = text => GOTCHAS.filter(rule => rule.pattern.test(text))
+/** @param {string} text @param {Pack} [pack] */
+export const matchGotchas = (text, pack = unreal) => pack.traps.filter(rule => rule.pattern.test(text))
 
 // A trap hit in this many separate sessions becomes a "Needs you" item: make it a rule?
 const RULE_AFTER_SESSIONS = 3
@@ -201,12 +100,13 @@ const RULE_AFTER_SESSIONS = 3
 /** @param {TrapHits} hits @param {Trap} rule @returns {TrapHits} */
 export const countGotcha = (hits, rule) => ({ ...hits, [rule.id]: { title: rule.title, fix: rule.fix, count: (hits[rule.id]?.count ?? 0) + 1 } })
 
-/** @param {TrapHits} hits @param {readonly string[]} ruled */
-export const recurringGotchas = (hits, ruled) =>
+// Only the pack's own traps: the counts are kept per machine, across every kind of repository.
+/** @param {TrapHits} hits @param {readonly string[]} ruled @param {Pack} [pack] */
+export const recurringGotchas = (hits, ruled, pack = unreal) =>
   Object.entries(hits)
-    .filter(([id, hit]) => hit.count >= RULE_AFTER_SESSIONS && !ruled.includes(id))
+    .filter(([id, hit]) => hit.count >= RULE_AFTER_SESSIONS && !ruled.includes(id) && pack.traps.some(trap => trap.id === id))
     .map(([id, hit]) => ({ id, ...hit }))
     .sort((a, b) => b.count - a.count)
 
-/** @param {string} id @returns {WrittenRule | undefined} */
-export const writtenRuleOf = id => GOTCHAS.find(one => one.id === id)?.rule
+/** @param {string} id @param {Pack} [pack] @returns {WrittenRule | undefined} */
+export const writtenRuleOf = (id, pack = unreal) => pack.traps.find(one => one.id === id)?.rule

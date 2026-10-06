@@ -8,9 +8,9 @@
 // The host reads on(...) and $.noun.method(...) from source, so they are
 // spelled literally, and helpers that take $ are top-level functions.
 
-import { ALLOWED_TEXT, clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
-import { HELD_KINDS, HELD_LABELS, HELD_NOUNS, automationResult, briefIssues, buildResult, explainGuard, gitFolders, heldShell, isAssetSave, isAutomationCommand, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isPiped, isSearchCommand, matchGotchas, mcpKind, mcpServer } from './guards.mjs'
-import { AREAS, ROLES, STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, normalizeArea, parseEditorLock, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
+import { clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
+import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, gitFolders, heldKindsOf, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
+import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 import { intentChanges, intentFileOf } from './changes.mjs'
@@ -29,6 +29,9 @@ const lastTools = new Map()
 const idleWarned = new Set()
 // When the person last typed a prompt: after an away window has ended, it means they are back.
 let lastPersonAt = 0
+// When this session started: a with-proof merge counts only proof seen since (D2: "passed in tool output this session").
+// A hot reload starts it again, which only makes the rule stricter.
+let sessionStartedAt = Date.now()
 
 // The store, files and session as closures: `$` cannot be handed to state.mjs itself.
 /** @param {Engine} $ @returns {import('./state.mjs').Io} */
@@ -45,6 +48,7 @@ function io($) {
     root: () => $.session.root(),
     gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
+    list: path => $.fs.list(path),
   }
 }
 
@@ -64,10 +68,11 @@ export function register(on, options) {
     idleWarned.clear()
     resetWorkers()
     lastPersonAt = 0
+    sessionStartedAt = Date.now()
     cwd = e.cwd
     try {
-      const { me, root, isS2 } = await laneOf($)
-      await registerTools($)
+      const { me, root, isS2, pack } = await laneOf($)
+      await registerTools($, pack)
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
@@ -113,7 +118,7 @@ export function register(on, options) {
   on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => shell($, e.command, e, next))
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
-    const issues = briefGate === 'off' ? [] : briefIssues(e.prompt, e.subagent_type)
+    const issues = briefGate === 'off' ? [] : briefIssues(e.prompt, e.subagent_type, (await laneOf($).catch(() => null))?.pack)
     const missing = andList(issues)
     if (issues.length > 0 && briefGate === 'enforce') {
       $.ui.toast(`Ather brief gate: refused a worker brief missing ${missing}.`)
@@ -153,7 +158,7 @@ export function register(on, options) {
     const isMcp = tool.startsWith('mcp__') && !tool.startsWith('mcp__ather-automata__')
     const input = JSON.stringify(e).slice(0, 4000)
     if (e.agentId) lastTools.set(e.agentId, { tool, at: Date.now() })
-    if (isMcp && isAssetSave(input)) {
+    if (isMcp && (await laneOf($)).pack.isAssetSave(input)) {
       const denied = await hold($, 'asset-save', `${tool} ${input.slice(0, 300)}`).catch(() => null)
       if (denied) return { deny: denied }
     }
@@ -192,7 +197,7 @@ async function noteIntentEdit($, target, path, before) {
 
 /** @param {Engine} $ @param {string} slug */
 async function readIntent($, slug) {
-  const { root } = await laneOf($)
+  const { root, pack } = await laneOf($)
   const dir = `${root}/docs/intent/${slug}`
   const files = io($)
   const prompt = await files.read(`${dir}/prompt.md`)
@@ -203,9 +208,9 @@ async function readIntent($, slug) {
     findings: (await files.read(`${dir}/findings.md`)) ?? '',
     progress: (await files.read(`${dir}/progress.md`)) ?? '',
     files: (await $.fs.list(dir).catch(() => [])).map(entry => entry.name),
-    hasDebrief: await files.exists(`${root}/Saved/AtherAutomata/debriefs/${slug}.md`),
+    hasDebrief: await files.exists(`${root}/${pack.debriefPath(slug)}`),
     mtimeMs: 0,
-  })
+  }, pack)
 }
 
 /** @param {Engine} $ */
@@ -240,21 +245,21 @@ async function branchesFor($, command) {
 
 /** @param {Engine} $ @param {boolean} hasEnded */
 async function heartbeat($, hasEnded) {
-  const { root, isS2 } = await laneOf($)
+  const { root, isS2, pack } = await laneOf($)
   if (!isS2) return
   const sid = await state.sessionId(io($))
   const away = await state.readAway(io($))
   const lane = { sessionId: sid, intent: await state.readPinned(io($)), branch: await readBranch($), updatedAt: Date.now(), away: away.phase, hasEnded }
-  await $.fs.write(`${root}/Saved/AtherAutomata/lanes/${sid}.json`, JSON.stringify(lane))
+  await $.fs.write(`${root}/${pack.localDir}/lanes/${sid}.json`, JSON.stringify(lane))
 }
 
 // A session this checkout can vouch has gone: its heartbeat is here and says ended, or is stale.
 // A session with no heartbeat here may be alive in another checkout, so it is left alone.
 /** @param {Engine} $ @param {string} sid */
 async function isLaneGone($, sid) {
-  const { root } = await laneOf($)
+  const { root, pack } = await laneOf($)
   try {
-    const lane = JSON.parse((await io($).read(`${root}/Saved/AtherAutomata/lanes/${sid}.json`)) ?? '')
+    const lane = JSON.parse((await io($).read(`${root}/${pack.localDir}/lanes/${sid}.json`)) ?? '')
     return lane.hasEnded === true || Date.now() - Number(lane.updatedAt) >= LANE_STALE_MS
   } catch {
     return false
@@ -264,9 +269,9 @@ async function isLaneGone($, sid) {
 // Another session is alive while its heartbeat is fresh and has not said it ended.
 /** @param {Engine} $ @param {string} sid */
 async function isLaneAlive($, sid) {
-  const { root } = await laneOf($)
+  const { root, pack } = await laneOf($)
   try {
-    const lane = JSON.parse((await io($).read(`${root}/Saved/AtherAutomata/lanes/${sid}.json`)) ?? '')
+    const lane = JSON.parse((await io($).read(`${root}/${pack.localDir}/lanes/${sid}.json`)) ?? '')
     return !lane.hasEnded && Date.now() - Number(lane.updatedAt) < LANE_STALE_MS
   } catch {
     return false
@@ -281,8 +286,8 @@ async function scopeOf($) {
 
 /** @param {Engine} $ */
 async function peers($) {
-  const { root } = await laneOf($)
-  const dir = `${root}/Saved/AtherAutomata/lanes`
+  const { root, pack } = await laneOf($)
+  const dir = `${root}/${pack.localDir}/lanes`
   const sid = await state.sessionId(io($))
   const out = []
   for (const entry of await $.fs.list(dir).catch(() => [])) {
@@ -300,23 +305,23 @@ async function peers($) {
 // What every prompt is told about this lane: the tracked intent, the Editor lock, live peers, the window's mandate.
 /** @param {Engine} $ */
 async function laneText($) {
-  const { root, me } = await laneOf($)
+  const { root, me, pack } = await laneOf($)
   const lines = []
   const tz = await state.readTz(io($))
   const slug = await state.readPinned(io($))
   const intent = slug ? await readIntent($, slug) : undefined
   if (intent) {
-    const { role } = await state.readProfile(io($), me)
+    const { role } = await state.readProfile(io($), me, pack)
     const prs = await state.readPrStates(io($))
-    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($))), role, prs)]
+    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), pack), role, prs, pack)]
     lines.push(`Tracked intent: ${intent.slug} (docs/intent/${intent.slug}/), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
   }
-  const lock = parseEditorLock(await io($).read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(Date.now(), tz))
+  const lock = pack.parseLock(pack.lockFile ? await io($).read(`${root}/${pack.lockFile}`) : null, localMinutes(Date.now(), tz))
   if (lock.state === 'held') lines.push(`Editor owner lock: held by ${lock.holder || 'another lane'}${lock.until ? ` until ${lock.until}` : ''}.`)
   const live = await peers($)
   if (live.length > 0) lines.push(`Live peer lanes on this checkout: ${live.map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`).join('; ')}.`)
   const away = await state.readAway(io($))
-  if (isHolding(away)) lines.push(mandateText(away, tz))
+  if (isHolding(away)) lines.push(mandateText(away, tz, pack))
   return lines.length > 0 ? `Ather Automata lane state (live, read-only):\n${lines.join('\n')}` : ''
 }
 
@@ -377,13 +382,13 @@ async function awayTool($, input) {
   const action = String(input.action ?? '')
   const tz = await state.readTz(io($))
   if (action === 'start') {
-    const held = Array.isArray(input.held) ? HELD_KINDS.filter(kind => /** @type {unknown[]} */ (input.held).includes(kind)) : undefined
+    const { root, me, pack } = await laneOf($)
+    const held = Array.isArray(input.held) ? heldKindsOf(pack).filter(kind => /** @type {unknown[]} */ (input.held).includes(kind)) : undefined
     const choice = { hours: clampHours(Number(input.hours) || 8), untilDone: input.untilDone === true, goal: typeof input.goal === 'string' ? input.goal.trim() : '', held }
-    const { root, me } = await laneOf($)
-    const started = await state.startAway(io($), choice, { root, me, tz, now: Date.now() })
+    const started = await state.startAway(io($), choice, { root, me, tz, now: Date.now(), pack })
     if (started === null) return 'An away window is already running or waiting for the user\'s review.'
     $.ui.toast(`Ather: away window running ${windowEndText(started, tz)}.`)
-    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${ALLOWED_TEXT}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => HELD_LABELS[/** @type {import('./guards.mjs').HeldKind} */ (kind)] ?? kind).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
+    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => HELD_LABELS[/** @type {import('./guards.mjs').HeldKind} */ (kind)] ?? kind).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
   }
   if (action === 'end') return (await state.endAway(io($))) ? 'Autonomy window ended; the user reviews it with /ather.' : 'No autonomy window is running.'
   if (action === 'close') return (await state.closeAway(io($))) ? 'Autonomy window closed.' : 'No autonomy window to close.'
@@ -392,14 +397,14 @@ async function awayTool($, input) {
 
 /** @param {Engine} $ @param {Record<string, unknown>} input */
 async function profileTool($, input) {
-  const { root, me } = await laneOf($)
+  const { root, me, pack } = await laneOf($)
   const done = []
   const role = input.role === undefined ? undefined : String(input.role).toLowerCase()
-  if (role !== undefined && !(/** @type {readonly string[]} */ (ROLES).includes(role))) return `Unknown role "${role}": use ${ROLES.join(', ')}.`
-  const area = input.area === undefined ? undefined : normalizeArea(String(input.area))
-  if (area === 'Unsorted') return `Unknown area "${String(input.area)}": use one of ${AREAS.join(', ')}.`
+  if (role !== undefined && !pack.roles.includes(role)) return `Unknown role "${role}": use ${pack.roles.join(', ')}.`
+  const area = input.area === undefined ? undefined : pack.normalizeArea(String(input.area))
+  if (area === 'Unsorted') return `Unknown area "${String(input.area)}": use one of ${pack.areas.join(', ')}.`
   if (role !== undefined || area !== undefined) {
-    await state.setProfile(io($), me, { role, area })
+    await state.setProfile(io($), me, { role, area }, pack)
     done.push([role ? `Role set to ${role}.` : '', area ? `Area set to ${area}.` : ''].filter(Boolean).join(' '))
   }
   if (typeof input.track === 'string' && input.track.trim() !== '') {
@@ -412,11 +417,11 @@ async function profileTool($, input) {
 
 /** @param {Engine} $ */
 async function statusText($) {
-  const { root, me } = await laneOf($)
+  const { root, me, pack } = await laneOf($)
   const slug = await state.readPinned(io($))
   const intent = slug ? await readIntent($, slug) : undefined
-  const { role, area } = await state.readProfile(io($), me)
-  const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)))
+  const { role, area } = await state.readProfile(io($), me, pack)
+  const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)), pack)
   const away = await state.readAway(io($))
   const tz = await state.readTz(io($))
   const prs = await state.readPrStates(io($))
@@ -426,13 +431,14 @@ async function statusText($) {
       role,
       area,
       tracked: intent
-        ? { slug: intent.slug, status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer', prs)], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, prs: prStatusList(intent, prs), directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) }
+        ? { slug: intent.slug, status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer', prs, pack)], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, prs: prStatusList(intent, prs), directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) }
         : null,
       evidence,
-      editorLock: parseEditorLock(await io($).read(`${root}/Saved/EDITOR_OWNER.txt`), localMinutes(Date.now(), tz)).raw,
+      ...(pack.lockFile ? { editorLock: pack.parseLock(await io($).read(`${root}/${pack.lockFile}`), localMinutes(Date.now(), tz)).raw } : {}),
+      ...(pack.id === 'unreal' ? {} : { pack: pack.id, gates: pack.gates.map(gate => `${gate.command}: ${gate.proofs.join(', ')}`), mergePolicy: pack.mergePolicy }),
       peers: (await peers($)).map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`),
       away: { phase: away.phase, until: away.phase === 'off' ? '' : windowEndText(away, tz), ledger: away.ledgerPath, parked: away.parked.map(one => `${one.id}: ${one.command}`) },
-      recurringGotchas: (await state.readRecurring(io($))).map(one => `${one.title} (${one.count} sessions)`),
+      recurringGotchas: (await state.readRecurring(io($), pack)).map(one => `${one.title} (${one.count} sessions)`),
       caught: await state.readScore(io($)),
     },
     null,
@@ -440,11 +446,11 @@ async function statusText($) {
   )
 }
 
-/** @param {Engine} $ */
-async function registerTools($) {
+/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack */
+async function registerTools($, pack) {
   await $.tool.register({
     name: 'status',
-    description: 'Ather Automata: read the live state of this S2 session as JSON: tracked intent, its stage (Plan, Build, Prove, Ship), director calls, evidence read from tool output, Editor owner lock, peer lanes, autonomy window, recurring traps. Read-only.',
+    description: `Ather Automata: read the live state of ${pack.statusWhat} as JSON: tracked intent, its stage (Plan, Build, Prove, Ship), director calls, evidence read from tool output, ${pack.lockFile ? 'Editor owner lock' : 'the gates the profile names'}, peer lanes, autonomy window, recurring traps. Read-only.`,
     inputSchema: { type: 'object', properties: {} },
   })
   await $.tool.register({
@@ -458,7 +464,7 @@ async function registerTools($) {
         hours: { type: 'number', description: 'Window length in hours (0.25 to 16). Default 8. Ignored with untilDone.' },
         untilDone: { type: 'boolean', description: 'No fixed end: the window runs until the goal is done (call this tool with action "end" then), capped at 24 hours.' },
         goal: { type: 'string', description: 'What to pursue while the user is away, in their words.' },
-        held: { type: 'array', items: { type: 'string', enum: HELD_KINDS }, description: 'Actions to refuse and park. Default: merge, push-main.' },
+        held: { type: 'array', items: { type: 'string', enum: heldKindsOf(pack) }, description: `Actions to refuse and park. Default: ${pack.held.defaults.join(', ')}.` },
       },
       required: ['action'],
     },
@@ -469,8 +475,8 @@ async function registerTools($) {
     inputSchema: {
       type: 'object',
       properties: {
-        role: { type: 'string', enum: [...ROLES] },
-        area: { type: 'string', enum: AREAS },
+        role: { type: 'string', enum: [...pack.roles] },
+        ...(pack.areas.length > 0 ? { area: { type: 'string', enum: [...pack.areas] } } : { area: { type: 'string' } }),
         track: { type: 'string', description: 'The folder name of an intent under docs/intent for this session to track.' },
       },
     },
@@ -482,7 +488,8 @@ async function registerTools($) {
 /** @param {Engine} $ @param {string} command @param {any} e @param {any} next */
 async function shell($, command, e, next) {
   const away = await state.readAway(io($)).catch(() => offAway())
-  const kind = isHolding(away) ? heldShell(command, away.held, await branchesFor($, command)) : null
+  const { pack } = isHolding(away) ? await laneOf($) : { pack: null }
+  const kind = pack ? heldShell(command, away.held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack) }) : null
   if (kind) {
     const denied = await hold($, kind, command).catch(() => null)
     if (denied) return { deny: denied }
@@ -496,33 +503,29 @@ async function shell($, command, e, next) {
   }
 }
 
+// With-proof merges (D2): every rung the profile requires passed in tool output in this session.
+/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack */
+async function isMergeProven($, pack) {
+  if (pack.mergePolicy !== 'with-proof') return false
+  const evidence = await state.readEvidence(io($), await scopeOf($), pack)
+  const rungs = pack.mergeRungs ?? []
+  const seen = /** @type {Record<string, { state: string, at?: number }>} */ (evidence)
+  return rungs.length > 0 && rungs.every(rung => seen[rung]?.state === 'pass' && (seen[rung]?.at ?? 0) >= sessionStartedAt)
+}
+
 /** @param {Engine} $ @param {string} command @param {{ text?: string, deny?: string, isError?: boolean }} ran */
 async function afterShell($, command, ran) {
   const context = []
   const text = ran.text ?? ''
-  if (!isSearchCommand(command)) await noteTraps($, text)
+  const { pack } = await laneOf($)
+  if (!isSearchCommand(command)) await noteTraps($, text, pack)
   const guard = explainGuard(command)
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
-  if (isBuildCommand(command)) {
-    const result = buildResult(text)
-    if (result && isEditorBuild(command)) await state.setRung(io($), await scopeOf($), 'build', { state: result, detail: result === 'pass' ? 'Result: Succeeded' : 'Result: Failed' })
-    if (isPiped(command) && result === 'fail' && ran.isError !== true) {
-      context.push('Ather Automata: the build printed "Result: Failed" although the command exited 0. The exit code is the pipe\'s, not the build\'s. Treat this build as failed.')
-      $.ui.toast('Ather: piped build reported success but its Result line says Failed.', { timeoutMs: 10000 })
-      void state.bump(io($), 'buildsCorrected').catch(() => undefined)
-    } else if (isPiped(command) && result === null) {
-      context.push('Ather Automata: this build was piped through a filter, so its exit code is the filter\'s. Read the build\'s own "Result:" line from the log before claiming the build passed.')
-    }
-  }
-  if (isLogRead(command) && /\bS2Editor\b/.test(text)) {
-    const result = buildResult(text)
-    if (result) await state.setRung(io($), await scopeOf($), 'build', { state: result, detail: result === 'pass' ? 'Result: Succeeded (from the log)' : 'Result: Failed (from the log)' })
-  }
-  if (isAutomationCommand(command)) {
-    // Every run replaces the last result: a run whose outcome cannot be read is no evidence.
-    const result = automationResult(text)
-    await state.setRung(io($), await scopeOf($), 'automation', { state: result ?? 'none', detail: result === 'pass' ? 'tests passed' : result === 'fail' ? 'tests failed or none ran' : 'no test result read' })
-  }
+  const reading = pack.readShell(command, text, ran)
+  for (const one of reading.rungs) await state.setRung(io($), await scopeOf($), one.rung, one.value)
+  context.push(...reading.context)
+  for (const toast of reading.toasts) $.ui.toast(toast.text, toast.timeoutMs === undefined ? undefined : { timeoutMs: toast.timeoutMs })
+  for (const key of reading.bumps) void state.bump(io($), key).catch(() => undefined)
   if (isMergeCommand(command) && ran.deny === undefined && ran.isError !== true) {
     const lost = await auditMerge($).catch(() => [])
     if (lost.length > 0) {
@@ -535,9 +538,9 @@ async function afterShell($, command, ran) {
   return context
 }
 
-/** @param {Engine} $ @param {string} text */
-async function noteTraps($, text) {
-  const fresh = matchGotchas(text).filter(rule => !seenTraps.has(rule.id))
+/** @param {Engine} $ @param {string} text @param {import('./packs/index.mjs').Pack} pack */
+async function noteTraps($, text, pack) {
+  const fresh = matchGotchas(text, pack).filter(rule => !seenTraps.has(rule.id))
   if (fresh.length === 0) return
   for (const rule of fresh) {
     seenTraps.add(rule.id)
@@ -548,21 +551,24 @@ async function noteTraps($, text) {
 
 /** @param {Engine} $ @param {string} tool @param {string} input @param {{ text?: string, isError?: boolean }} ran */
 async function noteMcp($, tool, input, ran) {
-  const kind = mcpKind(input)
+  const { pack } = await laneOf($)
+  const kind = pack.mcpKind(input)
   if (kind) await state.noteMcp(io($), await scopeOf($), kind, mcpServer(tool), ran.isError !== true)
-  await noteTraps($, ran.text ?? '')
+  await noteTraps($, ran.text ?? '', pack)
 }
 
 // After a merge: binary assets byte-identical to the merged-in side lost this branch's edits.
 /** @param {Engine} $ */
 async function auditMerge($) {
-  const { root } = await laneOf($)
+  const { root, pack } = await laneOf($)
+  const binary = pack.binaryAssets
+  if (!binary) return []
   const git = (/** @type {string[]} */ args) => $.process.run(['git', '-C', root, ...args], { env: { GIT_OPTIONAL_LOCKS: '0' }, timeoutMs: 30000 })
   const [, ours = '', theirs = ''] = (await git(['rev-list', '--parents', '-n', '1', 'HEAD'])).stdout.trim().split(/\s+/)
   if (theirs === '') return []
   const base = (await git(['merge-base', ours, theirs])).stdout.trim()
   if (base === '') return []
-  const touched = (await git(['diff', '--name-only', base, ours])).stdout.split(/\r?\n/).filter(path => /\.(uasset|umap)$/i.test(path)).slice(0, 300)
+  const touched = (await git(['diff', '--name-only', base, ours])).stdout.split(/\r?\n/).filter(path => binary.test(path)).slice(0, 300)
   if (touched.length === 0) return []
   const blobs = async (/** @type {string} */ rev) => {
     const map = new Map()

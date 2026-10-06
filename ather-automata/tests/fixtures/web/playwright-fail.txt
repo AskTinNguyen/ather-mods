@@ -1,0 +1,60 @@
+
+Running 7 tests using 7 workers
+
+  x  6 [w1365] › tests\ui\routes.spec.mjs:17:3 › /no-such-route-fixture (1.1s)
+  ok 1 [w1365] › tests\ui\routes.spec.mjs:17:3 › / @zoom200 (1.4s)
+  ok 5 [w1365] › tests\ui\routes.spec.mjs:17:3 › /listen (2.2s)
+  ok 2 [w1365] › tests\ui\routes.spec.mjs:17:3 › /practice @zoom200 (2.2s)
+  ok 7 [w1365] › tests\ui\routes.spec.mjs:17:3 › /progress (2.3s)
+  ok 4 [w1365] › tests\ui\routes.spec.mjs:17:3 › /learn (2.4s)
+  ok 3 [w1365] › tests\ui\routes.spec.mjs:17:3 › /library (2.5s)
+
+
+  1) [w1365] › tests\ui\routes.spec.mjs:17:3 › /no-such-route-fixture ──────────────────────────────
+
+    Error: status for /no-such-route-fixture
+
+    expect(received).toBeLessThan(expected)
+
+    Expected: < 400
+    Received:   404
+
+       at helpers.mjs:77
+
+      75 |
+      76 |   const response = await page.goto(route, { waitUntil: "load" });
+    > 77 |   expect(response?.status(), `status for ${route}`).toBeLessThan(400);
+         |                                                     ^
+      78 |   await page.waitForLoadState("networkidle");
+      79 |   if (prepare) await prepare(page);
+      80 |
+        at verifyPage (<repo>\tests\ui\helpers.mjs:77:53)
+        at <repo>\tests\ui\routes.spec.mjs:18:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\ui\routes--no-such-route-fixture-w1365\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\ui\routes--no-such-route-fixture-w1365\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\ui\routes--no-such-route-fixture-w1365\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\ui\routes--no-such-route-fixture-w1365\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [w1365] › tests\ui\routes.spec.mjs:17:3 › /no-such-route-fixture ───────────────────────────────
+  6 passed (6.0s)
+
+ui:verify screens covered:
+  passed   w1365    1365x768  / (axe rules 26)
+  passed   w1365    1365x768  /learn (axe rules 26)
+  passed   w1365    1365x768  /library (axe rules 29)
+  passed   w1365    1365x768  /listen (axe rules 24)
+  failed   w1365    -         /no-such-route-fixture (axe rules -)
+  passed   w1365    1365x768  /practice (axe rules 23)
+  passed   w1365    1365x768  /progress (axe rules 28)
+ui:verify summary: 6 passed, 1 failed, 0 skipped; 7 routes x 1 screens; overall failed

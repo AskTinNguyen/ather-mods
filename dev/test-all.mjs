@@ -14,10 +14,23 @@ const MOD = path.resolve(HERE, '../ather-automata')
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-test-'))
 const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: 'inherit' })
 
+// Copies a folder: .mjs files rewritten, everything else as it is, subfolders too (packs/, fixtures/).
 const copy = (from, to, rewrite = s => s) => {
   fs.mkdirSync(to, { recursive: true })
-  for (const name of fs.readdirSync(from).filter(f => f.endsWith('.mjs'))) fs.writeFileSync(path.join(to, name), rewrite(fs.readFileSync(path.join(from, name), 'utf8')))
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const source = path.join(from, entry.name)
+    if (entry.isDirectory()) copy(source, path.join(to, entry.name), rewrite)
+    else if (entry.name.endsWith('.mjs')) fs.writeFileSync(path.join(to, entry.name), rewrite(fs.readFileSync(source, 'utf8')))
+    else fs.copyFileSync(source, path.join(to, entry.name))
+  }
 }
+
+// `node --test ather-automata/tests/*.test.mjs` resolves 'claude-code/testing' through this link.
+const link = path.resolve(HERE, '../node_modules/claude-code')
+fs.mkdirSync(link, { recursive: true })
+fs.writeFileSync(path.join(link, 'package.json'), JSON.stringify({ name: 'claude-code', type: 'module', exports: { './testing': './testing.mjs' } }))
+fs.writeFileSync(path.join(link, 'testing.mjs'), `export * from '${new URL('./shim/node-test.mjs', import.meta.url).href}'
+`)
 
 console.log('== type-check')
 const types = process.env.CLAUDE_CODE_TYPES ?? [path.join(MOD, '.claude-plugin/types/claude-code/index.d.ts')].find(f => fs.existsSync(f))
@@ -26,7 +39,7 @@ if (types) {
   fs.writeFileSync(config, JSON.stringify({
     compilerOptions: { target: 'es2023', lib: ['es2023'], types: [], module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
     // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
-    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs')).map(f => f.replace(/\\/g, '/')),
+    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs')).map(f => f.replace(/\\/g, '/')),
   }))
   sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')
@@ -44,5 +57,7 @@ console.log('== e2e')
 const e2e = path.join(HERE, 'e2e')
 fs.rmSync(path.join(e2e, 'out'), { recursive: true, force: true })
 copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
-sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"`, e2e)
+// --layouts <dir> passes through: the e2e run writes every pane laid out at 72 and 110 columns there.
+const layouts = process.argv.includes('--layouts') ? path.resolve(process.argv[process.argv.indexOf('--layouts') + 1]) : null
+sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"${layouts ? ` --layouts "${layouts}"` : ''}`, e2e)
 console.log(`report: ${path.join(WORK, 'e2e-report.md')}`)

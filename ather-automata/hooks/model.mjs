@@ -2,14 +2,14 @@
 // Ather Automata: what the S2 workflow's files say. Intents, people, time, the
 // Editor lock, the four stages and the one next step. Pure: no `$`.
 
-export const ROLES = /** @type {const} */ (['engineer', 'techart', 'designer'])
-export const ROLE_LABELS = { engineer: 'Engineer', techart: 'Tech artist', designer: 'Designer' }
-export const OWNERS = 'Tin Nguyen, CanhNguyen and VuTruong'
-const RUNG_LABELS = { build: 'a build that succeeded', automation: 'passing tests', readback: 'a read-back check', pie: 'a PIE proof', editor: 'your own Editor check' }
-export const STAGE_LABELS = { plan: 'Plan', build: 'Build', prove: 'Prove', ship: 'Ship', close: 'Ready to close', shipped: 'Shipped' }
+import { unreal } from './packs/unreal.mjs'
 
-// The studio's intent areas (docs/intent/README.md#areas, decided 2026-10-03).
-export const AREAS = ['Tools', 'Combat', 'AI', 'Enemies', 'Bosses', 'Characters & Animation', 'VFX', 'World & Levels', 'Audio', 'UI', 'Pipeline', 'Optimization']
+// The Unreal pack's names, kept here for the modules and tests that read them from the model.
+export { ROLES, ROLE_LABELS, OWNERS, AREAS, parseRole, parseEditorLock } from './packs/unreal.mjs'
+
+/** @typedef {import('./packs/index.mjs').Pack} Pack */
+
+export const STAGE_LABELS = { plan: 'Plan', build: 'Build', prove: 'Prove', ship: 'Ship', close: 'Ready to close', shipped: 'Shipped' }
 
 // The issue an intent names: "#28887", "sipherxyz/S2#28887", a link ending "issues/28887", or "28887".
 /** @param {string} text */
@@ -18,17 +18,8 @@ const issueNumber = text => {
   return match ? Number(match[1] ?? match[2]) : null
 }
 
-/** @param {string} text @returns {(typeof ROLES)[number] | null} */
-export const parseRole = text => {
-  const words = text.toLowerCase()
-  if (/design/.test(words)) return 'designer'
-  if (/tech\s*-?\s*art/.test(words)) return 'techart'
-  if (/engineer|programmer|coder|developer/.test(words)) return 'engineer'
-  return null
-}
-
-/** @param {string} text */
-export const normalizeArea = text => AREAS.find(area => area.toLowerCase() === text.trim().toLowerCase()) ?? 'Unsorted'
+/** @param {string} text @param {Pack} [pack] */
+export const normalizeArea = (text, pack = unreal) => pack.normalizeArea(text)
 
 /** @param {string} name */
 const personKey = name => name.toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -261,8 +252,8 @@ export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number
  * @typedef {ReturnType<typeof parseIntent>} Intent
  */
 
-/** @param {IntentFiles} input */
-export const parseIntent = input => {
+/** @param {IntentFiles} input @param {Pack} [pack] */
+export const parseIntent = (input, pack = unreal) => {
   const { prompt, progress } = input
   // "parked: weather presets merged…" is a status too: take the leading word.
   const status = /^[a-z]+/.exec(field(prompt, 'Status').toLowerCase())?.[0] ?? 'unknown'
@@ -271,7 +262,7 @@ export const parseIntent = input => {
     slug: input.slug,
     title: /^#\s+(.+)$/m.exec(prompt)?.[1]?.trim() ?? input.slug,
     goal: shortTitle(/^(.+?[.!?])(\s|$)/.exec(section(prompt, 'Goal').replace(/\s+/g, ' ').trim())?.[1] ?? section(prompt, 'Goal').replace(/\s+/g, ' ').trim(), 110),
-    area: normalizeArea(field(prompt, 'Area')),
+    area: normalizeArea(field(prompt, 'Area'), pack),
     owner: field(prompt, 'Owner'),
     issue: issueNumber(field(prompt, 'Issue')),
     status,
@@ -362,25 +353,7 @@ export const isEvening = (ms, tz) => {
   return hour >= 20 || hour < 5
 }
 
-/**
- * @typedef {{ state: 'free' | 'held' | 'unknown', holder: string, until: string, isStale: boolean, raw: string, session: string }} EditorLock `session`: the first 8 hex of the Claude session named in it, or ''
- * @param {string | null} raw @param {number} nowMinutes @returns {EditorLock}
- */
-export const parseEditorLock = (raw, nowMinutes) => {
-  const text = (raw ?? '').trim()
-  const session = /\bsession\s+([0-9a-f]{8})/i.exec(text)?.[1]?.toLowerCase() ?? ''
-  if (text === '') return { state: 'unknown', holder: '', until: '', isStale: false, raw: text, session }
-  const free = /free\s+since\s+(\d{1,2}:\d{2})/i.exec(text)
-  // "…launched by Claude session b3ebb2cb; free for Tin to use; no agent holds it since 20:40" is free too.
-  if (free || /^free\b/i.test(text) || /\bfree (for|to use)\b|\bno (agent|one|lane) holds it\b/i.test(text)) return { state: 'free', holder: '', until: free?.[1] ?? /holds it since\s+(\d{1,2}:\d{2})/i.exec(text)?.[1] ?? '', isStale: false, raw: text, session }
-  const until = /until\s+(\d{1,2}:\d{2})/i.exec(text)?.[1] ?? ''
-  const named = /(?:holder|owner)\s*[:=]\s*([^,;\n]+)|held by\s+([^,;\n]+)/i.exec(text)
-  const holder = (named?.[1] ?? named?.[2] ?? text.split(/\r?\n/)[0] ?? '').replace(/\buntil\b.*$/i, '').trim()
-  const end = /^(\d{1,2}):(\d{2})$/.exec(until)
-  const endMinutes = end ? Number(end[1]) * 60 + Number(end[2]) : null
-  const isStale = endMinutes !== null && nowMinutes - endMinutes > 30 && nowMinutes - endMinutes < 12 * 60
-  return { state: 'held', holder: holder.slice(0, 60), until, isStale, raw: text, session }
-}
+/** @typedef {import('./packs/unreal.mjs').EditorLock} EditorLock */
 
 // A session's name from Claude Code's record of it (the lines a grep for its titles found):
 // the last title the person or the session set, else the last one Claude Code generated.
@@ -407,48 +380,34 @@ export const sessionTitle = lines => {
 
 // ---------------------------------------------------------------- stages and the next step
 
-/** @typedef {{ state: 'none' | 'pass' | 'fail', detail: string }} Rung */
-/** @typedef {Record<'build' | 'automation' | 'readback' | 'pie' | 'editor', Rung>} Evidence */
+/** @typedef {import('./packs/index.mjs').Rung} Rung */
+/** @typedef {Record<string, Rung>} Evidence the pack's rungs; the Unreal pack's are build, automation, readback, pie and editor */
 
-/** @returns {Evidence} */
-export const emptyEvidence = () => ({
-  build: { state: 'none', detail: '' },
-  automation: { state: 'none', detail: '' },
-  readback: { state: 'none', detail: '' },
-  pie: { state: 'none', detail: '' },
-  editor: { state: 'none', detail: '' },
-})
-
-/** @param {string} role @returns {Array<keyof Evidence>} */
-const requiredRungs = role => (role === 'engineer' ? ['build', 'automation'] : role === 'techart' ? ['editor', 'pie'] : ['pie'])
+/** @param {Pack} [pack] @returns {Evidence} */
+export const emptyEvidence = (pack = unreal) => pack.emptyEvidence()
 
 // A Status of completed wins; then every item met with every PR merged is ready to close, whatever proof this session saw.
-/** @param {Intent | undefined} intent @param {Evidence} evidence @param {string} role @param {PrStates} [prs] @returns {keyof typeof STAGE_LABELS} */
-export const currentStage = (intent, evidence, role, prs = {}) => {
+/** @param {Intent | undefined} intent @param {Evidence} evidence @param {string} role @param {PrStates} [prs] @param {Pack} [pack] @returns {keyof typeof STAGE_LABELS} */
+export const currentStage = (intent, evidence, role, prs = {}, pack = unreal) => {
   if (intent?.status === 'completed') return intent.hasDebrief ? 'shipped' : 'ship'
   if (!intent || intent.acceptanceTotal === 0) return 'plan'
   if (isReadyToClose(intent, prs)) return 'close'
   if (intent.acceptanceDone < intent.acceptanceTotal) return 'build'
-  return isProven(evidence, role) ? 'ship' : 'prove'
+  return pack.isProven(evidence, role) ? 'ship' : 'prove'
 }
-
-// With no role set, any role's proof counts: a PIE proof, or a build that succeeded with passing tests.
-/** @param {Evidence} evidence @param {string} role */
-const isProven = (evidence, role) =>
-  role === '' ? evidence.pie.state === 'pass' || (evidence.build.state === 'pass' && evidence.automation.state === 'pass') : requiredRungs(role).every(rung => evidence[rung].state === 'pass')
 
 /**
  * The one next step for the tracked intent and the person's role.
- * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me @param {PrStates} [prs]
+ * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me @param {PrStates} [prs] @param {Pack} [pack]
  * @returns {{ key: string, label: string, prompt: string, hint: string, isDraft?: boolean } | undefined}
  */
-export const nextStep = (role, intent, evidence, workers, me, prs = {}) => {
+export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = unreal) => {
   if (!intent) return { key: 'start', label: 'Start an intent', prompt: '/intent ', hint: 'Type what you want after /intent; the intent skill takes it from there.', isDraft: true }
   const slug = intent.slug
   if (!isMine(intent, me)) {
     return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: `Explain intent ${slug} to me in under ten lines: what it is for, which stage it is in (Plan, Build, Prove, Ship) and why, which decisions are open and whose they are, and what the next step would be. Read docs/intent/${slug}/ only; change nothing.` }
   }
-  const stage = currentStage(intent, evidence, role, prs)
+  const stage = currentStage(intent, evidence, role, prs, pack)
   if (stage === 'close') {
     const named = andList(intent.prs.map(number => `#${number}`))
     return {
@@ -468,37 +427,24 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}) => {
     if (intent.hasWorker || workers > 0) {
       return { key: 'progress', label: 'See how the work is going', hint: 'A five-line status against the checklist.', prompt: `Summarise intent ${slug} against its checklist: what is done with evidence, what is next, what is blocked. Five lines.` }
     }
-    const brief =
-      role !== 'techart' && role !== 'designer'
-        ? `Dispatch a background Opus worker for intent ${slug} using .agents/skills/intent/assets/worker-brief.md: exact paths, the acceptance checks it must prove, the shared-tree rule, no commits in the shared checkout.`
-        : `Dispatch one background Opus worker for intent ${slug} as the only Editor MCP user: take the Editor owner lock first, read back every write, never save a package that does not compile, release the lock when done. Use .agents/skills/intent/assets/worker-brief.md.`
-    return { key: 'brief', label: 'Start the work', hint: 'A background agent does the work, briefed the studio way for your role.', prompt: brief }
+    return { key: 'brief', label: 'Start the work', hint: pack.prompts.briefHint, prompt: pack.prompts.brief(role, slug) }
   }
   if (stage === 'prove') {
-    const missing = role === '' ? ['a PIE proof, or a build that succeeded with passing tests'] : requiredRungs(role).filter(rung => evidence[rung].state !== 'pass').map(rung => RUNG_LABELS[rung])
-    const prompt =
-      role === '' || role === 'engineer'
-        ? `Prove intent ${slug}: build S2Editor Development with the output written to a log file, report the build's own Result: line, then run the relevant automation tests and report the counts.`
-        : role === 'techart'
-          ? `Prove intent ${slug}: record a PIE proof with the map and capture path, and tell me which asset the change never touched to open in the Editor for my own check.`
-          : `Prove intent ${slug} in PIE with the MainChar test simulation templates (.agents/skills/mainchar-test-simulation/SKILL.md) and record the proof path.`
-    const own = role === 'techart' ? ' After your own Editor check, type /ather checked.' : ''
-    return { key: 'prove', label: 'Prove it works', hint: `Still needed: ${missing.join(' and ')}. Ather reads this from tool output, not from what the session says.${own}`, prompt }
+    const missing = role === '' ? [pack.anyProofText] : pack.requiredRungs(role).filter(rung => evidence[rung]?.state !== 'pass').map(rung => pack.rungLabels[rung] ?? rung)
+    const prompt = pack.prompts.prove(role, slug)
+    const own = pack.ownCheck && role === pack.ownCheck.role ? pack.ownCheck.proveHint : ''
+    return { key: 'prove', label: 'Prove it works', hint: `Still needed: ${andList(missing)}. Ather reads this from tool output, not from what the session says.${own}`, prompt }
   }
   if (stage === 'ship' && intent.status === 'completed') {
     return {
       key: 'debrief',
       label: 'Write up what was learned',
       hint: 'What was proven, lost and decided, and rules worth keeping.',
-      prompt: `Debrief intent ${slug}. List what was proven and with what evidence, what was lost or overwritten (lost optimisation vs broken feature), every decision taken on my behalf, and the gotchas we hit. Write it to Saved/AtherAutomata/debriefs/${slug}.md, and propose which recurring gotchas should become a skill or AGENTS.md rule for the owners (${OWNERS}).`,
+      prompt: `Debrief intent ${slug}. List what was proven and with what evidence, what was lost or overwritten (lost optimisation vs broken feature), every decision taken on my behalf, and the gotchas we hit. Write it to ${pack.debriefPath(slug)}, and propose which recurring gotchas should become a skill or AGENTS.md rule for the owners (${pack.owners}).`,
     }
   }
   if (stage === 'ship') {
-    const prompt =
-      role === 'designer'
-        ? `Summarise intent ${slug} for an owner to land: what changed, the evidence for each checklist item, and what is still owed.`
-        : `Prepare intent ${slug} for landing: extract the change onto a clean branch in its own worktree, audit the diff and every binary asset for lost edits, open the PR from .github/pull_request_template.md, then wait for my go before merging.`
-    return { key: 'land', label: 'Ship it', hint: role === 'designer' ? 'Summarises the work so an owner can land it.' : 'A clean PR; nothing merges without your go.', prompt }
+    return { key: 'land', label: 'Ship it', hint: pack.prompts.shipHint(role), prompt: pack.prompts.ship(role, slug) }
   }
   return undefined
 }
