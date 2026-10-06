@@ -30,3 +30,9 @@ Answers to F-1: the sync is planned from the A5 panel (D4); the launch gate is a
 > (install 0.4) Em đổi ngay (Recommended)
 
 After the orchestrator review (8/8 met at rev 2): F-2 rejected (the Source/Plugins freeze stays a notice), F-3 (a) kept as built and (b) accepted, plus review notes R1 and R2; rev 3 adds A9-A11. CLAUDE_CODE_PLUGIN_DIRS is switched to this repository's hai-flow now.
+
+## L-5 (2026-10-06 19:20) | class: decision | -> rev 3
+
+> (install 0.4, after CLAUDE_CODE_PLUGIN_DIR_WATCH=1 was found on) Chờ rev 3 xong rồi trỏ thẳng
+
+The plugin folders are watched, so pointing CLAUDE_CODE_PLUGIN_DIRS at hai-flow/ while the worker edits it would hot-reload half-made steps into every session. The switch to `D:/Projects/ather-mods/hai-flow` waits until rev 3 is done and reviewed.
