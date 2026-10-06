@@ -2,8 +2,8 @@
 
 - Working under rev: 1
 - Worker: track-guard worker (Claude Opus subagent, worktree `D:/Projects/ather-mods-wt/track-guard`)
-- Current step: S6, release 0.1.1 (version in both manifests, Changes line, README on tracking) and the PR body draft (A8 gate half)
-- Next step: stop for review: Hai's go to push and open the PR to `main` for Tin (A8's review half)
+- Current step: none (stopped for review)
+- Next step: Hai's go to push `intent/track-guard` and open the PR to `main` for Tin's review (A8's review half; body drafted, see S6); F-1 open (non-blocking)
 - PR: none
 
 ## Acceptance
@@ -19,7 +19,7 @@
 | A5 | met | S1, S3. Unit: `setRung` and `noteMcp` (pie, write then read) records carry `by` = the writing session's first 8 characters (`1a2b3c4d`, `9f8e7d6c`); `proofLine` names another session's records ("build ✓ by session 1a2b3c4d", by title when known: "read-back ✓ by \"Snow proof\"") and not this one's, and records without `by` name nobody. e2e: the status tool's `evidence.build.by` is `harness-`; the Intent view reads "Proof: build ✓ by session 1a2b3c4d". |
 | A6 | met | S4. e2e: after `/ather intent box-scale-tool` and /clear, `pinned:harness-session-0003` is box-scale-tool and the toast "Ather: Still tracking box-scale-tool · /ather untrack" shows; nothing is said after a /clear with nothing tracked; a morning session that adopts the away window keeps box-scale-tool and shows the same toast beside "your away window from an earlier session is still running". `218/219 passed` (pre-existing failure only). |
 | A7 | met | S5: `node --test ather-automata/tests/*.test.mjs` → `# pass 113 # fail 0`; `S2_ROOT=<S2 snapshot> node dev/test-all.mjs --layouts` → `113/113 passed`, `218/219 passed` against base 24eb1f4 on the same snapshot `105/105`, `184/185` (the pre-existing failure only, in both); live `S2_ROOT=E:/Projects/s2` → `218/219` (same failure); layouts identical to the base except #20 (Intent view: Stop tracking beside Back) and 7 appended Intent-view layouts; `claude plugin test ather-automata` → `2 pass 0 fail`; `claude plugin validate ather-automata` → `✔ Validation passed`. |
-| A8 | open | |
+| A8 | open | Gate half done (S6): 0.1.1 in both manifests, a 0.1.1 Changes line, README "Tracking" paragraph and Commands rows; `claude plugin validate ather-automata` → `✔ Validation passed`, `claude plugin test ather-automata` → `2 pass 0 fail`; PR body drafted. Open: push and PR need Hai's go; the review is Tin's. |
 
 ## Steps
 
@@ -36,6 +36,8 @@
 - S4 (rev 1, 2026-10-06): after /clear moves the lane (`followClear`), and after session.start adopts an away window, watch.mjs toasts "Ather: Still tracking <slug> · /ather untrack" when the session tracks one (`stillTracking`); the pin itself moves as before. Evidence: this commit; `S2_ROOT=<scratch>/s2-snap node dev/test-all.mjs --layouts <scratch>/tg-s4` → `113/113 passed`, `218/219 passed` (pre-existing failure only; 4 new checks: nothing said after /clear with nothing tracked, /clear keeps box-scale-tool and says so, an adopted window keeps it and says so beside the adoption toast), layouts identical to S3's; type-check → no errors. Acceptance: A6.
 
 - S5 (rev 1, 2026-10-06): the A7 gates on aeaa2c4. `node --test ather-automata/tests/*.test.mjs` → `# tests 113 # pass 113 # fail 0`. On the S2 snapshot (`<scratch>/s2-snap`): base 24eb1f4 → `105/105 passed`, `184/185 passed`; this branch → `113/113 passed`, `218/219 passed`; the one failure in both is the pre-existing "a teammate's name sits in its own column at the right edge". On the live checkout (`S2_ROOT=E:/Projects/s2`) → `113/113 passed`, `218/219 passed`, the same failure only. Layout diff, base `tg-base2` against `tg-s4`, same snapshot: layouts-110, 8 layouts, identical; layouts-72, 18 layouts in the base, 25 here: the 18 identical but one line of #20 (the Intent view of the tracked intent, "See opens the Intent view": `0: Back` → `s: Stop tracking   0: Back`), and 7 appended (#31 to #37, the new Intent view checks: an untracked intent's view with Work on this here, the same after Stop tracking, another from Everything open, Everything open itself, fluid-snow-sand-look's view from words, the same with a peer lane and another session's proof, and the tracked view with Next and Stop tracking). `claude plugin test ather-automata` → `2 pass 0 fail`; `claude plugin validate ather-automata` → `✔ Validation passed`. Type-check (tsc 5.6 against this build's engine types) → no errors. Acceptance: A7.
+
+- S6 (rev 1, 2026-10-06): release 0.1.1. `version` 0.1.1 in `ather-automata/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`; README: a **Tracking** paragraph under What to work on (look, Work on this here, Stop tracking and `/ather untrack`, orchestration writes, several sessions, /clear), proof names its session, Commands rows for `/ather pick|intent` and `/ather untrack`, a 0.1.1 Changes line. PR body drafted outside the repo (the bug, the two reviews' verdicts, what changed per acceptance item, proof, the layout diff, follow-ups, F-1) for the PR once Hai gives the go. Evidence: this commit; `claude plugin validate ather-automata` → `✔ Validation passed`; `claude plugin test ather-automata` → `2 pass 0 fail`. No push, no PR. Acceptance: A8 (gate half).
 
 ## Decisions (worker)
 

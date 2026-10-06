@@ -23,6 +23,8 @@ On a PC that also runs [week-calendar](../week-calendar/README.md), the pane's l
 
 Each session works on one intent. A new session offers to continue the one you last worked on. With nothing tracked, Ather offers one list: your open intents, then the GitHub issues assigned to you that have no intent yet (high priority first), then teammates' intents you could follow (read-only: their decisions stay theirs).
 
+**Tracking.** Looking at an intent never tracks it: a row, or words that name one, opens its view, and **Work on this here** there makes it this session's intent (so do Next's Continue and Pick up, and `/ather intent <exact name>`). **Stop tracking** in the view, or `/ather untrack`, undoes it; the proof recorded so far stays with the intent. A session also tracks the intent it runs: writing that intent's `prompt.md` or `log.md` from the main conversation (a new `prompt.md` switches to the new intent); a worker's writes never do. Several sessions may track one intent; its view then says so ("Also tracked in 1 other session · active 5m ago"). After `/clear`, or when a new session takes over an away window, Ather says which intent is still tracked.
+
 Clicking an issue opens its card: **Start an intent**, **Open on GitHub** or **Copy link**. Starting one asks the session to check for overlapping work first (the issue preflight), then draft an intent linked to it (`- Issue: #28887`) and show you the plan before anything is built. Ather reads your issues with `gh` and never writes to GitHub. `/ather issues` lists them; `/ather issue 28887` or `#28887` starts one.
 
 ## Going away
@@ -34,7 +36,7 @@ Clicking an issue opens its card: **Start an intent**, **Open on GitHub** or **C
 
 ## Proof
 
-Ather reads evidence from tool output, never from what the session says: an S2Editor build's own Result line, a test run whose tests passed (no tests, a failure or a non-zero exit is a fail), a started PIE or test simulation run, and a read-back from the server that was written to. A tech artist's own Editor check is `/ather checked`. Proof is kept with the intent for a day, so yesterday's build still counts this morning. Until you say your role, any role's proof counts.
+Ather reads evidence from tool output, never from what the session says: an S2Editor build's own Result line, a test run whose tests passed (no tests, a failure or a non-zero exit is a fail), a started PIE or test simulation run, and a read-back from the server that was written to. A tech artist's own Editor check is `/ather checked`. Proof is kept with the intent for a day, so yesterday's build still counts this morning; each record names the session that produced it, and the Intent view names any other session's. Until you say your role, any role's proof counts.
 
 ## Commands
 
@@ -42,7 +44,8 @@ Ather reads evidence from tool output, never from what the session says: an S2Ed
 |---|---|
 | `/ather` | What needs you and what is next |
 | `/ather tour`, `/ather skip` | The tour, or skip it and just say your role |
-| `/ather pick [words]`, `/ather intent <name>` | Choose what this session works on |
+| `/ather pick [words]`, `/ather intent <name>` | Everything open; an exact intent name works on it here, other words show the intent they match |
+| `/ather untrack` | Stop tracking this session's intent (not while an away window runs) |
 | `/ather issues`, `/ather issue <number>` | Your GitHub issues; start one |
 | `/ather role <in your words>` | Designer, tech artist or engineer |
 | `/ather checked` | Record your own Editor check |
@@ -109,6 +112,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs` and `tests/web.test.m
 
 ## Changes
 
+- **0.1.1** Track guard: looking at an intent never tracks it (rows and matching words open its view; Work on this here tracks it), Stop tracking and `/ather untrack` undo it with the proof kept, only a session's own orchestration tracks by writing (its main conversation writing an intent's prompt.md or log.md), a second session on an intent sees "Also tracked in …", proof names the session that produced it, and /clear or an adopted window says which intent is still tracked.
 - **0.1.0** Web projects: one plugin with packs. S2's behaviour moved unchanged into the Unreal pack; a web pack (piloted on Thính, han-viet) reads `.ather/profile.json` gates as proof from tool output, holds production deploys, migrations, secrets, publishes and infrastructure applies while you are away, merges with proof under `with-proof`, knows nine web traps, and offers web skills under Create.
 - **0.0.7** This week's figures from week-calendar (PRs merged, productive agent time) on the pane's meta line, when that plugin runs on the PC.
 - **0.0.4** ✦ Create: the skills that make content in the Unreal Editor, grouped by what is made (VFX and look, characters and animation, AI and encounters, enemies, levels and cinematics, audio), led by what they do, three per group with More for the rest, ordered by role; each asks what you want first, records an intent and respects the Editor lock.
