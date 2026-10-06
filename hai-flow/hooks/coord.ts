@@ -1,0 +1,636 @@
+// A5's coordination core for the sessions that share one S2 checkout and one machine: the Editor holder,
+// RAM and the Sync main holder. Pure: no `$`; register.ts reads the files, probes the machine, writes and
+// delivers. Every session computes the same answers from the same files, so there is no arbiter to keep
+// alive: each session writes only its own files (Saved/HaiFlow/editor/<id8>.json, touch/<id8>.json), the
+// sync holder alone writes Saved/HaiFlow/sync.json, and the head of the queue alone takes a free lock.
+// Files are the truth; a notice is only a doorbell.
+import { commandVerb, nestedCommand, segments, stripHeredocs, tokenize } from './a5.ts'
+
+export const DIR = 'Saved/HaiFlow'
+export const HEARTBEAT_STALE_MS = 3 * 60_000 // a session file not refreshed for 3 min: that session is gone
+export const LANE_STALE_MS = 10 * 60_000 // Ather's lane heartbeat (30 s) not written for 10 min: gone
+export const YIELD_MAX_MIN = 20 // a request this short, without a build, may ask the holder to yield
+export const YIELD_EVERY_MS = 60 * 60_000 // at most one interruption per holder per hour
+export const CUTOFF_MS = 30 * 60_000 // cutoff = sync − 30 min
+export const RELEASE_BEFORE_MS = 10 * 60_000 // the Editor is released by sync − 10 min
+export const LEASE_WARN_MS = 5 * 60_000 // the holder is told 5 min before its lease ends
+export const IDLE_RELEASE_MS = 15 * 60_000 // an Editor unused this long is released (S2 standard)
+export const REAP_BELOW_GB = 14
+export const DISK_MIN_GB = 20
+export const PIE_START_GB = 5 // fixed, never raised (Hai, 25/09)
+export const PIE_ABORT_GB = 3
+export const DEFAULT_GATES = { pieGb: 31, nopieGb: 28 } as const // D5: Editor ≈ 25.7 GB idle, ≈ 31.4 GB at PIE peak (L_TALab, 28/09)
+export const GATE_MIN_GB = 10
+export const GATE_MAX_GB = 60
+export const MARK = 'hai-flow ·'
+
+// ---------- time ----------
+const pad = (n: number): string => String(n).padStart(2, '0')
+export const hhmm = (ms: number): string => {
+  const d = new Date(ms)
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+export const ymd = (ms: number): string => {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+/** `HH:MM YYYY-MM-DD`, the lock's `since=` stamp. */
+export const stampOf = (ms: number): string => `${hhmm(ms)} ${ymd(ms)}`
+
+/** The moment a clock time names, nearest to `now` (an end written as HH:MM can fall either side of midnight). */
+export const atNearest = (text: string, now: number): number | null => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(text.trim())
+  if (!m) return null
+  const d = new Date(now)
+  d.setHours(Number(m[1]), Number(m[2]), 0, 0)
+  let t = d.getTime()
+  if (t - now > 12 * 3_600_000) t -= 24 * 3_600_000
+  else if (now - t > 12 * 3_600_000) t += 24 * 3_600_000
+  return t
+}
+
+/** The next time a clock time comes round: today when still ahead, else tomorrow. Null for a bad HH:MM. */
+export const atNext = (text: string, now: number): number | null => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(text.trim())
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return null
+  const d = new Date(now)
+  d.setHours(Number(m[1]), Number(m[2]), 0, 0)
+  return d.getTime() > now ? d.getTime() : d.getTime() + 24 * 3_600_000
+}
+
+/** Three sync times the panel offers: the first half hour at least 45 min ahead (a cutoff notice still lands
+ * before its cutoff), then one and two hours later. */
+export const presetTimes = (now: number): number[] => {
+  const d = new Date(now + 45 * 60_000)
+  const extra = d.getMinutes() === 0 || d.getMinutes() === 30 ? 0 : d.getMinutes() < 30 ? 30 - d.getMinutes() : 60 - d.getMinutes()
+  d.setMinutes(d.getMinutes() + extra, 0, 0)
+  const first = d.getTime()
+  return [first, first + 3_600_000, first + 7_200_000]
+}
+
+// ---------- session files (Saved/HaiFlow/editor/<id8>.json, one writer each) ----------
+export type Mode = 'interactive' | 'unattended'
+/** What a session asked the Editor for. */
+export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number }
+/** The lease a session holds, as it took it. */
+export type Holding = { since: number; end: number; extended: number }
+/** A request to a holder to yield (or a standard `UE request:` line sent to a holder without hai-flow). */
+export type YieldAsk = { holder: string; at: number; via: 'file' | 'send'; minutes: number; lane: string }
+export type SessionFile = {
+  v: 1
+  session: string
+  id8: string
+  lane: string
+  title: string
+  heartbeatAt: number
+  want: Want | null
+  holding: Holding | null
+  yieldAsks: YieldAsk[]
+  /** Notice ids this session has delivered, so a reload never repeats one. */
+  delivered: string[]
+}
+
+export const blankSession = (session: string, lane: string, title: string, now: number): SessionFile => ({
+  v: 1,
+  session,
+  id8: session.slice(0, 8).toLowerCase(),
+  lane,
+  title,
+  heartbeatAt: now,
+  want: null,
+  holding: null,
+  yieldAsks: [],
+  delivered: [],
+})
+
+export const parseSessionFile = (text: string | null): SessionFile | null => {
+  try {
+    const v = JSON.parse(text ?? '') as Partial<SessionFile>
+    if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [] }
+  } catch {
+    return null
+  }
+}
+
+/** Ather's lane heartbeat (Saved/AtherAutomata/lanes/<sessionId>.json), as far as liveness needs it. */
+export type LaneBeat = { sessionId: string; hasEnded: boolean; mtimeMs: number }
+export type Liveness = 'alive' | 'gone' | 'unknown'
+
+/** Whether the session named by its first 8 hex is alive, from files only: Ather's lane says ended or is older
+ * than 10 min, or its session file is older than 3 min while no fresh lane vouches for it, means gone. With
+ * neither file it is unknown, which is never treated as gone. */
+export const livenessOf = (id8: string, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): Liveness => {
+  if (!id8) return 'unknown'
+  const lane = lanes.find(l => l.sessionId.toLowerCase().startsWith(id8))
+  if (lane && (lane.hasEnded || now - lane.mtimeMs > LANE_STALE_MS)) return 'gone'
+  const file = files.find(f => f.id8 === id8)
+  if ((file && now - file.heartbeatAt <= HEARTBEAT_STALE_MS) || lane) return 'alive'
+  return file ? 'gone' : 'unknown'
+}
+
+// ---------- the Editor owner lock: S2 standard lines (D2) ----------
+export type LockKind = 'missing' | 'free' | 'held' | 'handed'
+export type LockLine = {
+  kind: LockKind
+  /** Written in the S2 standard's form (HELD / HANDED / FREE), not a legacy free-text line. */
+  isStandard: boolean
+  raw: string
+  lane: string
+  sessionName: string
+  id8: string
+  since: string
+  pid: number | null
+  end: string
+  mode: string
+  pausable: boolean
+  nextSafe: string
+  note: string
+  by: string
+  background: string
+}
+
+const field = (text: string, re: RegExp): string => re.exec(text)?.[1]?.trim() ?? ''
+const blank = (raw: string, kind: LockKind): LockLine => ({ kind, isStandard: false, raw, lane: '', sessionName: '', id8: '', since: '', pid: null, end: '', mode: '', pausable: true, nextSafe: '', note: '', by: '', background: '' })
+
+/** The lock's first line, read the S2 standard's way (HELD / HANDED / FREE) or as an older free-text line: a
+ * line without a prefix is FREE when it says "free since", else HELD (the standard, section 1). */
+export const parseLockLine = (raw: string | null): LockLine => {
+  if (raw === null) return blank('', 'missing')
+  const first = (raw.replace(/^﻿/, '').split(/\r?\n/).find(l => l.trim() !== '') ?? '').trim()
+  if (first === '') return blank('', 'missing')
+  const id8 = /\bsession\s+([0-9a-f]{8})/i.exec(first)?.[1]?.toLowerCase() ?? ''
+  const pidText = field(first, /\bpid=(\d+|none)\b/)
+  const pid = /^\d+$/.test(pidText) ? Number(pidText) : null
+  if (/^FREE\b/.test(first))
+    return { ...blank(first, 'free'), isStandard: true, since: field(first, /\bsince=(\d{1,2}:\d{2}(?: \d{4}-\d{2}-\d{2})?)/), by: field(first, /\bby=(\S+)/), note: field(first, /\bnote=(.*?)(?=\s+background=|\s+·\s|$)/), background: field(first, /\bbackground=(\S+)/), pid: /open PID (\d+)/i.test(first) ? Number(/open PID (\d+)/i.exec(first)?.[1]) : null }
+  if (/^HELD\b/.test(first))
+    return {
+      ...blank(first, 'held'),
+      isStandard: true,
+      lane: field(first, /\blane=(\S+)/),
+      sessionName: field(first, /\bsession=(\S+)/),
+      id8,
+      since: field(first, /\bsince=(\d{1,2}:\d{2}(?: \d{4}-\d{2}-\d{2})?)/),
+      pid,
+      end: field(first, /\bend=(\d{1,2}:\d{2})/),
+      mode: field(first, /\bmode=(\w+)/),
+      pausable: field(first, /\bpausable=(yes|no)\b/) !== 'no',
+      nextSafe: field(first, /\bnext_safe=(.*?)(?=\s+note=|\s+·\s|$)/),
+      note: field(first, /\bnote=(.*?)(?=\s+·\s|$)/),
+    }
+  if (/^HANDED\b/.test(first))
+    return { ...blank(first, 'handed'), isStandard: true, lane: field(first, /\blane=(\S+)/), by: field(first, /\bfrom=(\S+)/), id8, since: field(first, /\bat=(\d{1,2}:\d{2})/), pid, end: field(first, /\breturn_by=(\d{1,2}:\d{2})/), note: field(first, /\bnote=(.*)$/) }
+  if (/\bfree since\b/i.test(first) || /^free\b/i.test(first)) return { ...blank(first, 'free'), since: field(first, /free since\s+(\d{1,2}:\d{2})/i) }
+  const named = /(?:holder|owner)\s*[:=]\s*([^,;\n]+)|held by\s+([^,;\n]+)/i.exec(first)
+  const span = /(\d{1,2}:\d{2})\s*(?:->|→)\s*~?(\d{1,2}:\d{2})/.exec(first)
+  return {
+    ...blank(first, 'held'),
+    lane: (named?.[1] ?? named?.[2] ?? first.split(/\s+/)[0] ?? '').replace(/\buntil\b.*$/i, '').trim().slice(0, 60),
+    id8,
+    since: span?.[1] ?? field(first, /\bsince\s+(\d{1,2}:\d{2})/i),
+    end: span?.[2] ?? field(first, /(?:until|expected end|ends?)\s+~?(\d{1,2}:\d{2})/i),
+    note: first.slice(0, 120),
+  }
+}
+
+/** A word for a key=value field: no spaces, commas, semicolons or the separator. */
+export const safeWord = (s: string, max = 40): string =>
+  s.replace(/[\s,;·=]+/g, '-').replace(/[\u0000-\u001f"'`]+/g, '').replace(/^-+|-+$/g, '').slice(0, max) || 'unnamed'
+
+/** A note that no lock reader can mistake for a lock field: Ather's and the older parsers look for "free since",
+ * "until HH:MM", "held by", "holder:", "session <hex>" and "expected end" anywhere on the line. */
+export const safeNote = (s: string, max = 140): string =>
+  s
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s*·\s*/g, '; ')
+    .replace(/=/g, ':')
+    .replace(/\bfree\b/gi, 'clear')
+    .replace(/\buntil\b/gi, 'till')
+    .replace(/\bheld by\b/gi, 'held-by')
+    .replace(/\bholder\b/gi, 'holding lane')
+    .replace(/\bowner\b/gi, 'owning lane')
+    .replace(/\bexpected end\b/gi, 'expected finish')
+    .replace(/\bsession\s+(?=[0-9a-f]{4})/gi, 'session-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max) || 'none'
+
+const safeNextSafe = (s: string): string => (/^\d{1,2}:\d{2}$/.test(s.trim()) ? s.trim() : 'after save')
+
+export type Held = { lane: string; sessionName: string; id8: string; since: number; pid: number | null; end: number; mode: Mode; pausable: boolean; nextSafe: string; note: string }
+
+/** D2: the standard's HELD line, then the words Ather's parser reads (held by, session <id8>, until). */
+export const heldLine = (h: Held): string => {
+  const lane = safeWord(h.lane)
+  return `HELD lane=${lane} session=${safeWord(h.sessionName)} since=${stampOf(h.since)} pid=${h.pid ?? 'none'} end=${hhmm(h.end)} mode=${h.mode} pausable=${h.pausable ? 'yes' : 'no'} next_safe=${safeNextSafe(h.nextSafe)} note=${safeNote(h.note)} · held by ${lane}, session ${h.id8}, until ${hhmm(h.end)}`
+}
+
+/** D2: the standard's FREE line, then the words every older reader takes for free. */
+export const freeLine = (f: { since: number; by: string; note: string; background: 'none' | 'unknown' }): string =>
+  `FREE since=${stampOf(f.since)} by=${safeWord(f.by)} note=${safeNote(f.note)} background=${f.background} · free since ${hhmm(f.since)}`
+
+// ---------- the queue and the grant ----------
+export type Gates = { pieGb: number; nopieGb: number }
+export const clampGate = (n: number): number => Math.max(GATE_MIN_GB, Math.min(GATE_MAX_GB, Math.round(n)))
+/** The launch gate in force: the panel's setting (shared through the plugin's store) over the plugin options. */
+export const gatesOf = (stored: unknown, pieOpt: unknown, nopieOpt: unknown): Gates & { source: 'panel' | 'options' } => {
+  const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? clampGate(v) : typeof v === 'string' && Number.isFinite(Number(v)) && v.trim() !== '' ? clampGate(Number(v)) : d)
+  const s = stored as Partial<Gates> | null | undefined
+  const fromOpts = { pieGb: num(pieOpt, DEFAULT_GATES.pieGb), nopieGb: num(nopieOpt, DEFAULT_GATES.nopieGb) }
+  if (s && typeof s.pieGb === 'number' && typeof s.nopieGb === 'number') return { pieGb: clampGate(s.pieGb), nopieGb: clampGate(s.nopieGb), source: 'panel' }
+  return { ...fromOpts, source: 'options' }
+}
+
+export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
+export type Probe = { freeGb: number; diskGb: number | null; procs: Proc[] }
+
+const isName = (p: Proc, name: string) => p.name.toLowerCase().replace(/\.exe$/, '') === name.toLowerCase()
+export const editorPid = (probe: Probe | null): number | null => probe?.procs.find(p => isName(p, 'UnrealEditor'))?.pid ?? null
+
+/** The machine probe's JSON (`ramProbe`), or null when it did not answer. */
+export const parseProbe = (stdout: string): Probe | null => {
+  try {
+    const v = JSON.parse(stdout.trim()) as { freeGb?: unknown; diskGb?: unknown; procs?: unknown }
+    const free = Number(v.freeGb)
+    if (!Number.isFinite(free) || free <= 0) return null
+    const disk = Number(v.diskGb)
+    const raw = Array.isArray(v.procs) ? v.procs : v.procs && typeof v.procs === 'object' ? [v.procs] : []
+    const procs = raw
+      .map(p => p as Record<string, unknown>)
+      .map(p => ({ name: String(p.name ?? '').replace(/\.exe$/i, ''), pid: Number(p.pid), gb: Number(p.gb ?? 0), parentAlive: p.parentAlive !== false }))
+      .filter(p => p.name && Number.isFinite(p.pid))
+    return { freeGb: free, diskGb: Number.isFinite(disk) && disk >= 0 ? disk : null, procs }
+  } catch {
+    return null
+  }
+}
+
+/** One PowerShell probe: free RAM, the checkout drive's free space, and the heavy processes (pid, working set,
+ * whether the parent is alive), as one JSON line. */
+export const ramProbe = (drive: string): string[] => [
+  'powershell',
+  '-NoProfile',
+  '-NonInteractive',
+  '-Command',
+  [
+    '$os = Get-CimInstance Win32_OperatingSystem',
+    '$free = [math]::Round($os.FreePhysicalMemory / 1MB, 1)',
+    `$d = Get-PSDrive -Name '${drive.replace(/[^A-Za-z]/g, '').slice(0, 1) || 'E'}' -ErrorAction SilentlyContinue`,
+    '$disk = if ($d) { [math]::Round($d.Free / 1GB, 1) } else { -1 }',
+    '$alive = @{}; Get-Process | ForEach-Object { $alive[[int]$_.Id] = 1 }',
+    "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe')",
+    "$procs = @(Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId) } })",
+    '[pscustomobject]@{ freeGb = $free; diskGb = $disk; procs = $procs } | ConvertTo-Json -Compress -Depth 3',
+  ].join('; '),
+]
+
+/** The safe cleanup before a grant: the S2 orphan-git reaper below 14 GB free, LiveCodingConsole stopped only
+ * while no Editor runs; everything else is named, never killed. */
+export const cleanupPlan = (probe: Probe): { reap: boolean; stopLiveCoding: number[]; report: string[] } => {
+  const hasEditor = probe.procs.some(p => isName(p, 'UnrealEditor'))
+  const live = probe.procs.filter(p => isName(p, 'LiveCodingConsole'))
+  const orphans = probe.procs.filter(p => isName(p, 'git') && !p.parentAlive).length
+  const report: string[] = []
+  if (hasEditor && live.length) report.push(`LiveCodingConsole kept (an Editor runs): ${live.map(p => `pid ${p.pid}`).join(', ')}`)
+  for (const name of ['UnrealEditor-Cmd', 'ShaderCompileWorker', 'python']) {
+    const ps = probe.procs.filter(p => isName(p, name))
+    if (ps.length) report.push(`${name} ×${ps.length} ${round(ps.reduce((a, p) => a + p.gb, 0))} GB (not killed)`)
+  }
+  if (orphans && probe.freeGb >= REAP_BELOW_GB) report.push(`${orphans} orphan git (reaped only under ${REAP_BELOW_GB} GB free)`)
+  return { reap: probe.freeGb < REAP_BELOW_GB, stopLiveCoding: hasEditor ? [] : live.map(p => p.pid), report }
+}
+
+const round = (n: number): number => Math.round(n * 10) / 10
+
+/** What holds memory, heaviest first: the line the Memory tile and a waiting slot show. */
+export const heavyList = (probe: Probe, max = 4): string => {
+  const by = new Map<string, { n: number; gb: number }>()
+  for (const p of probe.procs) {
+    const k = p.name
+    const was = by.get(k) ?? { n: 0, gb: 0 }
+    by.set(k, { n: was.n + 1, gb: was.gb + p.gb })
+  }
+  const rows = [...by.entries()].sort((a, b) => b[1].gb - a[1].gb).slice(0, max)
+  return rows.length ? rows.map(([k, v]) => `${k}${v.n > 1 ? ` ×${v.n}` : ''} ${round(v.gb)} GB`).join(', ') : 'no heavy process'
+}
+
+/** The order every session computes alike: live waiting requests, first requested first served, the sync holder
+ * first while a sync is in its cutoff or freeze. */
+export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, sync: SyncFile | null): SessionFile[] => {
+  const phase = syncPhase(sync, now)
+  const first = phase === 'cutoff' || phase === 'frozen' ? sync?.holder.id8 : undefined
+  const rank = (f: SessionFile) => (first && f.id8 === first ? 0 : 1)
+  return files
+    .filter(f => f.want && !f.holding && livenessOf(f.id8, files, lanes, now) === 'alive')
+    .sort((a, b) => rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
+}
+
+export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe'
+export type Decision =
+  | { kind: 'none' }
+  | { kind: 'mine' }
+  | { kind: 'grant'; end: number; reuse: number | null }
+  | { kind: 'recover'; holder: string }
+  | { kind: 'wait'; code: WaitCode; why: string; next: string; place: number }
+
+export type GrantInput = {
+  me8: string
+  lock: LockLine
+  files: readonly SessionFile[]
+  lanes: readonly LaneBeat[]
+  now: number
+  sync: SyncFile | null
+  probe: Probe | null
+  gates: Gates
+}
+
+/** Whether this session may take the Editor now, and if not why and what next. Only the head of the queue takes
+ * a free lock; the slot must end by the next sync's cutoff (or wait out a cutoff and freeze, the sync holder
+ * excepted); launching an Editor needs the launch gate (an Editor already open is reused, its memory counted). */
+export const decide = (x: GrantInput): Decision => {
+  const { me8, lock, now, sync } = x
+  const queue = queueOf(x.files, x.lanes, now, sync)
+  const mine = x.files.find(f => f.id8 === me8)
+  if (lock.id8 === me8 && (lock.kind === 'held' || lock.kind === 'handed')) return { kind: 'mine' }
+  if (!mine?.want) return { kind: 'none' }
+  const place = Math.max(1, queue.findIndex(f => f.id8 === me8) + 1)
+  const wait = (code: WaitCode, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place })
+  const pid = editorPid(x.probe)
+  if (lock.kind === 'missing') return wait('missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', 'nobody takes it until a lane writes it; ask Hai if it stays missing')
+  if (lock.kind === 'held' || lock.kind === 'handed') {
+    const who = lock.lane || 'another lane'
+    const until = lock.end ? ` until ${lock.end}` : ''
+    const live = livenessOf(lock.id8, x.files, x.lanes, now)
+    if (live === 'gone' && pid === null && queue[0]?.id8 === me8) return { kind: 'recover', holder: lock.id8 }
+    if (live === 'gone' && pid !== null) return wait('gone-editor', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; ask Hai what to do with that Editor')
+    return wait('held', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}`, place > 1 ? `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile` : 'you are next; do work that needs no Editor meanwhile')
+  }
+  if (queue[0]?.id8 !== me8) return wait('queue', `the Editor is free but ${queue[0]?.lane ?? 'another session'} asked first`, `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile`)
+  const want = mine.want
+  const end = now + want.minutes * 60_000
+  const phase = syncPhase(sync, now)
+  if (sync && phase === 'planned' && end > sync.at - CUTOFF_MS) {
+    const room = Math.floor((sync.at - CUTOFF_MS - now) / 60_000)
+    return wait('sync', `a ${want.minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
+  }
+  if (sync && (phase === 'cutoff' || phase === 'frozen') && sync.holder.id8 !== me8)
+    return wait('sync', `the sync at ${hhmm(sync.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, 'Editor grants wait until it is done')
+  if (pid === null) {
+    if (!x.probe) return wait('probe', 'the RAM probe did not answer', 'the slot waits for a reading (the launch gate fails closed)')
+    const gate = want.pie ? x.gates.pieGb : x.gates.nopieGb
+    if (x.probe.freeGb < gate)
+      return wait('ram', `free RAM is ${x.probe.freeGb} GB after cleanup, under the launch gate of ${gate} GB for a slot ${want.pie ? 'with' : 'without'} PIE`, `the slot waits; memory is held by ${heavyList(x.probe)}`)
+  }
+  return { kind: 'grant', end, reuse: pid }
+}
+
+export const ordinal = (n: number): string => `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'}`
+
+/** Whether a request may ask the holder to yield now: ≤ 20 min without a build, at the head of the queue, the
+ * holder alive and pausable, and nobody asked that holder in the last hour. */
+export const mayAskYield = (x: GrantInput): { holder: string } | null => {
+  const mine = x.files.find(f => f.id8 === x.me8)
+  const want = mine?.want
+  if (!want || want.build || want.minutes > YIELD_MAX_MIN) return null
+  if (x.lock.kind !== 'held' || !x.lock.id8 || x.lock.id8 === x.me8 || !x.lock.pausable) return null
+  if (livenessOf(x.lock.id8, x.files, x.lanes, x.now) !== 'alive') return null
+  if (queueOf(x.files, x.lanes, x.now, x.sync)[0]?.id8 !== x.me8) return null
+  const asked = x.files.some(f => f.yieldAsks.some(a => a.holder === x.lock.id8 && x.now - a.at < YIELD_EVERY_MS))
+  return asked ? null : { holder: x.lock.id8 }
+}
+
+/** The standard's request line (section 6) for a holder that runs without hai-flow. */
+export const ueRequestLine = (lane: string, minutes: number, what: string, waitUntil: number): string =>
+  `UE request: ${lane} cần Editor ~${minutes} phút để ${what.replace(/\s+/g, ' ').slice(0, 120)}, build=no, chờ được tới ${hhmm(waitUntil)}.`
+
+// ---------- the sync timeline (Saved/HaiFlow/sync.json, written by the holder alone) ----------
+export type SyncState = 'planned' | 'done' | 'aborted' | 'cancelled'
+export type Conflict = { path: string; kind: 'self' | 'foreign'; match?: string }
+export type SyncHolder = { session: string; id8: string; lane: string }
+export type SyncFile = {
+  v: 1
+  id: string
+  at: number
+  holder: SyncHolder
+  plannedBy: string
+  state: SyncState
+  conflicts: Conflict[] | null
+  conflictsAt: number | null
+  conflictsSource: 'merge-tree' | 'holder' | null
+  endedAt: number | null
+  note: string
+  updatedAt: number
+}
+export type Phase = 'none' | 'planned' | 'cutoff' | 'frozen' | 'done' | 'aborted' | 'cancelled'
+
+export const parseSyncFile = (text: string | null): SyncFile | null => {
+  try {
+    const v = JSON.parse(text ?? '') as Partial<SyncFile>
+    if (typeof v?.at !== 'number' || !v.holder || typeof v.holder.id8 !== 'string') return null
+    return { v: 1, id: String(v.id ?? `sync-${v.at}`), at: v.at, holder: v.holder, plannedBy: String(v.plannedBy ?? ''), state: (v.state as SyncState) ?? 'planned', conflicts: v.conflicts ?? null, conflictsAt: v.conflictsAt ?? null, conflictsSource: v.conflictsSource ?? null, endedAt: v.endedAt ?? null, note: String(v.note ?? ''), updatedAt: Number(v.updatedAt ?? 0) }
+  } catch {
+    return null
+  }
+}
+
+/** planned → cutoff at T − 30 → frozen at T → done / aborted (or cancelled before T). */
+export const syncPhase = (s: SyncFile | null, now: number): Phase => {
+  if (!s) return 'none'
+  if (s.state !== 'planned') return s.state
+  return now < s.at - CUTOFF_MS ? 'planned' : now < s.at ? 'cutoff' : 'frozen'
+}
+export const isOpenPhase = (p: Phase): boolean => p === 'planned' || p === 'cutoff' || p === 'frozen'
+
+export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: number): SyncFile => ({
+  v: 1,
+  id: `sync-${ymd(at).replace(/-/g, '')}-${hhmm(at).replace(':', '')}-${holder.id8}`,
+  at,
+  holder,
+  plannedBy,
+  state: 'planned',
+  conflicts: null,
+  conflictsAt: null,
+  conflictsSource: null,
+  endedAt: null,
+  note: '',
+  updatedAt: now,
+})
+/** A move keeps the sync's id; its notices are keyed by its time too, so a moved sync gets them again. */
+export const movedSync = (s: SyncFile, at: number, now: number): SyncFile => ({ ...s, at, conflicts: null, conflictsAt: null, conflictsSource: null, updatedAt: now })
+export const endedSync = (s: SyncFile, state: 'done' | 'aborted' | 'cancelled', note: string, now: number): SyncFile => ({ ...s, state, note: note.slice(0, 200), endedAt: now, updatedAt: now })
+export const withConflicts = (s: SyncFile, conflicts: Conflict[], source: 'merge-tree' | 'holder', now: number): SyncFile => ({ ...s, conflicts, conflictsAt: now, conflictsSource: source, updatedAt: now })
+
+/** `git merge-tree --write-tree --name-only HEAD origin/main`: the tree, then the conflicted paths up to the
+ * first blank line (informational messages follow it). Exit 1 means conflicts, 0 a clean merge. */
+export const parseMergeTree = (stdout: string): { tree: string; paths: string[] } => {
+  const lines = stdout.replace(/\r/g, '').split('\n')
+  const paths: string[] = []
+  for (const l of lines.slice(1)) {
+    if (l.trim() === '') break
+    if (!paths.includes(l.trim())) paths.push(l.trim())
+  }
+  return { tree: (lines[0] ?? '').trim(), paths }
+}
+
+/** Every blob a path has had in this branch's history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`),
+ * mapped to the commit that wrote it. */
+export const historyBlobs = (rawLog: string): Map<string, string> => {
+  const out = new Map<string, string>()
+  let commit = ''
+  for (const l of rawLog.replace(/\r/g, '').split('\n')) {
+    if (/^[0-9a-f]{40}$/.test(l.trim())) commit = l.trim()
+    const m = /^:\d+ \d+ ([0-9a-f]{40}) ([0-9a-f]{40}) /.exec(l)
+    if (m?.[2] && !/^0+$/.test(m[2]) && !out.has(m[2])) out.set(m[2], commit)
+  }
+  return out
+}
+
+/** Runbook-sync-lane rule 11: main's blob for the path equals one this branch had, so main only holds an older
+ * version of ours (a self-conflict, resolved to ours); otherwise main carries a foreign change. */
+export const classify = (path: string, mainBlob: string, blobs: Map<string, string>): Conflict => {
+  const match = mainBlob ? blobs.get(mainBlob) : undefined
+  return match ? { path, kind: 'self', match: match.slice(0, 12) } : { path, kind: 'foreign' }
+}
+
+/** Saved/HaiFlow/touch/<id8>.json: the repo-relative paths a session and its workers edited in the shared
+ * checkout, so a conflict reaches the session that owns it. */
+export type Touch = { session: string; id8: string; lane: string; paths: string[]; updatedAt: number }
+export const parseTouch = (text: string | null): Touch | null => {
+  try {
+    const v = JSON.parse(text ?? '') as Partial<Touch>
+    return typeof v?.id8 === 'string' && Array.isArray(v.paths) ? { session: String(v.session ?? v.id8), id8: v.id8, lane: String(v.lane ?? v.id8), paths: v.paths.map(String), updatedAt: Number(v.updatedAt ?? 0) } : null
+  } catch {
+    return null
+  }
+}
+const samePath = (a: string, b: string) => a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase()
+export const ownersOf = (path: string, touches: readonly Touch[]): Touch[] => touches.filter(t => t.paths.some(p => samePath(p, path)))
+export const isBinaryAsset = (path: string): boolean => /\.(uasset|umap)$/i.test(path)
+
+// ---------- freeze: git writes and Editor use in the shared checkout ----------
+export const FREEZE_VERBS = new Set(['commit', 'add', 'rm', 'mv', 'checkout', 'switch', 'restore', 'reset', 'stash', 'merge', 'rebase', 'pull', 'push', 'cherry-pick', 'revert', 'clean', 'am'])
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
+
+/** The git writes a command makes (`git [-C dir] [-c k=v] <verb>`), each with the folder it runs in ('' = the
+ * working directory). `git stash list|show` only reads. */
+export const gitWrites = (command: string, depth = 0): { verb: string; dir: string }[] => {
+  const out: { verb: string; dir: string }[] = []
+  for (const seg of segments(stripHeredocs(command ?? ''))) {
+    const [verb, args] = commandVerb(tokenize(seg))
+    if (SHELLS.has(verb) && depth < 2) {
+      out.push(...gitWrites(nestedCommand(verb, args), depth + 1))
+      continue
+    }
+    if (verb !== 'git') continue
+    let dir = ''
+    for (let i = 0; i < args.length; i += 1) {
+      const a = args[i] ?? ''
+      if (a === '-C') {
+        dir = args[i + 1] ?? ''
+        i += 1
+      } else if (a === '-c' || ((a === '--git-dir' || a === '--work-tree' || a === '--namespace') && !a.includes('='))) i += 1
+      else if (a.startsWith('-')) continue
+      else {
+        const next = (args[i + 1] ?? '').toLowerCase()
+        if (FREEZE_VERBS.has(a.toLowerCase()) && !(a.toLowerCase() === 'stash' && (next === 'list' || next === 'show'))) out.push({ verb: a.toLowerCase(), dir })
+        break
+      }
+    }
+  }
+  return out
+}
+
+/** An Edit/Write path that is the Editor owner lock. */
+export const isLockPath = (path: string): boolean => /(^|\/)Saved\/EDITOR_OWNER\.txt$/i.test((path ?? '').replace(/\\/g, '/'))
+
+const LOCK_WRITERS = new Set(['set-content', 'sc', 'add-content', 'ac', 'out-file', 'tee', 'tee-object', 'new-item', 'ni', 'copy-item', 'cp', 'copy', 'cpi', 'move-item', 'mv', 'move', 'mi', 'rm', 'del', 'erase', 'remove-item', 'ri', 'clear-content', 'clc', 'truncate', 'dd'])
+
+/** A shell command that writes the lock: a redirect into it, a writing verb that names it, an in-place sed,
+ * or a .NET file write. Reading it is fine. */
+export const writesLock = (command: string): boolean =>
+  segments(stripHeredocs(command ?? '')).some(seg => {
+    if (!/EDITOR_OWNER\.txt/i.test(seg)) return false
+    if (/(>>?|\|\s*(tee|Out-File|Set-Content|Add-Content)\b)[^|]*EDITOR_OWNER\.txt/i.test(seg)) return true
+    if (/WriteAll(Text|Lines|Bytes)|AppendAll(Text|Lines)/i.test(seg)) return true
+    const [verb, args] = commandVerb(tokenize(seg))
+    if (verb === 'sed' && args.some(a => /^-i/.test(a))) return true
+    if (SHELLS.has(verb)) return writesLock(nestedCommand(verb, args))
+    return LOCK_WRITERS.has(verb)
+  })
+
+// ---------- notices (D6): one shape, one delivery per id per session ----------
+export type Notice = { id: string; text: string; isActionable: boolean }
+export const noticeText = (gate: string, what: string, todo: string): string => `${MARK} ${gate} — ${what} → ${todo}`
+export const isIntentFile = (path: string): boolean => /(^|\/)docs\/intent\//i.test((path ?? '').replace(/\\/g, '/'))
+export const addsNotice = (added: readonly string[]): boolean => added.some(l => l.includes(MARK))
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+
+export const NOTICES = {
+  granted: (end: number, pie: boolean, reuse: number | null, cleanup: string): Notice['text'] =>
+    noticeText('Editor', `granted to this session until ${hhmm(end)}${reuse ? ` (UnrealEditor PID ${reuse} is open: reuse it)` : ''}${cleanup ? `; cleanup: ${cleanup}` : ''}`, `${reuse ? 'use that Editor' : 'launch the Editor'}${pie ? ' (PIE needs 5 GB free to start)' : ''}; release with the editor tool (action release) when done, and before ${hhmm(end)}`),
+  leaseEnding: (end: number): string => noticeText('Editor lease', `your lease ends at ${hhmm(end)}`, 'finish to a checkpoint (PIE stopped, your own assets saved), then release with the editor tool, or extend it if it still fits'),
+  overrun: (end: number): string => noticeText('Editor lease', `your lease ended at ${hhmm(end)}`, 'stop at the nearest checkpoint and release now with the editor tool; ask again for the rest (almost done is no reason to overrun)'),
+  idle: (min: number): string => noticeText('Editor lease', `this session holds the Editor but has not used it for ${min} min`, 'release it with the editor tool (the Editor may stay open: say so in the note)'),
+  yield: (lane: string, minutes: number): string => noticeText('Editor yield', `${lane} asks for the Editor for ~${minutes} min, no build`, 'at your next safe point (≤ 10 min): stop PIE, save only your own assets, release with the editor tool; if you cannot pause, keep it and finish by your end time'),
+  recovered: (holder: string): string => noticeText('Editor', `the lease of session ${holder} was stale (its lane is gone, no UnrealEditor runs) and was freed`, 'nothing to do: the queue goes on'),
+  goneEditor: (who: string, pid: number): string => noticeText('Editor', `${who} is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; tell Hai and wait (AGENTS.md: force-kill only a hung Editor whose holder is confirmed gone)'),
+  pieAbort: (free: number): string => noticeText('RAM', `free RAM is ${free} GB, under the ${PIE_ABORT_GB} GB abort line, while this session's PIE runs`, 'stop PIE now, then free memory before starting it again'),
+  disk: (drive: string, free: number): string => noticeText('Disk', `${drive} has ${free} GB free, under ${DISK_MIN_GB} GB (the DDC refuses writes under 10 GB)`, 'tell Hai; move old Saved/_restore_backup or _train_residue copies to another drive, never delete them'),
+  cutoff: (s: SyncFile, isHolder: boolean, lockMine: boolean): string =>
+    isHolder
+      ? noticeText('Sync main', `cutoff: you hold the sync at ${hhmm(s.at)}`, `checkpoint your own work now; the conflict dry-run runs now and lands in sync.json; at ${hhmm(s.at)} run s2-sync-main (merge, never rebase), then call the sync tool with done or abort`)
+      : noticeText('Sync main', `cutoff: ${s.holder.lane} merges origin/main at ${hhmm(s.at)}`, `commit your own paths now (exact paths, wip: is fine), write your resume note in Saved/LANE_NOTES/<session id>.md, stop PIE and ${lockMine ? 'release the Editor' : 'leave the Editor alone'} by ${hhmm(s.at - RELEASE_BEFORE_MS)}; keep Source/ and Plugins/ edits out of the shared tree from now; from ${hhmm(s.at)} git writes and the Editor wait until the sync is done`),
+  releaseBy: (s: SyncFile): string => noticeText('Sync main', `the sync at ${hhmm(s.at)} needs the Editor free by ${hhmm(s.at - RELEASE_BEFORE_MS)} and this session still holds it`, 'stop PIE, save your own assets, release with the editor tool now'),
+  frozen: (s: SyncFile): string => noticeText('Sync main', `frozen: ${s.holder.lane} merges origin/main since ${hhmm(s.at)}`, 'no git writes in the shared checkout and no Editor use until it is done; keep working without them (or in your own worktree); you will be told when it lifts'),
+  frozenHolder: (s: SyncFile): string => noticeText('Sync main', `it is ${hhmm(s.at)}: every other session's git writes and Editor use are held for your sync`, 'run s2-sync-main now (merge origin/main, self-conflicts to ours per rule 11, abort on a logic or .uasset/.umap conflict), then call the sync tool with done or abort'),
+  lifted: (s: SyncFile): string =>
+    s.state === 'done'
+      ? noticeText('Sync main', `done at ${hhmm(s.endedAt ?? s.updatedAt)}${s.note ? ` (${s.note})` : ''}`, 'git and the Editor are open again: resume from your resume note and re-check the files main changed before trusting old measurements')
+      : noticeText('Sync main', `${s.state} at ${hhmm(s.endedAt ?? s.updatedAt)}${s.note ? ` (${s.note})` : ''}`, 'git and the Editor are open again; your work stays as it is; the next sync is planned on the A5 panel'),
+  holderConflicts: (s: SyncFile, rows: { c: Conflict; owners: string[] }[]): string => {
+    const self = rows.filter(r => r.c.kind === 'self')
+    const foreign = rows.filter(r => r.c.kind === 'foreign')
+    const list = foreign.map(r => `${r.c.path}${isBinaryAsset(r.c.path) ? ' (binary)' : ''} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')
+    return noticeText('Sync main', `dry-run for ${hhmm(s.at)}: ${plural(rows.length, 'conflict')} (${self.length} self, ${foreign.length} foreign)${list ? `: ${list}` : ''}`, `${self.length ? 'self-conflicts resolve to ours at the merge (rule 11, log each with its commit); ' : ''}${foreign.length ? 'a mechanical text conflict (both sides additive) you resolve and check with git diff --check; a logic or .uasset/.umap conflict → git merge --abort and the path goes to its owner; owner unknown → 🟥 to Hai' : 'nothing else to do'}`)
+  },
+  ownerConflicts: (s: SyncFile, mine: Conflict[]): string => {
+    const self = mine.filter(c => c.kind === 'self')
+    const foreign = mine.filter(c => c.kind === 'foreign')
+    const parts = [
+      foreign.length ? `foreign change on main in ${foreign.map(c => c.path).join(', ')}` : '',
+      self.length ? `self-conflict in ${self.map(c => `${c.path} (main holds our ${c.match})`).join(', ')}` : '',
+    ].filter(Boolean)
+    return noticeText('Sync main', `${parts.join('; ')} for the sync at ${hhmm(s.at)}; this session edited ${mine.length === 1 ? 'that path' : 'those paths'}`, `${foreign.length ? `before ${hhmm(s.at)}: commit your own version (exact paths) and tell ${s.holder.lane} how the two sides combine; a logic or .uasset/.umap conflict means the merge is aborted and you resolve it after the sync (the owner decides, never discard either side)` : ''}${foreign.length && self.length ? '; ' : ''}${self.length ? 'a self-conflict needs nothing from you: the holder resolves it to ours (rule 11)' : ''}`)
+  },
+  syncHolderNamed: (s: SyncFile): string => noticeText('Sync main', `you were named holder of the sync at ${hhmm(s.at)} (planned by ${s.plannedBy})`, `at ${hhmm(s.at - CUTOFF_MS)} the cutoff notice reaches every session; at ${hhmm(s.at)} run s2-sync-main, then call the sync tool with done or abort`),
+} as const
+
+export const noticeIds = {
+  granted: (since: number) => `editor:granted:${since}`,
+  leaseEnding: (since: number, end: number) => `editor:ending:${since}:${end}`,
+  overrun: (since: number, end: number) => `editor:overrun:${since}:${end}`,
+  idle: (since: number) => `editor:idle:${since}`,
+  yield: (asker: string, at: number) => `editor:yield:${asker}:${at}`,
+  recovered: (holder: string, at: number) => `editor:recovered:${holder}:${Math.floor(at / 60_000)}`,
+  goneEditor: (holder: string, pid: number) => `editor:gone:${holder}:${pid}`,
+  pieAbort: (n: number) => `ram:pie-abort:${n}`,
+  disk: (day: string) => `disk:${day}`,
+  cutoff: (s: SyncFile) => `sync:${s.id}:${s.at}:cutoff`,
+  releaseBy: (s: SyncFile) => `sync:${s.id}:${s.at}:release`,
+  frozen: (s: SyncFile) => `sync:${s.id}:${s.at}:frozen`,
+  lifted: (s: SyncFile) => `sync:${s.id}:${s.at}:${s.state}`,
+  conflicts: (s: SyncFile, paths: readonly string[]) => `sync:${s.id}:${s.at}:conflicts:${paths.slice().sort().join('|').length}:${hash(paths.slice().sort().join('|'))}`,
+  holderNamed: (s: SyncFile) => `sync:${s.id}:named`,
+} as const
+
+/** A short stable hash (FNV-1a) for notice ids built from long lists. */
+export const hash = (text: string): string => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
