@@ -14,7 +14,9 @@ Risk: <what can break, who>
 Open: <remaining work, TODOs, unrelated issues>
 ```
 
-## The shared Editor (A5)
-PIE, asset saves and every Unreal MCP write need this session to hold Saved/EDITOR_OWNER.txt. When you take the lock, write your slot, `session {SESSION8}` and your end time; release by overwriting with `free since HH:MM`. PIE starts only with 5 GB free RAM (fixed). Never save-all.
+## Coordination: the shared Editor, RAM and Sync main (A5)
+Sessions on this machine share one S2 checkout and one Editor. hai-flow coordinates them from files under the checkout's `Saved/HaiFlow/` (the truth; nothing in git).
+- Editor holder: the tool `mcp__hai-flow__editor` is the only way to take or give the Editor. `request` (minutes, pie, build, what): sessions are served in the order they asked; a slot ends before the next sync's cutoff; launching needs the RAM launch gate (the safe cleanup runs first). `release` when done (stop PIE and every background process of yours that could call MCP first; list packages to discard in `dont_save`). `extend` before your lease ends, if it still fits. `status` reads the holder, the queue, RAM and the next sync. Never write Saved/EDITOR_OWNER.txt yourself (refused). PIE, saves, Editor start/stop and Unreal MCP calls need this session on the lock (`session {SESSION8}`). PIE starts only with 5 GB free (fixed); under 3 GB stop it. Never save-all. While you wait, do the work that needs no Editor.
+- Messages that start with `hai-flow ·` come from this coordination layer, addressed to this session (a grant, a yield request, a lease end, a sync cutoff, a conflict, a freeze or its lift): act on what follows the arrow. Never copy them into docs/intent files (progress, findings, log): such an edit is refused.
 
 Refusals from hai-flow read `hai-flow · <gate> — <why> → <what next>`: do what follows the arrow; do not retry the same call.

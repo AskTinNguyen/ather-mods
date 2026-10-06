@@ -2,27 +2,39 @@ import type { EngineInterface as Engine, Register, RenderElement } from 'claude-
 import { A5, freshTurn, gitTargets, newLines, norm, under, type A5Config, type Decision, type Located, type Places, type Proof, type Turn } from './a5.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
+import {
+  DIR, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, YIELD_EVERY_MS, atNearest, blankSession, cleanupPlan, decide, editorPid, freeLine, gatesOf,
+  heldLine, hhmm as clockOf, isIntentFile, isLockPath, mayAskYield, noticeIds, parseLockLine, parseProbe, parseSessionFile, parseSyncFile, parseTouch, queueOf, ramProbe,
+  addsNotice, safeWord, syncPhase, ueRequestLine, writesLock, ymd, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  type SessionFile, type SyncFile, type Touch, type Want,
+} from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
 import { A5_LOOK, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
-import { SYNC_PROMPT, VITALS_PROBE, editorTile, lockLine, mainTile, memoryTile, parseLockView, parseVitals, ramBand, tilesRow, toMin, type LockView, type Sync, type Vitals } from './watch.ts'
+import { SYNC_PROMPT, editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type Vitals } from './watch.ts'
 
-// Hai's S2 flow beside Ather Automata, which it never changes:
+// Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
+// pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
 // - A5 (a5.ts, a5/config.json), only while `/a5 on`: refuses or asks before risky tool calls, records
 //   edits and checks, and at Stop keeps the agent going until its report is honest. Fitted to Ather's
 //   intent flow: rules about the shared checkout skip a worker's own worktree; a worker (subagent) never
 //   asks Hai, it reports; with an intent tracked, `Verified:` is held to Ather's proof for it.
-// - The shared Editor (editor.ts), always: PIE, saves and Unreal MCP writes need this session to hold
-//   the lock; PIE needs 5 GB free RAM; save-all is refused.
+// - A5's coordination (coord.ts) for the sessions sharing one S2 checkout and one machine: the Editor
+//   holder (model tool `editor`: a queue computed alike by every session from Saved/HaiFlow files, a lease
+//   with a hard end, the lock written in the S2 standard's lines), RAM (safe cleanup before a grant, the
+//   launch gate, PIE 5/3 GB fixed) and the Sync main holder (`/a5 sync`, model tool `sync`: cutoff, freeze,
+//   conflicts to their owners). One minute timer reads files and probes; it wakes the model only for an
+//   event addressed to this session. Notices start "hai-flow ·" and are never logged in docs/intent.
 // - 🟥 / ⏯️ (decision.ts), always: the title is marked and unread set. A 🟥 that relays an intent's director
 //   call (a worker added it to findings.md, intent skill) is in Ather's Needs you already; any other 🟥 gets
 //   one PENDING.md line, so no decision is lost.
-// - Ather's pane (theme.ts, watch.ts, icons.ts): its home view gains Editor · Memory · Branch tiles with
-//   pixel icons; with A5 on, the accent turns gold, a red seal joins the brand, the five rules sit at the foot.
-//   Icons move only when a state turns over (a dither reveal) or a sync runs (a dither sweep).
+// - Ather's pane (theme.ts, watch.ts, icons.ts), A5 on only: its home view gains Editor holder · Memory ·
+//   Sync main tiles with pixel icons; the accent turns gold, a red seal joins the brand, the five rules sit
+//   at the foot. Icons move only when a state turns over (a dither reveal) or a sync runs (a dither sweep).
 // Every refusal reads the same: "hai-flow · <gate> — <why> → <what next>".
-// Module variables are this session's (one process per session); a reload starts them over.
+// Module variables are this session's (one process per session); a reload starts them over, and what must
+// survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5WhenPresent: string; editorLock: string; pendingFile: string; motion: string }
+type Opts = { a5WhenPresent: string; editorLock: string; pendingFile: string; motion: string; launchGatePieGb?: number; launchGateGb?: number }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -64,6 +76,36 @@ let isSyncRunning = false
 let isStatusShown = false
 const seen = new Map<string, { sig: string; color: string; at: number; from: string }>() // each tile's state, and when it last turned over
 let chain: string[] | null = null // the plugins beneath this one on a tool call: Ather there means the pane can be wrapped
+
+// A5's coordination: what this session last read from the files and the machine (coord.ts decides).
+const EDITOR_TOOL = 'mcp__hai-flow__editor'
+const SYNC_TOOL = 'mcp__hai-flow__sync'
+const CLEANUP_EVERY_MS = 5 * 60_000 // while a slot waits on RAM, the safe cleanup runs at most this often
+const PIE_STOP = /StopPIE|EndPIE|StopPlayInEditor|EndPlayMap|RequestEndPlayMap/i
+const EDITOR_WORK = /Build\.(bat|sh|cmd)\b|UnrealEditor|RunUAT/i
+let hasTools = false
+let me: SessionFile | null = null // this session's own file (Saved/HaiFlow/editor/<id8>.json), as last written
+let me8 = ''
+let peers: SessionFile[] = [] // every other session's file
+let lanes: LaneBeat[] = [] // Ather's lane heartbeats
+let lockRaw: string | null = null
+let lock: LockLine = parseLockLine(null)
+let probe: Probe | null = null
+let gates: Gates & { source: string } = gatesOf(null, undefined, undefined)
+let syncFile: SyncFile | null = null
+let touches: Touch[] = []
+const touched = new Set<string>() // repo-relative paths this session and its workers edited in the shared checkout
+let pending: Notice[] = []
+const delivered = new Set<string>()
+let isBusy = false // a main-loop turn runs: notices ride its next tool result instead of a prompt
+let tickChain: Promise<void> = Promise.resolve()
+let lastEditorUseAt = 0
+let isPieRunning = false // this session started PIE and no stop was seen
+let isPieLow = false
+let pieLowSince = 0
+let cleanupNote = ''
+let cleanupAt = 0
+let decision: GrantDecision | null = null
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const parentOf = (p: string): string => {
@@ -198,7 +240,7 @@ async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Pro
   const raw = await $.fs.read(opts.editorLock).catch(() => null)
   if (raw === null && !(await $.fs.exists(s2Root(opts)))) return null // no S2 checkout on this machine
   const now = new Date()
-  const why = lockProblem(parseEditorLock(raw, now.getHours() * 60 + now.getMinutes()), (await $.session.id()).slice(0, 8).toLowerCase())
+  const why = lockProblem(parseEditorLock(raw, now.getHours() * 60 + now.getMinutes()), (await $.session.id()).slice(0, 8).toLowerCase(), `Take the lock first: ask for it with ${EDITOR_TOOL} (action request) and retry once it is granted.`)
   if (why) return why.replace(/\s+(Take the lock first:|If this session|Never drive)/, ' → $1')
   if (kind === 'pie') {
     const probe = await $.process.run(FREE_RAM_PROBE, { timeoutMs: 20_000 }).catch(() => null)
@@ -294,34 +336,416 @@ function showStatus($: Engine): void {
   isStatusShown = parts.length > 0
 }
 
-/** The lock and the machine, every minute in an S2 session; a toast when the Editor comes free or RAM falls. */
-async function refreshEditor($: Engine, opts: Opts): Promise<void> {
-  // A5 off: nothing is probed, drawn or toasted (D1).
+// ---------- A5 coordination: files, the minute tick, notices ----------
+const hfDir = (opts: Opts): string => `${s2Root(opts)}/${DIR}`
+const sameRoot = (a: string, b: string): boolean => norm(a).toLowerCase().replace(/\/$/, '') === norm(b).toLowerCase().replace(/\/$/, '')
+
+/** This session's own file, read back after a reload (its request, lease and delivered notices survive). */
+async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
+  const id = await $.session.id()
+  const id8 = id.slice(0, 8).toLowerCase()
+  if (me && me.id8 === id8) return me
+  me8 = id8
+  const dir = hfDir(opts)
+  const file = parseSessionFile(await $.fs.read(`${dir}/editor/${id8}.json`).catch(() => null))
+  const title = file?.title || (await sessionTitle($).catch(() => ''))
+  me = file ?? blankSession(id, safeWord(bareTitle(title) || `session-${id8}`), bareTitle(title), await $.clock.now())
+  for (const d of me.delivered) delivered.add(d)
+  for (const p of parseTouch(await $.fs.read(`${dir}/touch/${id8}.json`).catch(() => null))?.paths ?? []) touched.add(p)
+  return me
+}
+
+/** Writes this session's file (its heartbeat with it); one writer: this session. */
+async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
+  if (!me) return
+  const now = at ?? (await $.clock.now())
+  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`hai-flow: session file not written: ${String(err)}`, { to: 'debug' }))
+}
+
+async function readJson($: Engine, path: string): Promise<string | null> {
+  return $.fs.read(path).catch(() => null)
+}
+
+/** Everything the decisions read: the lock, every session file, Ather's lanes, the sync plan, the touch files
+ * and the machine probe. */
+async function readWorld($: Engine, opts: Opts): Promise<void> {
+  const root = s2Root(opts)
+  const dir = hfDir(opts)
+  const [raw, list, laneList, syncText, touchList, ran] = await Promise.all([
+    $.fs.read(opts.editorLock).catch(() => null),
+    $.fs.list(`${dir}/editor`).catch(() => []),
+    $.fs.list(`${root}/Saved/AtherAutomata/lanes`).catch(() => []),
+    readJson($, `${dir}/sync.json`),
+    $.fs.list(`${dir}/touch`).catch(() => []),
+    $.process.run(ramProbe(root.slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null),
+  ])
+  lockRaw = raw
+  lock = parseLockLine(raw)
+  const jsons = <T>(entries: { name: string; kind: string }[]) => entries.filter(f => f.kind === 'file' && f.name.endsWith('.json')) as T[]
+  const files = await Promise.all(jsons<{ name: string }>(list).map(async f => parseSessionFile(await readJson($, `${dir}/editor/${f.name}`))))
+  peers = files.filter((f): f is SessionFile => f !== null && f.id8 !== me8)
+  lanes = (
+    await Promise.all(
+      jsons<{ name: string; mtimeMs: number }>(laneList).map(async f => {
+        try {
+          const v = JSON.parse((await readJson($, `${root}/Saved/AtherAutomata/lanes/${f.name}`)) ?? '') as { sessionId?: string; hasEnded?: boolean }
+          return { sessionId: String(v.sessionId ?? f.name.replace(/\.json$/, '')), hasEnded: v.hasEnded === true, mtimeMs: f.mtimeMs }
+        } catch {
+          return null // a half-written heartbeat; the next tick reads it
+        }
+      }),
+    )
+  ).filter((l): l is LaneBeat => l !== null)
+  syncFile = parseSyncFile(syncText)
+  touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
+  probe = ran ? parseProbe(ran.stdout) : null
+}
+
+/** Queues a notice for this session, once per id (D6). */
+function push(n: Notice): void {
+  if (delivered.has(n.id) || pending.some(p => p.id === n.id)) return
+  pending.push(n)
+}
+
+/** The queued notices' texts, now marked delivered. */
+function drain(): string[] {
+  const out = pending.map(n => n.text)
+  for (const n of pending) delivered.add(n.id)
+  pending = []
+  return out
+}
+
+/** An idle session with a notice that needs action gets one prompt for all it has queued (D6). */
+async function deliverIdle($: Engine, opts: Opts): Promise<void> {
+  if (isBusy || !pending.some(n => n.isActionable)) return
+  const texts = drain()
+  isBusy = true
+  await saveMe($, opts)
+  await $.prompt.submit({ text: texts.join('\n\n') }).catch(err => $.ui.log(`hai-flow: notice prompt not queued: ${String(err)}`, { to: 'debug' }))
+}
+
+/** The model tools, registered the first time A5 is seen on in this session (D1: none while it is off). */
+async function ensureTools($: Engine): Promise<void> {
+  if (hasTools) return
+  hasTools = true
+  await $.tool.register({
+    name: 'editor',
+    description:
+      'hai-flow A5 Editor holder for the shared S2 checkout: the only way to take or give the Unreal Editor while A5 is on. ' +
+      '"request" asks for a slot (minutes, pie, build, what): sessions are served in the order they asked, a slot must end before the next sync cutoff, and launching needs the RAM launch gate; ' +
+      'you are granted at once when you are at the head and the lock is free, else you get your place and are told when it is yours. ' +
+      '"release" gives it back (stop PIE and every background process of yours that could call MCP first; list packages to discard in dont_save). ' +
+      '"extend" adds minutes before your lease ends, if it still fits. "status" reads the holder, the queue, RAM and the next sync. Never write Saved/EDITOR_OWNER.txt yourself.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['request', 'release', 'extend', 'status'] },
+        minutes: { type: 'number', description: 'request: how long you need the Editor (5–180, default 30; ≤ 20 without a build may ask the holder to yield). extend: how many more minutes.' },
+        pie: { type: 'boolean', description: 'request: the slot starts PIE (the launch gate is higher).' },
+        build: { type: 'boolean', description: 'request: the Editor must be closed for a build (one window ≤ 45 min).' },
+        what: { type: 'string', description: 'request: what the slot is for, one line.' },
+        lane: { type: 'string', description: 'request: the lane name written into the lock (default: this session\'s title).' },
+        mode: { type: 'string', enum: ['interactive', 'unattended'] },
+        pausable: { type: 'boolean', description: 'request: whether you can yield at a safe point (default true).' },
+        next_safe: { type: 'string', description: 'request: your next safe point, HH:MM or "after save".' },
+        note: { type: 'string', description: 'release: one line for the lock note.' },
+        dont_save: { type: 'array', items: { type: 'string' }, description: 'release: dirty packages to discard (Don\'t-Save), each confirmed by its owning lane.' },
+        pie_stopped: { type: 'boolean', description: 'release: PIE this session started has ended (needed only when no stop was seen).' },
+      },
+      required: ['action'],
+    },
+  }).catch(err => $.ui.log(`hai-flow: editor tool not registered: ${String(err)}`, { to: 'debug' }))
+}
+
+/** One minute tick, serialized with the tool's own runs: read, decide, write this session's files, notify. */
+function runTick($: Engine, opts: Opts): Promise<void> {
+  tickChain = tickChain.then(() => tick($, opts)).catch(err => $.ui.log(`hai-flow tick: ${String(err)}`, { to: 'debug' }))
+  return tickChain
+}
+
+async function tick($: Engine, opts: Opts): Promise<void> {
   if (!(await readA5($))) {
     showStatus($)
     return
   }
-  const [raw, probe, now] = await Promise.all([
-    $.fs.read(opts.editorLock).catch(() => null),
-    $.process.run(VITALS_PROBE, { timeoutMs: 15_000 }).catch(() => null),
-    $.clock.now(),
-  ])
+  if (!(await $.fs.exists(s2Root(opts)))) return // no S2 checkout on this machine
+  await ensureTools($)
+  await restoreMe($, opts)
+  const now = await $.clock.now()
+  await readWorld($, opts)
+  gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
+  await editorStep($, opts, now)
+  ramStep(opts, now)
+  await saveMe($, opts, now)
+  showMachine($, now)
+  await deliverIdle($, opts)
+  showStatus($)
+  $.ui.invalidate('ui.render')
+}
+
+const grantInput = (now: number): GrantInput => ({ me8, lock, files: me ? [me, ...peers] : peers, lanes, now, sync: syncFile, probe, gates })
+const holdsLock = (): boolean => lock.id8 === me8 && me8 !== '' && (lock.kind === 'held' || lock.kind === 'handed')
+
+/** The lock written by read-compare-write: only if it still reads as when this session decided, then read back
+ * (no compare-and-set exists; one more writer between the two reads loses, and the next tick decides again). */
+async function writeLock($: Engine, opts: Opts, line: string): Promise<boolean> {
+  const before = await $.fs.read(opts.editorLock).catch(() => null)
+  if (before !== lockRaw) {
+    lockRaw = before
+    lock = parseLockLine(before)
+    return false
+  }
+  await $.fs.write(opts.editorLock, `${line}\n`)
+  const after = await $.fs.read(opts.editorLock).catch(() => null)
+  lockRaw = after
+  lock = parseLockLine(after)
+  return (after ?? '').trim() === line
+}
+
+/** The holder's side (lease end, overrun, idle, yield asks) and the waiter's (recover, cleanup, grant, yield). */
+async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
+  if (!me) return
+  if (holdsLock()) {
+    if (!me.holding) me = { ...me, holding: { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? now + 30 * 60_000, extended: 0 } }
+    const h = me.holding ?? { since: now, end: now, extended: 0 }
+    if (now >= h.end - LEASE_WARN_MS && now < h.end) push({ id: noticeIds.leaseEnding(h.since, h.end), text: NOTICES.leaseEnding(h.end), isActionable: true })
+    if (now >= h.end) push({ id: noticeIds.overrun(h.since, h.end), text: NOTICES.overrun(h.end), isActionable: true })
+    if (!isPieRunning && me.want?.mode !== 'unattended' && now - Math.max(lastEditorUseAt, h.since) >= IDLE_RELEASE_MS)
+      push({ id: noticeIds.idle(h.since), text: NOTICES.idle(Math.round((now - Math.max(lastEditorUseAt, h.since)) / 60_000)), isActionable: true })
+    for (const f of peers)
+      for (const a of f.yieldAsks)
+        if (a.holder === me8 && a.via === 'file' && a.at >= h.since - 60_000 && now - a.at < YIELD_EVERY_MS) push({ id: noticeIds.yield(f.id8, a.at), text: NOTICES.yield(f.lane, a.minutes), isActionable: true })
+    decision = { kind: 'mine' }
+    return
+  }
+  if (me.holding) me = { ...me, holding: null, want: null } // the lock no longer names this session
+  if (!me.want) {
+    decision = null
+    return
+  }
+  let d = decide(grantInput(now))
+  if (d.kind === 'recover') {
+    const line = freeLine({ since: now, by: me.lane, note: `stale lease of ${lock.lane || 'a lane'} (session-${d.holder}): its lane is gone and no UnrealEditor runs`, background: 'unknown' })
+    if (await writeLock($, opts, line)) push({ id: noticeIds.recovered(d.holder, now), text: NOTICES.recovered(d.holder), isActionable: false })
+    d = decide(grantInput(now))
+  }
+  if (d.kind === 'grant' || (d.kind === 'wait' && d.code === 'ram')) {
+    const plan = probe ? cleanupPlan(probe) : null
+    if (plan && (plan.reap || plan.stopLiveCoding.length > 0) && (d.kind === 'grant' || now - cleanupAt >= CLEANUP_EVERY_MS)) {
+      await runCleanup($, opts, plan, now)
+      d = decide(grantInput(now))
+    } else if (plan && !cleanupAt) cleanupNote = plan.report.join('; ')
+  }
+  if (d.kind === 'grant') await takeLock($, opts, d, now)
+  else if (d.kind === 'wait' && d.code === 'held') await askYield($, now)
+  else if (d.kind === 'wait' && d.code === 'gone-editor') {
+    const pid = editorPid(probe) ?? 0
+    push({ id: noticeIds.goneEditor(lock.id8, pid), text: NOTICES.goneEditor(`${lock.lane || 'the holder'} (session ${lock.id8})`, pid), isActionable: true })
+  }
+  decision = holdsLock() ? { kind: 'mine' } : d
+}
+
+async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number | null }, now: number): Promise<void> {
+  const w = me?.want
+  if (!me || !w) return
+  const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: now, pid: d.reuse, end: d.end, mode: w.mode, pausable: w.pausable, nextSafe: w.nextSafe, note: `${w.what}${w.pie ? ' (PIE)' : ''}${w.build ? ' (build)' : ''}` })
+  if (!(await writeLock($, opts, line))) return
+  me = { ...me, holding: { since: now, end: d.end, extended: 0 } }
+  lastEditorUseAt = now
+  push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : ''), isActionable: true })
+}
+
+/** A short request without a build asks the holder to yield, once per holder per hour: through the holder's own
+ * hai-flow (a field in this session's file it reads), or the standard `UE request:` line to a holder without it. */
+async function askYield($: Engine, now: number): Promise<void> {
+  const want = me?.want
+  const y = want ? mayAskYield(grantInput(now)) : null
+  if (!me || !want || !y) return
+  const withMod = peers.some(f => f.id8 === y.holder && now - f.heartbeatAt <= HEARTBEAT_STALE_MS)
+  if (!withMod) {
+    const lane = lanes.find(l => l.sessionId.toLowerCase().startsWith(y.holder))
+    if (!lane) return // no address for it: the waiter is told its place, nothing is sent
+    const until = atNearest(lock.end, now) ?? now + 60 * 60_000
+    const sent = await $.session.send({ to: { sessionId: lane.sessionId }, text: ueRequestLine(me.lane, want.minutes, want.what, Math.max(until, now + 15 * 60_000)) }).catch(err => ({ isDelivered: false as const, reason: String(err) }))
+    if (!sent.isDelivered) $.ui.log(`hai-flow: UE request to ${y.holder} not delivered: ${sent.reason}`, { to: 'debug' })
+  }
+  me = { ...me, yieldAsks: [...me.yieldAsks, { holder: y.holder, at: now, via: withMod ? 'file' : 'send', minutes: want.minutes, lane: me.lane }] }
+}
+
+/** The safe cleanup before a grant: the S2 orphan-git reaper under 14 GB, LiveCodingConsole stopped only while
+ * no Editor runs (checked again by a fresh probe); every other process is named and left alone. */
+async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanupPlan>, now: number): Promise<void> {
+  const before = probe?.freeGb ?? 0
+  const done: string[] = []
+  if (plan.stopLiveCoding.length > 0) {
+    const fresh = parseProbe((await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null))?.stdout ?? '')
+    if (fresh && editorPid(fresh) === null) {
+      await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `Stop-Process -Id ${plan.stopLiveCoding.join(',')} -ErrorAction SilentlyContinue`], { timeoutMs: 15_000 }).catch(() => null)
+      done.push(`stopped LiveCodingConsole (pid ${plan.stopLiveCoding.join(', ')})`)
+    }
+  }
+  if (plan.reap) {
+    await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `${s2Root(opts)}/.agents/skills/git-poller-storm/scripts/reap-orphan-git.ps1`], { timeoutMs: 60_000 }).catch(() => null)
+    done.push('ran the orphan-git reaper')
+  }
+  probe = parseProbe((await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null))?.stdout ?? '') ?? probe
+  cleanupAt = now
+  cleanupNote = [`${clockOf(now)} ${done.join(', ') || 'nothing to clean'}: free ${before} → ${probe?.freeGb ?? '?'} GB`, ...plan.report].join('; ')
+}
+
+/** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */
+function ramStep(opts: Opts, now: number): void {
+  if (!probe) return
+  if (isPieRunning && holdsLock() && probe.freeGb < PIE_ABORT_GB) {
+    if (!isPieLow) pieLowSince = now
+    isPieLow = true
+    push({ id: noticeIds.pieAbort(pieLowSince), text: NOTICES.pieAbort(probe.freeGb), isActionable: true })
+  } else if (probe.freeGb >= PIE_ABORT_GB) isPieLow = false
+  if (probe.diskGb !== null && probe.diskGb < DISK_MIN_GB) push({ id: noticeIds.disk(ymd(now)), text: NOTICES.disk(`${s2Root(opts).slice(0, 2)}`, probe.diskGb), isActionable: false })
+}
+
+/** What the tiles and the status line show, from what the tick read; a toast when the Editor comes free or RAM
+ * falls (A5 on only). */
+function showMachine($: Engine, now: number): void {
   const d = new Date(now)
   nowMin = d.getHours() * 60 + d.getMinutes()
-  lockView = parseLockView(raw)
+  lockView = parseLockView(lockRaw)
   const key = lockView.isMissing ? 'missing' : lockView.isFree ? `free ${lockView.freeSince ?? ''}` : `${lockView.who ?? ''} ${lockView.until ?? ''}`
   // One toast when the Editor comes free (someone waiting can take it); hand-overs between lanes stay quiet.
   if (lastLockKey !== '' && key !== lastLockKey && lockView.isFree) $.ui.toast(lockLine(lockView))
   lastLockKey = key
-  vitals = probe ? parseVitals(probe.stdout) : undefined
+  vitals = probe ? { freeGb: probe.freeGb, claude: 0, git: probe.procs.filter(p => p.name.toLowerCase() === 'git').length, editorGb: probe.procs.find(p => p.name === 'UnrealEditor')?.gb ?? 0 } : undefined
   if (vitals) {
     const band = ramBand(vitals.freeGb)
     if (band !== lowBand && band !== 'ok')
       $.ui.toast(band === 'below-abort' ? `Free RAM ${vitals.freeGb} GB: under 3 GB, abort PIE` : `Free RAM ${vitals.freeGb} GB: under 5 GB, do not start PIE`)
     lowBand = band
   }
-  showStatus($)
-  $.ui.invalidate('ui.render')
+}
+
+/** Records a repo-relative path this session (or one of its workers) edited in the shared checkout. */
+async function recordTouch($: Engine, opts: Opts, locs: Located[]): Promise<void> {
+  const root = s2Root(opts)
+  let isNew = false
+  for (const l of locs) {
+    if (!l.root || !l.rel || !sameRoot(l.root, root) || !(await isSharedRoot($, l.root))) continue
+    if (!touched.has(l.rel)) {
+      touched.add(l.rel)
+      isNew = true
+    }
+  }
+  if (!isNew || !me) return
+  const t: Touch = { session: me.session, id8: me8, lane: me.lane, paths: [...touched].slice(-500), updatedAt: await $.clock.now() }
+  await $.fs.write(`${hfDir(opts)}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
+}
+
+/** A5's coordination refusals before a tool runs: the lock is the editor tool's to write; notices are not
+ * logged into intent files. */
+async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): Promise<string | null> {
+  const viaTool = `call ${EDITOR_TOOL} (action request, release or extend)`
+  if (EDIT_TOOLS.has(tool)) {
+    const parts = await editParts($, tool, input)
+    if (parts.some(([path]) => isLockPath(path))) return blocked('Editor lock', 'under A5 the lock is written by the editor tool, never by hand', viaTool)
+    if (parts.some(([path, old, neu]) => isIntentFile(path) && addsNotice(newLines(old, neu))))
+      return blocked('Notices', 'hai-flow notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "hai-flow ·" line out; the files under Saved/HaiFlow are the record')
+  }
+  if (SHELL_TOOLS.has(tool) && writesLock(str(input.command))) return blocked('Editor lock', 'under A5 the lock is written by the editor tool, never by a command', viaTool)
+  return null
+}
+
+const placeText = (d: GrantDecision | null): string => {
+  if (!d || d.kind === 'none') return 'no request from this session'
+  if (d.kind === 'mine') return `this session holds the Editor${me?.holding ? ` until ${clockOf(me.holding.end)}` : ''}`
+  if (d.kind === 'wait') return `waiting (${d.place > 1 ? `${d.place}${d.place === 2 ? 'nd' : d.place === 3 ? 'rd' : 'th'} in the queue` : 'next'}): ${d.why} → ${d.next}`
+  return d.kind === 'grant' ? `granted until ${clockOf(d.end)}` : 'recovering a stale lease'
+}
+
+/** The `editor` tool: request, release, extend, status (the only writer of the lock under A5). */
+async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
+  if (!(await readA5($))) return blocked('Editor', 'A5 is off, so the Editor holder is not running', 'follow AGENTS.md: take Saved/EDITOR_OWNER.txt by hand')
+  if (!(await $.fs.exists(s2Root(opts)))) return blocked('Editor', `no S2 checkout at ${s2Root(opts)}`, 'set the editorLock option to the checkout\'s Saved/EDITOR_OWNER.txt')
+  await restoreMe($, opts)
+  const action = str(e.action)
+  const now = await $.clock.now()
+  const tail = (text: string): string => [text, ...drain()].join('\n')
+  if (action === 'request') {
+    if (!me) return 'no session file'
+    await runTick($, opts) // a fresh read of the lock and the queue first
+    if (holdsLock()) return tail(`this session already holds the Editor until ${me.holding ? clockOf(me.holding.end) : lock.end} → use it; extend if you need more`)
+    const build = e.build === true
+    const minutes = Math.max(5, Math.min(180, Math.round(Number(e.minutes) || 30)))
+    if (build && minutes > 45) return blocked('Editor', `a build window is at most 45 min (S2 standard), ${minutes} asked`, 'batch the code changes into one window of ≤ 45 min and ask again')
+    const want: Want = {
+      minutes,
+      pie: e.pie === true,
+      build,
+      what: str(e.what).slice(0, 120) || 'Editor work',
+      mode: e.mode === 'unattended' ? 'unattended' : 'interactive',
+      pausable: e.pausable !== false,
+      nextSafe: str(e.next_safe) || 'after save',
+      requestedAt: me.want?.requestedAt ?? now, // asking again keeps the place in the queue
+    }
+    me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
+    await saveMe($, opts, now)
+    await runTick($, opts)
+    const asked = me.yieldAsks.find(a => a.at === now)
+    return tail(`${placeText(decision)}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without hai-flow)' : ''}` : ''}`)
+  }
+  if (action === 'release') {
+    lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+    lock = parseLockLine(lockRaw)
+    if (!holdsLock()) {
+      if (me) me = { ...me, want: null, holding: null }
+      await saveMe($, opts, now)
+      return tail(blocked('Editor', 'the lock does not name this session', 'nothing to release (any request of this session is withdrawn)'))
+    }
+    if (isPieRunning && e.pie_stopped !== true) return blocked('Editor', 'this session started PIE and no stop was seen', 'stop PIE first (or call release with pie_stopped: true once it has ended)')
+    const fresh = parseProbe((await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null))?.stdout ?? '')
+    const pid = editorPid(fresh)
+    const dont = Array.isArray(e.dont_save) ? e.dont_save.map(String).filter(Boolean) : []
+    const note = [pid ? `Editor open PID ${pid}, reusable` : 'Editor closed', dont.length ? `Don't-Save: ${dont.join(', ')}` : '', str(e.note)].filter(Boolean).join('; ')
+    const line = freeLine({ since: now, by: me?.lane ?? me8, note, background: 'none' })
+    if (!(await writeLock($, opts, line))) return blocked('Editor', 'the lock changed while releasing', 'read it with action status, then release again')
+    if (me) me = { ...me, want: null, holding: null }
+    isPieRunning = false
+    await saveMe($, opts, now)
+    return tail(`released: ${line}`)
+  }
+  if (action === 'extend') {
+    await readWorld($, opts) // the lock and who waits, as they are now
+    if (!holdsLock() || !me) return blocked('Editor', 'the lock does not name this session', 'ask for a slot with action request')
+    const h = me.holding ?? { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? now, extended: 0 }
+    if (now >= h.end) return blocked('Editor', `the lease ended at ${clockOf(h.end)}; an extension is asked before the end`, 'release now and ask again for the rest')
+    const add = Math.max(5, Math.min(120, Math.round(Number(e.minutes) || 15)))
+    const end = h.end + add * 60_000
+    const phase = syncPhase(syncFile, now)
+    if (syncFile && phase === 'planned' && end > syncFile.at - 30 * 60_000) return blocked('Editor', `the lease would end at ${clockOf(end)}, past the sync cutoff ${clockOf(syncFile.at - 30 * 60_000)}`, 'finish by the cutoff, or ask after the sync is done')
+    if (syncFile && (phase === 'cutoff' || phase === 'frozen') && syncFile.holder.id8 !== me8) return blocked('Editor', `the sync at ${clockOf(syncFile.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, `release by ${clockOf(syncFile.at - 10 * 60_000)}`)
+    const waiting = queueOf([me, ...peers], lanes, now, syncFile).length
+    if (waiting > 0 && h.extended >= 1) return blocked('Editor', `${waiting} session${waiting === 1 ? '' : 's'} wait and this lease was extended once already`, `release by ${clockOf(h.end)} and ask again`)
+    const w = me.want
+    const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid: lock.pid ?? editorPid(probe), end, mode: w?.mode ?? 'interactive', pausable: w?.pausable ?? true, nextSafe: w?.nextSafe ?? 'after save', note: lock.note || w?.what || 'Editor work' })
+    if (!(await writeLock($, opts, line))) return blocked('Editor', 'the lock changed while extending', 'read it with action status, then try again')
+    me = { ...me, holding: { ...h, end, extended: h.extended + 1 } }
+    await saveMe($, opts, now)
+    return tail(`extended until ${clockOf(end)}: ${line}`)
+  }
+  await runTick($, opts)
+  const queue = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile)
+  return tail(
+    JSON.stringify(
+      {
+        lock: (lockRaw ?? '').trim() || 'missing (unknown, not free)',
+        me: placeText(decision),
+        queue: queue.map((f, n) => `${n + 1}. ${f.lane} (session ${f.id8}): ${f.want?.minutes} min${f.want?.pie ? ', PIE' : ''}${f.want?.build ? ', build' : ''}: ${f.want?.what}`),
+        memory: probe ? { freeGb: probe.freeGb, launchGate: { withPie: gates.pieGb, withoutPie: gates.nopieGb, setOn: gates.source }, pie: 'start ≥ 5 GB, abort < 3 GB (fixed)', diskGb: probe.diskGb, cleanup: cleanupNote || 'none yet' } : 'probe did not answer',
+        sync: syncFile ? { at: clockOf(syncFile.at), phase: syncPhase(syncFile, now), holder: syncFile.holder.lane } : 'none planned',
+      },
+      null,
+      1,
+    ),
+  )
 }
 
 /** The branch against origin/main, read cheaply (no status, no fetch), one git call at a time. */
@@ -404,7 +828,7 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     const onRefresh = () => {
       syncAt = 0
       void refreshSync($, opts)
-      void refreshEditor($, opts)
+      void runTick($, opts)
     }
     const me8 = (await $.session.id()).slice(0, 8).toLowerCase()
     const tiles = [editorTile({ lock: lockView, vitals, me8, nowMin }), memoryTile(el, vitals), mainTile(el, sync, onSync, onRefresh, isDesktop, isSyncRunning)]
@@ -438,8 +862,9 @@ export const register: Register = (on, options) => {
     a5FlipAt = 0 // a session that starts with A5 already on does not stamp the seal
     isS2 = await $.fs.exists(`${(await $.session.root()).replace(/\\/g, '/')}/S2.uproject`)
     if (isS2) {
-      await refreshEditor($, opts)
-      $.clock.every(EDITOR_PERIOD_MS, () => void refreshEditor($, opts))
+      // The minute timer reads files and probes; it wakes the model only for an event addressed to this session.
+      await runTick($, opts)
+      $.clock.every(EDITOR_PERIOD_MS, () => void runTick($, opts))
     } else showStatus($)
     return res
   })
@@ -451,6 +876,7 @@ export const register: Register = (on, options) => {
       if (arg === 'on' && !a5On) a5FlipAt = await $.clock.now()
       a5On = arg === 'on'
       if (a5On) hits = noHits()
+      if (a5On && isS2) await runTick($, opts)
       showStatus($)
       $.ui.invalidate('ui.render')
       return {
@@ -467,12 +893,19 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
     const input = e as unknown as Input
+    // The main loop's model made this call (a plugin's own `$.tool.call`, this mod's included, is raised by that
+    // plugin, not the engine): it marks the session busy, and its result may carry queued notices to the model.
+    const isMain = e.agentId === undefined && next.origin.plugin === 'engine'
+    if (isMain) isBusy = true
+    if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
     const a5 = await load($)
     const isOn = await readA5($)
 
     // The Editor gate is A5's (D1): with A5 off nothing of hai-flow's refuses an Editor call.
     const editor = isOn ? await editorProblem($, opts, tool, input) : null
     if (editor) return { deny: blocked('Editor lock', editor.split(' → ')[0] ?? editor, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
+    const coord = isOn ? await coordProblem($, opts, tool, input) : null
+    if (coord) return { deny: coord }
 
     let d: Decision | null = null
     let what = ''
@@ -509,10 +942,18 @@ export const register: Register = (on, options) => {
       // Where this plugin sits: Ather beneath means its pane can be wrapped. Kept outside the plugin
       // folder (a write inside it would reload the mod), for /a5 status and for checking by hand.
       chain = next.trace.map(t => t.plugin).filter(p => p !== 'engine')
-      const me8 = (await $.session.id()).slice(0, 8)
-      await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/hai-flow/chain-${me8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
+      const id8 = (await $.session.id()).slice(0, 8)
+      await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/hai-flow/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
+    if (isOn && ran.isError !== true) {
+      // What the coordination needs from the call: Editor use (the idle lease), PIE running, the paths edited.
+      const text = isUnrealMcp(tool) ? JSON.stringify(input).slice(0, 4000) : ''
+      if (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && EDITOR_WORK.test(what))) lastEditorUseAt = await $.clock.now()
+      if (text && mcpKind(text) === 'pie') isPieRunning = true
+      if (text && PIE_STOP.test(text)) isPieRunning = false
+      if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, opts, locs)
+    }
     if (EDIT_TOOLS.has(tool) && ran.isError !== true) {
       parts.forEach(([path, old, neu], n) => {
         const added = newLines(old, neu)
@@ -531,6 +972,12 @@ export const register: Register = (on, options) => {
       if (kind === 'write' && ok) mcpWrote = true
       if (kind === 'pie') a5.recordProof(turn, 'PIE started (Ather proof)', ok)
       else if (kind === 'read' && mcpWrote && ok) a5.recordProof(turn, 'MCP read-back after a write (Ather proof)', true)
+    }
+    // Mid-turn, queued notices ride the main loop's next tool result (D6); a worker's results carry none.
+    if (isOn && isMain && pending.length > 0) {
+      const texts = drain()
+      await saveMe($, opts)
+      return { ...ran, context: [...(ran.context ?? []), ...texts] }
     }
     return ran
   })
@@ -582,16 +1029,26 @@ export const register: Register = (on, options) => {
         const isInFindings = m?.kind === 'decision' && (wrote || namesDirectorCall(await atherStatus($), e.answer))
         if (m) await applyMarker($, opts, m, isInFindings).catch(err => $.ui.log(`marker: ${String(err)}`))
       }
+      // The session is idle now: a notice that needs action and arrived after the last tool result is one prompt.
+      isBusy = false
+      if (a5On) await deliverIdle($, opts)
     }
     return res
   })
 
-  // Hai typed: the marker has been seen, so the title goes back.
   on('prompt.submit', async ($, e, next) => {
+    isBusy = true
+    // Hai typed: the marker has been seen, so the title goes back.
     if (markedFrom !== null && (e.origin.kind === 'composer' || e.origin.kind === 'bridge')) {
       const was = markedFrom
       markedFrom = null
       if (hasMark(await sessionTitle($))) await retitle($, was).catch(() => '')
+    }
+    // Notices waiting for the next turn ride this prompt as context the model reads (D6).
+    if (pending.length > 0 && (await readA5($))) {
+      const texts = drain()
+      await saveMe($, opts)
+      return next({ ...e, context: [...(e.context ?? []), ...texts] })
     }
     return next(e)
   })
@@ -600,8 +1057,8 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     await load($)
     const isOn = await readA5($)
-    const me8 = (await $.session.id()).slice(0, 8)
-    const text = [rulesFlow, isOn ? rulesA5 : ''].filter(Boolean).join('\n\n').replaceAll('{SESSION8}', me8)
+    const id8 = (await $.session.id()).slice(0, 8)
+    const text = [rulesFlow, isOn ? rulesA5 : ''].filter(Boolean).join('\n\n').replaceAll('{SESSION8}', id8)
     if (!text) return res
     return { ...res, sections: [...res.sections, { id: 'hai-flow:rules', text, scope: 'session' as const }] }
   })

@@ -24,6 +24,18 @@
       "default": "on",
       "options": ["on", "off"]
     },
+    "launchGatePieGb": {
+      "type": "number",
+      "title": "A5 Editor launch gate, slot with PIE (GB free)",
+      "description": "Free RAM, after the safe cleanup, a slot with PIE needs before the Editor is launched (an Editor already open is reused). The A5 panel's Memory tile can move it for every session; Reset there returns to this value. The PIE gate itself (start at 5 GB, abort under 3 GB) is fixed.",
+      "default": 31
+    },
+    "launchGateGb": {
+      "type": "number",
+      "title": "A5 Editor launch gate, slot without PIE (GB free)",
+      "description": "Free RAM, after the safe cleanup, a slot without PIE needs before the Editor is launched.",
+      "default": 28
+    },
     "pendingFile": {
       "type": "string",
       "title": "Pending decisions file",

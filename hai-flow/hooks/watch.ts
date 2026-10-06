@@ -2,6 +2,7 @@
 // summary strip, in its card language: label (quiet), value (bold, a status dot beside it), one quiet line.
 // The desktop gets cards; the terminal three short lines. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
+import { parseLockLine } from './coord.ts'
 import { ATHER, STATUS, TRACK } from './theme.ts'
 
 export const PIE_START_GB = 5
@@ -62,6 +63,12 @@ export const toMin = (hhmm: string | undefined): number | undefined => {
 export const parseLockView = (raw: string | null): LockView => {
   if (raw === null) return { isMissing: true, isFree: false, dontSave: 0 }
   const first = (raw.replace(/^\uFEFF/, '').split(/\r?\n/).find(l => l.trim() !== '') ?? '').trim()
+  // The S2 standard's lines (HELD / HANDED / FREE, D2) are read field by field.
+  const std = parseLockLine(raw)
+  if (std.isStandard) {
+    if (std.kind === 'free') return { isMissing: false, isFree: true, freeSince: std.since.slice(0, 5) || undefined, dontSave: 0 }
+    return { isMissing: false, isFree: false, who: std.lane || undefined, session: std.id8 || undefined, from: std.since.slice(0, 5) || undefined, until: std.end || undefined, task: std.note || undefined, dontSave: /Don't-Save:\s*([^;]+)/i.exec(std.note)?.[1]?.split(',').length ?? 0 }
+  }
   const free = /^free since (\d{1,2}:\d{2})/i.exec(first)
   if (first === '' || free || /\bfree (for|to use)\b|\bno (agent|one|lane) holds it\b/i.test(first))
     return { isMissing: first === '', isFree: first !== '', freeSince: free?.[1], dontSave: 0 }

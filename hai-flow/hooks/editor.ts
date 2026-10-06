@@ -35,8 +35,7 @@ export const isEditorStartStop = (command: string): boolean =>
   /(Stop-Process|taskkill|kill)\b[^\n]*UnrealEditor(?!-Cmd)\b|Start-Process[^\n]*UnrealEditor(?!-Cmd)\b|UnrealEditor(\.exe)?["']?\s+[^\n]*\.uproject/i.test(command)
 
 /** Why this session may not drive the Editor now, or null when it holds the lock. */
-export const lockProblem = (lock: EditorLock, me8: string): string | null => {
-  const take = `Take the lock first: write your slot, 'session ${me8}' and your end time into Saved/EDITOR_OWNER.txt (AGENTS.md), then retry.`
+export const lockProblem = (lock: EditorLock, me8: string, take = `Take the lock first: write your slot, 'session ${me8}' and your end time into Saved/EDITOR_OWNER.txt (AGENTS.md), then retry.`): string | null => {
   if (lock.state === 'unknown') return `Saved/EDITOR_OWNER.txt is missing or empty: that means unknown, not free. ${take}`
   if (lock.state === 'free') return `The Editor lock is free, so nobody (this session included) holds it. ${take}`
   if (lock.session === me8) return null
