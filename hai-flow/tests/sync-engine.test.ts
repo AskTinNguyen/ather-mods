@@ -198,3 +198,47 @@ test('a sync whose holder is gone can be taken over (the freeze never outlives i
   expect(await a5($, 'sync abort holder was gone, nothing merged')).toContain('aborted')
   expect(syncOf(w)?.state).toBe('aborted')
 })
+
+// ---------- A10: the lease follows /clear ----------
+const NEW = 'cd34ef56-0000-4000-8000-000000000000'
+const NEW8 = NEW.slice(0, 8)
+const clear = async ($: any, w: ReturnType<typeof world>) => {
+  w.ids.current = NEW
+  await $.session.end({ reason: 'clear', sessionId: ME, resume: { id: ME } } as never)
+  await w.clock.advance(1_000) // the new id is read 200 ms later and the files move
+}
+const ODD = ['named holder', 'is gone', 'was stale']
+
+test('A10: after /clear the lease, its lock line and the sync it holds move to the new session id', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, 'free since 14:20\n')
+  await $.session.start(START)
+  expect(out(await $.tool.call({ tool: 'mcp__hai-flow__editor', action: 'request', minutes: 20, what: 'tail VFX' } as never))).toContain('granted')
+  expect(await a5($, 'sync 15:30')).toContain('planned')
+  await clear($, w)
+  const line = w.read(LOCK).trim()
+  expect(line.startsWith('HELD lane=3️⃣-Loco-fix session=3️⃣-Loco-fix since=14:40 2026-10-06 pid=none end=15:00')).toBe(true)
+  expect(line.endsWith(`· held by 3️⃣-Loco-fix, session ${NEW8}, until 15:00`)).toBe(true)
+  expect(JSON.parse(w.read(`${HF}/editor/${NEW8}.json`)).holding).toEqual({ since: NOW, end: T(15, 0), extended: 0 })
+  const old = JSON.parse(w.read(`${HF}/editor/${ME8}.json`))
+  expect([old.holding, old.want, old.heartbeatAt]).toEqual([null, null, 0])
+  expect([syncOf(w)?.holder.id8, syncOf(w)?.plannedBy.includes(NEW8)]).toEqual([NEW8, true])
+  // The cleared session keeps driving the Editor it opened, and is told of nothing odd.
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets' } as never))).toBeUndefined()
+  await w.clock.advance(2 * MIN)
+  expect(prompts(w).filter(p => ODD.some(word => p.includes(word)))).toEqual([])
+  expect(out(await $.tool.call({ tool: 'mcp__hai-flow__editor', action: 'release' } as never))).toContain('released: FREE since=14:42')
+})
+
+test('A10: a pending request keeps its place in the queue after /clear', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, 'HELD lane=walker session=walker since=14:00 2026-10-06 pid=none end=15:30 mode=interactive pausable=no next_safe=after save note=capture · held by walker, session bbbbbbbb, until 15:30\n')
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { holding: { since: T(14, 0), end: T(15, 30), extended: 0 } }))
+  await $.session.start(START)
+  expect(out(await $.tool.call({ tool: 'mcp__hai-flow__editor', action: 'request', minutes: 30, what: 'PIE proof' } as never))).toContain('walker (session bbbbbbbb) holds the Editor until 15:30')
+  await clear($, w)
+  const moved = JSON.parse(w.read(`${HF}/editor/${NEW8}.json`))
+  expect([moved.want?.minutes, moved.want?.requestedAt]).toEqual([30, NOW])
+  expect(JSON.parse(w.read(`${HF}/editor/${ME8}.json`)).want).toBe(null)
+  expect(w.read(LOCK)).toContain('session bbbbbbbb') // not this session's lock: untouched
+})

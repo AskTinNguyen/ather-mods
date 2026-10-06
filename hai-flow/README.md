@@ -75,6 +75,6 @@ claude plugin test D:/Projects/ather-mods/hai-flow
 - Không có compare-and-set: lock ghi theo kiểu đọc-so-ghi rồi đọc lại; hai người ghi chen giữa hai lần đọc thì một người thua và tick sau quyết lại.
 - "Checkout chung" = working tree chính (`.git` là thư mục); worktree liên kết (`.git` là file) là của worker. `cd <worktree> && git …` vẫn bị coi là checkout chung (dùng `git -C`).
 - Dry-run lúc cutoff dùng `origin/main` đã fetch lần cuối (hai-flow không fetch); chỉ 40 đường dẫn đầu được xếp theo rule 11, phần còn lại tính là foreign.
-- `/clear` đổi id session: lease đang giữ vẫn mang id cũ, sẽ hiện như holder đã mất (Editor còn chạy thì chỉ báo).
+- `/clear` đổi id session: hai-flow chuyển file session, dòng lock (`session <id8 mới>`), yêu cầu đang chờ và sync đang giữ sang id mới trong vòng vài giây (như Ather chuyển lane). Trong mấy giây đó lane cũ của Ather đã báo kết thúc; nếu đúng lúc ấy Editor không chạy và một session khác đang đầu hàng tick trúng, lease có thể bị giải phóng trước khi kịp chuyển.
 - Needs you của Ather chỉ hiện director call của intent Hai làm owner; 🟥 chuyển tiếp F-<n> của intent người khác sẽ không vào PENDING.md.
 - Animation SMIL chạy trong khung SVG cách ly của desktop; terminal chỉ có ký tự tĩnh.

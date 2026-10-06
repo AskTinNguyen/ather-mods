@@ -42,6 +42,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   const runs: string[] = []
   const sent: Rec[] = []
   const machine = { ram, disk, procs }
+  const ids = { current: ME } // the session id: a /clear moves the process to another
   const value = (v: unknown) => ({ value: v })
   mock.env(on, ENV)
   mock.store(on, { a5: { on: a5 }, ...store })
@@ -66,7 +67,8 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   })
   on('fs.stat', async (_$: unknown, e: { path: string }) =>
     k(e.path).endsWith('fetch_head') ? value({ kind: 'file', size: 1, mtimeMs: NOW - 90 * 60_000, isLink: false }) : { deny: 'ENOENT' })
-  on('session.id', async () => value(ME))
+  on('session.id', async () => value(ids.current))
+  on('session.end', async (_$: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
   on('session.cwd', async () => value(PROJ))
   on('session.root', async () => value(PROJ))
   on('session.messages', async () => value([]))
@@ -114,6 +116,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     runs,
     sent,
     machine,
+    ids,
     put: (p: string, t: string, mtime = NOW) => {
       files.set(k(p), t)
       mtimes.set(k(p), mtime)

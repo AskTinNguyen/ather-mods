@@ -109,6 +109,7 @@ let cleanupAt = 0
 let decision: GrantDecision | null = null
 const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run this holder has started
 let nowMs = 0 // the time of the last tick
+let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
 const MAX_CLASSIFIED = 40 // conflicted paths checked against rule 11; the rest count as foreign
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -345,11 +346,17 @@ function showStatus($: Engine): void {
 const hfDir = (opts: Opts): string => `${s2Root(opts)}/${DIR}`
 const sameRoot = (a: string, b: string): boolean => norm(a).toLowerCase().replace(/\/$/, '') === norm(b).toLowerCase().replace(/\/$/, '')
 
-/** This session's own file, read back after a reload (its request, lease and delivered notices survive). */
+/** This session's own file, read back after a reload (its request, lease and delivered notices survive); after a
+ * /clear, moved to the new session id first (A10). */
 async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
   const id = await $.session.id()
   const id8 = id.slice(0, 8).toLowerCase()
   if (me && me.id8 === id8) return me
+  if (clearFrom && clearFrom.slice(0, 8).toLowerCase() !== id8) {
+    const from = clearFrom
+    clearFrom = null
+    return moveAfterClear($, opts, from, id)
+  }
   me8 = id8
   const dir = hfDir(opts)
   const file = parseSessionFile(await $.fs.read(`${dir}/editor/${id8}.json`).catch(() => null))
@@ -358,6 +365,52 @@ async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
   for (const d of me.delivered) delivered.add(d)
   for (const p of parseTouch(await $.fs.read(`${dir}/touch/${id8}.json`).catch(() => null))?.paths ?? []) touched.add(p)
   return me
+}
+
+/** A10: after /clear the process goes on under a new session id (no session.start fires). This session's file
+ * (request, lease, yield asks, delivered notices), its touch file, its HELD/HANDED lock line (`session <new id8>`,
+ * read-compare-write) and a sync it holds move to the new id, so it keeps driving the Editor it opened and nobody
+ * sees a gone holder. The old file is left with no request, no lease and a zero heartbeat. */
+async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: string): Promise<SessionFile> {
+  const old8 = oldSid.slice(0, 8).toLowerCase()
+  const new8 = newSid.slice(0, 8).toLowerCase()
+  const dir = hfDir(opts)
+  const now = await $.clock.now()
+  const src = me && me.id8 === old8 ? me : parseSessionFile(await readJson($, `${dir}/editor/${old8}.json`))
+  me8 = new8
+  me = src ? { ...src, session: newSid, id8: new8, heartbeatAt: now } : blankSession(newSid, `session-${new8}`, '', now)
+  for (const d of me.delivered) delivered.add(d)
+  await saveMe($, opts, now)
+  if (src) await $.fs.write(`${dir}/editor/${old8}.json`, JSON.stringify({ ...src, want: null, holding: null, yieldAsks: [], heartbeatAt: 0 })).catch(() => undefined)
+  const t = parseTouch(await readJson($, `${dir}/touch/${old8}.json`))
+  for (const p of t?.paths ?? []) touched.add(p)
+  if (touched.size > 0) await $.fs.write(`${dir}/touch/${new8}.json`, JSON.stringify({ session: newSid, id8: new8, lane: me.lane, paths: [...touched].slice(-500), updatedAt: now })).catch(() => undefined)
+  if (t) await $.fs.write(`${dir}/touch/${old8}.json`, JSON.stringify({ ...t, paths: [], updatedAt: now })).catch(() => undefined)
+  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lock = parseLockLine(lockRaw)
+  if (lockRaw && lock.id8 === old8 && (lock.kind === 'held' || lock.kind === 'handed')) {
+    const line = lockRaw.trim().replace(new RegExp(`\\bsession\\s+${old8}\\b`, 'gi'), `session ${new8}`)
+    if (!(await writeLock($, opts, line))) $.ui.log('hai-flow: the lock changed while moving it to the cleared session id', { to: 'debug' })
+  }
+  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  if (s && s.holder.id8 === old8 && isOpenPhase(syncPhase(s, now)))
+    await writeSync($, opts, { ...s, holder: { ...s.holder, session: newSid, id8: new8 }, plannedBy: s.plannedBy.replace(old8, new8), updatedAt: now }, s)
+  return me
+}
+
+/** While session.end runs the old id is still current: wait for the new one (as Ather's followClear does), then
+ * run a tick, whose restoreMe moves this session's files, lock line and sync to it. */
+function followClear($: Engine, opts: Opts, oldSid: string, tries: number): void {
+  $.clock.after(200, () => {
+    void $.session
+      .id()
+      .then(sid => {
+        if (sid !== oldSid) return runTick($, opts)
+        if (tries > 0) followClear($, opts, oldSid, tries - 1)
+        return undefined
+      })
+      .catch(() => undefined)
+  })
 }
 
 /** Writes this session's file (its heartbeat with it); one writer: this session. */
@@ -1205,6 +1258,16 @@ export const register: Register = (on, options) => {
       await runTick($, opts)
       $.clock.every(EDITOR_PERIOD_MS, () => void runTick($, opts))
     } else showStatus($)
+    return res
+  })
+
+  // A /clear goes on under a new session id: this session's lease, request and sync follow it (A10).
+  on('session.end', async ($, e, next) => {
+    const res = await next(e)
+    if (e.reason === 'clear' && isS2) {
+      clearFrom = e.sessionId
+      followClear($, opts, e.sessionId, 25)
+    }
     return res
   })
 
