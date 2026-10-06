@@ -255,3 +255,26 @@ test('RAM: one abort notice under 3 GB while this session\'s PIE runs; the disk 
   await w.clock.advance(2 * MIN)
   expect(prompts(w).length).toBe(1)
 })
+
+test('notices: one waiting for the next turn rides Hai\'s next prompt as context, once', opts(), async ($, on) => {
+  const w = world(on, { disk: 15 })
+  await $.session.start(START)
+  expect(prompts(w)).toEqual([]) // the disk notice needs no prompt of its own
+  await $.prompt.submit({ text: 'tiếp tục' } as never)
+  await $.prompt.submit({ text: 'và tiếp' } as never)
+  const ctx = (w.calls['prompt.submit'] ?? []).map(e => ((e as { context?: string[] }).context ?? []).join('\n'))
+  expect(ctx[0]).toContain('hai-flow · Disk — E: has 15 GB free, under 20 GB')
+  expect(ctx[1]).toBe('')
+})
+
+test('notices: Ather\'s intent log and findings never take a hai-flow line, by edit or by shell', opts(), async ($, on) => {
+  const w = world(on)
+  const log = `${PROJ}/docs/intent/tail-vfx/log.md`
+  w.put(log, '# Log\n')
+  const line = 'hai-flow · Sync main — cutoff: sync-lane merges origin/main at 15:30 → commit your own paths now'
+  expect(refused(await $.tool.call({ tool: 'MultiEdit', file_path: log, edits: [{ old_string: '# Log', new_string: `# Log\n> ${line}` }] } as never))).toContain('not logged in docs/intent')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: `echo "${line}" >> ${PROJ}/docs/intent/tail-vfx/findings.md` }))).toContain('not logged in docs/intent')
+  expect(refused(await $.tool.call({ tool: 'PowerShell', command: `Add-Content -Path ${PROJ.replace(/\//g, '\\')}\\docs\\intent\\tail-vfx\\log.md -Value '${line}'` }))).toContain('not logged in docs/intent')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: `echo "S5 done" >> ${PROJ}/docs/intent/tail-vfx/progress.md` }))).toBeUndefined()
+  expect(w.read(log)).toBe('# Log\n')
+})

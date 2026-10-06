@@ -6,7 +6,7 @@ import {
   CUTOFF_MS, DIR, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, classify,
   cleanupPlan, decide, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
-  syncPhase, ueRequestLine, withConflicts, writesLock, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, ueRequestLine, withConflicts, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
@@ -868,6 +868,8 @@ async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): 
       return blocked('Notices', 'hai-flow notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "hai-flow ·" line out; the files under Saved/HaiFlow are the record')
   }
   if (SHELL_TOOLS.has(tool) && writesLock(str(input.command))) return blocked('Editor lock', 'under A5 the lock is written by the editor tool, never by a command', viaTool)
+  if (SHELL_TOOLS.has(tool) && writesNoticeToIntent(str(input.command)))
+    return blocked('Notices', 'hai-flow notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "hai-flow ·" line out; the files under Saved/HaiFlow are the record')
   return null
 }
 

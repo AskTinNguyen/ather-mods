@@ -564,6 +564,10 @@ export type Notice = { id: string; text: string; isActionable: boolean }
 export const noticeText = (gate: string, what: string, todo: string): string => `${MARK} ${gate} — ${what} → ${todo}`
 export const isIntentFile = (path: string): boolean => /(^|\/)docs\/intent\//i.test((path ?? '').replace(/\\/g, '/'))
 export const addsNotice = (added: readonly string[]): boolean => added.some(l => l.includes(MARK))
+/** A shell command that writes a hai-flow line into an intent file (a redirect, tee or a PowerShell writer, a
+ * heredoc body included). Best effort, like every shell check here. */
+export const writesNoticeToIntent = (command: string): boolean =>
+  (command ?? '').includes(MARK) && /(>>?|\btee\b|Out-File|Set-Content|Add-Content)\s*(-\w+\s+)*['"]?[^|;&\n]*docs[\\/]+intent[\\/]/i.test(command ?? '')
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
