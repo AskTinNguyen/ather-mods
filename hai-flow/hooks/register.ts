@@ -3,15 +3,15 @@ import { A5, freshTurn, gitTargets, newLines, norm, under, type A5Config, type D
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
-  CUTOFF_MS, DIR, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, classify,
-  cleanupPlan, decide, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
+  CUTOFF_MS, DIR, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
+  cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   syncPhase, ueRequestLine, withConflicts, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
 import { A5_LOOK, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
-import { SYNC_PROMPT, editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type Vitals } from './watch.ts'
+import { editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
@@ -73,7 +73,6 @@ let lowBand = 'ok'
 let sync: Sync | undefined
 let syncAt = 0
 let isReadingGit = false
-let isSyncRunning = false
 let isStatusShown = false
 const seen = new Map<string, { sig: string; color: string; at: number; from: string }>() // each tile's state, and when it last turned over
 let chain: string[] | null = null // the plugins beneath this one on a tool call: Ather there means the pane can be wrapped
@@ -1004,6 +1003,97 @@ async function refreshSync($: Engine, opts: Opts): Promise<void> {
   $.ui.invalidate('ui.render')
 }
 
+/** This session's place, in the few words the Editor holder tile has room for. */
+const placeShort = (d: GrantDecision | null): string => {
+  if (!d || d.kind === 'none' || d.kind === 'mine') return ''
+  if (d.kind !== 'wait') return 'you: being granted'
+  const why = d.code === 'ram' ? ' · waiting on RAM' : d.code === 'sync' ? ' · after the sync' : d.code === 'gone-editor' ? ' · holder gone, Editor open' : d.code === 'missing' ? ' · lock missing' : ''
+  return `you: ${d.place > 1 ? `${ordinal(d.place)} in the queue` : 'next'}${why}`
+}
+
+/** The Sync main tile's words for the planned sync: when, by whom, its phase, its conflicts. */
+function syncData(now: number): SyncData {
+  const s = syncFile
+  const phase = syncPhase(s, now)
+  if (!s) return { line: 'no sync planned', conflicts: '', isRunning: false }
+  const by = s.holder.id8 === me8 ? 'this session' : s.holder.lane
+  const gone = isOpenPhase(phase) && !isLive(s.holder.id8, now) ? ' · holder gone' : ''
+  const cs = isOpenPhase(phase) ? s.conflicts : null
+  const line =
+    phase === 'planned'
+      ? `next sync ${clockOf(s.at)} by ${by} · cutoff ${clockOf(s.at - CUTOFF_MS)}`
+      : phase === 'cutoff'
+        ? `sync ${clockOf(s.at)} by ${by} · cutoff: commit, release the Editor by ${clockOf(s.at - RELEASE_BEFORE_MS)}`
+        : phase === 'frozen'
+          ? `sync ${clockOf(s.at)}: ${by} merging · git and the Editor frozen`
+          : `last sync ${clockOf(s.at)} ${phase}${s.endedAt ? ` at ${clockOf(s.endedAt)}` : ''} · none planned`
+  return {
+    line: `${line}${cs && cs.length === 0 ? ' · dry-run clean' : ''}${gone}`,
+    color: phase === 'frozen' ? STATUS.bad : phase === 'cutoff' ? STATUS.warn : undefined,
+    conflicts: cs && cs.length > 0 ? `conflicts: ${cs.length} (${cs.filter(c => c.kind === 'self').length} self, ${cs.filter(c => c.kind === 'foreign').length} foreign)` : '',
+    isRunning: phase === 'frozen',
+  }
+}
+
+type ButtonEl = { Button: (p: Record<string, unknown>) => unknown }
+
+/** The Memory tile's controls (D5): the launch gate down or up by 1 GB for every session (the plugin store), or
+ * back to the plugin options. */
+function gateButtons($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean): unknown[] {
+  const shift = (d: number) => () =>
+    void (async () => {
+      const g = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
+      await $.store.set('gates', { pieGb: clampGate(g.pieGb + d), nopieGb: clampGate(g.nopieGb + d) })
+      await runTick($, opts)
+    })()
+  const reset = () =>
+    void (async () => {
+      await $.store.delete('gates')
+      await runTick($, opts)
+    })()
+  const plain = isDesktop ? undefined : true
+  return [
+    el.Button({ key: 'hai-gate-down', label: isDesktop ? '− 1 GB' : '−1', plain, onPress: shift(-1) }),
+    el.Button({ key: 'hai-gate-up', label: isDesktop ? '+ 1 GB' : '+1', plain, onPress: shift(1) }),
+    ...(gates.source === 'panel' ? [el.Button({ key: 'hai-gate-reset', label: 'Reset', plain: true, dimColor: true, onPress: reset })] : []),
+  ]
+}
+
+/** The Sync main tile's controls (D4): plan at a preset time; the holder moves or cancels it before the freeze,
+ * ends it during the freeze; a gone holder's sync can be taken over. Every press goes through syncAction. */
+function syncButtons($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean, now: number): unknown[] {
+  const s = syncFile
+  const phase = syncPhase(s, now)
+  const act = (action: string, a: { at?: string; note?: string }) => () =>
+    void (async () => {
+      const text = await syncAction($, opts, action, a)
+      $.ui.toast(text.length > 200 ? `${text.slice(0, 197)}…` : text, { timeoutMs: 8_000 })
+      await runTick($, opts)
+    })()
+  const plain = isDesktop ? undefined : true
+  const refresh = el.Button({
+    key: 'hai-sync-refresh',
+    label: 'Refresh',
+    plain: true,
+    dimColor: true,
+    onPress: () => {
+      syncAt = 0
+      void refreshSync($, opts)
+      void runTick($, opts)
+    },
+  })
+  if (!s || !isOpenPhase(phase)) return [...presetTimes(now).map((t, n) => el.Button({ key: `hai-sync-plan-${n}`, label: `${isDesktop ? 'Plan ' : ''}${clockOf(t)}`, plain, onPress: act('plan', { at: clockOf(t) }) })), refresh]
+  if (s.holder.id8 !== me8) return isLive(s.holder.id8, now) ? [refresh] : [el.Button({ key: 'hai-sync-takeover', label: 'Take over', plain, onPress: act('takeover', {}) }), refresh]
+  if (phase === 'frozen')
+    return [el.Button({ key: 'hai-sync-done', label: 'Done', plain, onPress: act('done', { note: 'ended on the panel' }) }), el.Button({ key: 'hai-sync-abort', label: 'Abort', plain, onPress: act('abort', { note: 'aborted on the panel' }) }), refresh]
+  return [
+    ...(s.at - 30 * 60_000 > now ? [el.Button({ key: 'hai-sync-earlier', label: '−30 min', plain, onPress: act('move', { at: clockOf(s.at - 30 * 60_000) }) })] : []),
+    el.Button({ key: 'hai-sync-later', label: '+30 min', plain, onPress: act('move', { at: clockOf(s.at + 30 * 60_000) }) }),
+    el.Button({ key: 'hai-sync-cancel', label: 'Cancel', plain, onPress: act('cancel', { note: 'cancelled on the panel' }) }),
+    refresh,
+  ]
+}
+
 const keyOf = (node: unknown): string => {
   const props = (node as { props?: { key?: unknown } } | null)?.props
   return typeof props?.key === 'string' ? props.key : ''
@@ -1037,25 +1127,19 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   const stripAt = kids.findIndex(k => keyOf(k) === 'strip')
   if (isS2 && stripAt >= 0) {
     if (now - syncAt > SYNC_STALE_MS) $.clock.after(10, () => void refreshSync($, opts))
-    const onSync = () => {
-      $.ui.toast('Sync main: preflight and report sent to the session')
-      void $.prompt.submit({ text: SYNC_PROMPT }).then(() => {
-        isSyncRunning = true
-        $.ui.invalidate('ui.render')
-      })
-    }
-    const onRefresh = () => {
-      syncAt = 0
-      void refreshSync($, opts)
-      void runTick($, opts)
-    }
-    const me8 = (await $.session.id()).slice(0, 8).toLowerCase()
-    const tiles = [editorTile({ lock: lockView, vitals, me8, nowMin }), memoryTile(el, vitals), mainTile(el, sync, onSync, onRefresh, isDesktop, isSyncRunning)]
+    const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
+    const waiting = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile).length
+    const plan = syncData(now)
+    const tiles = [
+      editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
+      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }, gateButtons($, opts, el, isDesktop)),
+      mainTile(sync, plan, syncButtons($, opts, el, isDesktop, now)),
+    ]
     const names = { editor: 'editor', memory: 'memory', main: 'branch' } as const
     for (const t of tiles) {
       const name = names[t.key as keyof typeof names]
       const color = t.dot ?? (t.key === 'memory' ? STATUS.ok : INK)
-      t.icon = icon(el, name, color, motionFor(t.key, `${t.value}|${color}`, color, now, t.key === 'main' && isSyncRunning, opts), isDesktop)
+      t.icon = icon(el, name, color, motionFor(t.key, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
     kids.splice(stripAt + 1, 0, tilesRow(el, tiles, isDesktop))
   }
@@ -1244,10 +1328,6 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const res = await next(e)
     if (e.agentId === undefined) {
-      if (isSyncRunning) {
-        isSyncRunning = false
-        $.ui.invalidate('ui.render')
-      }
       const wrote = wroteDirectorCall
       wroteDirectorCall = false
       if (e.reason === 'answer') {

@@ -107,15 +107,21 @@ type El = {
   Text: (p: Record<string, unknown>) => unknown
   Button: (p: Record<string, unknown>) => unknown
 }
-export type Tile = { key: string; label: string; icon?: unknown; dot?: string; value: string; meter?: unknown; lines: { text: string; color?: string }[]; buttons?: unknown[] }
+/** One tile: `lines` on the desktop card, `short` (else the first line) on the terminal's one line. */
+export type Tile = { key: string; label: string; icon?: unknown; dot?: string; value: string; meter?: unknown; lines: { text: string; color?: string }[]; short?: { text: string; color?: string }[]; buttons?: unknown[] }
 
-export type EditorData = { lock?: LockView; vitals?: Vitals; me8: string; nowMin: number }
+/** What the Editor holder tile says about this session: its place in the queue, or that it holds the lease. */
+export type EditorData = { lock?: LockView; me8: string; nowMin: number; place: string; waiting: number }
 
-/** Editor: who may drive it now. */
+/** Editor holder: who holds it until when, and this session's place in the queue. */
 export const editorTile = (d: EditorData): Tile => {
   const l = d.lock
-  if (!l || l.isMissing) return { key: 'editor', label: 'Editor', dot: STATUS.warn, value: 'Lock missing', lines: [{ text: 'unknown, not free' }] }
-  if (l.isFree) return { key: 'editor', label: 'Editor', dot: STATUS.ok, value: 'Free', lines: [{ text: l.freeSince ? `since ${l.freeSince}` : 'nobody holds it' }] }
+  const queue = d.place ? [{ text: d.place }] : d.waiting > 0 ? [{ text: `queue: ${d.waiting} waiting` }] : []
+  if (!l || l.isMissing) return { key: 'editor', label: 'Editor holder', dot: STATUS.warn, value: 'Lock missing', lines: [{ text: 'unknown, not free' }, ...queue], short: [{ text: 'unknown, not free' }, ...queue] }
+  if (l.isFree) {
+    const since = [{ text: l.freeSince ? `since ${l.freeSince}` : 'nobody holds it' }, ...queue]
+    return { key: 'editor', label: 'Editor holder', dot: STATUS.ok, value: 'Free', lines: since, short: since }
+  }
   const isMine = Boolean(l.session && d.me8.startsWith(l.session.slice(0, 8)))
   const end = toMin(l.until)
   const left = end === undefined ? undefined : end - d.nowMin
@@ -123,49 +129,63 @@ export const editorTile = (d: EditorData): Tile => {
   const when = l.until ? `until ${l.until}${left === undefined ? '' : isOver ? ` · ${-left} min over` : ` · ${left} min left`}` : 'no end time written'
   return {
     key: 'editor',
-    label: 'Editor',
+    label: 'Editor holder',
     dot: isOver ? STATUS.bad : isMine ? STATUS.ok : STATUS.warn,
     value: isMine ? 'This session' : (l.who ?? 'Held'),
-    lines: [{ text: when, color: isOver ? STATUS.bad : undefined }, ...(l.next ? [{ text: `next: ${l.next}` }] : []), ...(l.dontSave > 0 ? [{ text: `Don't-Save: ${l.dontSave}`, color: STATUS.warn }] : [])],
+    lines: [{ text: when, color: isOver ? STATUS.bad : undefined }, ...queue, ...(l.next ? [{ text: `next: ${l.next}` }] : []), ...(l.dontSave > 0 ? [{ text: `Don't-Save: ${l.dontSave}`, color: STATUS.warn }] : [])],
+    short: [{ text: when, color: isOver ? STATUS.bad : undefined }, ...queue],
   }
 }
 
-/** Memory: free RAM against the PIE gate, as a meter whose track is a dark step of its own hue. */
-export const memoryTile = (el: El, v: Vitals | undefined): Tile => {
-  if (!v) return { key: 'memory', label: 'Memory', value: '?', lines: [{ text: 'probe failed' }] }
+/** What the Memory tile reads beside the probe: the launch gate in force, the last cleanup, the disk. */
+export type MemoryData = { pieGb: number; nopieGb: number; isFromPanel: boolean; cleanup: string; diskGb: number | null; drive: string }
+
+/** Memory: free RAM against the launch gate (adjustable: − / + / Reset, every session reads it) and the PIE gate
+ * (fixed), as a meter whose track is a dark step of its own hue; what the last cleanup did. */
+export const memoryTile = (el: El, v: Vitals | undefined, m: MemoryData, buttons: unknown[]): Tile => {
+  const gate = { text: `launch ≥ ${m.pieGb} GB with PIE · ${m.nopieGb} GB without${m.isFromPanel ? ' (set here)' : ''}` }
+  if (!v) return { key: 'memory', label: 'Memory', value: '?', lines: [{ text: 'probe failed' }, gate], buttons }
   const band = ramBand(v.freeGb)
   const tone = band === 'ok' ? 'ok' : band === 'below-start' ? 'warn' : 'bad'
   const cells = 16
   const filled = Math.max(0, Math.min(cells, Math.round((v.freeGb / TOTAL_GB) * cells)))
   const meter = el.Text({ children: [el.Text({ color: STATUS[tone], children: '━'.repeat(filled) }), el.Text({ color: TRACK[tone], children: '━'.repeat(cells - filled) })] })
-  const verdict = band === 'ok' ? `PIE ok · gate ${PIE_START_GB} GB` : band === 'below-start' ? `under the ${PIE_START_GB} GB PIE gate` : `abort PIE (under ${PIE_ABORT_GB} GB)`
+  const launch = v.freeGb >= m.pieGb ? 'a launch with PIE fits' : v.freeGb >= m.nopieGb ? 'a launch fits without PIE' : 'under the launch gate'
+  const pie = band === 'ok' ? `PIE ≥ ${PIE_START_GB} GB ok` : band === 'below-start' ? `under the ${PIE_START_GB} GB PIE gate` : `abort PIE (under ${PIE_ABORT_GB} GB)`
   return {
     key: 'memory',
     label: 'Memory',
     dot: band === 'ok' ? undefined : STATUS[tone],
     value: `${v.freeGb} GB free`,
     meter,
-    lines: [{ text: verdict, color: band === 'ok' ? undefined : STATUS[tone] }, ...(v.git >= 10 ? [{ text: `${v.git} git processes`, color: STATUS.warn }] : [])],
+    lines: [
+      { text: `${launch} · ${pie}`, color: band === 'ok' ? undefined : STATUS[tone] },
+      gate,
+      ...(m.cleanup ? [{ text: `cleanup ${m.cleanup}` }] : []),
+      ...(m.diskGb !== null && m.diskGb < 20 ? [{ text: `${m.drive} ${m.diskGb} GB free (under 20)`, color: STATUS.warn }] : []),
+      ...(v.git >= 10 ? [{ text: `${v.git} git processes`, color: STATUS.warn }] : []),
+    ],
+    short: [{ text: `${launch} · ${pie}`, color: band === 'ok' ? undefined : STATUS[tone] }, { text: `gate ${m.pieGb}/${m.nopieGb} GB` }],
+    buttons,
   }
 }
 
-/** Branch: this checkout's branch against origin/main, and the way to sync it. */
-export const mainTile = (el: El, s: Sync | undefined, onSync: () => void, onRefresh: () => void, isDesktop: boolean, isSyncing = false): Tile => {
-  const buttons = [
-    el.Button({ key: 'hai-sync-run', label: isSyncing ? 'Syncing…' : 'Sync', plain: isDesktop ? undefined : true, onPress: onSync }),
-    el.Button({ key: 'hai-sync-refresh', label: 'Refresh', plain: true, dimColor: true, onPress: onRefresh }),
-  ]
-  if (!s) return { key: 'main', label: 'Branch', value: 'Reading git…', lines: [], buttons }
+/** What the Sync main tile says about the planned sync. */
+export type SyncData = { line: string; color?: string; conflicts: string; isRunning: boolean }
+
+/** Sync main: the branch against origin/main, the next sync and its phase, its conflicts, and the controls to
+ * plan, move or cancel it (the holder ends it). */
+export const mainTile = (s: Sync | undefined, plan: SyncData, buttons: unknown[]): Tile => {
+  const planLines = [{ text: plan.line, color: plan.color }, ...(plan.conflicts ? [{ text: plan.conflicts, color: STATUS.warn }] : [])]
+  if (!s) return { key: 'main', label: 'Sync main', value: 'Reading git…', lines: planLines, short: planLines, buttons }
   const behind = s.behind ?? 0
   return {
     key: 'main',
-    label: s.branch || 'Branch',
-    dot: s.flags.length > 0 ? STATUS.bad : behind > 0 ? STATUS.warn : STATUS.ok,
+    label: 'Sync main',
+    dot: s.flags.length > 0 ? STATUS.bad : plan.isRunning ? STATUS.warn : behind > 0 ? STATUS.warn : STATUS.ok,
     value: s.behind === null ? 'unknown' : behind > 0 ? `${behind} behind` : 'Up to date',
-    lines: [
-      { text: `${s.ahead ?? '?'} ahead · fetched ${ago(s.fetchedMinAgo)}` },
-      ...s.flags.map(f => ({ text: f, color: STATUS.bad })),
-    ],
+    lines: [{ text: `${s.branch || 'branch'} · ${s.ahead ?? '?'} ahead · fetched ${ago(s.fetchedMinAgo)}` }, ...planLines, ...s.flags.map(f => ({ text: f, color: STATUS.bad }))],
+    short: [{ text: `${s.ahead ?? '?'} ahead` }, ...planLines, ...s.flags.slice(0, 1).map(f => ({ text: f, color: STATUS.bad }))],
     buttons,
   }
 }
@@ -217,10 +237,10 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean): unknown => 
         columnGap: 1,
         children: [
           ...(t.icon ? [t.icon] : []),
-          Text({ color: ATHER.quiet, children: (t.key === 'main' ? 'Branch' : t.label).padEnd(7) }),
+          Text({ color: ATHER.quiet, children: (TERMINAL_LABEL[t.key] ?? t.label).padEnd(6) }),
           value(t),
           ...(t.meter ? [t.meter] : []),
-          ...t.lines.slice(0, 1).map(l => Text({ color: l.color ?? ATHER.quiet, children: `· ${l.text}` })),
+          ...(t.short ?? t.lines.slice(0, 1)).map(l => Text({ color: l.color ?? ATHER.quiet, children: `· ${l.text}` })),
           ...(t.buttons ?? []),
         ],
       }),
@@ -228,8 +248,4 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean): unknown => 
   })
 }
 
-/** The prompt the Sync button hands to the session: s2-sync-main's read-only phases, then wait. */
-export const SYNC_PROMPT =
-  'Run s2-sync-main Phase 0 and Phase 1 only: follow C:\\Users\\hai.huynh\\.claude\\skills-paused\\s2-sync-main\\SKILL.md ' +
-  '(its preflight script is C:\\Users\\hai.huynh\\.claude\\skills-paused\\s2-sync-main\\preflight.sh). Read-only: no fetch that ' +
-  'downloads LFS objects, no merge, no Editor restart. Post the one Vietnamese report the skill describes, then wait for my approval.'
+const TERMINAL_LABEL: Record<string, string> = { editor: 'Editor', memory: 'Memory', main: 'Sync' }
