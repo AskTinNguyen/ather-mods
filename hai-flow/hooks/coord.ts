@@ -432,6 +432,9 @@ export type SyncFile = {
   conflicts: Conflict[] | null
   conflictsAt: number | null
   conflictsSource: 'merge-tree' | 'holder' | null
+  /** Paths origin/main adds that already exist on disk in the shared checkout (A11): the merge would refuse or
+   * overwrite them, and merge-tree does not see them. Null until the holder's dry-run lists them. */
+  untracked: string[] | null
   endedAt: number | null
   note: string
   updatedAt: number
@@ -442,7 +445,7 @@ export const parseSyncFile = (text: string | null): SyncFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SyncFile>
     if (typeof v?.at !== 'number' || !v.holder || typeof v.holder.id8 !== 'string') return null
-    return { v: 1, id: String(v.id ?? `sync-${v.at}`), at: v.at, holder: v.holder, plannedBy: String(v.plannedBy ?? ''), state: (v.state as SyncState) ?? 'planned', conflicts: v.conflicts ?? null, conflictsAt: v.conflictsAt ?? null, conflictsSource: v.conflictsSource ?? null, endedAt: v.endedAt ?? null, note: String(v.note ?? ''), updatedAt: Number(v.updatedAt ?? 0) }
+    return { v: 1, id: String(v.id ?? `sync-${v.at}`), at: v.at, holder: v.holder, plannedBy: String(v.plannedBy ?? ''), state: (v.state as SyncState) ?? 'planned', conflicts: v.conflicts ?? null, conflictsAt: v.conflictsAt ?? null, conflictsSource: v.conflictsSource ?? null, untracked: Array.isArray(v.untracked) ? v.untracked.map(String) : null, endedAt: v.endedAt ?? null, note: String(v.note ?? ''), updatedAt: Number(v.updatedAt ?? 0) }
   } catch {
     return null
   }
@@ -466,12 +469,17 @@ export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: 
   conflicts: null,
   conflictsAt: null,
   conflictsSource: null,
+  untracked: null,
   endedAt: null,
   note: '',
   updatedAt: now,
 })
 /** A move keeps the sync's id; its notices are keyed by its time too, so a moved sync gets them again. */
-export const movedSync = (s: SyncFile, at: number, now: number): SyncFile => ({ ...s, at, conflicts: null, conflictsAt: null, conflictsSource: null, updatedAt: now })
+export const movedSync = (s: SyncFile, at: number, now: number): SyncFile => ({ ...s, at, conflicts: null, conflictsAt: null, conflictsSource: null, untracked: null, updatedAt: now })
+export const withUntracked = (s: SyncFile, paths: readonly string[], now: number): SyncFile => ({ ...s, untracked: [...paths], updatedAt: now })
+
+/** `git diff --name-only -z --diff-filter=A HEAD origin/main`: the paths main adds, NUL-separated (no quoting). */
+export const parseAdded = (stdout: string): string[] => [...new Set(stdout.split('\0').map(p => p.replace(/[\r\n]+/g, '').trim()).filter(Boolean))]
 export const endedSync = (s: SyncFile, state: 'done' | 'aborted' | 'cancelled', note: string, now: number): SyncFile => ({ ...s, state, note: note.slice(0, 200), endedAt: now, updatedAt: now })
 export const withConflicts = (s: SyncFile, conflicts: Conflict[], source: 'merge-tree' | 'holder', now: number): SyncFile => ({ ...s, conflicts, conflictsAt: now, conflictsSource: source, updatedAt: now })
 
@@ -622,6 +630,10 @@ export const NOTICES = {
     ].filter(Boolean)
     return noticeText('Sync main', `${parts.join('; ')} for the sync at ${hhmm(s.at)}; this session edited ${mine.length === 1 ? 'that path' : 'those paths'}`, `${foreign.length ? `before ${hhmm(s.at)}: commit your own version (exact paths) and tell ${s.holder.lane} how the two sides combine; a logic or .uasset/.umap conflict means the merge is aborted and you resolve it after the sync (the owner decides, never discard either side)` : ''}${foreign.length && self.length ? '; ' : ''}${self.length ? 'a self-conflict needs nothing from you: the holder resolves it to ours (rule 11)' : ''}`)
   },
+  ownerUntracked: (s: SyncFile, paths: readonly string[]): string =>
+    noticeText('Sync main', `origin/main adds ${paths.join(', ')}, which already ${paths.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout and ${paths.length === 1 ? 'was' : 'were'} written by this session; the merge at ${hhmm(s.at)} would refuse to overwrite ${paths.length === 1 ? 'it' : 'them'} (merge-tree does not see this)`, `before ${hhmm(s.at)}: commit ${paths.length === 1 ? 'it' : 'them'} with exact paths (then it is an ordinary conflict, yours to settle) or move ${paths.length === 1 ? 'it' : 'them'} out of the tree; never delete a file that may be someone else's`),
+  holderUntracked: (s: SyncFile, rows: { path: string; owners: string[] }[]): string =>
+    noticeText('Sync main', `origin/main adds ${plural(rows.length, 'file')} that already ${rows.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout ("untracked would be overwritten"): ${rows.map(r => `${r.path} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')}`, `the owners are told to commit or move theirs before ${hhmm(s.at)}; owner unknown → 🟥 to Hai; never delete or overwrite one to get the merge through`),
   syncHolderNamed: (s: SyncFile): string => noticeText('Sync main', `you were named holder of the sync at ${hhmm(s.at)} (planned by ${s.plannedBy})`, `at ${hhmm(s.at - CUTOFF_MS)} the cutoff notice reaches every session; at ${hhmm(s.at)} run s2-sync-main, then call the sync tool with done or abort`),
 } as const
 
@@ -641,6 +653,7 @@ export const noticeIds = {
   lifted: (s: SyncFile) => `sync:${s.id}:${s.at}:${s.state}`,
   conflicts: (s: SyncFile, paths: readonly string[]) => `sync:${s.id}:${s.at}:conflicts:${paths.slice().sort().join('|').length}:${hash(paths.slice().sort().join('|'))}`,
   holderNamed: (s: SyncFile) => `sync:${s.id}:named`,
+  untracked: (s: SyncFile, paths: readonly string[]) => `sync:${s.id}:${s.at}:untracked:${hash(paths.slice().sort().join('|'))}`,
 } as const
 
 /** A short stable hash (FNV-1a) for notice ids built from long lists. */

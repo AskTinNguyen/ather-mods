@@ -7,7 +7,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  syncPhase, ueRequestLine, withConflicts, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
@@ -111,6 +111,7 @@ const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run th
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
 const MAX_CLASSIFIED = 40 // conflicted paths checked against rule 11; the rest count as foreign
+const MAX_ADDED_CHECKED = 5_000 // paths origin/main adds that are checked on disk at the cutoff (A11)
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const parentOf = (p: string): string => {
@@ -748,7 +749,29 @@ async function dryRun($: Engine, opts: Opts, s: SyncFile, now: number): Promise<
     return
   }
   const conflicts = r.exitCode === 0 ? [] : await classifyAll($, opts, parseMergeTree(r.stdout).paths)
-  await writeSync($, opts, withConflicts(s, conflicts, 'merge-tree', now), s)
+  const untracked = await addedOnDisk($, opts, s)
+  const next = withConflicts(s, conflicts, 'merge-tree', now)
+  await writeSync($, opts, untracked === null ? next : withUntracked(next, untracked, now), s)
+}
+
+/** A11: the files origin/main adds that already exist on disk in the shared checkout ("untracked would be
+ * overwritten", which merge-tree does not see): each added path is checked on its own, never a whole-tree
+ * untracked scan. Null when git could not list them (the holder is told). */
+async function addedOnDisk($: Engine, opts: Opts, s: SyncFile): Promise<string[] | null> {
+  const repo = s2Root(opts)
+  const r = await $.process.run(['git', '-C', repo, 'diff', '--name-only', '-z', '--diff-filter=A', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
+  if (!r || r.exitCode !== 0) {
+    push({ id: `sync:${s.id}:${s.at}:added-failed`, text: noticeText('Sync main', 'the list of files origin/main adds (git diff --diff-filter=A) did not finish', `run git -C ${repo} diff --name-only --diff-filter=A HEAD origin/main yourself and check which of those paths already exist in the checkout before the merge`), isActionable: true })
+    return null
+  }
+  const added = parseAdded(r.stdout).slice(0, MAX_ADDED_CHECKED)
+  const found: string[] = []
+  for (let i = 0; i < added.length; i += 50) {
+    const batch = added.slice(i, i + 50)
+    const hits = await Promise.all(batch.map(p => $.fs.exists(`${repo}/${p}`).catch(() => false)))
+    batch.forEach((p, n) => hits[n] && found.push(p))
+  }
+  return found
 }
 
 /** The sync's timeline for this session: who holds it, the cutoff, release by T − 10, the freeze, the conflicts
@@ -778,16 +801,25 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
     dryRuns.add(`${s.id}:${s.at}`)
     await dryRun($, opts, s, now)
   }
-  const cs = syncFile?.id === s.id ? syncFile.conflicts : s.conflicts
-  if (!cs || cs.length === 0) return
-  const sync = syncFile ?? s
+  const sync = syncFile?.id === s.id ? syncFile : s
   const lower = new Set([...touched].map(p => p.toLowerCase()))
-  const minePaths = cs.filter(c => lower.has(c.path.toLowerCase()))
-  if (minePaths.length > 0) push({ id: noticeIds.conflicts(sync, minePaths.map(c => c.path)), text: NOTICES.ownerConflicts(sync, minePaths), isActionable: true })
-  if (isHolder) {
-    const all = [...touches, { session: me.session, id8: me8, lane: me.lane, paths: [...touched], updatedAt: now }]
-    const rows = cs.map(c => ({ c, owners: ownersOf(c.path, all).map(t => t.lane) }))
-    push({ id: `${noticeIds.conflicts(sync, cs.map(c => c.path))}:holder`, text: NOTICES.holderConflicts(sync, rows), isActionable: true })
+  const all = [...touches, { session: me.session, id8: me8, lane: me.lane, paths: [...touched], updatedAt: now }]
+  const cs = sync.conflicts
+  if (cs && cs.length > 0) {
+    const minePaths = cs.filter(c => lower.has(c.path.toLowerCase()))
+    if (minePaths.length > 0) push({ id: noticeIds.conflicts(sync, minePaths.map(c => c.path)), text: NOTICES.ownerConflicts(sync, minePaths), isActionable: true })
+    if (isHolder) {
+      const rows = cs.map(c => ({ c, owners: ownersOf(c.path, all).map(t => t.lane) }))
+      push({ id: `${noticeIds.conflicts(sync, cs.map(c => c.path))}:holder`, text: NOTICES.holderConflicts(sync, rows), isActionable: true })
+    }
+  }
+  // A11: each untracked file main would overwrite goes to the session whose touch file names it; the holder
+  // gets the whole list, with "owner unknown" where nobody's touch file names it.
+  const un = sync.untracked
+  if (un && un.length > 0) {
+    const mineUn = un.filter(p => lower.has(p.toLowerCase()))
+    if (mineUn.length > 0) push({ id: noticeIds.untracked(sync, mineUn), text: NOTICES.ownerUntracked(sync, mineUn), isActionable: true })
+    if (isHolder) push({ id: `${noticeIds.untracked(sync, un)}:holder`, text: NOTICES.holderUntracked(sync, un.map(path => ({ path, owners: ownersOf(path, all).map(t => t.lane) }))), isActionable: true })
   }
 }
 
@@ -828,7 +860,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   }
   if (action === 'status') {
     if (!s) return 'No sync planned. Plan one on the A5 panel or with /a5 sync HH:MM.'
-    return `${when(s)}: ${phase}${isGone ? ' (its holder is gone: take it over from the panel or with /a5 sync takeover)' : ''}${s.conflicts ? ` · conflicts: ${s.conflicts.length ? s.conflicts.map(c => `${c.path} (${c.kind})`).join(', ') : 'none'}` : ''}${s.note ? ` · ${s.note}` : ''}`
+    return `${when(s)}: ${phase}${isGone ? ' (its holder is gone: take it over from the panel or with /a5 sync takeover)' : ''}${s.conflicts ? ` · conflicts: ${s.conflicts.length ? s.conflicts.map(c => `${c.path} (${c.kind})`).join(', ') : 'none'}` : ''}${s.untracked ? ` · untracked main would overwrite: ${s.untracked.length ? s.untracked.join(', ') : 'none'}` : ''}${s.note ? ` · ${s.note}` : ''}`
   }
   if (!s || !open) return blocked(gate, 'no sync is planned', 'plan one with /a5 sync HH:MM or the panel')
   if (action === 'takeover') {
@@ -1112,10 +1144,15 @@ function syncData(now: number): SyncData {
         : phase === 'frozen'
           ? `sync ${clockOf(s.at)}: ${by} merging · git and the Editor frozen`
           : `last sync ${clockOf(s.at)} ${phase}${s.endedAt ? ` at ${clockOf(s.endedAt)}` : ''} · none planned`
+  const un = isOpenPhase(phase) ? (s.untracked ?? []) : []
+  const parts = [
+    cs && cs.length > 0 ? `conflicts: ${cs.length} (${cs.filter(c => c.kind === 'self').length} self, ${cs.filter(c => c.kind === 'foreign').length} foreign)` : '',
+    un.length > 0 ? `untracked main would overwrite: ${un.length}` : '',
+  ].filter(Boolean)
   return {
-    line: `${line}${cs && cs.length === 0 ? ' · dry-run clean' : ''}${gone}`,
+    line: `${line}${cs && cs.length === 0 && un.length === 0 ? ' · dry-run clean' : ''}${gone}`,
     color: phase === 'frozen' ? STATUS.bad : phase === 'cutoff' ? STATUS.warn : undefined,
-    conflicts: cs && cs.length > 0 ? `conflicts: ${cs.length} (${cs.filter(c => c.kind === 'self').length} self, ${cs.filter(c => c.kind === 'foreign').length} foreign)` : '',
+    conflicts: parts.join(' · '),
     isRunning: phase === 'frozen',
   }
 }

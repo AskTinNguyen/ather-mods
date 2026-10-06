@@ -242,3 +242,47 @@ test('A10: a pending request keeps its place in the queue after /clear', opts(),
   expect(JSON.parse(w.read(`${HF}/editor/${ME8}.json`)).want).toBe(null)
   expect(w.read(LOCK)).toContain('session bbbbbbbb') // not this session's lock: untouched
 })
+
+// ---------- A11: untracked files main would overwrite ----------
+test('A11: at the cutoff the holder lists the files main adds that already exist on disk, each to the session that wrote it', opts(), async ($, on) => {
+  const w = world(on, {
+    git: {
+      'merge-tree': { stdout: '7e4887eb85fc0a6b1638a284733984d7d06b39f5\n', exitCode: 0 },
+      'diff --name-only -z --diff-filter=A HEAD origin/main': { stdout: 'Source/S2/NewFile.cpp\0Content/S2/New/A.uasset\0Config/Stray.ini\0docs/new.md\0' },
+    },
+  })
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put('E:/s2/Content/S2/New/A.uasset', 'local copy')
+  w.put('E:/s2/Config/Stray.ini', '[x]')
+  w.put(`${HF}/touch/cccccccc.json`, JSON.stringify({ session: 'cccccccc-1', id8: 'cccccccc', lane: 'level-lane', paths: ['Content/S2/New/A.uasset'], updatedAt: NOW }))
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Write', file_path: 'E:/s2/Source/S2/NewFile.cpp', content: 'int y;\n' })
+  w.put('E:/s2/Source/S2/NewFile.cpp', 'int y;\n') // what the Write left on disk (the test's Write tool is a stub)
+  expect(await a5($, 'sync 15:30')).toContain('planned')
+  await idle($)
+  await advance(w, 20, 'cccccccc') // 15:00, the cutoff
+  expect(syncOf(w)?.untracked).toEqual(['Source/S2/NewFile.cpp', 'Content/S2/New/A.uasset', 'Config/Stray.ini'])
+  expect(w.runs.filter(r => r.includes('--diff-filter=A')).length).toBe(1)
+  expect(w.runs.some(r => /ls-files|\bstatus\b|--others/.test(r))).toBe(false) // never a whole-tree untracked scan
+  const told = prompts(w)[0] ?? ''
+  expect(told).toContain('hai-flow · Sync main — origin/main adds Source/S2/NewFile.cpp, which already exists untracked in the shared checkout and was written by this session')
+  expect(told).toContain('before 15:30: commit it with exact paths (then it is an ordinary conflict, yours to settle) or move it out of the tree')
+  expect(told).toContain('origin/main adds 3 files that already exist untracked in the shared checkout ("untracked would be overwritten"): Source/S2/NewFile.cpp → 3️⃣-Loco-fix; Content/S2/New/A.uasset → level-lane; Config/Stray.ini → owner unknown')
+  expect(told).toContain('owner unknown → 🟥 to Hai')
+})
+
+test('A11: a session whose touch file names an untracked file main adds is told by its own hai-flow', opts(), async ($, on) => {
+  const w = world(on)
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put(SYNC, JSON.stringify({ ...newSync(T(16, 30), B, 'sync-lane (session bbbbbbbb)', NOW), conflicts: [], conflictsAt: NOW, conflictsSource: 'merge-tree', untracked: ['Content/S2/New/B.uasset'] }))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Write', file_path: 'E:/s2/Content/S2/New/B.uasset', content: 'x' })
+  await idle($)
+  await advance(w, 1)
+  expect(prompts(w)).toEqual([
+    'hai-flow · Sync main — origin/main adds Content/S2/New/B.uasset, which already exists untracked in the shared checkout and was written by this session; the merge at 16:30 would refuse to overwrite it (merge-tree does not see this) → before 16:30: commit it with exact paths (then it is an ordinary conflict, yours to settle) or move it out of the tree; never delete a file that may be someone else\'s',
+  ])
+})
