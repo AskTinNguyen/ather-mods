@@ -1,6 +1,6 @@
 # hai-flow-a5: Progress
 
-- Working under rev: 1
+- Working under rev: 2
 - Worker: none yet
 - Current step: S0 done (baseline moved in)
 - Next step: S1, the pure coordination core (queue, lock lines, sync timeline) with unit tests

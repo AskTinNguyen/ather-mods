@@ -16,3 +16,10 @@ Append-only. Each user prompt verbatim, with credentials and machine paths redac
 > Các update hardness này nên tracking theo folder ather-automata chứ không phải trên S2 đâu, chuyển directory đi
 
 The work moved from a scratch folder of the S2 session into this repository: `hai-flow/` beside `ather-automata/`, on branch `intent/hai-flow-a5`.
+
+## L-3 (2026-10-06 17:20) | class: decision | -> rev 2
+
+> (F-1 a, sync timing) Hiển thị chức năng đó trên panel của AtherAutomataA5
+> (F-1 b, Editor launch RAM gate) Cho phép điều chỉnh.
+
+Answers to F-1: the sync is planned from the A5 panel (D4); the launch gate is adjustable on the panel and in options, defaults kept (D5).
