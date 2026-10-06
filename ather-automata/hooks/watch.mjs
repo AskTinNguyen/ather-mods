@@ -29,6 +29,9 @@ const lastTools = new Map()
 const idleWarned = new Set()
 // When the person last typed a prompt: after an away window has ended, it means they are back.
 let lastPersonAt = 0
+// When this session started: a with-proof merge counts only proof seen since (D2: "passed in tool output this session").
+// A hot reload starts it again, which only makes the rule stricter.
+let sessionStartedAt = Date.now()
 
 // The store, files and session as closures: `$` cannot be handed to state.mjs itself.
 /** @param {Engine} $ @returns {import('./state.mjs').Io} */
@@ -65,6 +68,7 @@ export function register(on, options) {
     idleWarned.clear()
     resetWorkers()
     lastPersonAt = 0
+    sessionStartedAt = Date.now()
     cwd = e.cwd
     try {
       const { me, root, isS2, pack } = await laneOf($)
@@ -499,13 +503,14 @@ async function shell($, command, e, next) {
   }
 }
 
-// With-proof merges (D2): every rung the profile requires passed in tool output, for the tracked intent or this session.
+// With-proof merges (D2): every rung the profile requires passed in tool output in this session.
 /** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack */
 async function isMergeProven($, pack) {
   if (pack.mergePolicy !== 'with-proof') return false
   const evidence = await state.readEvidence(io($), await scopeOf($), pack)
   const rungs = pack.mergeRungs ?? []
-  return rungs.length > 0 && rungs.every(rung => evidence[rung]?.state === 'pass')
+  const seen = /** @type {Record<string, { state: string, at?: number }>} */ (evidence)
+  return rungs.length > 0 && rungs.every(rung => seen[rung]?.state === 'pass' && (seen[rung]?.at ?? 0) >= sessionStartedAt)
 }
 
 /** @param {Engine} $ @param {string} command @param {{ text?: string, deny?: string, isError?: boolean }} ran */

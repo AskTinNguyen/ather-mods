@@ -62,6 +62,37 @@ claude plugin install ather-automata@ather --scope user
 
 Setting: `briefGate` (`warn`, `enforce` or `off`) for worker briefs that lack paths, acceptance checks or the shared-tree rule.
 
+## Web projects
+
+The same mod runs in web app repositories (Node and TypeScript first), piloted on Thính (AskTinNguyen/han-viet). The pane, Plan → Build → Prove → Ship, Next, away windows, the decision ledger, issues and the worker squad are the same; what counts as proof, what is held and what Next asks for come from a **pack** for the kind of project:
+
+- **Which pack:** the repository's `.ather/profile.json` (`"pack": "web"` or `"unreal"`), else markers (`*.uproject` → Unreal; `package.json` or `pyproject.toml` → web), else the core alone. Read once per session. S2 checkouts get the Unreal pack and see exactly what they saw before.
+- **Profile format** (v1, as han-viet's `tests/ather-profile.test.mjs` checks it):
+
+  ```json
+  {
+    "version": 1,
+    "pack": "web",
+    "gates": [
+      { "id": "test", "command": "npm test", "proofs": ["tests", "build"], "proves": "the full suite" },
+      { "id": "lint", "command": "npm run lint", "proofs": ["lint"] },
+      { "id": "build-next", "command": "npm run build:next", "proofs": ["build", "typecheck"] },
+      { "id": "ui", "command": "npm run ui:verify", "proofs": ["ui"] }
+    ],
+    "production": { "host": "vercel", "branch": "main", "deployment": "how the deployment is checked", "probe": { "url": "https://…", "expectStatus": 200 } },
+    "mergePolicy": "with-proof",
+    "devPorts": { "base": 3100, "perWorktree": 10, "env": "UI_VERIFY_PORT" }
+  }
+  ```
+
+  Optional: `"required"` (the rungs a merge needs; default every declared proof but production) and `"areas"`. Without a profile, `npm test`, `lint`, `typecheck` and `build` scripts stand in for gates.
+- **Proof:** five rungs, read from tool output only: `tests`, `lint` (lint and typecheck), `build`, `ui`, `prod`. A gate's command (or an `npm run` script, or the tool itself: `node --test`, vitest, jest, Playwright, `tsc`, ESLint, `next build`, vinext and Vite builds) passes on exit 0 with its own pass counts and no failures; a failure count or a non-zero exit fails it; a piped run is judged on its counts alone. `prod` is the deployment's commit status through `gh api`, `vercel inspect`, or a probe of the profile's URL. Roles: Engineer (tests, lint, build), Designer (the browser check), Product (build and the browser check).
+- **Merge policy:** `with-proof` lets a merge into `main` through, even while you are away, once every required rung has passed in tool output in this session; otherwise it is held as in S2. Ship then asks for the production check. Without the policy, merges wait for you.
+- **Held while away:** production deploys (`vercel --prod`, `vercel deploy --prod`, `wrangler deploy`), migrations against a non-local database, env and secret changes (`vercel env add/rm`, `wrangler secret`, `gh secret`, and the same through `gh api`), `npm publish`, `terraform apply`, and pushes to main, inside chained commands and `npm run` scripts too.
+- **Traps** with their fix: a port in use, POSIX env syntax in npm scripts on Windows, hydration mismatch, a stale `.next` or Vite cache, lockfile drift, Node version against `engines`, a missing `NEXT_PUBLIC_*`, missing Playwright browsers, a held `.next` lock.
+- **Create** offers `frontend-design`, `run`, `code-review`, `security-review` and `simplify`.
+- **Local files:** lane heartbeats, and an away ledger when no intent is tracked, go to `.ather/local/` (add it to `.gitignore`); debriefs to `docs/intent/<slug>/debrief.md`.
+
 ## Limits
 
 - Where a surface has no pane (the mobile app), `/ather` asks one question instead; option descriptions may not show there, so labels stand alone.
@@ -72,10 +103,13 @@ Setting: `briefGate` (`warn`, `enforce` or `off`) for worker briefs that lack pa
 
 One hooks module (`hooks/ather.mjs`) made of two halves. `watch.mjs` protects work and has no interface beyond pop-ups; `console.mjs` draws. They share state only through `state.mjs`, the one owner of every stored value, which applies changes one at a time. The pure logic is split by concern: `model.mjs` (intents, stages, next step), `guards.mjs` (shell and MCP checks, traps), `away.mjs` (window rules), `issues.mjs` (GitHub issues), `home.mjs` (what the console shows). Background hooks never get in the way of the calls they watch; the mod shows state and routes, and the session does the talking.
 
-Tests: `tests/ather.test.mjs` ships with the plugin. An end-to-end run in the marketplace repo (`dev/test-all.mjs`) drives the real code against a stand-in engine that answers dialogs the way the app does and lays out every pane at 72 and 110 columns.
+Packs (`hooks/packs/`): `unreal.mjs` (S2), `web.mjs` and `core.mjs`, chosen by `packs/index.mjs`; `shell.mjs` reads command lines for all of them. A pack is a plain object; the pure modules take it as their last parameter, defaulting to the Unreal pack.
+
+Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs` and `tests/web.test.mjs` (with outputs captured from han-viet under `tests/fixtures/web/`) run under `node --test` once `dev/test-all.mjs` has linked the test kit; `tests/plugin.test.ts` runs under `claude plugin test ather-automata`. An end-to-end run in the marketplace repo (`dev/test-all.mjs`) drives the real code against a stand-in engine that answers dialogs the way the app does and lays out every pane at 72 and 110 columns; with `HANVIET_ROOT` set to a han-viet checkout it lays out the web pane too, and `--layouts <dir>` writes every layout for a diff.
 
 ## Changes
 
+- **0.1.0** Web projects: one plugin with packs. S2's behaviour moved unchanged into the Unreal pack; a web pack (piloted on Thính, han-viet) reads `.ather/profile.json` gates as proof from tool output, holds production deploys, migrations, secrets, publishes and infrastructure applies while you are away, merges with proof under `with-proof`, knows nine web traps, and offers web skills under Create.
 - **0.0.7** This week's figures from week-calendar (PRs merged, productive agent time) on the pane's meta line, when that plugin runs on the PC.
 - **0.0.4** ✦ Create: the skills that make content in the Unreal Editor, grouped by what is made (VFX and look, characters and animation, AI and encounters, enemies, levels and cinematics, audio), led by what they do, three per group with More for the rest, ordered by role; each asks what you want first, records an intent and respects the Editor lock.
 - **0.0.3** The intent at a glance: after a turn that changed the intent, one line above the prompt (ticked A12 · new decision F-11) with See; the Intent view lists today's changes (✓ done, ◆ yours, ✎ changed) and explains any of them on a click.

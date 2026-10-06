@@ -2,8 +2,8 @@
 
 - Working under rev: 1
 - Worker: `web-pack-worker`
-- Current step: S5: release 0.1.0 (A7)
-- Next step: open the PR
+- Current step: none (stopped for review)
+- Next step: orchestrator reviews the PR (A7's review half) and merges; then han-viet adds `.ather/local/` to `.gitignore` (F-2)
 - PR: none yet
 
 ## Acceptance
@@ -18,7 +18,7 @@
 | A4 | met | S3: "web held actions while away (A4)": vercel/wrangler production deploys, non-local migrations (local ones pass), vercel env / wrangler secret / gh secret and `gh api -X PUT …/actions/secrets`, npm publish, terraform apply, chained commands and `npm run <script>` bodies, merges by `gh pr merge`, `gh api …/pulls/N/merge` and GraphQL `mergePullRequest` held until proven (with-proof), never a push to main or a deploy; S2 still holds merges with proof. `ℹ pass 105 ℹ fail 0` |
 | A5 | met | S3: "web traps (A5)": 9 traps (EADDRINUSE, POSIX env on Windows, hydration, stale .next/Vite cache, lockfile drift, Node engines, NEXT_PUBLIC_*, Playwright browsers, .next lock), each with a fix, each matched alone (EADDRINUSE and POSIX env from real han-viet output), none on passing runs; Unreal and web traps never cross. `ℹ pass 105 ℹ fail 0` |
 | A6 | met | S4: `HANVIET_ROOT=C:/Users/Admin/src/han-viet S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s4b` → `105/105 passed`, `199/199 passed`: the web pane (profile, package.json, AGENTS.md and intents of han-viet main `5b71d7f` in a sandbox) laid out at 72 and 110 columns with no line too wide; Prove names `npm test`, `npm run lint`, `npm run build` (designer: the browser check); Ship names every gate, with-proof and the Vercel production check; Create offers frontend-design, run, code-review, security-review, simplify; no S2Editor, PIE, Unreal or Editor-lock wording; captured outputs read as tests, build, lint and ui passed; away holds `npx vercel deploy --prod` and lets a proven merge through. S2 layouts unchanged (the 72 and 110 dumps start with the base's, byte for byte). |
-| A7 | open | |
+| A7 | open | gate half done (S5): version 0.1.0 in `ather-automata/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, a 0.1.0 Changes line, README "Web projects" (profile format, proofs, merge policy, held actions, traps); `claude plugin test ather-automata` → `2 pass 0 fail`; `claude plugin validate ather-automata` → `✔ Validation passed`. Review by the orchestrator is the other half. |
 
 ## Steps
 
@@ -31,6 +31,8 @@
 - S3 (rev 1, 2026-10-06): `tests/web.test.mjs` (30 tests) and fixtures. Captured in a scratch `git worktree add --detach` of han-viet at `origin/main` (`b5379e5`, removed after), with `npm_config_script_shell` set to Git Bash; Playwright from the agent-workflow harness (now han-viet main `5b71d7f`) copied into the scratch copy. Failing runs came from temporary files in the scratch copy only (a failing node test, a conditional hook plus a type error, a broken import, an extra 404 route). Machine paths replaced by `<repo>` and `<home>`. Detector fixes the real outputs asked for: ANSI colour codes stripped, vinext's "Build complete." read as a pass, cmd.exe's `'WRANGLER_LOG_PATH' is not recognized` as the POSIX-env trap. Evidence: this commit; `node --test ather-automata/tests/*.test.mjs` → `ℹ pass 105 ℹ fail 0`; `S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s3` → `105/105 passed`, `185/185 passed`, layouts still identical to the base. Acceptance: A2, A3, A4, A5.
 
 - S4 (rev 1, 2026-10-06): the web scenario in `dev/e2e/run.mjs`, run when `HANVIET_ROOT` names a han-viet checkout (read only: copied into a sandbox). 14 checks and six screens (Prove, Ship, Create at 72 and 110). Missing proofs now read "a, b and c" (two items read as before). `.gitattributes` keeps fixture bytes as captured. Evidence: this commit; `HANVIET_ROOT=… S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s4b` → `105/105 passed`, `199/199 passed`; `node --test ather-automata/tests/*.test.mjs` → `ℹ pass 105 ℹ fail 0`. Acceptance: A6.
+
+- S5 (rev 1, 2026-10-06): release 0.1.0. `tests/plugin.test.ts` (the module, packs included, loads in the engine's host and answers /ather and /away outside an intent repository) so `claude plugin test` has something to run (F-1). With-proof merges count only proof recorded since this session started (D2 says "this session"; evidence is otherwise kept a day per intent); an e2e check holds a merge on hour-old proof. README sections for web projects and maintainers; root README release step names `HANVIET_ROOT` and `--layouts`. Evidence: this commit; `HANVIET_ROOT=C:/Users/Admin/src/han-viet S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s5` → `105/105 passed`, `200/200 passed`, S2 layouts a byte-for-byte prefix; `S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts L-s5s` → `105/105 passed`, `185/185 passed`, layouts-72 and -110 identical to the base; `node --test ather-automata/tests/*.test.mjs` → `ℹ pass 105 ℹ fail 0`; `claude plugin test ather-automata` → `2 pass 0 fail`; `claude plugin validate ather-automata` → `✔ Validation passed`. Acceptance: A7 (gate).
 
 ## Decisions (worker)
 

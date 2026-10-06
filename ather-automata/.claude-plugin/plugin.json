@@ -1,7 +1,7 @@
 {
   "name": "ather-automata",
-  "version": "0.0.9",
-  "description": "Ather Automata: what needs you and what is next in every S2 session (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
+  "version": "0.1.0",
+  "description": "Ather Automata: what needs you and what is next in every S2 session and web app repository (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
   "author": {
     "name": "Tin Nguyen"
   },

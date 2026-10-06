@@ -1029,6 +1029,11 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   const deploy = await engine.modelTool({ tool: 'Bash', command: 'npm run build && npx vercel deploy --prod' })
   const merge = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
   expect('while away, a production deploy is held and a merge with every gate proven goes through (with-proof)', typeof deploy.deny === 'string' && /Production deploys/.test(deploy.deny) && merge.deny === undefined, [deploy.deny, merge.deny])
+  // Proof from before this session (an hour old, still within the day evidence is kept) does not let a merge through.
+  const stored = engine.store.get('evidence:zz-web-lens')
+  engine.store.set('evidence:zz-web-lens', Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...value, at: Date.now() - 3600000 }])))
+  const stale = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
+  expect("a merge on proof from before this session is held (D2: passed in this session's tool output)", typeof stale.deny === 'string' && /Merges/.test(stale.deny), stale.deny)
   expect('no hook threw in the web scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   fs.rmSync(root, { recursive: true, force: true })
 } else if (HANVIET_ROOT) {
