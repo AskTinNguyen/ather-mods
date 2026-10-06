@@ -1,7 +1,7 @@
 # Ather Automata Web Pack
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`
@@ -43,3 +43,4 @@ Bring Ather Automata from the S2 game project to web app projects. Keep one plug
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 1 (2026-10-06): completed. A1–A7 met (A7 by orchestrator review); merged as ather-mods PR #5, release 0.1.0. F-1 and F-2 accepted.
