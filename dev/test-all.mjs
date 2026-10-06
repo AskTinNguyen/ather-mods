@@ -19,6 +19,13 @@ const copy = (from, to, rewrite = s => s) => {
   for (const name of fs.readdirSync(from).filter(f => f.endsWith('.mjs'))) fs.writeFileSync(path.join(to, name), rewrite(fs.readFileSync(path.join(from, name), 'utf8')))
 }
 
+// `node --test ather-automata/tests/*.test.mjs` resolves 'claude-code/testing' through this link.
+const link = path.resolve(HERE, '../node_modules/claude-code')
+fs.mkdirSync(link, { recursive: true })
+fs.writeFileSync(path.join(link, 'package.json'), JSON.stringify({ name: 'claude-code', type: 'module', exports: { './testing': './testing.mjs' } }))
+fs.writeFileSync(path.join(link, 'testing.mjs'), `export * from '${new URL('./shim/node-test.mjs', import.meta.url).href}'
+`)
+
 console.log('== type-check')
 const types = process.env.CLAUDE_CODE_TYPES ?? [path.join(MOD, '.claude-plugin/types/claude-code/index.d.ts')].find(f => fs.existsSync(f))
 if (types) {
@@ -44,5 +51,7 @@ console.log('== e2e')
 const e2e = path.join(HERE, 'e2e')
 fs.rmSync(path.join(e2e, 'out'), { recursive: true, force: true })
 copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
-sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"`, e2e)
+// --layouts <dir> passes through: the e2e run writes every pane laid out at 72 and 110 columns there.
+const layouts = process.argv.includes('--layouts') ? path.resolve(process.argv[process.argv.indexOf('--layouts') + 1]) : null
+sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"${layouts ? ` --layouts "${layouts}"` : ''}`, e2e)
 console.log(`report: ${path.join(WORK, 'e2e-report.md')}`)

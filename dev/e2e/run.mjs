@@ -4,9 +4,11 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { AFK, createEngine } from './engine.mjs'
-import { check } from './screen.mjs'
+import { check, layouts } from './screen.mjs'
 
 const OUT = process.argv[2]
+// --layouts <dir>: write every pane and band laid out at 72 and 110 columns, to diff two runs.
+const LAYOUTS = process.argv.includes('--layouts') ? process.argv[process.argv.indexOf('--layouts') + 1] : null
 // The intents come from an S2 checkout: its docs/intent is copied into a sandbox per run.
 const S2_ROOT = process.env.S2_ROOT
 if (!S2_ROOT || !fs.existsSync(path.join(S2_ROOT, 'docs/intent'))) throw new Error('Set S2_ROOT to an S2 checkout (the folder holding docs/intent).')
@@ -952,5 +954,13 @@ for (const one of results) lines.push(`- ${one.ok ? '✅' : '❌'} ${one.name}${
 lines.push('', '# Screens', '')
 for (const [title, body] of screens) lines.push(`## ${title}`, '', '```text', body, '```', '')
 fs.writeFileSync(OUT, lines.join('\n'))
+if (LAYOUTS) {
+  fs.mkdirSync(LAYOUTS, { recursive: true })
+  for (const width of [72, 110]) {
+    const drawn = layouts.map((one, index) => [one, index]).filter(([one]) => one.width === width)
+    fs.writeFileSync(path.join(LAYOUTS, `layouts-${width}.txt`), drawn.map(([one, index]) => `=== #${index} (${width} columns)\n${one.lines.join('\n')}\n`).join('\n'))
+  }
+  console.log(`layouts: ${LAYOUTS}`)
+}
 console.log(`${passed}/${results.length} passed`)
 for (const one of results.filter(r => !r.ok)) console.log(`FAIL ${one.name}\n     ${one.detail.slice(0, 400)}`)

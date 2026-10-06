@@ -69,6 +69,9 @@ const walk = (node, visit) => {
   node.children.forEach(child => walk(child, visit))
 }
 
+// Every layout check() draws, in order, so a run can dump them (run.mjs --layouts <dir>).
+export const layouts = []
+
 export const check = (node, width) => {
   const problems = []
   const hotkeys = new Map()
@@ -94,5 +97,6 @@ export const check = (node, width) => {
   lines.forEach((line, index) => {
     if (line.length > width) problems.push(`line ${index + 1} is ${line.length} wide (> ${width}): ${line.slice(0, 50)}…`)
   })
+  layouts.push({ width, lines })
   return { lines, problems }
 }
