@@ -7,8 +7,8 @@ import { buildHome, parseWeek, weekText, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
-import { KINDS, avatarSvg, classifyWorker, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
-import { recordSpawn, recordTool, resetWorkers, workerOf } from '../hooks/workers.mjs'
+import { KINDS, avatarSvg, classifyWorker, crewWords, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
+import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { intentChanges, intentFileOf } from '../hooks/changes.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
@@ -709,5 +709,41 @@ describe('the second panel review (0.0.8)', () => {
     expect(intentLabel(parked, 'Tin Nguyen')).toContain('parked: Waiting on the weather presets')
     const [first] = parseFindings('# Findings\n\n## F-1 (2026-10-01) | blocking: no | status: open (director)\n\nFound: the snow lab cannot drive either hook from its production path. A second sentence explains why.\n', '')
     expect(first?.full).toBe('The snow lab cannot drive either hook from its production path. A second sentence explains why.')
+  })
+})
+
+describe('worker clocks and kinds (0.1.1)', () => {
+  test('a fix round is a builder though its brief quotes the review; the description decides first', () => {
+    expect(classifyWorker({ subagentType: 'general-purpose', description: 'Thermo round 1 fixes', prompt: 'Apply the thermo-nuclear review findings.' })).toBe('builder')
+    expect(classifyWorker({ subagentType: 'general-purpose', description: 'Thermo review: core', prompt: 'Review the core and fix nothing.' })).toBe('reviewer')
+    expect(classifyWorker({ subagentType: 'general-purpose', description: 'Separate PR: rule book gap', prompt: 'Take the Editor owner lock first.' })).toBe('editor')
+  })
+  test("a worker's clock runs to now while it runs and to its last turn's end once finished", () => {
+    resetWorkers()
+    recordSpawn({ agentId: 'w', subagentType: 'general-purpose', prompt: 'Fix it.', description: 'Fix it', model: 'opus', at: 1000 })
+    expect(workerElapsed(/** @type {any} */ (workerOf('w')), true, 9000)).toBe(8000)
+    recordEnd('w', 5000)
+    expect(workerElapsed(/** @type {any} */ (workerOf('w')), false, 9000)).toBe(4000)
+    // Resumed and ended again: the later end wins; running again, it counts to now.
+    recordEnd('w', 12000)
+    expect(workerElapsed(/** @type {any} */ (workerOf('w')), false, 20000)).toBe(11000)
+    expect(workerElapsed(/** @type {any} */ (workerOf('w')), true, 20000)).toBe(19000)
+  })
+  test('a worker found running later is adopted whole: its start from the record, not idle, its calls uncounted', () => {
+    resetWorkers()
+    adoptWorker({ id: 'old', type: 'general-purpose', description: 'Thermo round 1 fixes', model: 'opus', startedAt: 1000, now: 600000 })
+    const worker = /** @type {any} */ (workerOf('old'))
+    expect(worker.origin).toBe('adopted')
+    expect(worker.kind).toBe('builder')
+    expect(worker.lastAt).toBe(600000)
+    expect(workerElapsed(worker, false, 700000)).toBe(null)
+  })
+  test('a row says what is known: no count for a worker found later, no clock without a start', () => {
+    const base = { state: /** @type {const} */ ('running'), prop: null, tools: 3, via: '' }
+    expect(crewWords({ ...base, origin: 'seen', elapsed: 5000 })).toEqual({ doing: 'starting', line: 'running 0:05 · 3 tool calls' })
+    expect(crewWords({ ...base, origin: 'adopted', elapsed: 600000, via: 'Thermo round 1 fixes' })).toEqual({ doing: 'working', line: 'running 10:00 · started by Thermo round 1 fixes' })
+    expect(crewWords({ ...base, origin: 'unknown', elapsed: null })).toEqual({ doing: 'working', line: 'running · start unknown' })
+    expect(crewWords({ ...base, state: 'done', origin: 'seen', elapsed: 1280000, tools: 1 })).toEqual({ doing: 'finished', line: 'took 21:20 · 1 tool call' })
+    expect(crewWords({ ...base, state: 'done', origin: 'adopted', elapsed: null })).toEqual({ doing: 'finished', line: '' })
   })
 })

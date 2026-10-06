@@ -230,11 +230,16 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     },
     modelTool: input => dispatch('tool.call', input, toolBottom, 'engine'),
     // A background worker: dispatched with a brief, then calling tools in its own loop.
-    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5' }) => {
-      const result = await dispatch('agent.spawn', { tool_use_id: `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model }, () => ({ model, agentId }))
-      agents.push({ id: agentId, description, type: subagentType, status: 'running' })
+    // `parentId`: a worker another worker dispatched from its own loop.
+    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5', parentId }) => {
+      const result = await dispatch('agent.spawn', { tool_use_id: `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model, ...(parentId ? { agentId: parentId } : {}) }, () => ({ model, agentId }))
+      agents.push({ id: agentId, description, type: subagentType, status: 'running', ...(parentId ? { parentId } : {}) })
       return result
     },
+    // A worker already running when the plugin loaded: listed, but no spawn event was seen.
+    addAgent: agent => void agents.push({ status: 'running', type: 'general-purpose', ...agent }),
+    // A worker's own turn ends (its answer), as Claude Code reports it.
+    agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', agentId }, () => ({ text: '' })),
     agentTool: (agentId, input) => dispatch('tool.call', { ...input, agentId }, toolBottom, 'engine'),
     setAgentStatus: (agentId, status) => {
       const agent = agents.find(one => one.id === agentId)
