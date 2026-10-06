@@ -982,6 +982,40 @@ const hasFocus = tree => {
   done()
 }
 
+{
+  // A3: only the session's own orchestration tracks: a main-thread Write or Edit of prompt.md or log.md, once it ran.
+  const { engine, root, done } = await boot({ store: { 'role:tinnguyen': 'engineer' } })
+  const pinned = () => engine.store.get('pinned:harness-session-0001')
+  const file = (slug, name) => path.join(root, 'docs/intent', slug, name)
+  await engine.spawn({ agentId: 'w-intent', description: 'Box worker', prompt: 'Implement box-scale-tool A1.' })
+  await engine.agentTool('w-intent', { tool: 'Write', file_path: file('box-scale-tool', 'progress.md'), content: '# box-scale-tool: Progress\n' })
+  await engine.agentTool('w-intent', { tool: 'Edit', file_path: file('box-scale-tool', 'log.md'), old_string: 'not there', new_string: 'x' })
+  await engine.flush()
+  expect("a worker's writes into an intent (progress.md, log.md) never track it", pinned() === undefined, pinned())
+  await engine.modelTool({ tool: 'Edit', file_path: file('box-scale-tool', 'progress.md'), old_string: ': Progress', new_string: ': progress' })
+  await engine.modelTool({ tool: 'Write', file_path: 'docs/intent/box-scale-tool/log.md', content: 'x', __isError: true })
+  await engine.flush()
+  expect('a main-thread write of progress.md, or a write of log.md that failed, does not track the intent', pinned() === undefined, pinned())
+  await engine.modelTool({ tool: 'Edit', file_path: file('box-scale-tool', 'log.md'), old_string: 'not there', new_string: 'x' })
+  await engine.flush()
+  expect('a main-thread edit of log.md tracks the intent once it ran', pinned() === 'box-scale-tool', pinned())
+  await engine.modelTool({ tool: 'Edit', file_path: file('fluid-snow-sand-look', 'prompt.md'), old_string: 'not there', new_string: 'x' })
+  await engine.flush()
+  expect("a main-thread edit of another intent's prompt.md does not switch the tracked one", pinned() === 'box-scale-tool', pinned())
+  await engine.modelTool({ tool: 'Write', file_path: file('zz-captured', 'prompt.md'), content: '# Captured\n\n- Rev: 1\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: It works.\n' })
+  await engine.flush()
+  expect('capturing a new intent (a write that creates its prompt.md) switches the pin to it', pinned() === 'zz-captured', pinned())
+  await run(engine, [], 'ather', 'untrack')
+  await engine.modelTool({ tool: 'Write', file_path: file('zz-captured', 'log.md'), content: '# Log\n' })
+  await engine.flush()
+  expect('after /ather untrack, a write into that intent does not track it again in this session', pinned() === undefined, pinned())
+  await engine.modelTool({ tool: 'Write', file_path: file('box-scale-tool', 'log.md'), content: '# Log\n' })
+  await engine.flush()
+  expect('another intent still tracks from a write', pinned() === 'box-scale-tool', pinned())
+  expect('no hook threw in the auto-track scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
 // ---------------------------------------------------------------- the web pack, on a han-viet checkout
 //
 // HANVIET_ROOT: a checkout of AskTinNguyen/han-viet. Its profile, package.json, AGENTS.md and intents

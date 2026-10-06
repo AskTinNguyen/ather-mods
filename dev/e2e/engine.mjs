@@ -60,7 +60,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
 
   const toolBottom = input => {
     if ((input.tool === 'Write' || input.tool === 'Edit') && typeof input.file_path === 'string' && input.file_path.startsWith(root)) {
-      if (input.tool === 'Write') fs.writeFileSync(input.file_path, input.content ?? '')
+      // Write makes the folder it writes into, as the real tool does.
+      if (input.tool === 'Write') fs.mkdirSync(path.dirname(input.file_path), { recursive: true }), fs.writeFileSync(input.file_path, input.content ?? '')
       else fs.writeFileSync(input.file_path, fs.readFileSync(input.file_path, 'utf8').replace(input.old_string, input.new_string))
       return { result: 'ok', text: 'ok' }
     }

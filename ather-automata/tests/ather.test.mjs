@@ -9,7 +9,7 @@ import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, next
 import * as state from '../hooks/state.mjs'
 import { KINDS, avatarSvg, classifyWorker, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
 import { recordSpawn, recordTool, resetWorkers, workerOf } from '../hooks/workers.mjs'
-import { intentChanges, intentFileOf } from '../hooks/changes.mjs'
+import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { unreal } from '../hooks/packs/unreal.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
@@ -775,6 +775,12 @@ describe('track guard', () => {
     await state.endAway(io)
     expect((await state.untrack(io, 'Tin Nguyen')).result).toBe('untracked')
     expect((await state.readAway(io)).phase).toBe('review')
+  })
+
+  test("auto-track (A3) reads only the orchestrator's files: an intent's prompt.md and log.md", () => {
+    expect(orchestrationFileOf('E:/S2/docs/intent/spawner/prompt.md')).toEqual({ slug: 'spawner', file: 'prompt.md' })
+    expect(orchestrationFileOf('docs\\intent\\spawner\\log.md')).toEqual({ slug: 'spawner', file: 'log.md' })
+    for (const other of ['docs/intent/spawner/progress.md', 'docs/intent/spawner/findings.md', 'docs/intent/spawner/decisions.md', 'docs/intent/README.md', 'docs/intent/spawner/notes/prompt.md.bak', 42]) expect(orchestrationFileOf(other)).toBe(null)
   })
 
   test('the heartbeat is written again at once on track and untrack (D4), with the last activity', async () => {

@@ -13,7 +13,7 @@ import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, gitFolders, heldKin
 import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
-import { intentChanges, intentFileOf } from './changes.mjs'
+import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { untrackText } from './home.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
@@ -167,13 +167,17 @@ export function register(on, options) {
       if (denied) return { deny: denied }
     }
     const path = /** @type {{ file_path?: unknown }} */ (e).file_path
-    const intent = typeof path === 'string' && /^(Write|Edit|NotebookEdit)$/.test(tool) ? /docs[\\/]intent[\\/]([^\\/]+)[\\/]/.exec(path)?.[1] : undefined
-    // The intent this session writes to becomes its tracked one; reading another does not.
-    if (intent) void laneOf($).then(({ root }) => state.track(io($), root, intent, { onlyIfNone: true })).catch(() => undefined)
+    const isWrite = /^(Write|Edit|MultiEdit)$/.test(tool)
+    // The session's own orchestration (its main thread, never a worker) writing an intent's prompt.md or log.md
+    // tracks that intent once the write has gone through; creating a prompt.md switches to the new intent.
+    const orchestrated = isWrite && e.agentId === undefined ? orchestrationFileOf(path) : null
+    const isNewIntent = orchestrated?.file === 'prompt.md' && !(await io($).exists(await fullPath($, String(path))))
     // An edit to an intent's prompt, findings or progress: what it changed, read off the file before and after.
-    const intentFile = /^(Write|Edit|MultiEdit)$/.test(tool) ? intentFileOf(path) : null
+    const intentFile = isWrite ? intentFileOf(path) : null
     const before = intentFile ? ((await readFile($, String(path))) ?? '') : ''
     const ran = await next(e)
+    const hasRun = ran.deny === undefined && ran.isError !== true
+    if (orchestrated && hasRun) void laneOf($).then(({ root }) => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
     if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
     return ran
@@ -182,10 +186,15 @@ export function register(on, options) {
 
 // ---------------------------------------------------------------- what an intent edit recorded
 
+// A tool's file path as written, or relative to the checkout.
+/** @param {Engine} $ @param {string} path */
+async function fullPath($, path) {
+  return /^([A-Za-z]:|[\\/])/.test(path) ? path : `${(await laneOf($)).root}/${path}`
+}
+
 /** @param {Engine} $ @param {string} path */
 async function readFile($, path) {
-  const full = /^([A-Za-z]:|[\\/])/.test(path) ? path : `${(await laneOf($)).root}/${path}`
-  return io($).read(full)
+  return io($).read(await fullPath($, path))
 }
 
 /** @param {Engine} $ @param {{ slug: string, file: import('./changes.mjs').IntentFile }} target @param {string} path @param {string} before */
