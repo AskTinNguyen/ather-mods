@@ -36,3 +36,10 @@ After the orchestrator review (8/8 met at rev 2): F-2 rejected (the Source/Plugi
 > (install 0.4, after CLAUDE_CODE_PLUGIN_DIR_WATCH=1 was found on) Chờ rev 3 xong rồi trỏ thẳng
 
 The plugin folders are watched, so pointing CLAUDE_CODE_PLUGIN_DIRS at hai-flow/ while the worker edits it would hot-reload half-made steps into every session. The switch to `D:/Projects/ather-mods/hai-flow` waits until rev 3 is done and reviewed.
+
+## L-6 (2026-10-06 19:50) | class: decision | -> rev 4
+
+> Phương án  có vẻ ổn, nhưng anh concern có caveat nào không? Kiểu vì lỗi đó mà hỏng toàn bộ flow và quá trình sync và blocker cho các session
+> Theo suggest của em, nhưng T là lúc gì?
+
+After the failure review (two caveats found in the 0.4 code: the freeze has no end and no holder check; A5's git-discard rule would stop the sync worker's `checkout --ours`), Hai took the suggestion: option B, the session overview, and safeguards 1, 2, 3, 5, 6 (hard end T + 45 / T + 90 min). T is the planned sync time. Rev 4 is built in a worktree, never in the live plugin folder.
