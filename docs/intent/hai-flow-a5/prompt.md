@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 2
+- Rev: 3
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -51,6 +51,9 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A5: Sync main holder via `/a5 sync <HH:MM>` and a model tool `sync` (plan, conflicts, done, abort): at the cutoff (sync − 30 min) every A5 session on the checkout gets the checkpoint notice (commit own paths, resume note, release the Editor by sync − 10); grants that would cross the sync are deferred; the holder's conflict list reaches the sessions that edited those paths (hai-flow records each session's edited paths), with the self-conflict and foreign-conflict rules; from the sync time until done/abort, every non-holder session is refused git writes and Editor use in the shared checkout; done/abort lifts it and tells every session. Proof: gate: unit tests on the timeline, engine tests for freeze and lift.
 - A6: Notices per D6: at most one idle prompt per session per event; never written into `docs/intent/*` (an edit that adds a `hai-flow ·` line to an intent file is refused); Ather's intent log and findings stay free of them. Proof: gate: engine tests.
 - A7: Ather is untouched: no file under `ather-automata/` changes; A5 rules and the report gate keep the 0.3 behaviour (worktree scope, worker stop-and-report, Ather proof). Proof: gate: `git diff --stat main -- ather-automata` empty; `claude plugin validate hai-flow`; type-check; `claude plugin test hai-flow`.
+- A9 (rev 3): One machine probe for all A5 sessions: the PowerShell probe runs in one session at a time and is shared through `Saved/HaiFlow/probe.json` (a session probes only when that file is older than 50 s, by read-compare-write so two sessions rarely both probe); every other session reads it; a grant and the cleanup still take a fresh reading. Proof: gate: engine tests (two sessions, one probe per period; stale file re-probed; grant re-probes).
+- A10 (rev 3): A lease follows `/clear`: when the session that holds the Editor (or a request, or the sync) is cleared into a new session id, its hai-flow moves its session file, its lock line (HELD with the new `session <id8>`) and its sync holder to the new id, so the cleared session keeps driving the Editor it opened and nobody sees a gone holder. Proof: gate: engine test on `session.end` with reason `clear`.
+- A11 (rev 3): At the cutoff the holder's hai-flow lists the files `origin/main` adds that already exist untracked in the shared checkout ("untracked would be overwritten", which merge-tree does not see), by checking each added path on disk (never a whole-tree untracked scan), and sends each to the session whose touch file names it (owner unknown → the holder's notice). Proof: gate: engine test with a mocked `git diff --name-only --diff-filter=A HEAD origin/main`.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -64,4 +67,5 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 3 (2026-10-06): L-4: A9 shared probe, A10 lease follows /clear, A11 untracked files main would overwrite (F-3 b); F-2 rejected.
 - rev 2 (2026-10-06): F-1 decided (L-3): D4 sync planned from the A5 panel; D5 launch gate adjustable on the panel and in options; A2 names both controls.

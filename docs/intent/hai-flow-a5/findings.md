@@ -16,14 +16,14 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 **Proposed amendment:** keep D4 (planned syncs, fixed windows optional) and D5 (launch at ≥ 31 GB free with PIE, ≥ 28 GB without, after cleanup) unless Hai picks otherwise.
 **Resolution:** decided by Hai (L-3): (a) planning a sync is a control on the A5 panel, no fixed windows by default; (b) the launch gate is adjustable on the panel and in options, defaults 31/28 GB. Folded into D4, D5 and A2 at rev 2.
 
-## F-2 (2026-10-06, rev 2) | blocking: no | status: open
+## F-2 (2026-10-06, rev 2) | blocking: no | status: rejected
 
 **Found:** the Sources line lists, from `runbook-sync-lane.md` (C++ trains rule 2), "`Source/` and `Plugins/` frozen from the cutoff", but A5's acceptance names only the cutoff notice and the freeze from T. Built (S5): the cutoff notice tells every session to keep `Source/` and `Plugins/` edits out of the shared tree from the cutoff; nothing refuses such an edit before T. The runbook's reason is a build compiling whatever is on disk; a planned sync under D4 is a merge that may or may not build.
 **Proposed amendment:** none needed if the notice is enough (recommended: D4 syncs are not C++ trains). Alternative: add to A5 "from the cutoff, an Edit/Write under `Source/` or `Plugins/` of the shared checkout asks Hai (A5 D1 ask), the sync holder excepted".
-**Resolution:**
+**Resolution:** rejected by Hai (L-4): the cutoff notice is enough; a planned sync is not always a C++ train. No change.
 
-## F-3 (2026-10-06, rev 2) | blocking: no | status: open
+## F-3 (2026-10-06, rev 2) | blocking: no | status: accepted
 
 **Found:** two dry-run details the intent leaves open. (a) The cutoff dry-run (`git merge-tree --write-tree --name-only HEAD origin/main`) runs against the last fetched `origin/main`; hai-flow does not fetch (a fetch at cutoff would touch the network and the LFS endpoint without the holder). (b) The runbook's cutoff also intersects the files main adds with the tree's untracked files ("untracked would be overwritten", invisible to merge-tree); not built.
 **Proposed amendment:** (a) keep: the holder fetches when it runs s2-sync-main, and the holder's notice says so if Hai wants that wording; or add "the holder's hai-flow runs `git fetch origin main` (no LFS, 60 s, GIT_TERMINAL_PROMPT=0) before the dry-run". (b) add to A5 if wanted: "untracked files that main adds are listed to their owners at the cutoff". Recommendation: keep (a) as is, defer (b) to a later rev.
-**Resolution:**
+**Resolution:** decided by Hai (L-4): (a) kept as built (hai-flow never fetches; the holder fetches when it runs s2-sync-main); (b) accepted as A11 at rev 3.
