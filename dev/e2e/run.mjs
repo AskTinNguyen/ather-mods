@@ -151,6 +151,10 @@ const pressIn = (tree, label) => {
   expect('without a pane, part of an intent name typed in the dialog says where it stands and how to work on it, and does not track it', engine.store.get('pinned:harness-session-0001') === undefined && /^fluid-snow-sand-look · .+\. To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(name.out) && name.sent.length === 0, name.out)
   const words = await run(engine, [], 'ather', 'fluid snow')
   expect('without a pane, words after /ather that match one intent do not track it either', engine.store.get('pinned:harness-session-0001') === undefined && /To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(words.out) && words.dialogs.length === 0, words.out)
+  // F-1 (b): the Work question asks what this session works on, so a name typed there tracks, as its choices do.
+  const workTyped = await run(engine, [pick('Pick something to work on'), typed('fluid')])
+  expect('in the Work question ("What should this session work on?"), the same words typed track the one intent they match', workTyped.dialogs[1]?.header === 'Work' && /^What should this session work on\?/.test(workTyped.dialogs[1]?.question ?? '') && engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && workTyped.out === 'Now tracking fluid-snow-sand-look.' && workTyped.sent.length === 0, [workTyped.dialogs.map(d => d.header), workTyped.out])
+  await run(engine, [], 'ather', 'untrack')
   const exact = await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
   expect('/ather intent with the exact name tracks it at once, with no dialog, without a pane too', engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && exact.out === 'Now tracking fluid-snow-sand-look.' && exact.dialogs.length === 0, exact.out)
   const tracked = await run(engine, [dismiss])

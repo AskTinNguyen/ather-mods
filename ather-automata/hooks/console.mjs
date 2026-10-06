@@ -791,8 +791,22 @@ async function workQuestion($) {
     question: 'What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number.',
     choices: work.map(one => ({ label: cut(one.label, 40), description: one.hint, run: () => startWork($, one) })),
     fallback: 'Nothing chosen.',
-    onTyped: text => typed($, text),
+    onTyped: text => typedWork($, text),
   })
+}
+
+// Typed in the Work question, which itself asks what this session works on: a name that matches one
+// intent tracks it, as the question's choices do. Anything else is read as in any other dialog.
+/** @param {Engine} $ @param {string} text */
+async function typedWork($, text) {
+  const words = text.trim()
+  // The tour and an issue number mean what they mean anywhere.
+  if (/^tours?$/i.test(words) || /^#?\d+$/.test(words)) return typed($, text)
+  const matches = searchIntents(intents, words)
+  const [only] = matches
+  if (intents.some(one => one.slug === words)) return trackSlug($, words)
+  if (matches.length === 1 && only) return trackSlug($, only.slug)
+  return typed($, text)
 }
 
 /** @param {Engine} $ @param {string} goal */
