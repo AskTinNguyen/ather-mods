@@ -31,6 +31,39 @@ const repo = (w: ReturnType<typeof world>, root: string, linked = false) => (lin
 const titled = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title').map(e => String(e.title))
 const COMMIT = 'git -C E:/s2 commit -m "wip: tail"'
 
+// ---------- A14: the merge guard ----------
+test('A14: while .git/MERGE_HEAD exists, a non-holder\'s git writes in the shared checkout are refused, whatever sync.json says', opts(), async ($, on) => {
+  const w = world(on)
+  repo(w, 'E:/s2')
+  repo(w, 'E:/wt/x', true)
+  w.put('E:/s2/.git/MERGE_HEAD', '1a2b3c\n')
+  w.put(SYNC, JSON.stringify({ ...newSync(T(14, 0), B, PLANNED_BY_B, NOW - 60 * MIN), state: 'expired', endedAt: T(14, 30), note: 'its hard end 14:45 passed' }))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
+  await $.session.start(START)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBe('hai-flow · Merge guard — a merge is in progress in the shared checkout (.git/MERGE_HEAD; sync-lane holds the sync at 14:00 (expired)): no git commit there until it is finished or aborted → leave the merge state alone (no commit, reset, abort or stash of yours); its holder or Hai ends it; work without git or in your own worktree')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge --abort' }))).toContain('Merge guard')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 status && git -C E:/s2 diff --stat' }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x commit -m "own worktree"' }))).toBeUndefined()
+  w.files.delete('e:/s2/.git/merge_head') // the merge is finished: the guard lifts with it
+  expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBeUndefined()
+})
+
+test('A14: a merge left behind with no sync open is one 🟥 for Hai; the holder of the last sync may still end it', opts(), async ($, on) => {
+  const w = world(on)
+  repo(w, 'E:/s2')
+  w.put(PENDING, '')
+  w.put('E:/s2/.git/MERGE_HEAD', '1a2b3c\n', T(14, 20))
+  await $.session.start(START)
+  expect(w.read(PENDING)).toContain('A merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since 14:20) and no sync is open')
+  expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toContain('no sync is open (a merge left behind)')
+  await advance(w, 3, null)
+  expect(w.read(PENDING).split('\n').filter(l => l.includes('MERGE_HEAD')).length).toBe(1)
+  // This session held the last sync: its own git there passes the guard (to finish or abort that merge).
+  w.put(SYNC, JSON.stringify({ ...newSync(T(14, 0), { session: ME, id8: ME8, lane: '3️⃣-Loco-fix' }, 'me', NOW - 60 * MIN), state: 'aborted', endedAt: T(14, 30) }))
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge --abort' }))).toBeUndefined()
+})
+
 // ---------- A13: the freeze is a lease ----------
 test('A13: at its hard end the freeze expires for every session: marked expired, a notice, one 🟥 for Hai', opts(), async ($, on) => {
   const w = world(on)

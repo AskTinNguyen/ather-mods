@@ -582,6 +582,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
   await editorStep($, opts, now)
   await syncStep($, opts, now)
+  await mergeGuardStep($, opts, now)
   ramStep(opts, now)
   await saveMe($, opts, now)
   showMachine($, now)
@@ -956,8 +957,21 @@ async function syncCommand($: Engine, opts: Opts, rest: string): Promise<string>
   return syncAction($, opts, 'status', {})
 }
 
-/** A5's freeze: from the sync time until done or abort, a session that does not hold the sync makes no git write
- * in the shared checkout and does not use the Editor (the sync file is read fresh for each such call). */
+/** The first git write of a command that lands in the shared S2 checkout (its main working tree), if any. */
+async function sharedGitWrite($: Engine, opts: Opts, a5: A5, writes: { verb: string; dir: string }[]): Promise<{ verb: string; dir: string } | null> {
+  const cwd = await $.session.cwd()
+  for (const w of writes) {
+    const dir = norm(w.dir || cwd, cwd)
+    const root = (await locate($, a5, `${dir}/_`)).root
+    if (root && sameRoot(root, s2Root(opts)) && (await isSharedRoot($, root))) return w
+  }
+  return null
+}
+
+/** A5's freeze, a lease (D8): from the sync time until done, abort or expiry, a session that does not hold the sync
+ * makes no git write in the shared checkout and does not use the Editor (sync.json read fresh for each such call).
+ * A14, the merge guard: while .git/MERGE_HEAD exists in the shared checkout, git writes there are refused to every
+ * session but the sync's holder, whatever sync.json says. */
 async function freezeProblem($: Engine, opts: Opts, a5: A5, tool: string, input: Input): Promise<string | null> {
   const command = SHELL_TOOLS.has(tool) ? str(input.command) : ''
   const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command))
@@ -965,18 +979,31 @@ async function freezeProblem($: Engine, opts: Opts, a5: A5, tool: string, input:
   if (!isEditorUse && writes.length === 0) return null
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   const now = await $.clock.now()
-  if (!s || phaseOf(s, now) !== 'frozen') return null
-  if (s.holder.id8 === (await $.session.id()).slice(0, 8).toLowerCase()) return null
-  const why = `${s.holder.lane} merges origin/main since ${clockOf(s.at)}`
-  if (isEditorUse) return blocked('Sync main freeze', `${why}: the Editor waits until the sync is done`, 'do work that needs no Editor; you will be told when it lifts')
-  const cwd = await $.session.cwd()
-  for (const w of writes) {
-    const dir = norm(w.dir || cwd, cwd)
-    const root = (await locate($, a5, `${dir}/_`)).root
-    if (root && sameRoot(root, s2Root(opts)) && (await isSharedRoot($, root)))
-      return blocked('Sync main freeze', `${why}: no git ${w.verb} in the shared checkout until the sync is done`, 'leave your changes as they are (never stash or reset them); commit after the lift, or work in your own worktree')
+  const isHolder = s?.holder.id8 === (await $.session.id()).slice(0, 8).toLowerCase()
+  const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5, writes) : null
+  if (shared && !isHolder && (await $.fs.exists(`${s2Root(opts)}/.git/MERGE_HEAD`))) {
+    const state = s ? `${s.holder.lane} holds the sync at ${clockOf(s.at)} (${phaseOf(s, now)})` : 'no sync is open (a merge left behind)'
+    return blocked('Merge guard', `a merge is in progress in the shared checkout (.git/MERGE_HEAD; ${state}): no git ${shared.verb} there until it is finished or aborted`, 'leave the merge state alone (no commit, reset, abort or stash of yours); its holder or Hai ends it; work without git or in your own worktree')
   }
+  if (!s || phaseOf(s, now) !== 'frozen' || isHolder) return null
+  const why = `${s.holder.lane} merges origin/main since ${clockOf(s.at)}`
+  if (isEditorUse) return blocked('Sync main freeze', `${why}: the Editor waits until the sync is done (at the latest ${clockOf(s.hardEnd)})`, 'do work that needs no Editor; you will be told when it lifts')
+  if (shared) return blocked('Sync main freeze', `${why}: no git ${shared.verb} in the shared checkout until the sync is done (at the latest ${clockOf(s.hardEnd)})`, 'leave your changes as they are (never stash or reset them); commit after the lift, or work in your own worktree')
   return null
+}
+
+/** A14: a merge left in the shared checkout with no sync open (.git/MERGE_HEAD) is one 🟥 for Hai, raised by the
+ * first session that sees it (an alert file per MERGE_HEAD). */
+async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void> {
+  const head = await $.fs.stat(`${s2Root(opts)}/.git/MERGE_HEAD`).catch(() => null)
+  if (!head || isOpenPhase(phaseOf(syncFile, now))) return
+  if (await claimAlert($, opts, `merge-head-${Math.round(head.mtimeMs)}`))
+    await raiseRed(
+      $,
+      opts,
+      `A merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since ${clockOf(head.mtimeMs)}) and no sync is open${syncFile ? ` (the last sync, ${clockOf(syncFile.at)} by ${syncFile.holder.lane}, is ${syncFile.state})` : ''}: finish it or abort it (git merge --abort) yourself, or name a session to do it`,
+      'every session but the last sync holder stays refused git writes there until MERGE_HEAD is gone',
+    )
 }
 
 /** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */

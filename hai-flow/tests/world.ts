@@ -66,7 +66,11 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return names.length ? value(names.map(p => ({ name: p.slice(dir.length), kind: 'file', size: (files.get(p) ?? '').length, mtimeMs: mtimes.get(p) ?? NOW, isLink: false }))) : { deny: `ENOENT: ${e.path}` }
   })
   on('fs.stat', async (_$: unknown, e: { path: string }) =>
-    k(e.path).endsWith('fetch_head') ? value({ kind: 'file', size: 1, mtimeMs: NOW - 90 * 60_000, isLink: false }) : { deny: 'ENOENT' })
+    k(e.path).endsWith('fetch_head')
+      ? value({ kind: 'file', size: 1, mtimeMs: NOW - 90 * 60_000, isLink: false })
+      : files.has(k(e.path))
+        ? value({ kind: 'file', size: (files.get(k(e.path)) ?? '').length, mtimeMs: mtimes.get(k(e.path)) ?? NOW, isLink: false })
+        : { deny: 'ENOENT' })
   on('session.id', async () => value(ids.current))
   on('session.end', async (_$: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
   on('session.cwd', async () => value(PROJ))
