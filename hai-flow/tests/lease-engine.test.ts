@@ -64,6 +64,36 @@ test('A14: a merge left behind with no sync open is one 🟥 for Hai; the holder
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge --abort' }))).toBeUndefined()
 })
 
+// ---------- A15: the sync's own commands pass A5 ----------
+const MINE = { session: ME, id8: ME8, lane: '3️⃣-Loco-fix' }
+const OURS = 'git -C E:/s2 checkout --ours -- Source/S2/Foo.cpp'
+
+test('A15: in its frozen phase the holder\'s worker runs the sync\'s own git commands; reset --hard still stops it', opts(), async ($, on) => {
+  const w = world(on)
+  repo(w, 'E:/s2')
+  w.put('E:/s2/.git/MERGE_HEAD', '1a2b3c\n')
+  w.put(SYNC, JSON.stringify(newSync(T(14, 30), MINE, 'me', NOW - 30 * MIN)))
+  await $.session.start(START)
+  const asWorker = (command: string) => $.tool.call({ tool: 'Bash', command, agentId: 'w-sync' } as never)
+  for (const c of [OURS, 'git -C E:/s2 add -- Source/S2/Foo.cpp', 'git -C E:/s2 commit --no-edit', 'git -C E:/s2 merge --abort', 'git -C E:/s2 revert -m 1 1a2b3c4d --no-edit'])
+    expect([c, refused(await asWorker(c))]).toEqual([c, undefined])
+  expect(refused(await asWorker('git -C E:/s2 reset --hard'))).toContain('a worker does not ask Hai')
+  expect(refused(await asWorker('git -C E:/s2 stash'))).toContain('a worker does not ask Hai')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 reset --hard' }))).toContain("needs Hai's approval") // the holder's own loop too
+})
+
+test('A15: before T (and for any session not holding the sync) the same commands keep A5\'s rules and the freeze', opts(), async ($, on) => {
+  const w = world(on)
+  repo(w, 'E:/s2')
+  w.put(SYNC, JSON.stringify(newSync(T(15, 0), MINE, 'me', NOW))) // 14:40: the cutoff, not the freeze
+  await $.session.start(START)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: OURS, agentId: 'w-sync' } as never))).toContain('a worker does not ask Hai')
+  w.put(SYNC, JSON.stringify(newSync(T(14, 30), B, PLANNED_BY_B, NOW - 30 * MIN))) // frozen, held by another session
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
+  expect(refused(await $.tool.call({ tool: 'Bash', command: OURS, agentId: 'w-sync' } as never))).toContain('Sync main freeze')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit --no-edit' }))).toContain('Sync main freeze')
+})
+
 // ---------- A13: the freeze is a lease ----------
 test('A13: at its hard end the freeze expires for every session: marked expired, a notice, one 🟥 for Hai', opts(), async ($, on) => {
   const w = world(on)

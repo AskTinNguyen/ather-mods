@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import {
   CUTOFF_MS, DEFAULT_GATES, NOTICES, atNext, blankSession, classify, cleanupPlan, decide, endedSync, freeLine, gatesOf, gitWrites, heldLine, historyBlobs,
-  isIntentFile, isLockPath, livenessOf, mayAskYield, newSync, noticeIds, parseLockLine, parseMergeTree, parseProbe, presetTimes, queueOf, safeNote, syncPhase,
+  isIntentFile, isLockPath, isSyncCommandOnly, livenessOf, mayAskYield, newSync, noticeIds, parseLockLine, parseMergeTree, parseProbe, presetTimes, queueOf, safeNote, syncPhase,
   writesLock, type GrantInput, type LockLine, type Probe, type SessionFile, type Want,
 } from '../hooks/coord.ts'
 import { parseEditorLock } from '../hooks/editor.ts'
@@ -181,6 +181,40 @@ test('freeze: the git writes in a command, with the folder each runs in; reads p
   expect(gitWrites('bash -c "git -C E:/wt/x merge origin/main"')).toEqual([{ verb: 'merge', dir: 'E:/wt/x' }])
   expect(gitWrites('git --no-pager cherry-pick abc')).toEqual([{ verb: 'cherry-pick', dir: '' }])
   for (const v of ['rm', 'mv', 'checkout', 'switch', 'restore', 'reset', 'stash', 'rebase', 'pull', 'revert', 'clean', 'am']) expect(gitWrites(`git ${v} x`).map(w => w.verb)).toEqual([v])
+})
+
+test('A15: exactly the sync\'s own git commands count as sync work; everything else keeps A5\'s rules', () => {
+  const ok = [
+    'git -C E:/s2 merge origin/main',
+    'GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C E:/s2 merge --no-edit origin/main',
+    'git -C E:/s2 merge --abort',
+    'git -C E:/s2 checkout --ours -- Source/S2/Foo.cpp Content/S2/X.uasset',
+    'git -C E:/s2 checkout --theirs -- Config/DefaultGame.ini',
+    'git -C E:/s2 revert -m 1 1a2b3c4d --no-edit',
+    'git -C E:/s2 add -- Source/S2/Foo.cpp',
+    'git -C E:/s2 commit --no-edit',
+    'git -C E:/s2 commit -m "Merge origin/main (sync 16:00)"',
+    'git -C E:/s2 status && git -C E:/s2 diff --name-only --diff-filter=U && git -C E:/s2 checkout --ours -- a.cpp && git -C E:/s2 add -- a.cpp',
+  ]
+  for (const c of ok) expect([c, isSyncCommandOnly(c)]).toEqual([c, true])
+  const no = [
+    'git -C E:/s2 reset --hard',
+    'git -C E:/s2 reset --hard ORIG_HEAD',
+    'git -C E:/s2 stash',
+    'git -C E:/s2 clean -fd',
+    'git -C E:/s2 checkout -- Source/S2/Foo.cpp',
+    'git -C E:/s2 checkout --ours -- .',
+    'git -C E:/s2 add .',
+    'git -C E:/s2 add -A',
+    'git -C E:/s2 commit -a -m x',
+    'git -C E:/s2 commit --amend --no-edit',
+    'git -C E:/s2 merge other-branch',
+    'git -C E:/s2 rebase origin/main',
+    'git -C E:/s2 restore --source=origin/main -- a.cpp',
+    'rm -rf E:/s2/Saved/x && git -C E:/s2 add -- a.cpp',
+    'bash -c "git -C E:/s2 checkout --ours -- a.cpp"',
+  ]
+  for (const c of no) expect([c, isSyncCommandOnly(c)]).toEqual([c, false])
 })
 
 test('the lock is written by the editor tool: direct writes are spotted, reads are not', () => {

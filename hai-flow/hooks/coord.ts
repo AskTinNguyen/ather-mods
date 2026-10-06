@@ -612,6 +612,53 @@ export const gitWrites = (command: string, depth = 0): { verb: string; dir: stri
   return out
 }
 
+/** A15: whether a command is only the sync's own git work, which the holder and its worker may run during their
+ * frozen phase without A5's asks: `git merge [--no-edit|--no-ff|--no-commit] origin/main`, `git merge --abort`,
+ * `git checkout --ours|--theirs -- <paths>`, `git revert -m 1 <sha> [--no-edit]`, `git add -- <paths>`,
+ * `git commit [-m <msg>|--no-edit|-F <file>|-q]`, beside git reads; every segment must be git (env assignments such
+ * as GIT_TERMINAL_PROMPT=0 allowed), no nested shell, no `.` or `-A` path, no `--amend` or `-a`. */
+export const isSyncCommandOnly = (command: string): boolean => {
+  const segs = segments(stripHeredocs(command ?? ''))
+  if (segs.length === 0) return false
+  return segs.every(seg => {
+    const [verb, args] = commandVerb(tokenize(seg))
+    if (verb !== 'git') return false
+    if (gitWrites(seg).length === 0) return true // a read
+    let i = 0
+    while (i < args.length) {
+      const a = args[i] ?? ''
+      if (a === '-C' || a === '-c') i += 2
+      else if (a === '--no-pager' || /^--(git-dir|work-tree)=/.test(a)) i += 1
+      else break
+    }
+    const sub = (args[i] ?? '').toLowerCase()
+    const rest = args.slice(i + 1)
+    const isPath = (p: string) => p !== '' && p !== '.' && p !== '*' && !p.startsWith('-')
+    const pathsAfterDashes = (xs: string[]) => xs.length >= 2 && xs[0] === '--' && xs.slice(1).every(isPath)
+    if (sub === 'merge') {
+      if (rest.length === 1 && rest[0] === '--abort') return true
+      const opts = rest.filter(r => r.startsWith('-'))
+      const targets = rest.filter(r => !r.startsWith('-'))
+      return targets.length === 1 && targets[0] === 'origin/main' && opts.every(o => ['--no-edit', '--no-ff', '--no-commit'].includes(o))
+    }
+    if (sub === 'checkout') return (rest[0] === '--ours' || rest[0] === '--theirs') && pathsAfterDashes(rest.slice(1))
+    if (sub === 'revert') {
+      const r = rest.filter(x => x !== '--no-edit')
+      return r.length === 3 && r[0] === '-m' && r[1] === '1' && /^([0-9a-f]{7,40}|HEAD)$/i.test(r[2] ?? '')
+    }
+    if (sub === 'add') return pathsAfterDashes(rest)
+    if (sub === 'commit') {
+      for (let n = 0; n < rest.length; n += 1) {
+        const r = rest[n] ?? ''
+        if (r === '-m' || r === '--message' || r === '-F' || r === '--file') n += 1
+        else if (!(r === '--no-edit' || r === '-q' || r === '--quiet' || /^--(message|file)=/.test(r))) return false
+      }
+      return true
+    }
+    return false
+  })
+}
+
 /** An Edit/Write path that is the Editor owner lock. */
 export const isLockPath = (path: string): boolean => /(^|\/)Saved\/EDITOR_OWNER\.txt$/i.test((path ?? '').replace(/\\/g, '/'))
 

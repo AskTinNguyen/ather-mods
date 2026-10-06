@@ -7,7 +7,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  syncPhase, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
@@ -957,6 +957,13 @@ async function syncCommand($: Engine, opts: Opts, rest: string): Promise<string>
   return syncAction($, opts, 'status', {})
 }
 
+/** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */
+async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
+  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  if (!s || s.holder.id8 !== (await $.session.id()).slice(0, 8).toLowerCase()) return false
+  return phaseOf(s, await $.clock.now()) === 'frozen'
+}
+
 /** The first git write of a command that lands in the shared S2 checkout (its main working tree), if any. */
 async function sharedGitWrite($: Engine, opts: Opts, a5: A5, writes: { verb: string; dir: string }[]): Promise<{ verb: string; dir: string } | null> {
   const cwd = await $.session.cwd()
@@ -1447,6 +1454,8 @@ export const register: Register = (on, options) => {
       if (isOn) {
         const cwd = await $.session.cwd()
         d = a5.preShell(what, cwd, places, 0, await sharedTest($, a5, what, cwd))
+        // A15: the sync's own git work passes A5's asks for its holder and worker, during their frozen phase only.
+        if (d?.kind === 'ask' && isSyncCommandOnly(what) && (await isFrozenHolder($, opts))) d = null
       }
     } else if (EDIT_TOOLS.has(tool)) {
       parts = await editParts($, tool, input)
