@@ -135,3 +135,8 @@ The review (Fable, read-only) of a5 0.11.1–0.11.2 found a HIGH regression: sin
 > Đây
 
 With two screenshots (dark theme) from an S2 session after the restart: the A5R pane (A5R on; rule chips with grey dots, no squares; the Sessions rows' "· 2m" / "· 1m" cut at the right edge; the Memory row's whole sub-line amber at 41.6 GB free with "10 git processes") and Ather's pane (★ A5R seal, compact line `free · 41.6 GB · −98 · ★ A5R ›`).
+
+## L-19 (2026-10-07 18:40) | class: intent | -> rev 17
+
+> 1. Cant see any red entrance, only the icon of A5R appear in Ather Automata pane
+> 2. Yes, I see the red scarf

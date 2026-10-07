@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 16
+- Rev: 17
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -97,6 +97,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A48 (rev 15): The feature is named A5R (Agent 5 Rules) everywhere, so it is never read as acceptance row A5: the mod folder `a5r/` and plugin name `a5r` (its tools `mcp__a5r__editor` / `mcp__a5r__sync`, agent type `a5r:sync`), the command `/a5r` (`/a5r on|off|accept|sync|gate|reset`), every notice and refusal prefix `A5R ·` (the A5-off one too, which still says `hai-flow ·`), the prompt sections ("A5R is ON", "Nghiệm thu A5R"), the Ather pane's compact line (`A5R ›`), the A5R pane (id and title), the coordination folder `Saved/A5R/` under the S2 checkout, the rules files, README and tests; the debug tag becomes `A5RTMP` (the old `A5TMP` stays forbidden too, so a leftover is still caught). No "a5", "A5 " or "hai-flow" is left as the feature's name in the mod's code or user-facing text (the five rules' own texts and history in the log/changelog stay as written). Proof: gate: a test that scans every user-facing string the mod builds and the source for the old names (with the explicit exceptions listed); validate, tsc, tests.
 - A49 (rev 16): A Sessions row never cuts its status at the right edge: the row fits inside its parent's padding (Hai's screenshots, 2026-10-07: "· 2m" shows as "· 2" cut at the pane edge, in both the dark-theme screenshots), the title is the only part that shortens. Proof: gate: pane test (the status column's text is whole at the A5R pane's narrowest width and at the reviewed width); review on the pane.
 - A50 (rev 16): The Memory row colours only what is wrong: the amber note goes on the part that warns ("below launch gate", "N git processes", a low disk), and the gate details ("gate 31 GB with PIE, 28 without · PIE needs 5 GB") stay quiet when free memory is above the gate (Hai's screenshot: the whole line amber at 41.6 GB free because of "10 git processes"). Proof: gate: pane test over above-gate with and without the git warning, and below gate.
+- A51 (rev 17): The entrance (A37) can be told apart from "not drawn" on the real pane: the `motion` option gains `slow`, a review aid that plays the same entrance and event dithers (A38) ten times slower (the entrance over about 3 s, each curtain held in the tree until it has finished plus a margin), so Hai can see whether the curtains render at all. Hai's review on 2026-10-07 saw no entrance at 0.3 s. `on` stays within the ≤ 300 ms budget; the curtains' time in the tree (ENTRANCE_MS) covers a late-loading frame (at least 2 s), since a cleared curtain is transparent. The option's description says `slow` is for checking the animations. Proof: gate: unit tests (slow timings ×10, lifetime covers the last cell, `on` still ≤ 300 ms); review by Hai with `slow`: curtains seen or not, which decides the next step.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -110,6 +111,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 17 (2026-10-07): L-19: A51 a slow motion setting to tell a too-fast entrance from one the desktop does not draw.
 - rev 16 (2026-10-07): L-18: A49 session rows' status not cut at the edge, A50 amber only on the warning part of the Memory row.
 - rev 15 (2026-10-07): L-17: renamed A5R (Agent 5 Rules): intent folder `docs/intent/hai-flow-a5/` → `docs/intent/a5r/`, branch `intent/hai-flow-a5` → `intent/a5r`, mod `a5/` → `a5r/`; A48. Rows keep their numbers.
 - rev 14 (2026-10-07): L-16, adversary review (Fable) of 0.11.1–0.11.2: A45 no PR-command bypass (regression from rev 12), A46 quote-aware refs and every gh flag form, A47 multi-intent slug, fork PRs, frame-style insertion, A43/A44 evidence.
