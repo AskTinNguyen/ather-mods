@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
-import { acceptText, closesIntent, failed, isPrCommand, isPrTool, namedPaths, openedPrs, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
+import { acceptText, closesIntent, failed, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -1123,6 +1123,25 @@ const PASS_ONCE = 'Let this PR through'
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
 type PrRefs = { repo?: string; head?: string; base?: string }
 
+/** A41: where a PR's head is: the worktree (of the repository at `start`) that has it checked out, scored at its HEAD;
+ * else `origin/<head>` (or a local branch of that name) scored from `start` without a checkout; with no head named,
+ * `start`'s own current branch (gh opens that one). A folder with no repository, or a head found nowhere, is a problem:
+ * the score is "not scored" with it. */
+async function prTarget($: Engine, start: string, refs: PrRefs): Promise<{ root: string; head: string | null; branch: string; problem: string | null }> {
+  const run = (args: string[]) => $.process.run(['git', '-C', start, ...args], { timeoutMs: 15_000 }).catch(() => null)
+  const top = await run(['rev-parse', '--show-toplevel'])
+  if (!top || top.exitCode !== 0) return { root: start, head: null, branch: '', problem: `no git repository at ${start}` }
+  const headName = refs.head?.trim().replace(/^[^:]+:/, '') || ''
+  if (!headName) return { root: start, head: 'HEAD', branch: '', problem: null }
+  let wt = ''
+  for (const line of ((await run(['worktree', 'list', '--porcelain']))?.stdout ?? '').split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) wt = line.slice(9).trim()
+    else if (line.trim() === `branch refs/heads/${headName}` && wt) return { root: wt, head: 'HEAD', branch: headName, problem: null }
+  }
+  for (const ref of [`origin/${headName}`, headName]) if ((await run(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]))?.exitCode === 0) return { root: start, head: ref, branch: headName, problem: null }
+  return { root: start, head: null, branch: headName, problem: `head ${headName} is neither checked out in a worktree of this repository nor at origin/${headName}: fetch it, or open the PR from its own checkout` }
+}
+
 /** Binaries left out of the added-lines diff (they carry no lines to score and make it big). */
 const BINARY_EXCLUDES = ['uasset', 'umap', 'ubulk', 'uexp', 'png', 'jpg', 'jpeg', 'tga', 'exr', 'hdr', 'psd', 'fbx', 'abc', 'wav', 'ogg', 'mp4', 'dll', 'exe', 'pdb', 'lib', 'zip', '7z'].map(x => `:(exclude,icase)*.${x}`)
 
@@ -1155,7 +1174,11 @@ async function prBody($: Engine, command: string, dir: string): Promise<string> 
 /** A18: everything the score reads, cheap and path-scoped: the branch diff against main (names and added lines),
  * the intent's four files, Ather's proof, the other sessions' touch files and active intents, this session's
  * untracked files in the shared checkout, worktrees on the same branch, running background agents. */
-async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHint: string | null, body: string, agentId: string | undefined, refs: PrRefs = {}): Promise<AcceptInput> {
+async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHint: string | null, body: string, agentId: string | undefined, refs: PrRefs = {}): Promise<AcceptInput> {
+  // A41: the branch the PR is opened from: the worktree that has its head checked out, else origin/<head>; never the
+  // session's own checkout unless that is where the head is.
+  const target = await prTarget($, start, refs)
+  const root = target.root
   const git = async (args: string[]): Promise<string> => {
     const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
     return r && r.exitCode === 0 ? r.stdout : ''
@@ -1166,18 +1189,19 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
   // A22: a PR tool names its base, head and repository; each is checked here, and one that cannot be read is no pass.
   const baseName = refs.base?.trim() || 'main'
   const base = (await hasRef(`origin/${baseName}`)) ? `origin/${baseName}` : (await hasRef(baseName)) ? baseName : null
-  const headName = refs.head?.trim().replace(/^[^:/]+:/, '') || ''
-  const head = !headName ? 'HEAD' : (await hasRef(headName)) ? headName : (await hasRef(`origin/${headName}`)) ? `origin/${headName}` : null
-  const branch = headName || (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  const head = target.head
+  const branch = target.branch || (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
   const origin = refs.repo ? (await git(['remote', 'get-url', 'origin'])).trim() : ''
   const isOtherRepo = Boolean(refs.repo) && !origin.replace(/\.git$/i, '').toLowerCase().endsWith(`/${(refs.repo ?? '').toLowerCase()}`) && !origin.replace(/\.git$/i, '').toLowerCase().endsWith(`:${(refs.repo ?? '').toLowerCase()}`)
-  const refProblem = isOtherRepo
-    ? `the PR is for ${refs.repo}, not this session's repository (${origin || 'no origin remote'})`
-    : !base
-      ? `no origin/${baseName} or ${baseName} to diff against`
-      : !head
-        ? `head ${headName} is not in this repository (fetch it, or open the PR from its own checkout)`
-        : null
+  const refProblem = target.problem
+    ? target.problem
+    : isOtherRepo
+      ? `the PR is for ${refs.repo}, not the repository at ${root} (${origin || 'no origin remote'})`
+      : !base
+        ? `no origin/${baseName} or ${baseName} to diff against`
+        : !head
+          ? `head ${target.branch} is not in this repository (fetch it, or open the PR from its own checkout)`
+          : null
   // An unread diff never passes: a failure, a timeout or a cut output is named, and nothing is scored.
   const whole = async (args: string[]): Promise<{ out: string; why: string | null }> => {
     const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
@@ -1194,7 +1218,10 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
   const added = addedLines(text.out)
   const status = await atherStatus($)
   const fromDiff = [...new Set(files.map(f => /^docs\/intent\/([^/]+)\//.exec(f)?.[1]).filter((s): s is string => Boolean(s)))]
-  const slug = slugHint ?? status?.tracked?.slug ?? (fromDiff.length === 1 ? (fromDiff[0] ?? null) : null)
+  // A41: the intent is the one this branch's diff touches (docs/intent/<slug>/); the session's tracked intent only when the
+  // diff touches none (or is among those it touches).
+  const tracked = status?.tracked?.slug ?? null
+  const slug = slugHint ?? (fromDiff.length > 0 ? (tracked && fromDiff.includes(tracked) ? tracked : (fromDiff[0] ?? null)) : tracked)
   const read = (rel: string) => $.fs.read(`${root}/${rel}`).catch(() => '')
   const [prompt, progress, findings] = slug ? await Promise.all([read(`docs/intent/${slug}/prompt.md`), read(`docs/intent/${slug}/progress.md`), read(`docs/intent/${slug}/findings.md`)]) : ['', '', '']
   const otherIntents: { slug: string; names: string[] }[] = []
@@ -1216,7 +1243,10 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
     if (l.startsWith('worktree ')) wt = l.slice(9).trim()
     else if (l === `branch refs/heads/${branch}` && wt && !sameRoot(wt, root)) strayWorktrees.push(wt)
   }
-  const runningAgents = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running' && a.type !== SYNC_AGENT && a.id !== agentId).map(a => `${a.type}: ${a.description}`)
+  // A41: this session's background agents count against a PR from its own worktree; a PR from another worktree is not
+  // held up by work elsewhere.
+  const sessionRoot = (await locate($, a5, `${await $.session.cwd()}/_`)).root
+  const runningAgents = sessionRoot && sameRoot(sessionRoot, root) ? (await $.agent.list().catch(() => [])).filter(a => a.status === 'running' && a.type !== SYNC_AGENT && a.id !== agentId).map(a => `${a.type}: ${a.description}`) : []
   return {
     slug,
     branch,
@@ -1249,10 +1279,13 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
   const cwd = await $.session.cwd()
   if (SHELL_TOOLS.has(tool) && isPrCommand(str(input.command))) {
     const command = str(input.command)
-    const cdDir = /^\s*cd\s+("[^"]+"|'[^']+'|\S+)\s*&&/.exec(command)?.[1]?.replace(/^["']|["']$/g, '')
-    const dir = norm(cdDir ?? cwd, cwd)
-    root = (await locate($, a5, `${dir}/_`)).root
+    // A41: the PR's own repository, head, base and folder, from the command; a folder with no repository is scored as
+    // unread (never passed, never another branch's score).
+    const cmdRefs = prCommandRefs(command, tokenize)
+    const dir = norm(cmdRefs.dir ?? cwd, cwd)
+    root = (await locate($, a5, `${dir}/_`)).root ?? dir
     body = await prBody($, command, dir)
+    refs = { repo: cmdRefs.repo, head: cmdRefs.head, base: cmdRefs.base }
   } else if (isPrTool(tool)) {
     // A22: a PR opened through an MCP tool (GitHub's create_pull_request and the like): the session's repository,
     // checked against the repository, head and base the input names; never let through unread.
