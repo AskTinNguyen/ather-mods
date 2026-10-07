@@ -1,7 +1,7 @@
 {
   "name": "a5",
-  "version": "0.7.0",
-  "description": "Hai's S2 flow beside Ather Automata, which it never changes. A5 off: Ather exactly as it ships, plus the 🟥/⏯️ title marks. /a5 on: the five rules (D9), checked at the action only for what cannot be undone and at nghiệm thu A5 (at Ather's Ship prompt, before a PR through gh or an MCP tool, at an intent close, and after the fact for a PR it never scored; a card in Ather's pane), and coordination for the sessions sharing one S2 checkout: Editor holder (queue, leases, the S2 standard's lock lines), RAM (safe cleanup, launch and PIE gates), Sync main holder (cutoff, a freeze that is a lease with a hard end, a sync worker that runs the merge, the MERGE_HEAD guard, conflicts to their owners), with a5 notices that never enter intent files, three tiles and a session overview in Ather's pane.",
+  "version": "0.8.0",
+  "description": "Hai's S2 flow beside Ather Automata, which it never changes. A5 off: Ather exactly as it ships, plus the 🟥/⏯️ title marks. /a5 on: the five rules (D9), checked at the action only for what cannot be undone and at nghiệm thu A5 (at Ather's Ship prompt, before a PR through gh or an MCP tool, at an intent close, and after the fact for a PR it never scored; a card in Ather's pane), and coordination for the sessions sharing one S2 checkout: Editor holder (queue, leases, the S2 standard's lock lines), RAM (safe cleanup, launch and PIE gates), Sync main holder (cutoff, a freeze that is a lease with a hard end, a sync worker that runs the merge, the MERGE_HEAD guard, conflicts to their owners), with a5 notices that never enter intent files, three tool rows (one action each), a named sessions list and the five rules as the last block in Ather's pane.",
   "author": { "name": "HaiHuynh" },
   "userConfig": {
     "a5WhenPresent": {
@@ -27,7 +27,7 @@
     "launchGatePieGb": {
       "type": "number",
       "title": "A5 Editor launch gate, slot with PIE (GB free)",
-      "description": "Free RAM, after the safe cleanup, a slot with PIE needs before the Editor is launched (an Editor already open is reused). The A5 panel's Memory tile can move it for every session; Reset there returns to this value. The PIE gate itself (start at 5 GB, abort under 3 GB) is fixed.",
+      "description": "Free RAM, after the safe cleanup, a slot with PIE needs before the Editor is launched (an Editor already open is reused). /a5 gate <with PIE> <without PIE> moves it for every session; /a5 gate reset returns to this value. The PIE gate itself (start at 5 GB, abort under 3 GB) is fixed.",
       "default": 31
     },
     "launchGateGb": {
@@ -45,7 +45,7 @@
     "syncBuildMinutes": {
       "type": "number",
       "title": "A5 Sync main: freeze length for a merge with a build (minutes)",
-      "description": "The same hard end for a sync planned with a build (/a5 sync HH:MM build, or Build: yes on the panel).",
+      "description": "The same hard end for a sync planned with a build (/a5 sync HH:MM build, or Build: on in the panel's Sync ⋯ dialog).",
       "default": 90
     },
     "pendingFile": {
