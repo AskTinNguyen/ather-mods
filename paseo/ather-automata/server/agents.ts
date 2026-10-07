@@ -1,5 +1,7 @@
-import type { PaseoApi } from "@getpaseo/client";
-import type { PluginHookAgent } from "@getpaseo/plugin/server";
+import type { PluginHookAgent, PluginHookContext } from "@getpaseo/plugin/server";
+
+// Only modules Paseo supplies may be imported, types included: a GitHub install has no node_modules.
+type PaseoApi = PluginHookContext["paseo"];
 import { NOTE_KIND, NOTE_VERSION, type Note } from "../shared/timeline";
 
 // The agents Ather has seen, and the Paseo API to reach them. Every hook and RPC

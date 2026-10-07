@@ -1,5 +1,6 @@
 import type { PluginBeforeRequests } from "@getpaseo/plugin/server";
-import type { JsonValue } from "@getpaseo/protocol/agent-types";
+// A JSON value, as Paseo's protocol defines it (only host modules may be imported, types included).
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 import { existsSync } from "node:fs";
 import { choosePack } from "./ather/packs/index.mjs";
 import { BRIDGE_SCRIPT, MCP_NAME } from "./bridge";

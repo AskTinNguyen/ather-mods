@@ -5,7 +5,7 @@
 // - a 30-second tick keeps heartbeats and ends windows on time.
 
 import type { PluginHookContext, PluginLifecycleEvents } from "@getpaseo/plugin/server";
-import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
+type AgentTimelineItem = PluginLifecycleEvents["agent.turn_ended"]["timeline"][number];
 import { isHolding } from "./ather/away.mjs";
 import { briefIssues, explainGuard, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from "./ather/guards.mjs";
 import { andList, clockText } from "./ather/model.mjs";

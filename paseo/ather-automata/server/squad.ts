@@ -2,7 +2,9 @@
 // from Claude Code's own transcripts (server/transcripts.ts), and the Paseo agents it started. Each
 // gets the original kind, prop and trail from server/ather/squad.mjs; the app draws avatar, ring and motion.
 
-import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
+import type { PluginLifecycleEvents } from "@getpaseo/plugin/server";
+
+type AgentTimelineItem = PluginLifecycleEvents["agent.turn_ended"]["timeline"][number];
 import { KINDS, PROP_WORDS, classifyWorker, propForTool, workerState } from "./ather/squad.mjs";
 import { knownAgents, paseo } from "./agents";
 import { ART } from "./art.generated";
