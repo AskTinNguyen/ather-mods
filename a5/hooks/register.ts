@@ -1123,6 +1123,16 @@ const PASS_ONCE = 'Let this PR through'
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
 type PrRefs = { repo?: string; head?: string; base?: string }
 
+/** A42: the a5 kit's rules/ and tests/ folders as paths in the repository at `root`: where the kit sits inside it, else
+ * under the kit's own folder name (the same mod checked out in another worktree of that repository). */
+const kitDirsIn = (root: string): string[] => {
+  const kit = String(places.KIT ?? '').replace(/\\/g, '/').replace(/\/$/, '')
+  if (!kit) return []
+  const r = root.replace(/\\/g, '/').replace(/\/$/, '')
+  const rel = kit.toLowerCase().startsWith(`${r.toLowerCase()}/`) ? kit.slice(r.length + 1) : (kit.split('/').pop() ?? '')
+  return rel ? [`${rel}/rules/`, `${rel}/tests/`] : []
+}
+
 /** A41: where a PR's head is: the worktree (of the repository at `start`) that has it checked out, scored at its HEAD;
  * else `origin/<head>` (or a local branch of that name) scored from `start` without a checkout; with no head named,
  * `start`'s own current branch (gh opens that one). A folder with no repository, or a head found nowhere, is a problem:
@@ -1265,6 +1275,7 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHi
     strayWorktrees,
     runningAgents,
     cfg: a5.cfg,
+    kitDirs: kitDirsIn(root),
   }
 }
 

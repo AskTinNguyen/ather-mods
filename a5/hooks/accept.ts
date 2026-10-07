@@ -47,6 +47,9 @@ export type AcceptInput = {
   /** This session's background agents still running (the sync worker excepted). */
   runningAgents: string[]
   cfg: Pick<A5Config, 'forbidden_added' | 'todo_regex' | 'secret_regex' | 'ask_paths' | 'ask_root_files'>
+  /** A42: the a5 kit's own folders in this repository (its rules/ and tests/, where the markers are defined and
+   * exercised); rule 4's debug-leftover scan skips them. */
+  kitDirs?: string[]
 }
 
 const lower = (s: string) => s.replace(/\\/g, '/').toLowerCase()
@@ -144,7 +147,8 @@ export const score = (x: AcceptInput): RuleScore[] => {
   for (const [f, lines] of x.added) {
     const secret = lines.find(l => x.cfg.secret_regex.some(p => rx(p).test(l)))
     if (secret) r4.push({ file: f, what: 'a secret in the diff', todo: 'remove it and rotate it; keep secrets out of the repo' })
-    if (isDoc(f)) continue
+    // A42: Markdown, docs and the a5 kit's own rules/ and tests/ define or quote the markers; only other files can leave one.
+    if (isDoc(f) || (x.kitDirs ?? []).some(d => lower(f).startsWith(lower(d)))) continue
     const debug = lines.find(l => x.cfg.forbidden_added.some(p => rx(p).test(l)))
     if (debug) r4.push({ file: f, what: `a debug leftover (${debug.trim().slice(0, 40)})`, todo: 'remove it' })
   }
