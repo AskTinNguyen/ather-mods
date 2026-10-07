@@ -110,9 +110,11 @@ type El = {
   Text: (p: Record<string, unknown>) => unknown
   Button: (p: Record<string, unknown>) => unknown
 }
+/** A50: one part of a tool's sub-line; only a part that warns is drawn in amber, the rest stays quiet. */
+export type SubPart = { text: string; warn?: boolean }
 /** One tool row: `lines` joined into the desktop status line, `short` (else `lines`) on the terminal's; `action` the
  * one button on the right (A25: at most one per tool, the rest behind it). */
-export type Tile = { key: string; label: string; icon?: unknown; dot?: string; value: string; meter?: unknown; lines: { text: string; color?: string }[]; short?: { text: string; color?: string }[]; action?: unknown; note?: { text: string; warn: boolean }; sub?: string; subWarn?: boolean }
+export type Tile = { key: string; label: string; icon?: unknown; dot?: string; value: string; meter?: unknown; lines: { text: string; color?: string }[]; short?: { text: string; color?: string }[]; action?: unknown; note?: { text: string; warn: boolean }; sub?: string | SubPart[]; subWarn?: boolean }
 
 /** What the Editor holder tile says about this session: its place in the queue, or that it holds the lease. */
 export type EditorData = { lock?: LockView; me8: string; nowMin: number; place: string; waiting: number }
@@ -208,8 +210,19 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean, look?: { ink
   const quiet = look?.quiet ?? ATHER.quiet
   const value = (t: Tile) =>
     Text({ bold: true, wrap: 'wrap', ...(look ? { color: look.ink } : {}), children: [...(t.dot && !t.icon ? [Text({ color: t.dot, children: '● ' })] : []), t.value, ...(t.note ? [Text({ bold: false, color: t.note.warn ? STATUS.warn : quiet, children: ` · ${t.note.text}` })] : [])] })
+  // A50: a sub-line given as parts colours only the parts that warn; the line itself stays quiet.
+  const subLine = (parts: SubPart[]) => {
+    const kids: unknown[] = []
+    parts.forEach((p, n) => {
+      if (n > 0) kids.push(' · ')
+      kids.push(p.warn ? Text({ color: STATUS.warn, children: p.text }) : p.text)
+    })
+    return Text({ color: quiet, wrap: 'wrap', children: kids })
+  }
   const row = (t: Tile) => {
-    const parts = t.sub !== undefined ? [{ text: t.sub, color: t.subWarn ? STATUS.warn : undefined }] : isDesktop ? t.lines : (t.short ?? t.lines)
+    const subParts = Array.isArray(t.sub) ? t.sub : undefined
+    const parts = subParts ? subParts.map(p => ({ text: p.text, color: p.warn ? STATUS.warn : undefined })) : typeof t.sub === 'string' ? [{ text: t.sub, color: t.subWarn ? STATUS.warn : undefined }] : isDesktop ? t.lines : (t.short ?? t.lines)
+    const status = subParts ? subLine(subParts) : Text({ color: statusColor(parts, quiet), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })
     return Box({
       key: `hai-tile-${t.key}`,
       flexDirection: 'row',
@@ -227,7 +240,7 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean, look?: { ink
           flexGrow: 1,
           flexShrink: 1,
           minWidth: 0,
-          children: [value(t), ...(parts.length ? [Box({ key: `hai-tile-${t.key}-status`, width: '100%', children: [Text({ color: statusColor(parts, quiet), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })] })] : [])],
+          children: [value(t), ...(parts.length ? [Box({ key: `hai-tile-${t.key}-status`, width: '100%', children: [status] })] : [])],
         }),
         ...(t.action ? [Box({ key: `hai-tile-${t.key}-action`, flexShrink: 0, flexGrow: 0, children: [t.action] })] : []),
       ],

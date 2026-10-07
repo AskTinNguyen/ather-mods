@@ -46,3 +46,31 @@ for (const surface of ['terminal', 'desktop'] as const)
       // Nothing wider than the pane.
       for (const k of keys(tree)) expect([k, minWidth(find(tree, k)) <= columns]).toEqual([k, true])
     })
+
+// A50 (Hai's screenshot, 2026-10-07: the whole Memory sub-line amber at 41.6 GB free because of "10 git processes"):
+// the Memory row colours only what is wrong. Amber goes on the parts that warn ("below launch gate", "N git
+// processes", a low disk); the gate details ("gate 31 GB with PIE, 28 without · PIE needs 5 GB") stay quiet.
+const GIT10 = Array.from({ length: 10 }, (_, n) => ({ name: 'git', pid: 100 + n, gb: 0.3, parentAlive: true }))
+const GATES = 'gate 31 GB with PIE, 28 without · PIE needs 5 GB'
+const CASES = [
+  { name: 'above the gate, no warning', ram: '41.6', procs: [], disk: 40, value: '41.6 GB free', sub: GATES, amber: [] },
+  { name: 'above the gate with 10 git processes', ram: '41.6', procs: GIT10, disk: 40, value: '41.6 GB free', sub: `${GATES} · 10 git processes`, amber: ['10 git processes'] },
+  { name: 'below the gate, 10 git processes and a low disk', ram: '4.2', procs: GIT10, disk: 12, value: '4.2 GB free · below launch gate', sub: `${GATES} · E: 12 GB free · 10 git processes`, amber: [' · below launch gate', 'E: 12 GB free', '10 git processes'] },
+]
+for (const surface of ['terminal', 'desktop'] as const)
+  for (const c of CASES)
+    test(`A50 (${surface}): Memory ${c.name}: amber only on what warns, the gate details quiet`, opts(), async ($, on) => {
+      const w = world(on, { ram: c.ram, procs: c.procs, disk: c.disk })
+      await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+      const P = { ...A5RPANE, surface, props: { ...A5RPANE.props, bodyColumns: 100 } } as never
+      await $.ui.render(P)
+      await w.clock.advance(50)
+      const tree = still(await $.ui.render(P)) as Tree
+      const main = find(tree, 'hai-tile-memory-main')
+      expect(text(main)).toBe(`${c.value}${c.sub}`)
+      // The amber texts are exactly the warning parts, each its own Text; the sub-line's own Text stays quiet.
+      expect(all(main).filter(n => n.type === 'Text' && n.props?.color === V2.amber).map(text)).toEqual(c.amber)
+      const line = find(tree, 'hai-tile-memory-status')?.children?.[0] as Tree
+      expect([line.type, line.props?.color === V2.amber]).toEqual(['Text', false])
+      for (const quiet of ['gate 31 GB with PIE, 28 without', 'PIE needs 5 GB']) expect(line.children).toContain(quiet)
+    })

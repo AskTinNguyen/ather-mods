@@ -2012,15 +2012,15 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     tiles[0] = { ...tiles[0], action: editorAction($, opts, el, isDesktop) } as (typeof tiles)[number]
     // A35 (mockup v2): Memory reads "<n> GB free · below launch gate" (the note in amber only when below); its gate
     // details are the sub-line; no meter. Sync main's sub-line: when main was fetched, the planned or last sync.
+    // A50: only the parts that warn (a low disk, N git processes) are amber; the gate details stay quiet.
     const free = vitals?.freeGb
-    const extra = [...(probe?.diskGb !== null && probe?.diskGb !== undefined && probe.diskGb < DISK_MIN_GB ? [`${s2Root(opts).slice(0, 2)} ${probe.diskGb} GB free`] : []), ...(vitals && vitals.git >= 10 ? [`${vitals.git} git processes`] : [])]
+    const extra = [...(probe?.diskGb !== null && probe?.diskGb !== undefined && probe.diskGb < DISK_MIN_GB ? [`${s2Root(opts).slice(0, 2)} ${probe.diskGb} GB free`] : []), ...(vitals && vitals.git >= 10 ? [`${vitals.git} git processes`] : [])].map(text => ({ text, warn: true }))
     tiles[1] = {
       ...tiles[1],
       value: free === undefined ? 'probe failed' : `${free} GB free`,
       meter: undefined,
       ...(free !== undefined && free < gates.nopieGb ? { note: { text: 'below launch gate', warn: true } } : free !== undefined && free < gates.pieGb ? { note: { text: 'launch fits without PIE', warn: false } } : {}),
-      sub: [`gate ${gates.pieGb} GB with PIE, ${gates.nopieGb} without`, `PIE needs ${PIE_START_GB} GB`, ...extra].join(' · '),
-      subWarn: extra.length > 0,
+      sub: [{ text: `gate ${gates.pieGb} GB with PIE, ${gates.nopieGb} without` }, { text: `PIE needs ${PIE_START_GB} GB` }, ...extra],
     } as (typeof tiles)[number]
     if (sync) tiles[2] = { ...tiles[2], sub: [`fetched ${ago(sync.fetchedMinAgo)}`, plan.line, plan.conflicts, ...sync.flags].filter(Boolean).join(' · '), subWarn: Boolean(plan.conflicts) || sync.flags.length > 0 } as (typeof tiles)[number]
     const names = { editor: 'editor', memory: 'memory', main: 'branch' } as const
