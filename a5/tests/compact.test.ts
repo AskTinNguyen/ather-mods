@@ -2,22 +2,24 @@ import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync } from '../hooks/coord.ts'
 import { A5PANE, LOCK, NOW, PANE, PROJ, all, atherTree, find, keys, minWidth, opts, text, world, type Tree } from './world.ts'
 
-// A28: Ather's pane carries exactly one A5 block, right under its strip: Editor · Memory · Sync main in one row of
-// quiet words (only what needs attention in the warning colour) and "A5 ›". A29: the A5 pane opens from that button,
+// A28: Ather's pane carries exactly one A5 block, right under its strip, and (A30) it is icons and values only: the
+// Editor holder and until, free GB, main's −N, then "★ A5 ›" on the seal red; only the holder's name may shorten. A29: the A5 pane opens from that button,
 // from `/a5` with no words, and `/a5 status` keeps its text reply.
 const HF = 'E:/s2/Saved/A5'
 const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
 const WARN = '#E0A93B'
+const SEAL_RED = '#A3201B' // A33 moves it to the approved #B3261E
 const LONG_LANE = '1006-walkerext-s9-retarget'
 const held = (lane: string, id8: string, end: number) => `${heldLine({ lane, sessionName: lane, id8, since: T(14, 30), pid: null, end, mode: 'interactive', pausable: false, nextSafe: 'after save', note: 'capture' })}\n`
 const peer = (id8: string, lane: string) => JSON.stringify({ ...blankSession(`${id8}-1111-4000-8000-000000000000`, lane, '', NOW), holding: { since: T(14, 30), end: T(15, 10), extended: 0 } })
 const partText = (tree: unknown, k: string) => text(find(tree, `hai-a5-line-${k}`))
 const partColor = (tree: unknown, k: string) => all(find(tree, `hai-a5-line-${k}`)).filter(n => n.type === 'Text').map(n => n.props?.color).at(-1)
+const valueOf = (tree: unknown, k: string) => find(tree, `hai-a5-line-${k}-value`)
 const A5_BLOCKS = ['hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5-rules']
 
 for (const surface of ['terminal', 'desktop'] as const)
   for (const columns of surface === 'terminal' ? [44, 100] : [40, 100])
-    test(`A28 (${surface}, ${columns} columns): one A5 line under Ather's strip, quiet, never wider than the pane; nothing else of A5`, opts(), async ($, on) => {
+    test(`A28/A30 (${surface}, ${columns} columns): one A5 line under Ather's strip, icons and values, quiet, never wider than the pane; only the holder name shortens`, opts(), async ($, on) => {
       const w = world(on, { ram: '28.5' })
       w.put(LOCK, held(LONG_LANE, 'bbbbbbbb', T(15, 10)))
       w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', LONG_LANE))
@@ -33,11 +35,17 @@ for (const surface of ['terminal', 'desktop'] as const)
       expect([line.props?.flexDirection, line.props?.flexWrap, line.props?.width]).toEqual(['row', undefined, '100%'])
       expect(all(line).filter(n => n.type === 'Box' && n.props?.flexDirection === 'column')).toEqual([]) // one line / one row
       expect(minWidth(line) <= columns).toBe(true)
-      expect([partText(tree, 'editor'), partText(tree, 'memory'), partText(tree, 'main')].map(t => t.replace(/^[▣▥⎇]/, ''))).toEqual([`Editor ${LONG_LANE} →15:10`, '28.5 GB', '12 behind'])
+      // A30: no words, values only; numbers and times sit in boxes that never shrink, only the holder name truncates.
+      expect([partText(tree, 'editor'), partText(tree, 'memory'), partText(tree, 'main')].map(t => t.replace(/^[▣▥⎇]/, ''))).toEqual([`${LONG_LANE} →15:10`, '28.5 GB', '−12'])
+      for (const k of ['editor', 'memory', 'main']) expect([k, valueOf(tree, k)?.props?.flexShrink, all(valueOf(tree, k)).some(n => String(n.props?.wrap ?? '').startsWith('truncate'))]).toEqual([k, 0, false])
+      expect(find(tree, 'hai-a5-line-editor-name')?.children?.[0]).toMatchObject({ type: 'Text', props: { wrap: 'truncate-end' } })
+      expect([find(tree, 'hai-a5-line-memory-name'), find(tree, 'hai-a5-line-main-name')]).toEqual([undefined, undefined])
+      expect(partText(tree, 'editor') + partText(tree, 'memory') + partText(tree, 'main')).not.toMatch(/Editor|Memory|Sync|behind|GB free/)
       expect([partColor(tree, 'editor'), partColor(tree, 'memory'), partColor(tree, 'main')]).toEqual(['#8E918A', '#8E918A', '#8E918A'])
       expect(find(tree, 'hai-a5-line-open')?.props?.flexShrink).toBe(0)
       expect(text(find(tree, 'hai-a5-line-open'))).toBe('')
-      expect(String(find(tree, 'hai-a5-open')?.props?.label)).toBe('A5 ›')
+      expect(String(find(tree, 'hai-a5-open')?.props?.label)).toBe('★ A5 ›')
+      expect(find(tree, 'hai-a5-line-open')?.props?.backgroundColor).toBe(SEAL_RED)
       if (surface === 'desktop') expect((find(tree, 'hai-a5-line-editor')?.children ?? [])[0]).toMatchObject({ type: 'Svg' })
     })
 
@@ -49,7 +57,7 @@ test('A28: only what waits on Hai or this session turns the warning colour: RAM 
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const tree = await $.ui.render(PANE as never)
-  expect([partText(tree, 'memory'), partText(tree, 'main')]).toEqual(['▥4.2 GB ⚠', '⎇Sync 14:30 frozen'])
+  expect([partText(tree, 'memory'), partText(tree, 'main')]).toEqual(['▥4.2 GB ⚠', '⎇14:30 ❄'])
   expect([partColor(tree, 'editor'), partColor(tree, 'memory'), partColor(tree, 'main')]).toEqual([WARN, WARN, WARN])
 })
 

@@ -302,19 +302,21 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknow
   })
 }
 
-/** A28: one part of the compact A5 line in Ather's pane: its icon, its few words, and whether it needs attention. */
-export type LinePart = { key: string; icon: unknown; text: string; isWarn: boolean }
+/** A28/A30: one part of the compact A5 line in Ather's pane: its icon, an optional name that may shorten (the Editor
+ * holder's), its value that never shortens (a time, free GB, a count), and whether it needs attention. */
+export type LinePart = { key: string; icon: unknown; name?: string; value: string; isWarn: boolean }
 
-/** A28: the one A5 block in Ather's pane: Editor · Memory · Sync main in a single row of quiet words (only a part that
- * needs attention in the warning colour), then the "A5 ›" button that opens the A5 pane. One line on the terminal,
- * one row on the desktop: the parts shrink and end in "…" before anything leaves the row; the button never shrinks. */
-export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean): unknown => {
+/** A28/A30: the one A5 block in Ather's pane: icons and values only (no words), in a single row: the Editor holder
+ * and until, free RAM, main's behind count (or the planned sync's time), then "★ A5 ›" on the seal red. Only the
+ * holder's name shortens and ends in "…"; numbers and times keep their width; the button never shrinks. */
+export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean, buttonBg?: string): unknown => {
   const { Box, Text } = el
+  const ink = (p: LinePart) => (p.isWarn ? STATUS.warn : ATHER.quiet)
   return Box({
     key: 'hai-a5-line',
     flexDirection: 'row',
     width: '100%',
-    columnGap: 2,
+    columnGap: 1,
     alignItems: 'center',
     marginTop: isDesktop ? 1 : 0,
     children: [
@@ -322,15 +324,18 @@ export const compactLine = (el: El, parts: LinePart[], button: unknown, isDeskto
         Box({
           key: `hai-a5-line-${p.key}`,
           flexDirection: 'row',
-          columnGap: 1,
-          flexShrink: 1,
+          flexShrink: p.name ? 1 : 0,
           minWidth: 0,
           alignItems: 'center',
-          children: [p.icon, Text({ color: p.isWarn ? STATUS.warn : ATHER.quiet, wrap: 'truncate-end', children: p.text })],
+          children: [
+            p.icon,
+            ...(p.name ? [Box({ key: `hai-a5-line-${p.key}-name`, flexShrink: 1, minWidth: 0, children: [Text({ color: ink(p), wrap: 'truncate-end', children: p.name })] })] : []),
+            Box({ key: `hai-a5-line-${p.key}-value`, flexShrink: 0, children: [Text({ color: ink(p), children: p.value })] }),
+          ],
         }),
       ),
       Box({ key: 'hai-a5-line-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
-      Box({ key: 'hai-a5-line-open', flexShrink: 0, children: [button] }),
+      Box({ key: 'hai-a5-line-open', flexShrink: 0, ...(buttonBg ? { backgroundColor: buttonBg } : {}), children: [button] }),
     ],
   })
 }

@@ -1776,21 +1776,24 @@ function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolea
   const isOver = t.dot === STATUS.bad
   const justGranted = isMine && me?.holding !== null && me?.holding !== undefined && now - me.holding.since < 5 * 60_000
   const l = lockView
-  const editorText = !l || l.isMissing ? 'Editor lock missing' : l.isFree ? 'Editor Free' : `Editor ${isMine ? 'this session' : (l.who ?? 'held')}${l.until ? ` →${l.until}` : ''}`
+  // A30: values only: the holder (★ for this session) and until; "free"; "?" for a missing lock.
+  const editorName = !l || l.isMissing || l.isFree ? undefined : isMine ? '★' : (l.who ?? 'held')
+  const editorValue = !l || l.isMissing ? '?' : l.isFree ? 'free' : l.until ? ` →${l.until}` : ''
   const editorWarn = isOver || justGranted || !l || l.isMissing
   const free = vitals?.freeGb
   const under = free !== undefined && (free < gates.nopieGb || ramBand(free) !== 'ok')
   const memText = free === undefined ? '? GB' : `${free} GB${under ? ' ⚠' : ''}`
   const phase = phaseOf(syncFile, now)
   const open = syncFile && isOpenPhase(phase) ? syncFile : null
-  const syncText = open ? `Sync ${clockOf(open.at)} ${phase}` : sync ? (sync.behind === null ? 'main ?' : sync.behind > 0 ? `${sync.behind} behind` : 'up to date') : 'main …'
+  // A30: main's behind count as −N (0 when level), or the planned sync's time (❄ in its freeze, ⚠ at its cutoff).
+  const syncText = open ? `${clockOf(open.at)}${phase === 'frozen' ? ' ❄' : phase === 'cutoff' ? ' ⚠' : ''}` : sync ? (sync.behind === null ? '?' : sync.behind > 0 ? `−${sync.behind}` : '0') : '…'
   const syncWarn = Boolean(open && (phase === 'cutoff' || phase === 'frozen'))
   const tint = (warn: boolean, base: string) => (warn ? STATUS.warn : base)
   const still: Motion = { kind: 'still' }
   return [
-    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK, now, false, opts), isDesktop), text: editorText, isWarn: editorWarn },
-    { key: 'memory', icon: icon(el, 'memory', tint(under, STATUS.ok), still, isDesktop), text: memText, isWarn: under },
-    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK), opts.motion === 'off' ? still : motionFor('main', syncText, INK, now, phase === 'frozen', opts), isDesktop), text: syncText, isWarn: syncWarn },
+    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK, now, false, opts), isDesktop), ...(editorName ? { name: editorName } : {}), value: editorValue, isWarn: editorWarn },
+    { key: 'memory', icon: icon(el, 'memory', tint(under, STATUS.ok), still, isDesktop), value: memText, isWarn: under },
+    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK), opts.motion === 'off' ? still : motionFor('main', syncText, INK, now, phase === 'frozen', opts), isDesktop), value: syncText, isWarn: syncWarn },
   ]
 }
 
@@ -1808,8 +1811,9 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   const stripAt = kids.findIndex(k => keyOf(k) === 'strip')
   if (isS2 && stripAt >= 0) {
     scheduleReads($, opts, now)
-    const button = el.Button({ key: 'hai-a5-open', label: 'A5 ›', plain: isDesktop ? undefined : true, onPress: () => void openA5Pane($) })
-    kids.splice(stripAt + 1, 0, compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop))
+    // A30: "★ A5 ›" on the seal red (a Button has no colour of its own: the red is its box's background).
+    const button = el.Button({ key: 'hai-a5-open', label: '★ A5 ›', plain: true, onPress: () => void openA5Pane($) })
+    kids.splice(stripAt + 1, 0, compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, A5_LOOK.sealBg))
   }
   // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.
   const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
