@@ -1,4 +1,4 @@
-# A5R 0.12.0
+# A5R 0.12.1
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
 
