@@ -1,4 +1,4 @@
-// Nghiệm thu A5 (A18, D9, D10): the five rules scored over a whole branch right before a PR is opened and when an
+// A5 acceptance (nghiệm thu, A18, D9, D10): the five rules scored over a whole branch right before a PR is opened and when an
 // intent closes, never per turn. Pure: no `$`; register.ts gathers the inputs cheaply and path-scoped (the branch
 // diff against origin/main, the added lines, the intent's four files, Ather's proof, the touch files) and acts on the score.
 import { basename, globMatch, proofGap, proofProblems, rx, section, type A5Config, type Proof } from './a5.ts'
@@ -6,11 +6,11 @@ import { basename, globMatch, proofGap, proofProblems, rx, section, type A5Confi
 export type RuleId = 1 | 2 | 3 | 4 | 5
 /** D9: the five rules as the workflow names them. */
 export const RULES5: readonly [RuleId, string][] = [
-  [1, 'Yêu Project, yêu đồng bào'],
-  [2, 'Học tập tốt, lao động tốt'],
-  [3, 'Đoàn kết tốt, kỷ luật tốt'],
-  [4, 'Giữ gìn vệ sinh thật tốt'],
-  [5, 'Khiêm tốn, thật thà, dũng cảm'],
+  [1, 'Love the project, love your fellow sessions'],
+  [2, 'Study well, work well'],
+  [3, 'Unity and discipline'],
+  [4, 'Keep it clean'],
+  [5, 'Modest, honest, brave'],
 ]
 export const ruleName = (r: RuleId): string => RULES5.find(([id]) => id === r)?.[1] ?? `rule ${r}`
 
@@ -96,7 +96,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
   const mk = (rule: RuleId, issues: Issue[], passLine: string, na = false): RuleScore => ({ rule, state: na ? 'na' : issues.length ? 'fail' : 'pass', line: na ? passLine : issues.length ? issues.map(i => `${i.file ? `${i.file}: ` : ''}${i.what}`).join('; ') : passLine, issues })
   const own = x.slug ? namedPaths(x.prompt, x.slug) : []
 
-  // 1 Yêu Project, yêu đồng bào: nothing another live session or another intent holds; nothing straight onto main.
+  // 1 Love the project, love your fellow sessions: nothing another live session or another intent holds; nothing straight onto main.
   const r1: Issue[] = []
   if (/^(main|master)$/i.test(x.branch)) r1.push({ what: `the branch is ${x.branch}`, todo: 'open the PR from a branch of its own, cut from main' })
   for (const f of x.files) {
@@ -107,7 +107,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
   }
   scores.push(mk(1, r1, 'no other session\'s or intent\'s paths; not on main'))
 
-  // 2 Học tập tốt, lao động tốt: every row met with evidence, Ather's proof complete, new TODOs recorded.
+  // 2 Study well, work well: every row met with evidence, Ather's proof complete, new TODOs recorded.
   const r2: Issue[] = []
   if (x.slug) {
     const rows = progressRows(x.progress)
@@ -127,7 +127,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
   }
   scores.push(mk(2, r2, x.slug ? 'every acceptance row met with evidence; proof complete' : 'no intent: acceptance rows not scored', !x.slug))
 
-  // 3 Đoàn kết tốt, kỷ luật tốt: the diff stays within the intent's paths, or says why.
+  // 3 Unity and discipline: the diff stays within the intent's paths, or says why.
   const r3: Issue[] = []
   if (x.slug) {
     for (const f of x.files) if (!inScope(f, own) && !mentions(x.progress, f) && !mentions(x.findings, f)) r3.push({ file: f, what: 'outside the paths the intent names', todo: 'explain it in progress.md or findings.md, or move it to its own PR' })
@@ -139,7 +139,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
   }
   scores.push(mk(3, r3, x.slug ? 'within the intent\'s paths' : 'no shared config changed without a word'))
 
-  // 4 Giữ gìn vệ sinh thật tốt: no leftovers, secrets, stray files, worktrees or background work.
+  // 4 Keep it clean: no leftovers, secrets, stray files, worktrees or background work.
   const r4: Issue[] = []
   for (const [f, lines] of x.added) {
     const secret = lines.find(l => x.cfg.secret_regex.some(p => rx(p).test(l)))
@@ -153,7 +153,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
   for (const a of x.runningAgents) r4.push({ what: `background agent still running: ${a}`, todo: 'let it finish or stop it before the PR' })
   scores.push(mk(4, r4, 'no leftovers, secrets, stray files or background work'))
 
-  // 5 Khiêm tốn, thật thà, dũng cảm: claims match the evidence; acceptance never rewritten without a rev.
+  // 5 Modest, honest, brave: claims match the evidence; acceptance never rewritten without a rev.
   const r5: Issue[] = []
   if (x.proof && x.body) {
     const names = ['Verified', 'Validation', 'Test plan', 'Testing']
@@ -173,14 +173,14 @@ export const score = (x: AcceptInput): RuleScore[] => {
 /** An unread branch diff is no pass: the card line and the gate text. */
 export const unreadLine = (why: string): string => `could not read the whole branch diff (${why})`
 export const unreadText = (why: string): string =>
-  `A5 · Nghiệm thu — ${unreadLine(why)} → open the PR from a slice branch cut from origin/main, or Hai lets this one through`
+  `A5 · Acceptance — ${unreadLine(why)} → open the PR from a slice branch cut from origin/main, or Hai lets this one through`
 
 export const failed = (scores: readonly RuleScore[]): RuleScore[] => scores.filter(s => s.state === 'fail')
 
 /** The refusal (or the ask) that lists what to fix: rule, file, what to do. */
 export const acceptText = (scores: readonly RuleScore[], what: string): string => {
   const bad = failed(scores)
-  return `A5 · Nghiệm thu — ${bad.length} of 5 rules not met before ${what} → fix these, or ask Hai to let this one through:\n${bad
+  return `A5 · Acceptance — ${bad.length} of 5 rules not met before ${what} → fix these, or ask Hai to let this one through:\n${bad
     .flatMap(s => s.issues.map(i => `- ${s.rule} ${ruleName(s.rule)}: ${i.file ? `${i.file}: ` : ''}${i.what} → ${i.todo}`))
     .join('\n')}`
 }
@@ -214,10 +214,10 @@ export const shipText = (scores: readonly RuleScore[], slug: string, branch: str
   const mark = (s: RuleScore) => (s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–')
   const bad = failed(scores)
   const head = diffProblem
-    ? `A5 · Nghiệm thu at Ship (intent ${slug}, branch ${branch || '?'}): not scored, ${unreadLine(diffProblem)} → land it from a slice branch cut from origin/main; the PR call is scored again.`
+    ? `A5 · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): not scored, ${unreadLine(diffProblem)} → land it from a slice branch cut from origin/main; the PR call is scored again.`
     : bad.length
-      ? `A5 · Nghiệm thu at Ship (intent ${slug}, branch ${branch || '?'}): ${bad.length} of 5 rules not met → fix these before you open the PR (the PR call is scored again and refused while any is open):`
-      : `A5 · Nghiệm thu at Ship (intent ${slug}, branch ${branch || '?'}): 5 of 5 met; the PR call is scored again.`
+      ? `A5 · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): ${bad.length} of 5 rules not met → fix these before you open the PR (the PR call is scored again and refused while any is open):`
+      : `A5 · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): 5 of 5 met; the PR call is scored again.`
   const rows = diffProblem ? [] : scores.map(s => `${mark(s)} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)
   const todo = diffProblem ? [] : bad.flatMap(s => s.issues.map(i => `- ${s.rule}: ${i.file ? `${i.file}: ` : ''}${i.what} → ${i.todo}`))
   return [head, ...rows, ...(todo.length ? ['To fix:', ...todo] : [])].join('\n')

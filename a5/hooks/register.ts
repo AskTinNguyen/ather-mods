@@ -42,15 +42,15 @@ type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
-const ALLOW_ONCE = 'Cho chạy lần này'
-const ALLOW_SESSION = 'Cho cả session này'
+const ALLOW_ONCE = 'Allow once'
+const ALLOW_SESSION = 'Allow for this session'
 const ATHER_PANE = 'ather'
 const A5_PANE = 'a5'
 const PANE_INK = { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet } // A33: the A5 pane's text: ivory, and its quiet grey // A29: the A5 pane's id ($.ui.open) and its render requestId
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
-const RULE_NAMES: Record<string, string> = { D1: 'Yêu Project', D2: 'Học tập tốt', D3: 'Kỷ luật tốt', D4: 'Giữ gìn vệ sinh', D5: 'Thật thà' } // D9, short for refusals
+const RULE_NAMES: Record<string, string> = { D1: 'Love the project', D2: 'Study and work well', D3: 'Unity and discipline', D4: 'Keep it clean', D5: 'Modest, honest, brave' } // D9, short for refusals
 const INK = '#ECE9E2'
 
 let engine: A5 | null = null
@@ -65,7 +65,7 @@ let markedFrom: string | null = null // the title before this session marked it,
 let a5On = false
 let a5FlipAt = 0
 let hits: RuleHits = noHits()
-let hitsDay = '' // A32: the day the counts are for ('Chạm hôm nay')
+let hitsDay = '' // A32: the day the counts are for ('Hits today')
 let openRule: number | null = null // A32: the rule whose card is open in the A5 pane
 let isS2 = false
 let lockView: LockView | undefined
@@ -113,7 +113,7 @@ let decision: GrantDecision | null = null
 const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run this holder has started
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
-let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string } | null = null // A18/A19: the last nghiệm thu
+let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string } | null = null // A18/A19: the last acceptance score
 let acceptDirty = false // A19: a file changed since the last score
 let isScoring = false
 let shipCheckedAt = 0
@@ -279,8 +279,8 @@ async function askHai($: Engine, opts: Opts, d: Decision, what: string): Promise
   const gate = gateOf(d.rule)
   if (opts.a5WhenPresent === 'deny') return blocked(gate, d.why, 'needs Hai\'s approval: ask Hai to run it')
   try {
-    const answer = await $.ui.ask(`${gate}: ${d.why} Cho chạy \`${what.slice(0, 160)}\`?`, {
-      options: [ALLOW_ONCE, ALLOW_SESSION, 'Không'],
+    const answer = await $.ui.ask(`${gate}: ${d.why} Run \`${what.slice(0, 160)}\`?`, {
+      options: [ALLOW_ONCE, ALLOW_SESSION, 'No'],
       header: `A5 ${d.rule}`,
     })
     if (answer === ALLOW_ONCE) return 'allow'
@@ -288,7 +288,7 @@ async function askHai($: Engine, opts: Opts, d: Decision, what: string): Promise
       approved.add(d.key)
       return 'allow'
     }
-    return blocked(gate, d.why, `Hai said no${answer && answer !== 'Không' ? ` ("${answer}")` : ''}: do not retry it; ask Hai or do other work`)
+    return blocked(gate, d.why, `Hai said no${answer && answer !== 'No' ? ` ("${answer}")` : ''}: do not retry it; ask Hai or do other work`)
   } catch {
     return blocked(gate, d.why, 'nobody could approve it now (an Ather away window, a closed dialog, or no one to ask): do not retry it; do other work, and if an away window is open set that ledger entry\'s Choice to "parked for the director"')
   }
@@ -1100,8 +1100,8 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
   push({ id: noticeIds.withoutMod(s, targets.map(t => t.id8)), text: NOTICES.holderWithoutMod(s, rows), isActionable: false })
 }
 
-// ---------- Nghiệm thu A5 (A18): the five rules over the branch, before a PR and when an intent closes ----------
-const PASS_ONCE = 'Cho PR này qua'
+// ---------- A5 acceptance (nghiệm thu, A18): the five rules over the branch, before a PR and when an intent closes ----------
+const PASS_ONCE = 'Let this PR through'
 
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
 type PrRefs = { repo?: string; head?: string; base?: string }
@@ -1267,9 +1267,9 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
   if (opts.a5WhenPresent === 'deny') return text
   try {
     const question = x.diffProblem
-      ? `Nghiệm thu A5: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Cho qua lần này?`
-      : `Nghiệm thu A5: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Cho qua lần này?`
-    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'Không'], header: 'Nghiệm thu A5' })
+      ? `A5 acceptance: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Let it through this once?`
+      : `A5 acceptance: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Let it through this once?`
+    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'No'], header: 'A5 acceptance' })
     return answer === PASS_ONCE ? null : `${text}\n(Hai said no)`
   } catch {
     return `${text}\n(nobody could approve it now)`
@@ -1332,7 +1332,7 @@ async function postHoc($: Engine, opts: Opts, a5: A5, root: string, status: Athe
         await raiseRed(
           $,
           opts,
-          `PR #${n} (intent ${slug}) was opened without nghiệm thu A5 and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
+          `PR #${n} (intent ${slug}) was opened without A5 acceptance and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
           'hold the merge until the branch scores 5 of 5',
         )
   return true
@@ -1343,12 +1343,12 @@ async function acceptCommand($: Engine, opts: Opts): Promise<string> {
   const a5 = await load($)
   const cwd = await $.session.cwd()
   const root = (await locate($, a5, `${cwd}/_`)).root
-  if (!root) return 'Nghiệm thu A5: this session is not in a git repository.'
+  if (!root) return 'A5 acceptance: this session is not in a git repository.'
   const x = await gatherAccept($, opts, a5, root, null, '', undefined)
   const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: null, scores, what: 'on demand' }
   $.ui.invalidate('ui.render')
-  return [`Nghiệm thu A5 (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
+  return [`A5 acceptance (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
 }
 
 /** A21: the score of the intent Ather hands over at Ship, as the text added to that prompt. */
@@ -1866,19 +1866,19 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   // A19: the Nghiệm thu A5 card, once there is a score or the tracked intent is in Ship.
   if (lastAccept) {
     const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
-    kids.push(acceptCard(el, 'Nghiệm thu A5', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
+    kids.push(acceptCard(el, 'A5 acceptance', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
   }
-  // A27: the five rules, last; A20: rule 1's word switches tổ quốc / project in a Client of its own.
+  // A27: the five rules, last; A20: rule 1's word switches country / project in a Client of its own.
   const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
   const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet, dim: true } }) : undefined
-  // A32: the five seals; a press opens or closes that rule's card. "Chạm hôm nay": the counts start over each day.
+  // A32: the five seals; a press opens or closes that rule's card. "Hits today": the counts start over each day.
   const today = ymd(now)
   if (hitsDay !== today) {
     if (hitsDay) hits = noHits()
     hitsDay = today
   }
   await load($) // the rules text the cards read
-  const motto = rule1 ?? el.Text({ color: ATHER.quiet, children: 'Yêu Project' })
+  const motto = rule1 ?? el.Text({ color: ATHER.quiet, children: 'Love the project' })
   const pressSeal = (n: number) => () => {
     openRule = openRule === n ? null : n
     $.ui.invalidate('ui.render')
@@ -1894,7 +1894,7 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     await $.command.register({
       name: 'a5',
-      description: 'A5: /a5 (opens the A5 pane) · /a5 on · /a5 off · /a5 status · /a5 accept (nghiệm thu A5 now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at nghiệm thu before a PR; Editor holder, RAM and Sync main)',
+      description: 'A5: /a5 (opens the A5 pane) · /a5 on · /a5 off · /a5 status · /a5 accept (A5 acceptance now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5 acceptance before a PR; Editor holder, RAM and Sync main)',
       argumentHint: 'on | off | status | accept | gate <pie> <nopie> | sync HH:MM',
     })
     await readA5($)
@@ -1938,8 +1938,8 @@ export const register: Register = (on, options) => {
       $.ui.invalidate('ui.render')
       return {
         text: a5On
-          ? '★ A5 on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; nghiệm thu A5 before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
-          : 'A5 off: the rules, nghiệm thu A5, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
+          ? '★ A5 on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; A5 acceptance before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
+          : 'A5 off: the rules, A5 acceptance, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
       }
     }
     await readA5($)

@@ -98,7 +98,7 @@ test('a worker (subagent) is never put to Hai: refused at once with stop-and-rep
   const asked: Rec[] = []
   on('tool.call', { tool: 'AskUserQuestion' }, async (_$: unknown, e: Rec) => {
     asked.push(e)
-    return { result: {}, text: 'Cho chạy lần này' }
+    return { result: {}, text: 'Allow once' }
   })
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard', agentId: 'worker-1' } as never))).toContain('a worker does not ask Hai')
   expect(asked.length).toBe(0)
@@ -202,7 +202,7 @@ test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand; th
   expect(brandColor(tree)).toBe(GOLD)
   expect(find(tree, 'strip')?.props?.borderColor).toBe('#3a3c36')
   const a5 = await $.ui.render(A5PANE as never)
-  expect(text(find(a5, 'hai-a5-rules-head')).startsWith('Năm điều')).toBe(true) // A32: seals under a heading; rule 1's word is its own element (A20)
+  expect(text(find(a5, 'hai-a5-rules-head')).startsWith('The five rules')).toBe(true) // A32: seals under a heading; rule 1's word is its own element (A20)
   expect(find(a5, 'hai-rule1')?.type).toBe('Client')
   expect(find(a5, 'hai-a5-seal-5')).toBeDefined()
 })

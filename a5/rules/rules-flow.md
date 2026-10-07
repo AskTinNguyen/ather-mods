@@ -9,4 +9,4 @@ Only when a decision is truly Hai's (cost, taste, hard to reverse). Where it goe
   and keep working on the default where it is reversible.
 The hook marks the title 🟥 and sets unread for every 🟥; it adds the 🟥 to PENDING.md once, unless the line names an open director call of the tracked intent (or one was added this turn), which Ather already lists. A finished step that waits on Hai starts a line with `⏯️`. A subagent never raises 🟥: it stops and reports, or adds the finding.
 
-A5 (the five rules with nghiệm thu A5 before a PR, and the Editor holder, RAM and Sync main coordination) applies only while Hai has it on (`/a5 on`); then its section follows.
+A5 (the five rules with A5 acceptance before a PR, and the Editor holder, RAM and Sync main coordination) applies only while Hai has it on (`/a5 on`); then its section follows.

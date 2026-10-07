@@ -45,11 +45,11 @@ export const spaced = (text: string, width: number): string => {
 }
 
 export const RULES = [
-  ['D1', 'Yêu Project, yêu đồng bào'],
-  ['D2', 'Học tập tốt, lao động tốt'],
-  ['D3', 'Đoàn kết tốt, kỷ luật tốt'],
-  ['D4', 'Giữ gìn vệ sinh thật tốt'],
-  ['D5', 'Khiêm tốn, thật thà, dũng cảm'],
+  ['D1', 'Love the project, love your fellow sessions'],
+  ['D2', 'Study well, work well'],
+  ['D3', 'Unity and discipline'],
+  ['D4', 'Keep it clean'],
+  ['D5', 'Modest, honest, brave'],
 ] as const
 export type RuleHits = Record<(typeof RULES)[number][0], number>
 export const noHits = (): RuleHits => ({ D1: 0, D2: 0, D3: 0, D4: 0, D5: 0 })
@@ -97,8 +97,8 @@ type ElB = El & { Button: (p: Record<string, unknown>) => unknown }
 
 /** A32: the five rules as five round seals in one row (red fill, gold rim, gold numeral; the numeral is a Button so a
  * press opens its card), then the open rule's card under them (gold border): "<n> · <name>" in gold, the purpose,
- * "Lúc hành động: …", "Nghiệm thu: …", "Chạm hôm nay: <hits>" in red. Pressing the open seal again closes it. Rule 1's
- * tổ quốc / project word (A20) rides the heading. No paragraph of rule text. */
+ * "At the action: …", "At acceptance: …", "Hits today: <hits>" in red. Pressing the open seal again closes it. Rule 1's
+ * country / project word (A20) rides the heading. No paragraph of rule text. */
 export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, open: number | null, press: (n: number) => () => void, motto: unknown, look: { seal: string; rim: string; numeral: string; ink: string; quiet: string; hit: string }): unknown => {
   const card = cards.find(c => c.n === open)
   return el.Box({
@@ -107,7 +107,7 @@ export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
     width: '100%',
     marginTop: 1,
     children: [
-      el.Box({ key: 'hai-a5-rules-head', flexDirection: 'row', columnGap: 1, children: [el.Text({ color: look.numeral, bold: true, children: 'Năm điều' }), el.Text({ color: look.quiet, children: '·' }), motto] }),
+      el.Box({ key: 'hai-a5-rules-head', flexDirection: 'row', columnGap: 1, children: [el.Text({ color: look.numeral, bold: true, children: 'The five rules' }), el.Text({ color: look.quiet, children: '·' }), motto] }),
       el.Box({
         key: 'hai-a5-seals',
         flexDirection: 'row',
@@ -136,9 +136,9 @@ export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
               children: [
                 el.Text({ color: look.numeral, bold: true, wrap: 'wrap', children: `${card.n} · ${card.name}` }),
                 ...(card.purpose ? [el.Text({ color: look.ink, wrap: 'wrap', children: card.purpose })] : []),
-                el.Text({ color: look.quiet, wrap: 'wrap', children: `Lúc hành động: ${card.action || '— (không chặn ở lời gọi)'}` }),
-                el.Text({ color: look.quiet, wrap: 'wrap', children: `Nghiệm thu: ${card.accept || '—'}` }),
-                el.Text({ color: look.hit, wrap: 'wrap', children: `Chạm hôm nay: ${hits[card.id]}` }),
+                el.Text({ color: look.quiet, wrap: 'wrap', children: `At the action: ${card.action || '— (nothing is blocked at the call)'}` }),
+                el.Text({ color: look.quiet, wrap: 'wrap', children: `At acceptance: ${card.accept || '—'}` }),
+                el.Text({ color: look.hit, wrap: 'wrap', children: `Hits today: ${hits[card.id]}` }),
               ],
             }),
           ]
@@ -147,10 +147,10 @@ export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
   })
 }
 
-/** A33: "A5 · NĂM ĐIỀU" letter-spaced (a space between letters, two between words). */
+/** A33: "A5 · THE FIVE RULES" letter-spaced (a space between letters, two between words). */
 export const bandTitle = (s: string): string => s.toUpperCase().split(' ').map(w => [...w].join(' ')).join('  ')
 
-/** A33: the A5 pane's title band: seal red, full width, a gold ★, "A5 · NĂM ĐIỀU" in pale gold, "đang bật" (or "đang tắt") on the right. */
+/** A33: the A5 pane's title band: seal red, full width, a gold ★, the title in pale gold, "on" (or "off") on the right. */
 export const a5Band = (el: El, isOn = true): unknown =>
   el.Box({
     key: 'hai-a5-band',
@@ -161,8 +161,8 @@ export const a5Band = (el: El, isOn = true): unknown =>
     backgroundColor: A5_LOOK.sealBg,
     children: [
       el.Box({ key: 'hai-a5-band-star', flexShrink: 0, children: [el.Text({ color: A5_LOOK.gold, bold: true, children: '★' })] }),
-      el.Box({ key: 'hai-a5-band-title', flexShrink: 1, minWidth: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, wrap: 'truncate-end', children: bandTitle('A5 · Năm điều') })] }),
+      el.Box({ key: 'hai-a5-band-title', flexShrink: 1, minWidth: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, wrap: 'truncate-end', children: bandTitle('A5') })] }),
       el.Box({ key: 'hai-a5-band-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
-      el.Box({ key: 'hai-a5-band-on', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: isOn ? 'đang bật' : 'đang tắt' })] }),
+      el.Box({ key: 'hai-a5-band-on', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: isOn ? 'on' : 'off' })] }),
     ],
   })

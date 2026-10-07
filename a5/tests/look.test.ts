@@ -10,7 +10,7 @@ const FREE = 'FREE since=14:00 2026-10-06 by=walker note=Editor closed backgroun
 const colorsIn = (t: unknown): string[] => all(t).map(n => String(n.props?.color ?? n.props?.backgroundColor ?? n.props?.borderColor ?? ''))
 
 test('A33: unit: the band title is letter-spaced in capitals', () => {
-  expect(bandTitle('A5 · Năm điều')).toBe('A 5  ·  N Ă M  Đ I Ề U')
+  expect(bandTitle('A5 · Five rules')).toBe('A 5  ·  F I V E  R U L E S')
 })
 
 for (const surface of ['terminal', 'desktop'] as const)
@@ -23,8 +23,8 @@ for (const surface of ['terminal', 'desktop'] as const)
     const band = find(tree, 'hai-a5-band') as Tree
     expect([band.props?.backgroundColor, band.props?.width]).toEqual([LOOK.red, '100%'])
     expect(find(tree, 'hai-a5-band-star')?.children?.[0]).toMatchObject({ props: { color: LOOK.gold }, children: ['★'] })
-    expect(find(tree, 'hai-a5-band-title')?.children?.[0]).toMatchObject({ props: { color: LOOK.pale }, children: ['A 5  ·  N Ă M  Đ I Ề U'] })
-    expect(text(find(tree, 'hai-a5-band-on'))).toBe('đang bật')
+    expect(find(tree, 'hai-a5-band-title')?.children?.[0]).toMatchObject({ props: { color: LOOK.pale }, children: ['A 5'] })
+    expect(text(find(tree, 'hai-a5-band-on'))).toBe('on')
     // Gold icons for the tools in a fine state (a free Editor, RAM above the gates).
     for (const k of ['editor', 'memory']) {
       const iconEl = (find(tree, `hai-tile-${k}-main`)?.children ?? [])[0] as Tree
@@ -52,8 +52,8 @@ test("A33: Ather's pane stays restrained: no band, the line in quiet grey, the s
   expect(colorsIn(line).filter(c => [LOOK.ivory, LOOK.meter, LOOK.track].includes(c))).toEqual([])
 })
 
-test('A33: with A5 off the band says "đang tắt"', opts(), async ($, on) => {
+test('A33: with A5 off the band says "off"', opts(), async ($, on) => {
   world(on, { a5: false })
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  expect(text(find(await $.ui.render(A5PANE as never), 'hai-a5-band-on'))).toBe('đang tắt')
+  expect(text(find(await $.ui.render(A5PANE as never), 'hai-a5-band-on'))).toBe('off')
 })

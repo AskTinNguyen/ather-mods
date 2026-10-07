@@ -246,11 +246,11 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean, look?: { ink
 
 const TERMINAL_LABEL: Record<string, string> = { editor: 'Editor', memory: 'Memory', main: 'Sync' }
 
-/** A19: one rule's row on the Nghiệm thu A5 card. */
+/** A19: one rule's row on the A5 acceptance card. */
 export type AcceptRow = { rule: number; name: string; state: 'pass' | 'fail' | 'na'; line: string }
 const MARK = { pass: '✓', fail: '✗', na: '–' } as const
 
-/** A19: the Nghiệm thu A5 card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
+/** A19: the A5 acceptance card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
  * one line each, ✓ / ✗ / – carried by the mark's color (never the text's). Terminal: one line per rule. */
 export const acceptCard = (el: El, title: string, sub: string, rows: readonly AcceptRow[], isDesktop: boolean): unknown => {
   const { Box, Text } = el
