@@ -1959,11 +1959,17 @@ const entrance = (n: number): Curtain[] => {
   return Array.from({ length: n }, (_, i) => ({ color: A5R_LOOK.sealBg, begin: n > 1 ? Math.floor((i * last) / (n - 1)) : 0, step, clear: true }))
 }
 
-/** A35 (mockup v2): the A5R pane's frame: the band at full width, then every block on one gutter, one gap between blocks. */
+/** A35 (mockup v2): the A5R pane's frame: the band at full width, then every block on one gutter, one gap between blocks.
+ * A49: a block on the gutter drops its own `width: '100%'` and stretches instead: a width of 100% is the pane's whole
+ * width, and the gutter margins sit outside it, so the block ran 2 columns past the pane's right edge and the edge cut
+ * the ends of its lines (a session row's "· 2m" read "· 2"). Stretched, its width is the pane's minus both margins. */
 function paneOf(el: { Box: (p: Record<string, unknown>) => unknown }, kids: unknown[]): RenderElement {
   const [band, ...blocks] = kids as { props?: Record<string, unknown> }[]
-  const onGutter = blocks.map(b => ({ ...b, props: { ...(b.props ?? {}), marginX: V2.gutter, marginTop: 0 } }))
-  return el.Box({ key: 'hai-a5r-pane', flexDirection: 'column', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
+  const onGutter = blocks.map(b => {
+    const { width: _full, ...props } = b.props ?? {}
+    return { ...b, props: { ...props, marginX: V2.gutter, marginTop: 0 } }
+  })
+  return el.Box({ key: 'hai-a5r-pane', flexDirection: 'column', alignItems: 'stretch', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
 }
 
 /** A29: the A5R pane: the three tool rows (A25), the sessions list (A26), the Nghiệm thu card (A19), and the five

@@ -214,6 +214,31 @@ export const minWidth = (node: unknown, wraps = false): number => {
   return pad + widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, widths.length - 1)
 }
 
+/** A49: where each keyed box lies across the pane, in cells from the pane's left edge, the way the surface's flex
+ * layout places it down the column blocks: in a column, a child's own `width: '100%'` (or a number) is its width and
+ * its side margins sit outside it; a child without a width stretches to the parent's content width less its margins.
+ * Content is the box less its border and padding. Rows are placed themselves but not entered (their children share
+ * the row by flex; `minWidth(row) <= w` says they fit). */
+export const placed = (tree: unknown, columns: number): Map<string, { x: number; w: number }> => {
+  const at = new Map<string, { x: number; w: number }>()
+  const walk = (node: unknown, x: number, w: number): void => {
+    const t = node as Tree
+    if (!t || typeof t !== 'object' || t.type !== 'Box') return
+    const p = (t.props ?? {}) as Record<string, unknown>
+    if (p.position === 'absolute') return
+    const left = Number(p.marginLeft ?? p.marginX ?? 0)
+    const right = Number(p.marginRight ?? p.marginX ?? 0)
+    const width = p.width === '100%' ? w : typeof p.width === 'number' ? p.width : w - left - right
+    const box = { x: x + left, w: width }
+    if (typeof p.key === 'string') at.set(p.key, box)
+    if (p.flexDirection !== 'column') return
+    const inset = (p.borderStyle ? 1 : 0) + Number(p.paddingX ?? 0)
+    for (const c of t.children ?? []) walk(c, box.x + inset + Number(p.paddingLeft ?? 0), box.w - 2 * inset - Number(p.paddingLeft ?? 0) - Number(p.paddingRight ?? 0))
+  }
+  walk(tree, 0, columns)
+  return at
+}
+
 export const all = (t: unknown, out: Tree[] = []): Tree[] => {
   if (t && typeof t === 'object' && !Array.isArray(t)) {
     out.push(t as Tree)

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, A5RPANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
+import { LOCK, ME, NOW, A5RPANE, PROJ, all, atherTree, find, keys, minWidth, opts, placed, still, text, world, type Tree } from './world.ts'
 
 // A25: the three tools never leave their box, at the narrowest and a wide pane, desktop and terminal: every tool
 // is a full-width row whose narrowest possible layout (wrapping text at words, nothing truncated) fits the pane,
@@ -69,3 +69,42 @@ test('A25: /a5r gate shows, sets and resets the launch gate; a bad argument expl
   expect(await run('gate many')).toContain('/a5r gate <with PIE GB> <without PIE GB>')
   expect(await run('gate reset')).toContain('back to the plugin options: ≥ 31 GB with PIE, ≥ 28 GB without')
 })
+
+// A49 (Hai's dark-theme screenshots, 2026-10-07: a session row's "· 2m" read "· 2", cut at the pane's right edge):
+// every block on the gutter lies inside the pane (its margins inside the pane's width, not added to a full width),
+// and each session row fits its block, so the status at its end is whole and only the title shortens. At the
+// narrowest pane (terminal 44, desktop 40, as A25) and wider ones up to 100 columns.
+const SID = (id8: string) => `${id8}-1111-4000-8000-000000000000`
+const LANES = 'E:/s2/Saved/AtherAutomata/lanes'
+const MIN = 60_000
+const LONG_TITLE = 'Walker capture — a long session title the row has to shorten somewhere before its end'
+for (const surface of ['terminal', 'desktop'] as const)
+  for (const columns of surface === 'terminal' ? [44, 60, 100] : [40, 60, 100])
+    test(`A49 (${surface}, ${columns} columns): the blocks sit inside the pane and a session row's status is whole at its end`, opts(), async ($, on) => {
+      const list = JSON.stringify([{ sessionId: 'local_1', title: LONG_TITLE, cwd: 'E:\\s2', isArchived: false, isRunning: false, lastActivityAt: new Date(NOW - 2 * MIN).toISOString() }])
+      const w = world(on, { out: { mcp__ccd_session_mgmt__list_sessions: list } })
+      w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify(blankSession(SID('bbbbbbbb'), 'lane-bbbbbbbb', LONG_TITLE, NOW)))
+      w.put(`${LANES}/${SID('bbbbbbbb')}.json`, JSON.stringify({ sessionId: SID('bbbbbbbb'), intent: 'fx-sand', branch: 'HaiHuynh/x', updatedAt: NOW, lastActiveAt: NOW - 2 * MIN, hasEnded: false }))
+      await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+      const P = { ...A5RPANE, surface, props: { ...A5RPANE.props, bodyColumns: columns } } as never
+      await $.ui.render(P)
+      await w.clock.advance(50)
+      const tree = still(await $.ui.render(P))
+      const at = placed(tree, columns)
+      // Every block lies inside the pane: the band at full width, the rest on the 2-column gutter.
+      for (const key of keys(tree)) {
+        const b = at.get(key)
+        expect([key, b !== undefined && b.x >= 0 && b.x + b.w <= columns]).toEqual([key, true])
+        if (key !== 'hai-a5r-band') expect([key, b?.x, b && b.x + b.w]).toEqual([key, 2, columns - 2])
+      }
+      // Each session row fits its block: dot, the shortened title and the whole status; the status never shrinks.
+      const rows = (find(tree, 'hai-overview')?.children ?? []).map(c => String((c as Tree).props?.key)).filter(k => /^hai-session-[0-9a-f]{8}$/.test(k))
+      expect(rows).toEqual([`hai-session-${ME8}`, 'hai-session-bbbbbbbb'])
+      for (const key of rows) {
+        const r = at.get(key)
+        expect([key, r !== undefined && r.x + r.w <= columns - 2, minWidth(find(tree, key)) <= (r?.w ?? 0)]).toEqual([key, true, true])
+        expect([key, find(tree, `${key}-status`)?.props?.flexShrink, find(tree, `${key}-title`)?.props?.flexShrink]).toEqual([key, 0, 1])
+      }
+      expect(text(find(tree, 'hai-session-bbbbbbbb-status'))).toBe('fx-sand · 2m')
+      expect(text(find(tree, 'hai-session-bbbbbbbb-title'))).toBe(LONG_TITLE)
+    })
