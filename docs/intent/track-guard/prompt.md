@@ -1,6 +1,6 @@
 # Ather Automata track guard
 
-- Rev: 2
+- Rev: 3
 - Status: active
 - Area: ather-automata
 - Owner: HaiHuynh
@@ -29,12 +29,13 @@ A session tracks the intent it works on, and only by a deliberate act. Today one
 - D1 (rev 1): Two acts, not one: looking at an intent opens its view; working on it is an explicit "Work on this here" in that view. The Next card ("Continue X", "Pick up X") and the phone path keep their one press: their label is the verb. Source: L-2 reviews.
 - D2 (rev 1): Untrack keeps the proof already recorded (in the legitimate case — work done, then untracked — moving it would destroy the intent's proof); the `by` stamp (D3) makes misattributed proof visible instead. Source: engineering, from the reviews' disagreement.
 - D3 (rev 1): Every evidence record carries `by` = the producing session's first 8 hex; proof produced elsewhere is labelled with it. Source: L-2 reviews.
+- D5 (rev 3): Without a pane a choice must explain itself: each Work-question choice and the follow-up for a typed name say what happens next and its consequence (this session gets the intent's next step and lane text, its builds and PIE count as the intent's proof, other sessions see it there; `/ather untrack` undoes it). Source: L-4 (Hai: easy to understand, leads to the next action, shows the consequence).
 - D4 (rev 1): "Held by" comes from the live lanes on this checkout with their last activity, never from a lock; heartbeats are written at once on track and untrack. Source: L-2 reviews.
 
 ## Acceptance
 
 - A1: Untrack: `/ather untrack`, a **Stop tracking** button in the Intent view, and the profile tool's `track: "none"` clear the session's pin, clear `last:<me>` when it names the same intent, stop auto-tracking from re-pinning that intent in this session, and rewrite the lane heartbeat at once; refused while an away window runs ("End the away window first."); running workers and Needs you are untouched; the reply says proof recorded so far stays with the intent. Proof: gate: unit tests in `tests/ather.test.mjs` and an e2e check in `dev/e2e/run.mjs`.
-- A2: Looking never tracks: a press on a home row (Also yours, Follow a teammate), an Everything-open row, or words typed in an Ather dialog or after `/ather` that match one intent open the Intent view for that slug without tracking — except in the Work question ("What should this session work on?"), whose typed name tracks when it matches one intent, as its choices do (F-1 b); the view offers **Work on this here** (tracks and sets `last:<me>`) when this session does not track it; `/ather intent <exact slug>` still tracks with no dialog (sessions without a pane included); the Next card and the phone path are unchanged. Proof: gate: e2e checks, including a session with no pane.
+- A2: Looking never tracks: a press on a home row (Also yours, Follow a teammate), an Everything-open row, or words typed in an Ather dialog or after `/ather` that match one intent open the Intent view for that slug without tracking — in the no-pane Work question ("What should this session work on?") a typed name that matches one intent opens one follow-up question instead (the phone's Intent view: where it stands, what working on it here means, and the choices Work on it here / Just look / Pick something else), several matches become its choices, and every choice there says in one line what it does (D5); the view offers **Work on this here** (tracks and sets `last:<me>`) when this session does not track it; `/ather intent <exact slug>` still tracks with no dialog (sessions without a pane included); the Next card and the phone path are unchanged. Proof: gate: e2e checks, including a session with no pane.
 - A3: Auto-track only for the session's own orchestration: a main-thread (no `agentId`) Write, Edit or MultiEdit of `docs/intent/<slug>/prompt.md` or `log.md`, checked after the tool ran; a write that creates `prompt.md` switches the pin to that intent; worker writes and other intent files never pin. Proof: gate: e2e checks (worker `progress.md` write, main-thread `log.md` write, capture of a new intent while another is tracked).
 - A4: Held by: the lane record carries `lastActiveAt` (last prompt or tool call); the Intent view and the lane text show one line when other live sessions on this checkout track the same intent — "Also tracked in <n> other session(s) · <age>" — and nothing otherwise. Proof: gate: unit test for the line, e2e with a peer lane fixture.
 - A5: Proof attribution per D3: records stamped `by`; the view's proof text names the session when it is not this one; the `status` tool exposes `by`. Proof: gate: unit tests.
@@ -57,4 +58,5 @@ A session tracks the intent it works on, and only by a deliberate act. Today one
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2 and the two adversarial reviews.
+- rev 3 (2026-10-07): L-4: D5, the Work question's typed name opens a follow-up instead of tracking (replaces F-1 b); its choices state their consequence.
 - rev 2 (2026-10-06): L-3: F-1 (b), a name typed in the Work question tracks like its choices.

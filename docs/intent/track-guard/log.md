@@ -24,3 +24,10 @@ Asked while Hai was away (Ather autonomy window from 18:52, ledger `.ather/local
 > D-1 · Push nhánh intent/track-guard lên AskTinNguyen/ather-mods và mở PR vào main cho anh Tín review? → Push và mở PR ngay (Recommended)
 
 The window allows pushing branches and opening PRs to main (merges and pushes to main stay held); L-2 already asked for this PR. F-1 (b) lands first, then the push and the PR.
+
+## L-4 (2026-10-07 11:30) | class: decision | -> rev 3
+
+At the away review (ledger D-2, reopened to talk it through), asked "trong hộp thoại 'What should this session work on?' (không có pane), gõ tên intent vào ô Other thì sao?":
+> Cân nhắc ux dễ hiểu và có tính dẫn dắt next action, hậu quả của action
+
+Also decided: accept Tin's write invitation, merge #6 once green and update the live checkout; Tin (Slack, 10:21): "anh đã add … vào contributor của project, có thể PR và Merge luôn nhé."

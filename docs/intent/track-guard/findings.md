@@ -23,4 +23,4 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 
 **Proposed amendment:** A2, "words typed in an Ather dialog or after `/ather` that match one intent open the Intent view" → "words typed in an Ather dialog (other than the Work question, 'What should this session work on?', whose typed name tracks as its choices do) or after `/ather` …".
 
-**Resolution:** (b), decided under Hai's away window (ledger D-2, the recommended option; L-3). Folded into A2 at rev 2.
+**Resolution:** (b), decided under Hai's away window (ledger D-2; L-3), then replaced at Hai's review (L-4, rev 3): the typed name opens a follow-up question that shows where the intent stands and what working on it here means, with Work on it here / Just look / Pick something else (D5).
