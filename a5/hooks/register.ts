@@ -1120,7 +1120,7 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
 const PASS_ONCE = 'Let this PR through'
 
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
-type PrRefs = { repo?: string; head?: string; base?: string }
+type PrRefs = { repo?: string; head?: string; base?: string; problem?: string } // A46: problem: the call's refs cannot be read
 
 /** A42: the a5 kit's rules/ and tests/ folders as paths in the repository at `root`: where the kit sits inside it, else
  * under the kit's own folder name (the same mod checked out in another worktree of that repository). */
@@ -1138,6 +1138,7 @@ const kitDirsIn = (root: string): string[] => {
  * the score is "not scored" with it. */
 async function prTarget($: Engine, start: string, refs: PrRefs): Promise<{ root: string; head: string | null; branch: string; problem: string | null }> {
   const run = (args: string[]) => $.process.run(['git', '-C', start, ...args], { timeoutMs: 15_000 }).catch(() => null)
+  if (refs.problem) return { root: start, head: null, branch: '', problem: refs.problem }
   const top = await run(['rev-parse', '--show-toplevel'])
   if (!top || top.exitCode !== 0) return { root: start, head: null, branch: '', problem: `no git repository at ${start}` }
   const headName = refs.head?.trim().replace(/^[^:]+:/, '') || ''
@@ -1291,11 +1292,11 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
     const command = str(input.command)
     // A41: the PR's own repository, head, base and folder, from the command; a folder with no repository is scored as
     // unread (never passed, never another branch's score).
-    const cmdRefs = prCommandRefs(command, tokenize)
+    const cmdRefs = prCommandRefs(command)
     const dir = norm(cmdRefs.dir ?? cwd, cwd)
     root = (await locate($, a5, `${dir}/_`)).root ?? dir
     body = await prBody($, command, dir)
-    refs = { repo: cmdRefs.repo, head: cmdRefs.head, base: cmdRefs.base }
+    refs = { repo: cmdRefs.repo, head: cmdRefs.head, base: cmdRefs.base, ...(cmdRefs.problem ? { problem: cmdRefs.problem } : {}) }
   } else if (isPrTool(tool)) {
     // A22: a PR opened through an MCP tool (GitHub's create_pull_request and the like): the session's repository,
     // checked against the repository, head and base the input names; never let through unread.

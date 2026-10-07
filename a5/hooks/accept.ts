@@ -2,6 +2,7 @@
 // intent closes, never per turn. Pure: no `$`; register.ts gathers the inputs cheaply and path-scoped (the branch
 // diff against origin/main, the added lines, the intent's four files, Ather's proof, the touch files) and acts on the score.
 import { basename, globMatch, proofGap, proofProblems, rx, section, type A5Config, type Proof } from './a5.ts'
+import { heredocs, prCalls, prRefs, type PrRefsRead } from './prcmd.ts'
 
 export type RuleId = 1 | 2 | 3 | 4 | 5
 /** D9: the five rules as the workflow names them. */
@@ -189,16 +190,10 @@ export const acceptText = (scores: readonly RuleScore[], what: string): string =
     .join('\n')}`
 }
 
-/** A command that opens a PR: `gh pr create`, or `gh api …/pulls` as a POST (fields imply one). `gh` must be the command
- * of a segment (line start, after `&&`, `||`, `;`, `|` or `(`), and here-document bodies are not read (A41, rev 12). */
-export const isPrCommand = (raw: string): boolean => {
-  const command = commandText(raw)
-  const at = '(?:^|&&|\\|\\||[;|(\\n])\\s*'
-  return (
-    new RegExp(`${at}gh\\s+pr\\s+create\\b`).test(command) ||
-    (new RegExp(`${at}gh\\s+api\\b[^\\n|;&]*/pulls\\b(?!/)`).test(command) && !/(-X|--method)\s+GET\b/i.test(command) && /(-X|--method)\s+POST\b|\s-[fF]\s|--(raw-)?field\b|--input\b/i.test(command))
-  )
-}
+/** A45 (rev 14): a command opens a PR when any command it runs is `gh pr create` or a POSTing `gh api …/pulls`, however
+ * it is written (prcmd.ts: quote-aware commands, env prefixes and wrappers, PowerShell `if (…) { … }` and `&`, nested
+ * shells, a here-document fed to a shell). Text inside quotes or in a data here-document is not a command. */
+export const isPrCommand = (raw: string): boolean => prCalls(raw).length > 0
 
 /** A22: a tool whose name creates a pull request, in any MCP server (`mcp__github__create_pull_request`,
  * `mcp__plugin_engineering_github__create_pull_request`, `…pull_request_create…`, `createPullRequest`); a review
@@ -243,52 +238,17 @@ export const prNumbersOf = (progress: string, prompt: string): number[] => {
   return [...new Set(numbers)].filter(n => Number.isInteger(n) && n > 0)
 }
 
-/** A41: what a PR-opening command names: its repository (`-R/--repo owner/name`, or the `gh api repos/<owner>/<name>/pulls`
- * path), its head (`-H/--head`, `-f head=`) and base (`-B/--base`, `-f base=`), and the folder it runs in (a leading
- * `cd <dir> &&`). Absent parts stay undefined: `gh pr create` without `--head` opens the folder's current branch. */
-export type PrCommandRefs = { repo?: string; head?: string; base?: string; dir?: string }
-export const prCommandRefs = (command: string, tokenize: (s: string) => string[]): PrCommandRefs => {
-  const out: PrCommandRefs = {}
-  const cd = /^\s*(?:cd|pushd)\s+(?:\/d\s+)?("[^"]+"|'[^']+'|\S+)\s*(?:&&|;)/i.exec(command)
-  if (cd?.[1]) out.dir = cd[1].replace(/^["']|["']$/g, '')
-  // The gh call itself: the first segment (between &&, || and ;) that is a gh pr create or a gh api call.
-  const seg = commandText(command).split(/&&|;|\|\|/).map(s => s.trim()).find(s => /^gh\s/.test(s) && (/\bpr\s+create\b/.test(s) || /\bapi\b/.test(s))) ?? command
-  const toks = tokenize(seg)
-  const val = (i: number, t: string): string | undefined => (t.includes('=') && t.startsWith('--') ? t.slice(t.indexOf('=') + 1) : toks[i + 1])
-  for (let i = 0; i < toks.length; i += 1) {
-    const t = toks[i] ?? ''
-    if (t === '-R' || t === '--repo' || t.startsWith('--repo=')) out.repo = val(i, t)
-    else if (t === '-H' || t === '--head' || t.startsWith('--head=')) out.head = val(i, t)
-    else if (t === '-B' || t === '--base' || t.startsWith('--base=')) out.base = val(i, t)
-    else if (t === '-f' || t === '-F' || t === '--field' || t === '--raw-field') {
-      const kv = toks[i + 1] ?? ''
-      if (kv.startsWith('head=')) out.head = kv.slice(5)
-      if (kv.startsWith('base=')) out.base = kv.slice(5)
-    } else {
-      const api = /^\/?repos\/([^/\s]+\/[^/\s]+)\/pulls\/?$/.exec(t)
-      if (api?.[1]) out.repo = api[1]
-    }
-  }
-  return out
+/** A41 / A46: what the PR call names (its repository, head, base, the folder a `cd` before it moved to, and a reason it
+ * cannot be read), from the first PR call's own words (prcmd.ts `prRefs`). */
+export type PrCommandRefs = PrRefsRead
+export const prCommandRefs = (command: string): PrCommandRefs => {
+  const call = prCalls(command)[0]
+  return call ? prRefs(call) : {}
 }
 
-/** A41 (found in rev 12): the text a shell command runs, without the bodies of its here-documents (`<<EOF … EOF`), so a
- * file written with a here-document that merely mentions `gh pr create` is not taken for a PR. */
-export const commandText = (command: string): string => {
-  const lines = command.split(/\r?\n/)
-  const out: string[] = []
-  let end: string | null = null
-  for (const line of lines) {
-    if (end !== null) {
-      if (line.trim() === end) end = null
-      continue
-    }
-    out.push(line)
-    const m = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line)
-    if (m?.[2]) end = m[2]
-  }
-  return out.join('\n')
-}
+/** A41 / A46: the command lines a shell command runs, here-document bodies removed (exact terminators; a `<<` after a
+ * `#` comment opens none). A body a shell reads as commands is checked by `isPrCommand` itself. */
+export const commandText = (command: string): string => heredocs(command).text
 
 /** A23: the PR numbers a PR-opening call reports (`gh pr create` prints the URL; an MCP tool returns its number). */
 export const openedPrs = (result: string): number[] =>

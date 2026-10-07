@@ -1,6 +1,5 @@
 import { expect, test } from 'claude-code/testing'
 import { commandText, isPrCommand, prCommandRefs } from '../hooks/accept.ts'
-import { tokenize } from '../hooks/a5.ts'
 import { PROJ, opts, refused, world, type Rec } from './world.ts'
 
 // A41 (rev 12): acceptance scores the branch the PR is opened from: the repository and head come from the command
@@ -35,9 +34,9 @@ const git = (wtDiff: string, extra: Record<string, { stdout: string; exitCode?: 
 const CLEAN = '+++ b/ather-automata/hooks/squad.mjs\n+const frame = 1\n'
 
 test('A41: unit: the PR command names its repository, head, base and folder; here-document text is not a command', () => {
-  expect(prCommandRefs(PR, tokenize)).toEqual({ repo: 'AskTinNguyen/ather-mods', head: 'intent/avatar-frame', base: 'main' })
-  expect(prCommandRefs(`cd "D:/x y" && ${GH} --repo=o/r --head=o:feat -B dev`, tokenize)).toEqual({ dir: 'D:/x y', repo: 'o/r', head: 'o:feat', base: 'dev' })
-  expect(prCommandRefs('gh api repos/o/r/pulls -f head=feat -f base=main -f title=t', tokenize)).toEqual({ repo: 'o/r', head: 'feat', base: 'main' })
+  expect(prCommandRefs(PR)).toEqual({ repo: 'AskTinNguyen/ather-mods', head: 'intent/avatar-frame', base: 'main' })
+  expect(prCommandRefs(`cd "D:/x y" && ${GH} --repo=o/r --head=o:feat -B dev`)).toEqual({ dir: 'D:/x y', repo: 'o/r', head: 'o:feat', base: 'dev' })
+  expect(prCommandRefs('gh api repos/o/r/pulls -f head=feat -f base=main -f title=t')).toEqual({ repo: 'o/r', head: 'feat', base: 'main' })
   const heredoc = `cat >> notes.md <<'EOF'\nrun ${GH} --head x when done\nEOF\necho ok`
   expect([commandText(heredoc), isPrCommand(heredoc)]).toEqual(["cat >> notes.md <<'EOF'\necho ok", false])
   expect([isPrCommand(`echo "${GH}"`), isPrCommand(`git push && ${GH} --fill`), isPrCommand(PR)]).toEqual([false, true, true])
