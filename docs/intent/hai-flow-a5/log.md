@@ -111,3 +111,9 @@ Mockup v2 taken as approved ("Ok better"); of the five dither places, the defaul
 > Double check lại theme của A5 và AtherAutomata khi bị affect bởi A5 ở cả điều kiện theme sáng và theme tối.
 
 The white square around a running worker's avatar is Ather's (its interactive avatar frame), fixed in Ather by a separate PR; the scarf and the two-theme check are a5's.
+
+## L-15 (2026-10-07 17:10) | class: intent | -> rev 13
+
+> Lỗi ở đây, có thể do node tooltip
+
+With a screenshot (A5 pane, dark theme), a red box around the last session row and the rule chips: each rule chip shows a white square (its tooltip dot), and the row titled `5️⃣📤+6️⃣🤔📤 S2 sync main — watch …` reads `5????+6?????? S2 sync main - watch …`.

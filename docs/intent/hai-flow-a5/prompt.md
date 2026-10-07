@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 12
+- Rev: 13
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -89,6 +89,8 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A40 (rev 11): a5 reads right in both app themes: every colour a5 draws (A5 pane, compact line, the accent it gives Ather's pane, notices' colours) is chosen per theme (the app's light/dark from `$.config.list()` "theme", or theme keys where the engine has one), text at ≥ 4.5:1 and icons/marks at ≥ 3:1 against that theme's pane background, measured with a contrast check, for light and dark. Any Svg drawn with `isInteractive` (animations, entrance, scarf on a running avatar) must not show an opaque white or black box in either theme (the engine paints a sandboxed frame white when its colour scheme differs from the app's); where that cannot be ruled out, the animated Svg falls back to a still image. The rule chips' tooltips use the Svg `<title>` the engine supports in interactive frames. Proof: gate: unit test over both palettes' contrast; review by Hai in light and dark.
 - A41 (rev 12): Nghiệm thu scores the branch the PR is opened from, never the session's own checkout by default: the PR's repository and head come from the command (`-R/--repo`, `--head`, `gh api` path and fields, a `cd <dir> &&` before it, the MCP tool's input) and are matched to the local worktree that has that branch checked out (`git worktree list`), scored there; a head no local worktree holds is scored from `origin/<head>` against `origin/main`; when neither can be determined the score is "not scored" with the reason, never another branch's score. Proof: gate: engine tests (a PR from a second worktree scores that worktree; a session cwd with a different intent is ignored; an unknown head is "not scored").
 - A42 (rev 12): The debug-leftover check (rule 4) never flags the patterns' own definitions or docs: the a5 kit's files (its config, rules text and tests) and Markdown files are skipped for forbidden markers like `A5TMP`. Proof: gate: unit test (a5's own config/tests/rules in a diff raise nothing; the same marker in a source file still fails).
+- A43 (rev 13): A40's frame half, done the way the avatar fix proved (Ather `intent/avatar-frame`): every Svg a5 draws with `isInteractive` (the rule chips' tooltip dots, moving icons, the stamping seal, entrance and event curtains, the scarf on a running avatar) carries `<style>:root{color-scheme:light dark;background:transparent}</style>` as the first child of its svg, so the sandboxed frame's page takes the app's scheme and stays transparent; the svg-root `style` alone does not reach the frame page (Hai's screenshot, dark theme: a white square beside each rule chip). Proof: gate: a unit test listing every `Svg(` call a5 makes with its `isInteractive` value, each interactive source starting with that rule; review by Hai in light and dark.
+- A44 (rev 13): Session names a5 reads from records keep their characters: the PowerShell fallback (used when the engine finds no `grep`) writes UTF-8 (`[Console]::OutputEncoding` UTF-8, `Select-String -Encoding UTF8`), so emoji and dashes survive. MEASURED 2026-10-07: without it a title `5️⃣📤+6️⃣🤔📤 S2 sync main — watch …` reads back `5????+6?????? S2 sync main - watch …`; with it, intact. Proof: gate: unit test on the command a5 builds; review on the pane.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -102,6 +104,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 13 (2026-10-07): L-15: A43 interactive frames transparent in both themes (the chips' white squares), A44 record titles keep emoji and dashes.
 - rev 12 (2026-10-07): F-? from the avatar-frame worker: A41 score the PR's own branch/worktree, A42 no false A5TMP hits on a5's own files.
 - rev 11 (2026-10-07): L-14: A39 red scarf on worker avatars with A5 on, A40 both themes (contrast, interactive frames).
 - rev 10 (2026-10-07): L-13: A34 English, A35 mockup v2 layout, A36 quiet rule chips, A37 red pixel-dither entrance ≤ 0.3 s, A38 event dithers (rule hit, sync freeze, nghiệm thu).
