@@ -9,7 +9,7 @@ test('A5 on: a refused command never reaches the tool', opts(), async ($, on) =>
   expect(w.seen.length).toBe(0)
 })
 
-test('A5 off: the rules, the report gate and the Editor gate all rest (D1)', opts(), async ($, on) => {
+test('A5 off: the rules, nghiệm thu and the Editor gate all rest (D1)', opts(), async ($, on) => {
   const w = world(on, { a5: false })
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
   w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2; // A5TMP\n')

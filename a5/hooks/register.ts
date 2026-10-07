@@ -17,10 +17,10 @@ import { acceptCard, editorTile, lockLine, mainTile, memoryTile, parseLockView, 
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
-// - A5 (a5.ts, rules/config.json), only while `/a5 on`: refuses or asks before risky tool calls, records
-//   edits and checks, and at Stop keeps the agent going until its report is honest. Fitted to Ather's
-//   intent flow: rules about the shared checkout skip a worker's own worktree; a worker (subagent) never
-//   asks Hai, it reports; with an intent tracked, `Verified:` is held to Ather's proof for it.
+// - A5 (a5.ts, accept.ts, rules/config.json), only while `/a5 on`: the five rules (D9). At the tool call it
+//   refuses or asks only before what cannot be undone (D10); nothing per turn. Everything else is scored at
+//   acceptance (nghiệm thu A5) over the branch, the intent's files and Ather's proof, when a PR is opened or
+//   an intent closes. Rules about the shared checkout skip a worker's own worktree; a worker never asks Hai.
 // - A5's coordination (coord.ts) for the sessions sharing one S2 checkout and one machine: the Editor
 //   holder (model tool `editor`: a queue computed alike by every session from Saved/A5 files, a lease
 //   with a hard end, the lock written in the S2 standard's lines), RAM (safe cleanup before a grant, the
@@ -1632,8 +1632,8 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     await $.command.register({
       name: 'a5',
-      description: 'A5: /a5 on · /a5 off · /a5 status · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, the report gate, Editor holder, RAM and Sync main)',
-      argumentHint: 'on | off | status | sync HH:MM',
+      description: 'A5: /a5 on · /a5 off · /a5 status · /a5 accept (nghiệm thu A5 now) · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at nghiệm thu before a PR; Editor holder, RAM and Sync main)',
+      argumentHint: 'on | off | status | accept | sync HH:MM',
     })
     await readA5($)
     a5FlipAt = 0 // a session that starts with A5 already on does not stamp the seal
@@ -1673,8 +1673,8 @@ export const register: Register = (on, options) => {
       $.ui.invalidate('ui.render')
       return {
         text: a5On
-          ? '★ A5 on: the five rules and the report gate apply in every session from its next tool call; Ather\'s pane takes the red seal and the gold accent.'
-          : 'A5 off: the rules, the report gate, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
+          ? '★ A5 on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; nghiệm thu A5 before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
+          : 'A5 off: the rules, nghiệm thu A5, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
       }
     }
     await readA5($)
