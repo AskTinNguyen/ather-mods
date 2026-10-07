@@ -1,13 +1,13 @@
 import { type PluginAgentPanelProps, useAgent, useRpc } from "@getpaseo/plugin/client";
-import { Icon, ScrollView, TextInput, useToast } from "@getpaseo/plugin/client/react-native";
+import { Icon, ScrollView, TextInput, copyText, useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Linking, Pressable, Text, View } from "react-native";
 import { atherAct, atherHome, type HomeView } from "../shared/contracts";
 import { Art } from "./art";
-import { Beacon, Bob, Button, FadeIn, FillBar, GrowLine, isLight, type Kit, PersonName, Pop, Pulse, Row, SectionLabel, personColours, useKit } from "./ui";
+import { Beacon, Bob, Button, FadeIn, FillBar, GrowLine, HoverCard, isLight, type Kit, PersonName, Pop, Pulse, Row, SectionLabel, personColours, useKit } from "./ui";
 
-type ActKind = "item" | "next" | "work" | "action" | "skill" | "create" | "all" | "away" | "draft" | "view" | "back" | "track" | "untrack";
+type ActKind = "item" | "next" | "work" | "action" | "skill" | "create" | "all" | "away" | "draft" | "view" | "back" | "track" | "untrack" | "start";
 
 const REFRESH_MS = 5000;
 const DONE_SHOWN = 3;
@@ -82,6 +82,9 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
 
   if (view.intentView) {
     return <IntentScreen kit={kit} intent={view.intentView} busy={busy} run={run} />;
+  }
+  if (view.issueView) {
+    return <IssueScreen kit={kit} issue={view.issueView} busy={busy} run={run} now={now} />;
   }
 
   return (
@@ -783,5 +786,76 @@ function WorkSection({ kit, view, now, busy, isSent, run, light }: { kit: Kit; v
         </View>
       ) : null}
     </FadeIn>
+  );
+}
+
+// An assigned issue opened to look at, as the Claude Code pane's issue card: Start an intent, Open on GitHub,
+// Copy link. Pressing an issue row only opens this; nothing goes to the agent until Start an intent.
+function IssueScreen({ kit, issue, busy, run, now }: { kit: Kit; issue: NonNullable<HomeView["issueView"]>; busy: boolean; run: (kind: ActKind, id: string) => void; now: number }) {
+  const { s, c, compact } = kit;
+  const toast = useToast();
+  // A link the app may open: https, printable characters only, of a sane length.
+  const link = /^https:\/\/[\x21-\x7e]+$/.test(issue.url) && issue.url.length <= 2048 ? issue.url : "";
+  const days = issue.updatedAt ? Math.floor((now - issue.updatedAt) / 86400000) : -1;
+  const when = days < 0 ? "" : days >= 60 ? `${Math.floor(days / 30)} months ago` : days >= 2 ? `${days} days ago` : days === 1 ? "yesterday" : "today";
+  const meta = [issue.isUrgent ? "High priority" : "", issue.area === "Unsorted" ? "" : issue.area, when ? `updated ${when}` : ""].filter(Boolean).join(" · ");
+  return (
+    <ScrollView style={s.screen}>
+      <View style={s.content}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Button kit={kit} variant="ghost" icon="ArrowLeft" accessibilityLabel="Back" onPress={() => run("back", "")} />
+          <Text style={s.brand}>{`ISSUE #${issue.number}`}</Text>
+        </View>
+        <FadeIn>
+          <Text style={[s.title, { marginTop: 8 }]}>{issue.name || issue.title}</Text>
+          {issue.name && issue.name !== issue.title ? <Text style={[s.hint, { marginTop: 4 }]}>{issue.title}</Text> : null}
+          {meta ? <Text style={[s.hint, { marginTop: 6 }]}>{meta}</Text> : null}
+          {issue.labels.length > 0 ? (
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+              {issue.labels.slice(0, 8).map((label) => (
+                <View key={label} style={{ paddingVertical: 2, paddingHorizontal: 8, borderRadius: 10, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border }}>
+                  <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{label}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </FadeIn>
+
+        <FadeIn delay={60}>
+          <HoverCard kit={kit} style={{ marginTop: 16, gap: 12 }}>
+            <Text style={s.rowTitle}>{issue.sent ? "Sent to the agent" : "Start an intent from this issue"}</Text>
+            <Text style={s.hint}>
+              The agent checks for overlapping work first (the issue preflight), then drafts an intent with you and shows you its prompt.md before anything is built. Ather reads your issues with gh and never writes to GitHub.
+            </Text>
+            <View style={s.buttons}>
+              <Button kit={kit} variant="primary" icon="Play" label={issue.sent ? "Start again" : "Start an intent"} full={compact} disabled={busy} onPress={() => run("start", `issue:${issue.number}`)} />
+              {link ? (
+                <Button
+                  kit={kit}
+                  icon="ExternalLink"
+                  label="Open on GitHub"
+                  full={compact}
+                  onPress={() => void Linking.openURL(link).catch(() => toast.error("Could not open the browser."))}
+                />
+              ) : null}
+              {link ? (
+                <Button
+                  kit={kit}
+                  icon="Copy"
+                  label="Copy link"
+                  full={compact}
+                  onPress={() =>
+                    void copyText(link).then(
+                      () => toast.show("Issue link copied.", { variant: "success" }),
+                      () => toast.error("Could not copy the link."),
+                    )
+                  }
+                />
+              ) : null}
+            </View>
+          </HoverCard>
+        </FadeIn>
+      </View>
+    </ScrollView>
   );
 }
