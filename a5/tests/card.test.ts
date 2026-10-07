@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { PANE, PROJ, atherTree, find, keys, opts, text, world } from './world.ts'
+import { A5PANE, PROJ, atherTree, find, keys, opts, text, world } from './world.ts'
 
 // A19: the Nghiệm thu A5 card on the pane: shown when the tracked intent is in Ship (or a score exists, e.g. /a5
 // accept), five rows ✓ / ✗ / – with one line each, scored again when files change; terminal and desktop.
@@ -17,12 +17,12 @@ for (const surface of ['terminal', 'desktop'] as const) {
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     w.put(`${INTENT}/prompt.md`, PROMPT)
     w.put(`${INTENT}/progress.md`, OPEN)
-    const P = { ...PANE, surface } as never
+    const P = { ...A5PANE, surface } as never
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
     await $.ui.render(P)
     await w.clock.advance(50) // the score runs off the render
     let tree = await $.ui.render(P)
-    expect(keys(tree)).toEqual(surface === 'desktop' ? ['head-words', 'strip', 'hai-tiles', 'hai-overview', 'hai-accept', 'foot', 'hai-a5-rules'] : ['head-words', 'strip', 'hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5-rules', 'foot']) // A27: the rules last
+    expect(keys(tree)).toEqual(['hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5-rules']) // A29: the A5 pane, the rules last
     expect(text(find(tree, 'hai-accept-head'))).toContain('Nghiệm thu A5● 1 of 5 not mettail-vfx · Ship · 14:40')
     expect(rowText(tree, 1)).toBe('✓1 Yêu Project, yêu đồng bào· no other session\'s or intent\'s paths; not on main')
     expect(rowText(tree, 2)).toBe('✗2 Học tập tốt, lao động tốt· docs/intent/tail-vfx/progress.md: A2 is open')
@@ -43,11 +43,11 @@ test('A19: not in Ship, no card until /a5 accept asks for one; without an intent
   const w = world(on, { out: { 'mcp__ather-automata__status': 'ok' }, git })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  await $.ui.render(PANE as never)
+  await $.ui.render(A5PANE as never)
   await w.clock.advance(50)
-  expect(find(await $.ui.render(PANE as never), 'hai-accept')).toBeUndefined()
+  expect(find(await $.ui.render(A5PANE as never), 'hai-accept')).toBeUndefined()
   await $.command.run({ command: 'a5', args: 'accept' } as never)
-  const tree = await $.ui.render(PANE as never)
+  const tree = await $.ui.render(A5PANE as never)
   expect(text(find(tree, 'hai-accept-head'))).toContain('5 of 5 met')
   expect(rowText(tree, 2)).toBe('–2 Học tập tốt, lao động tốt· no intent: acceptance rows not scored')
 })
@@ -57,7 +57,7 @@ test('review: when the branch diff cannot be read whole the card says "not score
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   w.put(`${INTENT}/prompt.md`, PROMPT)
   w.put(`${INTENT}/progress.md`, MET)
-  const P = { ...PANE, surface: 'desktop' } as never
+  const P = { ...A5PANE, surface: 'desktop' } as never
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   await $.ui.render(P)
   await w.clock.advance(50)

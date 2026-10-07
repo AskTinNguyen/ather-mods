@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync, titleFromRecord, type SessionFile } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
+import { LOCK, ME, NOW, A5PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
 
 // A26: the session overview is a short named list: one row per live S2 session (title, intent, what it holds or
 // waits for, how recently active; "no a5" when it runs without a5), six rows at most then "+N more", under a
@@ -49,7 +49,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     machine(w)
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    const P = { ...PANE, surface, props: { ...PANE.props, bodyColumns: 44 } } as never
+    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50) // titles are looked up off the render
     const tree = await $.ui.render(P)
@@ -75,5 +75,5 @@ test('A26: A5 off shows no sessions list (Ather as it ships)', opts(), async ($,
   machine(w)
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  expect(find(await $.ui.render(PANE as never), 'hai-overview')).toBeUndefined()
+  expect(find(await $.ui.render(A5PANE as never), 'hai-overview')).toBeUndefined()
 })

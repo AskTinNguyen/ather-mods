@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { openedPrs, prNumbersOf } from '../hooks/accept.ts'
-import { PANE, PENDING, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
+import { A5PANE, PENDING, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
 
 // A23: a PR a5 never scored (opened on GitHub, or by the app's own button) is scored once its number shows up on
 // the tracked intent's `- PR:` line or in Ather's `tracked.prs`: the card names it, and a failing one is one 🟥.
@@ -18,7 +18,7 @@ const minutes = async (w: ReturnType<typeof world>, n: number) => {
   for (let i = 0; i < n; i += 1) await w.clock.advance(MIN)
 }
 const titled = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title').map(e => String(e.title))
-const head = async ($: any) => text(find(await $.ui.render(PANE as never), 'hai-accept-head'))
+const head = async ($: any) => text(find(await $.ui.render(A5PANE as never), 'hai-accept-head'))
 const prLines = (w: ReturnType<typeof world>) => w.read(PENDING).split('\n').filter(l => l.includes('PR #'))
 
 test('A23: unit: PR numbers read as Ather reads them; the number a PR call reports', () => {

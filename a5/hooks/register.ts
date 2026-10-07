@@ -13,7 +13,7 @@ import {
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
 import { A5_LOOK, ATHER, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
-import { acceptCard, sessionsBox, editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
+import { acceptCard, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
@@ -45,6 +45,7 @@ const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
 const ALLOW_ONCE = 'Cho chạy lần này'
 const ALLOW_SESSION = 'Cho cả session này'
 const ATHER_PANE = 'ather'
+const A5_PANE = 'a5' // A29: the A5 pane's id ($.ui.open) and its render requestId
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
@@ -1751,9 +1752,50 @@ function motionFor(key: string, sig: string, color: string, now: number, running
   return s && s.at > 0 && now - s.at < MOTION_MS ? { kind: 'reveal', from: s.from, ms: 700 } : { kind: 'still' }
 }
 
-/** Ather's pane as Ather drew it. Its home view gains one row of tiles (Editor, Memory, Branch) right under
- * Ather's own summary strip; with A5 on, the accent turns gold, a red seal joins the brand and the five
- * rules sit at the foot. Nothing else of Ather's is moved or hidden. */
+/** The reads both panes need, off the render: the branch state, the nghiệm thu score (when one is wanted, or the
+ * Ship check is due), the PR lines. */
+function scheduleReads($: Engine, opts: Opts, now: number): void {
+  if (isS2 && now - syncAt > SYNC_STALE_MS) $.clock.after(10, () => void refreshSync($, opts))
+  const wantCard = lastAccept !== null || shipSlug !== null
+  if (!isScoring && ((wantCard && acceptDirty) || prDirty || now - shipCheckedAt > SHIP_CHECK_MS)) $.clock.after(10, () => void refreshAccept($, opts))
+}
+
+/** A29: open (or bring back) the A5 pane; a toast when the surface could not place it. */
+async function openA5Pane($: Engine): Promise<string> {
+  const r = await $.ui.open({ id: A5_PANE, title: 'A5' }).catch(err => ({ isPlaced: false, reason: String(err) }) as const)
+  if (r.isPlaced) return 'A5 pane opened.'
+  const why = 'reason' in r ? String(r.reason) : 'not placed'
+  $.ui.toast(`A5: the pane could not be placed (${why})`)
+  return `A5 pane not placed: ${why}`
+}
+
+/** A28: the compact line's three parts and their attention marks. */
+function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolean, now: number): LinePart[] {
+  const t = editorTile({ lock: lockView, me8, nowMin, place: placeShort(decision), waiting: 0 })
+  const isMine = holdsLock()
+  const isOver = t.dot === STATUS.bad
+  const justGranted = isMine && me?.holding !== null && me?.holding !== undefined && now - me.holding.since < 5 * 60_000
+  const l = lockView
+  const editorText = !l || l.isMissing ? 'Editor lock missing' : l.isFree ? 'Editor Free' : `Editor ${isMine ? 'this session' : (l.who ?? 'held')}${l.until ? ` →${l.until}` : ''}`
+  const editorWarn = isOver || justGranted || !l || l.isMissing
+  const free = vitals?.freeGb
+  const under = free !== undefined && (free < gates.nopieGb || ramBand(free) !== 'ok')
+  const memText = free === undefined ? '? GB' : `${free} GB${under ? ' ⚠' : ''}`
+  const phase = phaseOf(syncFile, now)
+  const open = syncFile && isOpenPhase(phase) ? syncFile : null
+  const syncText = open ? `Sync ${clockOf(open.at)} ${phase}` : sync ? (sync.behind === null ? 'main ?' : sync.behind > 0 ? `${sync.behind} behind` : 'up to date') : 'main …'
+  const syncWarn = Boolean(open && (phase === 'cutoff' || phase === 'frozen'))
+  const tint = (warn: boolean, base: string) => (warn ? STATUS.warn : base)
+  const still: Motion = { kind: 'still' }
+  return [
+    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK, now, false, opts), isDesktop), text: editorText, isWarn: editorWarn },
+    { key: 'memory', icon: icon(el, 'memory', tint(under, STATUS.ok), still, isDesktop), text: memText, isWarn: under },
+    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK), opts.motion === 'off' ? still : motionFor('main', syncText, INK, now, phase === 'frozen', opts), isDesktop), text: syncText, isWarn: syncWarn },
+  ]
+}
+
+/** Ather's pane as Ather drew it. With A5 on: one compact A5 line right under Ather's own summary strip (A28), the
+ * accent in lacquer gold and the red seal beside the brand. Nothing else of A5 is in it; the rest is the A5 pane. */
 async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bodyColumns?: number } }, tree: RenderElement): Promise<RenderElement> {
   const on = await readA5($)
   if (!on) return tree // A5 off: Ather's pane exactly as Ather drew it (D1)
@@ -1761,11 +1803,34 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   const isDesktop = e.surface === 'desktop'
   const now = await $.clock.now()
   const root = tree as unknown as { children?: unknown[] }
-  if (!Array.isArray(root.children)) return on ? recolor(tree) : tree
+  if (!Array.isArray(root.children)) return recolor(tree)
   let kids = [...root.children]
   const stripAt = kids.findIndex(k => keyOf(k) === 'strip')
   if (isS2 && stripAt >= 0) {
-    if (now - syncAt > SYNC_STALE_MS) $.clock.after(10, () => void refreshSync($, opts))
+    scheduleReads($, opts, now)
+    const button = el.Button({ key: 'hai-a5-open', label: 'A5 ›', plain: isDesktop ? undefined : true, onPress: () => void openA5Pane($) })
+    kids.splice(stripAt + 1, 0, compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop))
+  }
+  // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.
+  const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
+  const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5_LOOK.sealBg, A5_LOOK.sealText, true), alt: 'A5 on', width: 27, height: 14, isInteractive: true }) : undefined
+  kids = kids.map(k => replaceKeyed(k, 'head-words', words => withSeal(el, words, sealEl)))
+  return recolor({ ...(tree as object), children: kids } as unknown as RenderElement)
+}
+
+/** A29: the A5 pane: the three tool rows (A25), the sessions list (A26), the Nghiệm thu card (A19), and the five
+ * rules as its last block (A27). With A5 off it says how to turn it on; outside the S2 checkout it has no tools. */
+async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { bodyColumns?: number } }): Promise<RenderElement> {
+  const el = $.ui.resolve(e as never) as never as Parameters<typeof icon>[0] & Parameters<typeof tilesRow>[0]
+  const isDesktop = e.surface === 'desktop'
+  const now = await $.clock.now()
+  const kids: unknown[] = []
+  if (!(await readA5($))) {
+    kids.push(el.Box({ key: 'hai-a5-off', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'A5 is off: Ather runs as it ships. /a5 on turns on the five rules, the Editor holder, RAM and Sync main for every session.' })] }))
+    return el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement
+  }
+  scheduleReads($, opts, now)
+  if (isS2) {
     const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
     const waiting = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile).length
     const plan = syncData(now)
@@ -1779,43 +1844,25 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     for (const t of tiles) {
       const name = names[t.key as keyof typeof names]
       const color = t.dot ?? (t.key === 'memory' ? STATUS.ok : INK)
-      t.icon = icon(el, name, color, motionFor(t.key, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
+      t.icon = icon(el, name, color, motionFor(`pane-${t.key}`, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
-    kids.splice(stripAt + 1, 0, tilesRow(el, tiles, isDesktop))
-    // A26: under the tools, the sessions on this machine as a short named list: who, on what, holding or waiting
-    // for what, how recently active; sessions without a5 marked; at most six rows.
+    kids.push(tilesRow(el, tiles, isDesktop))
+    // A26: the sessions on this machine as a short named list, one line each.
     const view = sessionsView({ me8: id8, meTitle: me?.title ?? '', files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now), names: sessionNames })
-    kids.splice(stripAt + 2, 0, sessionsBox(el, view, isDesktop))
+    kids.push(sessionsBox(el, view, isDesktop))
     const unnamed = view.rows.filter(r => r.title === r.id8 && !r.isMe).map(r => r.id8)
-    if (unnamed.length > 0 && !isNaming && unnamed.some(id8 => now - (namesAt.get(id8) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, unnamed))
+    if (unnamed.length > 0 && !isNaming && unnamed.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, unnamed))
+  } else kids.push(el.Box({ key: 'hai-a5-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'This session is not in the S2 checkout: the Editor, Memory and Sync main tools and the sessions list live in an S2 session.' })] }))
+  // A19: the Nghiệm thu A5 card, once there is a score or the tracked intent is in Ship.
+  if (lastAccept) {
+    const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
+    kids.push(acceptCard(el, 'Nghiệm thu A5', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
   }
-  if (on && stripAt >= 0) {
-    // A19: the Nghiệm thu A5 card, once there is a score (a PR attempt, /a5 accept) or the tracked intent is in
-    // Ship; scored off the render, again when files changed, and the Ship check at most every 5 minutes.
-    const wantCard = lastAccept !== null || shipSlug !== null
-    if (!isScoring && ((wantCard && acceptDirty) || prDirty || now - shipCheckedAt > SHIP_CHECK_MS)) $.clock.after(10, () => void refreshAccept($, opts))
-    if (lastAccept) {
-      const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
-      const card = acceptCard(el, 'Nghiệm thu A5', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop)
-      const after = kids.findIndex(k => keyOf(k) === 'hai-overview')
-      kids.splice((after >= 0 ? after : kids.findIndex(k => keyOf(k) === 'strip')) + 1, 0, card)
-    }
-  }
-  if (on) {
-    // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.
-    const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
-    const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5_LOOK.sealBg, A5_LOOK.sealText, true), alt: 'A5 on', width: 27, height: 14, isInteractive: true }) : undefined
-    kids = kids.map(k => replaceKeyed(k, 'head-words', words => withSeal(el, words, sealEl)))
-    const footAt = kids.findIndex(k => keyOf(k) === 'foot')
-    // A20: rule 1's word switches tổ quốc / project in a Client of its own (only it redraws; it goes with the footer).
-    const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
-    const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet, dim: true } }) : undefined
-    // A27: the rules are the pane's last block: on the desktop after everything Ather drew, on the terminal right
-    // above Ather's foot line (its key hints stay the last line there).
-    kids.splice(isDesktop || footAt < 0 ? kids.length : footAt, 0, rulesFooter(el, hits, rule1))
-  }
-  const out = { ...(tree as object), children: kids } as unknown as RenderElement
-  return on ? recolor(out) : out
+  // A27: the five rules, last; A20: rule 1's word switches tổ quốc / project in a Client of its own.
+  const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
+  const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet, dim: true } }) : undefined
+  kids.push(rulesFooter(el, hits, rule1))
+  return recolor(el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement)
 }
 
 export const register: Register = (on, options) => {
@@ -1825,7 +1872,7 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     await $.command.register({
       name: 'a5',
-      description: 'A5: /a5 on · /a5 off · /a5 status · /a5 accept (nghiệm thu A5 now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at nghiệm thu before a PR; Editor holder, RAM and Sync main)',
+      description: 'A5: /a5 (opens the A5 pane) · /a5 on · /a5 off · /a5 status · /a5 accept (nghiệm thu A5 now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at nghiệm thu before a PR; Editor holder, RAM and Sync main)',
       argumentHint: 'on | off | status | accept | gate <pie> <nopie> | sync HH:MM',
     })
     await readA5($)
@@ -1856,6 +1903,8 @@ export const register: Register = (on, options) => {
     if (/^sync\b/i.test(e.args.trim())) return { text: await syncCommand($, opts, e.args.trim().slice(4)) }
     if (/^accept\b/i.test(e.args.trim())) return { text: await acceptCommand($, opts) }
     if (/^gate\b/i.test(e.args.trim())) return { text: await gateCommand($, opts, e.args.trim().slice(4)) }
+    // A29: `/a5` with no words opens the A5 pane; `/a5 status` keeps the text reply below.
+    if (e.args.trim() === '') return { text: await openA5Pane($) }
     const arg = e.args.trim().toLowerCase()
     if (arg === 'on' || arg === 'off') {
       await $.store.set('a5', { on: arg === 'on' })
@@ -2033,4 +2082,6 @@ export const register: Register = (on, options) => {
 
   // Ather's pane: drawn by Ather beneath; this wraps what it drew.
   on('ui.render', { component: 'Pane', requestId: ATHER_PANE }, async ($, e, next) => drawPane($, opts, e, await next(e)))
+  // A29: the A5 pane is this plugin's own: drawn here, never by anything beneath.
+  on('ui.render', { component: 'Pane', requestId: A5_PANE }, async ($, e) => drawA5Pane($, opts, e))
 }

@@ -299,3 +299,36 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknow
     ],
   })
 }
+
+/** A28: one part of the compact A5 line in Ather's pane: its icon, its few words, and whether it needs attention. */
+export type LinePart = { key: string; icon: unknown; text: string; isWarn: boolean }
+
+/** A28: the one A5 block in Ather's pane: Editor · Memory · Sync main in a single row of quiet words (only a part that
+ * needs attention in the warning colour), then the "A5 ›" button that opens the A5 pane. One line on the terminal,
+ * one row on the desktop: the parts shrink and end in "…" before anything leaves the row; the button never shrinks. */
+export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean): unknown => {
+  const { Box, Text } = el
+  return Box({
+    key: 'hai-a5-line',
+    flexDirection: 'row',
+    width: '100%',
+    columnGap: 2,
+    alignItems: 'center',
+    marginTop: isDesktop ? 1 : 0,
+    children: [
+      ...parts.map(p =>
+        Box({
+          key: `hai-a5-line-${p.key}`,
+          flexDirection: 'row',
+          columnGap: 1,
+          flexShrink: 1,
+          minWidth: 0,
+          alignItems: 'center',
+          children: [p.icon, Text({ color: p.isWarn ? STATUS.warn : ATHER.quiet, wrap: 'truncate-end', children: p.text })],
+        }),
+      ),
+      Box({ key: 'hai-a5-line-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
+      Box({ key: 'hai-a5-line-open', flexShrink: 0, children: [button] }),
+    ],
+  })
+}

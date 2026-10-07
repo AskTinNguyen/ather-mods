@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, newSync, parseSyncFile, type SessionFile, type SyncFile } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PANE, PENDING, PROJ, atherTree, find, opts, refused, text, world, type Rec } from './world.ts'
+import { LOCK, ME, NOW, A5PANE, PENDING, PROJ, atherTree, find, opts, refused, text, world, type Rec } from './world.ts'
 
 // Rev 4 through the engine: the freeze as a lease (A13), the merge guard (A14), the sync's own commands (A15),
 // the sync worker (A12) and the session overview (A16). Other sessions are only their files.
@@ -177,7 +177,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     machine(w)
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    const tree = await $.ui.render({ ...PANE, surface } as never)
+    const tree = await $.ui.render({ ...A5PANE, surface } as never)
     // Since 0.8 (A26) the overview is a named list (one row per session) instead of one line; the same facts.
     expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 in S2 · 1 elsewhere')
     expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('●3️⃣ Loco fix (this session)no intent · active now')
@@ -191,7 +191,7 @@ test('A16: without the client\'s session list the overview falls back to Ather\'
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   machine(w)
   await $.session.start(START)
-  const tree = await $.ui.render(PANE as never)
+  const tree = await $.ui.render(A5PANE as never)
   expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 in S2')
   expect(['bbbbbbbb', 'dddddddd'].map(id8 => Boolean(find(tree, `hai-session-${id8}`)))).toEqual([true, true])
 })

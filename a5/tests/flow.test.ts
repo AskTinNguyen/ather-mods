@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { PROJ, LOCK, PENDING, ME, ENV, opts, BAT, NOW, LIME, type Rec, type Tree, k, refused, keys, find, firstText, text, type Proc, world, atherTree, PANE } from './world.ts'
+import { PROJ, LOCK, PENDING, ME, ENV, opts, BAT, NOW, LIME, type Rec, type Tree, k, refused, keys, find, firstText, text, type Proc, world, atherTree, A5PANE, PANE } from './world.ts'
 
 
 // ---------- A5 ----------
@@ -167,15 +167,16 @@ const GOLD = '#E8B84A'
 /** The brand label's color: the first Text of the masthead, or of the brand row once A5 adds its seal. */
 const brandColor = (t: unknown): unknown => firstText(t, 'hai-brand') ?? firstText(t, 'head-words')
 
-test('pane, A5 on: one row of Editor · Memory · Main tiles right under Ather\'s strip', opts(), async ($, on) => {
+test('pane, A5 on: Ather\'s pane gains one compact A5 line under its strip; the tools are in the A5 pane (A28, A29)', opts(), async ($, on) => {
   const w = world(on, { a5: true })
   w.put(LOCK, '1006-walkerext-s9 (artifact-any-legs-worker) since 14:30, expected end 15:10. Build S2Editor, headless tests. Waiting: 1006-loco-s3\n')
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   await $.ui.render(PANE as never)
   await w.clock.advance(50) // the sync read runs off the render
-  const tree = await $.ui.render(PANE as never)
-  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-overview', 'hai-a5-rules', 'foot'])
+  expect(keys(await $.ui.render(PANE as never))).toEqual(['head-words', 'strip', 'hai-a5-line', 'foot'])
+  const tree = await $.ui.render(A5PANE as never)
+  expect(keys(tree)).toEqual(['hai-tiles', 'hai-overview', 'hai-a5-rules'])
   expect(text(find(tree, 'hai-tile-editor'))).toContain('1006-walkerext-s9')
   expect(text(find(tree, 'hai-tile-editor'))).toContain('until 15:10 · 30 min left')
   expect(text(find(tree, 'hai-tile-memory'))).toContain('20.5 GB free')
@@ -186,31 +187,32 @@ test('pane on the desktop: the tiles are cards in Ather\'s strip language', opts
   world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const tree = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
   expect(find(tree, 'hai-tile-editor')?.props?.borderStyle).toBe('round')
   expect(find(tree, 'hai-tile-main-action')).toBeDefined() // A25: one action per tool
 })
 
-test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand, the five rules sit at the foot', opts(), async ($, on) => {
+test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand; the five rules sit at the foot of the A5 pane', opts(), async ($, on) => {
   world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const tree = await $.ui.render(PANE as never)
-  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-tiles', 'hai-overview', 'hai-a5-rules', 'foot'])
+  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-a5-line', 'foot'])
   expect(text(find(tree, 'hai-brand'))).toContain('★ A5')
   expect(brandColor(tree)).toBe(GOLD)
   expect(find(tree, 'strip')?.props?.borderColor).toBe('#3a3c36')
-  expect(text(find(tree, 'hai-a5-rules'))).toContain(', yêu đồng bào') // D9: rule 1's word is its own element (A20)
-  expect(find(tree, 'hai-rule1')?.type).toBe('Client')
-  expect(text(find(tree, 'hai-a5-rules'))).toContain('5 Khiêm tốn, thật thà, dũng cảm')
+  const a5 = await $.ui.render(A5PANE as never)
+  expect(text(find(a5, 'hai-a5-rules'))).toContain(', yêu đồng bào') // D9: rule 1's word is its own element (A20)
+  expect(find(a5, 'hai-rule1')?.type).toBe('Client')
+  expect(text(find(a5, 'hai-a5-rules'))).toContain('5 Khiêm tốn, thật thà, dũng cảm')
 })
 
-test('pane: views other than home get no tiles (A5 still seals and recolors them)', opts(), async ($, on) => {
+test('pane: views other than home get no A5 line (A5 still seals and recolors them)', opts(), async ($, on) => {
   world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(false))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const tree = await $.ui.render(PANE as never)
-  expect(keys(tree)).toEqual(['head-words', 'hai-a5-rules', 'foot'])
+  expect(keys(tree)).toEqual(['head-words', 'foot'])
   expect(brandColor(tree)).toBe(GOLD)
 })
 
@@ -220,13 +222,13 @@ test('pane on the desktop: each tile carries a pixel icon; still unless its stat
   const w = world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  const first = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const first = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
   const svg = (find(first, 'hai-tile-editor-main')?.children ?? [])[0] as Tree
   expect(svg?.type).toBe('Svg')
   expect(svg?.props?.isInteractive).toBeUndefined()
   w.put(LOCK, `1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n`)
   await w.clock.advance(60_000) // the minute refresh reads the new holder
-  const changed = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const changed = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
   const moving = (find(changed, 'hai-tile-editor-main')?.children ?? [])[0] as Tree
   expect(moving?.props?.isInteractive).toBe(true)
   expect(String(moving?.props?.source)).toContain('<set attributeName="fill"')

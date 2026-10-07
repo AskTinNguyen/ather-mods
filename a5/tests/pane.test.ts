@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync, parseSyncFile } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PANE, PROJ, atherTree, find, keys, opts, text, world } from './world.ts'
+import { LOCK, ME, NOW, A5PANE, PROJ, atherTree, find, keys, opts, text, world } from './world.ts'
 
 // A2: with A5 on, the three tools right under Ather's strip (Editor holder, Memory, Sync main), each with what it
 // must show, on the terminal and the desktop. Since 0.8 (A25) each tool has at most one action: Sync main's opens one
@@ -13,7 +13,7 @@ const label = (tree: unknown, key: string): string => String((find(tree, key)?.p
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`A2 pane (${surface}): Editor holder · Memory · Sync main under Ather's strip; /a5 gate moves the launch gate; Sync ⋯ plans, moves and cancels`, opts(), async ($, on) => {
     const w = world(on, { ram: '28.5', procs: [{ name: 'python', pid: 7, gb: 0.4, parentAlive: true }] })
-    const PANE_AT = { ...PANE, surface } as never
+    const PANE_AT = { ...A5PANE, surface } as never
     w.put(LOCK, `${heldLine({ lane: 'walker', sessionName: 'walker', id8: 'bbbbbbbb', since: T(14, 30), pid: null, end: T(15, 10), mode: 'interactive', pausable: false, nextSafe: 'after save', note: 'capture' })}\n`)
     w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify({ ...blankSession('bbbbbbbb-1111', 'walker', '', NOW), holding: { since: T(14, 30), end: T(15, 10), extended: 0 } }))
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
@@ -22,7 +22,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.ui.render(PANE_AT)
     await w.clock.advance(50) // the branch read runs off the render
     let tree = await $.ui.render(PANE_AT)
-    expect(keys(tree)).toEqual(surface === 'desktop' ? ['head-words', 'strip', 'hai-tiles', 'hai-overview', 'foot', 'hai-a5-rules'] : ['head-words', 'strip', 'hai-tiles', 'hai-overview', 'hai-a5-rules', 'foot']) // A27: the rules last
+    expect(keys(tree)).toEqual(['hai-tiles', 'hai-overview', 'hai-a5-rules']) // A29: the A5 pane, the rules last
     // Editor holder: who, until when, this session's place.
     const editor = text(find(tree, 'hai-tile-editor'))
     for (const want of ['walker', 'until 15:10 · 30 min left', 'you: next']) expect(editor).toContain(want)
@@ -69,7 +69,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
   test(`A2 pane (${surface}): a sync held elsewhere shows its phase and conflicts, without controls that are not this session's`, opts(), async ($, on) => {
     const w = world(on)
-    const PANE_AT = { ...PANE, surface } as never
+    const PANE_AT = { ...A5PANE, surface } as never
     w.put(`${HF}/sync.json`, JSON.stringify({ ...newSync(T(15, 0), { session: 'bbbbbbbb-1', id8: 'bbbbbbbb', lane: 'sync-lane' }, 'sync-lane', NOW), conflicts: [{ path: 'Source/S2/Foo.cpp', kind: 'self', match: 'abc' }, { path: 'Content/X.uasset', kind: 'foreign' }], conflictsAt: NOW, conflictsSource: 'merge-tree' }))
     w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify(blankSession('bbbbbbbb-1', 'sync-lane', '', NOW)))
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))

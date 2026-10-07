@@ -1,8 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { LOCK, PANE, PENDING, PROJ, all, atherTree, find, keys, opts, text, world } from './world.ts'
+import { LOCK, A5PANE, PANE, PENDING, PROJ, all, atherTree, find, keys, opts, text, world } from './world.ts'
 
-// A27: the five rules are the pane's last block (desktop: after everything Ather drew; terminal: right above Ather's
-// foot line), a small "A5 · Năm điều" heading then one rule per line, in the quietest text the surface offers
+// A27 (A29 since 0.9): the five rules are the A5 pane's last block (Ather's pane carries none), a small "A5 · Năm điều" heading then one rule per line, in the quietest text the surface offers
 // (quiet grey, dimmed), with rule 1's tổ quốc / project switch kept.
 const RULE_LINES = ['Học tập tốt, lao động tốt', 'Đoàn kết tốt, kỷ luật tốt', 'Giữ gìn vệ sinh thật tốt', 'Khiêm tốn, thật thà, dũng cảm']
 
@@ -12,9 +11,9 @@ for (const surface of ['terminal', 'desktop'] as const)
       world(on, { a5: true })
       on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(home))
       await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-      const tree = await $.ui.render({ ...PANE, surface } as never)
-      const order = keys(tree)
-      expect(surface === 'desktop' ? order.at(-1) : order.slice(-2).join(',')).toBe(surface === 'desktop' ? 'hai-a5-rules' : 'hai-a5-rules,foot')
+      const tree = await $.ui.render({ ...A5PANE, surface } as never)
+      expect(keys(tree).at(-1)).toBe('hai-a5-rules')
+      expect(find(await $.ui.render({ ...PANE, surface } as never), 'hai-a5-rules')).toBeUndefined() // none in Ather's pane, any view
       const rules = find(tree, 'hai-a5-rules')
       expect(rules?.props?.flexDirection).toBe('column')
       const lines = (rules?.children ?? []).map(c => (c as { props?: { key?: string } }).props?.key)
@@ -33,7 +32,7 @@ test('A27: motion off keeps the same block with "1 Yêu Project, yêu đồng b�
   world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const tree = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
   expect(text(find(tree, 'hai-a5-rule1'))).toBe('1 Yêu Project, yêu đồng bào')
   expect(find(tree, 'hai-a5-rule1')?.children?.[0]).toMatchObject({ type: 'Text', props: { dimColor: true } })
   expect(keys(tree).at(-1)).toBe('hai-a5-rules')
