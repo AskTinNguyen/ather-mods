@@ -249,3 +249,27 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean): unknown => 
 }
 
 const TERMINAL_LABEL: Record<string, string> = { editor: 'Editor', memory: 'Memory', main: 'Sync' }
+
+/** A19: one rule's row on the Nghiệm thu A5 card. */
+export type AcceptRow = { rule: number; name: string; state: 'pass' | 'fail' | 'na'; line: string }
+const MARK = { pass: '✓', fail: '✗', na: '–' } as const
+
+/** A19: the Nghiệm thu A5 card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
+ * one line each, ✓ / ✗ / – carried by the mark's color (never the text's). Terminal: one line per rule. */
+export const acceptCard = (el: El, title: string, sub: string, rows: readonly AcceptRow[], isDesktop: boolean): unknown => {
+  const { Box, Text } = el
+  const bad = rows.filter(r => r.state === 'fail').length
+  const color = (r: AcceptRow) => (r.state === 'pass' ? STATUS.ok : r.state === 'fail' ? STATUS.bad : ATHER.quiet)
+  const head = [Text({ color: ATHER.quiet, children: title }), Text({ bold: true, children: [Text({ color: bad ? STATUS.bad : STATUS.ok, children: '● ' }), bad ? `${bad} of 5 not met` : '5 of 5 met'] }), ...(sub ? [Text({ color: ATHER.quiet, children: sub })] : [])]
+  const row = (r: AcceptRow) =>
+    Box({
+      key: `hai-accept-${r.rule}`,
+      flexDirection: 'row',
+      columnGap: 1,
+      ...(isDesktop ? { minWidth: 0 } : { flexWrap: 'wrap' }),
+      children: [Text({ color: color(r), bold: true, children: MARK[r.state] }), Text({ children: `${r.rule} ${r.name}` }), Text({ color: ATHER.quiet, ...(isDesktop ? { wrap: 'wrap' } : {}), children: `· ${r.line}` })],
+    })
+  if (isDesktop)
+    return Box({ key: 'hai-accept', flexDirection: 'column', width: '100%', marginTop: 1, borderStyle: 'round', borderColor: ATHER.line, paddingX: 1, children: [Box({ key: 'hai-accept-head', flexDirection: 'row', columnGap: 1, children: head }), ...rows.map(row)] })
+  return Box({ key: 'hai-accept', flexDirection: 'column', width: '100%', marginTop: 1, children: [Box({ key: 'hai-accept-head', flexDirection: 'row', columnGap: 1, flexWrap: 'wrap', children: head }), ...rows.map(row)] })
+}

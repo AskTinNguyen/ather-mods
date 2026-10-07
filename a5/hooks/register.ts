@@ -13,7 +13,7 @@ import {
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
 import { A5_LOOK, ATHER, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
-import { editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
+import { acceptCard, editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
@@ -110,6 +110,11 @@ const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run th
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
 let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string } | null = null // A18/A19: the last nghiệm thu
+let acceptDirty = false // A19: a file changed since the last score
+let isScoring = false
+let shipCheckedAt = 0
+let shipSlug: string | null = null // A19: the tracked intent is in Ship (or ready to close)
+const SHIP_CHECK_MS = 5 * 60_000
 const CLIENTS_EVERY_MS = 5 * 60_000 // A16: the client's session list is read at most this often
 let clients: ClientRow[] | null = null // A16: null when the client's list tool is missing or refused
 let clientsAt = 0
@@ -204,7 +209,7 @@ async function sharedTest($: Engine, a5: A5, command: string, cwd: string): Prom
   return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? true
 }
 
-type AtherStatus = { role?: string; tracked?: { slug?: string; directorCalls?: string[] } | null; evidence?: Proof['evidence'] }
+type AtherStatus = { role?: string; tracked?: { slug?: string; stage?: string; directorCalls?: string[] } | null; evidence?: Proof['evidence'] }
 
 /** Ather's live state (its read-only `status` tool), or null without Ather. */
 async function atherStatus($: Engine): Promise<AtherStatus | null> {
@@ -1156,6 +1161,31 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
   }
 }
 
+/** A19: the card's score, off the render: the tracked intent's stage (Ship or Ready to close shows the card), then
+ * the score of this session's repository while a card is wanted. */
+async function refreshAccept($: Engine, opts: Opts): Promise<void> {
+  if (isScoring) return
+  isScoring = true
+  try {
+    const now = await $.clock.now()
+    shipCheckedAt = now
+    const status = await atherStatus($)
+    const stage = status?.tracked?.stage ?? ''
+    shipSlug = status?.tracked?.slug && /^(Ship|Ready to close)$/i.test(stage) ? status.tracked.slug : null
+    if (!shipSlug && !lastAccept) return
+    const a5 = await load($)
+    const cwd = await $.session.cwd()
+    const root = (await locate($, a5, `${cwd}/_`)).root
+    if (!root) return
+    acceptDirty = false
+    const slug = lastAccept?.slug ?? shipSlug
+    lastAccept = { at: now, slug, scores: score(await gatherAccept($, opts, a5, root, slug, '', undefined)), what: lastAccept?.what ?? 'Ship' }
+  } finally {
+    isScoring = false
+    $.ui.invalidate('ui.render')
+  }
+}
+
 /** /a5 accept: the score on demand for the repository this session works in (no PR body). */
 async function acceptCommand($: Engine, opts: Opts): Promise<string> {
   const a5 = await load($)
@@ -1568,6 +1598,18 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     const line = overviewLine(overview)
     kids.splice(stripAt + 2, 0, el.Box({ key: 'hai-overview', flexDirection: 'row', width: '100%', marginTop: isDesktop ? 1 : 0, children: [el.Text({ color: overview.withoutMod.length > 0 ? STATUS.warn : ATHER.quiet, ...(isDesktop ? { wrap: 'wrap' } : {}), children: line })] }))
   }
+  if (on && stripAt >= 0) {
+    // A19: the Nghiệm thu A5 card, once there is a score (a PR attempt, /a5 accept) or the tracked intent is in
+    // Ship; scored off the render, again when files changed, and the Ship check at most every 5 minutes.
+    const wantCard = lastAccept !== null || shipSlug !== null
+    if (!isScoring && ((wantCard && acceptDirty) || now - shipCheckedAt > SHIP_CHECK_MS)) $.clock.after(10, () => void refreshAccept($, opts))
+    if (lastAccept) {
+      const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
+      const card = acceptCard(el, 'Nghiệm thu A5', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop)
+      const after = kids.findIndex(k => keyOf(k) === 'hai-overview')
+      kids.splice((after >= 0 ? after : kids.findIndex(k => keyOf(k) === 'strip')) + 1, 0, card)
+    }
+  }
   if (on) {
     // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.
     const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
@@ -1709,6 +1751,8 @@ export const register: Register = (on, options) => {
       await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
+    // A19: a file changed (an edit, a git write): the card scores again at its next draw.
+    if (ran.isError !== true && (EDIT_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && gitWrites(str(input.command)).length > 0))) acceptDirty = true
     if (isOn && ran.isError !== true) {
       // What the coordination needs from the call: Editor use (the idle lease), PIE running, the paths edited.
       const text = isUnrealMcp(tool) ? JSON.stringify(input).slice(0, 4000) : ''
