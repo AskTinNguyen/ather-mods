@@ -273,18 +273,20 @@ export const acceptCard = (el: El, title: string, sub: string, rows: readonly Ac
 export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknown => {
   const { Box, Text } = el
   const dot = (r: SessionRow) => (!r.hasA5 ? STATUS.warn : r.activeMin !== null && r.activeMin < 5 ? STATUS.ok : ATHER.quiet)
+  // A29: one line per session: the title and the quiet words shrink and end in "…"; the dot, what it holds or waits
+  // for, and "no a5" never shrink.
   const row = (r: SessionRow) =>
     Box({
       key: `hai-session-${r.id8}`,
       flexDirection: 'row',
-      flexWrap: 'wrap',
       width: '100%',
       columnGap: 1,
       children: [
-        Text({ color: dot(r), children: '●' }),
-        Text({ bold: r.isMe, wrap: 'wrap', children: r.isMe ? `${r.title} (this session)` : r.title }),
-        Text({ color: ATHER.quiet, wrap: 'wrap', children: sessionDetail(r) }),
-        ...(r.hasA5 ? [] : [Text({ color: STATUS.warn, children: 'no a5' })]),
+        Box({ key: `hai-session-${r.id8}-dot`, flexShrink: 0, children: [Text({ color: dot(r), children: '●' })] }),
+        Box({ key: `hai-session-${r.id8}-title`, flexShrink: 1, minWidth: 0, children: [Text({ bold: r.isMe, wrap: 'truncate-end', children: r.isMe ? `${r.title} (this session)` : r.title })] }),
+        ...(r.holds.length ? [Box({ key: `hai-session-${r.id8}-holds`, flexShrink: 0, children: [Text({ children: r.holds.join(' · ') })] })] : []),
+        Box({ key: `hai-session-${r.id8}-detail`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ color: ATHER.quiet, wrap: 'truncate-end', children: sessionDetail(r) })] }),
+        ...(r.hasA5 ? [] : [Box({ key: `hai-session-${r.id8}-noa5`, flexShrink: 0, children: [Text({ color: STATUS.warn, children: 'no a5' })] })]),
       ],
     })
   return Box({
@@ -296,6 +298,39 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknow
       Box({ key: 'hai-overview-head', children: [Text({ color: ATHER.quiet, bold: isDesktop, wrap: 'wrap', children: v.header })] }),
       ...v.rows.map(row),
       ...(v.more > 0 ? [Box({ key: 'hai-overview-more', children: [Text({ color: ATHER.quiet, children: `+${v.more} more` })] })] : []),
+    ],
+  })
+}
+
+/** A28: one part of the compact A5 line in Ather's pane: its icon, its few words, and whether it needs attention. */
+export type LinePart = { key: string; icon: unknown; text: string; isWarn: boolean }
+
+/** A28: the one A5 block in Ather's pane: Editor · Memory · Sync main in a single row of quiet words (only a part that
+ * needs attention in the warning colour), then the "A5 ›" button that opens the A5 pane. One line on the terminal,
+ * one row on the desktop: the parts shrink and end in "…" before anything leaves the row; the button never shrinks. */
+export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean): unknown => {
+  const { Box, Text } = el
+  return Box({
+    key: 'hai-a5-line',
+    flexDirection: 'row',
+    width: '100%',
+    columnGap: 2,
+    alignItems: 'center',
+    marginTop: isDesktop ? 1 : 0,
+    children: [
+      ...parts.map(p =>
+        Box({
+          key: `hai-a5-line-${p.key}`,
+          flexDirection: 'row',
+          columnGap: 1,
+          flexShrink: 1,
+          minWidth: 0,
+          alignItems: 'center',
+          children: [p.icon, Text({ color: p.isWarn ? STATUS.warn : ATHER.quiet, wrap: 'truncate-end', children: p.text })],
+        }),
+      ),
+      Box({ key: 'hai-a5-line-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
+      Box({ key: 'hai-a5-line-open', flexShrink: 0, children: [button] }),
     ],
   })
 }

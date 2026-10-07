@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
+import { LOCK, ME, NOW, A5PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
 
 // A25: the three tools never leave their box, at the narrowest and a wide pane, desktop and terminal: every tool
 // is a full-width row whose narrowest possible layout (wrapping text at words, nothing truncated) fits the pane,
@@ -27,7 +27,7 @@ for (const surface of ['terminal', 'desktop'] as const)
   for (const columns of surface === 'terminal' ? [44, 100] : [40, 100])
     test(`A25 (${surface}, ${columns} columns): each tool fits its row, nothing truncated, one action at most, inside a box that never shrinks`, opts(), async ($, on) => {
       const w = await setup($, on, surface, false)
-      const P = { ...PANE, surface, props: { ...PANE.props, bodyColumns: columns } } as never
+      const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: columns } } as never
       await $.ui.render(P)
       await w.clock.advance(50)
       const tree = await $.ui.render(P)
@@ -49,7 +49,7 @@ for (const surface of ['terminal', 'desktop'] as const)
 for (const surface of ['terminal', 'desktop'] as const)
   test(`A25 (${surface}): holding the Editor and the sync, the actions are Release and Sync ⋯; Release frees the Editor`, opts(), async ($, on) => {
     const w = await setup($, on, surface, true)
-    const P = { ...PANE, surface, props: { ...PANE.props, bodyColumns: surface === 'terminal' ? 44 : 40 } } as never
+    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: surface === 'terminal' ? 44 : 40 } } as never
     let tree = await $.ui.render(P)
     expect([buttons(tree, 'hai-tile-editor'), buttons(tree, 'hai-tile-memory'), buttons(tree, 'hai-tile-main')]).toEqual([['Release'], [], ['Sync ⋯']])
     for (const k of ['editor', 'main']) expect([k, minWidth(find(tree, `hai-tile-${k}`)) <= (surface === 'terminal' ? 44 : 40)]).toEqual([k, true])

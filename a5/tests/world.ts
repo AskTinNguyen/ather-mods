@@ -122,6 +122,11 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return { text: e.text, ...(e.context ? { context: e.context } : {}) }
   })
   on('classic.Stop', async () => ({}))
+  // The surface places every pane a5 opens (A29), and the test can see which.
+  on('ui.open', async (_$: unknown, e: Rec) => {
+    ;(calls['ui.open'] ??= []).push(e)
+    return value({ isPlaced: true })
+  })
   on('tool.call', async (_$: unknown, e: Rec) => {
     // The dialog (`$.ui.ask` → AskUserQuestion): Hai picks `ask` when the test gives one.
     if (e.tool === 'AskUserQuestion' && answer !== undefined) {
@@ -165,6 +170,8 @@ export const atherTree = (home: boolean): never => ({
   ],
 }) as never
 export const PANE = { surface: 'terminal', component: 'Pane', requestId: 'ather', props: { title: 'ATHER AUTOMATA', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 22 }, view: {} } }
+/** A29: the A5 pane, drawn by a5 itself (no Ather beneath). */
+export const A5PANE = { ...PANE, requestId: 'a5' }
 
 // A25/A26: measuring a drawn tree the way the surface lays it out.
 /** The narrowest width a node can be laid out in, in cells, the way the surface lays boxes out: text that wraps
@@ -181,6 +188,8 @@ export const minWidth = (node: unknown, wraps = false): number => {
   const p = (t.props ?? {}) as Record<string, unknown>
   const kids = t.children ?? (p.children === undefined ? [] : [p.children].flat())
   if (t.type === 'Text') {
+    // A28: a text that truncates can shrink to its ellipsis and one cell.
+    if (typeof p.wrap === 'string' && p.wrap.startsWith('truncate')) return Math.min([...text(t)].length, 2)
     const isWrap = p.wrap === 'wrap' || wraps
     const s = text(t)
     return isWrap ? Math.max(0, ...s.split(/\s+/).map(w => [...w].length)) : [...s].length

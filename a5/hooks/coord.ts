@@ -921,15 +921,15 @@ export const sessionsView = (x: { me8: string; meTitle: string; files: readonly 
     const file = freshFiles.find(f => f.id8 === id8)
     const isMe = id8 === x.me8
     const holds: string[] = []
-    if (x.lock.id8 === id8 && (x.lock.kind === 'held' || x.lock.kind === 'handed')) holds.push(`Editor${x.lock.end ? ` until ${x.lock.end}` : ''}`)
+    if (x.lock.id8 === id8 && (x.lock.kind === 'held' || x.lock.kind === 'handed')) holds.push(`Editor${x.lock.end ? ` →${x.lock.end}` : ''}`)
     if (syncOpen && syncOpen.holder.id8 === id8) holds.push(`sync ${hhmm(syncOpen.at)}`)
     const place = queue.indexOf(id8)
-    if (place >= 0) holds.push(`Editor queue #${place + 1}`)
+    if (place >= 0) holds.push(`queue #${place + 1}`)
     const activeAt = lane?.lastActiveAt ?? null
     const seenAt = activeAt ?? (isMe ? now : (file?.heartbeatAt ?? lane?.mtimeMs ?? null))
     return {
       id8,
-      title: (isMe ? x.meTitle : '') || file?.title || x.names.get(id8) || id8,
+      title: oneLine(isMe ? x.meTitle : '') || oneLine(file?.title) || oneLine(x.names.get(id8)) || id8,
       intent: lane?.intent || 'no intent',
       holds,
       hasA5: isMe || Boolean(file),
@@ -946,6 +946,10 @@ export const sessionsView = (x: { me8: string; meTitle: string; files: readonly 
   return { header, rows: rows.slice(0, SESSION_ROWS), more: Math.max(0, rows.length - SESSION_ROWS) }
 }
 
-/** One row's words after its title: intent · holds · active how long ago (· no a5). */
+/** A29: a title on one line: newlines, tabs and runs of spaces become one space; blank stays blank (the row then
+ * shows the first 8 hex, never a lone dot). */
+export const oneLine = (s: string | undefined | null): string => (s ?? '').replace(/[\u0000-\u001f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim()
+
+/** One row's quiet words after its title and holds: intent · active how long ago. */
 export const sessionDetail = (r: SessionRow): string =>
-  [r.intent, ...r.holds, r.activeMin === null ? '' : r.activeMin < 1 ? `${r.activeKind} now` : `${r.activeKind} ${r.activeMin < 60 ? `${r.activeMin}m` : `${Math.round(r.activeMin / 60)}h`} ago`].filter(Boolean).join(' · ')
+  [r.intent, r.activeMin === null ? '' : r.activeMin < 1 ? `${r.activeKind} now` : `${r.activeKind} ${r.activeMin < 60 ? `${r.activeMin}m` : `${Math.round(r.activeMin / 60)}h`} ago`].filter(Boolean).join(' · ')

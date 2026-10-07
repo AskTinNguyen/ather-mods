@@ -1,6 +1,6 @@
 import { expect, test, type Mounted } from 'claude-code/testing'
 import { shown } from '../hooks/rule1.ts'
-import { LOCK, PANE, PENDING, PROJ, atherTree, find, opts, text, world } from './world.ts'
+import { LOCK, A5PANE, PENDING, PROJ, atherTree, find, opts, text, world } from './world.ts'
 
 // A20: the footer's first rule switches "Yêu tổ quốc" / "Yêu project" at random intervals while A5 and motion are
 // on, in a Client of its own (so a switch redraws that word only); motion off shows "Yêu Project" and no Client.
@@ -9,7 +9,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     world(on, { a5: true })
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    const ui = (await $.ui.mount({ plugin: 'a5', surface, component: 'Pane', requestId: 'ather', props: PANE.props } as never)) as unknown as Mounted<'terminal'>
+    const ui = (await $.ui.mount({ plugin: 'a5', surface, component: 'Pane', requestId: 'a5', props: A5PANE.props } as never)) as unknown as Mounted<'terminal'>
     const words = new Set<string>()
     const rest = new Set<string>()
     for (let n = 0; n < 60; n += 1) {
@@ -28,7 +28,7 @@ test('A20: with motion off the footer says "Yêu Project" and holds no switching
   world(on, { a5: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
+  const tree = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
   expect(text(find(tree, 'hai-a5-rules'))).toContain('1 Yêu Project, yêu đồng bào')
   expect(find(tree, 'hai-rule1')).toBeUndefined()
 })

@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync, titleFromRecord, type SessionFile } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
+import { LOCK, ME, NOW, A5PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
 
-// A26: the session overview is a short named list: one row per live S2 session (title, intent, what it holds or
+// A26 (one line per row since A29): the session overview is a short named list: one row per live S2 session (title, intent, what it holds or
 // waits for, how recently active; "no a5" when it runs without a5), six rows at most then "+N more", under a
 // one-line header. Eight sessions here: this one, five with a5, two with only Ather.
 const HF = 'E:/s2/Saved/A5'
@@ -49,7 +49,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     machine(w)
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    const P = { ...PANE, surface, props: { ...PANE.props, bodyColumns: 44 } } as never
+    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50) // titles are looked up off the render
     const tree = await $.ui.render(P)
@@ -57,17 +57,18 @@ for (const surface of ['terminal', 'desktop'] as const)
     const rows = (find(tree, 'hai-overview')?.children ?? []).map(c => text(c))
     expect(rows.slice(1)).toEqual([
       '●3️⃣ Loco fix (this session)no intent · active now',
-      '●Tail glowtail-vfx · Editor queue #1 · active 1m ago',
-      '●Walker capturewalker · Editor until 15:10 · active 2m ago',
-      '●Sync laneno intent · sync 16:00 · active 40m ago',
+      '●Tail glowqueue #1tail-vfx · active 1m ago',
+      '●Walker captureEditor →15:10walker · active 2m ago',
+      '●Sync lanesync 16:00no intent · active 40m ago',
       '●Loco walk fixloco · active 3m agono a5',
       '●eeeeeeeefx-sand · active 7m agono a5',
       '+2 more',
     ])
-    // Each row and the header wrap inside the narrow pane; nothing is one long line or cut.
+    // Each row fits the narrow pane on one line.
     for (const node of find(tree, 'hai-overview')?.children ?? []) expect(minWidth(node) <= 44).toBe(true)
-    expect(all(find(tree, 'hai-overview')).filter(n => String(n.props?.wrap ?? '').startsWith('truncate'))).toEqual([])
-    expect(find(tree, `hai-session-${ME.slice(0, 8)}`)?.props?.flexWrap).toBe('wrap')
+    // A29: rows are one line each (cut with an ellipsis, never wrapped); only the header may wrap.
+    expect((find(tree, 'hai-overview')?.children ?? []).filter(c => (c as { props?: { flexWrap?: unknown } }).props?.flexWrap !== undefined)).toEqual([])
+    expect(find(tree, `hai-session-${ME.slice(0, 8)}`)?.props?.flexWrap).toBeUndefined() // A29: one line per session
   })
 
 test('A26: A5 off shows no sessions list (Ather as it ships)', opts(), async ($, on) => {
@@ -75,5 +76,35 @@ test('A26: A5 off shows no sessions list (Ather as it ships)', opts(), async ($,
   machine(w)
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  expect(find(await $.ui.render(PANE as never), 'hai-overview')).toBeUndefined()
+  expect(find(await $.ui.render(A5PANE as never), 'hai-overview')).toBeUndefined()
 })
+
+// A29: Hai's two row bugs (L-11): a blank title showed a lone "●"; a title with a newline and emoji wrapped over two lines.
+const MULTI = '✅ 3️⃣ POC tattoo — TattooDemo BP\nverified in PIE, pushed to PR 32584'
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`A29 (${surface}): a blank title shows the first 8 hex; a multi-line title is one line, cut with "…"; holds and "no a5" stay`, opts(), async ($, on) => {
+    const w = world(on, { git: { [sid('dddddddd')]: { stdout: `"customTitle":${JSON.stringify(MULTI)}\n` } } })
+    w.put(`${HF}/editor/bbbbbbbb.json`, file('bbbbbbbb', '   ', { holding: { since: T(14, 30), end: T(15, 10), extended: 0 } }))
+    w.put(`${LANES}/${sid('bbbbbbbb')}.json`, lane('bbbbbbbb', 'walker', 2))
+    w.put(LOCK, `${heldLine({ lane: 'lane-bbbbbbbb', sessionName: 'x', id8: 'bbbbbbbb', since: T(14, 30), pid: null, end: T(15, 10), mode: 'interactive', pausable: false, nextSafe: 'after save', note: 'capture' })}\n`)
+    w.put(`${LANES}/${sid('dddddddd')}.json`, lane('dddddddd', 'tattoo', 3))
+    w.put(`${RECORDS}/${sid('dddddddd')}.jsonl`, '{"customTitle":"x"}\n')
+    on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+    await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
+    await $.ui.render(P)
+    await w.clock.advance(50)
+    const tree = await $.ui.render(P)
+    const blank = find(tree, 'hai-session-bbbbbbbb')
+    expect(text(blank)).toBe('●bbbbbbbbEditor →15:10walker · active 2m ago')
+    const multi = find(tree, 'hai-session-dddddddd')
+    expect(text(find(tree, 'hai-session-dddddddd-title'))).toBe(MULTI.split(String.fromCharCode(10)).join(' ').slice(0, 60).trim()) // one line; the record's title is kept to 60 characters
+    expect(text(multi)).not.toContain('\n')
+    expect(find(tree, 'hai-session-dddddddd-title')?.children?.[0]).toMatchObject({ type: 'Text', props: { wrap: 'truncate-end' } })
+    expect(text(find(tree, 'hai-session-dddddddd-noa5'))).toBe('no a5')
+    expect(find(tree, 'hai-session-bbbbbbbb-holds')?.props?.flexShrink).toBe(0)
+    for (const key of ['hai-session-bbbbbbbb', 'hai-session-dddddddd']) {
+      const row = find(tree, key)
+      expect([key, row?.props?.flexWrap, minWidth(row) <= 44]).toEqual([key, undefined, true])
+    }
+  })
