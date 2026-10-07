@@ -13,11 +13,13 @@ import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } 
 import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, untrackText } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { clockText, closestWord, localMinutes, parseIntent, searchIntents, sessionTitle } from './model.mjs'
+import { clockText, closestWord, localMinutes, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
-import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, classifyWorker, modelWord, propSvg, trailWords, workerState } from './squad.mjs'
-import { recordEnd, workerOf } from './workers.mjs'
+import { crewOf } from './crew.mjs'
+import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, crewWords, propSvg, trailWords } from './squad.mjs'
+import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
+import { recordEnd } from './workers.mjs'
 import { changeGlyph } from './changes.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
@@ -37,9 +39,6 @@ const ISSUES_EVERY_MS = 15 * 60 * 1000
 
 let cwd = ''
 let me = ''
-// The person's home folder, where the week-calendar plugin keeps ~/.calendar/latest.json.
-/** @type {string | null} */
-let userHome = null
 /** @type {import('./model.mjs').Intent[]} */
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
@@ -94,6 +93,20 @@ function io($) {
   }
 }
 
+// What transcripts.mjs and crew.mjs need of the engine.
+/** @param {Engine} $ @returns {import('./transcripts.mjs').Host} */
+function host($) {
+  return {
+    home: async () => (await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || '',
+    configDir: async () => (await $.env.get('CLAUDE_CONFIG_DIR')) || '',
+    list: path => $.fs.list(path),
+    read: path => $.fs.read(path).then(text => (typeof text === 'string' ? text : null), () => null),
+    exists: path => $.fs.exists(path).catch(() => false),
+    run: (argv, timeoutMs) => $.process.run(argv, { timeoutMs }).catch(() => undefined),
+    agents: () => $.agent.list().catch(() => []),
+  }
+}
+
 /** @param {Engine} $ */
 function laneOf($) {
   return state.lane(io($), cwd)
@@ -121,6 +134,8 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (!e.agentId && (await laneOf($)).isS2) await refresh($).catch(() => undefined)
+    // A worker's turn ended: it finished now, not when the pane is next drawn.
+    if (e.agentId) recordEnd(e.agentId, Date.now())
     if (e.agentId) $.ui.invalidate('ui.render')
     return result
   })
@@ -171,7 +186,7 @@ export function register(on) {
     if (e.requestId !== PANE_ID) return next(e)
     void wake($)
     if (paneMode === 'intent') await readIntentView($)
-    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf($))
+    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($))))
   })
 
   on('ui.close', ($, e, next) => {
@@ -190,8 +205,7 @@ async function openConsole($, folder) {
   isIssuesWarned = false
   isWhoWarned = false
   issueRetries = 0
-  userHome = null
-  sessionNames.clear()
+  resetTranscripts()
   isAwake = null
   view = { version: -1, at: 0, model: null }
   closedHint = null
@@ -225,6 +239,10 @@ async function startConsoleWork($) {
   if (!lane.isS2) return
   await refresh($)
   $.clock.every(60000, () => void refresh($).catch(() => undefined))
+  // A running worker's clock: redrawn every five seconds while one runs, never otherwise.
+  $.clock.every(5000, () => {
+    void $.agent.list().then(agents => agents.some(agent => agent.status === 'running') && $.ui.invalidate('ui.render')).catch(() => undefined)
+  })
   // watch.mjs may pick up last night's window just after this; show it.
   $.clock.after(1500, () => void refresh($).catch(() => undefined))
   void refreshIssues($).catch(() => undefined)
@@ -344,9 +362,8 @@ async function home($) {
   const now = Date.now()
   const away = await state.readAway(files)
   const profile = await state.readProfile(files, me, chosen)
-  if (userHome === null) {
-    try { userHome = ((await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || '').replace(/\\/g, '/') } catch { userHome = '' }
-  }
+  // The week-calendar plugin keeps this week's figures in ~/.calendar/latest.json.
+  const userHome = await homeDir(host($))
   const model = buildHome({
     intents,
     pinned: await state.readPinned(files),
@@ -364,7 +381,7 @@ async function home($) {
     last: await state.readLast(files, me),
     sent: [...sent],
     skills,
-    workers: (await $.agent.list().catch(() => [])).filter(agent => agent.status === 'running' && agent.parentId === undefined).length,
+    workers: (await $.agent.list().catch(() => [])).filter(agent => agent.status === 'running').length,
     now,
     tz,
     pack: chosen,
@@ -377,37 +394,8 @@ async function home($) {
 /** @param {Engine} $ @param {string} root @param {import('./model.mjs').EditorLock} lock */
 async function namedLock($, root, lock) {
   if (lock.state !== 'held' || !lock.session) return lock
-  const name = await sessionName($, root, lock.session).catch(() => '')
+  const name = await sessionName(host($), root, lock.session).catch(() => '')
   return { ...lock, holder: name ? `"${name}"` : `session ${lock.session}` }
-}
-
-/** @type {Map<string, { name: string, at: number }>} */
-const sessionNames = new Map()
-const SESSION_NAME_TTL_MS = 5 * 60 * 1000
-
-// Claude Code keeps each session's record as <config>/projects/<checkout path, dashed>/<session id>.jsonl;
-// its titles are lines in it. Read with grep (or PowerShell where there is none), never whole: records run to many MB.
-/** @param {Engine} $ @param {string} root @param {string} prefix the first 8 hex of the session id */
-async function sessionName($, root, prefix) {
-  const hit = sessionNames.get(prefix)
-  if (hit && Date.now() - hit.at < SESSION_NAME_TTL_MS) return hit.name
-  if (!userHome) return ''
-  let config = `${userHome}/.claude`
-  try { config = ((await $.env.get('CLAUDE_CONFIG_DIR')) || config).replace(/\\/g, '/') } catch { /* the default */ }
-  const dir = `${config}/projects/${root.replace(/[^a-zA-Z0-9]/g, '-')}`
-  const file = (await $.fs.list(dir).catch(() => [])).find(entry => entry.kind === 'file' && entry.name.startsWith(prefix) && entry.name.endsWith('.jsonl'))
-  const name = file ? sessionTitle(await titleLines($, `${dir}/${file.name}`)) : ''
-  sessionNames.set(prefix, { name, at: Date.now() })
-  return name
-}
-
-/** @param {Engine} $ @param {string} path */
-async function titleLines($, path) {
-  const pattern = '"(customTitle|aiTitle)":"[^"]*"'
-  const grep = await $.process.run(['grep', '-oE', pattern, path], { timeoutMs: 15000 }).catch(() => undefined)
-  if (grep && (grep.exitCode === 0 || grep.exitCode === 1)) return grep.stdout
-  const ps = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${pattern}' -AllMatches | ForEach-Object { $_.Matches.Value }`], { timeoutMs: 20000 }).catch(() => undefined)
-  return ps?.exitCode === 0 ? ps.stdout : ''
 }
 
 /** @param {Home} model */
@@ -1052,7 +1040,7 @@ async function readIntentView($) {
   const mine = state.shortSession(await state.sessionId(files))
   const evidence = await state.readEvidence(files, slug || mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
-  const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName($, root, by).catch(() => '')])))
+  const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
   intentView = { slug, isHere: slug !== '' && slug === pinned, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
 }
 
@@ -1074,48 +1062,9 @@ async function seeIntent($) {
 
 // ---------------------------------------------------------------- workers
 
-/**
- * @typedef {{ id: string, title: string, kind: import('./squad.mjs').Kind, model: string, state: import('./squad.mjs').WorkerState,
- *   prop: import('./squad.mjs').Prop | null, trail: import('./squad.mjs').Prop[], elapsed: number, tools: number }} Crew
- */
+/** @typedef {import('./crew.mjs').Crew} Crew */
 
-const IDLE_MS = 90000
 const DONE_SHOWN = 3
-
-// The session's own workers, newest first: what Claude Code says of each (status), and what the
-// watch half saw (kind, model, tool calls). A worker started before Ather loaded has no trail.
-/** @param {Engine} $ @returns {Promise<Crew[]>} */
-async function crewOf($) {
-  const now = Date.now()
-  const agents = (await $.agent.list().catch(() => [])).filter(agent => agent.parentId === undefined)
-  /** @type {Crew[]} */
-  const crew = []
-  for (const agent of agents) {
-    const seen = workerOf(agent.id)
-    const state = workerState(agent.status)
-    if (state === 'done' || state === 'failed') recordEnd(agent.id, now)
-    const started = seen?.startedAt ?? now
-    const isIdle = state === 'running' && seen !== undefined && now - seen.lastAt > IDLE_MS
-    crew.push({
-      id: agent.id,
-      title: seen?.title ?? agent.description,
-      kind: seen?.kind ?? classifyWorker({ subagentType: agent.type, prompt: '', description: agent.description }),
-      model: modelWord(seen?.model ?? ''),
-      state,
-      prop: isIdle ? 'idle' : state === 'running' ? (seen?.prop ?? null) : (seen?.trail.at(-1) ?? null),
-      trail: seen?.trail ?? [],
-      elapsed: (workerOf(agent.id)?.endedAt ?? now) - started,
-      tools: seen?.tools ?? 0,
-    })
-  }
-  return crew.reverse()
-}
-
-/** @param {number} ms */
-const clock = ms => {
-  const seconds = Math.max(0, Math.round(ms / 1000))
-  return seconds >= 3600 ? `${Math.floor(seconds / 3600)}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}h` : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-}
 
 // Running workers, then the last few done: avatar, title, kind and model, and how it went.
 /** @param {any} el @param {Engine} $ @param {Crew[]} crew @param {number} width */
@@ -1132,11 +1081,10 @@ function crewSections(el, $, crew, width) {
 function crewRow(el, $, one, width) {
   const look = KINDS[one.kind]
   const isLive = one.state === 'running' || one.state === 'waiting'
-  const doing = isLive ? (one.prop ? PROP_WORDS[one.prop] : 'starting') : one.state === 'done' ? 'finished' : 'stopped'
+  const { doing, line } = crewWords(one)
   const kindLine = el.Box({ key: `${one.id}-kind`, flexDirection: 'row', children: [el.Text({ color: look.fill, bold: true, children: look.word }), el.Text({ color: QUIET, children: ` · ${[one.model, doing].filter(Boolean).join(' · ')}` })] })
-  const tools = `${one.tools} tool call${one.tools === 1 ? '' : 's'}`
   const how = isLive
-    ? el.Text({ key: `${one.id}-how`, color: QUIET, children: `running ${clock(one.elapsed)} · ${tools}` })
+    ? el.Text({ key: `${one.id}-how`, color: QUIET, wrap: 'wrap', children: line })
     : el.Box({
         key: `${one.id}-how`,
         flexDirection: 'row',
@@ -1145,7 +1093,7 @@ function crewRow(el, $, one, width) {
             ? one.trail.flatMap((prop, index) => [...(index > 0 ? [el.Text({ color: QUIET, children: ' → ' })] : []), el.Svg({ source: propSvg(prop), alt: PROP_WORDS[prop], width: 22, height: 22 })])
             : one.trail.length > 0 ? [el.Text({ color: QUIET, children: trailWords(one.trail) })] : []),
           el.Text({ color: STATE_COLOURS[one.state], children: `${one.trail.length > 0 ? ' ' : ''}${STATE_GLYPHS[one.state]}` }),
-          el.Text({ color: QUIET, children: ` · ${one.state === 'done' ? 'took' : 'stopped at'} ${clock(one.elapsed)} · ${tools}` }),
+          ...(line ? [el.Text({ color: QUIET, children: ` · ${line}` })] : []),
         ],
       })
   const words = el.Box({

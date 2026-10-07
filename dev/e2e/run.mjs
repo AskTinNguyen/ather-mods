@@ -731,7 +731,13 @@ const hasFocus = tree => {
   const home = check(await pane(110), 110).lines.join('\n')
   expect('the pane offers the hand-over in the evening', /H E A D I N G   O F F \?/.test(home), home)
   expect('Heading off says what it is for: let AI work while you zZz', /H E A D I N G   O F F \?\nLet AI work while you zZz\n/.test(home), home)
-  expect("a teammate's name sits in its own column at the right edge, out of the detail line", home.split('\n').some(line => /^a: heavy-attack-gpu-crash {2,}Cinematic$/.test(line) && line.length === 110) && !/VFX · 2\/6 · Cinematic/.test(home), home)
+  expect("a teammate's name sits in its own column at the right edge, out of the detail line", (() => {
+    // Whichever teammates the checkout has: the first row under the heading ends in a name at column 110, and its detail line does not repeat it.
+    const lines = home.split('\n')
+    const at = lines.findIndex(line => /^a: /.test(line))
+    const name = /\s{2,}(\S.*)$/.exec(lines[at] ?? '')?.[1] ?? ''
+    return at > 0 && lines[at].length === 110 && name !== '' && !(lines[at + 1] ?? '').includes(name)
+  })(), home)
   expect('NEXT leads and is focused', /N E X T\nn: Pick up /.test(home), home)
   pressIn(await pane(110), 'Everything open')
   const all = check(await pane(72), 72)
@@ -821,6 +827,8 @@ const hasFocus = tree => {
   await engine.spawn({ agentId: 'w-review', description: 'Review the snow material change', prompt: 'Run the thermo-nuclear review on the snow material change and report findings.' })
   await engine.agentTool('w-review', { tool: 'Read', file_path: 'Plugins/Fluid/Source/Footprints.cpp' })
   await engine.agentTool('w-review', { tool: 'Skill', skill: 'thermo-nuclear-code-quality-review' })
+  // It answers (its turn ends, as Claude Code reports), then its status reads completed.
+  await engine.agentTurnEnd('w-review')
   engine.setAgentStatus('w-review', 'completed')
   const term = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · the worker squad (72 columns)', term.lines.join('\n')])
@@ -1217,6 +1225,35 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   fs.rmSync(root, { recursive: true, force: true })
 } else if (HANVIET_ROOT) {
   expect('HANVIET_ROOT names a han-viet checkout with .ather/profile.json', false, HANVIET_ROOT)
+}
+
+{
+  // Every worker Claude Code lists is shown, those another worker started included; clocks are true.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-home-'))
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' }, env: { USERPROFILE: home } })
+  // A worker started before Ather loaded: its start and model come from Claude Code's record of it.
+  // The record's folder differs in case from the checkout path, as E--s2- did for E:\S2_.
+  const records = path.join(home, '.claude/projects', root.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(), 'harness-session-0001/subagents')
+  fs.mkdirSync(records, { recursive: true })
+  fs.writeFileSync(path.join(records, 'agent-w-old.jsonl'), `{"type":"user","timestamp":"${new Date(Date.now() - 10 * 60000).toISOString()}"}\n{"type":"assistant","timestamp":"${new Date().toISOString()}"}\n`)
+  fs.writeFileSync(path.join(records, 'agent-w-old.meta.json'), '{"agentType":"general-purpose","description":"Separate PR: rule book gap","model":"opus"}')
+  engine.addAgent({ id: 'w-old', description: 'Separate PR: rule book gap' })
+  engine.addAgent({ id: 'w-lost', description: 'Worker with no record' })
+  await engine.spawn({ agentId: 'w-fix', description: 'Thermo round 1 fixes', prompt: 'Apply the fixes from the thermo-nuclear review findings: review each finding and fix it.' })
+  await engine.spawn({ agentId: 'w-f1', description: 'F1 thermo fixes outside plugin', prompt: 'Fix finding F1.', parentId: 'w-fix' })
+  await engine.agentTool('w-f1', { tool: 'Edit', file_path: 'Source/S2/A.cpp', old_string: 'a', new_string: 'b' })
+  // The fix round answers and ends; its fixer keeps running. Claude Code's status catches up later.
+  await engine.agentTurnEnd('w-fix')
+  await new Promise(resolve => setTimeout(resolve, 2500))
+  engine.setAgentStatus('w-fix', 'completed')
+  const text = check(await engine.render('Pane', { bodyColumns: 100 }, 'ather'), 100).lines.join('\n')
+  screens.push(['Terminal · workers a worker started, and one from before Ather loaded (100 columns)', text])
+  expect('a worker another worker started is counted and shown, naming who started it', /Workers 3/.test(text) && /W O R K E R S   ·   R U N N I N G   3/.test(text) && /F1 thermo fixes outside plugin\n  Builder · Opus · editing files\n  running 0:0\d · 1 tool call · started by Thermo round 1 fixes/.test(text), text)
+  expect("a worker's time ends when its turn ends, not when the pane is next drawn", /Thermo round 1 fixes\n  Builder · Opus · finished\n  ✓ · took 0:0[0-1]/.test(text), text)
+  expect('a worker from before Ather loaded gets its start and model from Claude Code\'s record', /Separate PR: rule book gap\n  General · Opus · working\n  running 10:0\d\n/.test(text), text)
+  expect('a worker with no record shows no clock and no count rather than wrong ones', /Worker with no record\n  General · working\n  running · start unknown\n/.test(text), text)
+  done()
+  fs.rmSync(home, { recursive: true, force: true })
 }
 
 // ---------------------------------------------------------------- report
