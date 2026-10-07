@@ -224,7 +224,8 @@ async function model(ctx: Ctx, force = false) {
 const workTitle = (one: Any) => (one.kind === "intent" ? one.slug : one.label);
 const workDetail = (one: Any) => {
   const detail = one.kind === "intent" ? String(one.hint).replace(`${one.slug} · `, "") : one.hint;
-  return one.kind === "intent" && !one.isMine && one.owner ? `${detail.replace(` · ${one.owner}`, "")} · ${one.owner}` : detail;
+  // A teammate's intent names its owner at the end of the line; the owner is sent on its own (drawn as a name chip).
+  return one.kind === "intent" && !one.isMine && one.owner ? String(detail).replace(` · ${one.owner}`, "") : detail;
 };
 
 export async function homeView(agentId: string, cwd: string, force = false): Promise<HomeView> {
@@ -271,6 +272,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
   const now = Date.now();
   const changes = slug ? ((await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[]) : [];
   const next = built.next;
+  const intentsBySlug = new Map<string, Any>(((await refreshRoot(ctx)).intents as Any[]).map((one) => [one.slug, one]));
   const ledger = away.ledgerPath && away.ledgerPath.startsWith(lane.root) ? away.ledgerPath.slice(lane.root.length + 1) : away.ledgerPath;
   return {
     ...empty,
@@ -293,7 +295,18 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
       ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isTour ? "tour" : next.work ? "work" : next.action ?? "step" }
       : null,
     // Other work: never the intent already tracked, nor the one Next already offers.
-    work: built.work.filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug)).slice(0, 12).map((one: Any) => ({ id: one.id, label: workTitle(one), hint: workDetail(one), kind: one.kind })),
+    work: built.work
+      .filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug))
+      .slice(0, 300)
+      .map((one: Any) => ({
+        id: one.id,
+        label: workTitle(one),
+        hint: workDetail(one),
+        kind: one.kind,
+        group: one.kind === "issue" ? ("issues" as const) : one.isMine ? ("mine" as const) : ("others" as const),
+        owner: one.kind === "intent" && !one.isMine ? String(one.owner ?? "") : "",
+        updatedAt: one.kind === "issue" ? Number(one.issue.updatedAt) || 0 : Number(intentsBySlug.get(one.slug)?.mtimeMs) || 0,
+      })),
     actions: built.actions.filter((one: Any) => one.prompt).map((one: Any) => ({ id: one.id, label: one.label })),
     skills: built.skills.map((one: Any) => ({ id: one.id, label: one.name, hint: one.description, group: one.group })),
     create: built.create.map((group: Any) => ({ group: group.group, items: group.items.map((item: Any) => ({ id: item.id, label: item.verb, hint: item.description || item.name })) })),

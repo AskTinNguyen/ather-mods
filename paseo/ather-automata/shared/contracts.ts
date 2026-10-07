@@ -39,7 +39,9 @@ export const homeView = z.object({
   }),
   items: z.array(row),
   next: row.nullable(),
-  work: z.array(row),
+  // What to work on, with where each row comes from (mine: your intents, issues: your assigned GitHub
+  // issues with no intent yet, others: teammates' intents) and when it last changed (ms; 0 unknown).
+  work: z.array(row.extend({ group: z.enum(["mine", "issues", "others"]), updatedAt: z.number(), owner: z.string() })),
   actions: z.array(row),
   skills: z.array(row.extend({ group: z.string() })),
   create: z.array(z.object({ group: z.string(), items: z.array(row) })),
