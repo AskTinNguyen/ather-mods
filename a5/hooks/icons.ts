@@ -2,6 +2,15 @@
 // when something changed: an ordered-dither reveal (a 4×4 Bayer threshold per cell) when a state turns
 // over, a dither sweep while a task runs. Still otherwise. On the terminal each icon is one glyph. Pure.
 
+/** A43: the first child of every SVG a5 draws: the sandboxed frame an interactive Svg runs in takes its colour scheme
+ * and background from the document's own :root, which the svg root's `style` does not reach (Hai's dark-theme
+ * screenshot: a white square beside each rule chip). With this rule the frame follows the app's scheme and stays
+ * transparent, the fix Ather's avatar-frame intent proved for its running avatars. */
+export const FRAME_STYLE = '<style>:root{color-scheme:light dark;background:transparent}</style>'
+
+/** A43: an SVG document's opening tag with FRAME_STYLE as its first child. */
+export const svgOpen = (attrs: string): string => `<svg xmlns="http://www.w3.org/2000/svg" ${attrs}${' style="color-scheme: light dark; background: transparent"'}>${FRAME_STYLE}`
+
 const BAYER = [
   [0, 8, 2, 10],
   [12, 4, 14, 6],
@@ -36,7 +45,7 @@ export const pixelSvg = (rows: readonly string[], color: string, motion: Motion 
   const width = Math.max(...rows.map(r => r.length))
   const cells: string[] = []
   rows.forEach((row, y) => [...row].forEach((ch, x) => ch === '#' && cells.push(cell(x, y, color, width, motion))))
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${rows.length}" shape-rendering="crispEdges" style="color-scheme: light dark; background: transparent">${cells.join('')}</svg>`
+  return `${svgOpen(`viewBox="0 0 ${width} ${rows.length}" shape-rendering="crispEdges"`)}${cells.join('')}</svg>`
 }
 
 // 5×7 glyphs for the seal: ★ A 5.
@@ -60,7 +69,7 @@ export const sealSvg = (red: string, ink: string, stamp: boolean): string => {
         if (bits & (16 >> b)) cells.push(stamp ? cell(2 + i * 6 + b, 2 + j, ink, width, { kind: 'reveal', from: red, ms: 650 }) : cell(2 + i * 6 + b, 2 + j, ink, width, { kind: 'still' }))
     }),
   )
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" shape-rendering="crispEdges" style="color-scheme: light dark; background: transparent">${cells.join('')}</svg>`
+  return `${svgOpen(`viewBox="0 0 ${width} ${height}" shape-rendering="crispEdges"`)}${cells.join('')}</svg>`
 }
 
 type El = { Svg?: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }
@@ -88,7 +97,7 @@ export const curtainSvg = (c: Curtain): string => {
       const [from, to] = c.clear ? ['1', '0'] : ['0', '1']
       cells.push(`<rect x="${x * 2}" y="${y * 2}" width="2" height="2" fill="${c.color}" opacity="${from}"><animate attributeName="opacity" from="${from}" to="${to}" begin="${c.begin + t * c.step}ms" dur="${c.step}ms" fill="freeze"/></rect>`)
     }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="480" shape-rendering="crispEdges" style="color-scheme: light dark; background: transparent"><defs><pattern id="a5c" width="8" height="8" patternUnits="userSpaceOnUse">${cells.join('')}</pattern></defs><rect width="2400" height="480" fill="url(#a5c)"/></svg>`
+  return `${svgOpen('width="2400" height="480" shape-rendering="crispEdges"')}<defs><pattern id="a5c" width="8" height="8" patternUnits="userSpaceOnUse">${cells.join('')}</pattern></defs><rect width="2400" height="480" fill="url(#a5c)"/></svg>`
 }
 
 /** A38: a one-shot stamp over a chip: each cell fills and clears once (opacity 0 → 1 → 0) at its Bayer threshold. */
@@ -99,7 +108,7 @@ export const stampSvg = (color: string, begin = 0, step = 8, dur = 600): string 
       const t = BAYER[y]?.[x] ?? 0
       cells.push(`<rect x="${x * 2}" y="${y * 2}" width="2" height="2" fill="${color}" opacity="0"><animate attributeName="opacity" values="0;1;0" begin="${begin + t * step}ms" dur="${dur}ms" fill="freeze"/></rect>`)
     }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="480" shape-rendering="crispEdges" style="color-scheme: light dark; background: transparent"><defs><pattern id="a5s" width="8" height="8" patternUnits="userSpaceOnUse">${cells.join('')}</pattern></defs><rect width="2400" height="480" fill="url(#a5s)"/></svg>`
+  return `${svgOpen('width="2400" height="480" shape-rendering="crispEdges"')}<defs><pattern id="a5s" width="8" height="8" patternUnits="userSpaceOnUse">${cells.join('')}</pattern></defs><rect width="2400" height="480" fill="url(#a5s)"/></svg>`
 }
 
 /** A38: a one-shot sweep across a band: columns of cells fill and clear in turn, left to right (or right to left), with
@@ -113,5 +122,5 @@ export const sweepSvg = (color: string, reverse: boolean, ms = 900, cols = 120, 
       const begin = Math.round((order / cols) * pass + at(x, y) * 40)
       cells.push(`<rect x="${x * 20}" y="${y * 12}" width="20" height="12" fill="${color}" opacity="0"><animate attributeName="opacity" values="0;1;0" begin="${begin}ms" dur="250ms" fill="freeze"/></rect>`)
     }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${cols * 20}" height="${rows * 12}" shape-rendering="crispEdges" style="color-scheme: light dark; background: transparent">${cells.join('')}</svg>`
+  return `${svgOpen(`width="${cols * 20}" height="${rows * 12}" shape-rendering="crispEdges"`)}${cells.join('')}</svg>`
 }

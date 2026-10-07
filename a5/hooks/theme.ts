@@ -11,6 +11,8 @@
 // backgrounds and stay the same in both themes.
 /** The band's star sits on the band red in both themes, so it keeps the bright gold (6.4:1 on #7A1712). */
 export const BAND_GOLD = '#F2C14E'
+import { FRAME_STYLE, svgOpen } from './icons.ts'
+
 export type ThemeName = 'dark' | 'light'
 export const PALETTES = {
   dark: { bg: '#17181A', quiet: '#8E918A', line: '#3a3c36', gold: '#F2C14E', ink: '#E9E4D8', paneInk: '#ECE9E2', a5Quiet: '#8E8A80', hit: '#E5534B', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' },
@@ -189,7 +191,7 @@ const tip = (el: ElB, c: RuleCard): unknown[] => {
   const svg = (el as unknown as { Svg?: (p: Record<string, unknown>) => unknown }).Svg
   if (!svg) return []
   const title = xml(c.purpose ? `${c.name} — ${c.purpose}` : c.name)
-  return [svg({ source: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" style="color-scheme: light dark; background: transparent"><title>${title}</title><circle cx="5" cy="5" r="2.2" fill="${V2.label}"/></svg>`, alt: c.name, width: 10, height: 10, isInteractive: true })]
+  return [svg({ source: `${svgOpen('viewBox="0 0 10 10"')}<title>${title}</title><circle cx="5" cy="5" r="2.2" fill="${V2.label}"/></svg>`, alt: c.name, width: 10, height: 10, isInteractive: true })]
 }
 
 /** A35: the hairline that divides rows and sets off the rule card: a full-width rule clipped to one line. */
@@ -249,11 +251,18 @@ export const withScarf = (source: string): string => {
   return source
 }
 
+/** A43: an interactive SVG a5 changes gets FRAME_STYLE as its first child, if it has none yet (a still one is left alone). */
+export const withFrameStyle = (source: string, isInteractive: boolean): string => {
+  if (!isInteractive || source.includes(FRAME_STYLE)) return source
+  const end = source.indexOf('>', source.indexOf('<svg'))
+  return end < 0 ? source : source.slice(0, end + 1) + FRAME_STYLE + source.slice(end + 1)
+}
+
 /** A39: every avatar Svg in a drawn tree, scarfed. */
 export const scarfAvatars = <T>(node: T): T => {
   if (!node || typeof node !== 'object') return node
   const n = node as unknown as Node
-  const props = n.type === 'Svg' && typeof n.props?.source === 'string' && isAvatarSvg(n.props.source) ? { ...n.props, source: withScarf(n.props.source) } : n.props
+  const props = n.type === 'Svg' && typeof n.props?.source === 'string' && isAvatarSvg(n.props.source) ? { ...n.props, source: withFrameStyle(withScarf(n.props.source), n.props.isInteractive === true) } : n.props
   const children = Array.isArray(n.children) ? n.children.map(scarfAvatars) : n.children
   return { ...n, ...(props ? { props } : {}), ...(children ? { children } : {}) } as unknown as T
 }
