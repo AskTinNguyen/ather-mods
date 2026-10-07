@@ -64,24 +64,83 @@ export const withSeal = (el: El, words: Node, sealEl?: unknown): unknown => {
   return { ...words, children: [el.Box({ key: 'hai-brand', flexDirection: 'row', gap: 1, alignItems: 'center', children: [brand, sealEl ?? seal(el)] }), ...rest] }
 }
 
-/** A27: the five rules as the pane's last block: a small heading "A5 · Năm điều", then one rule per line, in the
- * quietest text the surface has (the quiet grey, dimmed; the Text element has no smaller size on either surface).
- * A rule that fired this session shows its count in gold. */
-export const rulesFooter = (el: El, hits: RuleHits, rule1Word?: unknown): unknown =>
-  el.Box({
+
+/** A32: one rule's card, read from rules-a5.md (D9's line for the rule, D10's [H] / [N] tags for when it is checked). */
+export type RuleCard = { n: number; id: (typeof RULES)[number][0]; name: string; purpose: string; action: string; accept: string }
+
+/** The first sentence of a tagged segment (the card stays short; rules-a5.md keeps the whole text). */
+const firstSentence = (s: string): string => {
+  const t = s.trim()
+  const m = /^(.+?[.;])(\s|$)/.exec(t)
+  return (m?.[1] ?? t).trim()
+}
+
+/** A32: the five cards from rules-a5.md's rule lines `- <n> <name> (<purpose>) [H] … [N] … [P] …`; a rule whose line
+ * is missing falls back to D9's name with empty parts. */
+export const ruleCards = (md: string): RuleCard[] =>
+  RULES.map(([id, fallback]) => {
+    const n = Number(id.slice(1))
+    const line = md.split(/\r?\n/).find(l => new RegExp(`^-\\s*${n}\\s`).test(l)) ?? ''
+    const head = /^-\s*\d+\s+(.+?)\s*\(([^)]*)\)/.exec(line)
+    const tag = (t: 'H' | 'N') => {
+      const parts = line.split(/\[(H|N|P)\]/)
+      const out: string[] = []
+      for (let i = 1; i < parts.length; i += 2) if (parts[i] === t) out.push(firstSentence(parts[i + 1] ?? ''))
+      return out.join(' ')
+    }
+    return { n, id, name: head?.[1]?.trim() || fallback, purpose: head?.[2]?.trim() ?? '', action: tag('H'), accept: tag('N') }
+  })
+
+type ElB = El & { Button: (p: Record<string, unknown>) => unknown }
+
+/** A32: the five rules as five round seals in one row (red fill, gold rim, gold numeral; the numeral is a Button so a
+ * press opens its card), then the open rule's card under them (gold border): "<n> · <name>" in gold, the purpose,
+ * "Lúc hành động: …", "Nghiệm thu: …", "Chạm hôm nay: <hits>" in red. Pressing the open seal again closes it. Rule 1's
+ * tổ quốc / project word (A20) rides the heading. No paragraph of rule text. */
+export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, open: number | null, press: (n: number) => () => void, motto: unknown, look: { seal: string; rim: string; numeral: string; ink: string; quiet: string; hit: string }): unknown => {
+  const card = cards.find(c => c.n === open)
+  return el.Box({
     key: 'hai-a5-rules',
     flexDirection: 'column',
     width: '100%',
     marginTop: 1,
     children: [
-      el.Box({ key: 'hai-a5-rules-head', children: [el.Text({ color: ATHER.quiet, dimColor: true, children: 'A5 · Năm điều' })] }),
-      ...RULES.map(([id, name]) => {
-        const count = hits[id] > 0 ? [' ', el.Text({ color: A5_LOOK.gold, bold: true, children: String(hits[id]) })] : []
-        const n = id.slice(1)
-        // A20: rule 1's word switches (a self-drawing element) while A5 and motion are on; "Yêu Project" otherwise.
-        if (id === 'D1' && rule1Word !== undefined)
-          return el.Box({ key: 'hai-a5-rule1', flexDirection: 'row', flexWrap: 'wrap', children: [el.Text({ color: ATHER.quiet, dimColor: true, children: '1 ' }), rule1Word, el.Text({ color: ATHER.quiet, dimColor: true, wrap: 'wrap', children: [name.replace(/^Yêu Project/, ''), ...count] })] })
-        return el.Box({ key: `hai-a5-rule${n}`, children: [el.Text({ color: ATHER.quiet, dimColor: true, wrap: 'wrap', children: [`${n} ${name}`, ...count] })] })
+      el.Box({ key: 'hai-a5-rules-head', flexDirection: 'row', columnGap: 1, children: [el.Text({ color: look.numeral, bold: true, children: 'Năm điều' }), el.Text({ color: look.quiet, children: '·' }), motto] }),
+      el.Box({
+        key: 'hai-a5-seals',
+        flexDirection: 'row',
+        columnGap: 1,
+        children: cards.map(c =>
+          el.Box({
+            key: `hai-a5-seal-${c.n}-box`,
+            flexShrink: 0,
+            borderStyle: 'round',
+            borderColor: look.rim,
+            backgroundColor: look.seal,
+            paddingX: 1,
+            children: [el.Button({ key: `hai-a5-seal-${c.n}`, label: String(c.n), plain: true, onPress: press(c.n) })],
+          }),
+        ),
       }),
+      ...(card
+        ? [
+            el.Box({
+              key: 'hai-a5-rule-card',
+              flexDirection: 'column',
+              width: '100%',
+              borderStyle: 'round',
+              borderColor: look.rim,
+              paddingX: 1,
+              children: [
+                el.Text({ color: look.numeral, bold: true, wrap: 'wrap', children: `${card.n} · ${card.name}` }),
+                ...(card.purpose ? [el.Text({ color: look.ink, wrap: 'wrap', children: card.purpose })] : []),
+                el.Text({ color: look.quiet, wrap: 'wrap', children: `Lúc hành động: ${card.action || '— (không chặn ở lời gọi)'}` }),
+                el.Text({ color: look.quiet, wrap: 'wrap', children: `Nghiệm thu: ${card.accept || '—'}` }),
+                el.Text({ color: look.hit, wrap: 'wrap', children: `Chạm hôm nay: ${hits[card.id]}` }),
+              ],
+            }),
+          ]
+        : []),
     ],
   })
+}

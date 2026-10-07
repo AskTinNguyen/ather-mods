@@ -1,39 +1,72 @@
 import { expect, test } from 'claude-code/testing'
-import { LOCK, A5PANE, PANE, PENDING, PROJ, all, atherTree, find, keys, opts, text, world } from './world.ts'
+import { ruleCards } from '../hooks/theme.ts'
+import { A5PANE, LOCK, PANE, PENDING, PROJ, all, atherTree, find, keys, opts, text, world } from './world.ts'
 
-// A27 (A29 since 0.9): the five rules are the A5 pane's last block (Ather's pane carries none), a small "A5 · Năm điều" heading then one rule per line, in the quietest text the surface offers
-// (quiet grey, dimmed), with rule 1's tổ quốc / project switch kept.
-const RULE_LINES = ['Học tập tốt, lao động tốt', 'Đoàn kết tốt, kỷ luật tốt', 'Giữ gìn vệ sinh thật tốt', 'Khiêm tốn, thật thà, dũng cảm']
+// A27 → A32 (rev 9): the five rules are the A5 pane's last block as five round seals (red fill, gold rim, gold
+// numeral) in one row under "Năm điều" (rule 1's tổ quốc / project word beside it); pressing a seal opens that rule's
+// card (name, purpose, "Lúc hành động", "Nghiệm thu", "Chạm hôm nay"), pressing it again closes it. No paragraph.
+// The rule lines below follow rules-a5.md's format (`- <n> <name> (<purpose>) [H] … [N] … [P] …`).
+const RULES_MD = [
+  '## ★ A5 is ON',
+  "- 1 Yêu Project, yêu đồng bào (keep shared state and other sessions' work safe) [H] In the shared checkout, git that discards work needs Hai's approval. More text. [N] No path another live session is editing; nothing straight onto main. Tail.",
+  '- 2 Học tập tốt, lao động tốt (understand before acting, finish to proof) [P] Read the target first. [N] Every Acceptance row marked met carries its evidence; more.',
+  '- 3 Đoàn kết tốt, kỷ luật tốt (right role, right scope, right channel) [P] One writer per intent file. [H] With a scope file, edits outside it need approval. [N] The diff stays within the paths the intent names.',
+  '- 4 Giữ gìn vệ sinh thật tốt (leave it clean) [H] Secrets in edits are refused. [P] Tag debug lines. [N] No debug leftovers or secrets in the diff.',
+  '- 5 Khiêm tốn, thật thà, dũng cảm (claim only what was measured) [H] Removing test assertions needs approval. [P] Label claims. [N] The PR body claims no proof rung that Ather has not read pass.',
+].join('\n')
+
+test('A32: unit: the cards come from the rule lines: name, purpose, the first sentence of each [H] and [N]', () => {
+  const cards = ruleCards(RULES_MD)
+  expect(cards.map(c => c.name)).toEqual(['Yêu Project, yêu đồng bào', 'Học tập tốt, lao động tốt', 'Đoàn kết tốt, kỷ luật tốt', 'Giữ gìn vệ sinh thật tốt', 'Khiêm tốn, thật thà, dũng cảm'])
+  expect(cards[0]).toEqual({ n: 1, id: 'D1', name: 'Yêu Project, yêu đồng bào', purpose: "keep shared state and other sessions' work safe", action: "In the shared checkout, git that discards work needs Hai's approval.", accept: 'No path another live session is editing;' })
+  expect([cards[1]?.action, cards[1]?.accept]).toEqual(['', 'Every Acceptance row marked met carries its evidence;'])
+  expect(ruleCards('').map(c => [c.name, c.purpose, c.action])).toEqual([['Yêu Project, yêu đồng bào', '', ''], ['Học tập tốt, lao động tốt', '', ''], ['Đoàn kết tốt, kỷ luật tốt', '', ''], ['Giữ gìn vệ sinh thật tốt', '', ''], ['Khiêm tốn, thật thà, dũng cảm', '', '']])
+})
 
 for (const surface of ['terminal', 'desktop'] as const)
-  for (const home of [true, false])
-    test(`A27 (${surface}, ${home ? 'home' : 'another view'}): the rules are the last block, a heading and five lines, dim; rule 1 still switches`, opts(), async ($, on) => {
-      world(on, { a5: true })
-      on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(home))
-      await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-      const tree = await $.ui.render({ ...A5PANE, surface } as never)
-      expect(keys(tree).at(-1)).toBe('hai-a5-rules')
-      expect(find(await $.ui.render({ ...PANE, surface } as never), 'hai-a5-rules')).toBeUndefined() // none in Ather's pane, any view
-      const rules = find(tree, 'hai-a5-rules')
-      expect(rules?.props?.flexDirection).toBe('column')
-      const lines = (rules?.children ?? []).map(c => (c as { props?: { key?: string } }).props?.key)
-      expect(lines).toEqual(['hai-a5-rules-head', 'hai-a5-rule1', 'hai-a5-rule2', 'hai-a5-rule3', 'hai-a5-rule4', 'hai-a5-rule5'])
-      expect(text(find(tree, 'hai-a5-rules-head'))).toBe('A5 · Năm điều')
-      for (const [n, words] of RULE_LINES.entries()) expect(text(find(tree, `hai-a5-rule${n + 2}`))).toBe(`${n + 2} ${words}`)
-      expect(text(find(tree, 'hai-a5-rule1'))).toBe('1 , yêu đồng bào') // the word itself is the Client's
-      expect(find(tree, 'hai-rule1')?.type).toBe('Client')
-      expect((find(tree, 'hai-rule1')?.props?.props as { dim?: boolean } | undefined)?.dim).toBe(true)
-      const texts = all(rules).filter(n => n.type === 'Text')
-      expect(texts.length).toBeGreaterThan(5)
-      expect(texts.filter(n => n.props?.dimColor !== true && n.props?.color !== '#E8B84A')).toEqual([]) // only a gold hit count is not dim
-    })
+  test(`A32 (${surface}): five seal buttons, last in the A5 pane; a press opens the right card with its four parts; again closes it`, opts(), async ($, on) => {
+    world(on, { a5: true, rules: RULES_MD })
+    on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+    await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+    const P = { ...A5PANE, surface } as never
+    let tree = await $.ui.render(P)
+    expect(keys(tree).at(-1)).toBe('hai-a5-rules')
+    expect(find(await $.ui.render({ ...PANE, surface } as never), 'hai-a5-rules')).toBeUndefined() // none in Ather's pane
+    expect(text(find(tree, 'hai-a5-rules-head')).startsWith('Năm điều')).toBe(true)
+    expect(find(tree, 'hai-rule1')?.type).toBe('Client') // A20: the switch rides the heading
+    const seals = all(find(tree, 'hai-a5-seals')).filter(n => n.type === 'Button').map(n => [n.props?.key, n.props?.label])
+    expect(seals).toEqual([1, 2, 3, 4, 5].map(n => [`hai-a5-seal-${n}`, String(n)]))
+    for (const n of [1, 2, 3, 4, 5]) expect(find(tree, `hai-a5-seal-${n}-box`)?.props).toMatchObject({ borderStyle: 'round', flexShrink: 0 })
+    expect(find(tree, 'hai-a5-rule-card')).toBeUndefined()
+    // Rule 3 is hit once (an edit outside the scope file would; here the counter is driven through a refused call).
+    await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-3', surface } as never)
+    tree = await $.ui.render(P)
+    const card = (find(tree, 'hai-a5-rule-card')?.children ?? []).map(c => text(c))
+    expect(card).toEqual(['3 · Đoàn kết tốt, kỷ luật tốt', 'right role, right scope, right channel', 'Lúc hành động: With a scope file, edits outside it need approval.', 'Nghiệm thu: The diff stays within the paths the intent names.', 'Chạm hôm nay: 0'])
+    expect(text(find(tree, 'hai-a5-seals'))).toBe('') // no paragraph: the seals carry nothing but their numeral labels
+    expect(keys(find(tree, 'hai-a5-rules'))).toEqual(['hai-a5-rules-head', 'hai-a5-seals', 'hai-a5-rule-card'])
+    await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-2', surface } as never)
+    tree = await $.ui.render(P)
+    expect((find(tree, 'hai-a5-rule-card')?.children ?? []).map(c => text(c))[2]).toBe('Lúc hành động: — (không chặn ở lời gọi)')
+    await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-2', surface } as never)
+    expect(find(await $.ui.render(P), 'hai-a5-rule-card')).toBeUndefined()
+  })
 
-test('A27: motion off keeps the same block with "1 Yêu Project, yêu đồng bào" as a plain dim line', { options: { a5WhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('A32: "Chạm hôm nay" counts the rule\'s hits (a refused --no-verify is rule 1 and 5)', opts(), async ($, on) => {
+  world(on, { a5: true, rules: RULES_MD })
+  await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' })
+  await $.ui.render(A5PANE as never)
+  await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-1', surface: 'terminal' } as never)
+  const card = (find(await $.ui.render(A5PANE as never), 'hai-a5-rule-card')?.children ?? []).map(c => text(c))
+  expect(card.at(-1)).toBe('Chạm hôm nay: 1')
+})
+
+test('A32: motion off keeps the seals with a still "Yêu Project" beside the heading', { options: { a5WhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
   world(on, { a5: true })
-  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const tree = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
-  expect(text(find(tree, 'hai-a5-rule1'))).toBe('1 Yêu Project, yêu đồng bào')
-  expect(find(tree, 'hai-a5-rule1')?.children?.[0]).toMatchObject({ type: 'Text', props: { dimColor: true } })
+  expect(text(find(tree, 'hai-a5-rules-head'))).toBe('Năm điều·Yêu Project')
+  expect(find(tree, 'hai-rule1')).toBeUndefined()
   expect(keys(tree).at(-1)).toBe('hai-a5-rules')
 })

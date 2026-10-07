@@ -35,7 +35,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5 RULES {SESSION8}' } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -49,7 +49,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   const clock = mock.clock(on, { now: NOW })
   on('fs.read', async (_$: unknown, e: { path: string }) => {
     if (k(e.path).endsWith('/rules/config.json')) return value(JSON.stringify(CONFIG))
-    if (k(e.path).endsWith('/rules/rules-a5.md')) return value('A5 RULES {SESSION8}')
+    if (k(e.path).endsWith('/rules/rules-a5.md')) return value(rules)
     if (k(e.path).endsWith('/rules/rules-flow.md')) return value('FLOW RULES {SESSION8}')
     const t = files.get(k(e.path))
     return t === undefined ? { deny: `ENOENT: ${e.path}` } : value(t)

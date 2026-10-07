@@ -12,7 +12,7 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, noHits, recolor, replaceKeyed, ruleCards, rulesSeals, withSeal, type RuleHits } from './theme.ts'
 import { acceptCard, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
@@ -64,6 +64,8 @@ let markedFrom: string | null = null // the title before this session marked it,
 let a5On = false
 let a5FlipAt = 0
 let hits: RuleHits = noHits()
+let hitsDay = '' // A32: the day the counts are for ('Chạm hôm nay')
+let openRule: number | null = null // A32: the rule whose card is open in the A5 pane
 let isS2 = false
 let lockView: LockView | undefined
 let vitals: Vitals | undefined
@@ -1866,7 +1868,19 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   // A27: the five rules, last; A20: rule 1's word switches tổ quốc / project in a Client of its own.
   const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
   const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet, dim: true } }) : undefined
-  kids.push(rulesFooter(el, hits, rule1))
+  // A32: the five seals; a press opens or closes that rule's card. "Chạm hôm nay": the counts start over each day.
+  const today = ymd(now)
+  if (hitsDay !== today) {
+    if (hitsDay) hits = noHits()
+    hitsDay = today
+  }
+  await load($) // the rules text the cards read
+  const motto = rule1 ?? el.Text({ color: ATHER.quiet, children: 'Yêu Project' })
+  const pressSeal = (n: number) => () => {
+    openRule = openRule === n ? null : n
+    $.ui.invalidate('ui.render')
+  }
+  kids.push(rulesSeals(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { seal: A5_LOOK.sealBg, rim: A5_LOOK.gold, numeral: A5_LOOK.gold, ink: INK, quiet: ATHER.quiet, hit: STATUS.bad }))
   return recolor(el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement)
 }
 
