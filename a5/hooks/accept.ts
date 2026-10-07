@@ -1,6 +1,6 @@
 // Nghiệm thu A5 (A18, D9, D10): the five rules scored over a whole branch right before a PR is opened and when an
 // intent closes, never per turn. Pure: no `$`; register.ts gathers the inputs cheaply and path-scoped (the branch
-// diff against main, the added lines, the intent's four files, Ather's proof, the touch files) and acts on the score.
+// diff against origin/main, the added lines, the intent's four files, Ather's proof, the touch files) and acts on the score.
 import { basename, globMatch, proofGap, proofProblems, rx, section, type A5Config, type Proof } from './a5.ts'
 
 export type RuleId = 1 | 2 | 3 | 4 | 5
@@ -21,9 +21,12 @@ export type AcceptInput = {
   /** The intent the branch works on, or null (then the light version: rules 3 by diff, 4, 5). */
   slug: string | null
   branch: string
-  /** `git diff --name-only main...HEAD`. */
+  /** Why the branch diff could not be read whole (no base, a git failure or timeout, output cut), or null. Then
+   * nothing is scored: every rule shows – with this, and the gate refuses (an unread diff never passes). */
+  diffProblem?: string | null
+  /** `git diff --name-only origin/main...HEAD` (main when origin/main is missing). */
   files: string[]
-  /** Added lines per file (`git diff -U0 main...HEAD`). */
+  /** Added lines per text file (`git diff -U0 origin/main...HEAD`, binaries excluded). */
   added: Map<string, string[]>
   prompt: string
   progress: string
@@ -88,6 +91,7 @@ const isDoc = (f: string) => /\.(md|txt|rst)$/i.test(f) || lower(f).startsWith('
 
 /** The five rules over the branch: each passes, fails with its issues, or does not apply. */
 export const score = (x: AcceptInput): RuleScore[] => {
+  if (x.diffProblem) return RULES5.map(([rule]) => ({ rule, state: 'na' as const, line: unreadLine(x.diffProblem ?? ''), issues: [] }))
   const scores: RuleScore[] = []
   const mk = (rule: RuleId, issues: Issue[], passLine: string, na = false): RuleScore => ({ rule, state: na ? 'na' : issues.length ? 'fail' : 'pass', line: na ? passLine : issues.length ? issues.map(i => `${i.file ? `${i.file}: ` : ''}${i.what}`).join('; ') : passLine, issues })
   const own = x.slug ? namedPaths(x.prompt, x.slug) : []
@@ -165,6 +169,11 @@ export const score = (x: AcceptInput): RuleScore[] => {
   scores.push(mk(5, r5, 'claims match the evidence'))
   return scores
 }
+
+/** An unread branch diff is no pass: the card line and the gate text. */
+export const unreadLine = (why: string): string => `could not read the whole branch diff (${why})`
+export const unreadText = (why: string): string =>
+  `A5 · Nghiệm thu — ${unreadLine(why)} → open the PR from a slice branch cut from origin/main, or Hai lets this one through`
 
 export const failed = (scores: readonly RuleScore[]): RuleScore[] => scores.filter(s => s.state === 'fail')
 

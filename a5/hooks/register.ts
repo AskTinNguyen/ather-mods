@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
-import { acceptText, closesIntent, failed, isPrCommand, namedPaths, ruleName, score, type AcceptInput, type RuleScore } from './accept.ts'
+import { acceptText, closesIntent, failed, isPrCommand, namedPaths, ruleName, score, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -1037,6 +1037,9 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
 // ---------- Nghiệm thu A5 (A18): the five rules over the branch, before a PR and when an intent closes ----------
 const PASS_ONCE = 'Cho PR này qua'
 
+/** Binaries left out of the added-lines diff (they carry no lines to score and make it big). */
+const BINARY_EXCLUDES = ['uasset', 'umap', 'ubulk', 'uexp', 'png', 'jpg', 'jpeg', 'tga', 'exr', 'hdr', 'psd', 'fbx', 'abc', 'wav', 'ogg', 'mp4', 'dll', 'exe', 'pdb', 'lib', 'zip', '7z'].map(x => `:(exclude,icase)*.${x}`)
+
 /** The added lines per file of `git diff -U0`. */
 const addedLines = (diff: string): Map<string, string[]> => {
   const out = new Map<string, string[]>()
@@ -1071,10 +1074,24 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
     const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
     return r && r.exitCode === 0 ? r.stdout : ''
   }
-  const base = (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'main'], { timeoutMs: 15_000 }).catch(() => null))?.exitCode === 0 ? 'main' : 'origin/main'
+  // The base is origin/main: a local main in the shared checkout can be far behind it, and main...HEAD would then
+  // list everything main merged since as this branch's work. Local main only when origin/main is missing.
+  const hasRef = async (ref: string) => (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { timeoutMs: 15_000 }).catch(() => null))?.exitCode === 0
+  const base = (await hasRef('origin/main')) ? 'origin/main' : (await hasRef('main')) ? 'main' : null
   const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-  const files = (await git(['diff', '--name-only', `${base}...HEAD`])).split(/\r?\n/).map(f => f.trim()).filter(Boolean)
-  const added = addedLines(await git(['diff', '-U0', '--no-color', `${base}...HEAD`]))
+  // An unread diff never passes: a failure, a timeout or a cut output is named, and nothing is scored.
+  const whole = async (args: string[]): Promise<{ out: string; why: string | null }> => {
+    const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
+    if (!r) return { out: '', why: `git ${args[0]} ${args[1]} timed out or did not start` }
+    if (r.exitCode !== 0) return { out: '', why: `git ${args[0]} ${args[1]} exited ${r.exitCode}` }
+    if (r.isStdoutTruncated) return { out: '', why: `git ${args[0]} ${args[1]} output passed 4 MiB` }
+    return { out: r.stdout, why: null }
+  }
+  const names = base ? await whole(['diff', '--name-only', `${base}...HEAD`]) : { out: '', why: 'no origin/main or main to diff against' }
+  const text = base && !names.why ? await whole(['diff', '-U0', '--no-color', `${base}...HEAD`, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
+  const diffProblem = names.why ?? text.why
+  const files = names.out.split(/\r?\n/).map(f => f.trim()).filter(Boolean)
+  const added = addedLines(text.out)
   const status = await atherStatus($)
   const fromDiff = [...new Set(files.map(f => /^docs\/intent\/([^/]+)\//.exec(f)?.[1]).filter((s): s is string => Boolean(s)))]
   const slug = slugHint ?? status?.tracked?.slug ?? (fromDiff.length === 1 ? (fromDiff[0] ?? null) : null)
@@ -1108,7 +1125,8 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
     prompt,
     progress,
     findings,
-    promptDiff: slug ? await git(['diff', `${base}...HEAD`, '--', `docs/intent/${slug}/prompt.md`]) : '',
+    diffProblem,
+    promptDiff: slug && base ? await git(['diff', `${base}...HEAD`, '--', `docs/intent/${slug}/prompt.md`]) : '',
     proof: status?.tracked?.slug === slug ? proofOf(status) : null,
     body,
     othersTouch,
@@ -1145,16 +1163,21 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
     }
   }
   if (!root) return null
-  const scores = score(await gatherAccept($, opts, a5, root, slug, body, agentId))
+  const x = await gatherAccept($, opts, a5, root, slug, body, agentId)
+  const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: slug ?? null, scores, what }
   $.ui.invalidate('ui.render')
   const bad = failed(scores)
-  if (bad.length === 0) return null
-  const text = acceptText(scores, what)
+  // An unread branch diff is no pass: refused with why, like a failing score.
+  if (bad.length === 0 && !x.diffProblem) return null
+  const text = x.diffProblem ? unreadText(x.diffProblem) : acceptText(scores, what)
   if (agentId !== undefined) return `${text}\n(a worker does not ask Hai: leave it undone, stop and report it to the session that briefed you)`
   if (opts.a5WhenPresent === 'deny') return text
   try {
-    const answer = await $.ui.ask(`Nghiệm thu A5: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Cho qua lần này?`, { options: [PASS_ONCE, 'Không'], header: 'Nghiệm thu A5' })
+    const question = x.diffProblem
+      ? `Nghiệm thu A5: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Cho qua lần này?`
+      : `Nghiệm thu A5: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Cho qua lần này?`
+    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'Không'], header: 'Nghiệm thu A5' })
     return answer === PASS_ONCE ? null : `${text}\n(Hai said no)`
   } catch {
     return `${text}\n(nobody could approve it now)`
@@ -1192,10 +1215,11 @@ async function acceptCommand($: Engine, opts: Opts): Promise<string> {
   const cwd = await $.session.cwd()
   const root = (await locate($, a5, `${cwd}/_`)).root
   if (!root) return 'Nghiệm thu A5: this session is not in a git repository.'
-  const scores = score(await gatherAccept($, opts, a5, root, null, '', undefined))
+  const x = await gatherAccept($, opts, a5, root, null, '', undefined)
+  const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: null, scores, what: 'on demand' }
   $.ui.invalidate('ui.render')
-  return [`Nghiệm thu A5 (${failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
+  return [`Nghiệm thu A5 (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
 }
 
 /** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */

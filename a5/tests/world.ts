@@ -35,7 +35,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -85,6 +85,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     const argv = e.argv.join(' ')
     runs.push(argv)
     const hit = Object.entries(git).find(([needle]) => argv.includes(needle))?.[1]
+    if (hit?.deny) return { deny: hit.deny } // the run rejects, as a timeout does
     const stdout = hit ? hit.stdout
       : argv.includes('ConvertTo-Json') ? JSON.stringify({ freeGb: Number(machine.ram), diskGb: machine.disk, procs: machine.procs })
         : argv.includes('rev-parse') ? 'HaiHuynh/20261005'
@@ -92,7 +93,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
             : argv.includes('--merges') ? 'def5678 · 3 days ago'
               : argv.includes('origin/main') ? 'abc1234 · 2 hours ago'
                 : machine.ram
-    return value({ exitCode: hit?.exitCode ?? 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+    return value({ exitCode: hit?.exitCode ?? 0, stdout, stderr: '', isStdoutTruncated: hit?.truncated === true, isStderrTruncated: false })
   })
   const calls: Record<string, unknown[]> = {}
   for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'tool.register'])

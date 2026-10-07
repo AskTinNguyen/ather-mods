@@ -102,7 +102,7 @@ claude plugin test D:/Projects/ather-mods/a5
 
 ## Giới hạn
 - Hook là best-effort: lách được bằng biến hoặc script trung gian; file sửa bằng lệnh shell không vào file touch (nghiệm thu vẫn thấy chúng qua diff của nhánh).
-- Nghiệm thu chấm theo diff `main...HEAD` (hoặc `origin/main...HEAD`) đã commit; file chưa commit chỉ hiện ở điều 4 khi là untracked trong checkout chung. Mở PR bằng công cụ khác ngoài `gh` (web, MCP GitHub) thì không bị chấm.
+- Nghiệm thu chấm theo diff `origin/main...HEAD` đã commit (`main` chỉ khi không có origin/main: main local trong checkout chung có thể tụt xa); dòng thêm chỉ lấy từ file text (bỏ .uasset, .umap và các file nhị phân khác). Diff không đọc trọn được (git lỗi, quá 30 s, hay output quá 4 MiB) thì **không** tính là đạt: lệnh mở PR bị từ chối với lý do, thẻ ghi *not scored* và năm dòng –; cắt một nhánh nhỏ từ origin/main, hoặc Hai cho qua; file chưa commit chỉ hiện ở điều 4 khi là untracked trong checkout chung. Mở PR bằng công cụ khác ngoài `gh` (web, MCP GitHub) thì không bị chấm.
 - Không có compare-and-set: lock ghi theo kiểu đọc-so-ghi rồi đọc lại; hai người ghi chen giữa hai lần đọc thì một người thua và tick sau quyết lại.
 - "Checkout chung" = working tree chính (`.git` là thư mục); worktree liên kết (`.git` là file) là của worker. `cd <worktree> && git …` vẫn bị coi là checkout chung (dùng `git -C`).
 - Dry-run lúc cutoff dùng `origin/main` đã fetch lần cuối (a5 không fetch); chỉ 40 đường dẫn đầu được xếp theo rule 11, phần còn lại tính là foreign; tối đa 5.000 file main thêm mới được kiểm tra trên đĩa.

@@ -76,3 +76,47 @@ test('A18: closing an intent is scored the same way; /a5 accept shows the score 
     '✓ 5 Khiêm tốn, thật thà, dũng cảm: claims match the evidence',
   ])
 })
+
+// Orchestrator review of rev 5: the base is origin/main (a stale local main is not), and an unread diff never passes.
+const OWN = 'Source/S2/Tail/Glow.cpp\ndocs/intent/tail-vfx/progress.md\n'
+const STALE = `${OWN}Source/S2/Combat/Hit.cpp\nContent/S2/Maps/L_TALab.umap\nConfig/DefaultGame.ini\n` // what main merged since local main
+const UNREAD = 'could not read the whole branch diff'
+const NEXT = '→ open the PR from a slice branch cut from origin/main, or Hai lets this one through'
+
+test('review: the branch is diffed against origin/main, not a stale local main; main only when origin/main is missing', opts(), async ($, on) => {
+  const git = { 'diff --name-only origin/main...HEAD': { stdout: OWN }, 'diff --name-only main...HEAD': { stdout: STALE }, 'diff -U0': { stdout: DIFF }, 'worktree list': { stdout: '' }, 'rev-parse --abbrev-ref HEAD': { stdout: 'HaiHuynh/tail-vfx\n' } }
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git })
+  setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect(w.runs.filter(r => r.includes('diff --name-only')).map(r => r.split(' -- ')[0]?.split(' ').pop())).toEqual(['origin/main...HEAD'])
+  const u0 = w.runs.find(r => r.includes('diff -U0')) ?? ''
+  expect([u0.includes('origin/main...HEAD'), u0.includes(':(exclude,icase)*.uasset'), u0.includes(':(exclude,icase)*.umap')]).toEqual([true, true, true])
+})
+
+test('review: without origin/main the local main is the base', opts(), async ($, on) => {
+  const git = { 'origin/main^{commit}': { stdout: '', exitCode: 1 }, 'diff --name-only main...HEAD': { stdout: OWN }, 'diff -U0': { stdout: DIFF }, 'worktree list': { stdout: '' }, 'rev-parse --abbrev-ref HEAD': { stdout: 'HaiHuynh/tail-vfx\n' } }
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git })
+  setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect(w.runs.some(r => r.includes('diff --name-only main...HEAD'))).toBe(true)
+})
+
+test('review: a name-only diff that times out is no pass: refused with why, nothing scored, the gh call never runs; /a5 accept shows – rows', opts(), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: { ...branch(OWN), 'diff --name-only': { stdout: '', deny: 'timed out after 30000 ms' } } })
+  setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBe(`A5 · Nghiệm thu — ${UNREAD} (git diff --name-only timed out or did not start) ${NEXT}`)
+  expect(ran(w)).toBe(0)
+  const shown = String((await $.command.run({ command: 'a5', args: 'accept' } as never)).text).split('\n')
+  expect(shown[0]).toBe('Nghiệm thu A5 (not scored):')
+  expect(shown.slice(1).every(l => l.startsWith('– ') && l.endsWith(`${UNREAD} (git diff --name-only timed out or did not start)`))).toBe(true)
+})
+
+test('review: a -U0 diff cut at 4 MiB is no pass (a worker is refused at once); Hai can still let it through', opts('ask'), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: { ...branch(OWN), 'diff -U0': { stdout: DIFF, truncated: true } }, ask: 'Cho PR này qua' })
+  setup(w)
+  const why = refused(await $.tool.call({ tool: 'Bash', command: PR, agentId: 'worker-1' } as never))
+  expect(why?.split('\n')[0]).toBe(`A5 · Nghiệm thu — ${UNREAD} (git diff -U0 output passed 4 MiB) ${NEXT}`)
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 0])
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([1, 1])
+})

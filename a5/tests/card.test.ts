@@ -51,3 +51,17 @@ test('A19: not in Ship, no card until /a5 accept asks for one; without an intent
   expect(text(find(tree, 'hai-accept-head'))).toContain('5 of 5 met')
   expect(rowText(tree, 2)).toBe('–2 Học tập tốt, lao động tốt· no intent: acceptance rows not scored')
 })
+
+test('review: when the branch diff cannot be read whole the card says "not scored" and every rule reads – with why', opts(), async ($, on) => {
+  const w = world(on, { out: { 'mcp__ather-automata__status': status('Ship') }, git: { ...git, 'diff -U0': { stdout: '', truncated: true } } })
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  w.put(`${INTENT}/prompt.md`, PROMPT)
+  w.put(`${INTENT}/progress.md`, MET)
+  const P = { ...PANE, surface: 'desktop' } as never
+  await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
+  await $.ui.render(P)
+  await w.clock.advance(50)
+  const tree = await $.ui.render(P)
+  expect(text(find(tree, 'hai-accept-head'))).toContain('● not scored')
+  for (const n of [1, 2, 3, 4, 5]) expect(rowText(tree, n).startsWith('–') && rowText(tree, n).endsWith('could not read the whole branch diff (git diff -U0 output passed 4 MiB)')).toBe(true)
+})
