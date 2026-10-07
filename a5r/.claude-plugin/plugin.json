@@ -1,12 +1,12 @@
 {
-  "name": "a5",
-  "version": "0.11.3",
-  "description": "Hai's S2 flow beside Ather Automata, which it never changes. A5 off: Ather exactly as it ships, plus the 🟥/⏯️ title marks. /a5 on: the five rules (D9), checked at the action only for what cannot be undone and at A5 acceptance (at Ather's Ship prompt, before a PR through gh or an MCP tool, at an intent close, and after the fact for a PR it never scored; a card in Ather's pane), and coordination for the sessions sharing one S2 checkout: Editor holder (queue, leases, the S2 standard's lock lines), RAM (safe cleanup, launch and PIE gates), Sync main holder (cutoff, a freeze that is a lease with a hard end, a sync worker that runs the merge, the MERGE_HEAD guard, conflicts to their owners), with a5 notices that never enter intent files, one compact A5 line of icons and values in Ather's pane (★ A5 › on seal red) and an A5 pane of its own (/a5, all in English): a thin seal-red band, one tools list, the open sessions, the acceptance card and five rule chips that open a card each; one-shot pixel dithers on the desktop.",
+  "name": "a5r",
+  "version": "0.12.0",
+  "description": "A5R (Agent 5 Rules): Hai's S2 flow beside Ather Automata, which it never changes. A5R off: Ather exactly as it ships, plus the 🟥/⏯️ title marks. /a5r on: the five rules (D9), checked at the action only for what cannot be undone and at A5R acceptance (at Ather's Ship prompt, before a PR through gh or an MCP tool, at an intent close, and after the fact for a PR it never scored; a card in Ather's pane), and coordination for the sessions sharing one S2 checkout: Editor holder (queue, leases, the S2 standard's lock lines), RAM (safe cleanup, launch and PIE gates), Sync main holder (cutoff, a freeze that is a lease with a hard end, a sync worker that runs the merge, the MERGE_HEAD guard, conflicts to their owners), with a5r notices that never enter intent files, one compact A5R line of icons and values in Ather's pane (★ A5R › on seal red) and an A5R pane of its own (/a5r, all in English): a thin seal-red band, one tools list, the open sessions, the acceptance card and five rule chips that open a card each; one-shot pixel dithers on the desktop.",
   "author": { "name": "HaiHuynh" },
   "userConfig": {
-    "a5WhenPresent": {
+    "a5rWhenPresent": {
       "type": "string",
-      "title": "A5 approvals when you are here",
+      "title": "A5R approvals when you are here",
       "description": "ask: a dialog asks you before a destructive git/fs command or a shared-config edit runs; deny: the agent is refused and must ask you to run it. A worker (subagent) is never asked: it is refused and reports. During an Ather away window the question goes to its ledger as a D-<n> and the call is refused.",
       "default": "ask",
       "options": ["ask", "deny"]
@@ -20,32 +20,32 @@
     "motion": {
       "type": "string",
       "title": "Pixel motion in Ather's pane",
-      "description": "on: a tile's pixel icon dithers in when its state turns over, the Branch icon sweeps while a sync runs, the A5 seal stamps in; off: every icon stays still.",
+      "description": "on: a tile's pixel icon dithers in when its state turns over, the Branch icon sweeps while a sync runs, the A5R seal stamps in; off: every icon stays still.",
       "default": "on",
       "options": ["on", "off"]
     },
     "launchGatePieGb": {
       "type": "number",
-      "title": "A5 Editor launch gate, slot with PIE (GB free)",
-      "description": "Free RAM, after the safe cleanup, a slot with PIE needs before the Editor is launched (an Editor already open is reused). /a5 gate <with PIE> <without PIE> moves it for every session; /a5 gate reset returns to this value. The PIE gate itself (start at 5 GB, abort under 3 GB) is fixed.",
+      "title": "A5R Editor launch gate, slot with PIE (GB free)",
+      "description": "Free RAM, after the safe cleanup, a slot with PIE needs before the Editor is launched (an Editor already open is reused). /a5r gate <with PIE> <without PIE> moves it for every session; /a5r gate reset returns to this value. The PIE gate itself (start at 5 GB, abort under 3 GB) is fixed.",
       "default": 31
     },
     "launchGateGb": {
       "type": "number",
-      "title": "A5 Editor launch gate, slot without PIE (GB free)",
+      "title": "A5R Editor launch gate, slot without PIE (GB free)",
       "description": "Free RAM, after the safe cleanup, a slot without PIE needs before the Editor is launched.",
       "default": 28
     },
     "syncMergeMinutes": {
       "type": "number",
-      "title": "A5 Sync main: freeze length for a merge (minutes)",
+      "title": "A5R Sync main: freeze length for a merge (minutes)",
       "description": "The freeze from the sync time is a lease: past this many minutes without done or abort the sync expires, git and the Editor open again for every session, and Hai gets a 🟥.",
       "default": 45
     },
     "syncBuildMinutes": {
       "type": "number",
-      "title": "A5 Sync main: freeze length for a merge with a build (minutes)",
-      "description": "The same hard end for a sync planned with a build (/a5 sync HH:MM build, or Build: on in the panel's Sync ⋯ dialog).",
+      "title": "A5R Sync main: freeze length for a merge with a build (minutes)",
+      "description": "The same hard end for a sync planned with a build (/a5r sync HH:MM build, or Build: on in the panel's Sync ⋯ dialog).",
       "default": 90
     },
     "pendingFile": {

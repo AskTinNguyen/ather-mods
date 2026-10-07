@@ -2,18 +2,18 @@ import { expect, test } from 'claude-code/testing'
 import { FRAME_STYLE, curtainSvg, pixelSvg, sealSvg, stampSvg, sweepSvg, ICONS } from '../hooks/icons.ts'
 import { svgOpenEnd, withFrameStyle } from '../hooks/theme.ts'
 import { AVATARS } from './avatars.fixture.ts'
-import { A5PANE, PANE, PROJ, all, atherTree, opts, world, type Tree } from './world.ts'
+import { A5RPANE, PANE, PROJ, all, atherTree, opts, world, type Tree } from './world.ts'
 
-// A43 (rev 13): every Svg a5 draws with isInteractive carries `<style>:root{color-scheme:light dark;background:transparent}</style>`
+// A43 (rev 13): every Svg a5r draws with isInteractive carries `<style>:root{color-scheme:light dark;background:transparent}</style>`
 // as the first child of its svg, so the sandboxed frame's page takes the app's scheme and stays transparent (the svg
 // root's style alone does not reach it: Hai's dark-theme screenshot showed a white square beside each rule chip).
-// A47 (d): the evidence that every interactive Svg a5 draws has the rule is the engine test below (both panes, both
+// A47 (d): the evidence that every interactive Svg a5r draws has the rule is the engine test below (both panes, both
 // themes, every effect drawn); rev 13's generated list of Svg calls (a fixture the suite could not regenerate, blind to a
-// multi-line, reordered or destructured call) was dropped. The unit test covers each SVG source a5 builds.
+// multi-line, reordered or destructured call) was dropped. The unit test covers each SVG source a5r builds.
 const firstChild = (source: string): string => source.slice(svgOpenEnd(source) + 1).slice(0, FRAME_STYLE.length)
 const starts = (source: string) => firstChild(source) === FRAME_STYLE
 
-test('A43: unit: every SVG source a5 builds has FRAME_STYLE as its first child', () => {
+test('A43: unit: every SVG source a5r builds has FRAME_STYLE as its first child', () => {
   expect(FRAME_STYLE).toBe('<style>:root{color-scheme:light dark;background:transparent}</style>')
   // What each call draws.
   const moving = pixelSvg(ICONS.editor, '#F2C14E', { kind: 'reveal', from: '#000000', ms: 700 })
@@ -33,12 +33,12 @@ for (const theme of ['dark', 'light'] as const)
     world(on, { theme })
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => ({ ...(atherTree(true) as object), children: [...((atherTree(true) as unknown as Tree).children ?? []), { type: 'Svg', props: { source: running, alt: 'editor', width: 40, height: 40, isInteractive: true } }] }) as never)
     await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-    await $.command.run({ command: 'a5', args: 'off' } as never)
-    await $.command.run({ command: 'a5', args: 'on' } as never) // the seal stamps in
-    await $.command.run({ command: 'a5', args: '' } as never) // the entrance
+    await $.command.run({ command: 'a5r', args: 'off' } as never)
+    await $.command.run({ command: 'a5r', args: 'on' } as never) // the seal stamps in
+    await $.command.run({ command: 'a5r', args: '' } as never) // the entrance
     await $.tool.call({ tool: 'Bash', command: 'git push --force origin HaiHuynh/x' }) // a chip stamp
-    await $.command.run({ command: 'a5', args: 'accept' } as never) // the score resolve
-    const svgs = [...all(await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)), ...all(await $.ui.render({ ...PANE, surface: 'desktop' } as never))].filter(n => n.type === 'Svg' && n.props?.isInteractive === true)
+    await $.command.run({ command: 'a5r', args: 'accept' } as never) // the score resolve
+    const svgs = [...all(await $.ui.render({ ...A5RPANE, surface: 'desktop' } as never)), ...all(await $.ui.render({ ...PANE, surface: 'desktop' } as never))].filter(n => n.type === 'Svg' && n.props?.isInteractive === true)
     expect(svgs.length).toBeGreaterThan(10)
     expect(svgs.filter(n => !starts(String(n.props?.source))).map(n => String(n.props?.source).slice(0, 90))).toEqual([])
     expect(svgs.some(n => String(n.props?.alt) === 'editor')).toBe(true) // the running avatar was checked too

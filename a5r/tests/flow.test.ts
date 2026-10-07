@@ -1,19 +1,19 @@
 import { expect, test } from 'claude-code/testing'
-import { PROJ, LOCK, PENDING, ME, ENV, opts, BAT, NOW, LIME, type Rec, type Tree, k, refused, keys, find, firstText, text, type Proc, world, atherTree, A5PANE, PANE } from './world.ts'
+import { PROJ, LOCK, PENDING, ME, ENV, opts, BAT, NOW, LIME, type Rec, type Tree, k, refused, keys, find, firstText, text, type Proc, world, atherTree, A5RPANE, PANE } from './world.ts'
 
 
-// ---------- A5 ----------
-test('A5 on: a refused command never reaches the tool', opts(), async ($, on) => {
+// ---------- A5R ----------
+test('A5R on: a refused command never reaches the tool', opts(), async ($, on) => {
   const w = world(on)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5 · D1/D5')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5R · D1/D5')
   expect(w.seen.length).toBe(0)
 })
 
-test('A5 off: the rules, nghiệm thu and the Editor gate all rest (D1)', opts(), async ($, on) => {
-  const w = world(on, { a5: false })
+test('A5R off: the rules, nghiệm thu and the Editor gate all rest (D1)', opts(), async ($, on) => {
+  const w = world(on, { a5r: false })
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
-  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2; // A5TMP\n')
-  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5TMP' })
+  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2; // A5RTMP\n')
+  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5RTMP' })
   expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
   w.put(LOCK, '1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n')
   expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets' } as never))).toBeUndefined()
@@ -21,8 +21,8 @@ test('A5 off: the rules, nghiệm thu and the Editor gate all rest (D1)', opts()
   expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toBeUndefined()
 })
 
-test('A5 off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; 🟥 still marks the title', opts(), async ($, on) => {
-  const w = world(on, { a5: false, ram: '2.1' })
+test('A5R off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; 🟥 still marks the title', opts(), async ($, on) => {
+  const w = world(on, { a5r: false, ram: '2.1' })
   w.put(LOCK, '1006-other-s9 (worker) since 13:30, expected end 14:00. session ffffffff\n') // over its lease, RAM under the PIE gate
   w.put(PENDING, '')
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
@@ -40,11 +40,11 @@ test('A5 off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; �
   expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' && e.title === '🟥 3️⃣ Loco fix')).toBe(true)
 })
 
-test('/a5 on and /a5 off flip the switch every session reads', opts(), async ($, on) => {
-  world(on, { a5: false })
-  expect((await $.command.run({ command: 'a5', args: 'on' } as never)).text).toContain('A5 on')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5 · D1/D5')
-  expect((await $.command.run({ command: 'a5', args: 'off' } as never)).text).toContain('A5 off')
+test('/a5r on and /a5r off flip the switch every session reads', opts(), async ($, on) => {
+  world(on, { a5r: false })
+  expect((await $.command.run({ command: 'a5r', args: 'on' } as never)).text).toContain('A5R on')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5R · D1/D5')
+  expect((await $.command.run({ command: 'a5r', args: 'off' } as never)).text).toContain('A5R off')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
 })
 
@@ -68,18 +68,18 @@ test('shared config edit in a git project needs Hai', opts(), async ($, on) => {
 test('A17: no per-turn report: a turn with edits, a failed build and no report ends; the action gates still hold', opts(), async ($, on) => {
   const w = world(on, { out: { [BAT]: 'Building...\nResult: Failed (OtherCompilationError)' } })
   w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
-  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5TMP' })
+  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5RTMP' })
   await $.tool.call({ tool: 'Bash', command: BAT })
   expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
   // What cannot be undone is still checked at the action (D10).
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5 · D1/D5')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5R · D1/D5')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain("needs Hai's approval")
   expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Source/S2/Key.cpp`, content: `k = 'ghp_${'a'.repeat(36)}'` }))).toContain('secret')
-  expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toContain('mcp__a5__editor')
+  expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toContain('mcp__a5r__editor')
 })
 
 
-// ---------- A5 inside Ather's intent flow ----------
+// ---------- A5R inside Ather's intent flow ----------
 const STATUS_TOOL = 'mcp__ather-automata__status'
 const status = (o: Rec) => JSON.stringify({ me: 'hai', role: 'techart', area: 'VFX', ...o })
 
@@ -132,7 +132,7 @@ test('Editor: writes need the lock to name this session; reads pass; never save-
   const w = world(on)
   const save = { tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets', arguments: { paths: ['/Game/X'] } }
   w.put(LOCK, '1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n')
-  expect(refused(await $.tool.call(save as never))).toContain('A5 · Editor lock')
+  expect(refused(await $.tool.call(save as never))).toContain('A5R · Editor lock')
   expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'get_actor' } as never))).toBeUndefined()
   w.put(LOCK, `1006-me-s1 (this lane) since 14:30, expected end 15:10. session ${ME.slice(0, 8)}\n`)
   expect(refused(await $.tool.call(save as never))).toBeUndefined()
@@ -164,19 +164,19 @@ test('🟥 at the end of a turn: PENDING.md once, title marked, unread', opts(),
 
 // ---------- Ather's pane ----------
 const GOLD = '#F2C14E' // A33: the approved gold
-/** The brand label's color: the first Text of the masthead, or of the brand row once A5 adds its seal. */
+/** The brand label's color: the first Text of the masthead, or of the brand row once A5R adds its seal. */
 const brandColor = (t: unknown): unknown => firstText(t, 'hai-brand') ?? firstText(t, 'head-words')
 
-test('pane, A5 on: Ather\'s pane gains one compact A5 line under its strip; the tools are in the A5 pane (A28, A29)', opts(), async ($, on) => {
-  const w = world(on, { a5: true })
+test('pane, A5R on: Ather\'s pane gains one compact A5R line under its strip; the tools are in the A5R pane (A28, A29)', opts(), async ($, on) => {
+  const w = world(on, { a5r: true })
   w.put(LOCK, '1006-walkerext-s9 (artifact-any-legs-worker) since 14:30, expected end 15:10. Build S2Editor, headless tests. Waiting: 1006-loco-s3\n')
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   await $.ui.render(PANE as never)
   await w.clock.advance(50) // the sync read runs off the render
-  expect(keys(await $.ui.render(PANE as never))).toEqual(['head-words', 'strip', 'hai-a5-line', 'foot'])
-  const tree = await $.ui.render(A5PANE as never)
-  expect(keys(tree)).toEqual(['hai-a5-band', 'hai-tiles', 'hai-overview', 'hai-a5-rules']) // A33: the band first
+  expect(keys(await $.ui.render(PANE as never))).toEqual(['head-words', 'strip', 'hai-a5r-line', 'foot'])
+  const tree = await $.ui.render(A5RPANE as never)
+  expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-overview', 'hai-a5r-rules']) // A33: the band first
   expect(text(find(tree, 'hai-tile-editor'))).toContain('1006-walkerext-s9')
   expect(text(find(tree, 'hai-tile-editor'))).toContain('until 15:10 · 30 min left')
   expect(text(find(tree, 'hai-tile-memory'))).toContain('20.5 GB free')
@@ -184,32 +184,32 @@ test('pane, A5 on: Ather\'s pane gains one compact A5 line under its strip; the 
 })
 
 test('pane on the desktop: the tiles are cards in Ather\'s strip language', opts(), async ($, on) => {
-  world(on, { a5: true })
+  world(on, { a5r: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  const tree = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
+  const tree = await $.ui.render({ ...A5RPANE, surface: 'desktop' } as never)
   expect(find(tree, 'hai-tiles')?.props?.borderStyle).toBe('round') // A35: one list in one box, not three cards
   expect(find(tree, 'hai-tile-editor')?.props?.borderStyle).toBeUndefined()
   expect(find(tree, 'hai-tile-main-action')).toBeDefined() // A25: one action per tool
 })
 
-test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand; the five rules sit at the foot of the A5 pane', opts(), async ($, on) => {
-  world(on, { a5: true })
+test('pane, A5R on: the accent turns lacquer gold, a red seal joins the brand; the five rules sit at the foot of the A5R pane', opts(), async ($, on) => {
+  world(on, { a5r: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const tree = await $.ui.render(PANE as never)
-  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-a5-line', 'foot'])
-  expect(text(find(tree, 'hai-brand'))).toContain('★ A5')
+  expect(keys(tree)).toEqual(['head-words', 'strip', 'hai-a5r-line', 'foot'])
+  expect(text(find(tree, 'hai-brand'))).toContain('★ A5R')
   expect(brandColor(tree)).toBe(GOLD)
   expect(find(tree, 'strip')?.props?.borderColor).toBe('#3a3c36')
-  const a5 = await $.ui.render(A5PANE as never)
-  expect(text(find(a5, 'hai-a5-rules-head')).startsWith('THE FIVE RULES')).toBe(true) // A32: seals under a heading; rule 1's word is its own element (A20)
-  expect(find(a5, 'hai-rule1')?.type).toBe('Client')
-  expect(find(a5, 'hai-a5-chip-5')).toBeDefined()
+  const a5r = await $.ui.render(A5RPANE as never)
+  expect(text(find(a5r, 'hai-a5r-rules-head')).startsWith('THE FIVE RULES')).toBe(true) // A32: seals under a heading; rule 1's word is its own element (A20)
+  expect(find(a5r, 'hai-rule1')?.type).toBe('Client')
+  expect(find(a5r, 'hai-a5r-chip-5')).toBeDefined()
 })
 
-test('pane: views other than home get no A5 line (A5 still seals and recolors them)', opts(), async ($, on) => {
-  world(on, { a5: true })
+test('pane: views other than home get no A5R line (A5R still seals and recolors them)', opts(), async ($, on) => {
+  world(on, { a5r: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(false))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const tree = await $.ui.render(PANE as never)
@@ -220,26 +220,26 @@ test('pane: views other than home get no A5 line (A5 still seals and recolors th
 // ---------- one inbox, Ather's proof, icons, motion ----------
 
 test('pane on the desktop: each tile carries a pixel icon; still unless its state just turned over', opts(), async ($, on) => {
-  const w = world(on, { a5: true })
+  const w = world(on, { a5r: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  const first = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
+  const first = await $.ui.render({ ...A5RPANE, surface: 'desktop' } as never)
   const svg = (find(first, 'hai-tile-editor-icon')?.children ?? [])[0] as Tree
   expect(svg?.type).toBe('Svg')
   expect(svg?.props?.isInteractive).toBeUndefined()
   w.put(LOCK, `1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n`)
   await w.clock.advance(60_000) // the minute refresh reads the new holder
-  const changed = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
+  const changed = await $.ui.render({ ...A5RPANE, surface: 'desktop' } as never)
   const moving = (find(changed, 'hai-tile-editor-icon')?.children ?? [])[0] as Tree
   expect(moving?.props?.isInteractive).toBe(true)
   expect(String(moving?.props?.source)).toContain('<set attributeName="fill"')
 })
 
-test('A5 seal on the desktop: stamps in once when A5 comes on, still afterwards', opts(), async ($, on) => {
-  const w = world(on, { a5: false })
+test('A5R seal on the desktop: stamps in once when A5R comes on, still afterwards', opts(), async ($, on) => {
+  const w = world(on, { a5r: false })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  await $.command.run({ command: 'a5', args: 'on' } as never)
+  await $.command.run({ command: 'a5r', args: 'on' } as never)
   const stamp = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
   const seal = (find(stamp, 'hai-brand')?.children ?? [])[1] as Tree
   expect(seal?.type).toBe('Svg')
@@ -249,11 +249,11 @@ test('A5 seal on the desktop: stamps in once when A5 comes on, still afterwards'
   expect(((find(still, 'hai-brand')?.children ?? [])[1] as Tree)?.props?.isInteractive).toBeUndefined()
 })
 
-test('motion off: every icon stays still', { options: { a5WhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
-  world(on, { a5: false })
+test('motion off: every icon stays still', { options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+  world(on, { a5r: false })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
-  await $.command.run({ command: 'a5', args: 'on' } as never)
+  await $.command.run({ command: 'a5r', args: 'on' } as never)
   const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
   expect(((find(tree, 'hai-brand')?.children ?? [])[1] as Tree)?.props?.isInteractive).toBeUndefined()
 })

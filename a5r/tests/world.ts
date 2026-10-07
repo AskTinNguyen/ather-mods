@@ -8,7 +8,7 @@ export const LOCK = 'E:/s2/Saved/EDITOR_OWNER.txt'
 export const PENDING = 'C:/Users/hai.huynh/.claude/PENDING.md'
 export const ME = 'ab12cd34-5678-4000-8000-000000000000'
 export const ENV = { TEMP: 'C:/Users/HAI~1.HUY/AppData/Local/Temp', LOCALAPPDATA: 'C:/Users/hai.huynh/AppData/Local', USERPROFILE: 'C:/Users/hai.huynh' }
-export const opts = (a5WhenPresent = 'deny') => ({ options: { a5WhenPresent, editorLock: LOCK, pendingFile: PENDING } })
+export const opts = (a5rWhenPresent = 'deny') => ({ options: { a5rWhenPresent, editorLock: LOCK, pendingFile: PENDING } })
 export const BAT = '"D:/GameEditors/5.8/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development'
 export const NOW = new Date(2026, 9, 6, 14, 40).getTime()
 export const LIME = '#DDFF00'
@@ -35,7 +35,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5 RULES {SESSION8}', theme = 'dark' } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark' } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -45,11 +45,11 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   const ids = { current: ME } // the session id: a /clear moves the process to another
   const value = (v: unknown) => ({ value: v })
   mock.env(on, ENV)
-  mock.store(on, { a5: { on: a5 }, ...store })
+  mock.store(on, { a5r: { on: a5r }, ...store })
   const clock = mock.clock(on, { now: NOW })
   on('fs.read', async (_$: unknown, e: { path: string }) => {
     if (k(e.path).endsWith('/rules/config.json')) return value(JSON.stringify(CONFIG))
-    if (k(e.path).endsWith('/rules/rules-a5.md')) return value(rules)
+    if (k(e.path).endsWith('/rules/rules-a5r.md')) return value(rules)
     if (k(e.path).endsWith('/rules/rules-flow.md')) return value('FLOW RULES {SESSION8}')
     const t = files.get(k(e.path))
     return t === undefined ? { deny: `ENOENT: ${e.path}` } : value(t)
@@ -103,19 +103,19 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'tool.register'])
     on(ev, async (_$: unknown, e: unknown) => {
       ;(calls[ev] ??= []).push(e)
-      return value(ev === 'tool.register' ? { tool: `mcp__a5__${String((e as Rec).name)}` } : undefined)
+      return value(ev === 'tool.register' ? { tool: `mcp__a5r__${String((e as Rec).name)}` } : undefined)
     })
   // D7: an agent type registers; a spawned subagent starts as `w-sync` (its end is the test's turn.complete).
   on('agent.register', async (_$: unknown, e: Rec) => {
     ;(calls['agent.register'] ??= []).push(e)
-    return value({ agent: `a5:${String(e.name)}` })
+    return value({ agent: `a5r:${String(e.name)}` })
   })
   on('agent.spawn', async (_$: unknown, e: Rec) => {
     ;(calls['agent.spawn'] ??= []).push(e)
     return { model: 'claude-test', agentId: 'w-sync' }
   })
   // The session's agents: the sync worker once one was spawned (the harness drops a spawn's agentId).
-  on('agent.list', async () => value((calls['agent.spawn'] ?? []).length > 0 ? [{ id: 'w-sync', description: 'Sync main', type: 'a5:sync', status: 'running', spawnedBy: 'a5' }] : []))
+  on('agent.list', async () => value((calls['agent.spawn'] ?? []).length > 0 ? [{ id: 'w-sync', description: 'Sync main', type: 'a5r:sync', status: 'running', spawnedBy: 'a5r' }] : []))
   // A prompt the plugin submits enters as it was sent (an event: it answers { text }).
   on('prompt.submit', async (_$: unknown, e: { text: string; context?: string[] }) => {
     ;(calls['prompt.submit'] ??= []).push(e)
@@ -129,7 +129,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     if (e.key === 'theme') themeValue = String(e.value)
     return value(e.value)
   })
-  // The surface places every pane a5 opens (A29), and the test can see which.
+  // The surface places every pane a5r opens (A29), and the test can see which.
   on('ui.open', async (_$: unknown, e: Rec) => {
     ;(calls['ui.open'] ??= []).push(e)
     return value({ isPlaced: true })
@@ -177,8 +177,8 @@ export const atherTree = (home: boolean): never => ({
   ],
 }) as never
 export const PANE = { surface: 'terminal', component: 'Pane', requestId: 'ather', props: { title: 'ATHER AUTOMATA', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 22 }, view: {} } }
-/** A29: the A5 pane, drawn by a5 itself (no Ather beneath). */
-export const A5PANE = { ...PANE, requestId: 'a5' }
+/** A29: the A5R pane, drawn by a5r itself (no Ather beneath). */
+export const A5RPANE = { ...PANE, requestId: 'a5r' }
 
 // A25/A26: measuring a drawn tree the way the surface lays it out.
 /** The narrowest width a node can be laid out in, in cells, the way the surface lays boxes out: text that wraps
@@ -222,13 +222,13 @@ export const all = (t: unknown, out: Tree[] = []): Tree[] => {
   return out
 }
 
-/** A37: a drawn tree without its entrance and event curtains (absolute boxes keyed hai-a5-in… / hai-a5-fx…), for tests
+/** A37: a drawn tree without its entrance and event curtains (absolute boxes keyed hai-a5r-in… / hai-a5r-fx…), for tests
  * that read a block's own children while a curtain may still lie over it. */
 export const still = <T>(tree: T): T => {
   const strip = (n: unknown): unknown => {
     if (!n || typeof n !== 'object' || Array.isArray(n)) return n
     const t = n as Tree
-    const kids = (t.children ?? []).filter(c => !/^hai-a5-(in|fx)/.test(String((c as Tree)?.props?.key ?? ''))).map(strip)
+    const kids = (t.children ?? []).filter(c => !/^hai-a5r-(in|fx)/.test(String((c as Tree)?.props?.key ?? ''))).map(strip)
     return { ...t, ...(t.children ? { children: kids } : {}) }
   }
   return strip(tree) as T

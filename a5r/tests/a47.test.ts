@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { A5PANE, PROJ, find, opts, refused, text, world } from './world.ts'
+import { A5RPANE, PROJ, find, opts, refused, text, world } from './world.ts'
 
 // A47 (rev 14, adversary review of 0.11.2): (a) a diff touching several intents, none of them tracked, is scored under
 // the intent whose prompt names most of its paths, a tie is "not scored" naming the candidates (never the
@@ -16,13 +16,13 @@ const intents = (w: ReturnType<typeof world>, alpha: string[], beta: string[]) =
 }
 const FILES = 'src/a/x.ts\nsrc/b/y.ts\nsrc/b/z.ts\ndocs/intent/alpha/progress.md\ndocs/intent/beta/progress.md\n'
 const git = (files = FILES) => ({ 'diff --name-only': { stdout: files }, 'diff -U0': { stdout: '+++ b/src/b/y.ts\n+const y = 1\n' }, 'worktree list': { stdout: '' } })
-const cardHead = async ($: any) => text(find(await $.ui.render(A5PANE as never), 'hai-accept-head'))
+const cardHead = async ($: any) => text(find(await $.ui.render(A5RPANE as never), 'hai-accept-head'))
 
 test('A47 (a): several intents touched, none tracked: the one whose prompt names most of the diff wins (here beta, not the alphabetically first)', opts(), async ($, on) => {
   const w = world(on, { git: git() })
   intents(w, ['src/a/'], ['src/b/'])
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  await $.command.run({ command: 'a5', args: 'accept' } as never)
+  await $.command.run({ command: 'a5r', args: 'accept' } as never)
   expect(await cardHead($)).toContain('beta · on demand')
 })
 
@@ -30,7 +30,7 @@ test('A47 (a): a tie is not scored and names the candidates', opts(), async ($, 
   const w = world(on, { git: git('src/a/x.ts\nsrc/b/y.ts\ndocs/intent/alpha/progress.md\ndocs/intent/beta/progress.md\n') })
   intents(w, ['src/a/'], ['src/b/'])
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: `${G} --fill` }))).toBe('A5 · Acceptance — could not read the whole branch diff (the diff touches the intents alpha, beta equally (1 of its paths named by each): open one PR per intent) → open the PR from a slice branch cut from origin/main, or Hai lets this one through')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: `${G} --fill` }))).toBe('A5R · Acceptance — could not read the whole branch diff (the diff touches the intents alpha, beta equally (1 of its paths named by each): open one PR per intent) → open the PR from a slice branch cut from origin/main, or Hai lets this one through')
 })
 
 test('A47 (b): a fork PR is scored against the fork branch and the upstream remote\'s base, not refused as another repository', opts(), async ($, on) => {

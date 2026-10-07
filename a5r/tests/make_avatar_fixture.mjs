@@ -1,6 +1,6 @@
 // Regenerates tests/avatars.fixture.ts from Ather's own avatar drawing (ather-automata/hooks/squad.mjs), so the scarf
-// tests (A39) read the avatars exactly as Ather ships them: the test runner cannot import outside the a5 folder.
-// Run from the repository root: node a5/tests/make_avatar_fixture.mjs
+// tests (A39) read the avatars exactly as Ather ships them: the test runner cannot import outside the a5r folder.
+// Run from the repository root: node a5r/tests/make_avatar_fixture.mjs
 import fs from 'node:fs'
 import { KINDS, avatarSvg } from '../../ather-automata/hooks/squad.mjs'
 

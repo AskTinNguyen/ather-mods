@@ -240,7 +240,7 @@ export const prRefs = (call: PrCall): PrRefsRead => {
     else if (kv !== undefined) {
       const m = /^(head|base)=(.*)$/.exec(kv)
       if (m) {
-        if ((m[2] ?? '').startsWith('@')) out.problem = `the PR's ${m[1]} is read from a file (${m[2]}), which a5 cannot read before the call`
+        if ((m[2] ?? '').startsWith('@')) out.problem = `the PR's ${m[1]} is read from a file (${m[2]}), which a5r cannot read before the call`
         else if (m[1] === 'head') out.head = m[2]
         else out.base = m[2]
       }

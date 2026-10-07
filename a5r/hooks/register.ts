@@ -1,5 +1,5 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
+import { A5R, gitTargets, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, closesIntent, failed, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
@@ -12,32 +12,32 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { curtainSvg, icon, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, V2, a5Band, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
+import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
-// Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
+// Hai's S2 flow beside Ather Automata, which it never changes. With A5R off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
-// - A5 (a5.ts, accept.ts, rules/config.json), only while `/a5 on`: the five rules (D9). At the tool call it
+// - A5R (a5r.ts, accept.ts, rules/config.json), only while `/a5r on`: the five rules (D9). At the tool call it
 //   refuses or asks only before what cannot be undone (D10); nothing per turn. Everything else is scored at
-//   acceptance (nghiệm thu A5) over the branch, the intent's files and Ather's proof, when a PR is opened or
+//   acceptance (nghiệm thu A5R) over the branch, the intent's files and Ather's proof, when a PR is opened or
 //   an intent closes. Rules about the shared checkout skip a worker's own worktree; a worker never asks Hai.
-// - A5's coordination (coord.ts) for the sessions sharing one S2 checkout and one machine: the Editor
-//   holder (model tool `editor`: a queue computed alike by every session from Saved/A5 files, a lease
+// - A5R's coordination (coord.ts) for the sessions sharing one S2 checkout and one machine: the Editor
+//   holder (model tool `editor`: a queue computed alike by every session from Saved/A5R files, a lease
 //   with a hard end, the lock written in the S2 standard's lines), RAM (safe cleanup before a grant, the
-//   launch gate, PIE 5/3 GB fixed) and the Sync main holder (`/a5 sync`, model tool `sync`: cutoff, freeze,
+//   launch gate, PIE 5/3 GB fixed) and the Sync main holder (`/a5r sync`, model tool `sync`: cutoff, freeze,
 //   conflicts to their owners). One minute timer reads files and probes; it wakes the model only for an
-//   event addressed to this session. Notices start "A5 ·" and are never logged in docs/intent.
+//   event addressed to this session. Notices start "A5R ·" and are never logged in docs/intent.
 // - 🟥 / ⏯️ (decision.ts), always: the title is marked and unread set. A 🟥 that relays an intent's director
 //   call (a worker added it to findings.md, intent skill) is in Ather's Needs you already; any other 🟥 gets
 //   one PENDING.md line, so no decision is lost.
-// - Ather's pane (theme.ts, watch.ts, icons.ts), A5 on only: its home view gains Editor holder · Memory ·
+// - Ather's pane (theme.ts, watch.ts, icons.ts), A5R on only: its home view gains Editor holder · Memory ·
 //   Sync main tiles with pixel icons; the accent turns gold, a red seal joins the brand, the five rules sit
 //   at the foot. Icons move only when a state turns over (a dither reveal) or a sync runs (a dither sweep).
-// Every refusal reads the same: "A5 · <gate> — <why> → <what next>".
+// Every refusal reads the same: "A5R · <gate> — <why> → <what next>".
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5WhenPresent: string; editorLock: string; pendingFile: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number }
+type Opts = { a5rWhenPresent: string; editorLock: string; pendingFile: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -45,16 +45,16 @@ const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
 const ALLOW_ONCE = 'Allow once'
 const ALLOW_SESSION = 'Allow for this session'
 const ATHER_PANE = 'ather'
-const A5_PANE = 'a5'
-const PANE_INK = (): { ink: string; quiet: string } => ({ ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet }) // A33/A40: the A5 pane's text and quiet grey, per theme // A29: the A5 pane's id ($.ui.open) and its render requestId
+const A5R_PANE = 'a5r'
+const PANE_INK = (): { ink: string; quiet: string } => ({ ink: A5R_LOOK.ivory, quiet: A5R_LOOK.quiet }) // A33/A40: the A5R pane's text and quiet grey, per theme // A29: the A5R pane's id ($.ui.open) and its render requestId
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
 const RULE_NAMES: Record<string, string> = RULE_SHORT // D9 / A34, short for refusals
-const INK = (): string => A5_LOOK.paneInk // A40: the pane's ink, per theme
+const INK = (): string => A5R_LOOK.paneInk // A40: the pane's ink, per theme
 
-let engine: A5 | null = null
-let rulesA5 = ''
+let engine: A5R | null = null
+let rulesA5R = ''
 let rulesFlow = ''
 let places: Places = {}
 const approved = new Set<string>()
@@ -62,12 +62,12 @@ const rootOf = new Map<string, string | null>()
 const isLinked = new Map<string, boolean>() // git root -> a linked worktree (one session's own), not the shared checkout
 let wroteDirectorCall = false // this turn added an open director call to an intent's findings.md
 let markedFrom: string | null = null // the title before this session marked it, put back when Hai answers
-let a5On = false
-let a5FlipAt = 0
+let a5rOn = false
+let a5rFlipAt = 0
 let hits: RuleHits = noHits()
 let hitsDay = '' // A32: the day the counts are for ('Hits today')
-let openRule: number | null = null // A32: the rule whose card is open in the A5 pane
-// A37: when the A5 pane opened (or first drew) and when the compact line first drew: their entrance plays then.
+let openRule: number | null = null // A32: the rule whose card is open in the A5R pane
+// A37: when the A5R pane opened (or first drew) and when the compact line first drew: their entrance plays then.
 let paneEnterAt = 0
 let lineEnterAt = 0
 const ENTRANCE_MS = 1_000 // how long after the opening the curtains stay in the tree (they finish within 300 ms)
@@ -75,7 +75,7 @@ const ENTRANCE_BUDGET_MS = 300
 // A38: one-shot event dithers (≤ 1 s): a rule chip stamps red when its rule is hit; the band sweeps at the sync freeze
 // (❄ in) and back at the lift; a new acceptance score resolves the chips one by one to ✓ / ✗.
 const FX_MS = 1_000
-const freshHits = new Set<string>() // rules hit since the A5 pane last drew
+const freshHits = new Set<string>() // rules hit since the A5R pane last drew
 const hitStampAt: Record<string, number> = {}
 let lastPhaseSeen: Phase | null = null
 let freezeAt = 0
@@ -95,15 +95,15 @@ let isStatusShown = false
 const seen = new Map<string, { sig: string; color: string; at: number; from: string }>() // each tile's state, and when it last turned over
 let chain: string[] | null = null // the plugins beneath this one on a tool call: Ather there means the pane can be wrapped
 
-// A5's coordination: what this session last read from the files and the machine (coord.ts decides).
-const EDITOR_TOOL = 'mcp__a5__editor'
-const SYNC_TOOL = 'mcp__a5__sync'
-const SYNC_AGENT = 'a5:sync' // D7: the sync worker's agent type
+// A5R's coordination: what this session last read from the files and the machine (coord.ts decides).
+const EDITOR_TOOL = 'mcp__a5r__editor'
+const SYNC_TOOL = 'mcp__a5r__sync'
+const SYNC_AGENT = 'a5r:sync' // D7: the sync worker's agent type
 const CLEANUP_EVERY_MS = 5 * 60_000 // while a slot waits on RAM, the safe cleanup runs at most this often
 const PIE_STOP = /StopPIE|EndPIE|StopPlayInEditor|EndPlayMap|RequestEndPlayMap/i
 const EDITOR_WORK = /Build\.(bat|sh|cmd)\b|UnrealEditor|RunUAT/i
 let hasTools = false
-let me: SessionFile | null = null // this session's own file (Saved/A5/editor/<id8>.json), as last written
+let me: SessionFile | null = null // this session's own file (Saved/A5R/editor/<id8>.json), as last written
 let me8 = ''
 let peers: SessionFile[] = [] // every other session's file
 let lanes: LaneBeat[] = [] // Ather's lane heartbeats
@@ -159,12 +159,12 @@ const count = (rule: string) => {
 }
 const gateOf = (rule: string): string => `${rule} ${rule.split('/').map(r => RULE_NAMES[r]).filter(Boolean).join(' / ')}`
 /** The one shape of every refusal: which gate, why, and what to do instead. */
-const blocked = (gate: string, why: string, next: string): string => `A5 · ${gate} — ${why} → ${next}`
+const blocked = (gate: string, why: string, next: string): string => `A5R · ${gate} — ${why} → ${next}`
 
-async function load($: Engine): Promise<A5> {
+async function load($: Engine): Promise<A5R> {
   if (engine) return engine
   const root = $.plugin.root.replace(/\\/g, '/')
-  const cfg = JSON.parse(await $.fs.read(`${root}/rules/config.json`)) as A5Config
+  const cfg = JSON.parse(await $.fs.read(`${root}/rules/config.json`)) as A5RConfig
   const local = await $.env.get('LOCALAPPDATA')
   places = {
     KIT: root,
@@ -176,25 +176,25 @@ async function load($: Engine): Promise<A5> {
     HERMES_HOME: (await $.env.get('HERMES_HOME')) ?? (local ? `${local}/hermes` : undefined),
     PROJECT: await $.session.root(),
   }
-  rulesA5 = await $.fs.read(`${root}/rules/rules-a5.md`).catch(() => '')
+  rulesA5R = await $.fs.read(`${root}/rules/rules-a5r.md`).catch(() => '')
   rulesFlow = await $.fs.read(`${root}/rules/rules-flow.md`).catch(() => '')
-  engine = new A5(cfg, places)
+  engine = new A5R(cfg, places)
   return engine
 }
 
-/** Whether A5 is on: Hai's switch, kept across sessions in this plugin's store. Notes when it just came on. */
-async function readA5($: Engine): Promise<boolean> {
-  const v = (await $.store.get('a5').catch(() => null)) as { on?: boolean } | null
+/** Whether A5R is on: Hai's switch, kept across sessions in this plugin's store. Notes when it just came on. */
+async function readA5R($: Engine): Promise<boolean> {
+  const v = (await $.store.get('a5r').catch(() => null)) as { on?: boolean } | null
   const on = v?.on === true
-  if (on && !a5On) a5FlipAt = await $.clock.now()
-  a5On = on
-  return a5On
+  if (on && !a5rOn) a5rFlipAt = await $.clock.now()
+  a5rOn = on
+  return a5rOn
 }
 
 /** The git project a file lives in (walks up to a `.git`), cached per folder. */
-async function locate($: Engine, a5: A5, path: string): Promise<Located> {
+async function locate($: Engine, a5r: A5R, path: string): Promise<Located> {
   const p = norm(path, await $.session.cwd())
-  const known = a5.roots.find(r => under(p, r))
+  const known = a5r.roots.find(r => under(p, r))
   if (known) return { root: known, rel: p.slice(known.length + 1) }
   const walked: string[] = []
   let root: string | null = null
@@ -224,11 +224,11 @@ async function isSharedRoot($: Engine, root: string | null): Promise<boolean> {
 }
 
 /** For a shell command: is each folder its git segments run in (the working directory, each `-C`) shared? */
-async function sharedTest($: Engine, a5: A5, command: string, cwd: string): Promise<(dir: string) => boolean> {
+async function sharedTest($: Engine, a5r: A5R, command: string, cwd: string): Promise<(dir: string) => boolean> {
   const known = new Map<string, boolean>()
   for (const dir of [cwd, ...gitTargets(command)]) {
     const p = norm(dir, cwd)
-    known.set(p.toLowerCase(), await isSharedRoot($, (await locate($, a5, `${p}/_`)).root))
+    known.set(p.toLowerCase(), await isSharedRoot($, (await locate($, a5r, `${p}/_`)).root))
   }
   return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? true
 }
@@ -290,14 +290,14 @@ async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Pro
   return null
 }
 
-/** An A5 'ask': Hai answers in a dialog. Resolves 'allow' or the refusal the model reads. */
+/** An A5R 'ask': Hai answers in a dialog. Resolves 'allow' or the refusal the model reads. */
 async function askHai($: Engine, opts: Opts, d: Decision, what: string): Promise<string> {
   const gate = gateOf(d.rule)
-  if (opts.a5WhenPresent === 'deny') return blocked(gate, d.why, 'needs Hai\'s approval: ask Hai to run it')
+  if (opts.a5rWhenPresent === 'deny') return blocked(gate, d.why, 'needs Hai\'s approval: ask Hai to run it')
   try {
     const answer = await $.ui.ask(`${gate}: ${d.why} Run \`${what.slice(0, 160)}\`?`, {
       options: [ALLOW_ONCE, ALLOW_SESSION, 'No'],
-      header: `A5 ${d.rule}`,
+      header: `A5R ${d.rule}`,
     })
     if (answer === ALLOW_ONCE) return 'allow'
     if (answer === ALLOW_SESSION) {
@@ -339,7 +339,7 @@ async function applyMarker($: Engine, opts: Opts, m: NonNullable<Marker>, isInFi
       const pending = await $.fs.read(file).catch(() => '')
       if (!isPending(pending, m.question)) await $.fs.write(file, `${pending.replace(/\s*$/, '')}\n${pendingLine(stampOf(new Date()), label, m.question, m.fallback)}\n`)
     }
-    if (a5On) $.ui.toast(`🟥 Waiting on Hai${isInFindings ? ' (Ather: Needs you)' : ''}: ${m.question.slice(0, 80)}`, { timeoutMs: 12_000 })
+    if (a5rOn) $.ui.toast(`🟥 Waiting on Hai${isInFindings ? ' (Ather: Needs you)' : ''}: ${m.question.slice(0, 80)}`, { timeoutMs: 12_000 })
     await callTool($, { tool: 'mcp__ccd_sidebar__set_unread', session_id: 'self', unread: true }).catch(() => '')
   }
   const sign = m.kind === 'decision' ? '🟥' : '⏯️'
@@ -350,11 +350,11 @@ async function applyMarker($: Engine, opts: Opts, m: NonNullable<Marker>, isInFi
 }
 
 
-/** The line under the prompt says only what the pane would not tell at a glance: ★ A5 while it is on, and
+/** The line under the prompt says only what the pane would not tell at a glance: ★ A5R while it is on, and
  * an Editor lease run over or RAM under the PIE gate. The normal state is silence (the pane has it). */
 function showStatus($: Engine): void {
-  // A5 off: the status line is Ather's alone (D1); a line this mod set earlier is taken down once.
-  if (!a5On) {
+  // A5R off: the status line is Ather's alone (D1); a line this mod set earlier is taken down once.
+  if (!a5rOn) {
     if (isStatusShown) $.ui.status(undefined)
     isStatusShown = false
     return
@@ -362,7 +362,7 @@ function showStatus($: Engine): void {
   const end = toMin(lockView?.until)
   const isOver = Boolean(lockView && !lockView.isFree && !lockView.isMissing && end !== undefined && end < nowMin)
   const parts = [
-    a5On ? '★ A5' : '',
+    a5rOn ? '★ A5R' : '',
     isS2 && isOver ? `Editor: ${lockView?.who ?? 'held'} over its lease` : '',
     isS2 && vitals && ramBand(vitals.freeGb) !== 'ok' ? `RAM ${vitals.freeGb} GB free` : '',
     isS2 && syncFile && ['cutoff', 'frozen'].includes(phaseOf(syncFile, nowMs)) ? `Sync ${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)}` : '',
@@ -371,7 +371,7 @@ function showStatus($: Engine): void {
   isStatusShown = parts.length > 0
 }
 
-// ---------- A5 coordination: files, the minute tick, notices ----------
+// ---------- A5R coordination: files, the minute tick, notices ----------
 const hfDir = (opts: Opts): string => `${s2Root(opts)}/${DIR}`
 const sameRoot = (a: string, b: string): boolean => norm(a).toLowerCase().replace(/\/$/, '') === norm(b).toLowerCase().replace(/\/$/, '')
 
@@ -423,7 +423,7 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   lock = parseLockLine(lockRaw)
   if (lockRaw && lock.id8 === old8 && (lock.kind === 'held' || lock.kind === 'handed')) {
     const line = lockRaw.trim().replace(new RegExp(`\\bsession\\s+${old8}\\b`, 'gi'), `session ${new8}`)
-    if (!(await writeLock($, opts, line))) $.ui.log('a5: the lock changed while moving it to the cleared session id', { to: 'debug' })
+    if (!(await writeLock($, opts, line))) $.ui.log('a5r: the lock changed while moving it to the cleared session id', { to: 'debug' })
   }
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   if (s && s.holder.id8 === old8 && isOpenPhase(syncPhase(s, now)))
@@ -451,7 +451,7 @@ async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
   me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
-  await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5: session file not written: ${String(err)}`, { to: 'debug' }))
+  await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
 async function readJson($: Engine, path: string): Promise<string | null> {
@@ -466,7 +466,7 @@ async function freshProbe($: Engine, opts: Opts): Promise<Probe | null> {
   return p
 }
 
-/** A9: the machine reading every A5 session shares. A session probes only when Saved/A5/probe.json is older
+/** A9: the machine reading every A5R session shares. A session probes only when Saved/A5R/probe.json is older
  * than 50 s, and only after claiming it by read-compare-write and a re-read, so two sessions rarely both probe;
  * everyone else reads the file. */
 async function sharedProbe($: Engine, opts: Opts, now: number): Promise<Probe | null> {
@@ -548,7 +548,7 @@ async function titleLines($: Engine, path: string): Promise<string> {
   return ps?.exitCode === 0 ? ps.stdout : ''
 }
 
-/** A26: names for the live sessions whose a5 file gives none (Ather-only sessions), from their records. */
+/** A26: names for the live sessions whose a5r file gives none (Ather-only sessions), from their records. */
 async function refreshNames($: Engine, opts: Opts, ids: string[]): Promise<void> {
   if (isNaming) return
   isNaming = true
@@ -591,17 +591,17 @@ async function deliverIdle($: Engine, opts: Opts): Promise<void> {
   const texts = drain()
   isBusy = true
   await saveMe($, opts)
-  await $.prompt.submit({ text: texts.join('\n\n') }).catch(err => $.ui.log(`a5: notice prompt not queued: ${String(err)}`, { to: 'debug' }))
+  await $.prompt.submit({ text: texts.join('\n\n') }).catch(err => $.ui.log(`a5r: notice prompt not queued: ${String(err)}`, { to: 'debug' }))
 }
 
-/** The model tools, registered the first time A5 is seen on in this session (D1: none while it is off). */
+/** The model tools, registered the first time A5R is seen on in this session (D1: none while it is off). */
 async function ensureTools($: Engine): Promise<void> {
   if (hasTools) return
   hasTools = true
   await $.tool.register({
     name: 'editor',
     description:
-      'a5 A5 Editor holder for the shared S2 checkout: the only way to take or give the Unreal Editor while A5 is on. ' +
+      'a5r A5R Editor holder for the shared S2 checkout: the only way to take or give the Unreal Editor while A5R is on. ' +
       '"request" asks for a slot (minutes, pie, build, what): sessions are served in the order they asked, a slot must end before the next sync cutoff, and launching needs the RAM launch gate; ' +
       'you are granted at once when you are at the head and the lock is free, else you get your place and are told when it is yours. ' +
       '"release" gives it back (stop PIE and every background process of yours that could call MCP first; list packages to discard in dont_save). ' +
@@ -625,12 +625,12 @@ async function ensureTools($: Engine): Promise<void> {
       },
       required: ['action'],
     },
-  }).catch(err => $.ui.log(`a5: editor tool not registered: ${String(err)}`, { to: 'debug' }))
+  }).catch(err => $.ui.log(`a5r: editor tool not registered: ${String(err)}`, { to: 'debug' }))
   await $.tool.register({
     name: 'sync',
     description:
-      'a5 A5 Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
-      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and Hai is asked. At the sync time the holder\'s a5 starts the sync worker, which runs the merge and ends with done or abort. ' +
+      'a5r A5R Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
+      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and Hai is asked. At the sync time the holder\'s a5r starts the sync worker, which runs the merge and ends with done or abort. ' +
       '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "done" (note), "abort" (note: why), "status". Only the holder changes a planned sync.',
     inputSchema: {
       type: 'object',
@@ -644,12 +644,12 @@ async function ensureTools($: Engine): Promise<void> {
       },
       required: ['action'],
     },
-  }).catch(err => $.ui.log(`a5: sync tool not registered: ${String(err)}`, { to: 'debug' }))
+  }).catch(err => $.ui.log(`a5r: sync tool not registered: ${String(err)}`, { to: 'debug' }))
   // D7: the sync worker's agent type, spawned by this mod at the sync time and hidden from the model (agent.offer).
-  await $.agent.register({ name: 'sync', description: 'a5 sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by a5 only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`a5: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
+  await $.agent.register({ name: 'sync', description: 'a5r sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by a5r only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`a5r: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
 }
 
-/** D7: at T the holder's a5 starts the sync worker, once per sync (sync.json records it before the spawn,
+/** D7: at T the holder's a5r starts the sync worker, once per sync (sync.json records it before the spawn,
  * so a reload or a second tick never starts another). */
 async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   if (!(await writeSync($, opts, { ...s, workerAt: now, updatedAt: now }, s))) return
@@ -660,7 +660,7 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
     return
   }
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
-  const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'a5').pop()?.id
+  const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'a5r').pop()?.id
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
 }
 
@@ -685,14 +685,14 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
 
 /** One minute tick, serialized with the tool's own runs: read, decide, write this session's files, notify. */
 function runTick($: Engine, opts: Opts): Promise<void> {
-  tickChain = tickChain.then(() => tick($, opts)).catch(err => $.ui.log(`a5 tick: ${String(err)}`, { to: 'debug' }))
+  tickChain = tickChain.then(() => tick($, opts)).catch(err => $.ui.log(`a5r tick: ${String(err)}`, { to: 'debug' }))
   return tickChain
 }
 
 async function tick($: Engine, opts: Opts): Promise<void> {
   await readTheme($)
-  if ((await readA5($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
-  if (!(await readA5($))) {
+  if ((await readA5R($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
+  if (!(await readA5R($))) {
     showStatus($)
     return
   }
@@ -793,7 +793,7 @@ async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number |
 }
 
 /** A short request without a build asks the holder to yield, once per holder per hour: through the holder's own
- * a5 (a field in this session's file it reads), or the standard `UE request:` line to a holder without it. */
+ * a5r (a field in this session's file it reads), or the standard `UE request:` line to a holder without it. */
 async function askYield($: Engine, now: number): Promise<void> {
   const want = me?.want
   const y = want ? mayAskYield(grantInput(now)) : null
@@ -804,7 +804,7 @@ async function askYield($: Engine, now: number): Promise<void> {
     if (!lane) return // no address for it: the waiter is told its place, nothing is sent
     const until = atNearest(lock.end, now) ?? now + 60 * 60_000
     const sent = await $.session.send({ to: { sessionId: lane.sessionId }, text: ueRequestLine(me.lane, want.minutes, want.what, Math.max(until, now + 15 * 60_000)) }).catch(err => ({ isDelivered: false as const, reason: String(err) }))
-    if (!sent.isDelivered) $.ui.log(`a5: UE request to ${y.holder} not delivered: ${sent.reason}`, { to: 'debug' })
+    if (!sent.isDelivered) $.ui.log(`a5r: UE request to ${y.holder} not delivered: ${sent.reason}`, { to: 'debug' })
   }
   me = { ...me, yieldAsks: [...me.yieldAsks, { holder: y.holder, at: now, via: withMod ? 'file' : 'send', minutes: want.minutes, lane: me.lane }] }
 }
@@ -830,7 +830,7 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
   cleanupNote = [`${clockOf(now)} ${done.join(', ') || 'nothing to clean'}: free ${before} → ${probe?.freeGb ?? '?'} GB`, ...plan.report].join('; ')
 }
 
-// ---------- Sync main holder: Saved/A5/sync.json, written by the holder alone ----------
+// ---------- Sync main holder: Saved/A5R/sync.json, written by the holder alone ----------
 const syncPath = (opts: Opts): string => `${hfDir(opts)}/sync.json`
 const isLive = (id8: string, now: number): boolean => livenessOf(id8, me ? [me, ...peers] : peers, lanes, now) !== 'gone'
 /** The sync's phase for every reader alike, the freeze lease included (D8: hard end, holder gone). */
@@ -852,7 +852,7 @@ async function claimAlert($: Engine, opts: Opts, key: string): Promise<boolean> 
 
 /** A 🟥 for Hai from the coordination layer: the title, unread and one PENDING.md line (decision.ts). */
 async function raiseRed($: Engine, opts: Opts, question: string, fallback: string): Promise<void> {
-  await applyMarker($, opts, { kind: 'decision', question, fallback }, false).catch(err => $.ui.log(`a5: 🟥 not raised: ${String(err)}`, { to: 'debug' }))
+  await applyMarker($, opts, { kind: 'decision', question, fallback }, false).catch(err => $.ui.log(`a5r: 🟥 not raised: ${String(err)}`, { to: 'debug' }))
 }
 
 /** D8: a freeze past its hard end, or whose holder is gone, is written down as expired (a terminal state any
@@ -902,7 +902,7 @@ async function classifyAll($: Engine, opts: Opts, paths: readonly string[]): Pro
   return [...out, ...paths.slice(MAX_CLASSIFIED).map(p => ({ path: p, kind: 'foreign' as const }))]
 }
 
-/** At the cutoff the holder's a5 dry-runs the merge against the last fetched origin/main (no fetch, 60 s). */
+/** At the cutoff the holder's a5r dry-runs the merge against the last fetched origin/main (no fetch, 60 s). */
 async function dryRun($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   const r = await $.process.run(['git', '-C', s2Root(opts), 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
   if (!r || (r.exitCode !== 0 && r.exitCode !== 1)) {
@@ -997,10 +997,10 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   }
 }
 
-/** Plan, move, cancel, take over, record conflicts, end: the one place sync.json changes (panel, /a5 sync, tool). */
+/** Plan, move, cancel, take over, record conflicts, end: the one place sync.json changes (panel, /a5r sync, tool). */
 async function syncAction($: Engine, opts: Opts, action: string, a: { at?: string; holder?: string; note?: string; paths?: string[]; build?: boolean }): Promise<string> {
   const gate = 'Sync main'
-  if (!(await readA5($))) return blocked(gate, 'A5 is off', 'turn A5 on (/a5 on) to plan a sync')
+  if (!(await readA5R($))) return blocked(gate, 'A5R is off', 'turn A5R on (/a5r on) to plan a sync')
   if (!(await $.fs.exists(s2Root(opts)))) return blocked(gate, `no S2 checkout at ${s2Root(opts)}`, 'set the editorLock option to the checkout\'s Saved/EDITOR_OWNER.txt')
   await restoreMe($, opts)
   if (!me) return 'no session file'
@@ -1017,7 +1017,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     `${when(x)}${x.build ? ', with a build' : ''}: cutoff ${clockOf(x.at - CUTOFF_MS)} (every session commits its own paths, writes its resume note, releases the Editor by ${clockOf(x.at - RELEASE_BEFORE_MS)}); from ${clockOf(x.at)} git writes and the Editor freeze for everyone but the holder until done or abort, at the latest until ${clockOf(x.hardEnd)} (its hard end: then it expires and Hai is asked).`
   if (action === 'plan' || action === 'move') {
     const at = atNext(a.at ?? '', now)
-    if (at === null) return blocked(gate, `"${a.at ?? ''}" is not a time`, 'give HH:MM, for example /a5 sync 16:00')
+    if (at === null) return blocked(gate, `"${a.at ?? ''}" is not a time`, 'give HH:MM, for example /a5r sync 16:00')
     if (s && open) {
       if (!isMine && !isGone) return notHolder(s)
       if (phase === 'frozen') return blocked(gate, `${when(s)} is frozen already`, 'finish it with done or abort first')
@@ -1026,7 +1026,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
       if (!(await writeSync($, opts, moved, s))) return blocked(gate, 'sync.json changed while moving it', 'read it with status and try again')
       return `moved: ${planned(moved)}`
     }
-    if (action === 'move') return blocked(gate, 'no sync is planned', 'plan one with /a5 sync HH:MM or the panel')
+    if (action === 'move') return blocked(gate, 'no sync is planned', 'plan one with /a5r sync HH:MM or the panel')
     const holder = holderFor(a.holder ?? '', now)
     if (!holder) return blocked(gate, `no live session named "${a.holder}"`, 'name a session by its first 8 hex or its lane, or leave it out to hold the sync yourself')
     const build = a.build === true
@@ -1035,10 +1035,10 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     return `planned: ${planned(next)}${at - now < CUTOFF_MS ? ' The cutoff is already past: every session is told now.' : ''}`
   }
   if (action === 'status') {
-    if (!s) return 'No sync planned. Plan one on the A5 panel or with /a5 sync HH:MM.'
-    return `${when(s)}: ${phase}${isOpenPhase(phase) ? ` (freeze ${clockOf(s.at)}–${clockOf(s.hardEnd)}${s.build ? ', with a build' : ''})` : ''}${isGone && isOpenPhase(phase) ? ' (its holder is gone: take it over from the panel or with /a5 sync takeover)' : ''}${s.conflicts ? ` · conflicts: ${s.conflicts.length ? s.conflicts.map(c => `${c.path} (${c.kind})`).join(', ') : 'none'}` : ''}${s.untracked ? ` · untracked main would overwrite: ${s.untracked.length ? s.untracked.join(', ') : 'none'}` : ''}${s.note ? ` · ${s.note}` : ''}`
+    if (!s) return 'No sync planned. Plan one on the A5R panel or with /a5r sync HH:MM.'
+    return `${when(s)}: ${phase}${isOpenPhase(phase) ? ` (freeze ${clockOf(s.at)}–${clockOf(s.hardEnd)}${s.build ? ', with a build' : ''})` : ''}${isGone && isOpenPhase(phase) ? ' (its holder is gone: take it over from the panel or with /a5r sync takeover)' : ''}${s.conflicts ? ` · conflicts: ${s.conflicts.length ? s.conflicts.map(c => `${c.path} (${c.kind})`).join(', ') : 'none'}` : ''}${s.untracked ? ` · untracked main would overwrite: ${s.untracked.length ? s.untracked.join(', ') : 'none'}` : ''}${s.note ? ` · ${s.note}` : ''}`
   }
-  if (!s || !open) return blocked(gate, 'no sync is planned', 'plan one with /a5 sync HH:MM or the panel')
+  if (!s || !open) return blocked(gate, 'no sync is planned', 'plan one with /a5r sync HH:MM or the panel')
   if (action === 'takeover') {
     if (isMine) return `this session already holds ${when(s)}`
     if (!isGone) return notHolder(s)
@@ -1073,7 +1073,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   return blocked(gate, `unknown action "${action}"`, 'use plan, move, cancel, takeover, conflicts, done, abort or status')
 }
 
-/** /a5 sync …: HH:MM [build] [for <session>] · move HH:MM · build on|off · cancel · done [note] · abort <why> ·
+/** /a5r sync …: HH:MM [build] [for <session>] · move HH:MM · build on|off · cancel · done [note] · abort <why> ·
  * takeover · (status). */
 async function syncCommand($: Engine, opts: Opts, rest: string): Promise<string> {
   const [verb = '', ...tail] = rest.trim().split(/\s+/)
@@ -1102,7 +1102,7 @@ async function refreshClients($: Engine, opts: Opts, now: number): Promise<void>
   }
 }
 
-/** A16: at the cutoff the holder sends each live S2 session without a5 0.4 the standard message once (they
+/** A16: at the cutoff the holder sends each live S2 session without a5r 0.4 the standard message once (they
  * cannot be frozen), records them in sync.json, and its own notice names them. */
 async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   const targets = withoutModOf(me8, me ? [me, ...peers] : peers, lanes, now).filter(n => !s.messaged.includes(n.sessionId))
@@ -1116,7 +1116,7 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
   push({ id: noticeIds.withoutMod(s, targets.map(t => t.id8)), text: NOTICES.holderWithoutMod(s, rows), isActionable: false })
 }
 
-// ---------- A5 acceptance (nghiệm thu, A18): the five rules over the branch, before a PR and when an intent closes ----------
+// ---------- A5R acceptance (nghiệm thu, A18): the five rules over the branch, before a PR and when an intent closes ----------
 const PASS_ONCE = 'Let this PR through'
 
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
@@ -1132,7 +1132,7 @@ const urlIsRepo = (url: string, repo: string): boolean => {
   return u.endsWith(`/${r}`) || u.endsWith(`:${r}`)
 }
 
-/** A42: the a5 kit's rules/ and tests/ folders as paths in the repository at `root`: where the kit sits inside it, else
+/** A42: the a5r kit's rules/ and tests/ folders as paths in the repository at `root`: where the kit sits inside it, else
  * under the kit's own folder name (the same mod checked out in another worktree of that repository). */
 const kitDirsIn = (root: string): string[] => {
   const kit = String(places.KIT ?? '').replace(/\\/g, '/').replace(/\/$/, '')
@@ -1194,7 +1194,7 @@ async function prBody($: Engine, command: string, dir: string): Promise<string> 
 /** A18: everything the score reads, cheap and path-scoped: the branch diff against main (names and added lines),
  * the intent's four files, Ather's proof, the other sessions' touch files and active intents, this session's
  * untracked files in the shared checkout, worktrees on the same branch, running background agents. */
-async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHint: string | null, body: string, agentId: string | undefined, refs: PrRefs = {}): Promise<AcceptInput> {
+async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slugHint: string | null, body: string, agentId: string | undefined, refs: PrRefs = {}): Promise<AcceptInput> {
   // A41: the branch the PR is opened from: the worktree that has its head checked out, else origin/<head>; never the
   // session's own checkout unless that is where the head is.
   const target = await prTarget($, start, refs)
@@ -1285,7 +1285,7 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHi
   }
   // A41: this session's background agents count against a PR from its own worktree; a PR from another worktree is not
   // held up by work elsewhere.
-  const sessionRoot = (await locate($, a5, `${await $.session.cwd()}/_`)).root
+  const sessionRoot = (await locate($, a5r, `${await $.session.cwd()}/_`)).root
   const runningAgents = sessionRoot && sameRoot(sessionRoot, root) ? (await $.agent.list().catch(() => [])).filter(a => a.status === 'running' && a.type !== SYNC_AGENT && a.id !== agentId).map(a => `${a.type}: ${a.description}`) : []
   return {
     slug,
@@ -1304,14 +1304,14 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHi
     untrackedLeft,
     strayWorktrees,
     runningAgents,
-    cfg: a5.cfg,
+    cfg: a5r.cfg,
     kitDirs: kitDirsIn(root),
   }
 }
 
 /** A18: the score at the PR-opening call (main loop or worker) or at an intent's close; a failing score refuses it
  * with the list, Hai may let this one through in the dialog, a worker is never asked. */
-async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: Input, agentId: string | undefined): Promise<string | null> {
+async function acceptGate($: Engine, opts: Opts, a5r: A5R, tool: string, input: Input, agentId: string | undefined): Promise<string | null> {
   let root: string | null = null
   let slug: string | null = null
   let body = ''
@@ -1324,13 +1324,13 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
     // unread (never passed, never another branch's score).
     const cmdRefs = prCommandRefs(command)
     const dir = norm(cmdRefs.dir ?? cwd, cwd)
-    root = (await locate($, a5, `${dir}/_`)).root ?? dir
+    root = (await locate($, a5r, `${dir}/_`)).root ?? dir
     body = await prBody($, command, dir)
     refs = { repo: cmdRefs.repo, head: cmdRefs.head, base: cmdRefs.base, ...(cmdRefs.problem ? { problem: cmdRefs.problem } : {}) }
   } else if (isPrTool(tool)) {
     // A22: a PR opened through an MCP tool (GitHub's create_pull_request and the like): the session's repository,
     // checked against the repository, head and base the input names; never let through unread.
-    root = (await locate($, a5, `${cwd}/_`)).root ?? cwd
+    root = (await locate($, a5r, `${cwd}/_`)).root ?? cwd
     body = str(input.body)
     const owner = str(input.owner)
     const name = str(input.repo) || str(input.repository) || str(input.repo_name)
@@ -1340,13 +1340,13 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
       const closing = closesIntent(norm(path, cwd), newLines(old, neu))
       if (closing) {
         slug = closing
-        root = (await locate($, a5, path)).root
+        root = (await locate($, a5r, path)).root
         what = `closing intent ${closing}`
       }
     }
   }
   if (!root) return null
-  const x = await gatherAccept($, opts, a5, root, slug, body, agentId, refs)
+  const x = await gatherAccept($, opts, a5r, root, slug, body, agentId, refs)
   const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: x.slug, scores, what } // the intent the score read (tracked or from the diff)
   $.ui.invalidate('ui.render')
@@ -1355,12 +1355,12 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
   if (bad.length === 0 && !x.diffProblem) return null
   const text = x.diffProblem ? unreadText(x.diffProblem) : acceptText(scores, what)
   if (agentId !== undefined) return `${text}\n(a worker does not ask Hai: leave it undone, stop and report it to the session that briefed you)`
-  if (opts.a5WhenPresent === 'deny') return text
+  if (opts.a5rWhenPresent === 'deny') return text
   try {
     const question = x.diffProblem
-      ? `A5 acceptance: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Let it through this once?`
-      : `A5 acceptance: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Let it through this once?`
-    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'No'], header: 'A5 acceptance' })
+      ? `A5R acceptance: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Let it through this once?`
+      : `A5R acceptance: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Let it through this once?`
+    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'No'], header: 'A5R acceptance' })
     return answer === PASS_ONCE ? null : `${text}\n(Hai said no)`
   } catch {
     return `${text}\n(nobody could approve it now)`
@@ -1378,16 +1378,16 @@ async function refreshAccept($: Engine, opts: Opts): Promise<void> {
     const status = await atherStatus($)
     const stage = status?.tracked?.stage ?? ''
     shipSlug = status?.tracked?.slug && /^(Ship|Ready to close)$/i.test(stage) ? status.tracked.slug : null
-    const a5 = await load($)
+    const a5r = await load($)
     const cwd = await $.session.cwd()
-    const root = (await locate($, a5, `${cwd}/_`)).root
+    const root = (await locate($, a5r, `${cwd}/_`)).root
     prDirty = false
     if (!root) return
-    if (await postHoc($, opts, a5, root, status, now)) return
+    if (await postHoc($, opts, a5r, root, status, now)) return
     if (!shipSlug && !lastAccept) return
     acceptDirty = false
     const slug = lastAccept?.slug ?? shipSlug
-    lastAccept = { at: now, slug, scores: score(await gatherAccept($, opts, a5, root, slug, '', undefined)), what: lastAccept?.what ?? 'Ship' }
+    lastAccept = { at: now, slug, scores: score(await gatherAccept($, opts, a5r, root, slug, '', undefined)), what: lastAccept?.what ?? 'Ship' }
   } finally {
     isScoring = false
     $.ui.invalidate('ui.render')
@@ -1398,7 +1398,7 @@ async function refreshAccept($: Engine, opts: Opts): Promise<void> {
  * (opened on GitHub, or by the app's own button) is scored now, shown on the card with its number, and one 🟥 is
  * raised per failing PR (the first session to claim its alert file). The first read of an intent only records the
  * numbers already there. Returns whether it scored. */
-async function postHoc($: Engine, opts: Opts, a5: A5, root: string, status: AtherStatus | null, now: number): Promise<boolean> {
+async function postHoc($: Engine, opts: Opts, a5r: A5R, root: string, status: AtherStatus | null, now: number): Promise<boolean> {
   const slug = status?.tracked?.slug
   if (!slug) return false
   const read = (rel: string) => $.fs.read(`${root}/${rel}`).catch(() => '')
@@ -1411,7 +1411,7 @@ async function postHoc($: Engine, opts: Opts, a5: A5, root: string, status: Athe
   }
   const fresh = listed.filter(n => !prsKnown.has(n))
   if (fresh.length === 0) return false
-  const x = await gatherAccept($, opts, a5, root, slug, '', undefined)
+  const x = await gatherAccept($, opts, a5r, root, slug, '', undefined)
   const scores = score(x)
   for (const n of fresh) prsKnown.add(n)
   lastAccept = { at: now, slug, scores, what: `PR #${fresh.join(', #')} · scored after the fact` }
@@ -1423,31 +1423,31 @@ async function postHoc($: Engine, opts: Opts, a5: A5, root: string, status: Athe
         await raiseRed(
           $,
           opts,
-          `PR #${n} (intent ${slug}) was opened without A5 acceptance and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
+          `PR #${n} (intent ${slug}) was opened without A5R acceptance and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
           'hold the merge until the branch scores 5 of 5',
         )
   return true
 }
 
-/** /a5 accept: the score on demand for the repository this session works in (no PR body). */
+/** /a5r accept: the score on demand for the repository this session works in (no PR body). */
 async function acceptCommand($: Engine, opts: Opts): Promise<string> {
-  const a5 = await load($)
+  const a5r = await load($)
   const cwd = await $.session.cwd()
-  const root = (await locate($, a5, `${cwd}/_`)).root
-  if (!root) return 'A5 acceptance: this session is not in a git repository.'
-  const x = await gatherAccept($, opts, a5, root, null, '', undefined)
+  const root = (await locate($, a5r, `${cwd}/_`)).root
+  if (!root) return 'A5R acceptance: this session is not in a git repository.'
+  const x = await gatherAccept($, opts, a5r, root, null, '', undefined)
   const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: x.slug, scores, what: 'on demand' } // A47: the intent the score read
   $.ui.invalidate('ui.render')
-  return [`A5 acceptance (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
+  return [`A5R acceptance (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
 }
 
 /** A21: the score of the intent Ather hands over at Ship, as the text added to that prompt. */
 async function shipScore($: Engine, opts: Opts, slug: string): Promise<string | null> {
-  const a5 = await load($)
-  const root = (await locate($, a5, `${await $.session.cwd()}/_`)).root
+  const a5r = await load($)
+  const root = (await locate($, a5r, `${await $.session.cwd()}/_`)).root
   if (!root) return null
-  const x = await gatherAccept($, opts, a5, root, slug, '', undefined)
+  const x = await gatherAccept($, opts, a5r, root, slug, '', undefined)
   const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug, scores, what: 'Ship' }
   $.ui.invalidate('ui.render')
@@ -1462,21 +1462,21 @@ async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
 }
 
 /** The first git write of a command that lands in the shared S2 checkout (its main working tree), if any. */
-async function sharedGitWrite($: Engine, opts: Opts, a5: A5, writes: { verb: string; dir: string }[]): Promise<{ verb: string; dir: string } | null> {
+async function sharedGitWrite($: Engine, opts: Opts, a5r: A5R, writes: { verb: string; dir: string }[]): Promise<{ verb: string; dir: string } | null> {
   const cwd = await $.session.cwd()
   for (const w of writes) {
     const dir = norm(w.dir || cwd, cwd)
-    const root = (await locate($, a5, `${dir}/_`)).root
+    const root = (await locate($, a5r, `${dir}/_`)).root
     if (root && sameRoot(root, s2Root(opts)) && (await isSharedRoot($, root))) return w
   }
   return null
 }
 
-/** A5's freeze, a lease (D8): from the sync time until done, abort or expiry, a session that does not hold the sync
+/** A5R's freeze, a lease (D8): from the sync time until done, abort or expiry, a session that does not hold the sync
  * makes no git write in the shared checkout and does not use the Editor (sync.json read fresh for each such call).
  * A14, the merge guard: while .git/MERGE_HEAD exists in the shared checkout, git writes there are refused to every
  * session but the sync's holder, whatever sync.json says. */
-async function freezeProblem($: Engine, opts: Opts, a5: A5, tool: string, input: Input): Promise<string | null> {
+async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, input: Input): Promise<string | null> {
   const command = SHELL_TOOLS.has(tool) ? str(input.command) : ''
   const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command))
   const writes = command ? gitWrites(command) : []
@@ -1484,7 +1484,7 @@ async function freezeProblem($: Engine, opts: Opts, a5: A5, tool: string, input:
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   const now = await $.clock.now()
   const isHolder = s?.holder.id8 === (await $.session.id()).slice(0, 8).toLowerCase()
-  const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5, writes) : null
+  const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5r, writes) : null
   if (shared && !isHolder && (await $.fs.exists(`${s2Root(opts)}/.git/MERGE_HEAD`))) {
     const state = s ? `${s.holder.lane} holds the sync at ${clockOf(s.at)} (${phaseOf(s, now)})` : 'no sync is open (a merge left behind)'
     return blocked('Merge guard', `a merge is in progress in the shared checkout (.git/MERGE_HEAD; ${state}): no git ${shared.verb} there until it is finished or aborted`, 'leave the merge state alone (no commit, reset, abort or stash of yours); its holder or Hai ends it; work without git or in your own worktree')
@@ -1522,7 +1522,7 @@ function ramStep(opts: Opts, now: number): void {
 }
 
 /** What the tiles and the status line show, from what the tick read; a toast when the Editor comes free or RAM
- * falls (A5 on only). */
+ * falls (A5R on only). */
 function showMachine($: Engine, now: number): void {
   const d = new Date(now)
   nowMin = d.getHours() * 60 + d.getMinutes()
@@ -1556,19 +1556,19 @@ async function recordTouch($: Engine, opts: Opts, locs: Located[]): Promise<void
   await $.fs.write(`${hfDir(opts)}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
 }
 
-/** A5's coordination refusals before a tool runs: the lock is the editor tool's to write; notices are not
+/** A5R's coordination refusals before a tool runs: the lock is the editor tool's to write; notices are not
  * logged into intent files. */
 async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): Promise<string | null> {
   const viaTool = `call ${EDITOR_TOOL} (action request, release or extend)`
   if (EDIT_TOOLS.has(tool)) {
     const parts = await editParts($, tool, input)
-    if (parts.some(([path]) => isLockPath(path))) return blocked('Editor lock', 'under A5 the lock is written by the editor tool, never by hand', viaTool)
+    if (parts.some(([path]) => isLockPath(path))) return blocked('Editor lock', 'under A5R the lock is written by the editor tool, never by hand', viaTool)
     if (parts.some(([path, old, neu]) => isIntentFile(path) && addsNotice(newLines(old, neu))))
-      return blocked('Notices', 'a5 notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5 ·" line out; the files under Saved/A5 are the record')
+      return blocked('Notices', 'a5r notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5R ·" line out; the files under Saved/A5R are the record')
   }
-  if (SHELL_TOOLS.has(tool) && writesLock(str(input.command))) return blocked('Editor lock', 'under A5 the lock is written by the editor tool, never by a command', viaTool)
+  if (SHELL_TOOLS.has(tool) && writesLock(str(input.command))) return blocked('Editor lock', 'under A5R the lock is written by the editor tool, never by a command', viaTool)
   if (SHELL_TOOLS.has(tool) && writesNoticeToIntent(str(input.command)))
-    return blocked('Notices', 'a5 notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5 ·" line out; the files under Saved/A5 are the record')
+    return blocked('Notices', 'a5r notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5R ·" line out; the files under Saved/A5R are the record')
   return null
 }
 
@@ -1579,9 +1579,9 @@ const placeText = (d: GrantDecision | null): string => {
   return d.kind === 'grant' ? `granted until ${clockOf(d.end)}` : 'recovering a stale lease'
 }
 
-/** The `editor` tool: request, release, extend, status (the only writer of the lock under A5). */
+/** The `editor` tool: request, release, extend, status (the only writer of the lock under A5R). */
 async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
-  if (!(await readA5($))) return blocked('Editor', 'A5 is off, so the Editor holder is not running', 'follow AGENTS.md: take Saved/EDITOR_OWNER.txt by hand')
+  if (!(await readA5R($))) return blocked('Editor', 'A5R is off, so the Editor holder is not running', 'follow AGENTS.md: take Saved/EDITOR_OWNER.txt by hand')
   if (!(await $.fs.exists(s2Root(opts)))) return blocked('Editor', `no S2 checkout at ${s2Root(opts)}`, 'set the editorLock option to the checkout\'s Saved/EDITOR_OWNER.txt')
   await restoreMe($, opts)
   const action = str(e.action)
@@ -1609,7 +1609,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     await saveMe($, opts, now)
     await runTick($, opts)
     const asked = me.yieldAsks.find(a => a.at === now)
-    return tail(`${placeText(decision)}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5)' : ''}` : ''}`)
+    return tail(`${placeText(decision)}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5r)' : ''}` : ''}`)
   }
   if (action === 'release') {
     lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
@@ -1743,22 +1743,22 @@ function syncData(now: number): SyncData {
 
 type ButtonEl = { Button: (p: Record<string, unknown>) => unknown }
 
-/** D5 / A25: `/a5 gate <pie> <nopie>` sets the launch gate for every session (the plugin store, as the panel's
- * ±1 GB did before 0.8); `/a5 gate reset` goes back to the plugin options. */
+/** D5 / A25: `/a5r gate <pie> <nopie>` sets the launch gate for every session (the plugin store, as the panel's
+ * ±1 GB did before 0.8); `/a5r gate reset` goes back to the plugin options. */
 async function gateCommand($: Engine, opts: Opts, args: string): Promise<string> {
   const words = args.trim().split(/\s+/).filter(Boolean)
   if (words[0]?.toLowerCase() === 'reset') {
     await $.store.delete('gates')
     await runTick($, opts)
-    return `A5 · launch gate back to the plugin options: ≥ ${clampGate(Number(opts.launchGatePieGb ?? 31))} GB with PIE, ≥ ${clampGate(Number(opts.launchGateGb ?? 28))} GB without.`
+    return `A5R · launch gate back to the plugin options: ≥ ${clampGate(Number(opts.launchGatePieGb ?? 31))} GB with PIE, ≥ ${clampGate(Number(opts.launchGateGb ?? 28))} GB without.`
   }
   const [pie, nopie] = words.map(Number)
-  if (words.length === 0) return `A5 · launch gate: ≥ ${gates.pieGb} GB with PIE, ≥ ${gates.nopieGb} GB without (${gates.source === 'panel' ? 'set with /a5 gate' : 'plugin options'}). Change it: /a5 gate <with PIE> <without PIE>, or /a5 gate reset.`
-  if (!Number.isFinite(pie) || !Number.isFinite(nopie ?? pie)) return 'A5 · /a5 gate <with PIE GB> <without PIE GB>, e.g. /a5 gate 31 28; or /a5 gate reset.'
+  if (words.length === 0) return `A5R · launch gate: ≥ ${gates.pieGb} GB with PIE, ≥ ${gates.nopieGb} GB without (${gates.source === 'panel' ? 'set with /a5r gate' : 'plugin options'}). Change it: /a5r gate <with PIE> <without PIE>, or /a5r gate reset.`
+  if (!Number.isFinite(pie) || !Number.isFinite(nopie ?? pie)) return 'A5R · /a5r gate <with PIE GB> <without PIE GB>, e.g. /a5r gate 31 28; or /a5r gate reset.'
   const g = { pieGb: clampGate(pie as number), nopieGb: clampGate((nopie ?? pie) as number) }
   await $.store.set('gates', g)
   await runTick($, opts)
-  return `A5 · launch gate for every session: ≥ ${g.pieGb} GB with PIE, ≥ ${g.nopieGb} GB without (the PIE gate stays 5 GB start / 3 GB abort). /a5 gate reset goes back to the plugin options.`
+  return `A5R · launch gate for every session: ≥ ${g.pieGb} GB with PIE, ≥ ${g.nopieGb} GB without (the PIE gate stays 5 GB start / 3 GB abort). /a5r gate reset goes back to the plugin options.`
 }
 
 /** A25: the Editor tile's one action: Release, only while this session holds the Editor. */
@@ -1846,7 +1846,7 @@ function motionFor(key: string, sig: string, color: string, now: number, running
   return s && s.at > 0 && now - s.at < MOTION_MS ? { kind: 'reveal', from: s.from, ms: 700 } : { kind: 'still' }
 }
 
-/** A40: the app theme from `/config` ("theme"), applied to every colour a5 draws; dark when it cannot be read. */
+/** A40: the app theme from `/config` ("theme"), applied to every colour a5r draws; dark when it cannot be read. */
 async function readTheme($: Engine): Promise<void> {
   const rows = await $.config.list().catch(() => [])
   const row = rows.find(x => x.key === 'theme')
@@ -1865,14 +1865,14 @@ function scheduleReads($: Engine, opts: Opts, now: number): void {
   if (!isScoring && ((wantCard && acceptDirty) || prDirty || now - shipCheckedAt > SHIP_CHECK_MS)) $.clock.after(10, () => void refreshAccept($, opts))
 }
 
-/** A29: open (or bring back) the A5 pane; a toast when the surface could not place it. */
+/** A29: open (or bring back) the A5R pane; a toast when the surface could not place it. */
 async function openA5Pane($: Engine): Promise<string> {
   paneEnterAt = await $.clock.now() // A37: the entrance plays at the next draw
-  const r = await $.ui.open({ id: A5_PANE, title: 'A5' }).catch(err => ({ isPlaced: false, reason: String(err) }) as const)
-  if (r.isPlaced) return 'A5 pane opened.'
+  const r = await $.ui.open({ id: A5R_PANE, title: 'A5R' }).catch(err => ({ isPlaced: false, reason: String(err) }) as const)
+  if (r.isPlaced) return 'A5R pane opened.'
   const why = 'reason' in r ? String(r.reason) : 'not placed'
-  $.ui.toast(`A5: the pane could not be placed (${why})`)
-  return `A5 pane not placed: ${why}`
+  $.ui.toast(`A5R: the pane could not be placed (${why})`)
+  return `A5R pane not placed: ${why}`
 }
 
 /** A28: the compact line's three parts and their attention marks. */
@@ -1903,11 +1903,11 @@ function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolea
   ]
 }
 
-/** Ather's pane as Ather drew it. With A5 on: one compact A5 line right under Ather's own summary strip (A28), the
- * accent in lacquer gold and the red seal beside the brand. Nothing else of A5 is in it; the rest is the A5 pane. */
+/** Ather's pane as Ather drew it. With A5R on: one compact A5R line right under Ather's own summary strip (A28), the
+ * accent in lacquer gold and the red seal beside the brand. Nothing else of A5R is in it; the rest is the A5R pane. */
 async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bodyColumns?: number } }, tree: RenderElement): Promise<RenderElement> {
-  const on = await readA5($)
-  if (!on) return tree // A5 off: Ather's pane exactly as Ather drew it (D1)
+  const on = await readA5R($)
+  if (!on) return tree // A5R off: Ather's pane exactly as Ather drew it (D1)
   const el = $.ui.resolve(e as never) as never as Parameters<typeof icon>[0] & Parameters<typeof tilesRow>[0]
   const isDesktop = e.surface === 'desktop'
   const now = await $.clock.now()
@@ -1917,23 +1917,23 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   const stripAt = kids.findIndex(k => keyOf(k) === 'strip')
   if (isS2 && stripAt >= 0) {
     scheduleReads($, opts, now)
-    // A30: "★ A5 ›" on the seal red (a Button has no colour of its own: the red is its box's background).
-    const button = el.Button({ key: 'hai-a5-open', label: '★ A5 ›', plain: true, onPress: () => void openA5Pane($) })
+    // A30: "★ A5R ›" on the seal red (a Button has no colour of its own: the red is its box's background).
+    const button = el.Button({ key: 'hai-a5r-open', label: '★ A5R ›', plain: true, onPress: () => void openA5Pane($) })
     // A40: the button's label is the surface's ink; seal red behind it reads in the dark theme, a red rim in the light one.
-    let line = compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, currentTheme() === 'dark' ? A5_LOOK.sealBg : undefined, currentTheme() === 'light' ? A5_LOOK.hit : undefined)
+    let line = compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, currentTheme() === 'dark' ? A5R_LOOK.sealBg : undefined, currentTheme() === 'light' ? A5R_LOOK.hit : undefined)
     // A37: the compact line's entrance when it first draws (desktop, motion on).
     if (lineEnterAt === 0) lineEnterAt = now
     if (isDesktop && opts.motion !== 'off' && now - lineEnterAt < ENTRANCE_MS) {
-      line = withCurtain(el as never, line, 'hai-a5-line-in', entrance(1)[0] as Curtain)
+      line = withCurtain(el as never, line, 'hai-a5r-line-in', entrance(1)[0] as Curtain)
       $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render'))
     }
     kids.splice(stripAt + 1, 0, line)
   }
   // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.
-  const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
-  const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5_LOOK.sealBg, A5_LOOK.sealText, true), alt: 'A5 on', width: 27, height: 14, isInteractive: true }) : undefined
+  const stamp = opts.motion !== 'off' && now - a5rFlipAt < MOTION_MS
+  const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5R_LOOK.sealBg, A5R_LOOK.sealText, true), alt: 'A5R on', width: 34, height: 14, isInteractive: true }) : undefined
   kids = kids.map(k => replaceKeyed(k, 'head-words', words => withSeal(el, words, sealEl)))
-  // A39: every worker avatar Ather drew wears the red scarf while A5 is on.
+  // A39: every worker avatar Ather drew wears the red scarf while A5R is on.
   return recolor(scarfAvatars({ ...(tree as object), children: kids } as unknown as RenderElement))
 }
 
@@ -1956,23 +1956,23 @@ function withOverlay(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (
 const entrance = (n: number): Curtain[] => {
   const step = 4
   const last = ENTRANCE_BUDGET_MS - 16 * step
-  return Array.from({ length: n }, (_, i) => ({ color: A5_LOOK.sealBg, begin: n > 1 ? Math.floor((i * last) / (n - 1)) : 0, step, clear: true }))
+  return Array.from({ length: n }, (_, i) => ({ color: A5R_LOOK.sealBg, begin: n > 1 ? Math.floor((i * last) / (n - 1)) : 0, step, clear: true }))
 }
 
-/** A35 (mockup v2): the A5 pane's frame: the band at full width, then every block on one gutter, one gap between blocks. */
+/** A35 (mockup v2): the A5R pane's frame: the band at full width, then every block on one gutter, one gap between blocks. */
 function paneOf(el: { Box: (p: Record<string, unknown>) => unknown }, kids: unknown[]): RenderElement {
   const [band, ...blocks] = kids as { props?: Record<string, unknown> }[]
   const onGutter = blocks.map(b => ({ ...b, props: { ...(b.props ?? {}), marginX: V2.gutter, marginTop: 0 } }))
-  return el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
+  return el.Box({ key: 'hai-a5r-pane', flexDirection: 'column', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
 }
 
-/** A29: the A5 pane: the three tool rows (A25), the sessions list (A26), the Nghiệm thu card (A19), and the five
- * rules as its last block (A27). With A5 off it says how to turn it on; outside the S2 checkout it has no tools. */
+/** A29: the A5R pane: the three tool rows (A25), the sessions list (A26), the Nghiệm thu card (A19), and the five
+ * rules as its last block (A27). With A5R off it says how to turn it on; outside the S2 checkout it has no tools. */
 async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { bodyColumns?: number } }): Promise<RenderElement> {
   const el = $.ui.resolve(e as never) as never as Parameters<typeof icon>[0] & Parameters<typeof tilesRow>[0]
   const isDesktop = e.surface === 'desktop'
   const now = await $.clock.now()
-  const isOn = await readA5($)
+  const isOn = await readA5R($)
   // A38: the sync freeze and its lift, seen at the draw after they happen.
   const phaseNow = phaseOf(syncFile, now)
   if (lastPhaseSeen !== null && phaseNow === 'frozen' && lastPhaseSeen !== 'frozen') freezeAt = now
@@ -1980,17 +1980,17 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   lastPhaseSeen = phaseNow
   const isFx = isDesktop && opts.motion !== 'off'
   let fxPlaced = false
-  let band = a5Band(el, isOn, isOn && phaseNow === 'frozen')
+  let band = a5rBand(el, isOn, isOn && phaseNow === 'frozen')
   if (isFx && now - freezeAt < FX_MS) {
-    band = withOverlay(el as never, band, 'hai-a5-fx-freeze', sweepSvg(A5_LOOK.sealText, false))
+    band = withOverlay(el as never, band, 'hai-a5r-fx-freeze', sweepSvg(A5R_LOOK.sealText, false))
     fxPlaced = true
   } else if (isFx && now - liftAt < FX_MS) {
-    band = withOverlay(el as never, band, 'hai-a5-fx-lift', sweepSvg(A5_LOOK.sealText, true))
+    band = withOverlay(el as never, band, 'hai-a5r-fx-lift', sweepSvg(A5R_LOOK.sealText, true))
     fxPlaced = true
   }
   const kids: unknown[] = [band] // A33/A35: the band first
   if (!isOn) {
-    kids.push(el.Box({ key: 'hai-a5-off', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'A5 is off: Ather runs as it ships. /a5 on turns on the five rules, the Editor holder, RAM and Sync main for every session.' })] }))
+    kids.push(el.Box({ key: 'hai-a5r-off', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'A5R is off: Ather runs as it ships. /a5r on turns on the five rules, the Editor holder, RAM and Sync main for every session.' })] }))
     return paneOf(el, kids)
   }
   scheduleReads($, opts, now)
@@ -2000,7 +2000,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     const plan = syncData(now)
     const tiles = [
       editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
-      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }, { fill: A5_LOOK.meter, track: A5_LOOK.meterTrack }),
+      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }, { fill: A5R_LOOK.meter, track: A5R_LOOK.meterTrack }),
       mainTile(sync, plan, syncActionButton($, opts, el, isDesktop, now)),
     ]
     tiles[0] = { ...tiles[0], action: editorAction($, opts, el, isDesktop) } as (typeof tiles)[number]
@@ -2021,7 +2021,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     for (const t of tiles) {
       const name = names[t.key as keyof typeof names]
       // A33: gold icons; a state that is not fine keeps its status colour.
-      const color = t.dot && t.dot !== STATUS.ok ? t.dot : A5_LOOK.gold
+      const color = t.dot && t.dot !== STATUS.ok ? t.dot : A5R_LOOK.gold
       t.icon = icon(el, name, color, motionFor(`pane-${t.key}`, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
     kids.push(tilesRow(el, tiles, isDesktop, PANE_INK()))
@@ -2031,11 +2031,11 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
-  } else kids.push(el.Box({ key: 'hai-a5-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'This session is not in the S2 checkout: the Editor, Memory and Sync main tools and the sessions list live in an S2 session.' })] }))
-  // A19: the Nghiệm thu A5 card, once there is a score or the tracked intent is in Ship.
+  } else kids.push(el.Box({ key: 'hai-a5r-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'This session is not in the S2 checkout: the Editor, Memory and Sync main tools and the sessions list live in an S2 session.' })] }))
+  // A19: the Nghiệm thu A5R card, once there is a score or the tracked intent is in Ship.
   if (lastAccept) {
     const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
-    kids.push(acceptCard(el, 'A5 acceptance', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
+    kids.push(acceptCard(el, 'A5R acceptance', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
   }
   // A27: the five rules, last; A20: rule 1's word switches country / project in a Client of its own.
   const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
@@ -2060,18 +2060,18 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   }
   const marks = (n: number): unknown[] => {
     const s = lastAccept?.scores.find(x => x.rule === n)
-    return s ? [el.Text({ key: `hai-a5-chip-${n}-mark`, color: s.state === 'pass' ? STATUS.ok : s.state === 'fail' ? STATUS.bad : A5_LOOK.quiet, children: s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–' })] : []
+    return s ? [el.Text({ key: `hai-a5r-chip-${n}-mark`, color: s.state === 'pass' ? STATUS.ok : s.state === 'fail' ? STATUS.bad : A5R_LOOK.quiet, children: s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–' })] : []
   }
-  let rules = rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.hit }, marks)
+  let rules = rulesChips(el as never, ruleCards(rulesA5R), hits, openRule, pressSeal, motto, { ink: A5R_LOOK.ivory, quiet: A5R_LOOK.quiet, hit: A5R_LOOK.hit }, marks)
   if (isFx)
     for (const n of [1, 2, 3, 4, 5]) {
       const id = `D${n}`
       if (now - (hitStampAt[id] ?? -FX_MS) < FX_MS) {
-        rules = replaceKeyed(rules, `hai-a5-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5-fx-hit-${n}`, stampSvg(A5_LOOK.sealBg)))
+        rules = replaceKeyed(rules, `hai-a5r-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5r-fx-hit-${n}`, stampSvg(A5R_LOOK.sealBg)))
         fxPlaced = true
       }
       if (lastAccept && now - scoreFxAt < FX_MS) {
-        rules = replaceKeyed(rules, `hai-a5-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5-fx-score-${n}`, curtainSvg({ color: A5_LOOK.gold, begin: (n - 1) * 150, step: 4, clear: true })))
+        rules = replaceKeyed(rules, `hai-a5r-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5r-fx-score-${n}`, curtainSvg({ color: A5R_LOOK.gold, begin: (n - 1) * 150, step: 4, clear: true })))
         fxPlaced = true
       }
     }
@@ -2083,7 +2083,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   if (isEntering) {
     const plan = entrance(kids.length)
     kids.forEach((k, i) => {
-      kids[i] = withCurtain(el as never, k, `hai-a5-in-${i}`, plan[i] as Curtain)
+      kids[i] = withCurtain(el as never, k, `hai-a5r-in-${i}`, plan[i] as Curtain)
     })
     $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render')) // then still: the curtains leave the tree
   }
@@ -2097,12 +2097,12 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     await readTheme($) // A40
     await $.command.register({
-      name: 'a5',
-      description: 'A5: /a5 (opens the A5 pane) · /a5 on · /a5 off · /a5 status · /a5 accept (A5 acceptance now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5 acceptance before a PR; Editor holder, RAM and Sync main)',
+      name: 'a5r',
+      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance before a PR; Editor holder, RAM and Sync main)',
       argumentHint: 'on | off | status | accept | gate <pie> <nopie> | sync HH:MM',
     })
-    await readA5($)
-    a5FlipAt = 0 // a session that starts with A5 already on does not stamp the seal
+    await readA5R($)
+    a5rFlipAt = 0 // a session that starts with A5R already on does not stamp the seal
     isS2 = await $.fs.exists(`${(await $.session.root()).replace(/\\/g, '/')}/S2.uproject`)
     if (isS2) {
       // The minute timer reads files and probes; it wakes the model only for an event addressed to this session.
@@ -2125,34 +2125,34 @@ export const register: Register = (on, options) => {
     return res
   })
 
-  on('command.run', { command: 'a5' }, async ($, e) => {
+  on('command.run', { command: 'a5r' }, async ($, e) => {
     if (/^sync\b/i.test(e.args.trim())) return { text: await syncCommand($, opts, e.args.trim().slice(4)) }
     if (/^accept\b/i.test(e.args.trim())) return { text: await acceptCommand($, opts) }
     if (/^gate\b/i.test(e.args.trim())) return { text: await gateCommand($, opts, e.args.trim().slice(4)) }
-    // A29: `/a5` with no words opens the A5 pane; `/a5 status` keeps the text reply below.
+    // A29: `/a5r` with no words opens the A5R pane; `/a5r status` keeps the text reply below.
     if (e.args.trim() === '') return { text: await openA5Pane($) }
     const arg = e.args.trim().toLowerCase()
     if (arg === 'on' || arg === 'off') {
-      await $.store.set('a5', { on: arg === 'on' })
-      if (arg === 'on' && !a5On) a5FlipAt = await $.clock.now()
-      a5On = arg === 'on'
-      if (a5On) hits = noHits()
-      if (a5On && isS2) await runTick($, opts)
+      await $.store.set('a5r', { on: arg === 'on' })
+      if (arg === 'on' && !a5rOn) a5rFlipAt = await $.clock.now()
+      a5rOn = arg === 'on'
+      if (a5rOn) hits = noHits()
+      if (a5rOn && isS2) await runTick($, opts)
       showStatus($)
       $.ui.invalidate('ui.render')
       return {
-        text: a5On
-          ? '★ A5 on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; A5 acceptance before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
-          : 'A5 off: the rules, A5 acceptance, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
+        text: a5rOn
+          ? '★ A5R on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; A5R acceptance before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
+          : 'A5R off: the rules, A5R acceptance, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
       }
     }
-    await readA5($)
-    const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put a5 first in CLAUDE_CODE_PLUGIN_DIRS`
+    await readA5R($)
+    const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put a5r first in CLAUDE_CODE_PLUGIN_DIRS`
     const coord =
-      a5On && isS2
+      a5rOn && isS2
         ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)} (holder ${syncFile.holder.lane}, hard end ${clockOf(syncFile.hardEnd)})` : 'none planned'}. ${overviewLine(overviewOf({ me8, files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now: nowMs, phase: phaseOf(syncFile, nowMs) }))}.`
         : ''
-    return { text: `A5 is ${a5On ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. a5 sits ${where2}.${coord}` }
+    return { text: `A5R is ${a5rOn ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. a5r sits ${where2}.${coord}` }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -2168,18 +2168,18 @@ export const register: Register = (on, options) => {
       const text = await syncAction($, opts, str(input.action), { at: str(input.at), holder: str(input.holder), note: str(input.note), paths, build: typeof input.build === 'boolean' ? input.build : undefined })
       return { result: [text, ...drain()].join('\n') }
     }
-    const a5 = await load($)
-    const isOn = await readA5($)
+    const a5r = await load($)
+    const isOn = await readA5R($)
 
-    // The Editor gate is A5's (D1): with A5 off nothing of a5's refuses an Editor call.
-    const frozen = isOn ? await freezeProblem($, opts, a5, tool, input) : null
+    // The Editor gate is A5R's (D1): with A5R off nothing of a5r's refuses an Editor call.
+    const frozen = isOn ? await freezeProblem($, opts, a5r, tool, input) : null
     if (frozen) return { deny: frozen }
     const editor = isOn ? await editorProblem($, opts, tool, input) : null
     if (editor) return { deny: blocked('Editor lock', editor.split(' → ')[0] ?? editor, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
     const coord = isOn ? await coordProblem($, opts, tool, input) : null
     if (coord) return { deny: coord }
-    // A18: nghiệm thu A5 on the PR-opening call and on an intent close (D10: at acceptance, never per turn).
-    const accepted = isOn ? await acceptGate($, opts, a5, tool, input, e.agentId) : null
+    // A18: nghiệm thu A5R on the PR-opening call and on an intent close (D10: at acceptance, never per turn).
+    const accepted = isOn ? await acceptGate($, opts, a5r, tool, input, e.agentId) : null
     if (accepted) return { deny: accepted }
 
     let d: Decision | null = null
@@ -2190,22 +2190,22 @@ export const register: Register = (on, options) => {
       what = str(input.command)
       if (isOn) {
         const cwd = await $.session.cwd()
-        d = a5.preShell(what, cwd, places, 0, await sharedTest($, a5, what, cwd))
-        // A15: the sync's own git work passes A5's asks for its holder and worker, during their frozen phase only.
+        d = a5r.preShell(what, cwd, places, 0, await sharedTest($, a5r, what, cwd))
+        // A15: the sync's own git work passes A5R's asks for its holder and worker, during their frozen phase only.
         if (d?.kind === 'ask' && isSyncCommandOnly(what) && (await isFrozenHolder($, opts))) d = null
       }
     } else if (EDIT_TOOLS.has(tool)) {
       parts = await editParts($, tool, input)
       const scope = isOn ? await scopeGlobs($) : []
       for (const [path, old, neu] of parts) {
-        const loc = await locate($, a5, path)
+        const loc = await locate($, a5r, path)
         locs.push(loc)
-        if (isOn) d ??= a5.preEdit(path, old, neu, loc, scope, await isSharedRoot($, loc.root))
+        if (isOn) d ??= a5r.preEdit(path, old, neu, loc, scope, await isSharedRoot($, loc.root))
         what = path
       }
     }
     if (d) count(d.rule)
-    if (d?.kind === 'deny') return { deny: blocked(gateOf(d.rule), d.why, 'not allowed under A5: do it another way, or ask Hai to turn A5 off for it') }
+    if (d?.kind === 'deny') return { deny: blocked(gateOf(d.rule), d.why, 'not allowed under A5R: do it another way, or ask Hai to turn A5R off for it') }
     if (d?.kind === 'ask' && !approved.has(d.key)) {
       // A worker stops and reports on such an action (intent skill); the session that briefed it decides, or asks Hai.
       if (e.agentId !== undefined)
@@ -2217,10 +2217,10 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     if (chain === null) {
       // Where this plugin sits: Ather beneath means its pane can be wrapped. Kept outside the plugin
-      // folder (a write inside it would reload the mod), for /a5 status and for checking by hand.
+      // folder (a write inside it would reload the mod), for /a5r status and for checking by hand.
       chain = next.trace.map(t => t.plugin).filter(p => p !== 'engine')
       const id8 = (await $.session.id()).slice(0, 8)
-      await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
+      await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5r/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
     // A19: a file changed (an edit, a git write): the card scores again at its next draw.
@@ -2253,8 +2253,8 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const res = await next(e)
     // A12: the sync worker's run ended; without done or abort the sync is aborted for it.
-    if (e.agentId !== undefined && isS2 && (await readA5($))) {
-      await workerEnded($, opts, e.agentId, 'answer' in e && typeof e.answer === 'string' ? e.answer : '').catch(err => $.ui.log(`a5: worker end: ${String(err)}`, { to: 'debug' }))
+    if (e.agentId !== undefined && isS2 && (await readA5R($))) {
+      await workerEnded($, opts, e.agentId, 'answer' in e && typeof e.answer === 'string' ? e.answer : '').catch(err => $.ui.log(`a5r: worker end: ${String(err)}`, { to: 'debug' }))
       if (!isBusy) await deliverIdle($, opts)
     }
     if (e.agentId === undefined) {
@@ -2268,7 +2268,7 @@ export const register: Register = (on, options) => {
       }
       // The session is idle now: a notice that needs action and arrived after the last tool result is one prompt.
       isBusy = false
-      if (a5On) await deliverIdle($, opts)
+      if (a5rOn) await deliverIdle($, opts)
     }
     return res
   })
@@ -2285,10 +2285,10 @@ export const register: Register = (on, options) => {
     // the gate). The origin is what the sender says: it only adds context here, it never opens a gate.
     const origin = e.origin as typeof e.origin | undefined
     const shipFor = origin?.kind === 'plugin' && origin.name === 'ather-automata' ? shipSlugOf(e.text) : null
-    const added = shipFor && (await readA5($)) ? await shipScore($, opts, shipFor).catch(() => null) : null
+    const added = shipFor && (await readA5R($)) ? await shipScore($, opts, shipFor).catch(() => null) : null
     const text = added ? `${e.text}\n\n${added}` : e.text
     // Notices waiting for the next turn ride this prompt as context the model reads (D6).
-    if (pending.length > 0 && (await readA5($))) {
+    if (pending.length > 0 && (await readA5R($))) {
       const texts = drain()
       await saveMe($, opts)
       return next({ ...e, text, context: [...(e.context ?? []), ...texts] })
@@ -2299,11 +2299,11 @@ export const register: Register = (on, options) => {
   on('prompt.compose', async ($, e, next) => {
     const res = await next(e)
     await load($)
-    const isOn = await readA5($)
+    const isOn = await readA5R($)
     const id8 = (await $.session.id()).slice(0, 8)
-    const text = [rulesFlow, isOn ? rulesA5 : ''].filter(Boolean).join('\n\n').replaceAll('{SESSION8}', id8)
+    const text = [rulesFlow, isOn ? rulesA5R : ''].filter(Boolean).join('\n\n').replaceAll('{SESSION8}', id8)
     if (!text) return res
-    return { ...res, sections: [...res.sections, { id: 'a5:rules', text, scope: 'session' as const }] }
+    return { ...res, sections: [...res.sections, { id: 'a5r:rules', text, scope: 'session' as const }] }
   })
 
   // Ather's pane: drawn by Ather beneath; this wraps what it drew.
@@ -2317,6 +2317,6 @@ export const register: Register = (on, options) => {
     }
     return res
   })
-  // A29: the A5 pane is this plugin's own: drawn here, never by anything beneath.
-  on('ui.render', { component: 'Pane', requestId: A5_PANE }, async ($, e) => drawA5Pane($, opts, e))
+  // A29: the A5R pane is this plugin's own: drawn here, never by anything beneath.
+  on('ui.render', { component: 'Pane', requestId: A5R_PANE }, async ($, e) => drawA5Pane($, opts, e))
 }

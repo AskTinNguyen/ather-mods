@@ -1,8 +1,8 @@
-// Two looks for Ather's pane. A5 off: Ather's own (one lime accent, quiet grey, near-black).
-// A5 on: the accent turns gold, a small red seal stands beside the brand, one compact A5 line sits under the strip;
-// borders and secondary text keep Ather's neutral greys. The A5 pane (its own) carries the rest.
-// A33 (rev 9, Hai's approved mockup): the A5 pane in seal red, gold, pale gold and ivory; Ather's pane keeps only the
-// seal, the gold accent and the red "★ A5 ›" button. Contrast (dataviz contrast()): pale gold on seal red ≈ 4.6:1,
+// Two looks for Ather's pane. A5R off: Ather's own (one lime accent, quiet grey, near-black).
+// A5R on: the accent turns gold, a small red seal stands beside the brand, one compact A5R line sits under the strip;
+// borders and secondary text keep Ather's neutral greys. The A5R pane (its own) carries the rest.
+// A33 (rev 9, Hai's approved mockup): the A5R pane in seal red, gold, pale gold and ivory; Ather's pane keeps only the
+// seal, the gold accent and the red "★ A5R ›" button. Contrast (dataviz contrast()): pale gold on seal red ≈ 4.6:1,
 // gold and ivory on the pane's near-black well above 7:1. Pure: no `$`.
 
 // A40: two palettes, one per app theme; the shared colour objects below are switched to the theme in force
@@ -15,15 +15,15 @@ import { FRAME_STYLE, svgOpen } from './icons.ts'
 
 export type ThemeName = 'dark' | 'light'
 export const PALETTES = {
-  dark: { bg: '#17181A', quiet: '#8E918A', line: '#3a3c36', gold: '#F2C14E', ink: '#E9E4D8', paneInk: '#ECE9E2', a5Quiet: '#8E8A80', hit: '#E5534B', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' },
-  light: { bg: '#FFFFFF', quiet: '#5F625C', line: '#C9C6BE', gold: '#8A6100', ink: '#1F1D1A', paneInk: '#1F1D1A', a5Quiet: '#5E5A52', hit: '#B3261E', hair: '#D9D5CC', rim: '#C9C4B8', label: '#5E5A52', ok: '#2E7D4A', warn: '#8F5B00', bad: '#B3261E' },
+  dark: { bg: '#17181A', quiet: '#8E918A', line: '#3a3c36', gold: '#F2C14E', ink: '#E9E4D8', paneInk: '#ECE9E2', a5rQuiet: '#8E8A80', hit: '#E5534B', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' },
+  light: { bg: '#FFFFFF', quiet: '#5F625C', line: '#C9C6BE', gold: '#8A6100', ink: '#1F1D1A', paneInk: '#1F1D1A', a5rQuiet: '#5E5A52', hit: '#B3261E', hair: '#D9D5CC', rim: '#C9C4B8', label: '#5E5A52', ok: '#2E7D4A', warn: '#8F5B00', bad: '#B3261E' },
 } as const
-/** A40: which palette each colour role of a5 draws as text (≥ 4.5:1) and which as a mark (≥ 3:1). */
-export const TEXT_ROLES = ['quiet', 'ink', 'paneInk', 'a5Quiet', 'label', 'gold', 'ok', 'warn', 'bad', 'hit'] as const
+/** A40: which palette each colour role of a5r draws as text (≥ 4.5:1) and which as a mark (≥ 3:1). */
+export const TEXT_ROLES = ['quiet', 'ink', 'paneInk', 'a5rQuiet', 'label', 'gold', 'ok', 'warn', 'bad', 'hit'] as const
 export const MARK_ROLES = ['gold', 'ok', 'warn', 'bad', 'hit'] as const
 
 export const ATHER: { accent: string; quiet: string; line: string } = { accent: '#DDFF00', quiet: '#8E918A', line: '#3a3c36' }
-export const A5_LOOK: { gold: string; sealBg: string; sealText: string; ivory: string; quiet: string; meter: string; meterTrack: string; hit: string; paneInk: string } = { gold: '#F2C14E', sealBg: '#B3261E', sealText: '#F6D98A', ivory: '#E9E4D8', quiet: '#8E8A80', meter: '#E8473C', meterTrack: '#4A2220', hit: '#E5534B', paneInk: '#ECE9E2' }
+export const A5R_LOOK: { gold: string; sealBg: string; sealText: string; ivory: string; quiet: string; meter: string; meterTrack: string; hit: string; paneInk: string } = { gold: '#F2C14E', sealBg: '#B3261E', sealText: '#F6D98A', ivory: '#E9E4D8', quiet: '#8E8A80', meter: '#E8473C', meterTrack: '#4A2220', hit: '#E5534B', paneInk: '#ECE9E2' }
 /** A35/A36 (mockup v2): the thin band's darker red, the list's hairline, a chip's neutral rim, the section label grey. */
 export const V2: { band: string; hair: string; rim: string; label: string; gutter: number } = { band: '#7A1712', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', gutter: 2 }
 export const STATUS: { ok: string; warn: string; bad: string } = { ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' }
@@ -36,7 +36,7 @@ export const applyTheme = (name: ThemeName): void => {
   const p = PALETTES[name]
   themeInForce = name
   Object.assign(ATHER, { quiet: p.quiet, line: p.line })
-  Object.assign(A5_LOOK, { gold: p.gold, ivory: p.ink, quiet: p.a5Quiet, hit: p.hit, paneInk: p.paneInk })
+  Object.assign(A5R_LOOK, { gold: p.gold, ivory: p.ink, quiet: p.a5rQuiet, hit: p.hit, paneInk: p.paneInk })
   Object.assign(V2, { hair: p.hair, rim: p.rim, label: p.label })
   Object.assign(STATUS, { ok: p.ok, warn: p.warn, bad: p.bad })
 }
@@ -54,9 +54,9 @@ export const recolor = <T>(node: T): T => {
     props = { ...props }
     for (const k of ['color', 'borderColor', 'backgroundColor']) {
       const v = props[k]
-      if (typeof v === 'string' && v.toLowerCase() === ATHER.accent.toLowerCase()) props[k] = A5_LOOK.gold
+      if (typeof v === 'string' && v.toLowerCase() === ATHER.accent.toLowerCase()) props[k] = A5R_LOOK.gold
     }
-    if (typeof props.source === 'string') props.source = props.source.replace(/#DDFF00/gi, A5_LOOK.gold)
+    if (typeof props.source === 'string') props.source = props.source.replace(/#DDFF00/gi, A5R_LOOK.gold)
   }
   const children = Array.isArray(n.children) ? n.children.map(recolor) : n.children
   return { ...n, ...(props ? { props } : {}), ...(children ? { children } : {}) } as unknown as T
@@ -88,8 +88,8 @@ export const noHits = (): RuleHits => ({ D1: 0, D2: 0, D3: 0, D4: 0, D5: 0 })
 
 type El = { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }
 
-/** The red seal that stands beside the brand while A5 is on. */
-export const seal = (el: El): unknown => el.Text({ backgroundColor: A5_LOOK.sealBg, color: A5_LOOK.sealText, bold: true, children: ' ★ A5 ' })
+/** The red seal that stands beside the brand while A5R is on. */
+export const seal = (el: El): unknown => el.Text({ backgroundColor: A5R_LOOK.sealBg, color: A5R_LOOK.sealText, bold: true, children: ' ★ A5R ' })
 
 /** The masthead's first line (the brand) with the seal after it: `sealEl` (the pixel seal on the desktop)
  * or the text seal. */
@@ -99,17 +99,17 @@ export const withSeal = (el: El, words: Node, sealEl?: unknown): unknown => {
 }
 
 
-/** A32: one rule's card, read from rules-a5.md (D9's line for the rule, D10's [H] / [N] tags for when it is checked). */
+/** A32: one rule's card, read from rules-a5r.md (D9's line for the rule, D10's [H] / [N] tags for when it is checked). */
 export type RuleCard = { n: number; id: (typeof RULES)[number][0]; name: string; purpose: string; action: string; accept: string }
 
-/** The first sentence of a tagged segment (the card stays short; rules-a5.md keeps the whole text). */
+/** The first sentence of a tagged segment (the card stays short; rules-a5r.md keeps the whole text). */
 const firstSentence = (s: string): string => {
   const t = s.trim()
   const m = /^(.+?[.;])(\s|$)/.exec(t)
   return (m?.[1] ?? t).trim()
 }
 
-/** A32: the five cards from rules-a5.md's rule lines `- <n> <name> (<purpose>) [H] … [N] … [P] …`; a rule whose line
+/** A32: the five cards from rules-a5r.md's rule lines `- <n> <name> (<purpose>) [H] … [N] … [P] …`; a rule whose line
  * is missing falls back to D9's name with empty parts. */
 export const ruleCards = (md: string): RuleCard[] =>
   RULES.map(([id, fallback]) => {
@@ -131,7 +131,7 @@ type ElB = El & { Button: (p: Record<string, unknown>) => unknown }
 export const RULE_SHORT: Record<(typeof RULES)[number][0], string> = { D1: 'Love the project', D2: 'Study and work well', D3: 'Unity and discipline', D4: 'Keep it clean', D5: 'Modest, honest, brave' }
 
 /** A36: a chip's rim: gold when selected, the seal red when its rule was hit today, else the neutral rim. */
-export const chipRim = (selected: boolean, hit: boolean): string => (selected ? A5_LOOK.gold : hit ? A5_LOOK.hit : V2.rim)
+export const chipRim = (selected: boolean, hit: boolean): string => (selected ? A5R_LOOK.gold : hit ? A5R_LOOK.hit : V2.rim)
 
 /** A36 (mockup v2): the five rules as quiet outlined chips "<n> <short name>" in a wrapping row, under the section
  * label "THE FIVE RULES" (rule 1's country / project word beside it, A20). A chip's rim is neutral by default, red only
@@ -141,33 +141,33 @@ export const chipRim = (selected: boolean, hit: boolean): string => (selected ? 
 export const rulesChips = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, open: number | null, press: (n: number) => () => void, motto: unknown, look: { ink: string; quiet: string; hit: string }, extra: (n: number) => unknown[] = () => []): unknown => {
   const card = cards.find(c => c.n === open)
   return el.Box({
-    key: 'hai-a5-rules',
+    key: 'hai-a5r-rules',
     flexDirection: 'column',
     width: '100%',
     children: [
-      el.Box({ key: 'hai-a5-rules-head', flexDirection: 'row', columnGap: 1, children: [el.Text({ color: V2.label, children: 'THE FIVE RULES' }), el.Text({ color: V2.label, children: '·' }), motto] }),
+      el.Box({ key: 'hai-a5r-rules-head', flexDirection: 'row', columnGap: 1, children: [el.Text({ color: V2.label, children: 'THE FIVE RULES' }), el.Text({ color: V2.label, children: '·' }), motto] }),
       el.Box({
-        key: 'hai-a5-chips',
+        key: 'hai-a5r-chips',
         flexDirection: 'row',
         flexWrap: 'wrap',
         columnGap: 1,
         children: cards.map(c =>
           el.Box({
-            key: `hai-a5-chip-${c.n}-box`,
+            key: `hai-a5r-chip-${c.n}-box`,
             flexShrink: 0,
             flexDirection: 'row',
             borderStyle: 'round',
             borderColor: chipRim(open === c.n, hits[c.id] > 0),
             paddingX: 1,
-            children: [el.Button({ key: `hai-a5-chip-${c.n}`, label: `${c.n} ${RULE_SHORT[c.id]}`, plain: true, onPress: press(c.n) }), ...tip(el, c), ...extra(c.n)],
+            children: [el.Button({ key: `hai-a5r-chip-${c.n}`, label: `${c.n} ${RULE_SHORT[c.id]}`, plain: true, onPress: press(c.n) }), ...tip(el, c), ...extra(c.n)],
           }),
         ),
       }),
       ...(card
         ? [
-            hairline(el, 'hai-a5-rule-hair'),
+            hairline(el, 'hai-a5r-rule-hair'),
             el.Box({
-              key: 'hai-a5-rule-card',
+              key: 'hai-a5r-rule-card',
               flexDirection: 'column',
               width: '100%',
               children: [
@@ -198,35 +198,35 @@ const tip = (el: ElB, c: RuleCard): unknown[] => {
 export const hairline = (el: El, key: string, color: string = V2.hair): unknown =>
   el.Box({ key, width: '100%', height: 1, overflow: 'hidden', children: [el.Text({ color, children: '─'.repeat(240) })] })
 
-/** A33: "A5 · THE FIVE RULES" letter-spaced (a space between letters, two between words). */
+/** A33: "A5R · THE FIVE RULES" letter-spaced (a space between letters, two between words). */
 export const bandTitle = (s: string): string => s.toUpperCase().split(' ').map(w => [...w].join(' ')).join('  ')
 
-/** A35 (mockup v2): the A5 pane's thin band: the darker seal red, full width, its words on the content gutter: a gold
- * ★ and "A 5" (pale gold, letter-spaced) on the left, "on" / "off" on the right. */
-export const a5Band = (el: El, isOn = true, isFrozen = false): unknown =>
+/** A35 (mockup v2): the A5R pane's thin band: the darker seal red, full width, its words on the content gutter: a gold
+ * ★ and "A 5 R" (pale gold, letter-spaced) on the left, "on" / "off" on the right. */
+export const a5rBand = (el: El, isOn = true, isFrozen = false): unknown =>
   el.Box({
-    key: 'hai-a5-band',
+    key: 'hai-a5r-band',
     flexDirection: 'row',
     width: '100%',
     columnGap: 1,
     paddingX: V2.gutter,
     backgroundColor: V2.band,
     children: [
-      el.Box({ key: 'hai-a5-band-star', flexShrink: 0, children: [el.Text({ color: BAND_GOLD, bold: true, children: '★' })] }),
-      el.Box({ key: 'hai-a5-band-title', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, children: bandTitle('A5') })] }),
-      el.Box({ key: 'hai-a5-band-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
-      ...(isFrozen ? [el.Box({ key: 'hai-a5-band-freeze', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: '❄' })] })] : []), // A38: the sync freeze
-      el.Box({ key: 'hai-a5-band-on', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: isOn ? 'on' : 'off' })] }),
+      el.Box({ key: 'hai-a5r-band-star', flexShrink: 0, children: [el.Text({ color: BAND_GOLD, bold: true, children: '★' })] }),
+      el.Box({ key: 'hai-a5r-band-title', flexShrink: 0, children: [el.Text({ color: A5R_LOOK.sealText, bold: true, children: bandTitle('A5R') })] }),
+      el.Box({ key: 'hai-a5r-band-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
+      ...(isFrozen ? [el.Box({ key: 'hai-a5r-band-freeze', flexShrink: 0, children: [el.Text({ color: A5R_LOOK.sealText, children: '❄' })] })] : []), // A38: the sync freeze
+      el.Box({ key: 'hai-a5r-band-on', flexShrink: 0, children: [el.Text({ color: A5R_LOOK.sealText, children: isOn ? 'on' : 'off' })] }),
     ],
   })
 
-// ---------- A39: the red Young Pioneer scarf on Ather's worker avatars (A5 on) ----------
+// ---------- A39: the red Young Pioneer scarf on Ather's worker avatars (A5R on) ----------
 /** The scarf, in the avatar's 100×100 badge: a red triangle under the face, knotted at the lower neck (y ≈ 84–104), a
  * dark red outline so it reads on every body colour. The badge clips it, as it clips the body. */
 export const SCARF = {
   red: '#C8102E',
   line: '#6E0A16',
-  svg: '<g data-a5="scarf"><path d="M33 85 L67 85 L50 104 Z" fill="#C8102E" stroke="#6E0A16" stroke-width="1.6" stroke-linejoin="round"/><path d="M47.5 88 L41 100 L46.5 99 Z M52.5 88 L59 100 L53.5 99 Z" fill="#C8102E" stroke="#6E0A16" stroke-width="1.4" stroke-linejoin="round"/><circle cx="50" cy="87.5" r="3.6" fill="#A50E25" stroke="#6E0A16" stroke-width="1.4"/></g>',
+  svg: '<g data-a5r="scarf"><path d="M33 85 L67 85 L50 104 Z" fill="#C8102E" stroke="#6E0A16" stroke-width="1.6" stroke-linejoin="round"/><path d="M47.5 88 L41 100 L46.5 99 Z M52.5 88 L59 100 L53.5 99 Z" fill="#C8102E" stroke="#6E0A16" stroke-width="1.4" stroke-linejoin="round"/><circle cx="50" cy="87.5" r="3.6" fill="#A50E25" stroke="#6E0A16" stroke-width="1.4"/></g>',
 } as const
 
 /** Whether an SVG is one of Ather's worker avatars (`squad.mjs avatarSvg`): the round clip and its body group. */
@@ -236,7 +236,7 @@ export const isAvatarSvg = (source: string): boolean => source.includes('<clipPa
  * prop it holds, so it bobs with the body and the prop stays in front; the ring, the badge and the root's transparency
  * are untouched. Any other SVG, or one already scarfed, comes back unchanged. */
 export const withScarf = (source: string): string => {
-  if (!isAvatarSvg(source) || source.includes('data-a5="scarf"')) return source
+  if (!isAvatarSvg(source) || source.includes('data-a5r="scarf"')) return source
   const open = '<g transform="translate(50 106) scale(1.32) translate(-50 -106)">'
   const start = source.indexOf(open)
   if (start < 0) return source
@@ -251,7 +251,7 @@ export const withScarf = (source: string): string => {
   return source
 }
 
-/** A43: an interactive SVG a5 changes gets FRAME_STYLE as its first child, if it has none yet (a still one is left alone). */
+/** A43: an interactive SVG a5r changes gets FRAME_STYLE as its first child, if it has none yet (a still one is left alone). */
 export const withFrameStyle = (source: string, isInteractive: boolean): string => {
   if (!isInteractive) return source
   const end = svgOpenEnd(source)

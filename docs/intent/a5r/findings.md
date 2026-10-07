@@ -1,4 +1,4 @@
-# hai-flow A5: Findings
+# A5R (Agent 5 Rules; formerly hai-flow A5): Findings
 
 Discoveries that may change the intent. The worker adds entries; the orchestrator resolves them.
 

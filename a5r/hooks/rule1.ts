@@ -1,7 +1,7 @@
 // A20: the footer's first rule, a self-drawing Client so a switch redraws this one word and nothing else of the
 // pane. It flips between "Love the project" and "Love the country" at random intervals (4–12 s); on the desktop the flip is a
 // short ordered dither (▓ ▒ ░ over the letters), on the terminal a plain swap. Its timer lives and dies with the
-// element: closing the pane or turning A5 (or motion) off drops it from the tree, and the timer with it.
+// element: closing the pane or turning A5R (or motion) off drops it from the tree, and the timer with it.
 import type { ClientSurface } from 'claude-code'
 
 type State = { word: number; frame: number }

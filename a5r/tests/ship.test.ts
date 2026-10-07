@@ -39,12 +39,12 @@ test("A21: Ather's Ship prompt enters with the score added (rows and what to fix
   const res = await $.prompt.submit({ text: SHIP.unreal, wait: false, origin: ATHER } as never)
   expect((res as Rec).drop).toBeUndefined()
   const [text] = entered(w)
-  expect(text?.startsWith(`${SHIP.unreal}\n\nA5 · Acceptance at Ship (intent tail-vfx, branch HaiHuynh/tail-vfx): 1 of 5 rules not met → fix these before you open the PR`)).toBe(true)
+  expect(text?.startsWith(`${SHIP.unreal}\n\nA5R · Acceptance at Ship (intent tail-vfx, branch HaiHuynh/tail-vfx): 1 of 5 rules not met → fix these before you open the PR`)).toBe(true)
   expect(text).toContain('✗ 2 Study well, work well: docs/intent/tail-vfx/progress.md: A2 is open')
   expect(text).toContain('✓ 3 Unity and discipline: within the intent\'s paths')
   expect(text).toContain('To fix:\n- 2: docs/intent/tail-vfx/progress.md: A2 is open → prove it, or record in findings.md why this PR ships without it')
   // The card shows the Ship score too (on demand reads the same state).
-  expect(String((await $.command.run({ command: 'a5', args: 'accept' } as never)).text)).toContain('A5 acceptance (1 of 5 not met)')
+  expect(String((await $.command.run({ command: 'a5r', args: 'accept' } as never)).text)).toContain('A5R acceptance (1 of 5 not met)')
 })
 
 test('A21: a clean intent at Ship gets "5 of 5 met"; the web Land wording is scored the same way', opts(), async ($, on) => {
@@ -52,16 +52,16 @@ test('A21: a clean intent at Ship gets "5 of 5 met"; the web Land wording is sco
   w.put(`${INTENT}/prompt.md`, PROMPT)
   w.put(`${INTENT}/progress.md`, OPEN.replace('| A2 | open | |', '| A2 | met | PIE: fade 0.4 s |'))
   await $.prompt.submit({ text: SHIP.webLand, wait: false, origin: ATHER } as never)
-  expect(entered(w)[0]?.split('\n\n')[1]?.split('\n')[0]).toBe('A5 · Acceptance at Ship (intent tail-vfx, branch HaiHuynh/tail-vfx): 5 of 5 met; the PR call is scored again.')
+  expect(entered(w)[0]?.split('\n\n')[1]?.split('\n')[0]).toBe('A5R · Acceptance at Ship (intent tail-vfx, branch HaiHuynh/tail-vfx): 5 of 5 met; the PR call is scored again.')
 })
 
-test('A21: the same words typed by Hai, or with A5 off, enter unchanged and nothing is scored', opts(), async ($, on) => {
+test('A21: the same words typed by Hai, or with A5R off, enter unchanged and nothing is scored', opts(), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status }, git })
   w.put(`${INTENT}/prompt.md`, PROMPT)
   w.put(`${INTENT}/progress.md`, OPEN)
   await $.prompt.submit({ text: SHIP.core, wait: false, origin: { kind: 'composer' } } as never)
   await $.prompt.submit({ text: SHIP.core, wait: false, origin: { kind: 'plugin', name: 'someone-else' } } as never)
-  await $.command.run({ command: 'a5', args: 'off' } as never)
+  await $.command.run({ command: 'a5r', args: 'off' } as never)
   await $.prompt.submit({ text: SHIP.core, wait: false, origin: ATHER } as never)
   expect(entered(w)).toEqual([SHIP.core, SHIP.core, SHIP.core])
   expect(w.runs.some(r => r.includes('diff --name-only'))).toBe(false)

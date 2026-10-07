@@ -1,7 +1,7 @@
-// A5 acceptance (nghiệm thu, A18, D9, D10): the five rules scored over a whole branch right before a PR is opened and when an
+// A5R acceptance (nghiệm thu, A18, D9, D10): the five rules scored over a whole branch right before a PR is opened and when an
 // intent closes, never per turn. Pure: no `$`; register.ts gathers the inputs cheaply and path-scoped (the branch
 // diff against origin/main, the added lines, the intent's four files, Ather's proof, the touch files) and acts on the score.
-import { basename, globMatch, proofGap, proofProblems, rx, section, type A5Config, type Proof } from './a5.ts'
+import { basename, globMatch, proofGap, proofProblems, rx, section, type A5RConfig, type Proof } from './a5r.ts'
 import { heredocs, prCalls, prRefs, type PrRefsRead } from './prcmd.ts'
 
 export type RuleId = 1 | 2 | 3 | 4 | 5
@@ -47,8 +47,8 @@ export type AcceptInput = {
   strayWorktrees: string[]
   /** This session's background agents still running (the sync worker excepted). */
   runningAgents: string[]
-  cfg: Pick<A5Config, 'forbidden_added' | 'todo_regex' | 'secret_regex' | 'ask_paths' | 'ask_root_files'>
-  /** A42: the a5 kit's own folders in this repository (its rules/ and tests/, where the markers are defined and
+  cfg: Pick<A5RConfig, 'forbidden_added' | 'todo_regex' | 'secret_regex' | 'ask_paths' | 'ask_root_files'>
+  /** A42: the a5r kit's own folders in this repository (its rules/ and tests/, where the markers are defined and
    * exercised); rule 4's debug-leftover scan skips them. */
   kitDirs?: string[]
 }
@@ -148,7 +148,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
   for (const [f, lines] of x.added) {
     const secret = lines.find(l => x.cfg.secret_regex.some(p => rx(p).test(l)))
     if (secret) r4.push({ file: f, what: 'a secret in the diff', todo: 'remove it and rotate it; keep secrets out of the repo' })
-    // A42: Markdown, docs and the a5 kit's own rules/ and tests/ define or quote the markers; only other files can leave one.
+    // A42: Markdown, docs and the a5r kit's own rules/ and tests/ define or quote the markers; only other files can leave one.
     if (isDoc(f) || (x.kitDirs ?? []).some(d => lower(f).startsWith(lower(d)))) continue
     const debug = lines.find(l => x.cfg.forbidden_added.some(p => rx(p).test(l)))
     if (debug) r4.push({ file: f, what: `a debug leftover (${debug.trim().slice(0, 40)})`, todo: 'remove it' })
@@ -178,14 +178,14 @@ export const score = (x: AcceptInput): RuleScore[] => {
 /** An unread branch diff is no pass: the card line and the gate text. */
 export const unreadLine = (why: string): string => `could not read the whole branch diff (${why})`
 export const unreadText = (why: string): string =>
-  `A5 · Acceptance — ${unreadLine(why)} → open the PR from a slice branch cut from origin/main, or Hai lets this one through`
+  `A5R · Acceptance — ${unreadLine(why)} → open the PR from a slice branch cut from origin/main, or Hai lets this one through`
 
 export const failed = (scores: readonly RuleScore[]): RuleScore[] => scores.filter(s => s.state === 'fail')
 
 /** The refusal (or the ask) that lists what to fix: rule, file, what to do. */
 export const acceptText = (scores: readonly RuleScore[], what: string): string => {
   const bad = failed(scores)
-  return `A5 · Acceptance — ${bad.length} of 5 rules not met before ${what} → fix these, or ask Hai to let this one through:\n${bad
+  return `A5R · Acceptance — ${bad.length} of 5 rules not met before ${what} → fix these, or ask Hai to let this one through:\n${bad
     .flatMap(s => s.issues.map(i => `- ${s.rule} ${ruleName(s.rule)}: ${i.file ? `${i.file}: ` : ''}${i.what} → ${i.todo}`))
     .join('\n')}`
 }
@@ -219,10 +219,10 @@ export const shipText = (scores: readonly RuleScore[], slug: string, branch: str
   const mark = (s: RuleScore) => (s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–')
   const bad = failed(scores)
   const head = diffProblem
-    ? `A5 · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): not scored, ${unreadLine(diffProblem)} → land it from a slice branch cut from origin/main; the PR call is scored again.`
+    ? `A5R · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): not scored, ${unreadLine(diffProblem)} → land it from a slice branch cut from origin/main; the PR call is scored again.`
     : bad.length
-      ? `A5 · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): ${bad.length} of 5 rules not met → fix these before you open the PR (the PR call is scored again and refused while any is open):`
-      : `A5 · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): 5 of 5 met; the PR call is scored again.`
+      ? `A5R · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): ${bad.length} of 5 rules not met → fix these before you open the PR (the PR call is scored again and refused while any is open):`
+      : `A5R · Acceptance at Ship (intent ${slug}, branch ${branch || '?'}): 5 of 5 met; the PR call is scored again.`
   const rows = diffProblem ? [] : scores.map(s => `${mark(s)} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)
   const todo = diffProblem ? [] : bad.flatMap(s => s.issues.map(i => `- ${s.rule}: ${i.file ? `${i.file}: ` : ''}${i.what} → ${i.todo}`))
   return [head, ...rows, ...(todo.length ? ['To fix:', ...todo] : [])].join('\n')

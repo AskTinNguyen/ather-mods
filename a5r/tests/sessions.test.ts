@@ -1,13 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync, titleFromRecord, type SessionFile } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, A5PANE, PROJ, all, atherTree, find, minWidth, opts, text, still, world } from './world.ts'
+import { LOCK, ME, NOW, A5RPANE, PROJ, all, atherTree, find, minWidth, opts, text, still, world } from './world.ts'
 
 // A26 (one line per row since A29; open sessions only since A31): the session overview is a short named list: one row
 // per S2 session the app lists as open (★ this one; title, then a status that is never cut: what it holds or waits
-// for, "no a5", or its intent, and how long ago it was active), six rows at most then "+N more", under a one-line
-// header. Eight live sessions here: this one, five with a5, two with only Ather (one has no title, so the app's list
+// for, "no a5r", or its intent, and how long ago it was active), six rows at most then "+N more", under a one-line
+// header. Eight live sessions here: this one, five with a5r, two with only Ather (one has no title, so the app's list
 // cannot match it and it is dropped).
-const HF = 'E:/s2/Saved/A5'
+const HF = 'E:/s2/Saved/A5R'
 const LANES = 'E:/s2/Saved/AtherAutomata/lanes'
 const RECORDS = 'C:/Users/hai.huynh/.claude/projects/E--s2'
 const MIN = 60_000
@@ -22,7 +22,7 @@ const CLIENTS = JSON.stringify([
 ])
 
 const machine = (w: ReturnType<typeof world>) => {
-  // a5 sessions
+  // a5r sessions
   w.put(`${HF}/editor/bbbbbbbb.json`, file('bbbbbbbb', 'Walker capture', { holding: { since: T(14, 30), end: T(15, 10), extended: 0 } }))
   w.put(`${LANES}/${sid('bbbbbbbb')}.json`, lane('bbbbbbbb', 'walker', 2))
   w.put(LOCK, `${heldLine({ lane: 'lane-bbbbbbbb', sessionName: 'Walker capture', id8: 'bbbbbbbb', since: T(14, 30), pid: null, end: T(15, 10), mode: 'interactive', pausable: false, nextSafe: 'after save', note: 'capture' })}\n`)
@@ -53,7 +53,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     machine(w)
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
+    const P = { ...A5RPANE, surface, props: { ...A5RPANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50) // titles are looked up off the render
     const tree = still(await $.ui.render(P))
@@ -64,7 +64,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       '●Tail glow' + 'queue #1 · 1m',
       '●Walker capture' + 'Editor →15:10 · 2m',
       '●Sync lane' + 'sync 16:00 · 40m',
-      '●Loco walk fix' + 'no a5 · 3m',
+      '●Loco walk fix' + 'no a5r · 3m',
       '●Docs pass' + 'docs · 2h',
       '+1 more',
     ])
@@ -75,18 +75,18 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(find(tree, `hai-session-${ME.slice(0, 8)}`)?.props?.flexWrap).toBeUndefined() // A29: one line per session
   })
 
-test('A26: A5 off shows no sessions list (Ather as it ships)', opts(), async ($, on) => {
-  const w = world(on, { a5: false })
+test('A26: A5R off shows no sessions list (Ather as it ships)', opts(), async ($, on) => {
+  const w = world(on, { a5r: false })
   machine(w)
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  expect(find(await $.ui.render(A5PANE as never), 'hai-overview')).toBeUndefined()
+  expect(find(await $.ui.render(A5RPANE as never), 'hai-overview')).toBeUndefined()
 })
 
 // A29: Hai's two row bugs (L-11): a blank title showed a lone "●"; a title with a newline and emoji wrapped over two lines.
 const MULTI = '✅ 3️⃣ POC tattoo — TattooDemo BP\nverified in PIE, pushed to PR 32584'
 for (const surface of ['terminal', 'desktop'] as const)
-  test(`A29 (${surface}): a blank title shows the first 8 hex; a multi-line title is one line, cut with "…"; holds and "no a5" stay`, opts(), async ($, on) => {
+  test(`A29 (${surface}): a blank title shows the first 8 hex; a multi-line title is one line, cut with "…"; holds and "no a5r" stay`, opts(), async ($, on) => {
     const w = world(on, { git: { [sid('dddddddd')]: { stdout: `"customTitle":${JSON.stringify(MULTI)}\n` } } })
     w.put(`${HF}/editor/bbbbbbbb.json`, file('bbbbbbbb', '   ', { holding: { since: T(14, 30), end: T(15, 10), extended: 0 } }))
     w.put(`${LANES}/${sid('bbbbbbbb')}.json`, lane('bbbbbbbb', 'walker', 2))
@@ -95,7 +95,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     w.put(`${RECORDS}/${sid('dddddddd')}.jsonl`, '{"customTitle":"x"}\n')
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
+    const P = { ...A5RPANE, surface, props: { ...A5RPANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50)
     const tree = still(await $.ui.render(P))
@@ -105,7 +105,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(text(find(tree, 'hai-session-dddddddd-title'))).toBe(MULTI.split(String.fromCharCode(10)).join(' ').slice(0, 60).trim()) // one line; the record's title is kept to 60 characters
     expect(text(multi)).not.toContain('\n')
     expect(find(tree, 'hai-session-dddddddd-title')?.children?.[0]).toMatchObject({ type: 'Text', props: { wrap: 'truncate-end' } })
-    expect(text(find(tree, 'hai-session-dddddddd-status'))).toBe('no a5 · 3m')
+    expect(text(find(tree, 'hai-session-dddddddd-status'))).toBe('no a5r · 3m')
     expect(find(tree, 'hai-session-bbbbbbbb-status')?.props?.flexShrink).toBe(0)
     for (const key of ['hai-session-bbbbbbbb', 'hai-session-dddddddd']) {
       const row = find(tree, key)
@@ -128,7 +128,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     w.put(`${LANES}/${sid('eeeeeeee')}.json`, lane('eeeeeeee', 'fx-sand', 4))
     w.put(`${RECORDS}/${sid('eeeeeeee')}.jsonl`, '{"customTitle":"x"}\n')
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
+    const P = { ...A5RPANE, surface, props: { ...A5RPANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50) // record titles are looked up off the render
     const tree = still(await $.ui.render(P))

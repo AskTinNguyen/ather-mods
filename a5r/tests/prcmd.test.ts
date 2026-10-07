@@ -56,7 +56,7 @@ test('A45: text that only mentions a PR stays no PR (the F-4 forms), and reads a
     `${API} repos/o/r/pulls/12`,
     `gh pr view 12`,
     `gh pr list --state open`,
-    `grep -n "${G}" a5/hooks/accept.ts`,
+    `grep -n "${G}" a5r/hooks/accept.ts`,
   ]
   for (const c of not) expect([c, isPrCommand(c)]).toEqual([c, false])
 })
@@ -71,7 +71,7 @@ test('A46: refs from the gh call\'s own words, quote-aware, every flag form; a @
   expect(prCommandRefs(`Set-Location D:/w; if ($?) { ${G} --head feat }`)).toEqual({ dir: 'D:/w', head: 'feat' })
   expect(prCommandRefs(`${API} repos/o/r/pulls --field=head=x -F base=main -H "Accept: application/json"`)).toEqual({ repo: 'o/r', head: 'x', base: 'main' }) // api's -H is a header
   expect(prCommandRefs(`${API} repos/o/r/pulls -fhead=x -f base=main`)).toEqual({ repo: 'o/r', head: 'x', base: 'main' })
-  expect(prCommandRefs(`${API} repos/o/r/pulls -F head=@head.txt -f base=main`).problem).toBe("the PR's head is read from a file (@head.txt), which a5 cannot read before the call")
+  expect(prCommandRefs(`${API} repos/o/r/pulls -F head=@head.txt -f base=main`).problem).toBe("the PR's head is read from a file (@head.txt), which a5r cannot read before the call")
   expect(prCommandRefs(`bash -c "cd D:/w && ${G} --head feat"`)).toEqual({ dir: 'D:/w', head: 'feat' })
 })
 
@@ -95,9 +95,9 @@ test('A46: here-documents end at their exact terminator (tabs only for <<-), and
 })
 
 test("A45: through the gate: PowerShell's `if ($?) { … }` chain and an env prefix are scored like any PR (refused while the branch fails)", opts(), async ($, on) => {
-  const w = world(on, { git: { 'diff --name-only': { stdout: 'Source/x.cpp\n' }, 'diff -U0': { stdout: `+++ b/Source/x.cpp\n+int x = 2; // ${['A5', 'TMP'].join('')}\n` }, 'worktree list': { stdout: '' } } })
+  const w = world(on, { git: { 'diff --name-only': { stdout: 'Source/x.cpp\n' }, 'diff -U0': { stdout: `+++ b/Source/x.cpp\n+int x = 2; // ${['A5R', 'TMP'].join('')}\n` }, 'worktree list': { stdout: '' } } })
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   for (const command of [`git push; if ($?) { ${G} --fill }`, `GH_TOKEN=x ${G} --fill`, `& ${G} --fill`, `bash -c "${G} --fill"`])
-    expect([command, (refused(await $.tool.call({ tool: 'Bash', command })) ?? '').split('\n')[0]?.startsWith('A5 · Acceptance —')]).toEqual([command, true])
+    expect([command, (refused(await $.tool.call({ tool: 'Bash', command })) ?? '').split('\n')[0]?.startsWith('A5R · Acceptance —')]).toEqual([command, true])
   expect(w.seen.filter(e => e.tool === 'Bash').length).toBe(0) // none of them ran
 })

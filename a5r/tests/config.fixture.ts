@@ -1,8 +1,8 @@
 // Generated from rules/config.json (tests have no file system). Regenerate after editing the config:
 //   python make_fixture.py <mod folder>
-import type { A5Config } from '../hooks/a5.ts'
+import type { A5RConfig } from '../hooks/a5r.ts'
 
-export const CONFIG: A5Config = {
+export const CONFIG: A5RConfig = {
   "ask_action": "approve",
   "claude_ask_action": "deny",
   "deny_abs_paths": [
@@ -109,6 +109,7 @@ export const CONFIG: A5Config = {
   "assert_regex": "\\b(assert\\w*|EXPECT_\\w+|ASSERT_\\w+|Test(True|False|Equal|NotEqual|Null|NotNull|Valid|Invalid)|expect)\\s*\\(",
   "verify_regex": "(?i)(\\bpytest\\b|-m\\s+(pytest|unittest)\\b|\\bnpm\\s+(run\\s+)?test\\b|\\bctest\\b|\\bdotnet\\s+test\\b|Build\\.(bat|sh|cmd)\\b|\\bRunUAT\\b|\\bUnrealBuildTool\\b|UnrealEditor-Cmd[^\\n]*Automation|Automation\\s+RunTests|\\bmsbuild\\b|validate_repository\\.py|\\bnode\\s+--test\\b|\\bgo\\s+test\\b|\\bcargo\\s+test\\b)",
   "forbidden_added": [
+    "A5RTMP",
     "A5TMP",
     "debugger;",
     "breakpoint\\(\\)",

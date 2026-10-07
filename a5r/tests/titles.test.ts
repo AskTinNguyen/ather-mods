@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { TITLE_PATTERN, titleSearchPs, titleFromRecord } from '../hooks/coord.ts'
-import { A5PANE, NOW, PROJ, find, opts, text, still, world } from './world.ts'
+import { A5RPANE, NOW, PROJ, find, opts, text, still, world } from './world.ts'
 
 // A44 (rev 13): session names read from Claude Code's records keep their characters. Where the engine finds no `grep`,
 // the title search falls back to PowerShell, which writes UTF-8 (`[Console]::OutputEncoding`) and reads the record as
@@ -32,9 +32,9 @@ test('A44: with no grep, the session row shows the record title intact (emoji, d
   w.put(`${LANES}/${SID}.json`, JSON.stringify({ sessionId: SID, intent: 'sync', branch: 'HaiHuynh/x', updatedAt: NOW, lastActiveAt: NOW - 2 * MIN, hasEnded: false }))
   w.put(`${RECORDS}/${SID}.jsonl`, '{}\n')
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  await $.ui.render(A5PANE as never)
+  await $.ui.render(A5RPANE as never)
   await w.clock.advance(50) // titles are looked up off the render
-  const tree = still(await $.ui.render(A5PANE as never))
+  const tree = still(await $.ui.render(A5RPANE as never))
   expect(text(find(tree, 'hai-session-dddddddd-title'))).toBe(TITLE)
   const ps = w.runs.find(r => r.startsWith('powershell') && r.includes('Select-String')) ?? ''
   expect([ps.includes('[Console]::OutputEncoding = [Text.Encoding]::UTF8'), ps.includes('-Encoding UTF8')]).toEqual([true, true])

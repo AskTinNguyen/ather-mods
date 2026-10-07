@@ -1,4 +1,4 @@
-// A5 for Claude Code: the five agent rules, ported from the Hermes plugin's a5_core.py and read
+// A5R for Claude Code: the five agent rules, ported from the Hermes plugin's a5_core.py and read
 // from the same config.json schema. Pure: no `$`; register.ts does the reading and writing.
 // Paths are compared with forward slashes and without case (Windows).
 
@@ -6,7 +6,7 @@
 export type Rule = { id: string; re: string; why: string; where?: 'shared' }
 /** What Ather has read as proof for the tracked intent (its `status` tool), or null with no intent tracked. */
 export type Proof = { intent: string; role: string; evidence: Record<string, { state: string; detail?: string }> }
-export type A5Config = {
+export type A5RConfig = {
   deny_abs_paths: string[]
   ask_abs_paths: string[]
   ask_root_files: string[]
@@ -257,15 +257,15 @@ export const proofProblems = (proof: Proof, verified: string): string[] => {
 
 const decision = (kind: Decision['kind'], rule: string, why: string, k: string): Decision => ({ kind, rule, why, key: k })
 
-export class A5 {
-  readonly cfg: A5Config
+export class A5R {
+  readonly cfg: A5RConfig
   readonly denyAbs: string[]
   readonly askAbs: string[]
   readonly safeRoots: string[]
   readonly roots: string[]
   private readonly kitMentions: [RegExp, string][] = []
 
-  constructor(cfg: A5Config, places: Places) {
+  constructor(cfg: A5RConfig, places: Places) {
     this.cfg = cfg
     const expand = (list: readonly string[]) =>
       list.flatMap(p => {
@@ -301,7 +301,7 @@ export class A5 {
       for (const r of this.cfg.shell_deny) if (applies(r)) return decision('deny', 'D1/D5', r.why, r.id)
       const [verb, args] = commandVerb(tokenize(raw))
       const hit = this.writesProtected(raw, verb)
-      if (hit) return decision('deny', 'D1', `This command touches the A5 kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
+      if (hit) return decision('deny', 'D1', `This command touches the A5R kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
       if (NESTED_SHELLS.has(verb) && depth < 2) {
         const inner = this.preShell(nestedCommand(verb, args), workdir, env, depth + 1, isShared)
         if (inner?.kind === 'deny') return inner
@@ -351,7 +351,7 @@ export class A5 {
     const relRaw = isAbs(raw) ? null : raw
     const { rel } = loc
     const g0 = matchAbs(p, this.denyAbs)
-    if (g0) return decision('deny', 'D1', `${p} is part of the A5 kit (${g0}). Agents may not edit the enforcement kit.`, 'kit')
+    if (g0) return decision('deny', 'D1', `${p} is part of the A5R kit (${g0}). Agents may not edit the enforcement kit.`, 'kit')
     const s = this.secret(neu)
     if (s) return decision('deny', 'D4', `Content looks like a secret (pattern ${s}). Keep secrets in env/config outside the repo.`, 'secret')
     if (scope.length && !(matchRel(rel, relRaw, scope.filter(g => !isAbs(g))) || matchAbs(p, scope.filter(isAbs).map(g => norm(g)))))

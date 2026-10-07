@@ -38,7 +38,7 @@
 
   "verify_regex": "(?i)(\\bpytest\\b|-m\\s+(pytest|unittest)\\b|\\bnpm\\s+(run\\s+)?test\\b|\\bctest\\b|\\bdotnet\\s+test\\b|Build\\.(bat|sh|cmd)\\b|\\bRunUAT\\b|\\bUnrealBuildTool\\b|UnrealEditor-Cmd[^\\n]*Automation|Automation\\s+RunTests|\\bmsbuild\\b|validate_repository\\.py|\\bnode\\s+--test\\b|\\bgo\\s+test\\b|\\bcargo\\s+test\\b)",
 
-  "forbidden_added": ["A5TMP", "debugger;", "breakpoint\\(\\)", "pdb\\.set_trace", "console\\.log\\("],
+  "forbidden_added": ["A5RTMP", "A5TMP", "debugger;", "breakpoint\\(\\)", "pdb\\.set_trace", "console\\.log\\("],
   "todo_regex": "\\b(TODO|FIXME|HACK|XXX)\\b",
 
   "report_sections": ["Changed", "Verified", "Risk", "Open"],

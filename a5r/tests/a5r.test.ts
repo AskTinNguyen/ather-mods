@@ -1,15 +1,15 @@
 import { expect, test } from 'claude-code/testing'
-import { A5, proofProblems } from '../hooks/a5.ts'
+import { A5R, proofProblems } from '../hooks/a5r.ts'
 import { CONFIG } from './config.fixture.ts'
 import { lockProblem, mcpKind, parseEditorLock, isEditorStartStop } from '../hooks/editor.ts'
 import { readMarker, markedTitle, bareTitle, isDirectorCallLine, isFindingsFile } from '../hooks/decision.ts'
 
 // The same shell and path cases the Hermes kit's tests/test_core.py runs, so both engines agree.
-const KIT = 'C:/Users/hai.huynh/.claude/mods/a5'
+const KIT = 'C:/Users/hai.huynh/.claude/mods/a5r'
 const PLACES = { KIT, HOME: 'C:/Users/hai.huynh', USERPROFILE: 'C:/Users/hai.huynh', TEMP: 'C:/Users/HAI~1.HUY/AppData/Local/Temp', LOCALAPPDATA: 'C:/Users/hai.huynh/AppData/Local', HERMES_HOME: 'C:/Users/hai.huynh/AppData/Local/hermes' }
 const ENV = { TEMP: PLACES.TEMP, LOCALAPPDATA: PLACES.LOCALAPPDATA, USERPROFILE: PLACES.USERPROFILE }
 
-const engine = async (_$?: unknown) => new A5(CONFIG, PLACES)
+const engine = async (_$?: unknown) => new A5R(CONFIG, PLACES)
 
 const SHELL: [string, 'deny' | 'ask' | null][] = [
   ['git commit --no-verify -m x', 'deny'],
@@ -42,22 +42,22 @@ const SHELL: [string, 'deny' | 'ask' | null][] = [
   ['cmd /c "rd /s /q E:\\Projects\\s2\\Saved"', 'ask'],
   ['git rm -r --cached Saved/x', null],
   [`cat ${KIT}/rules/config.json`, null],
-  [`D="${KIT}/a5"`, null],
+  [`D="${KIT}/a5r"`, null],
   [`D=x > ${KIT}/rules/config.json`, 'deny'],
   [`echo x > ${KIT}/rules/config.json`, 'deny'],
   [`Set-Content ${KIT}/rules/config.json '{}'`, 'deny'],
-  ['Remove-Item .claude/mods/a5/rules/scope', 'deny'],
+  ['Remove-Item .claude/mods/a5r/rules/scope', 'deny'],
 ]
 
 test('shell commands get the same decisions as the Hermes kit', async $ => {
-  const a5 = await engine($)
-  for (const [cmd, want] of SHELL) expect([cmd, a5.preShell(cmd, '', ENV)?.kind ?? null]).toEqual([cmd, want])
+  const a5r = await engine($)
+  for (const [cmd, want] of SHELL) expect([cmd, a5r.preShell(cmd, '', ENV)?.kind ?? null]).toEqual([cmd, want])
 })
 
 test('file writes: shared config asks, the kit and secrets are refused', async $ => {
-  const a5 = await engine($)
+  const a5r = await engine($)
   const at = (rel: string) => ({ root: 'E:/proj', rel })
-  const kind = (path: string, rel: string | null, neu = 'x', old = '') => a5.preEdit(path, old, neu, rel ? at(rel) : { root: null, rel: null })?.kind ?? null
+  const kind = (path: string, rel: string | null, neu = 'x', old = '') => a5r.preEdit(path, old, neu, rel ? at(rel) : { root: null, rel: null })?.kind ?? null
   expect(kind('E:/proj/Config/DefaultEngine.ini', 'Config/DefaultEngine.ini')).toBe('ask')
   expect(kind('E:/proj/Saved/Config/WindowsEditor/X.ini', 'Saved/Config/WindowsEditor/X.ini')).toBe(null)
   expect(kind('E:/proj/Plugins/Foo/Config/DefaultFoo.ini', 'Plugins/Foo/Config/DefaultFoo.ini')).toBe('ask')
@@ -70,13 +70,13 @@ test('file writes: shared config asks, the kit and secrets are refused', async $
   expect(kind('E:/proj/Source/S2/Foo.cpp', 'Source/S2/Foo.cpp', `k = 'ghp_${'a'.repeat(36)}'`)).toBe('deny')
   expect(kind('E:/proj/Source/S2/Tests/FooTest.cpp', 'Source/S2/Tests/FooTest.cpp', 'TestTrue(a);', 'TestTrue(a);\nTestEqual(b,c);')).toBe('ask')
   expect(kind('E:/proj/Source/S2/Foo.cpp', 'Source/S2/Foo.cpp')).toBe(null)
-  expect(a5.preEdit('E:/proj/Source/S2/Foo.cpp', '', 'x', at('Source/S2/Foo.cpp'), ['Source/S2/Combat/*'])?.key).toBe('scope')
+  expect(a5r.preEdit('E:/proj/Source/S2/Foo.cpp', '', 'x', at('Source/S2/Foo.cpp'), ['Source/S2/Combat/*'])?.key).toBe('scope')
 })
 
 test('a worker\'s own worktree: shared-checkout rules step aside, the rest stay', async $ => {
-  const a5 = await engine($)
+  const a5r = await engine($)
   const isShared = (dir: string) => !dir.replace(/\\/g, '/').toLowerCase().startsWith('e:/wt/')
-  const kind = (cmd: string, cwd = 'E:/Projects/s2') => a5.preShell(cmd, cwd, ENV, 0, isShared)?.kind ?? null
+  const kind = (cmd: string, cwd = 'E:/Projects/s2') => a5r.preShell(cmd, cwd, ENV, 0, isShared)?.kind ?? null
   expect(kind('git -C E:/wt/x checkout main')).toBe(null)
   expect(kind('git -C E:/wt/x reset --hard')).toBe(null)
   expect(kind('git -C "E:/wt/x" stash')).toBe(null)
@@ -88,11 +88,11 @@ test('a worker\'s own worktree: shared-checkout rules step aside, the rest stay'
   expect(kind('git checkout main')).toBe('ask')
   expect(kind('git -C E:/Projects/s2 sparse-checkout set Source')).toBe('deny')
   expect(kind('bash -c "git -C E:/Projects/s2 reset --hard"')).toBe('ask')
-  const edit = (path: string, rel: string, shared: boolean) => a5.preEdit(path, '', 'x', { root: path.slice(0, -rel.length - 1), rel }, [], shared)?.kind ?? null
+  const edit = (path: string, rel: string, shared: boolean) => a5r.preEdit(path, '', 'x', { root: path.slice(0, -rel.length - 1), rel }, [], shared)?.kind ?? null
   expect(edit('E:/wt/x/Config/DefaultGame.ini', 'Config/DefaultGame.ini', false)).toBe(null)
   expect(edit('E:/wt/x/S2.uproject', 'S2.uproject', false)).toBe(null)
   expect(edit('E:/Projects/s2/Config/DefaultGame.ini', 'Config/DefaultGame.ini', true)).toBe('ask')
-  expect(a5.preEdit('C:/Users/hai.huynh/.claude/settings.json', '', 'x', { root: null, rel: null }, [], false)?.kind).toBe('ask')
+  expect(a5r.preEdit('C:/Users/hai.huynh/.claude/settings.json', '', 'x', { root: null, rel: null }, [], false)?.kind).toBe('ask')
 })
 
 test('with an intent tracked, Verified answers to Ather\'s proof', () => {

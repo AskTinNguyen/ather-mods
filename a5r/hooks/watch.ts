@@ -4,7 +4,7 @@
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
-import { A5_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
+import { A5R_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
 
 // A31: this session's ★ takes the theme's gold (read at each draw, A40).
 
@@ -144,17 +144,17 @@ export const editorTile = (d: EditorData): Tile => {
 /** What the Memory tile reads beside the probe: the launch gate in force, the last cleanup, the disk. */
 export type MemoryData = { pieGb: number; nopieGb: number; isFromPanel: boolean; cleanup: string; diskGb: number | null; drive: string }
 
-/** Memory: free RAM against the launch gate (adjustable with `/a5 gate` and the plugin options, every session reads
+/** Memory: free RAM against the launch gate (adjustable with `/a5r gate` and the plugin options, every session reads
  * it) and the PIE gate (fixed), as a meter whose track is a dark step of its own hue; what the last cleanup did. No
  * action (A25). */
 export const memoryTile = (el: El, v: Vitals | undefined, m: MemoryData, meterLook?: { fill: string; track: string }): Tile => {
-  const gate = { text: `launch ≥ ${m.pieGb} GB with PIE · ${m.nopieGb} GB without${m.isFromPanel ? ' (/a5 gate)' : ''}` }
+  const gate = { text: `launch ≥ ${m.pieGb} GB with PIE · ${m.nopieGb} GB without${m.isFromPanel ? ' (/a5r gate)' : ''}` }
   if (!v) return { key: 'memory', label: 'Memory', value: '?', lines: [{ text: 'probe failed' }, gate] }
   const band = ramBand(v.freeGb)
   const tone = band === 'ok' ? 'ok' : band === 'below-start' ? 'warn' : 'bad'
   const cells = 16
   const filled = Math.max(0, Math.min(cells, Math.round((v.freeGb / TOTAL_GB) * cells)))
-  // A33: the A5 pane's meter is red on a dark red track; state stays on the line's colour and the warning mark.
+  // A33: the A5R pane's meter is red on a dark red track; state stays on the line's colour and the warning mark.
   const meter = el.Text({ children: [el.Text({ color: meterLook?.fill ?? STATUS[tone], children: '━'.repeat(filled) }), el.Text({ color: meterLook?.track ?? TRACK[tone], children: '━'.repeat(cells - filled) })] })
   const launch = v.freeGb >= m.pieGb ? 'a launch with PIE fits' : v.freeGb >= m.nopieGb ? 'a launch fits without PIE' : 'under the launch gate'
   const pie = band === 'ok' ? `PIE ≥ ${PIE_START_GB} GB ok` : band === 'below-start' ? `under the ${PIE_START_GB} GB PIE gate` : `abort PIE (under ${PIE_ABORT_GB} GB)`
@@ -250,11 +250,11 @@ export const sectionLabel = (el: El, key: string, text: string, extra: unknown[]
   el.Box({ key, flexDirection: 'row', columnGap: 1, children: [el.Text({ color: V2.label, children: text.toUpperCase() }), ...extra] })
 
 
-/** A19: one rule's row on the A5 acceptance card. */
+/** A19: one rule's row on the A5R acceptance card. */
 export type AcceptRow = { rule: number; name: string; state: 'pass' | 'fail' | 'na'; line: string }
 const MARK = { pass: '✓', fail: '✗', na: '–' } as const
 
-/** A19: the A5 acceptance card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
+/** A19: the A5R acceptance card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
  * one line each, ✓ / ✗ / – carried by the mark's color (never the text's). Terminal: one line per rule. */
 export const acceptCard = (el: El, title: string, sub: string, rows: readonly AcceptRow[], isDesktop: boolean): unknown => {
   const { Box, Text } = el
@@ -277,13 +277,13 @@ export const acceptCard = (el: El, title: string, sub: string, rows: readonly Ac
 
 /** A26: the sessions list under the tools: a quiet header ("Sessions · 8 in S2 · 1 elsewhere"), then one row per
  * live session: a status dot, its title, then intent · what it holds or waits for · how recently active, and
- * "no a5" for a session that runs without it; "+N more" past six. Every piece wraps; nothing is cut. */
+ * "no a5r" for a session that runs without it; "+N more" past six. Every piece wraps; nothing is cut. */
 export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: { ink: string; quiet: string }): unknown => {
   const quiet = look?.quiet ?? ATHER.quiet
   const { Box, Text } = el
-  // A31: ★ marks this session (no "(this session)" text); others a dot: ok green with a5, warn without. The title is
-  // the only part that shortens; the status (holds, "no a5", age) sits at the end and is never cut.
-  const mark = (r: SessionRow) => (r.isMe ? Text({ color: A5_LOOK.gold, children: '★' }) : Text({ color: r.hasA5 ? STATUS.ok : STATUS.warn, children: '●' }))
+  // A31: ★ marks this session (no "(this session)" text); others a dot: ok green with a5r, warn without. The title is
+  // the only part that shortens; the status (holds, "no a5r", age) sits at the end and is never cut.
+  const mark = (r: SessionRow) => (r.isMe ? Text({ color: A5R_LOOK.gold, children: '★' }) : Text({ color: r.hasA5R ? STATUS.ok : STATUS.warn, children: '●' }))
   const row = (r: SessionRow) =>
     Box({
       key: `hai-session-${r.id8}`,
@@ -293,7 +293,7 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
       children: [
         Box({ key: `hai-session-${r.id8}-dot`, flexShrink: 0, children: [mark(r)] }),
         Box({ key: `hai-session-${r.id8}-title`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ bold: r.isMe, wrap: 'truncate-end', ...(look ? { color: look.ink } : {}), children: r.title })] }),
-        Box({ key: `hai-session-${r.id8}-status`, flexShrink: 0, children: [Text({ color: r.hasA5 ? quiet : STATUS.warn, children: sessionStatus(r) })] }),
+        Box({ key: `hai-session-${r.id8}-status`, flexShrink: 0, children: [Text({ color: r.hasA5R ? quiet : STATUS.warn, children: sessionStatus(r) })] }),
       ],
     })
   return Box({
@@ -309,18 +309,18 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
   })
 }
 
-/** A28/A30: one part of the compact A5 line in Ather's pane: its icon, an optional name that may shorten (the Editor
+/** A28/A30: one part of the compact A5R line in Ather's pane: its icon, an optional name that may shorten (the Editor
  * holder's), its value that never shortens (a time, free GB, a count), and whether it needs attention. */
 export type LinePart = { key: string; icon: unknown; name?: string; value: string; isWarn: boolean }
 
-/** A28/A30: the one A5 block in Ather's pane: icons and values only (no words), in a single row: the Editor holder
- * and until, free RAM, main's behind count (or the planned sync's time), then "★ A5 ›" on the seal red. Only the
+/** A28/A30: the one A5R block in Ather's pane: icons and values only (no words), in a single row: the Editor holder
+ * and until, free RAM, main's behind count (or the planned sync's time), then "★ A5R ›" on the seal red. Only the
  * holder's name shortens and ends in "…"; numbers and times keep their width; the button never shrinks. */
 export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean, buttonBg?: string, buttonRim?: string): unknown => {
   const { Box, Text } = el
   const ink = (p: LinePart) => (p.isWarn ? STATUS.warn : ATHER.quiet)
   return Box({
-    key: 'hai-a5-line',
+    key: 'hai-a5r-line',
     flexDirection: 'row',
     width: '100%',
     columnGap: 1,
@@ -329,20 +329,20 @@ export const compactLine = (el: El, parts: LinePart[], button: unknown, isDeskto
     children: [
       ...parts.map(p =>
         Box({
-          key: `hai-a5-line-${p.key}`,
+          key: `hai-a5r-line-${p.key}`,
           flexDirection: 'row',
           flexShrink: p.name ? 1 : 0,
           minWidth: 0,
           alignItems: 'center',
           children: [
             p.icon,
-            ...(p.name ? [Box({ key: `hai-a5-line-${p.key}-name`, flexShrink: 1, minWidth: 0, children: [Text({ color: ink(p), wrap: 'truncate-end', children: p.name })] })] : []),
-            Box({ key: `hai-a5-line-${p.key}-value`, flexShrink: 0, children: [Text({ color: ink(p), children: p.value })] }),
+            ...(p.name ? [Box({ key: `hai-a5r-line-${p.key}-name`, flexShrink: 1, minWidth: 0, children: [Text({ color: ink(p), wrap: 'truncate-end', children: p.name })] })] : []),
+            Box({ key: `hai-a5r-line-${p.key}-value`, flexShrink: 0, children: [Text({ color: ink(p), children: p.value })] }),
           ],
         }),
       ),
-      Box({ key: 'hai-a5-line-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
-      Box({ key: 'hai-a5-line-open', flexShrink: 0, ...(buttonBg ? { backgroundColor: buttonBg } : {}), ...(buttonRim ? { borderStyle: 'round', borderColor: buttonRim } : {}), children: [button] }),
+      Box({ key: 'hai-a5r-line-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
+      Box({ key: 'hai-a5r-line-open', flexShrink: 0, ...(buttonBg ? { backgroundColor: buttonBg } : {}), ...(buttonRim ? { borderStyle: 'round', borderColor: buttonRim } : {}), children: [button] }),
     ],
   })
 }

@@ -11,12 +11,12 @@ const STATUS_TOOL = 'mcp__ather-automata__status'
 const WT = 'E:/wt/avatar-frame'
 const GH = ['gh', 'pr', 'create'].join(' ') // spelled apart so this file's own text is never a PR command
 const PR = `${GH} -R AskTinNguyen/ather-mods --base main --head intent/avatar-frame --title "Ather: avatar frame" --body "PIE n/a"`
-// The session: on intent/hai-flow-a5 with its own intent (open rows), tracked by Ather.
-const SESSION_STATUS = JSON.stringify({ me: 'hai', role: 'engineer', tracked: { slug: 'hai-flow-a5', directorCalls: [] }, evidence: {} })
-const WORKTREES = `worktree ${PROJ}\nHEAD 1111\nbranch refs/heads/intent/hai-flow-a5\n\nworktree ${WT}\nHEAD 2222\nbranch refs/heads/intent/avatar-frame\n`
+// The session: on intent/a5r-old with its own intent (open rows), tracked by Ather.
+const SESSION_STATUS = JSON.stringify({ me: 'hai', role: 'engineer', tracked: { slug: 'a5r-old', directorCalls: [] }, evidence: {} })
+const WORKTREES = `worktree ${PROJ}\nHEAD 1111\nbranch refs/heads/intent/a5r-old\n\nworktree ${WT}\nHEAD 2222\nbranch refs/heads/intent/avatar-frame\n`
 const machine = (w: ReturnType<typeof world>) => {
-  w.put(`${PROJ}/docs/intent/hai-flow-a5/prompt.md`, ['# hai-flow-a5', '- Status: active', 'Change \`a5/\` only.', '## Acceptance', '- A1: x. Proof: tests.'].join('\n'))
-  w.put(`${PROJ}/docs/intent/hai-flow-a5/progress.md`, '| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | open | |\n')
+  w.put(`${PROJ}/docs/intent/a5r-old/prompt.md`, ['# a5r-old', '- Status: active', 'Change \`a5r/\` only.', '## Acceptance', '- A1: x. Proof: tests.'].join('\n'))
+  w.put(`${PROJ}/docs/intent/a5r-old/progress.md`, '| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | open | |\n')
   w.put(`${WT}/.git`, 'gitdir: E:/proj/.git/worktrees/avatar-frame')
   w.put(`${WT}/docs/intent/avatar-frame/prompt.md`, ['# avatar-frame', '- Status: active', 'Change \`ather-automata/hooks/squad.mjs\` only.', '## Acceptance', '- A1: the frame. Proof: tests.'].join('\n'))
   w.put(`${WT}/docs/intent/avatar-frame/progress.md`, '| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | tests: 12 pass 0 fail |\n')
@@ -27,8 +27,8 @@ const git = (wtDiff: string, extra: Record<string, { stdout: string; exitCode?: 
   'worktree list': { stdout: WORKTREES },
   [`${WT} diff --name-only`]: { stdout: 'ather-automata/hooks/squad.mjs\ndocs/intent/avatar-frame/progress.md\n' },
   [`${WT} diff -U0`]: { stdout: wtDiff },
-  [`${PROJ} diff --name-only`]: { stdout: 'a5/hooks/register.ts\na5/rules/config.json\n' },
-  [`${PROJ} diff -U0`]: { stdout: '+++ b/a5/hooks/register.ts\n+const x = 1 // A5TMP\n' },
+  [`${PROJ} diff --name-only`]: { stdout: 'a5r/hooks/register.ts\na5/rules/config.json\n' },
+  [`${PROJ} diff -U0`]: { stdout: '+++ b/a5r/hooks/register.ts\n+const x = 1 // A5TMP\n' },
   'remote -v': { stdout: 'origin\thttps://github.com/AskTinNguyen/ather-mods.git (fetch)\norigin\thttps://github.com/AskTinNguyen/ather-mods.git (push)\n' }, // A47 (b): remotes from git remote -v
 })
 const CLEAN = '+++ b/ather-automata/hooks/squad.mjs\n+const frame = 1\n'
@@ -59,18 +59,18 @@ test('A41: the same PR with a leftover in that worktree is refused for that work
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const why = refused(await $.tool.call({ tool: 'Bash', command: PR })) ?? ''
   expect(why).toContain('- 4 Keep it clean: ather-automata/hooks/squad.mjs: a debug leftover')
-  expect(why).not.toContain('hai-flow-a5') // the session's own intent plays no part
-  expect(why).not.toContain('a5/hooks/register.ts')
+  expect(why).not.toContain('a5r-old') // the session's own intent plays no part
+  expect(why).not.toContain('a5r/hooks/register.ts')
 })
 
 test('A41: a head no worktree holds is read from origin/<head> without a checkout; a head found nowhere is not scored', opts(), async ($, on) => {
-  const w = world(on, { out: { [STATUS_TOOL]: SESSION_STATUS }, git: { ...git(CLEAN), 'worktree list': { stdout: `worktree ${PROJ}\nbranch refs/heads/intent/hai-flow-a5\n` }, 'origin/intent/gone^{commit}': { stdout: '', exitCode: 1 }, 'intent/gone^{commit}': { stdout: '', exitCode: 1 } } })
+  const w = world(on, { out: { [STATUS_TOOL]: SESSION_STATUS }, git: { ...git(CLEAN), 'worktree list': { stdout: `worktree ${PROJ}\nbranch refs/heads/intent/a5r-old\n` }, 'origin/intent/gone^{commit}': { stdout: '', exitCode: 1 }, 'intent/gone^{commit}': { stdout: '', exitCode: 1 } } })
   machine(w)
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   await $.tool.call({ tool: 'Bash', command: PR })
   expect(w.runs.find(r => r.includes('diff --name-only'))).toBe(`git -C ${PROJ} diff --name-only origin/main...origin/intent/avatar-frame`)
   const why = refused(await $.tool.call({ tool: 'Bash', command: PR.replace('intent/avatar-frame', 'intent/gone') }))
-  expect(why).toBe('A5 · Acceptance — could not read the whole branch diff (head intent/gone is neither checked out in a worktree of this repository nor at origin/intent/gone: fetch it, or open the PR from its own checkout) → open the PR from a slice branch cut from origin/main, or Hai lets this one through')
+  expect(why).toBe('A5R · Acceptance — could not read the whole branch diff (head intent/gone is neither checked out in a worktree of this repository nor at origin/intent/gone: fetch it, or open the PR from its own checkout) → open the PR from a slice branch cut from origin/main, or Hai lets this one through')
 })
 
 test('A41: a PR run from a folder with no repository is not scored (never the session\'s checkout instead)', opts(), async ($, on) => {

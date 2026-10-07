@@ -66,7 +66,8 @@ test('A18 rule 3: a file outside the named paths fails it unless progress or fin
 })
 
 test('A18 rule 4: debug leftovers, secrets, untracked files, a stray worktree or a running agent fail it', () => {
-  expect(score(base({ added: new Map([['Source/S2/Tail/Glow.cpp', ['int x = 2; // A5TMP']]]) }))[3]?.line).toContain('a debug leftover')
+  expect(score(base({ added: new Map([['Source/S2/Tail/Glow.cpp', ['int x = 2; // A5RTMP']]]) }))[3]?.line).toContain('a debug leftover')
+  expect(score(base({ added: new Map([['Source/S2/Tail/Glow.cpp', ['int x = 2; // A5TMP']]]) }))[3]?.line).toContain('a debug leftover') // A48: the old tag stays forbidden
   expect(score(base({ added: new Map([['docs/notes.md', ['use console.log( to trace']]]) }))[3]?.state).toBe('pass') // docs may name it
   expect(score(base({ added: new Map([['Source/S2/Tail/Key.cpp', [`k = 'ghp_${'a'.repeat(36)}'`]]]) }))[3]?.line).toContain('a secret')
   expect(score(base({ untrackedLeft: ['Source/S2/Tail/New.cpp'] }))[3]?.state).toBe('fail')
@@ -84,7 +85,7 @@ test('A18 rule 5: a PR body claiming what Ather has not read, a met row whose ev
 
 test('A18: the refusal lists rule, file and what to do; PR commands and intent closes are recognised', () => {
   const text = acceptText(score(base({ files: ['Source/S2/Combat/Hit.cpp'], untrackedLeft: ['x.cpp'] })), 'this PR')
-  expect(text.split('\n')[0]).toBe('A5 · Acceptance — 2 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
+  expect(text.split('\n')[0]).toBe('A5R · Acceptance — 2 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
   expect(text).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp: outside the paths the intent names → explain it in progress.md or findings.md, or move it to its own PR')
   expect(text).toContain('- 4 Keep it clean: x.cpp: left untracked in the shared checkout')
   for (const c of ['gh pr create --title x --body y', 'cd E:/wt/x && gh pr create -B main -F body.md', 'gh api repos/sipherxyz/s2/pulls -f title=x -f head=b -f base=main', 'gh api -X POST repos/o/r/pulls --input pr.json'])

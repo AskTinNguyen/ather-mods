@@ -1,11 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, A5PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
+import { LOCK, ME, NOW, A5RPANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
 
 // A25: the three tools never leave their box, at the narrowest and a wide pane, desktop and terminal: every tool
 // is a full-width row whose narrowest possible layout (wrapping text at words, nothing truncated) fits the pane,
 // its one action sits in a box that never shrinks, and each tool has the action set it should.
-const HF = 'E:/s2/Saved/A5'
+const HF = 'E:/s2/Saved/A5R'
 const ME8 = ME.slice(0, 8)
 const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
 const LONG_LANE = '1006-walkerext-s9-retarget' // a long holder name, like the ones Hai's screenshot cut to "Edi…"
@@ -27,7 +27,7 @@ for (const surface of ['terminal', 'desktop'] as const)
   for (const columns of surface === 'terminal' ? [44, 100] : [40, 100])
     test(`A25 (${surface}, ${columns} columns): each tool fits its row, nothing truncated, one action at most, inside a box that never shrinks`, opts(), async ($, on) => {
       const w = await setup($, on, surface, false)
-      const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: columns } } as never
+      const P = { ...A5RPANE, surface, props: { ...A5RPANE.props, bodyColumns: columns } } as never
       await $.ui.render(P)
       await w.clock.advance(50)
       const tree = await $.ui.render(P)
@@ -49,23 +49,23 @@ for (const surface of ['terminal', 'desktop'] as const)
 for (const surface of ['terminal', 'desktop'] as const)
   test(`A25 (${surface}): holding the Editor and the sync, the actions are Release and Sync ⋯; Release frees the Editor`, opts(), async ($, on) => {
     const w = await setup($, on, surface, true)
-    const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: surface === 'terminal' ? 44 : 40 } } as never
+    const P = { ...A5RPANE, surface, props: { ...A5RPANE.props, bodyColumns: surface === 'terminal' ? 44 : 40 } } as never
     let tree = await $.ui.render(P)
     expect([buttons(tree, 'hai-tile-editor'), buttons(tree, 'hai-tile-memory'), buttons(tree, 'hai-tile-main')]).toEqual([['Release'], [], ['Sync ⋯']])
     for (const k of ['editor', 'main']) expect([k, minWidth(find(tree, `hai-tile-${k}`)) <= (surface === 'terminal' ? 44 : 40)]).toEqual([k, true])
-    await $.ui.press({ plugin: 'a5', key: 'hai-editor-release', surface })
+    await $.ui.press({ plugin: 'a5r', key: 'hai-editor-release', surface })
     expect(w.read(LOCK).startsWith('FREE')).toBe(true)
     tree = await $.ui.render(P)
     expect(buttons(tree, 'hai-tile-editor')).toEqual([])
   })
 
-test('A25: /a5 gate shows, sets and resets the launch gate; a bad argument explains itself', opts(), async ($, on) => {
+test('A25: /a5r gate shows, sets and resets the launch gate; a bad argument explains itself', opts(), async ($, on) => {
   world(on)
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  const run = async (args: string) => String((await $.command.run({ command: 'a5', args } as never)).text)
+  const run = async (args: string) => String((await $.command.run({ command: 'a5r', args } as never)).text)
   expect(await run('gate')).toContain('≥ 31 GB with PIE, ≥ 28 GB without (plugin options)')
   expect(await run('gate 33 30')).toContain('≥ 33 GB with PIE, ≥ 30 GB without')
-  expect(await run('gate')).toContain('(set with /a5 gate)')
-  expect(await run('gate many')).toContain('/a5 gate <with PIE GB> <without PIE GB>')
+  expect(await run('gate')).toContain('(set with /a5r gate)')
+  expect(await run('gate many')).toContain('/a5r gate <with PIE GB> <without PIE GB>')
   expect(await run('gate reset')).toContain('back to the plugin options: ≥ 31 GB with PIE, ≥ 28 GB without')
 })

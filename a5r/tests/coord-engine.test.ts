@@ -3,12 +3,12 @@ import { blankSession, heldLine, parseLockLine, type SessionFile, type Want } fr
 import { parseEditorLock } from '../hooks/editor.ts'
 import { LOCK, ME, NOW, PENDING, PROJ, opts, refused, world, type Rec } from './world.ts'
 
-// The Editor holder, RAM and notices through the engine: other sessions are only files under Saved/A5
+// The Editor holder, RAM and notices through the engine: other sessions are only files under Saved/A5R
 // (and Ather's lane heartbeats), exactly what this session reads in a real checkout.
-const HF = 'E:/s2/Saved/A5'
+const HF = 'E:/s2/Saved/A5R'
 const LANES = 'E:/s2/Saved/AtherAutomata/lanes'
 const ME8 = ME.slice(0, 8)
-const EDITOR = 'mcp__a5__editor'
+const EDITOR = 'mcp__a5r__editor'
 const START = { cwd: PROJ, surface: 'terminal', isInteractive: true } as never
 const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
 const MIN = 60_000
@@ -28,7 +28,7 @@ test('editor request: the head takes a free lock in the S2 standard\'s line, whi
   await $.session.start(START)
   expect((w.calls['tool.register'] ?? []).map(e => (e as Rec).name)).toEqual(['editor', 'sync'])
   const ran = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX check' } as never))
-  expect(ran).toContain('A5 · Editor — granted to this session until 15:00')
+  expect(ran).toContain('A5R · Editor — granted to this session until 15:00')
   const line = w.read(LOCK).trim()
   expect(line.startsWith('HELD lane=3️⃣-Loco-fix session=3️⃣-Loco-fix since=14:40 2026-10-06 pid=none end=15:00 mode=interactive pausable=yes next_safe=after save note=tail VFX check')).toBe(true)
   expect(line.endsWith(`· held by 3️⃣-Loco-fix, session ${ME8}, until 15:00`)).toBe(true)
@@ -49,7 +49,7 @@ test('the queue: first asked, first served; the next session is granted at a min
   expect(asked).toContain('2nd in the queue')
   expect(w.read(LOCK)).toBe('free since 14:20\n')
   await idle($)
-  // The other session takes it, then gives it back; its own a5 keeps its file fresh.
+  // The other session takes it, then gives it back; its own a5r keeps its file fresh.
   w.put(LOCK, heldBy('bbbbbbbb', T(15, 10)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: NOW + MIN, holding: { since: NOW, end: T(15, 10), extended: 0 } }))
   await w.clock.advance(MIN)
@@ -60,12 +60,12 @@ test('the queue: first asked, first served; the next session is granted at a min
   await w.clock.advance(MIN)
   expect(w.read(LOCK)).toContain(`session ${ME8}, until 15:02`)
   expect(prompts(w).length).toBe(1)
-  expect(prompts(w)[0]).toContain('A5 · Editor — granted to this session until 15:02')
+  expect(prompts(w)[0]).toContain('A5R · Editor — granted to this session until 15:02')
   await w.clock.advance(2 * MIN)
   expect(prompts(w).length).toBe(1) // one prompt per event
 })
 
-test('yield: a ≤ 20 min request without a build asks the holder once an hour; the holder\'s a5 tells it', opts(), async ($, on) => {
+test('yield: a ≤ 20 min request without a build asks the holder once an hour; the holder\'s a5r tells it', opts(), async ($, on) => {
   const w = world(on)
   w.put(LOCK, heldBy('bbbbbbbb', T(15, 30)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { holding: { since: T(14, 0), end: T(15, 30), extended: 0 } }))
@@ -76,7 +76,7 @@ test('yield: a ≤ 20 min request without a build asks the holder once an hour; 
     await w.clock.advance(MIN)
   }
   expect(mine(w).yieldAsks.map(a => [a.holder, a.via, a.minutes])).toEqual([['bbbbbbbb', 'file', 15]])
-  expect(w.sent).toEqual([]) // the holder runs a5: no cross-session send (D6)
+  expect(w.sent).toEqual([]) // the holder runs a5r: no cross-session send (D6)
 })
 
 test('yield, the holder\'s side: one notice for the ask, as one prompt while idle', opts(), async ($, on) => {
@@ -86,12 +86,12 @@ test('yield, the holder\'s side: one notice for the ask, as one prompt while idl
   await $.session.start(START)
   // One prompt carries every notice queued for this event: the yield ask, and the lease idle since 14:00.
   expect(prompts(w).length).toBe(1)
-  expect(prompts(w)[0]).toContain('A5 · Editor yield — loco asks for the Editor for ~10 min, no build → at your next safe point (≤ 10 min): stop PIE, save only your own assets, release with the editor tool; if you cannot pause, keep it and finish by your end time')
+  expect(prompts(w)[0]).toContain('A5R · Editor yield — loco asks for the Editor for ~10 min, no build → at your next safe point (≤ 10 min): stop PIE, save only your own assets, release with the editor tool; if you cannot pause, keep it and finish by your end time')
   await w.clock.advance(MIN)
   expect(prompts(w).length).toBe(1)
 })
 
-test('a holder without a5 gets the standard UE request line, at most once an hour', opts(), async ($, on) => {
+test('a holder without a5r gets the standard UE request line, at most once an hour', opts(), async ($, on) => {
   const w = world(on)
   w.put(LOCK, '1006-walker-s9 (worker) since 14:00, until 15:30. session dddddddd\n')
   w.put(`${LANES}/dddddddd-2222-4000-8000-000000000000.json`, JSON.stringify({ sessionId: 'dddddddd-2222-4000-8000-000000000000', hasEnded: false }))
@@ -117,11 +117,11 @@ test('lease end and overrun: the holder is told before the end and at the end, e
   await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'get_actor' } as never)
   await idle($)
   await w.clock.advance(5 * MIN) // 14:55
-  expect(prompts(w)).toEqual(['A5 · Editor lease — your lease ends at 15:00 → finish to a checkpoint (PIE stopped, your own assets saved), then release with the editor tool, or extend it if it still fits'])
+  expect(prompts(w)).toEqual(['A5R · Editor lease — your lease ends at 15:00 → finish to a checkpoint (PIE stopped, your own assets saved), then release with the editor tool, or extend it if it still fits'])
   await idle($)
   await w.clock.advance(5 * MIN) // 15:00
   expect(prompts(w).length).toBe(2)
-  expect(prompts(w)[1]).toContain('A5 · Editor lease — your lease ended at 15:00 → stop at the nearest checkpoint and release now')
+  expect(prompts(w)[1]).toContain('A5R · Editor lease — your lease ended at 15:00 → stop at the nearest checkpoint and release now')
   await idle($)
   await w.clock.advance(2 * MIN)
   expect(prompts(w).length).toBe(2)
@@ -149,7 +149,7 @@ test('a gone holder whose Editor still runs is reported, never killed and never 
   expect(w.runs.some(r => /Stop-Process|taskkill|kill\b/i.test(r))).toBe(false)
 })
 
-test('under A5 the lock is the editor tool\'s: Edit, Write and redirects are refused with the tool named; reads pass', opts(), async ($, on) => {
+test('under A5R the lock is the editor tool\'s: Edit, Write and redirects are refused with the tool named; reads pass', opts(), async ($, on) => {
   const w = world(on)
   w.put(LOCK, 'free since 14:20\n')
   expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: `slot · session ${ME8} until 15:00` }))).toContain(EDITOR)
@@ -188,11 +188,11 @@ test('notices: mid-turn they ride the main loop\'s next tool result, never a wor
   const worker = await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'w1', tool_use_id: 'tu2' } as never)
   expect((worker as { context?: string[] }).context ?? []).toEqual([])
   const main = await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'tu3' } as never)
-  expect(((main as { context?: string[] }).context ?? []).join('\n')).toContain('A5 · Editor yield — loco asks')
+  expect(((main as { context?: string[] }).context ?? []).join('\n')).toContain('A5R · Editor yield — loco asks')
   const again = await $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'tu4' } as never)
   expect((again as { context?: string[] }).context ?? []).toEqual([])
   expect(prompts(w)).toEqual([])
-  const note = 'A5 · Editor yield — loco asks for the Editor for ~10 min'
+  const note = 'A5R · Editor yield — loco asks for the Editor for ~10 min'
   w.put(`${PROJ}/docs/intent/tail-vfx/progress.md`, '# Progress\n')
   expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/docs/intent/tail-vfx/progress.md`, content: `# Progress\n- ${note}\n` }))).toContain('not logged in docs/intent')
   expect(refused(await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/docs/intent/tail-vfx/findings.md`, old_string: 'x', new_string: `x\n${note}` }))).toContain('not logged in docs/intent')
@@ -222,7 +222,7 @@ test('RAM: LiveCodingConsole stays while an Editor runs, and an open Editor is r
   expect(parseLockLine(w.read(LOCK)).pid).toBe(91)
 })
 
-const GATE_OPTS = { options: { a5WhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, launchGatePieGb: 24 } }
+const GATE_OPTS = { options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, launchGatePieGb: 24 } }
 test('RAM: the launch gate comes from the plugin options', GATE_OPTS, async ($, on) => {
   const w = world(on, { ram: '25' })
   w.put(LOCK, 'free since 14:20\n')
@@ -249,8 +249,8 @@ test('RAM: one abort notice under 3 GB while this session\'s PIE runs; the disk 
   w.machine.disk = 15
   await w.clock.advance(MIN)
   expect(prompts(w).length).toBe(1)
-  expect(prompts(w)[0]).toContain('A5 · RAM — free RAM is 2.5 GB, under the 3 GB abort line, while this session\'s PIE runs → stop PIE now')
-  expect(prompts(w)[0]).toContain('A5 · Disk — E: has 15 GB free, under 20 GB')
+  expect(prompts(w)[0]).toContain('A5R · RAM — free RAM is 2.5 GB, under the 3 GB abort line, while this session\'s PIE runs → stop PIE now')
+  expect(prompts(w)[0]).toContain('A5R · Disk — E: has 15 GB free, under 20 GB')
   await idle($)
   await w.clock.advance(2 * MIN)
   expect(prompts(w).length).toBe(1)
@@ -263,15 +263,15 @@ test('notices: one waiting for the next turn rides Hai\'s next prompt as context
   await $.prompt.submit({ text: 'tiếp tục' } as never)
   await $.prompt.submit({ text: 'và tiếp' } as never)
   const ctx = (w.calls['prompt.submit'] ?? []).map(e => ((e as { context?: string[] }).context ?? []).join('\n'))
-  expect(ctx[0]).toContain('A5 · Disk — E: has 15 GB free, under 20 GB')
+  expect(ctx[0]).toContain('A5R · Disk — E: has 15 GB free, under 20 GB')
   expect(ctx[1]).toBe('')
 })
 
-test('notices: Ather\'s intent log and findings never take a a5 line, by edit or by shell', opts(), async ($, on) => {
+test('notices: Ather\'s intent log and findings never take a a5r line, by edit or by shell', opts(), async ($, on) => {
   const w = world(on)
   const log = `${PROJ}/docs/intent/tail-vfx/log.md`
   w.put(log, '# Log\n')
-  const line = 'A5 · Sync main — cutoff: sync-lane merges origin/main at 15:30 → commit your own paths now'
+  const line = 'A5R · Sync main — cutoff: sync-lane merges origin/main at 15:30 → commit your own paths now'
   expect(refused(await $.tool.call({ tool: 'MultiEdit', file_path: log, edits: [{ old_string: '# Log', new_string: `# Log\n> ${line}` }] } as never))).toContain('not logged in docs/intent')
   expect(refused(await $.tool.call({ tool: 'Bash', command: `echo "${line}" >> ${PROJ}/docs/intent/tail-vfx/findings.md` }))).toContain('not logged in docs/intent')
   expect(refused(await $.tool.call({ tool: 'PowerShell', command: `Add-Content -Path ${PROJ.replace(/\//g, '\\')}\\docs\\intent\\tail-vfx\\log.md -Value '${line}'` }))).toContain('not logged in docs/intent')
@@ -279,7 +279,7 @@ test('notices: Ather\'s intent log and findings never take a a5 line, by edit or
   expect(w.read(log)).toBe('# Log\n')
 })
 
-// ---------- A9: one machine probe shared by every A5 session ----------
+// ---------- A9: one machine probe shared by every A5R session ----------
 const PROBE = `${HF}/probe.json`
 const sharedBy = (by: string, at: number, freeGb: number) => JSON.stringify({ at, by, probe: { freeGb, diskGb: 50, procs: [] } })
 const probes = (w: ReturnType<typeof world>) => w.runs.filter(r => r.includes('ConvertTo-Json')).length

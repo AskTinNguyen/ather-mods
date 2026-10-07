@@ -36,7 +36,7 @@ test(`A22: ${GITHUB} on a failing branch is refused with the list; the score rea
   const w = world(on, { out: { [STATUS_TOOL]: status }, git: DIRTY })
   setup(w)
   const why = refused(await $.tool.call({ tool: GITHUB, ...input() } as never))
-  expect(why?.split('\n')[0]).toBe('A5 · Acceptance — 2 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
+  expect(why?.split('\n')[0]).toBe('A5R · Acceptance — 2 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
   expect(why).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
   expect(why).toContain('- 4 Keep it clean: Source/S2/Combat/Hit.cpp: a debug leftover')
   expect(w.runs.find(r => r.includes('diff --name-only'))?.endsWith('origin/main...origin/HaiHuynh/tail-vfx')).toBe(true) // A41: a head no worktree holds is read from origin
@@ -63,7 +63,7 @@ test('A22: a PR for another repository, or a head this checkout does not have, i
   const w = world(on, { out: { [STATUS_TOOL]: status }, git: { ...CLEAN, 'origin/HaiHuynh/gone^{commit}': { stdout: '', exitCode: 1 }, 'HaiHuynh/gone^{commit}': { stdout: '', exitCode: 1 } } })
   setup(w)
   expect(refused(await $.tool.call({ tool: GITHUB, ...input({ owner: 'someone', repo: 'other' }) } as never))).toBe(
-    "A5 · Acceptance — could not read the whole branch diff (the PR is for someone/other, which is not a remote of the repository at E:/proj (https://github.com/sipherxyz/s2.git)) → open the PR from a slice branch cut from origin/main, or Hai lets this one through",
+    "A5R · Acceptance — could not read the whole branch diff (the PR is for someone/other, which is not a remote of the repository at E:/proj (https://github.com/sipherxyz/s2.git)) → open the PR from a slice branch cut from origin/main, or Hai lets this one through",
   )
   expect(refused(await $.tool.call({ tool: GITHUB, ...input({ head: 'HaiHuynh/gone' }) } as never))).toContain('head HaiHuynh/gone is neither checked out in a worktree of this repository nor at origin/HaiHuynh/gone')
   expect(ran(w, GITHUB)).toBe(0)

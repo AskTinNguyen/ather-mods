@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { openedPrs, prNumbersOf } from '../hooks/accept.ts'
-import { A5PANE, PENDING, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
+import { A5RPANE, PENDING, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
 
-// A23: a PR a5 never scored (opened on GitHub, or by the app's own button) is scored once its number shows up on
+// A23: a PR a5r never scored (opened on GitHub, or by the app's own button) is scored once its number shows up on
 // the tracked intent's `- PR:` line or in Ather's `tracked.prs`: the card names it, and a failing one is one 🟥.
 const STATUS_TOOL = 'mcp__ather-automata__status'
 const INTENT = `${PROJ}/docs/intent/tail-vfx`
@@ -18,7 +18,7 @@ const minutes = async (w: ReturnType<typeof world>, n: number) => {
   for (let i = 0; i < n; i += 1) await w.clock.advance(MIN)
 }
 const titled = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title').map(e => String(e.title))
-const head = async ($: any) => text(find(await $.ui.render(A5PANE as never), 'hai-accept-head'))
+const head = async ($: any) => text(find(await $.ui.render(A5RPANE as never), 'hai-accept-head'))
 const prLines = (w: ReturnType<typeof world>) => w.read(PENDING).split('\n').filter(l => l.includes('PR #'))
 
 test('A23: unit: PR numbers read as Ather reads them; the number a PR call reports', () => {
@@ -41,14 +41,14 @@ test('A23: a PR line added by hand is scored after the fact: the card names the 
   w.put(`${INTENT}/progress.md`, progress('#812'))
   await minutes(w, 5)
   expect(prLines(w).length).toBe(1)
-  expect(prLines(w)[0]).toContain('PR #812 (intent tail-vfx) was opened without A5 acceptance and fails 1 of 5 (4 Keep it clean)')
+  expect(prLines(w)[0]).toContain('PR #812 (intent tail-vfx) was opened without A5R acceptance and fails 1 of 5 (4 Keep it clean)')
   expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
   expect(await head($)).toContain('● 1 of 5 not mettail-vfx · PR #812 · scored after the fact')
   await minutes(w, 11)
   expect(prLines(w).length).toBe(1) // one 🟥 per PR
 })
 
-test("A23: numbers already listed at the first read, and a PR a5 scored at its own call, are not scored again; a new one in Ather's tracked.prs is", opts(), async ($, on) => {
+test("A23: numbers already listed at the first read, and a PR a5r scored at its own call, are not scored again; a new one in Ather's tracked.prs is", opts(), async ($, on) => {
   const out: Record<string, string> = { [STATUS_TOOL]: status(), 'gh pr create --title "Tail glow" --body "PIE ✓"': 'https://github.com/sipherxyz/s2/pull/813\n' }
   const w = world(on, { out, git: CLEAN })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))

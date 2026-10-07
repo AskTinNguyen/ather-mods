@@ -1,8 +1,8 @@
-// Pixel icons for the tiles and the A5 seal. On the desktop they are SVG of 1×1 cells; SMIL moves them only
+// Pixel icons for the tiles and the A5R seal. On the desktop they are SVG of 1×1 cells; SMIL moves them only
 // when something changed: an ordered-dither reveal (a 4×4 Bayer threshold per cell) when a state turns
 // over, a dither sweep while a task runs. Still otherwise. On the terminal each icon is one glyph. Pure.
 
-/** A43: the first child of every SVG a5 draws: the sandboxed frame an interactive Svg runs in takes its colour scheme
+/** A43: the first child of every SVG a5r draws: the sandboxed frame an interactive Svg runs in takes its colour scheme
  * and background from the document's own :root, which the svg root's `style` does not reach (Hai's dark-theme
  * screenshot: a white square beside each rule chip). With this rule the frame follows the app's scheme and stays
  * transparent, the fix Ather's avatar-frame intent proved for its running avatars. */
@@ -48,16 +48,17 @@ export const pixelSvg = (rows: readonly string[], color: string, motion: Motion 
   return `${svgOpen(`viewBox="0 0 ${width} ${rows.length}" shape-rendering="crispEdges"`)}${cells.join('')}</svg>`
 }
 
-// 5×7 glyphs for the seal: ★ A 5.
+// 5×7 glyphs for the seal: ★ A 5 R.
 const FONT: Record<string, number[]> = {
   '★': [4, 21, 14, 31, 14, 21, 4],
   A: [14, 17, 17, 31, 17, 17, 17],
   '5': [31, 16, 30, 1, 1, 17, 14],
+  R: [30, 17, 17, 30, 20, 18, 17],
 }
 
-/** The A5 seal as pixels: gold-cream glyphs on lacquer red. `stamp` dithers the red in, then the glyphs. */
+/** The A5R seal as pixels: gold-cream glyphs on lacquer red. `stamp` dithers the red in, then the glyphs. */
 export const sealSvg = (red: string, ink: string, stamp: boolean): string => {
-  const chars = ['★', 'A', '5']
+  const chars = ['★', 'A', '5', 'R']
   const width = 2 + chars.length * 6 + 1
   const height = 11
   const cells: string[] = []

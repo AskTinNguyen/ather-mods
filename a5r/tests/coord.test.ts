@@ -7,7 +7,7 @@ import {
 import { parseEditorLock } from '../hooks/editor.ts'
 
 // Ather Automata's own reader (ather-automata/hooks/packs/unreal.mjs parseEditorLock), copied verbatim so the
-// test proves that Ather still reads holder, until and session from the lines a5 writes.
+// test proves that Ather still reads holder, until and session from the lines a5r writes.
 const atherParse = (raw: string | null, nowMinutes: number) => {
   const text = (raw ?? '').trim()
   const session = /\bsession\s+([0-9a-f]{8})/i.exec(text)?.[1]?.toLowerCase() ?? ''
@@ -184,7 +184,7 @@ test('freeze: the git writes in a command, with the folder each runs in; reads p
   for (const v of ['rm', 'mv', 'checkout', 'switch', 'restore', 'reset', 'stash', 'rebase', 'pull', 'revert', 'clean', 'am']) expect(gitWrites(`git ${v} x`).map(w => w.verb)).toEqual([v])
 })
 
-test('A15: exactly the sync\'s own git commands count as sync work; everything else keeps A5\'s rules', () => {
+test('A15: exactly the sync\'s own git commands count as sync work; everything else keeps A5R\'s rules', () => {
   const ok = [
     'git -C E:/s2 merge origin/main',
     'GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C E:/s2 merge --no-edit origin/main',
@@ -227,7 +227,7 @@ test('the lock is written by the editor tool: direct writes are spotted, reads a
   expect(writesLock('[IO.File]::WriteAllText("E:/Projects/s2/Saved/EDITOR_OWNER.txt", "x")')).toBe(true)
   expect(writesLock('cat E:/Projects/s2/Saved/EDITOR_OWNER.txt')).toBe(false)
   expect(writesLock('Get-Content E:/Projects/s2/Saved/EDITOR_OWNER.txt | Select-Object -First 1')).toBe(false)
-  expect(isIntentFile('D:/Projects/ather-mods/docs/intent/a5-a5/progress.md')).toBe(true)
+  expect(isIntentFile('D:/Projects/ather-mods/docs/intent/a5r-a5r/progress.md')).toBe(true)
 })
 
 test('RAM: the probe\'s JSON, the cleanup plan (reaper under 14 GB, LiveCodingConsole only with no Editor), gates', () => {
@@ -246,7 +246,7 @@ test('RAM: the probe\'s JSON, the cleanup plan (reaper under 14 GB, LiveCodingCo
   expect(gatesOf({ pieGb: 200, nopieGb: 1 }, 31, 28)).toEqual({ pieGb: 60, nopieGb: 10, source: 'panel' })
 })
 
-test('notices read the one shape: A5 · <gate> — <what> → <what to do>', () => {
+test('notices read the one shape: A5R · <gate> — <what> → <what to do>', () => {
   const s = newSync(T(16, 0), { session: 'bbbbbbbb-0', id8: 'bbbbbbbb', lane: 'sync-lane' }, 'sync-lane', NOW)
   const texts = [
     NOTICES.granted(T(15, 0), true, null, ''),
@@ -257,7 +257,7 @@ test('notices read the one shape: A5 · <gate> — <what> → <what to do>', () 
     NOTICES.ownerConflicts(s, [{ path: 'Source/S2/Foo.cpp', kind: 'foreign' }, { path: 'Content/X.uasset', kind: 'self', match: 'abc' }]),
     NOTICES.yield('loco', 15),
   ]
-  for (const t of texts) expect(/^A5 · [^—]+ — .+ → .+/.test(t)).toBe(true)
+  for (const t of texts) expect(/^A5R · [^—]+ — .+ → .+/.test(t)).toBe(true)
   expect(NOTICES.cutoff(s, false, true)).toContain('release the Editor by 15:50')
   expect(NOTICES.ownerConflicts(s, [{ path: 'Content/X.uasset', kind: 'self', match: 'abc' }])).toContain('rule 11')
 })
