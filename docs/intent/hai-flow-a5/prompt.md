@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 8
+- Rev: 9
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -76,6 +76,10 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A27 (rev 7): The five rules sit at the very bottom of the pane, below everything else, one rule per line under a small "A5 · Năm điều" heading, in the smallest, dimmest text the surface offers (desktop: a small text style; terminal: dim), with the rule-1 tổ quốc/project switch kept. Proof: gate: pane tests (last block of the tree, five lines, small/dim style).
 - A28 (rev 8): Ather's pane carries only one compact A5 line, right under Ather's own strip: Editor (holder and until, or Free), Memory (free GB, a warning mark when under a gate), Sync main (behind count, or the planned sync and its phase), and an **A5 ›** button; the line turns the warning colour only when something waits on Hai or this session (a grant, an overrun, a freeze, RAM under a gate). Nothing else of A5 is in Ather's pane (no tool rows, no sessions list, no Nghiệm thu card, no five-rules block); the A5 seal and accent stay. Proof: gate: pane tests (Ather's tree gains exactly one A5 block, one line on terminal, one row on desktop).
 - A29 (rev 8): A separate **A5 pane** (its own `$.ui.open`, id `a5`), opened by **A5 ›**, by `/a5` with no words (`/a5 status` keeps the text reply), and on the desktop beside Ather's: the three tool rows (A25), the Sessions list (A26), the Nghiệm thu card (A19), the five rules at its bottom (A27). Session rows are one line each: a blank title falls back to the first 8 hex (never a lone dot), titles are one line (no newline), cut with an ellipsis to the row width. Proof: gate: pane tests for the A5 pane on desktop and terminal, including a blank and a multi-line title.
+- A30 (rev 9): The compact A5 line shows icons and values only (no "Editor"/"Memory"/"Sync" words): the Editor holder's name is the only part that shortens with "…"; numbers (free GB, behind count as `−N`, until time) never shorten; the button reads **★ A5 ›** on the seal red. Proof: gate: compact tests at narrow and wide widths (numbers intact, only the holder name cut).
+- A31 (rev 9): The Sessions list shows only sessions that are open now: rows come from the app's session list (`list_sessions`, not archived) matched to Ather lanes/a5 files, with the app's current title (renamed sessions show the new title; closed or archived ones are gone); without the app list it falls back to live lanes only (heartbeat fresh, not ended). This session is marked with a ★ before its title (no "(this session)" text); the status part (holds, "no a5", age) stays at the row's end and is never cut, only the title is. Proof: gate: sessions tests with a closed, an archived and a renamed session.
+- A32 (rev 9): The five rules are five round seals (red, gold rim, gold numeral) in one row; pressing one opens its card in the A5 pane: the rule's name, its purpose, what it checks at the action, what it checks at nghiệm thu, and how many times it was hit today; pressing again closes it. No paragraph of rule text. Proof: gate: pane tests (five seal buttons; press opens the right card with the four parts; press again closes).
+- A33 (rev 9): The A5 pane's look per the approved mockup: a seal-red title band with a gold star and "A5 · NĂM ĐIỀU" in pale gold, gold icons and accents, RAM meter in red on a dark red track; Ather's pane stays restrained (seal and the red A5 button only). Proof: gate: pane tests on the band and colours; review by Hai on the real pane.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -89,6 +93,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 9 (2026-10-07): L-12: A30 compact line icons and values, A31 only open sessions with ★ for this one, A32 rule seals with cards, A33 communist look on the A5 pane (approved mockup).
 - rev 8 (2026-10-07): L-11: A28 one compact A5 line in Ather's pane, A29 everything else in a separate A5 pane; session rows one line with an id8 fallback.
 - rev 7 (2026-10-07): L-10: A25 tool boxes that never overflow, no ±1 GB; A26 the session overview as a named list; A27 the five rules at the bottom, one per line, small.
 - rev 6 (2026-10-07): L-9: A21 score at Ship, A22 MCP PR tools gated, A23 post-hoc score for PRs opened outside the agent, A24 measure the app's Create PR.

@@ -82,3 +82,13 @@ With a screenshot of the desktop pane (Editor tile cut to "Edi…", the Sync til
 > (choice) 1 dòng compact + pane A5 riêng (Recommended)
 
 With a screenshot of 0.8.0: the A5 block (three tool rows and the sessions list) pushes Needs you and Next below the fold; one session row shows a lone dot (blank title) and one title wraps over two lines.
+
+## L-12 (2026-10-07 14:10) | class: intent | -> rev 9
+
+> Hình 1. Hiện Editor RAM GitSync dạng 1 dòng status bị crop nghiêm trọng, ảnh hưởng tới nội dung chính
+> Hình 2. Phần sessions hiện cả các session đã bị đóng hoặc đổi tên. This Session nên dùng 1 icon riêng (ngôi sao chẳng hạn) đừng viết text cuối tên lỡ text dài sẽ bị crop hoặc sai mất.
+> * Phần 5 điều viết dài quá, font chữ vẫn bị to, và nên có tooltips về tác dụng của mỗi điều. Hoặc khi bấm vào thì hiện ra các rule hoặc script hoặc gate chế tài liên quan tới mỗi điều. Đừng viết chữ không.
+> * Tone màu chung chưa tốt. Chưa đúng vibe communist
+> (after the mockup) Ok duyệt
+
+The approved mockup: compact line with icons and uncut numbers and a red "★ A5 ›"; a seal-red title band "★ A5 · NĂM ĐIỀU" on the A5 pane, gold icons; sessions only open ones, ★ for this session; five red seals that open a card per rule.
