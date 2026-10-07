@@ -10,10 +10,12 @@ Decision (coordinator, engineering): the list uses the header's stages without t
 
 Claude Code 2.1.287 is no longer installed on this PC; `claude plugin validate` ran on 2.1.292 (PATH) and 2.1.286 (desktop), both exit 0. The type-check uses the 2.1.287 types file.
 
-## F-3 (2026-10-07) | blocking: no | status: open
+## F-3 (2026-10-07) | blocking: no | status: decided
 
 An intent that is only on origin/main (not yet in this checkout) can be viewed but not tracked: `state.track` needs its folder on disk. "Work on this here" and Next's "Pick up …" say "<slug> is on origin/main but not in this checkout yet: pull main to work on it here." Next can still offer one of the person's main-only intents first; if that reads badly, Next could prefer intents the checkout has.
 
 ## F-4 (2026-10-07) | blocking: no | status: open
 
 Two things on this machine the checks depend on, not the change. (1) The e2e copies E:\S2_'s working tree `docs/intent`; during the session that shared checkout was moved to origin/main (21 folders and 4 open became 45 and 23), which broke six assertions that assumed exactly one director call of Tin's and a team of four or fewer. They were made data-independent (one call or several, "Go through N things"; the "+N more ›" press by key; colours unique while there are eight people or fewer). (2) The second allowed live fetch on E:\S2_, with the new explicit refspec, failed to reach github.com (port 443, 21 s). The argv is proven against real git in the e2e sandbox; E:\S2_'s own `remote.origin.fetch` is `+refs/heads/main:refs/remotes/origin/main`, the same refspec.
+
+Decision (Tin, 2026-10-07): working on a main-only intent stays refused until the checkout has it, but asking about it must work. 0.1.6: its view offers Ask about it (primary when the folder is not here, with "Not in this checkout yet: pull main to work on it here."), which hands the session `aboutIntentPrompt(slug, fromMain)`: read the intent's files with `git show origin/main:...` and its history with `git log ... origin/main -- docs/intent/<slug>`, `GIT_OPTIONAL_LOCKS=0`, no fetch/pull/checkout/track/write. Next's "See where it stands" for a teammate's intent uses the same prompt, from main when that is its source.

@@ -13,7 +13,7 @@ import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } 
 import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { STAGE_LABELS, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { crewOf } from './crew.mjs'
@@ -615,7 +615,7 @@ async function startIssue($, number, isInQuestion = false) {
 async function trackSlug($, slug) {
   const { root } = await laneOf($)
   // An intent read from origin/main that this checkout does not have yet cannot be worked on here.
-  if (!(await state.track(io($), root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here.` : `No intent named "${slug}" in docs/intent.`
+  if (!(await state.track(io($), root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
   return `Now tracking ${slug}.`
 }
@@ -1169,8 +1169,8 @@ let intentToday = []
 
 // What the Intent view shows beside the intent's files: whether this session tracks it, its proof
 // (each record another session wrote named by it), the other live sessions tracking it.
-/** @type {{ slug: string, isHere: boolean, proof: string, heldBy: string }} */
-let intentView = { slug: '', isHere: false, proof: '', heldBy: '' }
+/** @type {{ slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string }} */
+let intentView = { slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '' }
 
 // The shown intent (the tracked one unless a row or words chose another): its lines since the start
 // of the person's day, newest first, with their time; and the rest of what its view shows.
@@ -1188,7 +1188,9 @@ async function readIntentView($) {
   const evidence = await state.readEvidence(files, slug || mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
-  intentView = { slug, isHere: slug !== '' && slug === pinned, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
+  // Working on it here needs its folder in this checkout; asking about it does not.
+  const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
+  intentView = { slug, isHere: slug !== '' && slug === pinned, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
@@ -1396,8 +1398,12 @@ function paneView(el, $, model, columns, surface, crew = []) {
           surface,
         ),
       )
-      // Looking never tracks: working on it here is its own press.
-      if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', marginTop: 1, children: [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] }))
+      // Looking never tracks: working on it here is its own press, and needs its folder in this
+      // checkout. Asking about it never needs one: the session reads it from origin/main if it must.
+      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main')); return `asked the session about ${slug}` }, false) })
+      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] : []
+      if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
+      if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: 'Not in this checkout yet: pull main to work on it here.' }))
       const today = intentToday.slice(0, 5)
       rows.push(
         section(el, 'intent-today', [

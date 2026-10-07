@@ -5,7 +5,7 @@ import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nex
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
 import { KINDS, avatarSvg, classifyWorker, crewWords, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
@@ -1156,5 +1156,18 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     const four = intent('quest-debug-panel', {}, { findings: [1, 2, 3, 4].map(n => `## F-${n} (2026-10-07) | blocking: yes | status: open (director)\n\nCall ${n}.\n`).join('\n') })
     const home = buildHome(base({ intents: [four], pinned: null, away: OFF }))
     expect(callBlocks(home.items).map(block => [block.slug, block.items.length])).toEqual([['quest-debug-panel', 4]])
+  })
+})
+
+describe('asking about an intent (0.1.6)', () => {
+  test('one this checkout has is read from its folder; one only on main is read from origin/main, read-only', () => {
+    const local = aboutIntentPrompt('worn-edges', false)
+    expect(local).toContain('Read docs/intent/worn-edges/ only; change nothing.')
+    expect(local.includes('git show')).toBe(false)
+    const main = aboutIntentPrompt('worn-edges', true)
+    expect(main).toContain('git show origin/main:docs/intent/worn-edges/<file>')
+    expect(main).toContain('origin/main -- docs/intent/worn-edges')
+    expect(main).toContain('Do not fetch, pull, check out, track it or write anything.')
+    expect(main).toContain('who owns it, its status and stage')
   })
 })
