@@ -387,7 +387,7 @@ function StageTrack({ kit, stages }: { kit: Kit; stages: HomeView["stages"] }) {
             </View>
           ) : one.state === "now" ? (
             // The ring and the dot are placed by coordinates, not by flex centring: 20 across, the dot 8, so 6 in.
-            <Beacon size={20} color={c.accent} count={2} duration={5200} maxScale={3}>
+            <Beacon size={20} color={c.accent} count={1} duration={5200} maxScale={3}>
               <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: c.accent }} />
               <View style={{ position: "absolute", top: 6, left: 6, width: 8, height: 8 }}>
                 <Pulse>

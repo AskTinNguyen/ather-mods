@@ -257,7 +257,7 @@ export function Beacon({
   size,
   color,
   active = true,
-  count = 2,
+  count = 1,
   duration = 4800,
   maxScale = 2.8,
   stroke = 2,
