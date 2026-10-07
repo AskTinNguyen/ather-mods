@@ -49,3 +49,12 @@ After the failure review (two caveats found in the 0.4 code: the freeze has no e
 > 2. Không gọi là hai-flow nữa gọi là a5 nhé. Và đưa vào bản đang chạy
 
 The mod is renamed a5 (folder `a5/`, tools `mcp__a5__*`, agent type `a5:sync`, `Saved/A5/`, the `A5 ·` prefix; its rules folder becomes `rules/`), and rev 4 (0.5.0) is released into the live checkout, which closes the away ledger's D-3. The intent folder keeps its name `hai-flow-a5` (its history).
+
+## L-8 (2026-10-07 09:45) | class: intent | -> rev 5
+
+> Suggest cho tôi chỉnh sửa mới của 5 điều cho phù hợp thực tế workflow.
+> Ngoài ra tôi concern việc các điều luật này được check mỗi pace trao đổi hay ở cuối session (phần nghiệm thu kết quả của cả chuỗi intent workflow, ngay trước khi PR)
+> Ok chỉnh sửa mới tốt đó. Duyệt
+> Btw, Yêu tổ quốc scope hơi to, sửa thành Yêu Project trong rule và làm animation random switch "tổ quốc" <—> "project" trên Pane giao diện AtherAutomataA5 nhé
+
+Hai approved the proposal: five rules rewritten for the workflow, checked at the action and at acceptance before the PR, no per-turn report; rule 1 named "Yêu Project" with a random tổ quốc/project switch on the pane.
