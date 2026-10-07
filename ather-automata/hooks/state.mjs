@@ -18,7 +18,7 @@ import { unreal } from './packs/unreal.mjs'
  *   get: (key: string) => Promise<unknown>, set: (key: string, value: unknown) => Promise<void>, remove: (key: string) => Promise<void>, keys: () => Promise<string[]>,
  *   read: (path: string) => Promise<string | null>, write: (path: string, text: string) => Promise<void>, exists: (path: string) => Promise<boolean>,
  *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: () => Promise<string>, redraw: () => void,
- *   list?: (path: string) => Promise<{ name: string, kind: string }[]>
+ *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>
  * }} Io
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
@@ -30,6 +30,8 @@ const KEY = {
   pinned: (/** @type {string} */ sid) => `pinned:${sid}`,
   evidence: (/** @type {string} */ sid) => `evidence:${sid}`,
   lost: (/** @type {string} */ sid) => `lost:${sid}`,
+  // The intents this session stopped tracking: a write into one does not track it again.
+  untracked: (/** @type {string} */ sid) => `untracked:${sid}`,
   // A pack's roles are its own: a tech artist in S2 is not a role in a web repository. The Unreal pack's key is unprefixed.
   role: (/** @type {string} */ me, /** @type {string} */ prefix = '') => `role:${prefix}${personId(me)}`,
   area: (/** @type {string} */ me) => `area:${personId(me)}`,
@@ -49,7 +51,7 @@ const KEY = {
   score: 'score',
 }
 // What belongs to this lane and follows it to a new session id after /clear.
-const LANE_KEYS = [KEY.away, KEY.pinned, KEY.evidence, KEY.lost]
+const LANE_KEYS = [KEY.away, KEY.pinned, KEY.evidence, KEY.lost, KEY.untracked]
 
 let queue = Promise.resolve()
 /** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
@@ -103,7 +105,7 @@ export const lane = (io, cwd) => {
 export const sessionId = io => io.sessionId()
 
 // After /clear the process goes on under a new session id and no session.start fires:
-// this lane's window, tracked intent, evidence and lost-edits flag move to it. Only
+// this lane's window, tracked intent, evidence, lost-edits flag and untracked intents move to it. Only
 // /clear moves them; a resume returns to another conversation, whose state is its own.
 /** @param {Io} io @param {string} from @param {string} to */
 export const moveLane = (io, from, to) =>
@@ -149,11 +151,16 @@ export const readEvidence = async (io, scope, pack = unreal) => {
   return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh })
 }
 
-// Writes one scope's evidence, each record stamped with when it was seen.
+// A session as people see it named: the first 8 hex of its id, as the Editor lock and the tab list show it.
+/** @param {string} sid */
+export const shortSession = sid => sid.slice(0, 8)
+
+// Writes one scope's evidence, each record stamped with when it was seen and `by` the session that saw it.
 /** @param {Io} io @param {string} scope @param {Partial<Evidence>} change */
 const writeEvidence = async (io, scope, change) => {
   const stored = /** @type {object} */ ((await io.get(KEY.evidence(scope))) ?? {})
-  const stamped = Object.fromEntries(Object.entries(change).map(([rung, value]) => [rung, { ...value, at: Date.now() }]))
+  const by = shortSession(await io.sessionId())
+  const stamped = Object.fromEntries(Object.entries(change).map(([rung, value]) => [rung, { ...value, at: Date.now(), by }]))
   await io.set(KEY.evidence(scope), { ...stored, ...stamped })
   changed(io)
 }
@@ -262,17 +269,129 @@ export const setProfile = (io, me, fields, pack = unreal) =>
   })
 
 // Tracks an intent, if it exists. The one path for /ather, the profile tool and a write into an intent.
-/** @param {Io} io @param {string} root @param {string} slug @param {{ onlyIfNone?: boolean, me?: string }} [options] */
+// `isAuto`: a write into the intent, which never tracks one this session stopped tracking; tracking one
+// on purpose lifts that stop. `me`: the person's "Continue …" moves to it too.
+/** @param {Io} io @param {string} root @param {string} slug @param {{ onlyIfNone?: boolean, isAuto?: boolean, me?: string }} [options] */
 export const track = (io, root, slug, options = {}) =>
   serial(async () => {
     if (!(await io.exists(`${root}/docs/intent/${slug}/prompt.md`))) return false
     const sid = await io.sessionId()
+    const stopped = /** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? [])
+    if (options.isAuto && stopped.includes(slug)) return false
     if (options.onlyIfNone && (await io.get(KEY.pinned(sid))) !== undefined) return false
     await io.set(KEY.pinned(sid), slug)
     if (options.me) await io.set(KEY.last(options.me), slug)
+    if (!options.isAuto && stopped.includes(slug)) await setList(io, KEY.untracked(sid), stopped.filter(one => one !== slug))
+    await beat(io)
     changed(io)
     return true
   })
+
+// Stops tracking: the session's pin, the person's "Continue …" when it names the same intent, and a
+// stop on a write tracking it again in this session. Proof recorded so far stays with the intent.
+// Refused while an away window runs: its mandate and ledger were set up for the tracked intent.
+/** @param {Io} io @param {string} me @returns {Promise<{ result: 'untracked' | 'none' | 'away', slug: string }>} */
+export const untrack = (io, me) =>
+  serial(async () => {
+    const sid = await io.sessionId()
+    const slug = /** @type {string | undefined} */ (await io.get(KEY.pinned(sid)))
+    if (slug === undefined) return { result: /** @type {const} */ ('none'), slug: '' }
+    const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
+    if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
+    await io.remove(KEY.pinned(sid))
+    if ((await io.get(KEY.last(me))) === slug) await io.remove(KEY.last(me))
+    await setList(io, KEY.untracked(sid), [.../** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? []), slug])
+    await beat(io)
+    changed(io)
+    return { result: /** @type {const} */ ('untracked'), slug }
+  })
+
+/** @param {Io} io @param {string} key @param {string[]} list */
+const setList = async (io, key, list) => {
+  const kept = [...new Set(list)]
+  if (kept.length === 0) await io.remove(key)
+  else await io.set(key, kept)
+}
+
+// ---------------------------------------------------------------- lanes: the heartbeats of the sessions on this checkout
+
+// A heartbeat older than this, or one that says it ended, is no longer a live session.
+const LANE_STALE_MS = 10 * 60 * 1000
+
+/**
+ * One session's heartbeat, a file under the pack's local folder: what it tracks, on which branch,
+ * when it was written and when the session last took a prompt or ran a tool.
+ * @typedef {{ sessionId: string, intent: string | null, branch: string, updatedAt: number, lastActiveAt?: number, away: string, hasEnded: boolean }} Lane
+ */
+
+// When this session last took a prompt or ran a tool; a hot reload starts it again.
+let activeAt = Date.now()
+/** @param {number} [at] */
+export const markActive = (at = Date.now()) => {
+  activeAt = at
+}
+
+/** @type {{ path: string, lane: Lane } | null} */
+let lastBeat = null
+
+// Writes this session's heartbeat; after any change in hand, so it never undoes one.
+/** @param {Io} io @param {{ root: string, localDir: string, branch: string, hasEnded: boolean }} at */
+export const writeHeartbeat = (io, at) =>
+  serial(async () => {
+    const sid = await io.sessionId()
+    const away = await readAway(io)
+    /** @type {Lane} */
+    const lane = { sessionId: sid, intent: await readPinned(io), branch: at.branch, updatedAt: Date.now(), lastActiveAt: activeAt, away: away.phase, hasEnded: at.hasEnded }
+    const path = `${at.root}/${at.localDir}/lanes/${sid}.json`
+    await io.write(path, JSON.stringify(lane))
+    lastBeat = { path, lane }
+  })
+
+// The heartbeat again, at once, when what the session tracks changes: peers see it before the next tick.
+/** @param {Io} io */
+const beat = async io => {
+  const sid = await io.sessionId()
+  if (lastBeat === null || lastBeat.lane.sessionId !== sid) return
+  const { path } = lastBeat
+  // Only over a heartbeat that is still there: never brings back one a cleanup removed.
+  if (!(await io.exists(path))) return
+  const lane = { ...lastBeat.lane, intent: /** @type {string | undefined} */ (await io.get(KEY.pinned(sid))) ?? null, updatedAt: Date.now(), lastActiveAt: activeAt }
+  await io.write(path, JSON.stringify(lane)).catch(() => undefined)
+  lastBeat = { path, lane }
+}
+
+// One session's heartbeat on this checkout, or null when it has none here (it may live in another checkout).
+/** @param {Io} io @param {string} root @param {string} localDir @param {string} sid @returns {Promise<Lane | null>} */
+export const readLane = async (io, root, localDir, sid) => {
+  try {
+    return JSON.parse((await io.read(`${root}/${localDir}/lanes/${sid}.json`)) ?? '')
+  } catch {
+    return null
+  }
+}
+
+/** @param {Lane} lane */
+export const isLaneLive = lane => !lane.hasEnded && Date.now() - Number(lane.updatedAt) < LANE_STALE_MS
+
+// The other sessions alive on this checkout: a fresh heartbeat that has not said it ended.
+/** @param {Io} io @param {string} root @param {string} localDir @returns {Promise<Lane[]>} */
+export const readPeers = async (io, root, localDir) => {
+  const dir = `${root}/${localDir}/lanes`
+  const sid = await io.sessionId()
+  const list = io.list ?? (async () => [])
+  /** @type {Lane[]} */
+  const out = []
+  for (const entry of await list(dir).catch(() => [])) {
+    if (entry.kind !== 'file' || entry.name === `${sid}.json` || Date.now() - Number(entry.mtimeMs) > LANE_STALE_MS) continue
+    try {
+      const lane = JSON.parse((await io.read(`${dir}/${entry.name}`)) ?? '')
+      if (!lane.hasEnded) out.push(lane)
+    } catch {
+      // a half-written heartbeat; the next tick reads it
+    }
+  }
+  return out
+}
 
 /** @param {Io} io @param {string} scope @param {keyof Evidence} rung @param {import('./model.mjs').Rung} value */
 export const setRung = (io, scope, rung, value) => serial(() => writeEvidence(io, scope, { [rung]: { state: value.state, detail: value.detail.slice(0, 120) } }))
@@ -418,7 +537,7 @@ export const adoptWindow = async (io, lane) => {
 }
 
 // Removes what sessions that have ended left behind (tracked intent, evidence, a lost-edits
-// flag, an empty window), so the store stays small. The store spans every checkout on the
+// flag, the intents it stopped tracking, an empty window), so the store stays small. The store spans every checkout on the
 // machine, so only sessions `isGone` can vouch for are touched (their heartbeat is in this
 // checkout and says ended or stale); a holding window is kept for adoption.
 // Runs in the background; reads every key once.
@@ -428,7 +547,7 @@ export const prune = async (io, isGone) => {
   /** @type {Map<string, string[]>} */
   const bySession = new Map()
   for (const key of await io.keys()) {
-    const sid = /^(?:away|pinned|evidence|lost):(.+)$/.exec(key)?.[1]
+    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]
     if (sid && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
   }
   for (const [sid, keys] of bySession) {

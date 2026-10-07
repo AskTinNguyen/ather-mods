@@ -13,7 +13,7 @@ import { unreal } from './unreal.mjs'
 import { makeWebPack } from './web.mjs'
 
 /**
- * @typedef {{ state: 'none' | 'pass' | 'fail', detail: string }} Rung
+ * @typedef {{ state: 'none' | 'pass' | 'fail', detail: string, at?: number, by?: string }} Rung `at`, `by`: when, and by which session (its first 8 hex), the record was written
  * @typedef {{ rungs: { rung: string, value: Rung }[], context: string[], toasts: { text: string, timeoutMs?: number }[], bumps: string[] }} ShellReading
  * @typedef {{ id: string, pattern: RegExp, title: string, fix: string, rule?: { file: string, text: string } }} PackTrap
  * @typedef {{ name: string, verb: string, isGlobal?: boolean }} CreateItem

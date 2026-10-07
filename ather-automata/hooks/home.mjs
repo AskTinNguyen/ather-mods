@@ -4,7 +4,7 @@
 
 import { windowDecisions } from './away.mjs'
 import { issueLabel, issuePrompt } from './issues.mjs'
-import { STAGE_LABELS, clockText, currentStage, directorCalls, intentLabel, isEvening, isMine, nextStep, ownedIntents, pickCandidates, plural } from './model.mjs'
+import { STAGE_LABELS, clockText, currentStage, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, ownedIntents, pickCandidates, plural } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
@@ -45,6 +45,22 @@ const skillPrompt = (name, target) =>
 
 /** @param {string} question @param {Pack} [pack] */
 export const askPrompt = (question, pack = unreal) => pack.prompts.ask(question)
+
+// What working on an intent in this session means, said wherever a press tracks one without a view (D5).
+/** @param {Pack} [pack] */
+export const trackConsequence = (pack = unreal) =>
+  `This session gets its next step, your ${pack.id === 'unreal' ? 'builds and PIE' : 'tests and builds'} count as its proof, other sessions see you on it; /ather untrack undoes it.`
+
+// "fluid-snow-sand-look: Build, 8/17 done, Tin Nguyen's. Also tracked in 1 other session · active 3m ago.":
+// where an intent stands, in one line, for a surface without a pane.
+/** @param {Intent} intent @param {string} stage @param {string} me @param {string} [heldBy] */
+export const intentStands = (intent, stage, me, heldBy = '') =>
+  `${intent.slug}: ${stage}, ${intent.acceptanceTotal > 0 ? `${intent.acceptanceDone}/${intent.acceptanceTotal} done` : 'no checklist yet'}, ${isMine(intent, me) ? 'yours' : intent.owner ? `${intent.owner}'s` : 'no owner named'}.${heldBy ? ` ${heldBy}.` : ''}`
+
+// What stopping tracking said: done (proof stays with the intent), nothing tracked, or refused while away.
+/** @param {{ result: 'untracked' | 'none' | 'away', slug: string }} outcome */
+export const untrackText = outcome =>
+  outcome.result === 'untracked' ? `Stopped tracking ${outcome.slug}. Its proof so far stays with the intent.` : outcome.result === 'away' ? 'End the away window first.' : 'Nothing is tracked in this session.'
 
 /** @param {readonly Item[]} items */
 export const batchPrompt = items => `Take me through these one at a time, with a question dialog for each: ${items.map((one, index) => `(${index + 1}) ${one.prompt}`).join(' ')}`
@@ -266,6 +282,29 @@ const stageList = stage => {
 const stageTrack = stage => {
   const at = stageIndex(stage)
   return STAGE_ORDER.map((key, index) => `${STAGE_LABELS[/** @type {keyof typeof STAGE_LABELS} */ (key)]} ${index < at ? '✓' : index === at ? '●' : '○'}`).join('  ')
+}
+
+// "build ✓ by session 1a2b3c4d · tests ✗": an intent's proof so far, each record another session wrote named
+// by that session (its title when known, `names`), so proof a helper produced is never taken for this one's.
+/** @param {import('./model.mjs').Evidence} evidence @param {Pack} pack @param {string} mine this session's first 8 hex @param {Readonly<Record<string, string>>} [names] */
+export const proofLine = (evidence, pack, mine, names = {}) =>
+  Object.entries(pack.proofWords)
+    .filter(([rung]) => (evidence[rung]?.state ?? 'none') !== 'none')
+    .map(([rung, word]) => {
+      const by = evidence[rung]?.by
+      const elsewhere = by && by !== mine ? ` by ${names[by] ? `"${names[by]}"` : `session ${by}`}` : ''
+      return `${word} ${evidence[rung]?.state === 'pass' ? '✓' : '✗'}${elsewhere}`
+    })
+    .join(' · ')
+
+// "Also tracked in 2 other sessions · active 4m ago": the live sessions on this checkout that track
+// the same intent, and when the latest of them last did something; '' when there are none.
+/** @param {readonly { intent: string | null, updatedAt: number, lastActiveAt?: number }[]} peers @param {string} slug @param {number} now */
+export const heldByLine = (peers, slug, now) => {
+  const same = peers.filter(lane => slug !== '' && lane.intent === slug)
+  if (same.length === 0) return ''
+  const ago = now - Math.max(...same.map(lane => Number(lane.lastActiveAt ?? lane.updatedAt) || 0))
+  return `Also tracked in ${plural(same.length, 'other session')} · ${ago < 60000 ? 'active now' : `active ${durationText(ago)} ago`}`
 }
 
 // "build ✓ · tests ✗": the proof seen so far, so a failed test is never hidden.

@@ -4,7 +4,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { AFK, createEngine } from './engine.mjs'
-import { check, layouts } from './screen.mjs'
+import { check, draw, layouts } from './screen.mjs'
 
 const OUT = process.argv[2]
 // --layouts <dir>: write every pane and band laid out at 72 and 110 columns, to diff two runs.
@@ -148,7 +148,37 @@ const pressIn = (tree, label) => {
   const miss = await run(engine, [typed('zzzq')])
   expect('a word that matches no intent goes to the session, once', miss.dialogs.length === 1 && miss.sent.length === 1 && /I asked Ather: "zzzq"/.test(miss.sent[0] ?? ''), miss.out)
   const name = await run(engine, [typed('fluid')])
-  expect('part of an intent name tracks it', engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && /Now tracking fluid-snow-sand-look/.test(name.out), name.out)
+  expect('without a pane, part of an intent name typed in the dialog says where it stands and how to work on it, and does not track it', engine.store.get('pinned:harness-session-0001') === undefined && /^fluid-snow-sand-look · .+\. To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(name.out) && name.sent.length === 0, name.out)
+  const words = await run(engine, [], 'ather', 'fluid snow')
+  expect('without a pane, words after /ather that match one intent do not track it either', engine.store.get('pinned:harness-session-0001') === undefined && /To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(words.out) && words.dialogs.length === 0, words.out)
+  // D5: in the Work question a typed name opens one follow-up (the phone's Intent view) that says where it
+  // stands and what working on it here means; each of the question's own choices says what it does.
+  const pinnedNow = () => engine.store.get('pinned:harness-session-0001')
+  const consequence = 'This session gets its next step, your builds and PIE count as its proof, other sessions see you on it; /ather untrack undoes it.'
+  const work = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Work on it here')])
+  screens.push(['Desktop · a name typed in the Work question, then Work on it here', `${dialogText(work.dialogs)}\n  → output: ${work.out}`])
+  const [, workQ, follow] = work.dialogs
+  expect("each Work-question choice says what it does: an intent's works on it here, with the consequence", workQ?.header === 'Work' && (workQ?.options ?? []).length > 0 && workQ.options.every(o => o.description.endsWith(consequence) || o.description.endsWith('Drafts an intent with you first.')), workQ?.options)
+  expect('a name typed in the Work question opens one follow-up: the slug, where it stands, what working on it here means, three choices', follow?.header === 'fluid-snow-s' && new RegExp(`^fluid-snow-sand-look: [A-Z][a-z ]+, \\d+/\\d+ done, [^.]+\\. Work on it here\\? ${consequence.replace(/[.?/()]/g, '\\$&')}$`).test(follow?.question ?? '') && (follow?.options ?? []).map(o => o.label).join('|') === 'Work on it here|Just look|Pick something else', follow)
+  expect('… Work on it here tracks it and moves "Continue …" to it', pinnedNow() === 'fluid-snow-sand-look' && engine.store.get('last:tinnguyen') === 'fluid-snow-sand-look' && work.out === 'Now tracking fluid-snow-sand-look.' && work.sent.length === 0, work.out)
+  await run(engine, [], 'ather', 'untrack')
+  const look = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Just look')])
+  expect('… Just look says where it stands and its next step, and tracks nothing', pinnedNow() === undefined && /^fluid-snow-sand-look: .+ Its next step: .+\. Not tracked here; \/ather intent fluid-snow-sand-look works on it in this session\.$/.test(look.out) && look.sent.length === 0, look.out)
+  const other = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Pick something else'), dismiss])
+  expect('… Pick something else asks the Work question again, tracking nothing', pinnedNow() === undefined && other.dialogs.map(d => d.header).join(',') === 'Ather,Work,fluid-snow-s,Work', other.dialogs.map(d => d.header))
+  const noDialog = await run(engine, [pick('Pick something to work on'), typed('fluid'), () => { throw new Error('no dialog in this session') }])
+  expect('… where the follow-up cannot be asked, the reply names /ather intent <slug> and nothing is tracked', pinnedNow() === undefined && /To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(noDialog.out), noDialog.out)
+  const sandbox = await engine.$.session.root()
+  for (const slug of ['zz-guard-alpha', 'zz-guard-beta']) {
+    fs.mkdirSync(path.join(sandbox, 'docs/intent', slug), { recursive: true })
+    fs.writeFileSync(path.join(sandbox, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Rev: 1\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: It works.\n`)
+  }
+  const several = await run(engine, [pick('Pick something to work on'), typed('guard'), pick('zz-guard-beta')])
+  expect('several matches in the Work question become its choices, each with the consequence; picking one tracks it', several.dialogs[2]?.header === 'Work' && /^2 intents match "guard"\. Which one should this session work on\?$/.test(several.dialogs[2]?.question ?? '') && (several.dialogs[2]?.options ?? []).map(o => o.label).sort().join('|') === 'zz-guard-alpha|zz-guard-beta' && several.dialogs[2].options.every(o => o.description.endsWith(consequence)) && pinnedNow() === 'zz-guard-beta', several.dialogs[2])
+  for (const slug of ['zz-guard-alpha', 'zz-guard-beta']) fs.rmSync(path.join(sandbox, 'docs/intent', slug), { recursive: true, force: true })
+  await run(engine, [], 'ather', 'untrack')
+  const exact = await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
+  expect('/ather intent with the exact name tracks it at once, with no dialog, without a pane too', engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && exact.out === 'Now tracking fluid-snow-sand-look.' && exact.dialogs.length === 0, exact.out)
   const tracked = await run(engine, [dismiss])
   expect('with an intent tracked, the question leads with it', /^fluid-snow-sand-look: /.test(tracked.dialogs[0]?.question ?? ''), tracked.dialogs[0]?.question)
   const switched = await run(engine, [pick('Switch to other work'), question => question.options[0].label])
@@ -376,7 +406,7 @@ const pressIn = (tree, label) => {
   const { engine, done } = await boot({ user: 'Minh Tran', hour: 18 })
   const no = await run(engine, [typed('no')])
   expect('typing "no" does not track an intent', engine.store.get('pinned:harness-session-0001') === undefined && no.sent.length === 1, no.out)
-  await run(engine, [], 'ather', 'pick fluid')
+  await run(engine, [], 'ather', 'pick fluid-snow-sand-look')
   const menu = await run(engine, [dismiss])
   expect("a teammate's open decisions are not offered to the follower", !(menu.dialogs[0]?.options ?? []).some(o => /Answer question/.test(o.label)) && (menu.dialogs[0]?.options ?? []).some(o => /See where it stands/.test(o.label)), menu.dialogs[0]?.options.map(o => o.label))
   await run(engine, [], 'away', '4h')
@@ -954,6 +984,177 @@ const hasFocus = tree => {
   expect('a lock that says no agent holds it reads as free', /Editor free/.test(free) && !/Editor busy/.test(free), free.split('\n').slice(0, 5))
   done()
   fs.rmSync(home, { recursive: true, force: true })
+}
+
+// ---------------------------------------------------------------- track guard (0.1.1)
+
+{
+  // A1: untrack from /ather and from the profile tool; refused while an away window runs; the proof stays with the intent.
+  const { engine, root, done } = await boot({ store: { 'role:tinnguyen': 'engineer' } })
+  const pinned = () => engine.store.get('pinned:harness-session-0001')
+  const laneFile = path.join(root, 'Saved/AtherAutomata/lanes/harness-session-0001.json')
+  const lane = () => JSON.parse(fs.readFileSync(laneFile, 'utf8'))
+  await engine.timers()
+  await run(engine, [], 'ather', 'intent box-scale-tool')
+  expect('tracking writes the lane heartbeat at once, with the last activity', lane().intent === 'box-scale-tool' && typeof lane().lastActiveAt === 'number', lane())
+  await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Succeeded' })
+  const waiting = async () => /Waiting on you: [^.]*\./.exec((await run(engine, [dismiss])).dialogs[0]?.question ?? '')?.[0] ?? ''
+  const before = await waiting()
+  await engine.spawn({ agentId: 'w-guard', description: 'A2 worker', prompt: 'Implement A2.' })
+  await run(engine, [], 'away', '4h')
+  const refused = await run(engine, [], 'ather', 'untrack')
+  expect('/ather untrack is refused while an away window runs', refused.out === 'End the away window first.' && pinned() === 'box-scale-tool', refused.out)
+  await run(engine, [], 'away', 'end')
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+  const untracked = await run(engine, [], 'ather', 'untrack')
+  expect('/ather untrack stops tracking: the pin and "Continue …" go, the heartbeat says so at once, the proof stays with the intent', untracked.out === 'Stopped tracking box-scale-tool. Its proof so far stays with the intent.' && pinned() === undefined && engine.store.get('last:tinnguyen') === undefined && lane().intent === null && engine.store.get('evidence:box-scale-tool')?.build?.state === 'pass', [untracked.out, pinned(), lane().intent])
+  expect('untracking leaves running workers and Needs you as they were', (await engine.$.agent.list()).some(one => one.id === 'w-guard' && one.status === 'running') && before !== '' && (await waiting()) === before, before)
+  const nothing = await run(engine, [], 'ather', 'untrack')
+  expect('/ather untrack with nothing tracked says so', nothing.out === 'Nothing is tracked in this session.', nothing.out)
+  await engine.modelTool({ tool: 'mcp__ather-automata__profile', track: 'box-scale-tool' })
+  const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
+  expect('the status tool shows which session produced each proof (by: its first 8 characters)', status.tracked?.slug === 'box-scale-tool' && status.evidence.build.state === 'pass' && status.evidence.build.by === 'harness-', status.evidence.build)
+  const none = await engine.modelTool({ tool: 'mcp__ather-automata__profile', track: 'none' })
+  expect('the profile tool\'s track "none" stops tracking', pinned() === undefined && /^Stopped tracking box-scale-tool\. Its proof so far stays with the intent\.$/.test(none.result), none.result)
+  expect('no hook threw in the untrack scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  // A3: only the session's own orchestration tracks: a main-thread Write or Edit of prompt.md or log.md, once it ran.
+  const { engine, root, done } = await boot({ store: { 'role:tinnguyen': 'engineer' } })
+  const pinned = () => engine.store.get('pinned:harness-session-0001')
+  const file = (slug, name) => path.join(root, 'docs/intent', slug, name)
+  await engine.spawn({ agentId: 'w-intent', description: 'Box worker', prompt: 'Implement box-scale-tool A1.' })
+  await engine.agentTool('w-intent', { tool: 'Write', file_path: file('box-scale-tool', 'progress.md'), content: '# box-scale-tool: Progress\n' })
+  await engine.agentTool('w-intent', { tool: 'Edit', file_path: file('box-scale-tool', 'log.md'), old_string: 'not there', new_string: 'x' })
+  await engine.flush()
+  expect("a worker's writes into an intent (progress.md, log.md) never track it", pinned() === undefined, pinned())
+  await engine.modelTool({ tool: 'Edit', file_path: file('box-scale-tool', 'progress.md'), old_string: ': Progress', new_string: ': progress' })
+  await engine.modelTool({ tool: 'Write', file_path: 'docs/intent/box-scale-tool/log.md', content: 'x', __isError: true })
+  await engine.flush()
+  expect('a main-thread write of progress.md, or a write of log.md that failed, does not track the intent', pinned() === undefined, pinned())
+  await engine.modelTool({ tool: 'Edit', file_path: file('box-scale-tool', 'log.md'), old_string: 'not there', new_string: 'x' })
+  await engine.flush()
+  expect('a main-thread edit of log.md tracks the intent once it ran', pinned() === 'box-scale-tool', pinned())
+  await engine.modelTool({ tool: 'Edit', file_path: file('fluid-snow-sand-look', 'prompt.md'), old_string: 'not there', new_string: 'x' })
+  await engine.flush()
+  expect("a main-thread edit of another intent's prompt.md does not switch the tracked one", pinned() === 'box-scale-tool', pinned())
+  await engine.modelTool({ tool: 'Write', file_path: file('zz-captured', 'prompt.md'), content: '# Captured\n\n- Rev: 1\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: It works.\n' })
+  await engine.flush()
+  expect('capturing a new intent (a write that creates its prompt.md) switches the pin to it', pinned() === 'zz-captured', pinned())
+  await run(engine, [], 'ather', 'untrack')
+  await engine.modelTool({ tool: 'Write', file_path: file('zz-captured', 'log.md'), content: '# Log\n' })
+  await engine.flush()
+  expect('after /ather untrack, a write into that intent does not track it again in this session', pinned() === undefined, pinned())
+  await engine.modelTool({ tool: 'Write', file_path: file('box-scale-tool', 'log.md'), content: '# Log\n' })
+  await engine.flush()
+  expect('another intent still tracks from a write', pinned() === 'box-scale-tool', pinned())
+  expect('no hook threw in the auto-track scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  // A2: looking never tracks. A row or words open the Intent view; Work on this here tracks; Stop tracking undoes it (A1).
+  // A4 and A5: the view says when other live sessions track the same intent, and names proof another session produced.
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer', 'tour:tinnguyen': { isDone: true } } })
+  const pinned = () => engine.store.get('pinned:harness-session-0001')
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  const findWhere = (node, test) => (!node || typeof node !== 'object' ? null : test(node) ? node : (node.children ?? []).map(child => findWhere(child, test)).find(Boolean) ?? null)
+  const pane = () => engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  // A second intent of Tin's, so the home lists one under Also yours beside the teammates' ones.
+  fs.mkdirSync(path.join(root, 'docs/intent/zz-guard-mine'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'docs/intent/zz-guard-mine/prompt.md'), '# Guard\n\n- Rev: 1\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Goal\n\nA second intent of mine.\n\n## Acceptance\n\n- A1: It works.\n')
+  await run(engine, [])
+  const row = findWhere(await pane(), node => node.type === 'Button' && /^work-intent:/.test(node.props.key ?? ''))
+  const slug = String(row?.props.key ?? '').slice('work-intent:'.length)
+  row?.props.onPress({})
+  const viewTree = await pane()
+  const view = check(viewTree, 72)
+  screens.push(['Terminal · the Intent view of an intent this session does not track (72 columns)', view.lines.join('\n')])
+  expect('a home row opens the Intent view for its intent and does not track it; the view offers Work on this here, and no Next', slug !== '' && pinned() === undefined && new RegExp(`^I N T E N T\\n${slug}$`, 'm').test(view.lines.join('\n')) && /\[ Work on this here \]/.test(view.lines.join('\n')) && !findKey(viewTree, 'intent-untrack') && !/N E X T/.test(view.lines.join('\n')) && view.problems.length === 0, view.lines)
+  findKey(viewTree, 'intent-work')?.props.onPress({})
+  await engine.flush()
+  const trackedTree = await pane()
+  expect('Work on this here tracks it and moves "Continue …" to it; the view then offers Stop tracking', pinned() === slug && engine.store.get('last:tinnguyen') === slug && Boolean(findKey(trackedTree, 'intent-untrack')) && !findKey(trackedTree, 'intent-work') && engine.record.toasts.includes(`Ather: Now tracking ${slug}.`), [pinned(), engine.record.toasts.slice(-2)])
+  findKey(trackedTree, 'intent-untrack')?.props.onPress({})
+  await engine.flush()
+  const stoppedTree = await pane()
+  expect('Stop tracking in the Intent view stops tracking, says the proof stays, and keeps the view on the intent with Work on this here', pinned() === undefined && engine.store.get('last:tinnguyen') === undefined && Boolean(findKey(stoppedTree, 'intent-work')) && new RegExp(`^I N T E N T\\n${slug}$`, 'm').test(check(stoppedTree, 72).lines.join('\n')) && engine.record.toasts.includes(`Ather: Stopped tracking ${slug}. Its proof so far stays with the intent.`), engine.record.toasts.slice(-2))
+  pressIn(stoppedTree, 'Back')
+  // Every home row, under Also yours and under Follow a teammate alike.
+  const homeTree = await pane()
+  const sections = ['picks-mine', 'picks-theirs'].filter(key => findKey(homeTree, key))
+  const rows = []
+  ;(function collect(node) {
+    if (!node || typeof node !== 'object') return
+    if (node.type === 'Button' && /^work-intent:/.test(node.props.key ?? '')) rows.push(String(node.props.key).slice('work-intent:'.length))
+    for (const child of node.children ?? []) collect(child)
+  })(homeTree)
+  const opened = []
+  for (const one of rows) {
+    findWhere(await pane(), node => node.type === 'Button' && node.props.key === `work-intent:${one}`)?.props.onPress({})
+    if (new RegExp(`^I N T E N T\\n${one}$`, 'm').test(draw(await pane(), 72).join('\n'))) opened.push(one)
+    pressIn(await pane(), 'Back')
+  }
+  expect('every home row (Also yours, Follow a teammate) opens its own Intent view and none tracks', rows.length > 1 && opened.join(',') === rows.join(',') && pinned() === undefined && sections.length === 2, { sections, rows, opened })
+  pressIn(await pane(), 'Everything open')
+  const pickRow = findWhere(await pane(), node => node.type === 'Button' && /^pick-intent:/.test(node.props.key ?? '') && node.props.key !== `pick-intent:${slug}`)
+  const other = String(pickRow?.props.key ?? '').slice('pick-intent:'.length)
+  pickRow?.props.onPress({})
+  const pickView = await pane()
+  expect('an Everything-open row opens the Intent view without tracking; Back goes back to the list', other !== '' && pinned() === undefined && new RegExp(`^I N T E N T\\n${other}$`, 'm').test(check(pickView, 72).lines.join('\n')), other)
+  pressIn(pickView, 'Back')
+  expect('… and Back from it goes back to Everything open', /^Everything open$/m.test(check(await pane(), 72).lines.join('\n')))
+  const words = await run(engine, [], 'ather', 'fluid snow')
+  const wordsView = check(await pane(), 72)
+  expect('words after /ather that match one intent open its view and do not track it', pinned() === undefined && words.dialogs.length === 0 && /^I N T E N T\nfluid-snow-sand-look$/m.test(wordsView.lines.join('\n')), [words.out, pinned()])
+  // Another live session on this checkout tracks fluid-snow-sand-look; a build it ran is in the intent's proof.
+  const lanes = path.join(root, 'Saved/AtherAutomata/lanes')
+  fs.mkdirSync(lanes, { recursive: true })
+  const now = Date.now()
+  fs.writeFileSync(path.join(lanes, '1a2b3c4d-0000-4000-8000-000000000000.json'), JSON.stringify({ sessionId: '1a2b3c4d-0000-4000-8000-000000000000', intent: 'fluid-snow-sand-look', branch: 'main', updatedAt: now, lastActiveAt: now - 3 * 60000, away: 'off', hasEnded: false }))
+  fs.writeFileSync(path.join(lanes, '5e6f7a8b-0000-4000-8000-000000000000.json'), JSON.stringify({ sessionId: '5e6f7a8b-0000-4000-8000-000000000000', intent: 'fluid-snow-sand-look', branch: 'main', updatedAt: now, lastActiveAt: now, away: 'off', hasEnded: true }))
+  engine.store.set('evidence:fluid-snow-sand-look', { build: { state: 'pass', detail: 'Result: Succeeded', at: now, by: '1a2b3c4d' } })
+  const peerView = check(await pane(), 72)
+  screens.push(['Terminal · the Intent view with another session on it and its proof (72 columns)', peerView.lines.join('\n')])
+  expect('the Intent view says how many other live sessions track the intent, and when the latest was active; an ended one does not count', /^Also tracked in 1 other session · active 3m ago$/m.test(peerView.lines.join('\n')) && peerView.problems.length === 0, peerView.lines.slice(0, 8))
+  expect('the Intent view names the session that produced proof when it is not this one', /^Proof: build ✓ by session 1a2b3c4d$/m.test(peerView.lines.join('\n')), peerView.lines.slice(0, 8))
+  await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
+  const laneText = (await engine.compose()).sections.find(one => one.id === 'ather-automata:lane')?.text ?? ''
+  expect('the lane text carries the same line for the tracked intent', /\nAlso tracked in 1 other session · active 3m ago\.\n/.test(laneText), laneText)
+  fs.rmSync(path.join(lanes, '1a2b3c4d-0000-4000-8000-000000000000.json'))
+  const alone = (await engine.compose()).sections.find(one => one.id === 'ather-automata:lane')?.text ?? ''
+  const aloneView = check(await pane(), 72).lines.join('\n')
+  expect('with no other live session on the intent, neither the view nor the lane text says anything', !/Also tracked/.test(alone) && !/Also tracked/.test(aloneView) && /^I N T E N T\nfluid-snow-sand-look$/m.test(aloneView), aloneView.split('\n').slice(0, 6))
+  expect('no hook threw in the Intent view scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  // A6: /clear and an adopted away window keep the pin, and say so with the way out.
+  const { engine, done } = await boot({ store: { 'role:tinnguyen': 'engineer' } })
+  const still = 'Ather: Still tracking box-scale-tool · /ather untrack'
+  await engine.end('clear')
+  engine.setSessionId('harness-session-0002')
+  await new Promise(resolve => setTimeout(resolve, 1400))
+  expect('after /clear with nothing tracked, nothing is said', !engine.record.toasts.some(text => /Still tracking/.test(text)), engine.record.toasts)
+  await run(engine, [], 'ather', 'intent box-scale-tool')
+  await engine.end('clear')
+  engine.setSessionId('harness-session-0003')
+  await new Promise(resolve => setTimeout(resolve, 1400))
+  expect('after /clear the session keeps its intent and says "Still tracking <slug> · /ather untrack"', engine.store.get('pinned:harness-session-0003') === 'box-scale-tool' && engine.record.toasts.includes(still), engine.record.toasts.slice(-2))
+  await run(engine, [], 'away', '4h')
+  await engine.end('exit')
+  engine.setSessionId('harness-session-morning')
+  engine.record.toasts.length = 0
+  await engine.start()
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect('a new session that takes over an away window keeps its intent and says "Still tracking <slug> · /ather untrack"', engine.store.get('pinned:harness-session-morning') === 'box-scale-tool' && engine.record.toasts.some(text => /away window from an earlier session/.test(text)) && engine.record.toasts.includes(still), engine.record.toasts)
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+  expect('no hook threw in the /clear and adoption scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
 }
 
 // ---------------------------------------------------------------- the web pack, on a han-viet checkout
