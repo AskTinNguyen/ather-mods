@@ -190,6 +190,12 @@ export const isPrCommand = (command: string): boolean =>
   /\bgh\s+pr\s+create\b/.test(command) ||
   (/\bgh\s+api\b[^\n|;&]*\/pulls\b(?!\/)/.test(command) && !/(-X|--method)\s+GET\b/i.test(command) && /(-X|--method)\s+POST\b|\s-[fF]\s|--(raw-)?field\b|--input\b/i.test(command))
 
+/** A22: a tool whose name creates a pull request, in any MCP server (`mcp__github__create_pull_request`,
+ * `mcp__plugin_engineering_github__create_pull_request`, `…pull_request_create…`, `createPullRequest`); a review
+ * or a comment on a PR is not one. */
+export const isPrTool = (tool: string): boolean =>
+  /create_?pull_?requests?(?!_?(review|comment))|pull_?requests?_?create|pulls_create/i.test(tool)
+
 /** An intent being closed: its prompt.md gains a closed Status line. */
 export const closesIntent = (path: string, added: readonly string[]): string | null => {
   const m = /(?:^|\/)docs\/intent\/([^/]+)\/prompt\.md$/i.exec(path.replace(/\\/g, '/'))

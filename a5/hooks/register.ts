@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
-import { acceptText, closesIntent, failed, isPrCommand, namedPaths, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
+import { acceptText, closesIntent, failed, isPrCommand, isPrTool, namedPaths, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -1037,6 +1037,9 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
 // ---------- Nghiệm thu A5 (A18): the five rules over the branch, before a PR and when an intent closes ----------
 const PASS_ONCE = 'Cho PR này qua'
 
+/** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
+type PrRefs = { repo?: string; head?: string; base?: string }
+
 /** Binaries left out of the added-lines diff (they carry no lines to score and make it big). */
 const BINARY_EXCLUDES = ['uasset', 'umap', 'ubulk', 'uexp', 'png', 'jpg', 'jpeg', 'tga', 'exr', 'hdr', 'psd', 'fbx', 'abc', 'wav', 'ogg', 'mp4', 'dll', 'exe', 'pdb', 'lib', 'zip', '7z'].map(x => `:(exclude,icase)*.${x}`)
 
@@ -1069,7 +1072,7 @@ async function prBody($: Engine, command: string, dir: string): Promise<string> 
 /** A18: everything the score reads, cheap and path-scoped: the branch diff against main (names and added lines),
  * the intent's four files, Ather's proof, the other sessions' touch files and active intents, this session's
  * untracked files in the shared checkout, worktrees on the same branch, running background agents. */
-async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHint: string | null, body: string, agentId: string | undefined): Promise<AcceptInput> {
+async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHint: string | null, body: string, agentId: string | undefined, refs: PrRefs = {}): Promise<AcceptInput> {
   const git = async (args: string[]): Promise<string> => {
     const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
     return r && r.exitCode === 0 ? r.stdout : ''
@@ -1077,8 +1080,21 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
   // The base is origin/main: a local main in the shared checkout can be far behind it, and main...HEAD would then
   // list everything main merged since as this branch's work. Local main only when origin/main is missing.
   const hasRef = async (ref: string) => (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { timeoutMs: 15_000 }).catch(() => null))?.exitCode === 0
-  const base = (await hasRef('origin/main')) ? 'origin/main' : (await hasRef('main')) ? 'main' : null
-  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  // A22: a PR tool names its base, head and repository; each is checked here, and one that cannot be read is no pass.
+  const baseName = refs.base?.trim() || 'main'
+  const base = (await hasRef(`origin/${baseName}`)) ? `origin/${baseName}` : (await hasRef(baseName)) ? baseName : null
+  const headName = refs.head?.trim().replace(/^[^:/]+:/, '') || ''
+  const head = !headName ? 'HEAD' : (await hasRef(headName)) ? headName : (await hasRef(`origin/${headName}`)) ? `origin/${headName}` : null
+  const branch = headName || (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  const origin = refs.repo ? (await git(['remote', 'get-url', 'origin'])).trim() : ''
+  const isOtherRepo = Boolean(refs.repo) && !origin.replace(/\.git$/i, '').toLowerCase().endsWith(`/${(refs.repo ?? '').toLowerCase()}`) && !origin.replace(/\.git$/i, '').toLowerCase().endsWith(`:${(refs.repo ?? '').toLowerCase()}`)
+  const refProblem = isOtherRepo
+    ? `the PR is for ${refs.repo}, not this session's repository (${origin || 'no origin remote'})`
+    : !base
+      ? `no origin/${baseName} or ${baseName} to diff against`
+      : !head
+        ? `head ${headName} is not in this repository (fetch it, or open the PR from its own checkout)`
+        : null
   // An unread diff never passes: a failure, a timeout or a cut output is named, and nothing is scored.
   const whole = async (args: string[]): Promise<{ out: string; why: string | null }> => {
     const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
@@ -1087,8 +1103,9 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
     if (r.isStdoutTruncated) return { out: '', why: `git ${args[0]} ${args[1]} output passed 4 MiB` }
     return { out: r.stdout, why: null }
   }
-  const names = base ? await whole(['diff', '--name-only', `${base}...HEAD`]) : { out: '', why: 'no origin/main or main to diff against' }
-  const text = base && !names.why ? await whole(['diff', '-U0', '--no-color', `${base}...HEAD`, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
+  const range = `${base}...${head}`
+  const names = refProblem ? { out: '', why: refProblem } : await whole(['diff', '--name-only', range])
+  const text = !names.why ? await whole(['diff', '-U0', '--no-color', range, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
   const diffProblem = names.why ?? text.why
   const files = names.out.split(/\r?\n/).map(f => f.trim()).filter(Boolean)
   const added = addedLines(text.out)
@@ -1126,7 +1143,7 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHin
     progress,
     findings,
     diffProblem,
-    promptDiff: slug && base ? await git(['diff', `${base}...HEAD`, '--', `docs/intent/${slug}/prompt.md`]) : '',
+    promptDiff: slug && !refProblem ? await git(['diff', range, '--', `docs/intent/${slug}/prompt.md`]) : '',
     proof: status?.tracked?.slug === slug ? proofOf(status) : null,
     body,
     othersTouch,
@@ -1145,6 +1162,7 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
   let slug: string | null = null
   let body = ''
   let what = 'this PR'
+  let refs: PrRefs = {}
   const cwd = await $.session.cwd()
   if (SHELL_TOOLS.has(tool) && isPrCommand(str(input.command))) {
     const command = str(input.command)
@@ -1152,6 +1170,14 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
     const dir = norm(cdDir ?? cwd, cwd)
     root = (await locate($, a5, `${dir}/_`)).root
     body = await prBody($, command, dir)
+  } else if (isPrTool(tool)) {
+    // A22: a PR opened through an MCP tool (GitHub's create_pull_request and the like): the session's repository,
+    // checked against the repository, head and base the input names; never let through unread.
+    root = (await locate($, a5, `${cwd}/_`)).root ?? cwd
+    body = str(input.body)
+    const owner = str(input.owner)
+    const name = str(input.repo) || str(input.repository) || str(input.repo_name)
+    refs = { repo: name ? (owner && !name.includes('/') ? `${owner}/${name}` : name) : undefined, head: str(input.head) || str(input.head_branch) || undefined, base: str(input.base) || str(input.base_branch) || undefined }
   } else if (EDIT_TOOLS.has(tool)) {
     for (const [path, old, neu] of await editParts($, tool, input)) {
       const closing = closesIntent(norm(path, cwd), newLines(old, neu))
@@ -1163,7 +1189,7 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
     }
   }
   if (!root) return null
-  const x = await gatherAccept($, opts, a5, root, slug, body, agentId)
+  const x = await gatherAccept($, opts, a5, root, slug, body, agentId, refs)
   const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: slug ?? null, scores, what }
   $.ui.invalidate('ui.render')
