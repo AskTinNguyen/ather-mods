@@ -11,7 +11,7 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { curtainSvg, icon, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
+import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
@@ -70,11 +70,9 @@ let openRule: number | null = null // A32: the rule whose card is open in the A5
 // A37: when the A5R pane opened (or first drew) and when the compact line first drew: their entrance plays then.
 let paneEnterAt = 0
 let lineEnterAt = 0
-const ENTRANCE_MS = 1_000 // how long after the opening the curtains stay in the tree (they finish within 300 ms)
-const ENTRANCE_BUDGET_MS = 300
+// A51: their timings (and `motion: slow`, ten times slower) live in icons.ts: ENTRANCE_MS, entranceLife, fxLife.
 // A38: one-shot event dithers (≤ 1 s): a rule chip stamps red when its rule is hit; the band sweeps at the sync freeze
 // (❄ in) and back at the lift; a new acceptance score resolves the chips one by one to ✓ / ✗.
-const FX_MS = 1_000
 const freshHits = new Set<string>() // rules hit since the A5R pane last drew
 const hitStampAt: Record<string, number> = {}
 let lastPhaseSeen: Phase | null = null
@@ -1923,9 +1921,10 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     let line = compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, currentTheme() === 'dark' ? A5R_LOOK.sealBg : undefined, currentTheme() === 'light' ? A5R_LOOK.hit : undefined)
     // A37: the compact line's entrance when it first draws (desktop, motion on).
     if (lineEnterAt === 0) lineEnterAt = now
-    if (isDesktop && opts.motion !== 'off' && now - lineEnterAt < ENTRANCE_MS) {
-      line = withCurtain(el as never, line, 'hai-a5r-line-in', entrance(1)[0] as Curtain)
-      $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render'))
+    const life = entranceLife(paceOf(opts.motion))
+    if (isDesktop && opts.motion !== 'off' && now - lineEnterAt < life) {
+      line = withCurtain(el as never, line, 'hai-a5r-line-in', entrance(1, paceOf(opts.motion))[0] as Curtain)
+      $.clock.after(life + 10, () => $.ui.invalidate('ui.render'))
     }
     kids.splice(stripAt + 1, 0, line)
   }
@@ -1952,12 +1951,8 @@ function withOverlay(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (
 }
 
 /** A37: the entrance: each block in turn (band, tools, sessions, card, rules) dithers in from seal-red pixels, the
- * whole sequence ending within 300 ms; the cells take 4 ms apiece. */
-const entrance = (n: number): Curtain[] => {
-  const step = 4
-  const last = ENTRANCE_BUDGET_MS - 16 * step
-  return Array.from({ length: n }, (_, i) => ({ color: A5R_LOOK.sealBg, begin: n > 1 ? Math.floor((i * last) / (n - 1)) : 0, step, clear: true }))
-}
+ * whole sequence ending within 300 ms × pace (A51: ten times slower with motion slow); the cells take 4 ms × pace. */
+const entrance = (n: number, pace = 1): Curtain[] => entranceCurtains(n, A5R_LOOK.sealBg, pace)
 
 /** A35 (mockup v2): the A5R pane's frame: the band at full width, then every block on one gutter, one gap between blocks.
  * A49: a block on the gutter drops its own `width: '100%'` and stretches instead: a width of 100% is the pane's whole
@@ -1985,13 +1980,15 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   if (lastPhaseSeen === 'frozen' && phaseNow !== 'frozen') liftAt = now
   lastPhaseSeen = phaseNow
   const isFx = isDesktop && opts.motion !== 'off'
+  const pace = paceOf(opts.motion) // A51: slow plays the entrance and the event dithers ten times slower
+  const fxMs = fxLife(pace)
   let fxPlaced = false
   let band = a5rBand(el, isOn, isOn && phaseNow === 'frozen')
-  if (isFx && now - freezeAt < FX_MS) {
-    band = withOverlay(el as never, band, 'hai-a5r-fx-freeze', sweepSvg(A5R_LOOK.sealText, false))
+  if (isFx && now - freezeAt < fxMs) {
+    band = withOverlay(el as never, band, 'hai-a5r-fx-freeze', sweepSvg(A5R_LOOK.sealText, false, 900, 120, 2, pace))
     fxPlaced = true
-  } else if (isFx && now - liftAt < FX_MS) {
-    band = withOverlay(el as never, band, 'hai-a5r-fx-lift', sweepSvg(A5R_LOOK.sealText, true))
+  } else if (isFx && now - liftAt < fxMs) {
+    band = withOverlay(el as never, band, 'hai-a5r-fx-lift', sweepSvg(A5R_LOOK.sealText, true, 900, 120, 2, pace))
     fxPlaced = true
   }
   const kids: unknown[] = [band] // A33/A35: the band first
@@ -2072,26 +2069,27 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   if (isFx)
     for (const n of [1, 2, 3, 4, 5]) {
       const id = `D${n}`
-      if (now - (hitStampAt[id] ?? -FX_MS) < FX_MS) {
-        rules = replaceKeyed(rules, `hai-a5r-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5r-fx-hit-${n}`, stampSvg(A5R_LOOK.sealBg)))
+      if (now - (hitStampAt[id] ?? -fxMs) < fxMs) {
+        rules = replaceKeyed(rules, `hai-a5r-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5r-fx-hit-${n}`, stampSvg(A5R_LOOK.sealBg, 0, 8 * pace, 600 * pace)))
         fxPlaced = true
       }
-      if (lastAccept && now - scoreFxAt < FX_MS) {
-        rules = replaceKeyed(rules, `hai-a5r-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5r-fx-score-${n}`, curtainSvg({ color: A5R_LOOK.gold, begin: (n - 1) * 150, step: 4, clear: true })))
+      if (lastAccept && now - scoreFxAt < fxMs) {
+        rules = replaceKeyed(rules, `hai-a5r-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5r-fx-score-${n}`, curtainSvg(scoreCurtain(n, A5R_LOOK.gold, pace))))
         fxPlaced = true
       }
     }
-  if (fxPlaced) $.clock.after(FX_MS + 10, () => $.ui.invalidate('ui.render')) // then still
+  if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
   if (paneEnterAt === 0) paneEnterAt = now
-  const isEntering = isDesktop && opts.motion !== 'off' && now - paneEnterAt < ENTRANCE_MS
+  const life = entranceLife(pace)
+  const isEntering = isDesktop && opts.motion !== 'off' && now - paneEnterAt < life
   if (isEntering) {
-    const plan = entrance(kids.length)
+    const plan = entrance(kids.length, pace)
     kids.forEach((k, i) => {
       kids[i] = withCurtain(el as never, k, `hai-a5r-in-${i}`, plan[i] as Curtain)
     })
-    $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render')) // then still: the curtains leave the tree
+    $.clock.after(life + 10, () => $.ui.invalidate('ui.render')) // then still: the curtains leave the tree
   }
   return recolor(paneOf(el, kids))
 }

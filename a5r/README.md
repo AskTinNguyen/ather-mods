@@ -1,4 +1,4 @@
-# A5R 0.12.1
+# A5R 0.12.2
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
 
@@ -89,7 +89,7 @@ Mọi lần a5r từ chối đều cùng một dạng: `A5R · <cổng> — <vì
 
 ## Tuỳ chọn (`pluginConfigs."a5r"` trong `~/.claude/settings.json`)
 - `a5rWhenPresent`: `ask` (mặc định) hoặc `deny`.
-- `motion`: `on` (mặc định) hoặc `off`.
+- `motion`: `on` (mặc định), `slow` hoặc `off`. `slow` (0.12.2) để kiểm tra hiệu ứng trên pane thật: màn vào của pane A5R (các khối hiện dần từ điểm ảnh đỏ) và các hiệu ứng sự kiện chạy chậm gấp 10 (màn vào khoảng 3 giây), mỗi lớp phủ ở lại đến khi ô cuối xong cộng thêm một khoảng; xong thì đổi lại `on`. Với `on` màn vào vẫn trong 0,3 giây, lớp phủ ở lại 2 giây để khung tải trễ vẫn kịp chạy.
 - `editorLock`: mặc định `E:/Projects/s2/Saved/EDITOR_OWNER.txt`; repo S2 và thư mục `Saved/A5R/` suy ra từ đây.
 - `launchGatePieGb` (31) và `launchGateGb` (28): cổng launch mặc định; `/a5r gate` ghi đè chung cho mọi session, `/a5r gate reset` trả về giá trị này.
 - `syncMergeMinutes` (45) và `syncBuildMinutes` (90): độ dài tối đa của freeze sau giờ sync (hard end), không build / có build.

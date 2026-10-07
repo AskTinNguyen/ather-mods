@@ -11,7 +11,7 @@ const curtains = (tree: unknown) => all(tree).filter(n => /^hai-a5r-(in|line-in)
 const timings = (svg: string) => [...svg.matchAll(/begin="(\d+)ms" dur="(\d+)ms"/g)].map(m => [Number(m[1]), Number(m[2])] as const)
 const svgOf = (c: Tree) => String(((c.children ?? [])[0] as Tree)?.props?.source ?? '')
 
-test('A37 (desktop): /a5r opens the pane with a curtain over each block, in order, all done within 300 ms; still a second later', opts(), async ($, on) => {
+test('A37 (desktop): /a5r opens the pane with a curtain over each block, in order, all done within 300 ms; kept 2 s for a late frame, then still', opts(), async ($, on) => {
   const w = world(on)
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   await $.command.run({ command: 'a5r', args: '' } as never)
@@ -35,7 +35,10 @@ test('A37 (desktop): /a5r opens the pane with a curtain over each block, in orde
   expect(starts[0]).toBe(0)
   expect([...starts].sort((a, b) => a - b)).toEqual(starts) // band, tools, sessions, rules in order
   expect(end).toBeLessThanOrEqual(300)
-  await w.clock.advance(1_100)
+  // A51: the curtains stay in the tree 2 s (ENTRANCE_MS), so a frame that loads late still plays them; then still.
+  await w.clock.advance(1_900)
+  expect(curtains((await $.ui.render(P)) as Tree).length).toBe(4)
+  await w.clock.advance(200)
   tree = (await $.ui.render(P)) as Tree
   expect(curtains(tree)).toEqual([])
 })
@@ -49,7 +52,9 @@ test('A37 (desktop): the compact line dithers in when it first draws, then stays
   const c = (find(first, 'hai-a5r-line')?.children ?? []).at(-1) as Tree
   expect([c.props?.key, c.props?.position]).toEqual(['hai-a5r-line-in', 'absolute'])
   expect(Math.max(...timings(svgOf(c)).map(([b, d]) => b + d))).toBeLessThanOrEqual(300)
-  await w.clock.advance(1_100)
+  await w.clock.advance(1_900) // A51: kept 2 s for a late frame
+  expect(curtains(await $.ui.render(P)).length).toBe(1)
+  await w.clock.advance(200)
   expect(curtains(await $.ui.render(P))).toEqual([])
 })
 

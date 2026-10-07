@@ -88,6 +88,37 @@ export type Curtain = { color: string; begin: number; step: number; clear: boole
 /** The latest moment (ms) a curtain's last cell finishes: what the entrance budget (≤ 300 ms) is checked against. */
 export const curtainEnd = (c: Curtain): number => c.begin + 15 * c.step + c.step
 
+// A51: the pace of the entrance and the event dithers. `motion: slow` (a review aid, to see whether the curtains are
+// drawn at all) plays every one of them ten times slower; `on` keeps the ≤ 300 ms entrance and the ≤ 1 s events.
+/** A37: the whole entrance (every block's curtain) ends within this, at `on`. */
+export const ENTRANCE_BUDGET_MS = 300
+/** A51: how long a curtain stays in the tree after its last cell: an SVG's SMIL clock starts when its frame loads, so a
+ * frame that loads late still plays the entrance (a cleared curtain is transparent, so staying costs nothing). */
+export const LATE_FRAME_MS = 1_700
+/** A51: the entrance's time in the tree at `on` (≥ 2 s): its last cell by 300 ms, plus a late frame. */
+export const ENTRANCE_MS = ENTRANCE_BUDGET_MS + LATE_FRAME_MS
+/** A38: an event dither ends within this at `on` (sweep 900 ms, stamp 720 ms, score 664 ms) and leaves the tree then. */
+export const FX_MS = 1_000
+/** A51: how much slower `motion: slow` plays the entrance and the event dithers. */
+export const SLOW = 10
+export const paceOf = (motion: string | undefined): number => (motion === 'slow' ? SLOW : 1)
+/** A51: how long the entrance stays in the tree at a pace: its last cell (300 ms × pace), then a late frame's margin. */
+export const entranceLife = (pace = 1): number => ENTRANCE_BUDGET_MS * pace + LATE_FRAME_MS
+/** A51: how long an event dither stays in the tree at a pace: each ends by 900 ms × pace, so 1 s × pace keeps a margin. */
+export const fxLife = (pace = 1): number => FX_MS * pace
+
+/** A37: the entrance: `n` blocks in turn (band, tools, sessions, card, rules) dither in from `color`, the whole sequence
+ * ending within 300 ms × pace; the cells take 4 ms × pace apiece. */
+export const entranceCurtains = (n: number, color: string, pace = 1): Curtain[] => {
+  const step = 4
+  const last = ENTRANCE_BUDGET_MS - 16 * step
+  // the plan at `on`, then every time × pace, so slow is exactly ten times on
+  return Array.from({ length: n }, (_, i) => ({ color, begin: (n > 1 ? Math.floor((i * last) / (n - 1)) : 0) * pace, step: step * pace, clear: true }))
+}
+
+/** A38: a new score resolves chip `n` (1–5) from a gold dither, the chips 150 ms × pace apart. */
+export const scoreCurtain = (n: number, color: string, pace = 1): Curtain => ({ color, begin: (n - 1) * 150 * pace, step: 4 * pace, clear: true })
+
 /** A full-block pixel curtain: one 8×8 pattern of 4×4 two-pixel cells, each animating once at its Bayer threshold, tiled
  * over a canvas wider and taller than any block (the box over it clips it to the block). One shot: `fill="freeze"`. */
 export const curtainSvg = (c: Curtain): string => {
@@ -113,15 +144,15 @@ export const stampSvg = (color: string, begin = 0, step = 8, dur = 600): string 
 }
 
 /** A38: a one-shot sweep across a band: columns of cells fill and clear in turn, left to right (or right to left), with
- * a little Bayer jitter, the whole sweep within `ms`. */
-export const sweepSvg = (color: string, reverse: boolean, ms = 900, cols = 120, rows = 2): string => {
+ * a little Bayer jitter, the whole sweep within `ms` × `pace` (A51: every time in it scaled by the pace). */
+export const sweepSvg = (color: string, reverse: boolean, ms = 900, cols = 120, rows = 2, pace = 1): string => {
   const cells: string[] = []
-  const pass = ms - 300
+  const pass = (ms - 300) * pace
   for (let x = 0; x < cols; x += 1)
     for (let y = 0; y < rows; y += 1) {
       const order = reverse ? cols - 1 - x : x
-      const begin = Math.round((order / cols) * pass + at(x, y) * 40)
-      cells.push(`<rect x="${x * 20}" y="${y * 12}" width="20" height="12" fill="${color}" opacity="0"><animate attributeName="opacity" values="0;1;0" begin="${begin}ms" dur="250ms" fill="freeze"/></rect>`)
+      const begin = Math.round((order / cols) * pass + at(x, y) * 40 * pace)
+      cells.push(`<rect x="${x * 20}" y="${y * 12}" width="20" height="12" fill="${color}" opacity="0"><animate attributeName="opacity" values="0;1;0" begin="${begin}ms" dur="${250 * pace}ms" fill="freeze"/></rect>`)
     }
   return `${svgOpen(`width="${cols * 20}" height="${rows * 12}" shape-rendering="crispEdges"`)}${cells.join('')}</svg>`
 }
