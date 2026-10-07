@@ -1,4 +1,4 @@
-# A5 0.6
+# A5 0.7
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
 
@@ -35,7 +35,18 @@ Trên Windows các thư mục cách nhau bằng `;`. Đổi đường dẫn cũ 
 | 4 | Không `A5TMP`, console.log, debugger, breakpoint hay secret trong diff (bỏ qua file docs khi tìm debug); không file untracked bỏ lại trong checkout chung; không worktree thứ hai trên nhánh; không agent nền của session còn chạy. |
 | 5 | Mô tả PR không nhận rung proof mà Ather chưa đọc pass (rung hỏng phải ghi FAILED); không dòng `met` nào mà bằng chứng nói chưa xong; không sửa Acceptance mà không lên rev. |
 
-Điều nào không đạt thì lệnh mở PR bị từ chối, kèm danh sách `- <điều>: <file>: <chuyện gì> → <làm gì>`. Hai cho qua một lần trong hộp thoại (*Cho PR này qua*); worker không bao giờ hỏi, nó báo lại danh sách. Không có intent thì chạy bản nhẹ: điều 2 không chấm (–), điều 3 chỉ xét config chung, điều 1, 4, 5 như trên. Bàn giao Ship của Ather không có lời gọi nào để a5 bắt, nên nghiệm thu chạy ở lệnh mở PR và trên thẻ.
+Điều nào không đạt thì lệnh mở PR bị từ chối, kèm danh sách `- <điều>: <file>: <chuyện gì> → <làm gì>`. Hai cho qua một lần trong hộp thoại (*Cho PR này qua*); worker không bao giờ hỏi, nó báo lại danh sách. Không có intent thì chạy bản nhẹ: điều 2 không chấm (–), điều 3 chỉ xét config chung, điều 1, 4, 5 như trên.
+
+Từ 0.7, nghiệm thu chạy ở bốn chỗ:
+
+| Lúc | Làm gì |
+|---|---|
+| **Ship của Ather** | Khi Ather gửi prompt Ship cho session ("Prepare intent <slug> for landing", "Summarise intent <slug> for an owner to land" / "for landing", "Land intent <slug>:"; prompt từ plugin `ather-automata`), a5 chấm intent đó ngay và nối kết quả vào cuối prompt: năm dòng ✓/✗/– và danh sách cần sửa, để sửa trước khi mở PR. Không bao giờ chặn prompt này; lệnh mở PR vẫn là cổng. |
+| **Mở PR** | `gh pr create`, `gh api …/pulls` POST, và mọi tool MCP tạo PR (`mcp__github__create_pull_request`, `mcp__plugin_engineering_github__create_pull_request`, `…pull_request_create`, `createPullRequest`). Với tool MCP, a5 lấy repo, head và base từ input: repo khác repo của session, base không có, hay head không có trong checkout đều là "không đọc được diff", nên không đạt. |
+| **Đóng intent** | prompt.md có `- Status: closed`. |
+| **Sau khi PR đã mở** | Số PR mới trên dòng `- PR:` của intent đang track (hay trong `tracked.prs` của Ather) mà session chưa chấm (mở trên web GitHub, hay đường nào khác vượt cổng) được chấm trong vòng 5 phút: thẻ ghi `PR #n · scored after the fact`, và PR không đạt thì đúng một 🟥 cho Hai (file `Saved/A5/alerts/pr-<n>.json`). Lần đầu session đọc một intent chỉ ghi nhận các số đã có (PR cũ không bị chấm lại); PR mở qua cổng thì số của nó được ghi lại, không chấm hai lần. |
+
+Nút **Create PR** của app desktop (đo 07/10 từ chuỗi trong bundle của app, chưa bấm): nút gửi một prompt vào session ("Create a pull request for the changes in this session …": commit, push, rồi `gh pr create`), nên PR đi qua cổng `gh pr create` như thường; đường nào vượt cổng thì phần "sau khi PR đã mở" bắt.
 
 ## Những gì A5 thêm
 
@@ -102,7 +113,7 @@ claude plugin test D:/Projects/ather-mods/a5
 
 ## Giới hạn
 - Hook là best-effort: lách được bằng biến hoặc script trung gian; file sửa bằng lệnh shell không vào file touch (nghiệm thu vẫn thấy chúng qua diff của nhánh).
-- Nghiệm thu chấm theo diff `origin/main...HEAD` đã commit (`main` chỉ khi không có origin/main: main local trong checkout chung có thể tụt xa); dòng thêm chỉ lấy từ file text (bỏ .uasset, .umap và các file nhị phân khác). Diff không đọc trọn được (git lỗi, quá 30 s, hay output quá 4 MiB) thì **không** tính là đạt: lệnh mở PR bị từ chối với lý do, thẻ ghi *not scored* và năm dòng –; cắt một nhánh nhỏ từ origin/main, hoặc Hai cho qua; file chưa commit chỉ hiện ở điều 4 khi là untracked trong checkout chung. Mở PR bằng công cụ khác ngoài `gh` (web, MCP GitHub) thì không bị chấm.
+- Nghiệm thu chấm theo diff `origin/main...HEAD` đã commit (`main` chỉ khi không có origin/main: main local trong checkout chung có thể tụt xa); dòng thêm chỉ lấy từ file text (bỏ .uasset, .umap và các file nhị phân khác). Diff không đọc trọn được (git lỗi, quá 30 s, hay output quá 4 MiB) thì **không** tính là đạt: lệnh mở PR bị từ chối với lý do, thẻ ghi *not scored* và năm dòng –; cắt một nhánh nhỏ từ origin/main, hoặc Hai cho qua; file chưa commit chỉ hiện ở điều 4 khi là untracked trong checkout chung. PR mở trên web hay bằng đường khác ngoài agent chỉ được chấm sau khi đã mở (khi số PR hiện trên dòng `- PR:` hoặc trong Ather), và chỉ ở session đang track intent đó; nó không bị chặn.
 - Không có compare-and-set: lock ghi theo kiểu đọc-so-ghi rồi đọc lại; hai người ghi chen giữa hai lần đọc thì một người thua và tick sau quyết lại.
 - "Checkout chung" = working tree chính (`.git` là thư mục); worktree liên kết (`.git` là file) là của worker. `cd <worktree> && git …` vẫn bị coi là checkout chung (dùng `git -C`).
 - Dry-run lúc cutoff dùng `origin/main` đã fetch lần cuối (a5 không fetch); chỉ 40 đường dẫn đầu được xếp theo rule 11, phần còn lại tính là foreign; tối đa 5.000 file main thêm mới được kiểm tra trên đĩa.
