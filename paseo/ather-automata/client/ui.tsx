@@ -154,13 +154,9 @@ export function Row({
     <>
       {icon ? (
         <View style={s.rowIcon}>
-          {pulse ? (
-            <Pulse>
-              <Icon name={icon} size={12} color={iconColor ?? c.accent} />
-            </Pulse>
-          ) : (
+          <Beacon active={pulse} size={12} color={iconColor ?? c.accent} stroke={1.5} maxScale={2.6} duration={4000}>
             <Icon name={icon} size={12} color={iconColor ?? c.accent} />
-          )}
+          </Beacon>
         </View>
       ) : null}
       <View style={s.rowBody}>
@@ -219,12 +215,12 @@ export function FadeIn({ children, delay = 0, style }: { children: ReactNode; de
       progress.setValue(1);
       return;
     }
-    const animation = Animated.timing(progress, { toValue: 1, duration: 220, delay, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE });
+    const animation = Animated.timing(progress, { toValue: 1, duration: 360, delay, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE });
     animation.start();
     return () => animation.stop();
   }, [progress, delay, reduced]);
   return (
-    <Animated.View style={[style, { opacity: progress, transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) }] }]}>{children}</Animated.View>
+    <Animated.View style={[style, { opacity: progress, transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] }]}>{children}</Animated.View>
   );
 }
 
@@ -247,9 +243,75 @@ export function Pulse({ children }: { children: ReactNode }) {
     return () => loop.stop();
   }, [value, reduced]);
   return (
-    <Animated.View style={{ opacity: value.interpolate({ inputRange: [0, 1], outputRange: [1, 0.55] }), transform: [{ scale: value.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] }) }] }}>
+    <Animated.View style={{ opacity: value.interpolate({ inputRange: [0, 1], outputRange: [1, 0.35] }), transform: [{ scale: value.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }) }] }}>
       {children}
     </Animated.View>
+  );
+}
+
+// Rings that expand from `children` and fade out, like a sonar: `count` rings a period apart, so
+// there is always one on its way. `size` is the child's box; the rings start at its edge. Still when inactive
+// or when the system asks for reduced motion.
+export function Beacon({
+  children,
+  size,
+  color,
+  active = true,
+  count = 1,
+  duration = 4800,
+  maxScale = 2.8,
+  stroke = 2,
+}: {
+  children: ReactNode;
+  size: number;
+  color: string;
+  active?: boolean;
+  count?: number;
+  duration?: number;
+  maxScale?: number;
+  stroke?: number;
+}) {
+  const reduced = useReducedMotion();
+  const phase = useRef(new Animated.Value(0)).current;
+  const on = active && !reduced;
+  useEffect(() => {
+    if (!on) {
+      phase.stopAnimation();
+      phase.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(Animated.timing(phase, { toValue: 1, duration, easing: Easing.linear, useNativeDriver: NATIVE }));
+    loop.start();
+    return () => loop.stop();
+  }, [phase, duration, on]);
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      {on
+        ? Array.from({ length: count }, (_, ring) => {
+            // Each ring is a step behind the last: the same sweep, shifted by a fraction of the period.
+            const progress = Animated.modulo(Animated.add(phase, ring / count), 1);
+            return (
+              <Animated.View
+                key={ring}
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: size,
+                  height: size,
+                  borderRadius: size / 2,
+                  borderWidth: stroke,
+                  borderColor: color,
+                  opacity: progress.interpolate({ inputRange: [0, 0.08, 1], outputRange: [0, 0.85, 0] }),
+                  transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, maxScale] }) }],
+                }}
+              />
+            );
+          })
+        : null}
+      {children}
+    </View>
   );
 }
 

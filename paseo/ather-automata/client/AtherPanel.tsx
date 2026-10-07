@@ -5,7 +5,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import { atherAct, atherHome, type HomeView } from "../shared/contracts";
 import { Art } from "./art";
-import { Bob, Button, FadeIn, FillBar, GrowLine, isLight, type Kit, Pop, Pulse, Row, SectionLabel, useKit } from "./ui";
+import { Beacon, Bob, Button, FadeIn, FillBar, GrowLine, isLight, type Kit, Pop, Pulse, Row, SectionLabel, useKit } from "./ui";
 
 type ActKind = "item" | "next" | "work" | "action" | "skill" | "create" | "all" | "away" | "draft" | "view" | "back" | "track" | "untrack";
 
@@ -154,9 +154,9 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
       {view.away.phase === "running" ? (
         <FadeIn delay={0} style={[s.card, { marginTop: layout.compact ? 20 : 28 }]}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Pulse>
+            <Beacon size={16} color={c.accent} stroke={1.5} maxScale={2.6} duration={5200}>
               <Icon name="Moon" size={16} color={c.accent} />
-            </Pulse>
+            </Beacon>
             <Text style={s.label}>{`AWAY · ${view.away.until.toUpperCase()}`}</Text>
           </View>
           <Text style={s.hint}>{`Merges and other held actions wait for you. Questions go to ${view.away.ledger}.`}</Text>
@@ -386,11 +386,15 @@ function StageTrack({ kit, stages }: { kit: Kit; stages: HomeView["stages"] }) {
               <Icon name="Check" size={12} color={c.accentForeground} />
             </View>
           ) : one.state === "now" ? (
-            <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: c.accent, alignItems: "center", justifyContent: "center" }}>
-              <Pulse>
-                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: c.accent }} />
-              </Pulse>
-            </View>
+            // The ring and the dot are placed by coordinates, not by flex centring: 20 across, the dot 8, so 6 in.
+            <Beacon size={20} color={c.accent} count={1} duration={5200} maxScale={3}>
+              <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: c.accent }} />
+              <View style={{ position: "absolute", top: 6, left: 6, width: 8, height: 8 }}>
+                <Pulse>
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: c.accent }} />
+                </Pulse>
+              </View>
+            </Beacon>
           ) : (
             <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: c.border }} />
           );
