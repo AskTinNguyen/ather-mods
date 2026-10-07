@@ -8,6 +8,7 @@ import { isAutomationCommand, isBuildCommand, mcpKind } from './guards.mjs'
 /** @typedef {'editor' | 'builder' | 'tester' | 'scout' | 'reviewer' | 'general'} Kind */
 /** @typedef {'reading' | 'editing' | 'building' | 'testing' | 'editor' | 'reviewing' | 'profiling' | 'idle'} Prop */
 /** @typedef {'running' | 'done' | 'failed' | 'waiting'} WorkerState */
+/** @typedef {'seen' | 'adopted' | 'unknown'} Origin how much Ather knows of a worker: saw it dispatched, found it running later, or neither */
 
 // One body and one colour per kind: colour reads from across the room, the shape still reads
 // for colour-blind teammates and at small sizes.
@@ -30,16 +31,26 @@ const TRAIL_WORDS = /** @type {const} */ ({ reading: 'read', editing: 'edit', bu
 
 // ---------------------------------------------------------------- what kind, what now
 
-// The kind, from the dispatch: the agent type first, then what the brief asks for.
+// The kind, from the dispatch: the agent type first, then its short description, then the brief.
+// The description says what the worker is for: "Thermo round 1 fixes" fixes what a review found,
+// a builder, though its brief quotes the review throughout.
 /** @param {{ subagentType: string, prompt: string, description?: string }} spawn @returns {Kind} */
 export const classifyWorker = ({ subagentType, prompt, description = '' }) => {
-  const brief = `${description}\n${prompt}`
   if (/^(explore|plan)$/i.test(subagentType)) return 'scout'
-  if (/\b(review|reviewer|verify|verification|critique|audit|thermo-nuclear|fresh[- ]eyes|adversarial)\b/i.test(brief)) return 'reviewer'
-  if (/EDITOR_OWNER|Editor owner lock|only Editor MCP user|\bunreal-mcp\b|Editor MCP/i.test(brief)) return 'editor'
-  if (/\b(test|tests|testing|PIE|simulation|TALab|automation|prove|proof)\b/i.test(brief)) return 'tester'
-  if (/\b(build|implement|edit|write|fix|refactor|code|port|migrate)\b/i.test(brief)) return 'builder'
-  return 'general'
+  return kindOf(description) ?? kindOf(prompt) ?? 'general'
+}
+
+// A worker known only by its type and description (no brief seen).
+/** @param {string} type @param {string} description */
+export const kindOfAgent = (type, description) => classifyWorker({ subagentType: type, prompt: '', description })
+
+/** @param {string} text @returns {Kind | null} */
+const kindOf = text => {
+  if (/\b(review|reviewer|verify|verification|critique|audit|thermo-nuclear|fresh[- ]eyes|adversarial)\b/i.test(text)) return 'reviewer'
+  if (/EDITOR_OWNER|Editor owner lock|only Editor MCP user|\bunreal-mcp\b|Editor MCP/i.test(text)) return 'editor'
+  if (/\b(test|tests|testing|PIE|simulation|TALab|automation|prove|proof)\b/i.test(text)) return 'tester'
+  if (/\b(build|implement|edit|write|fix|fixes|refactor|code|port|migrate)\b/i.test(text)) return 'builder'
+  return null
 }
 
 // What a worker is doing, from one of its tool calls; null keeps what it was doing.
@@ -74,6 +85,30 @@ export const workerState = status => (status === 'running' ? 'running' : status 
 
 /** @param {string} model */
 export const modelWord = model => (/opus/i.test(model) ? 'Opus' : /sonnet/i.test(model) ? 'Sonnet' : /haiku/i.test(model) ? 'Haiku' : /fable/i.test(model) ? 'Fable' : model)
+
+// "6:40", or "1:02h" past an hour.
+/** @param {number} ms */
+export const durationText = ms => {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  return seconds >= 3600 ? `${Math.floor(seconds / 3600)}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}h` : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/**
+ * What a worker row says, from what is known of the worker. `origin`: 'seen' (Ather saw it
+ * dispatched), 'adopted' (found running later; start from Claude Code's record), 'unknown' (no record).
+ * `elapsed` null: its time is not known. `via`: the worker that started it, or ''.
+ * @param {{ state: WorkerState, prop: Prop | null, origin: Origin, elapsed: number | null, tools: number, via: string }} one
+ * @returns {{ doing: string, line: string }}
+ */
+export const crewWords = one => {
+  const isLive = one.state === 'running' || one.state === 'waiting'
+  const isFresh = one.origin === 'seen' && one.elapsed !== null && one.elapsed < 60000
+  const doing = !isLive ? (one.state === 'done' ? 'finished' : 'stopped') : one.prop ? PROP_WORDS[one.prop] : isFresh ? 'starting' : 'working'
+  const time = one.elapsed === null ? (isLive ? 'running · start unknown' : '') : `${isLive ? 'running' : one.state === 'done' ? 'took' : 'stopped at'} ${durationText(one.elapsed)}`
+  // Counted only for a worker Ather saw start: one found later shows no count rather than too few.
+  const tools = one.origin === 'seen' ? `${one.tools} tool call${one.tools === 1 ? '' : 's'}` : ''
+  return { doing, line: [time, tools, one.via ? `started by ${one.via}` : ''].filter(Boolean).join(' · ') }
+}
 
 // ---------------------------------------------------------------- drawing
 

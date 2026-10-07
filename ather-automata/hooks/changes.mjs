@@ -74,5 +74,13 @@ export const intentFileOf = path => {
   return match ? { slug: match[1], file: /** @type {IntentFile} */ (`${match[2].toLowerCase()}.md`) } : null
 }
 
+// The intent a session's own orchestration writes: its prompt.md or log.md (the orchestrator's files,
+// .agents/skills/intent/SKILL.md), as its folder name and which file; null for anything else.
+/** @param {unknown} path @returns {{ slug: string, file: 'prompt.md' | 'log.md' } | null} */
+export const orchestrationFileOf = path => {
+  const match = typeof path === 'string' ? /docs[\\/]intent[\\/]([^\\/]+)[\\/](prompt|log)\.md$/i.exec(path) : null
+  return match ? { slug: match[1], file: match[2].toLowerCase() === 'prompt' ? 'prompt.md' : 'log.md' } : null
+}
+
 /** @param {Change['kind']} kind */
 export const changeGlyph = kind => (kind === 'done' ? '✓' : kind === 'yours' ? '◆' : '✎')

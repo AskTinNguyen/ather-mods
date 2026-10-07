@@ -60,7 +60,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
 
   const toolBottom = input => {
     if ((input.tool === 'Write' || input.tool === 'Edit') && typeof input.file_path === 'string' && input.file_path.startsWith(root)) {
-      if (input.tool === 'Write') fs.writeFileSync(input.file_path, input.content ?? '')
+      // Write makes the folder it writes into, as the real tool does.
+      if (input.tool === 'Write') fs.mkdirSync(path.dirname(input.file_path), { recursive: true }), fs.writeFileSync(input.file_path, input.content ?? '')
       else fs.writeFileSync(input.file_path, fs.readFileSync(input.file_path, 'utf8').replace(input.old_string, input.new_string))
       return { result: 'ok', text: 'ok' }
     }
@@ -230,11 +231,16 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     },
     modelTool: input => dispatch('tool.call', input, toolBottom, 'engine'),
     // A background worker: dispatched with a brief, then calling tools in its own loop.
-    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5' }) => {
-      const result = await dispatch('agent.spawn', { tool_use_id: `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model }, () => ({ model, agentId }))
-      agents.push({ id: agentId, description, type: subagentType, status: 'running' })
+    // `parentId`: a worker another worker dispatched from its own loop.
+    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5', parentId }) => {
+      const result = await dispatch('agent.spawn', { tool_use_id: `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model, ...(parentId ? { agentId: parentId } : {}) }, () => ({ model, agentId }))
+      agents.push({ id: agentId, description, type: subagentType, status: 'running', ...(parentId ? { parentId } : {}) })
       return result
     },
+    // A worker already running when the plugin loaded: listed, but no spawn event was seen.
+    addAgent: agent => void agents.push({ status: 'running', type: 'general-purpose', ...agent }),
+    // A worker's own turn ends (its answer), as Claude Code reports it.
+    agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', agentId }, () => ({ text: '' })),
     agentTool: (agentId, input) => dispatch('tool.call', { ...input, agentId }, toolBottom, 'engine'),
     setAgentStatus: (agentId, status) => {
       const agent = agents.find(one => one.id === agentId)
