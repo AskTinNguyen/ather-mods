@@ -1,4 +1,4 @@
-# A5 0.11
+# A5 0.11.1
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
 
@@ -122,6 +122,7 @@ claude plugin test D:/Projects/ather-mods/a5
 
 ## Giới hạn
 - Hook là best-effort: lách được bằng biến hoặc script trung gian; file sửa bằng lệnh shell không vào file touch (nghiệm thu vẫn thấy chúng qua diff của nhánh).
+- (0.11.1) Nghiệm thu chấm **đúng nhánh của PR**: repo, head và base lấy từ chính lệnh mở PR (`-R/--repo`, `--head`, `--base`, `cd <thư mục> &&` phía trước, đường dẫn và `-f head=`/`-f base=` của `gh api`, input của tool MCP), rồi tìm worktree đang checkout head đó (`git worktree list`) và chấm ở đó; không worktree nào giữ head thì đọc `origin/<head>` so với `origin/<base>` (không checkout); không xác định được repo hay head thì là "not scored" kèm lý do, không bao giờ lấy điểm của nhánh khác. Intent được chấm là intent mà diff của nhánh đó chạm (`docs/intent/<slug>/`), intent đang track của session chỉ khi diff không chạm intent nào; agent nền của session chỉ tính khi PR mở từ chính worktree của session. Chữ trong here-document hay trong chuỗi trích dẫn (ví dụ một dòng ghi "gh pr create") không còn bị coi là mở PR. Điều 4 không còn báo `A5TMP` trong chính các file định nghĩa nó: thư mục `rules/` và `tests/` của a5 và file Markdown được bỏ qua khi tìm dấu debug (secret vẫn kiểm mọi file).
 - Nghiệm thu chấm theo diff `origin/main...HEAD` đã commit (`main` chỉ khi không có origin/main: main local trong checkout chung có thể tụt xa); dòng thêm chỉ lấy từ file text (bỏ .uasset, .umap và các file nhị phân khác). Diff không đọc trọn được (git lỗi, quá 30 s, hay output quá 4 MiB) thì **không** tính là đạt: lệnh mở PR bị từ chối với lý do, thẻ ghi *not scored* và năm dòng –; cắt một nhánh nhỏ từ origin/main, hoặc Hai cho qua; file chưa commit chỉ hiện ở điều 4 khi là untracked trong checkout chung. PR mở trên web hay bằng đường khác ngoài agent chỉ được chấm sau khi đã mở (khi số PR hiện trên dòng `- PR:` hoặc trong Ather), và chỉ ở session đang track intent đó; nó không bị chặn.
 - Không có compare-and-set: lock ghi theo kiểu đọc-so-ghi rồi đọc lại; hai người ghi chen giữa hai lần đọc thì một người thua và tick sau quyết lại.
 - "Checkout chung" = working tree chính (`.git` là thư mục); worktree liên kết (`.git` là file) là của worker. `cd <worktree> && git …` vẫn bị coi là checkout chung (dùng `git -C`).
