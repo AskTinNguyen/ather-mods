@@ -195,3 +195,24 @@ export const closesIntent = (path: string, added: readonly string[]): string | n
   const m = /(?:^|\/)docs\/intent\/([^/]+)\/prompt\.md$/i.exec(path.replace(/\\/g, '/'))
   return m && added.some(l => /^-\s*Status:\s*(closed|done|complete|completed|shipped)\b/i.test(l.trim())) ? (m[1] ?? null) : null
 }
+
+/** A21: the intent an Ather Ship prompt hands over, from its wording (packs unreal, core, web: "Prepare intent <slug>
+ * for landing", "Summarise intent <slug> for an owner to land" / "for landing", "Land intent <slug>:"), or null. */
+export const shipSlugOf = (text: string): string | null => {
+  const m = /\b(?:Prepare intent ([\w.-]+?) for landing\b|Summari[sz]e intent ([\w.-]+?) for (?:an owner to land|landing)\b|Land intent ([\w.-]+?):)/.exec(text)
+  return m ? (m[1] ?? m[2] ?? m[3] ?? null) : null
+}
+
+/** A21: the score added to the Ship prompt: five rows and what to fix before the PR (never a refusal). */
+export const shipText = (scores: readonly RuleScore[], slug: string, branch: string, diffProblem?: string | null): string => {
+  const mark = (s: RuleScore) => (s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–')
+  const bad = failed(scores)
+  const head = diffProblem
+    ? `A5 · Nghiệm thu at Ship (intent ${slug}, branch ${branch || '?'}): not scored, ${unreadLine(diffProblem)} → land it from a slice branch cut from origin/main; the PR call is scored again.`
+    : bad.length
+      ? `A5 · Nghiệm thu at Ship (intent ${slug}, branch ${branch || '?'}): ${bad.length} of 5 rules not met → fix these before you open the PR (the PR call is scored again and refused while any is open):`
+      : `A5 · Nghiệm thu at Ship (intent ${slug}, branch ${branch || '?'}): 5 of 5 met; the PR call is scored again.`
+  const rows = diffProblem ? [] : scores.map(s => `${mark(s)} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)
+  const todo = diffProblem ? [] : bad.flatMap(s => s.issues.map(i => `- ${s.rule}: ${i.file ? `${i.file}: ` : ''}${i.what} → ${i.todo}`))
+  return [head, ...rows, ...(todo.length ? ['To fix:', ...todo] : [])].join('\n')
+}

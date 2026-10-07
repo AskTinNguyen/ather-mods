@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
-import { acceptText, closesIntent, failed, isPrCommand, namedPaths, ruleName, score, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
+import { acceptText, closesIntent, failed, isPrCommand, namedPaths, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -1222,6 +1222,18 @@ async function acceptCommand($: Engine, opts: Opts): Promise<string> {
   return [`Nghiệm thu A5 (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
 }
 
+/** A21: the score of the intent Ather hands over at Ship, as the text added to that prompt. */
+async function shipScore($: Engine, opts: Opts, slug: string): Promise<string | null> {
+  const a5 = await load($)
+  const root = (await locate($, a5, `${await $.session.cwd()}/_`)).root
+  if (!root) return null
+  const x = await gatherAccept($, opts, a5, root, slug, '', undefined)
+  const scores = score(x)
+  lastAccept = { at: await $.clock.now(), slug, scores, what: 'Ship' }
+  $.ui.invalidate('ui.render')
+  return shipText(scores, slug, x.branch, x.diffProblem)
+}
+
 /** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */
 async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
   const s = parseSyncFile(await readJson($, syncPath(opts)))
@@ -1830,13 +1842,19 @@ export const register: Register = (on, options) => {
       markedFrom = null
       if (hasMark(await sessionTitle($))) await retitle($, was).catch(() => '')
     }
+    // A21: Ather's Ship hand-off is scored at once and the score rides the prompt (never refused: the PR call stays
+    // the gate). The origin is what the sender says: it only adds context here, it never opens a gate.
+    const origin = e.origin as typeof e.origin | undefined
+    const shipFor = origin?.kind === 'plugin' && origin.name === 'ather-automata' ? shipSlugOf(e.text) : null
+    const added = shipFor && (await readA5($)) ? await shipScore($, opts, shipFor).catch(() => null) : null
+    const text = added ? `${e.text}\n\n${added}` : e.text
     // Notices waiting for the next turn ride this prompt as context the model reads (D6).
     if (pending.length > 0 && (await readA5($))) {
       const texts = drain()
       await saveMe($, opts)
-      return next({ ...e, context: [...(e.context ?? []), ...texts] })
+      return next({ ...e, text, context: [...(e.context ?? []), ...texts] })
     }
-    return next(e)
+    return added ? next({ ...e, text }) : next(e)
   })
 
   on('prompt.compose', async ($, e, next) => {
