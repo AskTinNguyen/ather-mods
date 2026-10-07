@@ -22,7 +22,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.ui.render(PANE_AT)
     await w.clock.advance(50) // the branch read runs off the render
     let tree = await $.ui.render(PANE_AT)
-    expect(keys(tree)).toEqual(['hai-tiles', 'hai-overview', 'hai-a5-rules']) // A29: the A5 pane, the rules last
+    expect(keys(tree)).toEqual(['hai-a5-band', 'hai-tiles', 'hai-overview', 'hai-a5-rules']) // A29: the A5 pane, the rules last; A33: the band first
     // Editor holder: who, until when, this session's place.
     const editor = text(find(tree, 'hai-tile-editor'))
     for (const want of ['walker', 'until 15:10 · 30 min left', 'you: next']) expect(editor).toContain(want)

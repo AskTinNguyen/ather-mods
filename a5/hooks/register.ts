@@ -12,7 +12,7 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, noHits, recolor, replaceKeyed, ruleCards, rulesSeals, withSeal, type RuleHits } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesSeals, withSeal, type RuleHits } from './theme.ts'
 import { acceptCard, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
@@ -45,7 +45,8 @@ const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
 const ALLOW_ONCE = 'Cho chạy lần này'
 const ALLOW_SESSION = 'Cho cả session này'
 const ATHER_PANE = 'ather'
-const A5_PANE = 'a5' // A29: the A5 pane's id ($.ui.open) and its render requestId
+const A5_PANE = 'a5'
+const PANE_INK = { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet } // A33: the A5 pane's text: ivory, and its quiet grey // A29: the A5 pane's id ($.ui.open) and its render requestId
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
@@ -1830,8 +1831,9 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   const el = $.ui.resolve(e as never) as never as Parameters<typeof icon>[0] & Parameters<typeof tilesRow>[0]
   const isDesktop = e.surface === 'desktop'
   const now = await $.clock.now()
-  const kids: unknown[] = []
-  if (!(await readA5($))) {
+  const isOn = await readA5($)
+  const kids: unknown[] = [a5Band(el, isOn)] // A33: the seal-red title band first
+  if (!isOn) {
     kids.push(el.Box({ key: 'hai-a5-off', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'A5 is off: Ather runs as it ships. /a5 on turns on the five rules, the Editor holder, RAM and Sync main for every session.' })] }))
     return el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement
   }
@@ -1842,20 +1844,21 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     const plan = syncData(now)
     const tiles = [
       editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
-      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }),
+      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }, { fill: A5_LOOK.meter, track: A5_LOOK.meterTrack }),
       mainTile(sync, plan, syncActionButton($, opts, el, isDesktop, now)),
     ]
     tiles[0] = { ...tiles[0], action: editorAction($, opts, el, isDesktop) } as (typeof tiles)[number]
     const names = { editor: 'editor', memory: 'memory', main: 'branch' } as const
     for (const t of tiles) {
       const name = names[t.key as keyof typeof names]
-      const color = t.dot ?? (t.key === 'memory' ? STATUS.ok : INK)
+      // A33: gold icons; a state that is not fine keeps its status colour.
+      const color = t.dot && t.dot !== STATUS.ok ? t.dot : A5_LOOK.gold
       t.icon = icon(el, name, color, motionFor(`pane-${t.key}`, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
-    kids.push(tilesRow(el, tiles, isDesktop))
+    kids.push(tilesRow(el, tiles, isDesktop, PANE_INK))
     // A26: the sessions on this machine as a short named list, one line each.
     const view = sessionsView({ me8: id8, meTitle: me?.title ?? '', files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now), names: sessionNames })
-    kids.push(sessionsBox(el, view, isDesktop))
+    kids.push(sessionsBox(el, view, isDesktop, PANE_INK))
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
@@ -1880,7 +1883,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     openRule = openRule === n ? null : n
     $.ui.invalidate('ui.render')
   }
-  kids.push(rulesSeals(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { seal: A5_LOOK.sealBg, rim: A5_LOOK.gold, numeral: A5_LOOK.gold, ink: INK, quiet: ATHER.quiet, hit: STATUS.bad }))
+  kids.push(rulesSeals(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { seal: A5_LOOK.sealBg, rim: A5_LOOK.gold, numeral: A5_LOOK.gold, ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.meter }))
   return recolor(el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement)
 }
 

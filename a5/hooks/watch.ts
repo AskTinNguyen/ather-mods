@@ -147,14 +147,15 @@ export type MemoryData = { pieGb: number; nopieGb: number; isFromPanel: boolean;
 /** Memory: free RAM against the launch gate (adjustable with `/a5 gate` and the plugin options, every session reads
  * it) and the PIE gate (fixed), as a meter whose track is a dark step of its own hue; what the last cleanup did. No
  * action (A25). */
-export const memoryTile = (el: El, v: Vitals | undefined, m: MemoryData): Tile => {
+export const memoryTile = (el: El, v: Vitals | undefined, m: MemoryData, meterLook?: { fill: string; track: string }): Tile => {
   const gate = { text: `launch ≥ ${m.pieGb} GB with PIE · ${m.nopieGb} GB without${m.isFromPanel ? ' (/a5 gate)' : ''}` }
   if (!v) return { key: 'memory', label: 'Memory', value: '?', lines: [{ text: 'probe failed' }, gate] }
   const band = ramBand(v.freeGb)
   const tone = band === 'ok' ? 'ok' : band === 'below-start' ? 'warn' : 'bad'
   const cells = 16
   const filled = Math.max(0, Math.min(cells, Math.round((v.freeGb / TOTAL_GB) * cells)))
-  const meter = el.Text({ children: [el.Text({ color: STATUS[tone], children: '━'.repeat(filled) }), el.Text({ color: TRACK[tone], children: '━'.repeat(cells - filled) })] })
+  // A33: the A5 pane's meter is red on a dark red track; state stays on the line's colour and the warning mark.
+  const meter = el.Text({ children: [el.Text({ color: meterLook?.fill ?? STATUS[tone], children: '━'.repeat(filled) }), el.Text({ color: meterLook?.track ?? TRACK[tone], children: '━'.repeat(cells - filled) })] })
   const launch = v.freeGb >= m.pieGb ? 'a launch with PIE fits' : v.freeGb >= m.nopieGb ? 'a launch fits without PIE' : 'under the launch gate'
   const pie = band === 'ok' ? `PIE ≥ ${PIE_START_GB} GB ok` : band === 'below-start' ? `under the ${PIE_START_GB} GB PIE gate` : `abort PIE (under ${PIE_ABORT_GB} GB)`
   return {
@@ -195,17 +196,18 @@ export const mainTile = (s: Sync | undefined, plan: SyncData, action?: unknown):
 }
 
 /** The status line's color: the most severe one any of its parts carries, else quiet. */
-const statusColor = (parts: { color?: string }[]): string =>
-  parts.some(p => p.color === STATUS.bad) ? STATUS.bad : parts.some(p => p.color === STATUS.warn) ? STATUS.warn : ATHER.quiet
+const statusColor = (parts: { color?: string }[], quiet: string = ATHER.quiet): string =>
+  parts.some(p => p.color === STATUS.bad) ? STATUS.bad : parts.some(p => p.color === STATUS.warn) ? STATUS.warn : quiet
 
 /** A25: the three tools as full-width rows, one under the other. The first line is a row of two boxes: the left one
  * (icon, label, value, meter) wraps onto a second line when the width runs out and shrinks first; the right one
  * holds the tool's one action and never shrinks. Under it one quiet status line that wraps inside the row. No
  * text is truncated; on the desktop each row is a card (Ather's round border). */
-export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean): unknown => {
+export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean, look?: { ink: string; quiet: string }): unknown => {
   const { Box, Text } = el
+  const quiet = look?.quiet ?? ATHER.quiet
   // State rides the icon's color when there is one, else a dot; the value stays in text ink.
-  const value = (t: Tile) => Text({ bold: true, wrap: 'wrap', children: [...(t.dot && !t.icon ? [Text({ color: t.dot, children: '● ' })] : []), t.value] })
+  const value = (t: Tile) => Text({ bold: true, wrap: 'wrap', ...(look ? { color: look.ink } : {}), children: [...(t.dot && !t.icon ? [Text({ color: t.dot, children: '● ' })] : []), t.value] })
   const row = (t: Tile) => {
     const parts = isDesktop ? t.lines : (t.short ?? t.lines)
     const head = Box({
@@ -224,12 +226,12 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean): unknown => 
           minWidth: 0,
           columnGap: 1,
           alignItems: 'center',
-          children: [...(t.icon ? [t.icon] : []), Text({ color: ATHER.quiet, wrap: 'wrap', children: isDesktop ? t.label : (TERMINAL_LABEL[t.key] ?? t.label) }), value(t), ...(t.meter ? [t.meter] : [])],
+          children: [...(t.icon ? [t.icon] : []), Text({ color: quiet, wrap: 'wrap', children: isDesktop ? t.label : (TERMINAL_LABEL[t.key] ?? t.label) }), value(t), ...(t.meter ? [t.meter] : [])],
         }),
         ...(t.action ? [Box({ key: `hai-tile-${t.key}-action`, flexShrink: 0, flexGrow: 0, children: [t.action] })] : []),
       ],
     })
-    const status = parts.length ? [Box({ key: `hai-tile-${t.key}-status`, width: '100%', children: [Text({ color: statusColor(parts), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })] })] : []
+    const status = parts.length ? [Box({ key: `hai-tile-${t.key}-status`, width: '100%', children: [Text({ color: statusColor(parts, quiet), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })] })] : []
     return Box({
       key: `hai-tile-${t.key}`,
       flexDirection: 'column',
@@ -272,7 +274,8 @@ export const acceptCard = (el: El, title: string, sub: string, rows: readonly Ac
 /** A26: the sessions list under the tools: a quiet header ("Sessions · 8 in S2 · 1 elsewhere"), then one row per
  * live session: a status dot, its title, then intent · what it holds or waits for · how recently active, and
  * "no a5" for a session that runs without it; "+N more" past six. Every piece wraps; nothing is cut. */
-export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknown => {
+export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: { ink: string; quiet: string }): unknown => {
+  const quiet = look?.quiet ?? ATHER.quiet
   const { Box, Text } = el
   // A31: ★ marks this session (no "(this session)" text); others a dot: ok green with a5, warn without. The title is
   // the only part that shortens; the status (holds, "no a5", age) sits at the end and is never cut.
@@ -285,8 +288,8 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknow
       columnGap: 1,
       children: [
         Box({ key: `hai-session-${r.id8}-dot`, flexShrink: 0, children: [mark(r)] }),
-        Box({ key: `hai-session-${r.id8}-title`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ bold: r.isMe, wrap: 'truncate-end', children: r.title })] }),
-        Box({ key: `hai-session-${r.id8}-status`, flexShrink: 0, children: [Text({ color: r.hasA5 ? ATHER.quiet : STATUS.warn, children: sessionStatus(r) })] }),
+        Box({ key: `hai-session-${r.id8}-title`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ bold: r.isMe, wrap: 'truncate-end', ...(look ? { color: look.ink } : {}), children: r.title })] }),
+        Box({ key: `hai-session-${r.id8}-status`, flexShrink: 0, children: [Text({ color: r.hasA5 ? quiet : STATUS.warn, children: sessionStatus(r) })] }),
       ],
     })
   return Box({

@@ -22,7 +22,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.ui.render(P)
     await w.clock.advance(50) // the score runs off the render
     let tree = await $.ui.render(P)
-    expect(keys(tree)).toEqual(['hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5-rules']) // A29: the A5 pane, the rules last
+    expect(keys(tree)).toEqual(['hai-a5-band', 'hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5-rules']) // A29: the A5 pane, the rules last; A33: the band first
     expect(text(find(tree, 'hai-accept-head'))).toContain('Nghiệm thu A5● 1 of 5 not mettail-vfx · Ship · 14:40')
     expect(rowText(tree, 1)).toBe('✓1 Yêu Project, yêu đồng bào· no other session\'s or intent\'s paths; not on main')
     expect(rowText(tree, 2)).toBe('✗2 Học tập tốt, lao động tốt· docs/intent/tail-vfx/progress.md: A2 is open')

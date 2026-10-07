@@ -1,10 +1,12 @@
 // Two looks for Ather's pane. A5 off: Ather's own (one lime accent, quiet grey, near-black).
 // A5 on: the accent alone turns lacquer gold, a small red seal stands beside the brand, and the five
 // rules sit in one quiet line at the foot. Borders and secondary text keep Ather's neutral greys.
-// Contrast (dataviz contrast()): gold on the pane 9.25:1, seal text on seal red 5.47:1. Pure: no `$`.
+// A33 (rev 9, Hai's approved mockup): the A5 pane in seal red, gold, pale gold and ivory; Ather's pane keeps only the
+// seal, the gold accent and the red "★ A5 ›" button. Contrast (dataviz contrast()): pale gold on seal red ≈ 4.6:1,
+// gold and ivory on the pane's near-black well above 7:1. Pure: no `$`.
 
 export const ATHER = { accent: '#DDFF00', quiet: '#8E918A', line: '#3a3c36' } as const
-export const A5_LOOK = { gold: '#E8B84A', sealBg: '#A3201B', sealText: '#F6D98A' } as const
+export const A5_LOOK = { gold: '#F2C14E', sealBg: '#B3261E', sealText: '#F6D98A', ivory: '#E9E4D8', quiet: '#8E8A80', meter: '#E8473C', meterTrack: '#4A2220' } as const
 export const STATUS = { ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' } as const
 // The unfilled part of a meter: a dark step of the fill's own hue (dataviz: same-ramp track).
 export const TRACK = { ok: '#2E4A37', warn: '#4A3D1E', bad: '#4A2220' } as const
@@ -144,3 +146,23 @@ export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
     ],
   })
 }
+
+/** A33: "A5 · NĂM ĐIỀU" letter-spaced (a space between letters, two between words). */
+export const bandTitle = (s: string): string => s.toUpperCase().split(' ').map(w => [...w].join(' ')).join('  ')
+
+/** A33: the A5 pane's title band: seal red, full width, a gold ★, "A5 · NĂM ĐIỀU" in pale gold, "đang bật" (or "đang tắt") on the right. */
+export const a5Band = (el: El, isOn = true): unknown =>
+  el.Box({
+    key: 'hai-a5-band',
+    flexDirection: 'row',
+    width: '100%',
+    columnGap: 1,
+    paddingX: 1,
+    backgroundColor: A5_LOOK.sealBg,
+    children: [
+      el.Box({ key: 'hai-a5-band-star', flexShrink: 0, children: [el.Text({ color: A5_LOOK.gold, bold: true, children: '★' })] }),
+      el.Box({ key: 'hai-a5-band-title', flexShrink: 1, minWidth: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, wrap: 'truncate-end', children: bandTitle('A5 · Năm điều') })] }),
+      el.Box({ key: 'hai-a5-band-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
+      el.Box({ key: 'hai-a5-band-on', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: isOn ? 'đang bật' : 'đang tắt' })] }),
+    ],
+  })

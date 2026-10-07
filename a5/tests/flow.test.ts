@@ -163,7 +163,7 @@ test('🟥 at the end of a turn: PENDING.md once, title marked, unread', opts(),
 })
 
 // ---------- Ather's pane ----------
-const GOLD = '#E8B84A'
+const GOLD = '#F2C14E' // A33: the approved gold
 /** The brand label's color: the first Text of the masthead, or of the brand row once A5 adds its seal. */
 const brandColor = (t: unknown): unknown => firstText(t, 'hai-brand') ?? firstText(t, 'head-words')
 
@@ -176,7 +176,7 @@ test('pane, A5 on: Ather\'s pane gains one compact A5 line under its strip; the 
   await w.clock.advance(50) // the sync read runs off the render
   expect(keys(await $.ui.render(PANE as never))).toEqual(['head-words', 'strip', 'hai-a5-line', 'foot'])
   const tree = await $.ui.render(A5PANE as never)
-  expect(keys(tree)).toEqual(['hai-tiles', 'hai-overview', 'hai-a5-rules'])
+  expect(keys(tree)).toEqual(['hai-a5-band', 'hai-tiles', 'hai-overview', 'hai-a5-rules']) // A33: the band first
   expect(text(find(tree, 'hai-tile-editor'))).toContain('1006-walkerext-s9')
   expect(text(find(tree, 'hai-tile-editor'))).toContain('until 15:10 · 30 min left')
   expect(text(find(tree, 'hai-tile-memory'))).toContain('20.5 GB free')

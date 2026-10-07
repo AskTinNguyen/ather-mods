@@ -8,7 +8,7 @@ import { A5PANE, LOCK, NOW, PANE, PROJ, all, atherTree, find, keys, minWidth, op
 const HF = 'E:/s2/Saved/A5'
 const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
 const WARN = '#E0A93B'
-const SEAL_RED = '#A3201B' // A33 moves it to the approved #B3261E
+const SEAL_RED = '#B3261E' // A33: the approved seal red
 const LONG_LANE = '1006-walkerext-s9-retarget'
 const held = (lane: string, id8: string, end: number) => `${heldLine({ lane, sessionName: lane, id8, since: T(14, 30), pid: null, end, mode: 'interactive', pausable: false, nextSafe: 'after save', note: 'capture' })}\n`
 const peer = (id8: string, lane: string) => JSON.stringify({ ...blankSession(`${id8}-1111-4000-8000-000000000000`, lane, '', NOW), holding: { since: T(14, 30), end: T(15, 10), extended: 0 } })
@@ -80,9 +80,9 @@ for (const surface of ['terminal', 'desktop'] as const)
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
     await $.command.run({ command: 'a5', args: 'accept' } as never)
     let tree = await $.ui.render({ ...A5PANE, surface } as never)
-    expect(keys(tree)).toEqual(['hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5-rules'])
+    expect(keys(tree)).toEqual(['hai-a5-band', 'hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5-rules'])
     await $.command.run({ command: 'a5', args: 'off' } as never)
     tree = await $.ui.render({ ...A5PANE, surface } as never)
-    expect(keys(tree)).toEqual(['hai-a5-off'])
+    expect(keys(tree)).toEqual(['hai-a5-band', 'hai-a5-off'])
     expect(text(tree)).toContain('/a5 on')
   })
