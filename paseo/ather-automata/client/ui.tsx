@@ -67,7 +67,8 @@ export function useKit(theme: Theme, compact: boolean) {
         subLabelPlain: { color: c.foregroundMuted, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1 },
         subLabel: { color: c.foregroundMuted, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1, marginTop: 8, marginBottom: 2 },
         row: { flexDirection: "row" as const, gap: 10, alignItems: "flex-start" as const, paddingVertical: compact ? 10 : 8, paddingHorizontal: 8, borderRadius: 8, minHeight: compact ? 40 : 36 },
-        rowPressed: { backgroundColor: c.surface1 },
+        rowHover: { backgroundColor: c.surface1 },
+        rowPressed: { backgroundColor: c.surface2 },
         rowIcon: { marginTop: 4 },
         rowBody: { flex: 1, gap: 2 },
         card: { backgroundColor: c.surface1, borderColor: c.border, borderWidth: 1, borderRadius: 10, padding: 12, gap: 8 },
@@ -116,6 +117,7 @@ export function Button({
   onPress: () => void;
 }) {
   const { c, compact } = kit;
+  const [hovered, setHovered] = useState(false);
   const fg = variant === "primary" ? c.accentForeground : danger ? c.statusDanger : variant === "ghost" ? c.foregroundMuted : c.foreground;
   return (
     <Pressable
@@ -125,6 +127,8 @@ export function Button({
       disabled={disabled}
       hitSlop={label ? undefined : 8}
       onPress={onPress}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
       style={({ pressed }) => [
         {
           flexDirection: "row" as const,
@@ -139,6 +143,10 @@ export function Button({
         full ? { flexBasis: "100%" as const, flexGrow: 1 } : null,
         variant === "primary" ? { backgroundColor: c.accent } : null,
         variant === "secondary" ? { backgroundColor: c.surface2, borderColor: c.border, borderWidth: 1 } : null,
+        // Under the pointer: a primary grows a little, a secondary takes the accent edge, a ghost a surface.
+        hovered && !pressed && !disabled && variant === "primary" ? { transform: [{ scale: 1.04 }] } : null,
+        hovered && !pressed && !disabled && variant === "secondary" ? { borderColor: c.accent, backgroundColor: c.surface1 } : null,
+        hovered && !pressed && !disabled && variant === "ghost" ? { backgroundColor: c.surface1 } : null,
         pressed && variant === "primary" ? { opacity: 0.85, transform: [{ scale: 0.97 }] } : null,
         pressed && variant !== "primary" ? { backgroundColor: c.surface1, transform: [{ scale: 0.97 }] } : null,
         disabled ? { opacity: 0.5 } : null,
@@ -190,6 +198,7 @@ export function Row({
   onPress?: () => void;
 }) {
   const { s, c } = kit;
+  const [hovered, setHovered] = useState(false);
   const body = (
     <>
       {icon ? (
@@ -223,10 +232,28 @@ export function Row({
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [s.row, pressed ? s.rowPressed : null, disabled ? { opacity: 0.5 } : null]}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
+      style={({ pressed }) => [s.row, hovered && !disabled ? s.rowHover : null, pressed ? s.rowPressed : null, disabled ? { opacity: 0.5 } : null]}
     >
       {body}
     </Pressable>,
+  );
+}
+
+// A card that answers the pointer: it lifts a little and its edge takes the accent colour. It stays
+// still on touch screens (nothing hovers there) and when the system asks for reduced motion.
+export function HoverCard({ kit, children, style }: { kit: Kit; children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  const reduced = useReducedMotion();
+  const level = useRef(new Animated.Value(0)).current;
+  const hover = (on: boolean) => Animated.timing(level, { toValue: on ? 1 : 0, duration: reduced ? 0 : 170, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE }).start();
+  return (
+    <Pressable accessible={false} focusable={false} onHoverIn={() => hover(true)} onHoverOut={() => hover(false)}>
+      <Animated.View style={[kit.s.card, style, { transform: [{ translateY: level.interpolate({ inputRange: [0, 1], outputRange: [0, reduced ? 0 : -3] }) }] }]}>
+        <Animated.View pointerEvents="none" style={{ position: "absolute", top: -1, left: -1, right: -1, bottom: -1, borderRadius: 10, borderWidth: 1.5, borderColor: kit.c.accent, opacity: level }} />
+        {children}
+      </Animated.View>
+    </Pressable>
   );
 }
 
