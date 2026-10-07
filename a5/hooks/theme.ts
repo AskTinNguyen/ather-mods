@@ -1,6 +1,6 @@
 // Two looks for Ather's pane. A5 off: Ather's own (one lime accent, quiet grey, near-black).
-// A5 on: the accent alone turns lacquer gold, a small red seal stands beside the brand, and the five
-// rules sit in one quiet line at the foot. Borders and secondary text keep Ather's neutral greys.
+// A5 on: the accent turns gold, a small red seal stands beside the brand, one compact A5 line sits under the strip;
+// borders and secondary text keep Ather's neutral greys. The A5 pane (its own) carries the rest.
 // A33 (rev 9, Hai's approved mockup): the A5 pane in seal red, gold, pale gold and ivory; Ather's pane keeps only the
 // seal, the gold accent and the red "★ A5 ›" button. Contrast (dataviz contrast()): pale gold on seal red ≈ 4.6:1,
 // gold and ivory on the pane's near-black well above 7:1. Pure: no `$`.
