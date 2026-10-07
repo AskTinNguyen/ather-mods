@@ -1,6 +1,6 @@
 # Ather mods
 
-Claude Code mods for the S2 team. This repository is the `ather` plugin marketplace.
+Claude Code mods for the S2 team. This repository is the `ather` plugin marketplace, and has the same mods as [Paseo](https://paseo.sh) plugins under [`paseo/`](paseo/).
 
 | Mod | What it does |
 |---|---|
@@ -26,6 +26,20 @@ On an agent PC, add the weekly report too; its [README](week-calendar/README.md)
 claude plugin install week-calendar@ather --scope user
 ```
 
+## On Paseo
+
+For agents that Paseo runs (Paseo 0.10.2 or later, plugins enabled), install the Paseo versions from this repository:
+
+```bash
+paseo plugin install github:AskTinNguyen/ather-mods:paseo/ather-automata
+```
+
+```bash
+paseo plugin install github:AskTinNguyen/ather-mods:paseo/week-calendar
+```
+
+They behave the same, on Paseo's surfaces: an Ather panel per agent, `/ather` and `/away`, a composer pill, and notes in the agent's timeline. Each README says what differs: [ather-automata](paseo/ather-automata/README.md), [week-calendar](paseo/week-calendar/README.md) (not yet run under Paseo). To update, run `paseo plugin update ather-automata`.
+
 ## Update
 
 ```bash
@@ -41,8 +55,14 @@ Restart your sessions afterwards.
 1. Edit `ather-automata/`, then run `S2_ROOT=<your S2 checkout> HANVIET_ROOT=<a han-viet checkout> node dev/test-all.mjs` (unit tests plus an end-to-end run against a stand-in engine, on a sandbox copy of that checkout's intents; set `CLAUDE_CODE_TYPES` to type-check too; `HANVIET_ROOT` adds the web pane; `--layouts <dir>` writes every pane layout for a diff). Afterwards `node --test ather-automata/tests/*.test.mjs` runs the unit tests alone, and `claude plugin test ather-automata` loads the module in the engine.
 2. Check it loads: `claude plugin validate ather-automata`.
 3. Bump `version` in both `ather-automata/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, and add a line under Changes in the mod's README.
-4. Open a PR to `main`. Teammates get it on their next update.
+4. Bring the Paseo version along. In `paseo/ather-automata`:
+   - run `npm run sync`, plus `npm run art` if the artwork in `squad.mjs` changed;
+   - run `npm run typecheck`;
+   - add the Paseo side of any new behaviour (`server/watch.ts`, `server/console.ts`, the panel).
 
-For `week-calendar/`, run `node --test "week-calendar/scripts/test/*.test.mjs"`, `claude plugin test week-calendar` and `claude plugin validate week-calendar`, then bump its version in the same two places and note the change in its README.
+   `dev/test-all.mjs` fails while the shared copies differ.
+5. Open a PR to `main`. Teammates get it on their next update.
+
+For `week-calendar/`, run `node --test "week-calendar/scripts/test/*.test.mjs"`, `claude plugin test week-calendar` and `claude plugin validate week-calendar`, then bump its version in the same two places and note the change in its README. After any change to its scripts, run `npm run embed` in `paseo/week-calendar`.
 
 The mod depends on S2 repository pieces that ship with S2 itself: the `ather-tour` skill and the `Area`, `Owner` and `Issue` lines of intent prompts. Some end-to-end checks name real S2 intents, so they follow the checkout's state.
