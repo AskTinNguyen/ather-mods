@@ -117,3 +117,9 @@ The white square around a running worker's avatar is Ather's (its interactive av
 > Lỗi ở đây, có thể do node tooltip
 
 With a screenshot (A5 pane, dark theme), a red box around the last session row and the rule chips: each rule chip shows a white square (its tooltip dot), and the row titled `5️⃣📤+6️⃣🤔📤 S2 sync main — watch …` reads `5????+6?????? S2 sync main - watch …`.
+
+## L-16 (2026-10-07 17:50) | class: intent | -> rev 14
+
+> Adversary review by Fable please
+
+The review (Fable, read-only) of a5 0.11.1–0.11.2 found a HIGH regression: since rev 12 `isPrCommand` needs `gh` at a bare segment start, so `GH_TOKEN=x gh pr create`, PowerShell `if ($?) { gh pr create }`, `& gh pr create` and `bash -c "gh pr create"` open a PR unscored (the orchestrator re-ran them: all read as no PR); plus quote-blind segment splitting, missed gh flag forms, here-doc terminator handling, multi-intent slug choice, fork PRs, frame-style insertion and thin A43/A44 evidence.
