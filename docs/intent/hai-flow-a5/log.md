@@ -103,3 +103,11 @@ The approved mockup: compact line with icons and uncut numbers and a red "★ A5
 > Ngay cả khi xuất hiện anh muốn toàn bộ UI sẽ được pixelating dither vào bằng sắc đỏ. Mỗi bộ phận sẽ tuần tự được hiện lên theo cách đó. Tổng thời gian không quá 0.3s
 
 Mockup v2 taken as approved ("Ok better"); of the five dither places, the default 2, 3, 5 (rule hit, sync freeze, nghiệm thu); plus a sequential red dither entrance within 0.3 s.
+
+## L-14 (2026-10-07 16:00) | class: intent | -> rev 11
+
+> Ngoài ra, phần icon và avatar của các worker đang bị khoảng trắng, nên bo tròn transparent khớp với hình để hợp với theme tối lẫn sáng
+> Khi bật A5, các icon này nên đeo thêm khăn quàng đỏ.
+> Double check lại theme của A5 và AtherAutomata khi bị affect bởi A5 ở cả điều kiện theme sáng và theme tối.
+
+The white square around a running worker's avatar is Ather's (its interactive avatar frame), fixed in Ather by a separate PR; the scarf and the two-theme check are a5's.

@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 10
+- Rev: 11
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -85,6 +85,8 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A36 (rev 10): The five rules as quiet outlined chips "<n> <short name>": neutral rim by default, red rim only when that rule was hit today, gold rim on the selected one; pressing one shows its card below a hairline (full name, purpose, "At the action:", "At acceptance:", "Hits today:"), pressing again hides it. Proof: gate: pane tests (rims by state, card parts).
 - A37 (rev 10): Entrance: when the A5 pane opens (and when the compact line first draws), each part dithers in from seal-red pixels in sequence (band, tools, sessions, rules), the whole sequence within 0.3 s, then still; desktop only (SVG/SMIL), terminal draws at once; off with `motion: off`. If the engine cannot lay a dither over text, the worker records a finding with the closest feasible form (e.g. each block's own SVG mask or a short red pixel curtain per block) before building it. Proof: gate: pane tests (each block carries its entrance with begin offsets summing ≤ 300 ms; none with motion off; terminal none); review by Hai on the real pane.
 - A38 (rev 10): Event dithers (one shot, ≤ 1 s, never looping except while something runs): a rule chip stamps red once when its rule is hit; the sync freeze sweeps the band with a ❄ dithering in, reversed at the lift; a nghiệm thu score resolves the five chips one by one from dither to ✓/✗. Proof: gate: pane tests for each trigger and none without it.
+- A39 (rev 11): With A5 on, every worker avatar Ather draws wears a red Young Pioneer scarf (a red triangle knotted at the neck, inside the round badge, under the face), added by a5 to the avatar's SVG as it wraps Ather's pane; the badge stays round and transparent; with A5 off the avatar is Ather's own. Proof: gate: pane tests (scarf in each avatar kind's source with A5 on, none with it off).
+- A40 (rev 11): a5 reads right in both app themes: every colour a5 draws (A5 pane, compact line, the accent it gives Ather's pane, notices' colours) is chosen per theme (the app's light/dark from `$.config.list()` "theme", or theme keys where the engine has one), text at ≥ 4.5:1 and icons/marks at ≥ 3:1 against that theme's pane background, measured with a contrast check, for light and dark. Any Svg drawn with `isInteractive` (animations, entrance, scarf on a running avatar) must not show an opaque white or black box in either theme (the engine paints a sandboxed frame white when its colour scheme differs from the app's); where that cannot be ruled out, the animated Svg falls back to a still image. The rule chips' tooltips use the Svg `<title>` the engine supports in interactive frames. Proof: gate: unit test over both palettes' contrast; review by Hai in light and dark.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -98,6 +100,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 11 (2026-10-07): L-14: A39 red scarf on worker avatars with A5 on, A40 both themes (contrast, interactive frames).
 - rev 10 (2026-10-07): L-13: A34 English, A35 mockup v2 layout, A36 quiet rule chips, A37 red pixel-dither entrance ≤ 0.3 s, A38 event dithers (rule hit, sync freeze, nghiệm thu).
 - rev 9 (2026-10-07): L-12: A30 compact line icons and values, A31 only open sessions with ★ for this one, A32 rule seals with cards, A33 communist look on the A5 pane (approved mockup).
 - rev 8 (2026-10-07): L-11: A28 one compact A5 line in Ather's pane, A29 everything else in a separate A5 pane; session rows one line with an id8 fallback.
