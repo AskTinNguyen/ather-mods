@@ -7,7 +7,7 @@ import { buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequ
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
-import { KINDS, avatarSvg, classifyWorker, crewWords, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
+import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { unreal } from '../hooks/packs/unreal.mjs'
@@ -568,6 +568,36 @@ describe('the worker squad', () => {
     expect(avatarSvg('builder', null, 'running')).toContain('animateTransform')
     // A running avatar is framed; a frame whose colour scheme differs from the app's paints a white square behind it.
     expect(avatarSvg('builder', null, 'running')).toContain('color-scheme: light dark')
+  })
+})
+
+describe('avatar frame (0.1.3)', () => {
+  test("every avatar sets its frame page's root to light dark, first thing in the svg, so the frame is transparent in either theme", () => {
+    for (const state of /** @type {const} */ (['running', 'waiting', 'done', 'failed'])) {
+      for (const prop of /** @type {const} */ ([null, 'building', 'idle'])) {
+        const svg = avatarSvg('builder', prop, state)
+        // The desktop's frame page is <style>…</style><svg…>: only a rule on :root reaches the page's root.
+        expect(svg).toMatch(/^<svg [^>]*><style>:root\{color-scheme:light dark;background:transparent\}<\/style>/)
+        expect(svg.match(/<style>/g)?.length ?? 0).toBe(1)
+      }
+    }
+    expect(FRAME_SCHEME).toBe('<style>:root{color-scheme:light dark;background:transparent}</style>')
+  })
+
+  test('every Svg Ather draws, with whether it is framed (isInteractive) and why', async () => {
+    const fs = await import('node:fs')
+    const sources = ['console.mjs', 'squad.mjs', 'crew.mjs', 'home.mjs'].map(name => fs.readFileSync(new URL(`../hooks/${name}`, import.meta.url), 'utf8'))
+    // Each `Svg({` call in the hooks, with its isInteractive expression ('' when it has none: a still image).
+    const drawn = sources.flatMap(text => [...text.matchAll(/\bSvg\(\{([^\n]*?)\}\)/g)].map(([, props]) => ({ source: /source: ([^,]+)/.exec(props)?.[1] ?? '', framed: /isInteractive: ([^,}]+)/.exec(props)?.[1]?.trim() ?? '' })))
+    expect(drawn).toEqual([
+      // The Ather mark in the desktop masthead: a still image, nothing moves.
+      { source: 'MARK', framed: '' },
+      // A finished worker's trail: still images, so no frame and no page behind them.
+      { source: 'propSvg(prop)', framed: '' },
+      // A worker's avatar: framed only while it runs (its bob); FRAME_SCHEME keeps that frame transparent.
+      { source: 'avatarSvg(one.kind', framed: "one.state === 'running' ? true : undefined" },
+    ])
+    expect(propSvg('reading').startsWith('<svg')).toBe(true)
   })
 })
 

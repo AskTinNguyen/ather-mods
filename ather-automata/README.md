@@ -112,6 +112,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs` and `tests/web.test.m
 
 ## Changes
 
+- **0.1.3** Avatar frame: a running worker's avatar is a round badge on the pane again in the dark theme, not in a white square (its animated frame now takes the app's colour scheme).
 - **0.1.2** Track guard: looking at an intent never tracks it (rows and matching words open its view; Work on this here tracks it), Stop tracking and `/ather untrack` undo it with the proof kept, only a session's own orchestration tracks by writing (its main conversation writing an intent's prompt.md or log.md), a second session on an intent sees "Also tracked in …", proof names the session that produced it, and /clear or an adopted window says which intent is still tracked.
 - **0.1.1** Every worker counted, true clocks: the worker list shows every agent Claude Code lists (those another worker started too), a worker's clock ends at its turn's end, a worker running before Ather loaded takes its start and model from Claude Code's record, and a worker's kind comes from its description first.
 - **0.1.0** Web projects: one plugin with packs. S2's behaviour moved unchanged into the Unreal pack; a web pack (piloted on Thính, han-viet) reads `.ather/profile.json` gates as proof from tool output, holds production deploys, migrations, secrets, publishes and infrastructure applies while you are away, merges with proof under `with-proof`, knows nine web traps, and offers web skills under Create.
