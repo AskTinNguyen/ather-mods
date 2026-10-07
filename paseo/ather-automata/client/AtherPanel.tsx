@@ -387,7 +387,7 @@ function StageTrack({ kit, stages }: { kit: Kit; stages: HomeView["stages"] }) {
             </View>
           ) : one.state === "now" ? (
             // The ring and the dot are placed by coordinates, not by flex centring: 20 across, the dot 8, so 6 in.
-            <Beacon size={20} color={c.accent} count={3} duration={5200} maxScale={3}>
+            <Beacon size={20} color={c.accent} count={2} duration={5200} maxScale={3}>
               <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: c.accent }} />
               <View style={{ position: "absolute", top: 6, left: 6, width: 8, height: 8 }}>
                 <Pulse>
@@ -524,11 +524,9 @@ function CrewRow({ kit, one, index, now, isLightTheme }: { kit: Kit; one: HomeVi
         style={{ flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 10, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: c.border }}
       >
         <Bob active={one.state === "running"}>
-          <Beacon active={one.state === "running"} size={48} color={ring} stroke={2.5} maxScale={1.9} duration={4400}>
-            <View style={{ width: 48, height: 48, borderRadius: 24, borderWidth: 3, borderColor: ring, alignItems: "center", justifyContent: "center" }}>
-              <Art artKey={`avatar:${one.kind}:${held}`} size={38} round />
-            </View>
-          </Beacon>
+          <View style={{ width: 48, height: 48, borderRadius: 24, borderWidth: 3, borderColor: ring, alignItems: "center", justifyContent: "center" }}>
+            <Art artKey={`avatar:${one.kind}:${held}`} size={38} round />
+          </View>
         </Bob>
         <View style={{ flex: 1, gap: 3 }}>
           <Text style={[s.rowTitle, { fontSize: 15 }, isEnded ? { color: c.foregroundMuted } : null]} numberOfLines={1}>
