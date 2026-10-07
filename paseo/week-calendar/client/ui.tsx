@@ -154,7 +154,7 @@ export function Row({
     <>
       {icon ? (
         <View style={s.rowIcon}>
-          <Beacon active={pulse} size={12} color={iconColor ?? c.accent} stroke={1.5} maxScale={2.6} duration={2000}>
+          <Beacon active={pulse} size={12} color={iconColor ?? c.accent} stroke={1.5} maxScale={2.6} duration={4000}>
             <Icon name={icon} size={12} color={iconColor ?? c.accent} />
           </Beacon>
         </View>
@@ -258,7 +258,7 @@ export function Beacon({
   color,
   active = true,
   count = 3,
-  duration = 2400,
+  duration = 4800,
   maxScale = 2.8,
   stroke = 2,
 }: {
