@@ -179,3 +179,43 @@ export const a5Band = (el: El, isOn = true, isFrozen = false): unknown =>
       el.Box({ key: 'hai-a5-band-on', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: isOn ? 'on' : 'off' })] }),
     ],
   })
+
+// ---------- A39: the red Young Pioneer scarf on Ather's worker avatars (A5 on) ----------
+/** The scarf, in the avatar's 100×100 badge: a red triangle under the face, knotted at the lower neck (y ≈ 84–104), a
+ * dark red outline so it reads on every body colour. The badge clips it, as it clips the body. */
+export const SCARF = {
+  red: '#C8102E',
+  line: '#6E0A16',
+  svg: '<g data-a5="scarf"><path d="M33 85 L67 85 L50 104 Z" fill="#C8102E" stroke="#6E0A16" stroke-width="1.6" stroke-linejoin="round"/><path d="M47.5 88 L41 100 L46.5 99 Z M52.5 88 L59 100 L53.5 99 Z" fill="#C8102E" stroke="#6E0A16" stroke-width="1.4" stroke-linejoin="round"/><circle cx="50" cy="87.5" r="3.6" fill="#A50E25" stroke="#6E0A16" stroke-width="1.4"/></g>',
+} as const
+
+/** Whether an SVG is one of Ather's worker avatars (`squad.mjs avatarSvg`): the round clip and its body group. */
+export const isAvatarSvg = (source: string): boolean => source.includes('<clipPath id="round">') && source.includes('translate(50 106) scale(1.32) translate(-50 -106)')
+
+/** A39: Ather's avatar SVG with the scarf inside the clipped group, right after the body (and its eyes) and before the
+ * prop it holds, so it bobs with the body and the prop stays in front; the ring, the badge and the root's transparency
+ * are untouched. Any other SVG, or one already scarfed, comes back unchanged. */
+export const withScarf = (source: string): string => {
+  if (!isAvatarSvg(source) || source.includes('data-a5="scarf"')) return source
+  const open = '<g transform="translate(50 106) scale(1.32) translate(-50 -106)">'
+  const start = source.indexOf(open)
+  if (start < 0) return source
+  // The body group's own closing tag: count the group tags from its opening (a body may nest groups of its own).
+  const tags = new RegExp('<g\\b[^>]*>|</g>', 'g')
+  tags.lastIndex = start
+  let depth = 0
+  for (let m = tags.exec(source); m; m = tags.exec(source)) {
+    depth += m[0] === '</g>' ? -1 : 1
+    if (depth === 0) return source.slice(0, m.index + 4) + SCARF.svg + source.slice(m.index + 4)
+  }
+  return source
+}
+
+/** A39: every avatar Svg in a drawn tree, scarfed. */
+export const scarfAvatars = <T>(node: T): T => {
+  if (!node || typeof node !== 'object') return node
+  const n = node as unknown as Node
+  const props = n.type === 'Svg' && typeof n.props?.source === 'string' && isAvatarSvg(n.props.source) ? { ...n.props, source: withScarf(n.props.source) } : n.props
+  const children = Array.isArray(n.children) ? n.children.map(scarfAvatars) : n.children
+  return { ...n, ...(props ? { props } : {}), ...(children ? { children } : {}) } as unknown as T
+}

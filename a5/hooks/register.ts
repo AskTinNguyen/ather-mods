@@ -12,7 +12,7 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { curtainSvg, icon, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, withSeal, type RuleHits } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
@@ -1846,7 +1846,8 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
   const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5_LOOK.sealBg, A5_LOOK.sealText, true), alt: 'A5 on', width: 27, height: 14, isInteractive: true }) : undefined
   kids = kids.map(k => replaceKeyed(k, 'head-words', words => withSeal(el, words, sealEl)))
-  return recolor({ ...(tree as object), children: kids } as unknown as RenderElement)
+  // A39: every worker avatar Ather drew wears the red scarf while A5 is on.
+  return recolor(scarfAvatars({ ...(tree as object), children: kids } as unknown as RenderElement))
 }
 
 /** A37/A38: a pixel curtain laid over a block: an absolute box spanning it (painted over what it holds, clipped to
