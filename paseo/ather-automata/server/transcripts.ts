@@ -26,6 +26,8 @@ export type WorkerRecord = {
 
 // A worker that has written nothing for this long is waiting on something (a prompt, a lock).
 const QUIET_MS = 3 * 60 * 1000;
+// Silent this long, a worker is taken as gone (its session ended or the process died).
+const GONE_MS = 30 * 60 * 1000;
 
 const configDir = () => (process.env.CLAUDE_CONFIG_DIR || `${USER_HOME}/.claude`).split("\\").join("/");
 // Claude Code names a project folder after its path: every character that is not a letter or digit becomes "-".
@@ -61,15 +63,20 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
   const file = join(dir, `${base}.jsonl`);
   const info = await stat(file).catch(() => null);
   if (!info) return null;
-  const key = `${info.mtimeMs}:${info.size}`;
+  // Claude Code marks a stopped worker in its .meta.json, after its record has stopped growing:
+  // both files decide whether what was read still holds.
+  const metaFile = join(dir, `${base}.meta.json`);
+  const metaInfo = await stat(metaFile).catch(() => null);
+  const key = `${info.mtimeMs}:${info.size}:${metaInfo?.mtimeMs ?? 0}`;
   const hit = cache.get(file);
   if (hit && hit.key === key) return refreshState(hit.record, info.mtimeMs);
 
-  const meta = JSON.parse((await readFile(join(dir, `${base}.meta.json`), "utf8").catch(() => "{}")) || "{}") as {
+  const meta = JSON.parse((await readFile(metaFile, "utf8").catch(() => "{}")) || "{}") as {
     agentType?: string;
     description?: string;
     toolUseId?: string;
     model?: string;
+    stoppedByUser?: boolean;
   };
   const lines = (await readFile(file, "utf8")).split("\n").filter(Boolean);
   const tools: { name: string; input: Record<string, unknown> }[] = [];
@@ -80,6 +87,9 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
   let handback = "";
   let stoppedAt: string | null = null;
   let firstPrompt = "";
+  // The record's last word: "[Request interrupted by user]" when someone stopped the worker.
+  let lastUserText = "";
+  let lastType = "";
   for (const raw of lines) {
     let line: Line;
     try {
@@ -93,7 +103,12 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
       endedAt = at;
     }
     const content = line.message?.content;
+    if (line.type) lastType = line.type;
     if (line.type === "user" && !firstPrompt && typeof content === "string") firstPrompt = content;
+    if (line.type === "user") {
+      const text = typeof content === "string" ? content : Array.isArray(content) ? content.filter((block) => block.type === "text").map((block) => block.text ?? "").join(" ") : "";
+      if (text.trim()) lastUserText = text;
+    }
     if (line.type !== "assistant" || !Array.isArray(content)) continue;
     if (line.message?.model && !model) model = line.message.model;
     for (const block of content) {
@@ -113,7 +128,9 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
   }
   const last = tools[tools.length - 1];
   const finished = handback !== "" || stoppedAt === "end_turn";
-  const failed = /\[Request interrupted|API Error|error_during_execution/i.test(lastText) || (finished && /^(failed|stopped|could not|blocked)\b/i.test(handback.trim()));
+  // Stopped: Claude Code says so in its .meta.json, or the record ends on an interruption.
+  const isStopped = meta.stoppedByUser === true || (lastType === "user" && /^\s*\[Request interrupted/i.test(lastUserText));
+  const failed = isStopped || /\[Request interrupted|API Error|error_during_execution/i.test(lastText) || (finished && /^(failed|stopped|could not|blocked)\b/i.test(handback.trim()));
   const record: WorkerRecord = {
     id: base.replace(/^agent-/, ""),
     toolUseId: meta.toolUseId ?? "",
@@ -127,15 +144,19 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
     toolCalls: tools.length,
     startedAt,
     endedAt,
-    outcome: sentence(handback || lastText),
+    outcome: isStopped ? "stopped by the user" : sentence(handback || lastText),
   };
   cache.set(file, { key, record });
   return refreshState(record, info.mtimeMs);
 }
 
-// A worker still "running" but silent for minutes is waiting on something.
+// A worker still "running" but silent for minutes is waiting on something (a prompt, a lock);
+// silent for half an hour, it is no longer working: its process has gone without a word.
 function refreshState(record: WorkerRecord, mtimeMs: number): WorkerRecord {
-  if (record.state === "running" && Date.now() - Math.max(mtimeMs, record.endedAt) > QUIET_MS) return { ...record, state: "waiting" };
+  if (record.state !== "running") return record;
+  const quiet = Date.now() - Math.max(mtimeMs, record.endedAt);
+  if (quiet > GONE_MS) return { ...record, state: "failed", outcome: "went silent and never reported back" };
+  if (quiet > QUIET_MS) return { ...record, state: "waiting" };
   return record;
 }
 
