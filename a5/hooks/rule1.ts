@@ -5,7 +5,7 @@
 import type { ClientSurface } from 'claude-code'
 
 type State = { word: number; frame: number }
-type Props = { dither?: boolean; color?: string }
+type Props = { dither?: boolean; color?: string; dim?: boolean }
 
 export const RULE1_WORDS = ['Yêu project', 'Yêu tổ quốc'] as const
 const STEP_MS = 120
@@ -43,5 +43,5 @@ export default function Rule1(props: Props, surface: ClientSurface<State>): unkn
     })
   }
   const s = surface.state ?? { word: 0, frame: 0 }
-  return Text({ color: props.color, children: shown(s.word, s.frame, props.dither === true) })
+  return Text({ color: props.color, dimColor: props.dim === true, children: shown(s.word, s.frame, props.dither === true) })
 }

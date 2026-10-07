@@ -1809,8 +1809,10 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     const footAt = kids.findIndex(k => keyOf(k) === 'foot')
     // A20: rule 1's word switches tổ quốc / project in a Client of its own (only it redraws; it goes with the footer).
     const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
-    const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet } }) : undefined
-    kids.splice(footAt < 0 ? kids.length : footAt, 0, rulesFooter(el, hits, rule1))
+    const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet, dim: true } }) : undefined
+    // A27: the rules are the pane's last block: on the desktop after everything Ather drew, on the terminal right
+    // above Ather's foot line (its key hints stay the last line there).
+    kids.splice(isDesktop || footAt < 0 ? kids.length : footAt, 0, rulesFooter(el, hits, rule1))
   }
   const out = { ...(tree as object), children: kids } as unknown as RenderElement
   return on ? recolor(out) : out

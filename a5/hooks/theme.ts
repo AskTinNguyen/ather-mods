@@ -64,22 +64,24 @@ export const withSeal = (el: El, words: Node, sealEl?: unknown): unknown => {
   return { ...words, children: [el.Box({ key: 'hai-brand', flexDirection: 'row', gap: 1, alignItems: 'center', children: [brand, sealEl ?? seal(el)] }), ...rest] }
 }
 
-/** The five rules in one quiet line at the foot; a rule that fired this session shows its count in gold. */
+/** A27: the five rules as the pane's last block: a small heading "A5 · Năm điều", then one rule per line, in the
+ * quietest text the surface has (the quiet grey, dimmed; the Text element has no smaller size on either surface).
+ * A rule that fired this session shows its count in gold. */
 export const rulesFooter = (el: El, hits: RuleHits, rule1Word?: unknown): unknown =>
   el.Box({
     key: 'hai-a5-rules',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    columnGap: 2,
+    flexDirection: 'column',
+    width: '100%',
     marginTop: 1,
     children: [
-      el.Text({ children: 'A5 · Năm điều' }),
+      el.Box({ key: 'hai-a5-rules-head', children: [el.Text({ color: ATHER.quiet, dimColor: true, children: 'A5 · Năm điều' })] }),
       ...RULES.map(([id, name]) => {
         const count = hits[id] > 0 ? [' ', el.Text({ color: A5_LOOK.gold, bold: true, children: String(hits[id]) })] : []
+        const n = id.slice(1)
         // A20: rule 1's word switches (a self-drawing element) while A5 and motion are on; "Yêu Project" otherwise.
         if (id === 'D1' && rule1Word !== undefined)
-          return el.Box({ key: 'hai-a5-rule1', flexDirection: 'row', children: [el.Text({ color: ATHER.quiet, children: '1 ' }), rule1Word, el.Text({ color: ATHER.quiet, children: [name.replace(/^Yêu Project/, ''), ...count] })] })
-        return el.Text({ color: ATHER.quiet, children: [`${id.slice(1)} ${name}`, ...count] })
+          return el.Box({ key: 'hai-a5-rule1', flexDirection: 'row', flexWrap: 'wrap', children: [el.Text({ color: ATHER.quiet, dimColor: true, children: '1 ' }), rule1Word, el.Text({ color: ATHER.quiet, dimColor: true, wrap: 'wrap', children: [name.replace(/^Yêu Project/, ''), ...count] })] })
+        return el.Box({ key: `hai-a5-rule${n}`, children: [el.Text({ color: ATHER.quiet, dimColor: true, wrap: 'wrap', children: [`${n} ${name}`, ...count] })] })
       }),
     ],
   })
