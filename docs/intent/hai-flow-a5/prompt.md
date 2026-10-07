@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 5
+- Rev: 6
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -67,6 +67,10 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A18 (rev 5): Nghiệm thu A5 before a PR: when the main loop opens a PR (`gh pr create`, `gh api …/pulls` POST, or Ather's Ship hand-off), a5 scores the five rules over the branch: (1) no paths another live session's touch file or another intent claims, nothing pushed to main; (2) every Acceptance row `met` has evidence and Ather's proof is complete for the role, new TODO/FIXME listed in Open or findings; (3) the diff stays within the paths the intent names (plus its own folder), anything else is explained in progress.md or findings; (4) no debug leftovers (`A5TMP`, console.log, breakpoints) or secrets in the diff, no untracked files of the intent left in the shared tree, no stray worktree or background process of this session; (5) claims in the PR body and progress.md match the evidence, no acceptance row rewritten without a rev. A failing score refuses the PR with the list (rule, file, what to do); Hai can let one PR through in a dialog; a worker is never asked. Without an intent a light version runs (rules 4, 5, scope by diff). The same score runs when an intent closes. Proof: gate: unit tests per rule, engine tests (refused with list, passes when clean, Hai's pass-once, worker refused).
 - A19 (rev 5): The pane shows a **Nghiệm thu A5** card (A5 on, a tracked intent in Ship, or on demand): five rows ✓ / ✗ / – with one line each, refreshed when files change. Proof: gate: pane tests on terminal and desktop.
 - A20 (rev 5): The rules text (rules-a5.md, README, the pane footer) uses D9's five rules; rule 1 is named "Yêu Project". On the A5 pane the footer's first rule switches at random intervals between "Yêu tổ quốc" and "Yêu project" with a short dither/flip, only while A5 is on and `motion` is on (still "Yêu Project" with motion off); the switch never redraws more than the footer and stops when the pane is closed or A5 is off. Proof: gate: pane tests (both words appear over a mocked clock; motion off shows one).
+- A21 (rev 6): Nghiệm thu at Ship: when Ather hands the session its Ship prompt (`prompt.submit` with origin plugin `ather-automata` and the ship wording, e.g. "Prepare intent <slug> for landing" / "Summarise intent <slug> for an owner to land"), a5 scores that intent at once and adds the score to the prompt (five rows, what to fix) so the work is fixed before the PR; the PR call stays the gate. Never a refusal of the Ship prompt itself. Proof: gate: engine test with Ather's real ship prompt text.
+- A22 (rev 6): PRs opened through MCP tools: a tool call whose name creates a pull request (GitHub MCP `create_pull_request` and similar names in any server) is gated like `gh pr create` (score, refusal with the list, Hai's pass-once, worker refused). Proof: gate: engine tests for two tool-name spellings.
+- A23 (rev 6): PRs opened outside the agent (GitHub web, the desktop app's own Create PR if it bypasses the agent): when a PR number appears on the tracked intent's `- PR:` line (or in Ather's status `tracked.prs`) that a5 has not scored, a5 scores it then (post-hoc), shows the result on the Nghiệm thu card with the PR number, and raises one 🟥 when it fails. Proof: gate: engine test with a PR line added by hand.
+- A24 (rev 6): Measure the desktop app's Create PR button: record in progress.md what it does in this app build (a prompt to the session, a tool call, or the app calling GitHub itself), from evidence (the button's tooltip/docs, a session transcript, or a dry observation that creates no PR); no PR is opened for the measurement. A23 covers it either way. Proof: review.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -80,6 +84,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 6 (2026-10-07): L-9: A21 score at Ship, A22 MCP PR tools gated, A23 post-hoc score for PRs opened outside the agent, A24 measure the app's Create PR.
 - rev 5 (2026-10-07): L-8: D9 five rules for the real workflow, D10 when they are checked (action / acceptance, nothing per turn); A17-A20.
 - rev 4 (2026-10-06): L-6: D7 option B (sync worker), D8 freeze as a lease plus the merge guard; A12-A16 from the failure review (no end to the freeze, A5 blocking the sync worker, a worker dying mid-merge, sessions without 0.4, credential hangs, an Editor left open).
 - rev 3 (2026-10-06): L-4: A9 shared probe, A10 lease follows /clear, A11 untracked files main would overwrite (F-3 b); F-2 rejected.

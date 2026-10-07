@@ -58,3 +58,10 @@ The mod is renamed a5 (folder `a5/`, tools `mcp__a5__*`, agent type `a5:sync`, `
 > Btw, Yêu tổ quốc scope hơi to, sửa thành Yêu Project trong rule và làm animation random switch "tổ quốc" <—> "project" trên Pane giao diện AtherAutomataA5 nhé
 
 Hai approved the proposal: five rules rewritten for the workflow, checked at the action and at acceptance before the PR, no per-turn report; rule 1 named "Yêu Project" with a random tổ quốc/project switch on the pane.
+
+## L-9 (2026-10-07 10:40) | class: intent | -> rev 6
+
+> Giới hạn này có giảo quyết được chưa?
+> Làm rev 6
+
+The two known limits of rev 5 (Ather's Ship is not seen; PRs opened outside `gh` are not scored) become A21-A24.
