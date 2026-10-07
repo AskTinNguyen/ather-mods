@@ -200,8 +200,9 @@ test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand, th
   expect(text(find(tree, 'hai-brand'))).toContain('★ A5')
   expect(brandColor(tree)).toBe(GOLD)
   expect(find(tree, 'strip')?.props?.borderColor).toBe('#3a3c36')
-  expect(text(find(tree, 'hai-a5-rules'))).toContain('Yêu Tổ quốc')
-  expect(text(find(tree, 'hai-a5-rules'))).toContain('Thật thà')
+  expect(text(find(tree, 'hai-a5-rules'))).toContain(', yêu đồng bào') // D9: rule 1's word is its own element (A20)
+  expect(find(tree, 'hai-rule1')?.type).toBe('Client')
+  expect(text(find(tree, 'hai-a5-rules'))).toContain('5 Khiêm tốn, thật thà, dũng cảm')
 })
 
 test('pane: views other than home get no tiles (A5 still seals and recolors them)', opts(), async ($, on) => {

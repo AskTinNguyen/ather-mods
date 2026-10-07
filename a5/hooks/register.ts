@@ -48,7 +48,7 @@ const ATHER_PANE = 'ather'
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
-const RULE_NAMES: Record<string, string> = { D1: 'Yêu Tổ quốc', D2: 'Học tập tốt', D3: 'Kỷ luật tốt', D4: 'Vệ sinh', D5: 'Thật thà' }
+const RULE_NAMES: Record<string, string> = { D1: 'Yêu Project', D2: 'Học tập tốt', D3: 'Kỷ luật tốt', D4: 'Giữ gìn vệ sinh', D5: 'Thật thà' } // D9, short for refusals
 const INK = '#ECE9E2'
 
 let engine: A5 | null = null
@@ -1616,7 +1616,10 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5_LOOK.sealBg, A5_LOOK.sealText, true), alt: 'A5 on', width: 27, height: 14, isInteractive: true }) : undefined
     kids = kids.map(k => replaceKeyed(k, 'head-words', words => withSeal(el, words, sealEl)))
     const footAt = kids.findIndex(k => keyOf(k) === 'foot')
-    kids.splice(footAt < 0 ? kids.length : footAt, 0, rulesFooter(el, hits))
+    // A20: rule 1's word switches tổ quốc / project in a Client of its own (only it redraws; it goes with the footer).
+    const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
+    const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet } }) : undefined
+    kids.splice(footAt < 0 ? kids.length : footAt, 0, rulesFooter(el, hits, rule1))
   }
   const out = { ...(tree as object), children: kids } as unknown as RenderElement
   return on ? recolor(out) : out

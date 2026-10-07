@@ -43,11 +43,11 @@ export const spaced = (text: string, width: number): string => {
 }
 
 export const RULES = [
-  ['D1', 'Yêu Tổ quốc'],
-  ['D2', 'Học tập tốt'],
-  ['D3', 'Kỷ luật tốt'],
-  ['D4', 'Vệ sinh'],
-  ['D5', 'Thật thà'],
+  ['D1', 'Yêu Project, yêu đồng bào'],
+  ['D2', 'Học tập tốt, lao động tốt'],
+  ['D3', 'Đoàn kết tốt, kỷ luật tốt'],
+  ['D4', 'Giữ gìn vệ sinh thật tốt'],
+  ['D5', 'Khiêm tốn, thật thà, dũng cảm'],
 ] as const
 export type RuleHits = Record<(typeof RULES)[number][0], number>
 export const noHits = (): RuleHits => ({ D1: 0, D2: 0, D3: 0, D4: 0, D5: 0 })
@@ -65,7 +65,7 @@ export const withSeal = (el: El, words: Node, sealEl?: unknown): unknown => {
 }
 
 /** The five rules in one quiet line at the foot; a rule that fired this session shows its count in gold. */
-export const rulesFooter = (el: El, hits: RuleHits): unknown =>
+export const rulesFooter = (el: El, hits: RuleHits, rule1Word?: unknown): unknown =>
   el.Box({
     key: 'hai-a5-rules',
     flexDirection: 'row',
@@ -74,11 +74,12 @@ export const rulesFooter = (el: El, hits: RuleHits): unknown =>
     marginTop: 1,
     children: [
       el.Text({ children: 'A5 · Năm điều' }),
-      ...RULES.map(([id, name]) =>
-        el.Text({
-          color: ATHER.quiet,
-          children: [`${id.slice(1)} ${name}`, ...(hits[id] > 0 ? [' ', el.Text({ color: A5_LOOK.gold, bold: true, children: String(hits[id]) })] : [])],
-        }),
-      ),
+      ...RULES.map(([id, name]) => {
+        const count = hits[id] > 0 ? [' ', el.Text({ color: A5_LOOK.gold, bold: true, children: String(hits[id]) })] : []
+        // A20: rule 1's word switches (a self-drawing element) while A5 and motion are on; "Yêu Project" otherwise.
+        if (id === 'D1' && rule1Word !== undefined)
+          return el.Box({ key: 'hai-a5-rule1', flexDirection: 'row', children: [el.Text({ color: ATHER.quiet, children: '1 ' }), rule1Word, el.Text({ color: ATHER.quiet, children: [name.replace(/^Yêu Project/, ''), ...count] })] })
+        return el.Text({ color: ATHER.quiet, children: [`${id.slice(1)} ${name}`, ...count] })
+      }),
     ],
   })
