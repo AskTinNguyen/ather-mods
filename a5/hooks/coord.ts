@@ -975,3 +975,19 @@ export const sessionStatus = (r: SessionRow): string => {
   const age = r.activeMin === null ? '' : r.activeMin < 1 ? 'now' : r.activeMin < 60 ? `${r.activeMin}m` : `${Math.round(r.activeMin / 60)}h`
   return [...what, age].filter(Boolean).join(' · ')
 }
+
+// ---------- A44: record titles read through PowerShell keep their characters ----------
+/** The pattern of a record's title lines (`"customTitle":"…"`, `"aiTitle":"…"`), as Ather's transcripts.mjs reads them. */
+export const TITLE_PATTERN = '"(customTitle|aiTitle)":"[^"]*"'
+
+/** A44: the PowerShell fallback for the title search (the engine finds no `grep` on this machine). PowerShell 5 writes
+ * its stdout in the console's OEM code page, so emoji and dashes came back as "?" (MEASURED 2026-10-07:
+ * `5️⃣📤+6️⃣🤔📤 S2 sync main — watch …` read back as `5????+6?????? S2 sync main - watch …`); UTF-8 output and a UTF-8
+ * read of the file keep them. */
+export const titleSearchPs = (path: string): string[] => [
+  'powershell',
+  '-NoProfile',
+  '-NonInteractive',
+  '-Command',
+  `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${TITLE_PATTERN}' -Encoding UTF8 -AllMatches | ForEach-Object { $_.Matches.Value }`,
+]

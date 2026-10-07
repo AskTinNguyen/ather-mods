@@ -8,7 +8,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { curtainSvg, icon, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
@@ -541,11 +541,10 @@ async function recordsDir($: Engine, opts: Opts): Promise<string> {
 
 /** The title lines of one record: grep, or PowerShell where there is none (as Ather's transcripts.mjs does). */
 async function titleLines($: Engine, path: string): Promise<string> {
-  const pattern = '"(customTitle|aiTitle)":"[^"]*"'
-  const grep = await $.process.run(['grep', '-oE', pattern, path], { timeoutMs: 15_000 }).catch(() => null)
+  const grep = await $.process.run(['grep', '-oE', TITLE_PATTERN, path], { timeoutMs: 15_000 }).catch(() => null)
   if (grep && (grep.exitCode === 0 || grep.exitCode === 1)) return grep.stdout
-  const select = `Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${pattern}' -AllMatches | ForEach-Object { $_.Matches.Value }`
-  const ps = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', select], { timeoutMs: 20_000 }).catch(() => null)
+  // A44: UTF-8 out and in, or emoji and dashes in a title come back as "?".
+  const ps = await $.process.run(titleSearchPs(path), { timeoutMs: 20_000 }).catch(() => null)
   return ps?.exitCode === 0 ? ps.stdout : ''
 }
 
