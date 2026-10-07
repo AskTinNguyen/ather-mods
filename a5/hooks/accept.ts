@@ -222,3 +222,17 @@ export const shipText = (scores: readonly RuleScore[], slug: string, branch: str
   const todo = diffProblem ? [] : bad.flatMap(s => s.issues.map(i => `- ${s.rule}: ${i.file ? `${i.file}: ` : ''}${i.what} → ${i.todo}`))
   return [head, ...rows, ...(todo.length ? ['To fix:', ...todo] : [])].join('\n')
 }
+
+/** A23: the PR numbers on an intent's `- PR:` / `- PRs:` lines (in the header, before the first `## `), read as
+ * Ather reads them: `#123`, `owner/repo#123`, `…/pull/123`; progress.md first, then a legacy prompt.md line. */
+export const prNumbersOf = (progress: string, prompt: string): number[] => {
+  const header = (text: string) => text.split(/^##\s/m)[0] ?? ''
+  const numbers = [progress, prompt].flatMap(text =>
+    [...header(text).matchAll(/^\s*-\s*PRs?\s*:\s*(.+)$/gim)].flatMap(line => [...(line[1] ?? '').matchAll(/#(\d+)|pull\/(\d+)/g)].map(m => Number(m[1] ?? m[2]))),
+  )
+  return [...new Set(numbers)].filter(n => Number.isInteger(n) && n > 0)
+}
+
+/** A23: the PR numbers a PR-opening call reports (`gh pr create` prints the URL; an MCP tool returns its number). */
+export const openedPrs = (result: string): number[] =>
+  [...new Set([...result.matchAll(/\/pull\/(\d+)|\\?"number\\?"\s*:\s*(\d+)/g)].map(m => Number(m[1] ?? m[2])))].filter(n => Number.isInteger(n) && n > 0)

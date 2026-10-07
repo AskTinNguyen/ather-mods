@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
-import { acceptText, closesIntent, failed, isPrCommand, isPrTool, namedPaths, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
+import { acceptText, closesIntent, failed, isPrCommand, isPrTool, namedPaths, openedPrs, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -115,6 +115,10 @@ let isScoring = false
 let shipCheckedAt = 0
 let shipSlug: string | null = null // A19: the tracked intent is in Ship (or ready to close)
 const SHIP_CHECK_MS = 5 * 60_000
+// A23: PR numbers this session scored or found already listed, and the intents whose PR lines it has read once.
+const prsKnown = new Set<number>()
+const prBaseline = new Set<string>()
+let prDirty = false // an edit touched an intent's progress.md or prompt.md: look for a new PR number soon
 const CLIENTS_EVERY_MS = 5 * 60_000 // A16: the client's session list is read at most this often
 let clients: ClientRow[] | null = null // A16: null when the client's list tool is missing or refused
 let clientsAt = 0
@@ -209,7 +213,7 @@ async function sharedTest($: Engine, a5: A5, command: string, cwd: string): Prom
   return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? true
 }
 
-type AtherStatus = { role?: string; tracked?: { slug?: string; stage?: string; directorCalls?: string[] } | null; evidence?: Proof['evidence'] }
+type AtherStatus = { role?: string; tracked?: { slug?: string; stage?: string; directorCalls?: string[]; prs?: string[] } | null; evidence?: Proof['evidence'] }
 
 /** Ather's live state (its read-only `status` tool), or null without Ather. */
 async function atherStatus($: Engine): Promise<AtherStatus | null> {
@@ -368,6 +372,8 @@ async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
   const title = file?.title || (await sessionTitle($).catch(() => ''))
   me = file ?? blankSession(id, safeWord(bareTitle(title) || `session-${id8}`), bareTitle(title), await $.clock.now())
   for (const d of me.delivered) delivered.add(d)
+  for (const n of me.prsKnown ?? []) prsKnown.add(n)
+  for (const slug of me.prBaseline ?? []) prBaseline.add(slug)
   for (const p of parseTouch(await $.fs.read(`${dir}/touch/${id8}.json`).catch(() => null))?.paths ?? []) touched.add(p)
   return me
 }
@@ -385,6 +391,8 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   me8 = new8
   me = src ? { ...src, session: newSid, id8: new8, heartbeatAt: now } : blankSession(newSid, `session-${new8}`, '', now)
   for (const d of me.delivered) delivered.add(d)
+  for (const n of me.prsKnown ?? []) prsKnown.add(n)
+  for (const slug of me.prBaseline ?? []) prBaseline.add(slug)
   await saveMe($, opts, now)
   if (src) await $.fs.write(`${dir}/editor/${old8}.json`, JSON.stringify({ ...src, want: null, holding: null, yieldAsks: [], heartbeatAt: 0 })).catch(() => undefined)
   const t = parseTouch(await readJson($, `${dir}/touch/${old8}.json`))
@@ -422,7 +430,7 @@ function followClear($: Engine, opts: Opts, oldSid: string, tries: number): void
 async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
-  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -610,6 +618,7 @@ function runTick($: Engine, opts: Opts): Promise<void> {
 }
 
 async function tick($: Engine, opts: Opts): Promise<void> {
+  if ((await readA5($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
   if (!(await readA5($))) {
     showStatus($)
     return
@@ -1191,7 +1200,7 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
   if (!root) return null
   const x = await gatherAccept($, opts, a5, root, slug, body, agentId, refs)
   const scores = score(x)
-  lastAccept = { at: await $.clock.now(), slug: slug ?? null, scores, what }
+  lastAccept = { at: await $.clock.now(), slug: x.slug, scores, what } // the intent the score read (tracked or from the diff)
   $.ui.invalidate('ui.render')
   const bad = failed(scores)
   // An unread branch diff is no pass: refused with why, like a failing score.
@@ -1221,11 +1230,13 @@ async function refreshAccept($: Engine, opts: Opts): Promise<void> {
     const status = await atherStatus($)
     const stage = status?.tracked?.stage ?? ''
     shipSlug = status?.tracked?.slug && /^(Ship|Ready to close)$/i.test(stage) ? status.tracked.slug : null
-    if (!shipSlug && !lastAccept) return
     const a5 = await load($)
     const cwd = await $.session.cwd()
     const root = (await locate($, a5, `${cwd}/_`)).root
+    prDirty = false
     if (!root) return
+    if (await postHoc($, opts, a5, root, status, now)) return
+    if (!shipSlug && !lastAccept) return
     acceptDirty = false
     const slug = lastAccept?.slug ?? shipSlug
     lastAccept = { at: now, slug, scores: score(await gatherAccept($, opts, a5, root, slug, '', undefined)), what: lastAccept?.what ?? 'Ship' }
@@ -1233,6 +1244,41 @@ async function refreshAccept($: Engine, opts: Opts): Promise<void> {
     isScoring = false
     $.ui.invalidate('ui.render')
   }
+}
+
+/** A23: a PR number on the tracked intent's `- PR:` line (or in Ather's `tracked.prs`) that this session never scored
+ * (opened on GitHub, or by the app's own button) is scored now, shown on the card with its number, and one 🟥 is
+ * raised per failing PR (the first session to claim its alert file). The first read of an intent only records the
+ * numbers already there. Returns whether it scored. */
+async function postHoc($: Engine, opts: Opts, a5: A5, root: string, status: AtherStatus | null, now: number): Promise<boolean> {
+  const slug = status?.tracked?.slug
+  if (!slug) return false
+  const read = (rel: string) => $.fs.read(`${root}/${rel}`).catch(() => '')
+  const listed = [...new Set([...prNumbersOf(await read(`docs/intent/${slug}/progress.md`), await read(`docs/intent/${slug}/prompt.md`)), ...(status?.tracked?.prs ?? []).flatMap(p => prNumbersOf(`- PR: ${p}`, ''))])]
+  if (!prBaseline.has(slug)) {
+    prBaseline.add(slug)
+    for (const n of listed) prsKnown.add(n)
+    await saveMe($, opts)
+    return false
+  }
+  const fresh = listed.filter(n => !prsKnown.has(n))
+  if (fresh.length === 0) return false
+  const x = await gatherAccept($, opts, a5, root, slug, '', undefined)
+  const scores = score(x)
+  for (const n of fresh) prsKnown.add(n)
+  lastAccept = { at: now, slug, scores, what: `PR #${fresh.join(', #')} · scored after the fact` }
+  await saveMe($, opts)
+  const bad = failed(scores)
+  if (bad.length > 0 || x.diffProblem)
+    for (const n of fresh)
+      if (await claimAlert($, opts, `pr-${n}`))
+        await raiseRed(
+          $,
+          opts,
+          `PR #${n} (intent ${slug}) was opened without nghiệm thu A5 and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
+          'hold the merge until the branch scores 5 of 5',
+        )
+  return true
 }
 
 /** /a5 accept: the score on demand for the repository this session works in (no PR body). */
@@ -1664,7 +1710,7 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     // A19: the Nghiệm thu A5 card, once there is a score (a PR attempt, /a5 accept) or the tracked intent is in
     // Ship; scored off the render, again when files changed, and the Ship check at most every 5 minutes.
     const wantCard = lastAccept !== null || shipSlug !== null
-    if (!isScoring && ((wantCard && acceptDirty) || now - shipCheckedAt > SHIP_CHECK_MS)) $.clock.after(10, () => void refreshAccept($, opts))
+    if (!isScoring && ((wantCard && acceptDirty) || prDirty || now - shipCheckedAt > SHIP_CHECK_MS)) $.clock.after(10, () => void refreshAccept($, opts))
     if (lastAccept) {
       const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
       const card = acceptCard(el, 'Nghiệm thu A5', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop)
@@ -1818,6 +1864,12 @@ export const register: Register = (on, options) => {
     if (ran.deny !== undefined) return ran
     // A19: a file changed (an edit, a git write): the card scores again at its next draw.
     if (ran.isError !== true && (EDIT_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && gitWrites(str(input.command)).length > 0))) acceptDirty = true
+    if (ran.isError !== true && EDIT_TOOLS.has(tool) && parts.some(([path]) => /docs\/intent\/[^/]+\/(progress|prompt)\.md$/i.test(path.replace(/\\/g, '/')))) prDirty = true
+    // A23: a PR this session opened through the gate was scored there; its number is not scored again after the fact.
+    if (isOn && ran.isError !== true && (isPrTool(tool) || (SHELL_TOOLS.has(tool) && isPrCommand(what)))) {
+      for (const n of openedPrs(JSON.stringify(ran).slice(0, 20_000))) prsKnown.add(n)
+      await saveMe($, opts)
+    }
     if (isOn && ran.isError !== true) {
       // What the coordination needs from the call: Editor use (the idle lease), PIE running, the paths edited.
       const text = isUnrealMcp(tool) ? JSON.stringify(input).slice(0, 4000) : ''

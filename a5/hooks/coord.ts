@@ -88,6 +88,10 @@ export type SessionFile = {
   yieldAsks: YieldAsk[]
   /** Notice ids this session has delivered, so a reload never repeats one. */
   delivered: string[]
+  /** A23: PR numbers this session has scored (at the PR call or after the fact), or found already listed when it
+   * first read an intent's PR lines; the slugs whose PR lines it has read once (that first read only records). */
+  prsKnown?: number[]
+  prBaseline?: string[]
 }
 
 export const blankSession = (session: string, lane: string, title: string, now: number): SessionFile => ({
@@ -107,7 +111,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [] }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [] }
   } catch {
     return null
   }
