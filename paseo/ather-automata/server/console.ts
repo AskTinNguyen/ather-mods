@@ -69,13 +69,15 @@ async function readIntents(root: string, pinned: string | null, pack: Pack) {
           progress: isOpen || isPinned ? ((await readText(`${dir}/progress.md`)) ?? "") : "",
           files: isPinned ? (await list(dir).catch(() => [])).map((one) => one.name) : [],
           hasDebrief: isPinned && (await readText(`${root}/${pack.debriefPath(entry.name)}`)) !== null,
-          mtimeMs: Math.max(...stats),
+          updatedAt: Math.max(...stats),
+          source: "local",
+          firstAuthor: "",
         },
         pack,
       ),
     );
   }
-  return read.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return read.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 async function readSkills(root: string, pack: Pack) {
@@ -308,7 +310,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
         kind: one.kind,
         group: one.kind === "issue" ? ("issues" as const) : one.isMine ? ("mine" as const) : ("others" as const),
         owner: one.kind === "intent" && !one.isMine ? String(one.owner ?? "") : "",
-        updatedAt: one.kind === "issue" ? Number(one.issue.updatedAt) || 0 : Number(intentsBySlug.get(one.slug)?.mtimeMs) || 0,
+        updatedAt: one.kind === "issue" ? Number(one.issue.updatedAt) || 0 : Number(intentsBySlug.get(one.slug)?.updatedAt) || 0,
       })),
     actions: built.actions.filter((one: Any) => one.prompt).map((one: Any) => ({ id: one.id, label: one.label })),
     skills: built.skills.map((one: Any) => ({ id: one.id, label: one.name, hint: one.description, group: one.group })),

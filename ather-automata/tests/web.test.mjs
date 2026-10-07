@@ -260,7 +260,7 @@ describe('web traps (A5)', () => {
 describe('web words: Next, Prove and Create (A6)', () => {
   const prompt = `# Lens\n\n- Rev: 1\n- Status: active\n- Area: Platform\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: one\n`
   const progress = '# p\n\n## Acceptance\n\n| Item | Verdict |\n| --- | --- |\n| A1 | met |\n'
-  const intent = parseIntent({ slug: 'lens', prompt, findings: '', progress, files: [], hasDebrief: false, mtimeMs: 1 }, WEB)
+  const intent = parseIntent({ slug: 'lens', prompt, findings: '', progress, files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' }, WEB)
   const proven = Object.fromEntries(['tests', 'lint', 'build', 'ui'].map(rung => [rung, { state: 'pass', detail: '' }]))
   test('Prove names the profile gates for the role, never S2Editor or PIE', () => {
     const engineer = nextStep('engineer', intent, emptyEvidence(WEB), 0, 'Tin Nguyen', {}, WEB)

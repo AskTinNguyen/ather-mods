@@ -276,6 +276,14 @@ export const unreal = {
   roleKey: '',
   parseRole,
   owners: OWNERS,
+  // Owner lines that name a team, not a person: each shown with its lead.
+  teams: { Cinematic: 'Tien Dang' },
+  // How the studio's git names read (worklist.mjs tidyName): role and studio words at the end, and family names.
+  names: {
+    suffix: /^(art|artist|vfx|ta|ge|gd|tech|techart|sipher|ather|atherlabs|labs|producer|game|design|designer|engineer|dev|qa)$/i,
+    studio: /(sipher|atherlabs|ather)$/i,
+    families: ['nguyen', 'huynh', 'hoang', 'truong', 'duong', 'trinh', 'luong', 'tran', 'pham', 'phan', 'dang', 'dinh', 'doan', 'quach', 'than', 'bui', 'ngo', 'lam', 'mai', 'cao', 'le', 'vo', 'vu', 'do', 'ho', 'ly'],
+  },
   areas: AREAS,
   normalizeArea,
   rungLabels: RUNG_LABELS,
