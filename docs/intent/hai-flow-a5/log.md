@@ -43,3 +43,9 @@ The plugin folders are watched, so pointing CLAUDE_CODE_PLUGIN_DIRS at hai-flow/
 > Theo suggest của em, nhưng T là lúc gì?
 
 After the failure review (two caveats found in the 0.4 code: the freeze has no end and no holder check; A5's git-discard rule would stop the sync worker's `checkout --ours`), Hai took the suggestion: option B, the session overview, and safeguards 1, 2, 3, 5, 6 (hard end T + 45 / T + 90 min). T is the planned sync time. Rev 4 is built in a worktree, never in the live plugin folder.
+
+## L-7 (2026-10-07 09:20) | class: intent | -> rev 4
+
+> 2. Không gọi là hai-flow nữa gọi là a5 nhé. Và đưa vào bản đang chạy
+
+The mod is renamed a5 (folder `a5/`, tools `mcp__a5__*`, agent type `a5:sync`, `Saved/A5/`, the `A5 ·` prefix; its rules folder becomes `rules/`), and rev 4 (0.5.0) is released into the live checkout, which closes the away ledger's D-3. The intent folder keeps its name `hai-flow-a5` (its history).
