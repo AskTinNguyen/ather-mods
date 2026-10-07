@@ -123,3 +123,9 @@ With a screenshot (A5 pane, dark theme), a red box around the last session row a
 > Adversary review by Fable please
 
 The review (Fable, read-only) of a5 0.11.1–0.11.2 found a HIGH regression: since rev 12 `isPrCommand` needs `gh` at a bare segment start, so `GH_TOKEN=x gh pr create`, PowerShell `if ($?) { gh pr create }`, `& gh pr create` and `bash -c "gh pr create"` open a PR unscored (the orchestrator re-ran them: all read as no PR); plus quote-blind segment splitting, missed gh flag forms, here-doc terminator handling, multi-intent slug choice, fork PRs, frame-style insertion and thin A43/A44 evidence.
+
+## L-17 (2026-10-07 18:30) | class: intent | -> rev 15
+
+> A5 này nãy giờ bị lẫn lộn trong nhiều tình huống quá, nhất là flow intent dùng A để kí hiệu Acceptant
+> Từ giờ hãy sửa tên feature đang làm này là A5R (Agent 5 rules) để tránh nhầm lẫn nhé.
+> Chưa có PR nào thuộc feature này bị đẩy vào ather-mods nên bạn hãy fix thoải mái

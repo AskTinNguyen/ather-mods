@@ -1,11 +1,11 @@
-# hai-flow A5: Editor holder, RAM and Sync main holder
+# A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 14
+- Rev: 15
 - Status: active
-- Area: hai-flow
+- Area: a5r
 - Owner: HaiHuynh
 - Skill: `plugin-authoring`
-- Branch: `intent/hai-flow-a5`
+- Branch: `intent/a5r`
 - Started: 2026-10-06
 
 ## Goal
@@ -94,19 +94,21 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A45 (rev 14): No PR leaves unscored because of how the command is written. A command opens a PR when any command it runs is `gh pr create` or a POSTing `gh api …/pulls`: found by tokenizing each segment (quote-aware split on `&&`, `||`, `;`, `|`, newlines, `{`/`}`, PowerShell `if (…) {`), skipping env assignments and wrappers (`env`, `time`, `&`, `.exe`, path prefixes) the way `commandVerb` does, and recursing into `bash -c`, `sh -c`, `cmd /c`, `powershell`/`pwsh -Command` (as `nestedCommand` does); a here-document fed to a shell (`bash <<EOF`, `sh`, `pwsh`) is read as commands, any other here-document body is not. MEASURED 2026-10-07 on 0.11.2: `GH_TOKEN=x gh pr create`, `git push; if ($?) { gh pr create }`, `& gh pr create`, `bash -c "gh pr create"` all read as no PR (ff3ced6 caught all but `gh.exe`). Proof: gate: unit tests over each form (and the F-4 forms still not a PR: `echo "gh pr create"`, a `cat <<EOF` body quoting it).
 - A46 (rev 14): The PR's refs are read from the gh call's own tokens, quote-aware: a `;`, `&&` or `||` inside a quoted title or body never cuts `--head` off (MEASURED: `--body "fix a; b" --head intent/x` read no head and scored the session's checkout); every flag form gh accepts is read: `-Hvalue`, `-H=value`, `-R=o/r`, `--field=head=x`, `-F head=x` (a `@file` value is "not scored"). Here-document terminators match exactly (leading tabs only for `<<-`); a `<<` after `#` is a comment. Proof: gate: unit tests over each form.
 - A47 (rev 14): The rest of the adversary review of 0.11.2 (2026-10-07): (a) a diff touching several intents' folders, none of them the tracked one, is scored under the intent whose prompt names most of the diff's paths, or "not scored" naming the candidates when tied, never the alphabetically first; (b) a fork PR (`-R upstream/x --head me:branch` from a clone whose origin is the fork) is scored against the fork's branch, not refused as another repository, when `upstream/x` is a remote of that repository; (c) `withFrameStyle` finds the real end of the `<svg …>` open tag (quote-aware, comments skipped); (d) the Svg-call list for A43 is regenerated and compared by the suite itself (or the engine test is named the evidence and the fixture test dropped), and finds calls with any prop order, multi-line, or a destructured `Svg`; (e) A44's row says what was measured: the fallback failure was reproduced by the orchestrator in Git Bash's PowerShell 5, the worker's spawn environment did not reproduce it; mark which half is MEASURED. Proof: gate: unit tests for (a)–(d); (e) review.
+- A48 (rev 15): The feature is named A5R (Agent 5 Rules) everywhere, so it is never read as acceptance row A5: the mod folder `a5r/` and plugin name `a5r` (its tools `mcp__a5r__editor` / `mcp__a5r__sync`, agent type `a5r:sync`), the command `/a5r` (`/a5r on|off|accept|sync|gate|reset`), every notice and refusal prefix `A5R ·` (the A5-off one too, which still says `hai-flow ·`), the prompt sections ("A5R is ON", "Nghiệm thu A5R"), the Ather pane's compact line (`A5R ›`), the A5R pane (id and title), the coordination folder `Saved/A5R/` under the S2 checkout, the rules files, README and tests; the debug tag becomes `A5RTMP` (the old `A5TMP` stays forbidden too, so a leftover is still caught). No "a5", "A5 " or "hai-flow" is left as the feature's name in the mod's code or user-facing text (the five rules' own texts and history in the log/changelog stay as written). Proof: gate: a test that scans every user-facing string the mod builds and the source for the old names (with the explicit exceptions listed); validate, tsc, tests.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
 
-- Never edit `ather-automata/`; hai-flow wraps Ather from above in the hook chain (it must load first in `CLAUDE_CODE_PLUGIN_DIRS`).
+- Never edit `ather-automata/`; A5R wraps Ather from above in the hook chain (it must load first in `CLAUDE_CODE_PLUGIN_DIRS`).
 - No fixed-interval model check-ins: the mod's minute timer reads files only and wakes the model only on events.
-- Coordination files live under the S2 checkout's git-ignored `Saved/` (`Saved/HaiFlow/`), never in git, never in `docs/intent/`.
+- Coordination files live under the S2 checkout's git-ignored `Saved/` (`Saved/A5R/`), never in git, never in `docs/intent/`.
 - Never write inside the mod folder at runtime (hot reload would loop).
-- Commit on `intent/hai-flow-a5` with exact paths; no push without Hai.
+- Commit on `intent/a5r` with exact paths; no push without Hai.
 
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 15 (2026-10-07): L-17: renamed A5R (Agent 5 Rules): intent folder `docs/intent/hai-flow-a5/` → `docs/intent/a5r/`, branch `intent/hai-flow-a5` → `intent/a5r`, mod `a5/` → `a5r/`; A48. Rows keep their numbers.
 - rev 14 (2026-10-07): L-16, adversary review (Fable) of 0.11.1–0.11.2: A45 no PR-command bypass (regression from rev 12), A46 quote-aware refs and every gh flag form, A47 multi-intent slug, fork PRs, frame-style insertion, A43/A44 evidence.
 - rev 13 (2026-10-07): L-15: A43 interactive frames transparent in both themes (the chips' white squares), A44 record titles keep emoji and dashes.
 - rev 12 (2026-10-07): F-? from the avatar-frame worker: A41 score the PR's own branch/worktree, A42 no false A5TMP hits on a5's own files.
