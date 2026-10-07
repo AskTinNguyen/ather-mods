@@ -11,9 +11,9 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { icon, sealSvg, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesSeals, withSeal, type RuleHits } from './theme.ts'
-import { acceptCard, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
+import { curtainSvg, icon, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
+import { A5_LOOK, ATHER, STATUS, V2, a5Band, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
+import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
@@ -42,16 +42,16 @@ type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
-const ALLOW_ONCE = 'Cho chạy lần này'
-const ALLOW_SESSION = 'Cho cả session này'
+const ALLOW_ONCE = 'Allow once'
+const ALLOW_SESSION = 'Allow for this session'
 const ATHER_PANE = 'ather'
 const A5_PANE = 'a5'
-const PANE_INK = { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet } // A33: the A5 pane's text: ivory, and its quiet grey // A29: the A5 pane's id ($.ui.open) and its render requestId
+const PANE_INK = (): { ink: string; quiet: string } => ({ ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet }) // A33/A40: the A5 pane's text and quiet grey, per theme // A29: the A5 pane's id ($.ui.open) and its render requestId
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
-const RULE_NAMES: Record<string, string> = { D1: 'Yêu Project', D2: 'Học tập tốt', D3: 'Kỷ luật tốt', D4: 'Giữ gìn vệ sinh', D5: 'Thật thà' } // D9, short for refusals
-const INK = '#ECE9E2'
+const RULE_NAMES: Record<string, string> = RULE_SHORT // D9 / A34, short for refusals
+const INK = (): string => A5_LOOK.paneInk // A40: the pane's ink, per theme
 
 let engine: A5 | null = null
 let rulesA5 = ''
@@ -65,8 +65,23 @@ let markedFrom: string | null = null // the title before this session marked it,
 let a5On = false
 let a5FlipAt = 0
 let hits: RuleHits = noHits()
-let hitsDay = '' // A32: the day the counts are for ('Chạm hôm nay')
+let hitsDay = '' // A32: the day the counts are for ('Hits today')
 let openRule: number | null = null // A32: the rule whose card is open in the A5 pane
+// A37: when the A5 pane opened (or first drew) and when the compact line first drew: their entrance plays then.
+let paneEnterAt = 0
+let lineEnterAt = 0
+const ENTRANCE_MS = 1_000 // how long after the opening the curtains stay in the tree (they finish within 300 ms)
+const ENTRANCE_BUDGET_MS = 300
+// A38: one-shot event dithers (≤ 1 s): a rule chip stamps red when its rule is hit; the band sweeps at the sync freeze
+// (❄ in) and back at the lift; a new acceptance score resolves the chips one by one to ✓ / ✗.
+const FX_MS = 1_000
+const freshHits = new Set<string>() // rules hit since the A5 pane last drew
+const hitStampAt: Record<string, number> = {}
+let lastPhaseSeen: Phase | null = null
+let freezeAt = 0
+let liftAt = 0
+let scoreSeenAt = 0
+let scoreFxAt = 0
 let isS2 = false
 let lockView: LockView | undefined
 let vitals: Vitals | undefined
@@ -113,7 +128,7 @@ let decision: GrantDecision | null = null
 const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run this holder has started
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
-let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string } | null = null // A18/A19: the last nghiệm thu
+let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string } | null = null // A18/A19: the last acceptance score
 let acceptDirty = false // A19: a file changed since the last score
 let isScoring = false
 let shipCheckedAt = 0
@@ -139,6 +154,7 @@ const s2Root = (opts: Opts): string => parentOf(parentOf(norm(opts.editorLock)))
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const stampOf = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hhmm(d)}`
 const count = (rule: string) => {
+  for (const id of rule.match(/D[1-5]/g) ?? []) freshHits.add(id) // A38: the chip stamps at the next draw
   for (const id of rule.match(/D[1-5]/g) ?? []) hits[id as keyof RuleHits] += 1
 }
 const gateOf = (rule: string): string => `${rule} ${rule.split('/').map(r => RULE_NAMES[r]).filter(Boolean).join(' / ')}`
@@ -279,8 +295,8 @@ async function askHai($: Engine, opts: Opts, d: Decision, what: string): Promise
   const gate = gateOf(d.rule)
   if (opts.a5WhenPresent === 'deny') return blocked(gate, d.why, 'needs Hai\'s approval: ask Hai to run it')
   try {
-    const answer = await $.ui.ask(`${gate}: ${d.why} Cho chạy \`${what.slice(0, 160)}\`?`, {
-      options: [ALLOW_ONCE, ALLOW_SESSION, 'Không'],
+    const answer = await $.ui.ask(`${gate}: ${d.why} Run \`${what.slice(0, 160)}\`?`, {
+      options: [ALLOW_ONCE, ALLOW_SESSION, 'No'],
       header: `A5 ${d.rule}`,
     })
     if (answer === ALLOW_ONCE) return 'allow'
@@ -288,7 +304,7 @@ async function askHai($: Engine, opts: Opts, d: Decision, what: string): Promise
       approved.add(d.key)
       return 'allow'
     }
-    return blocked(gate, d.why, `Hai said no${answer && answer !== 'Không' ? ` ("${answer}")` : ''}: do not retry it; ask Hai or do other work`)
+    return blocked(gate, d.why, `Hai said no${answer && answer !== 'No' ? ` ("${answer}")` : ''}: do not retry it; ask Hai or do other work`)
   } catch {
     return blocked(gate, d.why, 'nobody could approve it now (an Ather away window, a closed dialog, or no one to ask): do not retry it; do other work, and if an away window is open set that ledger entry\'s Choice to "parked for the director"')
   }
@@ -675,6 +691,7 @@ function runTick($: Engine, opts: Opts): Promise<void> {
 }
 
 async function tick($: Engine, opts: Opts): Promise<void> {
+  await readTheme($)
   if ((await readA5($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
   if (!(await readA5($))) {
     showStatus($)
@@ -1100,8 +1117,8 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
   push({ id: noticeIds.withoutMod(s, targets.map(t => t.id8)), text: NOTICES.holderWithoutMod(s, rows), isActionable: false })
 }
 
-// ---------- Nghiệm thu A5 (A18): the five rules over the branch, before a PR and when an intent closes ----------
-const PASS_ONCE = 'Cho PR này qua'
+// ---------- A5 acceptance (nghiệm thu, A18): the five rules over the branch, before a PR and when an intent closes ----------
+const PASS_ONCE = 'Let this PR through'
 
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
 type PrRefs = { repo?: string; head?: string; base?: string }
@@ -1267,9 +1284,9 @@ async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: In
   if (opts.a5WhenPresent === 'deny') return text
   try {
     const question = x.diffProblem
-      ? `Nghiệm thu A5: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Cho qua lần này?`
-      : `Nghiệm thu A5: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Cho qua lần này?`
-    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'Không'], header: 'Nghiệm thu A5' })
+      ? `A5 acceptance: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Let it through this once?`
+      : `A5 acceptance: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Let it through this once?`
+    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'No'], header: 'A5 acceptance' })
     return answer === PASS_ONCE ? null : `${text}\n(Hai said no)`
   } catch {
     return `${text}\n(nobody could approve it now)`
@@ -1332,7 +1349,7 @@ async function postHoc($: Engine, opts: Opts, a5: A5, root: string, status: Athe
         await raiseRed(
           $,
           opts,
-          `PR #${n} (intent ${slug}) was opened without nghiệm thu A5 and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
+          `PR #${n} (intent ${slug}) was opened without A5 acceptance and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
           'hold the merge until the branch scores 5 of 5',
         )
   return true
@@ -1343,12 +1360,12 @@ async function acceptCommand($: Engine, opts: Opts): Promise<string> {
   const a5 = await load($)
   const cwd = await $.session.cwd()
   const root = (await locate($, a5, `${cwd}/_`)).root
-  if (!root) return 'Nghiệm thu A5: this session is not in a git repository.'
+  if (!root) return 'A5 acceptance: this session is not in a git repository.'
   const x = await gatherAccept($, opts, a5, root, null, '', undefined)
   const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: null, scores, what: 'on demand' }
   $.ui.invalidate('ui.render')
-  return [`Nghiệm thu A5 (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
+  return [`A5 acceptance (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
 }
 
 /** A21: the score of the intent Ather hands over at Ship, as the text added to that prompt. */
@@ -1755,6 +1772,17 @@ function motionFor(key: string, sig: string, color: string, now: number, running
   return s && s.at > 0 && now - s.at < MOTION_MS ? { kind: 'reveal', from: s.from, ms: 700 } : { kind: 'still' }
 }
 
+/** A40: the app theme from `/config` ("theme"), applied to every colour a5 draws; dark when it cannot be read. */
+async function readTheme($: Engine): Promise<void> {
+  const rows = await $.config.list().catch(() => [])
+  const row = rows.find(x => x.key === 'theme')
+  const name = themeOf(row?.value)
+  if (name !== currentTheme()) {
+    applyTheme(name)
+    $.ui.invalidate('ui.render')
+  }
+}
+
 /** The reads both panes need, off the render: the branch state, the nghiệm thu score (when one is wanted, or the
  * Ship check is due), the PR lines. */
 function scheduleReads($: Engine, opts: Opts, now: number): void {
@@ -1765,6 +1793,7 @@ function scheduleReads($: Engine, opts: Opts, now: number): void {
 
 /** A29: open (or bring back) the A5 pane; a toast when the surface could not place it. */
 async function openA5Pane($: Engine): Promise<string> {
+  paneEnterAt = await $.clock.now() // A37: the entrance plays at the next draw
   const r = await $.ui.open({ id: A5_PANE, title: 'A5' }).catch(err => ({ isPlaced: false, reason: String(err) }) as const)
   if (r.isPlaced) return 'A5 pane opened.'
   const why = 'reason' in r ? String(r.reason) : 'not placed'
@@ -1794,9 +1823,9 @@ function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolea
   const tint = (warn: boolean, base: string) => (warn ? STATUS.warn : base)
   const still: Motion = { kind: 'still' }
   return [
-    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK, now, false, opts), isDesktop), ...(editorName ? { name: editorName } : {}), value: editorValue, isWarn: editorWarn },
+    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK()), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK(), now, false, opts), isDesktop), ...(editorName ? { name: editorName } : {}), value: editorValue, isWarn: editorWarn },
     { key: 'memory', icon: icon(el, 'memory', tint(under, STATUS.ok), still, isDesktop), value: memText, isWarn: under },
-    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK), opts.motion === 'off' ? still : motionFor('main', syncText, INK, now, phase === 'frozen', opts), isDesktop), value: syncText, isWarn: syncWarn },
+    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK()), opts.motion === 'off' ? still : motionFor('main', syncText, INK(), now, phase === 'frozen', opts), isDesktop), value: syncText, isWarn: syncWarn },
   ]
 }
 
@@ -1816,13 +1845,51 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     scheduleReads($, opts, now)
     // A30: "★ A5 ›" on the seal red (a Button has no colour of its own: the red is its box's background).
     const button = el.Button({ key: 'hai-a5-open', label: '★ A5 ›', plain: true, onPress: () => void openA5Pane($) })
-    kids.splice(stripAt + 1, 0, compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, A5_LOOK.sealBg))
+    // A40: the button's label is the surface's ink; seal red behind it reads in the dark theme, a red rim in the light one.
+    let line = compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, currentTheme() === 'dark' ? A5_LOOK.sealBg : undefined, currentTheme() === 'light' ? A5_LOOK.hit : undefined)
+    // A37: the compact line's entrance when it first draws (desktop, motion on).
+    if (lineEnterAt === 0) lineEnterAt = now
+    if (isDesktop && opts.motion !== 'off' && now - lineEnterAt < ENTRANCE_MS) {
+      line = withCurtain(el as never, line, 'hai-a5-line-in', entrance(1)[0] as Curtain)
+      $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render'))
+    }
+    kids.splice(stripAt + 1, 0, line)
   }
   // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.
   const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
   const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5_LOOK.sealBg, A5_LOOK.sealText, true), alt: 'A5 on', width: 27, height: 14, isInteractive: true }) : undefined
   kids = kids.map(k => replaceKeyed(k, 'head-words', words => withSeal(el, words, sealEl)))
-  return recolor({ ...(tree as object), children: kids } as unknown as RenderElement)
+  // A39: every worker avatar Ather drew wears the red scarf while A5 is on.
+  return recolor(scarfAvatars({ ...(tree as object), children: kids } as unknown as RenderElement))
+}
+
+/** A37/A38: a pixel curtain laid over a block: an absolute box spanning it (painted over what it holds, clipped to
+ * it) holding one SVG whose cells clear or fill in Bayer order. The block becomes the curtain's positioning parent. */
+function withCurtain(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, c: Curtain): unknown {
+  return withOverlay(el, block, key, curtainSvg(c))
+}
+
+/** A37/A38: any one-shot SVG laid over a block the same way (an absolute box spanning it, clipped to it). */
+function withOverlay(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, source: string): unknown {
+  if (!el.Svg) return block
+  const b = block as { props?: Record<string, unknown>; children?: unknown[] }
+  const over = el.Box({ key, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', children: [el.Svg({ source, alt: '', width: 2400, height: 480, isInteractive: true })] })
+  return { ...b, props: { ...(b.props ?? {}), position: 'relative' }, children: [...(b.children ?? []), over] }
+}
+
+/** A37: the entrance: each block in turn (band, tools, sessions, card, rules) dithers in from seal-red pixels, the
+ * whole sequence ending within 300 ms; the cells take 4 ms apiece. */
+const entrance = (n: number): Curtain[] => {
+  const step = 4
+  const last = ENTRANCE_BUDGET_MS - 16 * step
+  return Array.from({ length: n }, (_, i) => ({ color: A5_LOOK.sealBg, begin: n > 1 ? Math.floor((i * last) / (n - 1)) : 0, step, clear: true }))
+}
+
+/** A35 (mockup v2): the A5 pane's frame: the band at full width, then every block on one gutter, one gap between blocks. */
+function paneOf(el: { Box: (p: Record<string, unknown>) => unknown }, kids: unknown[]): RenderElement {
+  const [band, ...blocks] = kids as { props?: Record<string, unknown> }[]
+  const onGutter = blocks.map(b => ({ ...b, props: { ...(b.props ?? {}), marginX: V2.gutter, marginTop: 0 } }))
+  return el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
 }
 
 /** A29: the A5 pane: the three tool rows (A25), the sessions list (A26), the Nghiệm thu card (A19), and the five
@@ -1832,10 +1899,25 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   const isDesktop = e.surface === 'desktop'
   const now = await $.clock.now()
   const isOn = await readA5($)
-  const kids: unknown[] = [a5Band(el, isOn)] // A33: the seal-red title band first
+  // A38: the sync freeze and its lift, seen at the draw after they happen.
+  const phaseNow = phaseOf(syncFile, now)
+  if (lastPhaseSeen !== null && phaseNow === 'frozen' && lastPhaseSeen !== 'frozen') freezeAt = now
+  if (lastPhaseSeen === 'frozen' && phaseNow !== 'frozen') liftAt = now
+  lastPhaseSeen = phaseNow
+  const isFx = isDesktop && opts.motion !== 'off'
+  let fxPlaced = false
+  let band = a5Band(el, isOn, isOn && phaseNow === 'frozen')
+  if (isFx && now - freezeAt < FX_MS) {
+    band = withOverlay(el as never, band, 'hai-a5-fx-freeze', sweepSvg(A5_LOOK.sealText, false))
+    fxPlaced = true
+  } else if (isFx && now - liftAt < FX_MS) {
+    band = withOverlay(el as never, band, 'hai-a5-fx-lift', sweepSvg(A5_LOOK.sealText, true))
+    fxPlaced = true
+  }
+  const kids: unknown[] = [band] // A33/A35: the band first
   if (!isOn) {
     kids.push(el.Box({ key: 'hai-a5-off', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'A5 is off: Ather runs as it ships. /a5 on turns on the five rules, the Editor holder, RAM and Sync main for every session.' })] }))
-    return el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement
+    return paneOf(el, kids)
   }
   scheduleReads($, opts, now)
   if (isS2) {
@@ -1848,6 +1930,19 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
       mainTile(sync, plan, syncActionButton($, opts, el, isDesktop, now)),
     ]
     tiles[0] = { ...tiles[0], action: editorAction($, opts, el, isDesktop) } as (typeof tiles)[number]
+    // A35 (mockup v2): Memory reads "<n> GB free · below launch gate" (the note in amber only when below); its gate
+    // details are the sub-line; no meter. Sync main's sub-line: when main was fetched, the planned or last sync.
+    const free = vitals?.freeGb
+    const extra = [...(probe?.diskGb !== null && probe?.diskGb !== undefined && probe.diskGb < DISK_MIN_GB ? [`${s2Root(opts).slice(0, 2)} ${probe.diskGb} GB free`] : []), ...(vitals && vitals.git >= 10 ? [`${vitals.git} git processes`] : [])]
+    tiles[1] = {
+      ...tiles[1],
+      value: free === undefined ? 'probe failed' : `${free} GB free`,
+      meter: undefined,
+      ...(free !== undefined && free < gates.nopieGb ? { note: { text: 'below launch gate', warn: true } } : free !== undefined && free < gates.pieGb ? { note: { text: 'launch fits without PIE', warn: false } } : {}),
+      sub: [`gate ${gates.pieGb} GB with PIE, ${gates.nopieGb} without`, `PIE needs ${PIE_START_GB} GB`, ...extra].join(' · '),
+      subWarn: extra.length > 0,
+    } as (typeof tiles)[number]
+    if (sync) tiles[2] = { ...tiles[2], sub: [`fetched ${ago(sync.fetchedMinAgo)}`, plan.line, plan.conflicts, ...sync.flags].filter(Boolean).join(' · '), subWarn: Boolean(plan.conflicts) || sync.flags.length > 0 } as (typeof tiles)[number]
     const names = { editor: 'editor', memory: 'memory', main: 'branch' } as const
     for (const t of tiles) {
       const name = names[t.key as keyof typeof names]
@@ -1855,10 +1950,10 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
       const color = t.dot && t.dot !== STATUS.ok ? t.dot : A5_LOOK.gold
       t.icon = icon(el, name, color, motionFor(`pane-${t.key}`, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
-    kids.push(tilesRow(el, tiles, isDesktop, PANE_INK))
+    kids.push(tilesRow(el, tiles, isDesktop, PANE_INK()))
     // A26: the sessions on this machine as a short named list, one line each.
     const view = sessionsView({ me8: id8, meTitle: me?.title ?? '', files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now), names: sessionNames })
-    kids.push(sessionsBox(el, view, isDesktop, PANE_INK))
+    kids.push(sessionsBox(el, view, isDesktop, PANE_INK()))
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
@@ -1866,25 +1961,59 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   // A19: the Nghiệm thu A5 card, once there is a score or the tracked intent is in Ship.
   if (lastAccept) {
     const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
-    kids.push(acceptCard(el, 'Nghiệm thu A5', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
+    kids.push(acceptCard(el, 'A5 acceptance', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
   }
-  // A27: the five rules, last; A20: rule 1's word switches tổ quốc / project in a Client of its own.
+  // A27: the five rules, last; A20: rule 1's word switches country / project in a Client of its own.
   const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
   const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet, dim: true } }) : undefined
-  // A32: the five seals; a press opens or closes that rule's card. "Chạm hôm nay": the counts start over each day.
+  // A36: the five chips; a press shows or hides that rule's card. "Hits today": the counts start over each day.
   const today = ymd(now)
   if (hitsDay !== today) {
     if (hitsDay) hits = noHits()
     hitsDay = today
   }
   await load($) // the rules text the cards read
-  const motto = rule1 ?? el.Text({ color: ATHER.quiet, children: 'Yêu Project' })
+  const motto = rule1 ?? el.Text({ color: ATHER.quiet, children: 'Love the project' })
   const pressSeal = (n: number) => () => {
     openRule = openRule === n ? null : n
     $.ui.invalidate('ui.render')
   }
-  kids.push(rulesSeals(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { seal: A5_LOOK.sealBg, rim: A5_LOOK.gold, numeral: A5_LOOK.gold, ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.meter }))
-  return recolor(el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement)
+  for (const id of freshHits) hitStampAt[id] = now
+  freshHits.clear()
+  if (lastAccept && lastAccept.at !== scoreSeenAt) {
+    scoreSeenAt = lastAccept.at
+    scoreFxAt = now
+  }
+  const marks = (n: number): unknown[] => {
+    const s = lastAccept?.scores.find(x => x.rule === n)
+    return s ? [el.Text({ key: `hai-a5-chip-${n}-mark`, color: s.state === 'pass' ? STATUS.ok : s.state === 'fail' ? STATUS.bad : A5_LOOK.quiet, children: s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–' })] : []
+  }
+  let rules = rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.hit }, marks)
+  if (isFx)
+    for (const n of [1, 2, 3, 4, 5]) {
+      const id = `D${n}`
+      if (now - (hitStampAt[id] ?? -FX_MS) < FX_MS) {
+        rules = replaceKeyed(rules, `hai-a5-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5-fx-hit-${n}`, stampSvg(A5_LOOK.sealBg)))
+        fxPlaced = true
+      }
+      if (lastAccept && now - scoreFxAt < FX_MS) {
+        rules = replaceKeyed(rules, `hai-a5-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5-fx-score-${n}`, curtainSvg({ color: A5_LOOK.gold, begin: (n - 1) * 150, step: 4, clear: true })))
+        fxPlaced = true
+      }
+    }
+  if (fxPlaced) $.clock.after(FX_MS + 10, () => $.ui.invalidate('ui.render')) // then still
+  kids.push(rules)
+  // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
+  if (paneEnterAt === 0) paneEnterAt = now
+  const isEntering = isDesktop && opts.motion !== 'off' && now - paneEnterAt < ENTRANCE_MS
+  if (isEntering) {
+    const plan = entrance(kids.length)
+    kids.forEach((k, i) => {
+      kids[i] = withCurtain(el as never, k, `hai-a5-in-${i}`, plan[i] as Curtain)
+    })
+    $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render')) // then still: the curtains leave the tree
+  }
+  return recolor(paneOf(el, kids))
 }
 
 export const register: Register = (on, options) => {
@@ -1892,9 +2021,10 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const res = await next(e)
+    await readTheme($) // A40
     await $.command.register({
       name: 'a5',
-      description: 'A5: /a5 (opens the A5 pane) · /a5 on · /a5 off · /a5 status · /a5 accept (nghiệm thu A5 now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at nghiệm thu before a PR; Editor holder, RAM and Sync main)',
+      description: 'A5: /a5 (opens the A5 pane) · /a5 on · /a5 off · /a5 status · /a5 accept (A5 acceptance now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5 acceptance before a PR; Editor holder, RAM and Sync main)',
       argumentHint: 'on | off | status | accept | gate <pie> <nopie> | sync HH:MM',
     })
     await readA5($)
@@ -1938,8 +2068,8 @@ export const register: Register = (on, options) => {
       $.ui.invalidate('ui.render')
       return {
         text: a5On
-          ? '★ A5 on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; nghiệm thu A5 before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
-          : 'A5 off: the rules, nghiệm thu A5, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
+          ? '★ A5 on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; A5 acceptance before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
+          : 'A5 off: the rules, A5 acceptance, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
       }
     }
     await readA5($)
@@ -2104,6 +2234,15 @@ export const register: Register = (on, options) => {
 
   // Ather's pane: drawn by Ather beneath; this wraps what it drew.
   on('ui.render', { component: 'Pane', requestId: ATHER_PANE }, async ($, e, next) => drawPane($, opts, e, await next(e)))
+  // A40: the theme changed in /config: every colour follows at once.
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const res = await next(e)
+    if (!('deny' in res && res.deny)) {
+      applyTheme(themeOf(e.value))
+      $.ui.invalidate('ui.render')
+    }
+    return res
+  })
   // A29: the A5 pane is this plugin's own: drawn here, never by anything beneath.
   on('ui.render', { component: 'Pane', requestId: A5_PANE }, async ($, e) => drawA5Pane($, opts, e))
 }

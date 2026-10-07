@@ -960,7 +960,7 @@ export const sessionsView = (x: { me8: string; meTitle: string; files: readonly 
   }
   const rank = (r: SessionRow) => (r.isMe ? 0 : r.holds.length > 0 ? 1 : 2)
   rows.sort((a, b) => rank(a) - rank(b) || (a.activeMin ?? 1e9) - (b.activeMin ?? 1e9) || a.id8.localeCompare(b.id8))
-  return { header: `Sessions · ${rows.length} đang mở`, rows: rows.slice(0, SESSION_ROWS), more: Math.max(0, rows.length - SESSION_ROWS), source: appRows ? 'app' : 'lanes' }
+  return { header: `Sessions · ${rows.length} open`, rows: rows.slice(0, SESSION_ROWS), more: Math.max(0, rows.length - SESSION_ROWS), source: appRows ? 'app' : 'lanes' }
 }
 
 /** A29: a title on one line: newlines, tabs and runs of spaces become one space; blank stays blank (the row then

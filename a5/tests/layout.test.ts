@@ -39,8 +39,8 @@ for (const surface of ['terminal', 'desktop'] as const)
         const action = find(tree, `hai-tile-${k}-action`)
         if (action) expect([k, action.props?.flexShrink, find(tree, `hai-tile-${k}-main`)?.props?.flexShrink]).toEqual([k, 0, 1])
       }
-      const labels = surface === 'desktop' ? ['Editor holder', 'Memory', 'Sync main'] : ['Editor', 'Memory', 'Sync']
-      for (const [n, k] of ['editor', 'memory', 'main'].entries()) expect(text(find(tree, `hai-tile-${k}-main`))).toContain(labels[n] as string)
+      // A35: one label column on both surfaces.
+      for (const [n, k] of ['editor', 'memory', 'main'].entries()) expect(text(find(tree, `hai-tile-${k}-label`))).toBe(['Editor', 'Memory', 'Sync main'][n] as string)
       expect(text(find(tree, 'hai-tile-editor'))).toContain(LONG_LANE)
       expect([buttons(tree, 'hai-tile-editor'), buttons(tree, 'hai-tile-memory'), buttons(tree, 'hai-tile-main')]).toEqual([[], [], ['Plan sync']])
       expect(text(find(tree, 'hai-tile-memory'))).not.toMatch(/[−+] ?1 GB/)

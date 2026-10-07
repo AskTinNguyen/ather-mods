@@ -36,9 +36,9 @@ test(`A22: ${GITHUB} on a failing branch is refused with the list; the score rea
   const w = world(on, { out: { [STATUS_TOOL]: status }, git: DIRTY })
   setup(w)
   const why = refused(await $.tool.call({ tool: GITHUB, ...input() } as never))
-  expect(why?.split('\n')[0]).toBe('A5 · Nghiệm thu — 2 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
-  expect(why).toContain('- 3 Đoàn kết tốt, kỷ luật tốt: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
-  expect(why).toContain('- 4 Giữ gìn vệ sinh thật tốt: Source/S2/Combat/Hit.cpp: a debug leftover')
+  expect(why?.split('\n')[0]).toBe('A5 · Acceptance — 2 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
+  expect(why).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
+  expect(why).toContain('- 4 Keep it clean: Source/S2/Combat/Hit.cpp: a debug leftover')
   expect(w.runs.find(r => r.includes('diff --name-only'))?.endsWith('origin/main...HaiHuynh/tail-vfx')).toBe(true)
   expect(ran(w, GITHUB)).toBe(0)
 })
@@ -51,7 +51,7 @@ test(`A22: ${PLUGIN_GITHUB} on a clean branch passes and runs`, opts(), async ($
 })
 
 test('A22: a worker is refused at once; Hai can let one PR through in the dialog', opts('ask'), async ($, on) => {
-  const w = world(on, { out: { [STATUS_TOOL]: status }, git: DIRTY, ask: 'Cho PR này qua' })
+  const w = world(on, { out: { [STATUS_TOOL]: status }, git: DIRTY, ask: 'Let this PR through' })
   setup(w)
   expect(refused(await $.tool.call({ tool: PLUGIN_GITHUB, ...input(), agentId: 'worker-1' } as never))).toContain('a worker does not ask Hai')
   expect([(w.calls.ask ?? []).length, ran(w, PLUGIN_GITHUB)]).toEqual([0, 0])
@@ -63,7 +63,7 @@ test('A22: a PR for another repository, or a head this checkout does not have, i
   const w = world(on, { out: { [STATUS_TOOL]: status }, git: { ...CLEAN, 'origin/HaiHuynh/gone^{commit}': { stdout: '', exitCode: 1 }, 'HaiHuynh/gone^{commit}': { stdout: '', exitCode: 1 } } })
   setup(w)
   expect(refused(await $.tool.call({ tool: GITHUB, ...input({ owner: 'someone', repo: 'other' }) } as never))).toBe(
-    "A5 · Nghiệm thu — could not read the whole branch diff (the PR is for someone/other, not this session's repository (https://github.com/sipherxyz/s2.git)) → open the PR from a slice branch cut from origin/main, or Hai lets this one through",
+    "A5 · Acceptance — could not read the whole branch diff (the PR is for someone/other, not this session's repository (https://github.com/sipherxyz/s2.git)) → open the PR from a slice branch cut from origin/main, or Hai lets this one through",
   )
   expect(refused(await $.tool.call({ tool: GITHUB, ...input({ head: 'HaiHuynh/gone' }) } as never))).toContain('head HaiHuynh/gone is not in this repository')
   expect(ran(w, GITHUB)).toBe(0)

@@ -28,12 +28,12 @@ test('A18: a PR whose branch fails the score is refused with the list (rule, fil
   const w = world(on, { out: { [STATUS_TOOL]: status({ pie: { state: 'pass' }, editor: { state: 'none' } }) }, git: branch('Source/S2/Tail/Glow.cpp\nSource/S2/Combat/Hit.cpp\n', `${DIFF}+++ b/Source/S2/Combat/Hit.cpp\n+int x = 2; // A5TMP\n`) })
   setup(w, MET.replace('| A2 | met | PIE: fade 0.4 s |', '| A2 | open | |'))
   const why = refused(await $.tool.call({ tool: 'Bash', command: PR }))
-  expect(why?.split('\n')[0]).toBe('A5 · Nghiệm thu — 4 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
-  expect(why).toContain('- 2 Học tập tốt, lao động tốt: docs/intent/tail-vfx/progress.md: A2 is open → prove it, or record in findings.md why this PR ships without it')
-  expect(why).toContain("- 2 Học tập tốt, lao động tốt: Ather's proof is incomplete for the role techart: still needs Editor check")
-  expect(why).toContain('- 3 Đoàn kết tốt, kỷ luật tốt: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
-  expect(why).toContain('- 4 Giữ gìn vệ sinh thật tốt: Source/S2/Combat/Hit.cpp: a debug leftover')
-  expect(why).toContain('- 5 Khiêm tốn, thật thà, dũng cảm: PR body: \'Verified\' claims Editor check')
+  expect(why?.split('\n')[0]).toBe('A5 · Acceptance — 4 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
+  expect(why).toContain('- 2 Study well, work well: docs/intent/tail-vfx/progress.md: A2 is open → prove it, or record in findings.md why this PR ships without it')
+  expect(why).toContain("- 2 Study well, work well: Ather's proof is incomplete for the role techart: still needs Editor check")
+  expect(why).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
+  expect(why).toContain('- 4 Keep it clean: Source/S2/Combat/Hit.cpp: a debug leftover')
+  expect(why).toContain('- 5 Modest, honest, brave: PR body: \'Verified\' claims Editor check')
   expect(ran(w)).toBe(0)
 })
 
@@ -48,7 +48,7 @@ test('A18: a clean branch passes and the PR opens; the score is never a per-turn
 })
 
 test('A18: Hai can let one PR through in the dialog; the next PR is scored and asked again', opts('ask'), async ($, on) => {
-  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Cho PR này qua' })
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Let this PR through' })
   setup(w)
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
@@ -56,7 +56,7 @@ test('A18: Hai can let one PR through in the dialog; the next PR is scored and a
 })
 
 test('A18: a worker opening a failing PR is refused at once, never asked', opts('ask'), async ($, on) => {
-  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Cho PR này qua' })
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Let this PR through' })
   setup(w)
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR, agentId: 'worker-1' } as never))).toContain('a worker does not ask Hai')
   expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 0])
@@ -65,15 +65,15 @@ test('A18: a worker opening a failing PR is refused at once, never asked', opts(
 test('A18: closing an intent is scored the same way; /a5 accept shows the score on demand', opts(), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Tail/Glow.cpp\n') })
   setup(w, MET.replace('| A2 | met | PIE: fade 0.4 s |', '| A2 | open | |'))
-  expect(refused(await $.tool.call({ tool: 'Edit', file_path: `${INTENT}/prompt.md`, old_string: '- Status: active', new_string: '- Status: closed' }))).toContain('A5 · Nghiệm thu — 1 of 5 rules not met before closing intent tail-vfx')
+  expect(refused(await $.tool.call({ tool: 'Edit', file_path: `${INTENT}/prompt.md`, old_string: '- Status: active', new_string: '- Status: closed' }))).toContain('A5 · Acceptance — 1 of 5 rules not met before closing intent tail-vfx')
   const shown = String((await $.command.run({ command: 'a5', args: 'accept' } as never)).text)
   expect(shown.split('\n')).toEqual([
-    'Nghiệm thu A5 (1 of 5 not met):',
-    '✓ 1 Yêu Project, yêu đồng bào: no other session\'s or intent\'s paths; not on main',
-    '✗ 2 Học tập tốt, lao động tốt: docs/intent/tail-vfx/progress.md: A2 is open',
-    '✓ 3 Đoàn kết tốt, kỷ luật tốt: within the intent\'s paths',
-    '✓ 4 Giữ gìn vệ sinh thật tốt: no leftovers, secrets, stray files or background work',
-    '✓ 5 Khiêm tốn, thật thà, dũng cảm: claims match the evidence',
+    'A5 acceptance (1 of 5 not met):',
+    '✓ 1 Love the project, love your fellow sessions: no other session\'s or intent\'s paths; not on main',
+    '✗ 2 Study well, work well: docs/intent/tail-vfx/progress.md: A2 is open',
+    '✓ 3 Unity and discipline: within the intent\'s paths',
+    '✓ 4 Keep it clean: no leftovers, secrets, stray files or background work',
+    '✓ 5 Modest, honest, brave: claims match the evidence',
   ])
 })
 
@@ -104,18 +104,18 @@ test('review: without origin/main the local main is the base', opts(), async ($,
 test('review: a name-only diff that times out is no pass: refused with why, nothing scored, the gh call never runs; /a5 accept shows – rows', opts(), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: { ...branch(OWN), 'diff --name-only': { stdout: '', deny: 'timed out after 30000 ms' } } })
   setup(w)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBe(`A5 · Nghiệm thu — ${UNREAD} (git diff --name-only timed out or did not start) ${NEXT}`)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBe(`A5 · Acceptance — ${UNREAD} (git diff --name-only timed out or did not start) ${NEXT}`)
   expect(ran(w)).toBe(0)
   const shown = String((await $.command.run({ command: 'a5', args: 'accept' } as never)).text).split('\n')
-  expect(shown[0]).toBe('Nghiệm thu A5 (not scored):')
+  expect(shown[0]).toBe('A5 acceptance (not scored):')
   expect(shown.slice(1).every(l => l.startsWith('– ') && l.endsWith(`${UNREAD} (git diff --name-only timed out or did not start)`))).toBe(true)
 })
 
 test('review: a -U0 diff cut at 4 MiB is no pass (a worker is refused at once); Hai can still let it through', opts('ask'), async ($, on) => {
-  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: { ...branch(OWN), 'diff -U0': { stdout: DIFF, truncated: true } }, ask: 'Cho PR này qua' })
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: { ...branch(OWN), 'diff -U0': { stdout: DIFF, truncated: true } }, ask: 'Let this PR through' })
   setup(w)
   const why = refused(await $.tool.call({ tool: 'Bash', command: PR, agentId: 'worker-1' } as never))
-  expect(why?.split('\n')[0]).toBe(`A5 · Nghiệm thu — ${UNREAD} (git diff -U0 output passed 4 MiB) ${NEXT}`)
+  expect(why?.split('\n')[0]).toBe(`A5 · Acceptance — ${UNREAD} (git diff -U0 output passed 4 MiB) ${NEXT}`)
   expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 0])
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
   expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([1, 1])

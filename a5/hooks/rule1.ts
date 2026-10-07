@@ -1,5 +1,5 @@
 // A20: the footer's first rule, a self-drawing Client so a switch redraws this one word and nothing else of the
-// pane. It flips between "Yêu project" and "Yêu tổ quốc" at random intervals (4–12 s); on the desktop the flip is a
+// pane. It flips between "Love the project" and "Love the country" at random intervals (4–12 s); on the desktop the flip is a
 // short ordered dither (▓ ▒ ░ over the letters), on the terminal a plain swap. Its timer lives and dies with the
 // element: closing the pane or turning A5 (or motion) off drops it from the tree, and the timer with it.
 import type { ClientSurface } from 'claude-code'
@@ -7,7 +7,7 @@ import type { ClientSurface } from 'claude-code'
 type State = { word: number; frame: number }
 type Props = { dither?: boolean; color?: string; dim?: boolean }
 
-export const RULE1_WORDS = ['Yêu project', 'Yêu tổ quốc'] as const
+export const RULE1_WORDS = ['Love the project', 'Love the country'] as const
 const STEP_MS = 120
 const FRAMES = ['▓', '▒', '░'] // the dither a flip passes through, one frame per step
 const wait = (): number => 4_000 + Math.floor(Math.random() * 8_000)

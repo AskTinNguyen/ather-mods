@@ -10,7 +10,7 @@ const FREE = 'FREE since=14:00 2026-10-06 by=walker note=Editor closed backgroun
 const colorsIn = (t: unknown): string[] => all(t).map(n => String(n.props?.color ?? n.props?.backgroundColor ?? n.props?.borderColor ?? ''))
 
 test('A33: unit: the band title is letter-spaced in capitals', () => {
-  expect(bandTitle('A5 · Năm điều')).toBe('A 5  ·  N Ă M  Đ I Ề U')
+  expect(bandTitle('A5 · Five rules')).toBe('A 5  ·  F I V E  R U L E S')
 })
 
 for (const surface of ['terminal', 'desktop'] as const)
@@ -21,23 +21,22 @@ for (const surface of ['terminal', 'desktop'] as const)
     const tree = await $.ui.render({ ...A5PANE, surface } as never)
     expect(keys(tree)[0]).toBe('hai-a5-band')
     const band = find(tree, 'hai-a5-band') as Tree
-    expect([band.props?.backgroundColor, band.props?.width]).toEqual([LOOK.red, '100%'])
+    expect([band.props?.backgroundColor, band.props?.width]).toEqual(['#7A1712', '100%']) // A35: the darker, thinner band
     expect(find(tree, 'hai-a5-band-star')?.children?.[0]).toMatchObject({ props: { color: LOOK.gold }, children: ['★'] })
-    expect(find(tree, 'hai-a5-band-title')?.children?.[0]).toMatchObject({ props: { color: LOOK.pale }, children: ['A 5  ·  N Ă M  Đ I Ề U'] })
-    expect(text(find(tree, 'hai-a5-band-on'))).toBe('đang bật')
+    expect(find(tree, 'hai-a5-band-title')?.children?.[0]).toMatchObject({ props: { color: LOOK.pale }, children: ['A 5'] })
+    expect(text(find(tree, 'hai-a5-band-on'))).toBe('on')
     // Gold icons for the tools in a fine state (a free Editor, RAM above the gates).
     for (const k of ['editor', 'memory']) {
-      const iconEl = (find(tree, `hai-tile-${k}-main`)?.children ?? [])[0] as Tree
+      const iconEl = (find(tree, `hai-tile-${k}-icon`)?.children ?? [])[0] as Tree
       expect([k, surface === 'desktop' ? String(iconEl.props?.source).includes(LOOK.gold) : iconEl.props?.color]).toEqual([k, surface === 'desktop' ? true : LOOK.gold])
     }
-    // The RAM meter: red on a dark red track.
-    const meter = all(find(tree, 'hai-tile-memory')).filter(n => n.type === 'Text' && /━/.test(text(n)) && typeof n.props?.color === 'string').map(n => n.props?.color)
-    expect([...new Set(meter)].sort()).toEqual([LOOK.meter, LOOK.track].sort())
+    // A35 supersedes A33's RAM meter: Memory reads "<n> GB free" with no meter.
+    expect(all(find(tree, 'hai-tile-memory')).filter(n => n.type === 'Text' && /━/.test(text(n)))).toEqual([])
     // Ivory text: the tools' values and the session titles.
     expect(colorsIn(find(tree, 'hai-tile-memory-main'))).toContain(LOOK.ivory)
     expect(colorsIn(find(tree, 'hai-overview'))).toContain(LOOK.ivory)
-    // The seals: red fill, gold rim.
-    expect(find(tree, 'hai-a5-seal-1-box')?.props).toMatchObject({ backgroundColor: LOOK.red, borderColor: LOOK.gold })
+    // A36 supersedes A33's red seals: quiet chips, neutral rim until a rule is hit.
+    expect(find(tree, 'hai-a5-chip-1-box')?.props).toMatchObject({ borderColor: '#3A3833' })
   })
 
 test("A33: Ather's pane stays restrained: no band, the line in quiet grey, the seal red only behind the A5 button", opts(), async ($, on) => {
@@ -52,8 +51,8 @@ test("A33: Ather's pane stays restrained: no band, the line in quiet grey, the s
   expect(colorsIn(line).filter(c => [LOOK.ivory, LOOK.meter, LOOK.track].includes(c))).toEqual([])
 })
 
-test('A33: with A5 off the band says "đang tắt"', opts(), async ($, on) => {
+test('A33: with A5 off the band says "off"', opts(), async ($, on) => {
   world(on, { a5: false })
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  expect(text(find(await $.ui.render(A5PANE as never), 'hai-a5-band-on'))).toBe('đang tắt')
+  expect(text(find(await $.ui.render(A5PANE as never), 'hai-a5-band-on'))).toBe('off')
 })

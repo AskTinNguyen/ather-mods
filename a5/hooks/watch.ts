@@ -4,9 +4,9 @@
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
-import { A5_LOOK, ATHER, STATUS, TRACK } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
 
-const A5_MARK = A5_LOOK.gold // A31: this session's ★
+// A31: this session's ★ takes the theme's gold (read at each draw, A40).
 
 export const PIE_START_GB = 5
 export const PIE_ABORT_GB = 3
@@ -112,7 +112,7 @@ type El = {
 }
 /** One tool row: `lines` joined into the desktop status line, `short` (else `lines`) on the terminal's; `action` the
  * one button on the right (A25: at most one per tool, the rest behind it). */
-export type Tile = { key: string; label: string; icon?: unknown; dot?: string; value: string; meter?: unknown; lines: { text: string; color?: string }[]; short?: { text: string; color?: string }[]; action?: unknown }
+export type Tile = { key: string; label: string; icon?: unknown; dot?: string; value: string; meter?: unknown; lines: { text: string; color?: string }[]; short?: { text: string; color?: string }[]; action?: unknown; note?: { text: string; warn: boolean }; sub?: string; subWarn?: boolean }
 
 /** What the Editor holder tile says about this session: its place in the queue, or that it holds the lease. */
 export type EditorData = { lock?: LockView; me8: string; nowMin: number; place: string; waiting: number }
@@ -199,58 +199,62 @@ export const mainTile = (s: Sync | undefined, plan: SyncData, action?: unknown):
 const statusColor = (parts: { color?: string }[], quiet: string = ATHER.quiet): string =>
   parts.some(p => p.color === STATUS.bad) ? STATUS.bad : parts.some(p => p.color === STATUS.warn) ? STATUS.warn : quiet
 
-/** A25: the three tools as full-width rows, one under the other. The first line is a row of two boxes: the left one
- * (icon, label, value, meter) wraps onto a second line when the width runs out and shrinks first; the right one
- * holds the tool's one action and never shrinks. Under it one quiet status line that wraps inside the row. No
- * text is truncated; on the desktop each row is a card (Ather's round border). */
+/** A35 (mockup v2): the three tools as ONE grouped list in a single hairline-bordered box, rows divided by
+ * hairlines. Each row: the icon, a fixed label column ("Editor", "Memory", "Sync main"), the bold value (its
+ * attention part, if any, in amber) with one quiet sub-line under it, and at most one button at the right that
+ * never shrinks. Values and sub-lines wrap inside their column; nothing is truncated. */
 export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean, look?: { ink: string; quiet: string }): unknown => {
   const { Box, Text } = el
   const quiet = look?.quiet ?? ATHER.quiet
-  // State rides the icon's color when there is one, else a dot; the value stays in text ink.
-  const value = (t: Tile) => Text({ bold: true, wrap: 'wrap', ...(look ? { color: look.ink } : {}), children: [...(t.dot && !t.icon ? [Text({ color: t.dot, children: '● ' })] : []), t.value] })
+  const value = (t: Tile) =>
+    Text({ bold: true, wrap: 'wrap', ...(look ? { color: look.ink } : {}), children: [...(t.dot && !t.icon ? [Text({ color: t.dot, children: '● ' })] : []), t.value, ...(t.note ? [Text({ bold: false, color: t.note.warn ? STATUS.warn : quiet, children: ` · ${t.note.text}` })] : [])] })
   const row = (t: Tile) => {
-    const parts = isDesktop ? t.lines : (t.short ?? t.lines)
-    const head = Box({
-      key: `hai-tile-${t.key}-head`,
+    const parts = t.sub !== undefined ? [{ text: t.sub, color: t.subWarn ? STATUS.warn : undefined }] : isDesktop ? t.lines : (t.short ?? t.lines)
+    return Box({
+      key: `hai-tile-${t.key}`,
       flexDirection: 'row',
+      flexWrap: 'wrap', // on a narrow pane the value column drops under the icon and label instead of overflowing
       width: '100%',
+      minWidth: 0,
       columnGap: 1,
       alignItems: 'flex-start',
       children: [
+        Box({ key: `hai-tile-${t.key}-icon`, flexShrink: 0, width: 2, children: t.icon ? [t.icon] : [] }),
+        Box({ key: `hai-tile-${t.key}-label`, flexShrink: 0, width: LABEL_COLUMN, children: [Text({ color: quiet, children: TOOL_LABEL[t.key] ?? t.label })] }),
         Box({
           key: `hai-tile-${t.key}-main`,
-          flexDirection: 'row',
-          flexWrap: 'wrap',
+          flexDirection: 'column',
           flexGrow: 1,
           flexShrink: 1,
           minWidth: 0,
-          columnGap: 1,
-          alignItems: 'center',
-          children: [...(t.icon ? [t.icon] : []), Text({ color: quiet, wrap: 'wrap', children: isDesktop ? t.label : (TERMINAL_LABEL[t.key] ?? t.label) }), value(t), ...(t.meter ? [t.meter] : [])],
+          children: [value(t), ...(parts.length ? [Box({ key: `hai-tile-${t.key}-status`, width: '100%', children: [Text({ color: statusColor(parts, quiet), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })] })] : [])],
         }),
         ...(t.action ? [Box({ key: `hai-tile-${t.key}-action`, flexShrink: 0, flexGrow: 0, children: [t.action] })] : []),
       ],
     })
-    const status = parts.length ? [Box({ key: `hai-tile-${t.key}-status`, width: '100%', children: [Text({ color: statusColor(parts, quiet), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })] })] : []
-    return Box({
-      key: `hai-tile-${t.key}`,
-      flexDirection: 'column',
-      width: '100%',
-      minWidth: 0,
-      ...(isDesktop ? { borderStyle: 'round', borderColor: ATHER.line, paddingX: 1 } : { paddingLeft: 0 }),
-      children: [head, ...status],
-    })
   }
-  return Box({ key: 'hai-tiles', flexDirection: 'column', width: '100%', marginTop: 1, rowGap: isDesktop ? 0 : 0, children: tiles.map(row) })
+  const kids: unknown[] = []
+  tiles.forEach((t, n) => {
+    if (n > 0) kids.push(hairline(el, `hai-tiles-rule-${n}`))
+    kids.push(row(t))
+  })
+  return Box({ key: 'hai-tiles', flexDirection: 'column', width: '100%', borderStyle: isDesktop ? 'round' : 'single', borderColor: V2.hair, paddingX: 1, children: kids })
 }
 
-const TERMINAL_LABEL: Record<string, string> = { editor: 'Editor', memory: 'Memory', main: 'Sync' }
+/** A35: the label column's width (the longest label, "Sync main", and a space). */
+const LABEL_COLUMN = 10
+const TOOL_LABEL: Record<string, string> = { editor: 'Editor', memory: 'Memory', main: 'Sync main' }
 
-/** A19: one rule's row on the Nghiệm thu A5 card. */
+/** A35: a section label: one small, quiet, capitalised style for every section ("SESSIONS · 6 OPEN", "THE FIVE RULES"). */
+export const sectionLabel = (el: El, key: string, text: string, extra: unknown[] = []): unknown =>
+  el.Box({ key, flexDirection: 'row', columnGap: 1, children: [el.Text({ color: V2.label, children: text.toUpperCase() }), ...extra] })
+
+
+/** A19: one rule's row on the A5 acceptance card. */
 export type AcceptRow = { rule: number; name: string; state: 'pass' | 'fail' | 'na'; line: string }
 const MARK = { pass: '✓', fail: '✗', na: '–' } as const
 
-/** A19: the Nghiệm thu A5 card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
+/** A19: the A5 acceptance card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
  * one line each, ✓ / ✗ / – carried by the mark's color (never the text's). Terminal: one line per rule. */
 export const acceptCard = (el: El, title: string, sub: string, rows: readonly AcceptRow[], isDesktop: boolean): unknown => {
   const { Box, Text } = el
@@ -279,7 +283,7 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
   const { Box, Text } = el
   // A31: ★ marks this session (no "(this session)" text); others a dot: ok green with a5, warn without. The title is
   // the only part that shortens; the status (holds, "no a5", age) sits at the end and is never cut.
-  const mark = (r: SessionRow) => (r.isMe ? Text({ color: A5_MARK, children: '★' }) : Text({ color: r.hasA5 ? STATUS.ok : STATUS.warn, children: '●' }))
+  const mark = (r: SessionRow) => (r.isMe ? Text({ color: A5_LOOK.gold, children: '★' }) : Text({ color: r.hasA5 ? STATUS.ok : STATUS.warn, children: '●' }))
   const row = (r: SessionRow) =>
     Box({
       key: `hai-session-${r.id8}`,
@@ -298,7 +302,7 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
     width: '100%',
     marginTop: 1,
     children: [
-      Box({ key: 'hai-overview-head', children: [Text({ color: ATHER.quiet, bold: isDesktop, wrap: 'wrap', children: v.header })] }),
+      sectionLabel(el, 'hai-overview-head', v.header),
       ...v.rows.map(row),
       ...(v.more > 0 ? [Box({ key: 'hai-overview-more', children: [Text({ color: ATHER.quiet, children: `+${v.more} more` })] })] : []),
     ],
@@ -312,7 +316,7 @@ export type LinePart = { key: string; icon: unknown; name?: string; value: strin
 /** A28/A30: the one A5 block in Ather's pane: icons and values only (no words), in a single row: the Editor holder
  * and until, free RAM, main's behind count (or the planned sync's time), then "★ A5 ›" on the seal red. Only the
  * holder's name shortens and ends in "…"; numbers and times keep their width; the button never shrinks. */
-export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean, buttonBg?: string): unknown => {
+export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean, buttonBg?: string, buttonRim?: string): unknown => {
   const { Box, Text } = el
   const ink = (p: LinePart) => (p.isWarn ? STATUS.warn : ATHER.quiet)
   return Box({
@@ -338,7 +342,7 @@ export const compactLine = (el: El, parts: LinePart[], button: unknown, isDeskto
         }),
       ),
       Box({ key: 'hai-a5-line-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
-      Box({ key: 'hai-a5-line-open', flexShrink: 0, ...(buttonBg ? { backgroundColor: buttonBg } : {}), children: [button] }),
+      Box({ key: 'hai-a5-line-open', flexShrink: 0, ...(buttonBg ? { backgroundColor: buttonBg } : {}), ...(buttonRim ? { borderStyle: 'round', borderColor: buttonRim } : {}), children: [button] }),
     ],
   })
 }

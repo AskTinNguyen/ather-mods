@@ -35,7 +35,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5 RULES {SESSION8}' } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5 RULES {SESSION8}', theme = 'dark' } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -122,6 +122,13 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return { text: e.text, ...(e.context ? { context: e.context } : {}) }
   })
   on('classic.Stop', async () => ({}))
+  // A40: the app theme as /config lists it, and its change through /config.
+  let themeValue = theme
+  on('config.list', async () => value([{ key: 'theme', label: 'Theme', kind: 'choice', value: themeValue, options: ['dark', 'light', 'dark-daltonized', 'light-daltonized'], provider: 'engine', isLocked: false }]))
+  on('config.set', async (_$: unknown, e: Rec) => {
+    if (e.key === 'theme') themeValue = String(e.value)
+    return value(e.value)
+  })
   // The surface places every pane a5 opens (A29), and the test can see which.
   on('ui.open', async (_$: unknown, e: Rec) => {
     ;(calls['ui.open'] ??= []).push(e)
@@ -197,7 +204,10 @@ export const minWidth = (node: unknown, wraps = false): number => {
   if (t.type === 'Button') return [...String(p.label ?? '')].length + (p.plain ? 0 : 4)
   if (t.type === 'Svg') return Math.ceil(Number(p.width ?? 16) / 8)
   if (t.type === 'Client') return 11
-  const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0)
+  // A35: a box that clips (overflow hidden: a hairline) needs no width of its own; margins add like padding.
+  if (p.overflow === 'hidden') return Number(p.marginX ?? 0) * 2
+  if (p.position === 'absolute') return 0 // A37: a curtain lies over its block and takes no room
+  const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0) + Number(p.marginX ?? 0) * 2 + Number(p.marginLeft ?? 0) + Number(p.marginRight ?? 0)
   const widths = kids.map(c => minWidth(c))
   if (p.flexDirection === 'column' || p.flexWrap === 'wrap') return pad + Math.max(0, ...widths)
   const gap = Number(p.columnGap ?? p.gap ?? 0)
@@ -210,4 +220,16 @@ export const all = (t: unknown, out: Tree[] = []): Tree[] => {
     for (const c of (t as Tree).children ?? []) all(c, out)
   }
   return out
+}
+
+/** A37: a drawn tree without its entrance and event curtains (absolute boxes keyed hai-a5-in… / hai-a5-fx…), for tests
+ * that read a block's own children while a curtain may still lie over it. */
+export const still = <T>(tree: T): T => {
+  const strip = (n: unknown): unknown => {
+    if (!n || typeof n !== 'object' || Array.isArray(n)) return n
+    const t = n as Tree
+    const kids = (t.children ?? []).filter(c => !/^hai-a5-(in|fx)/.test(String((c as Tree)?.props?.key ?? ''))).map(strip)
+    return { ...t, ...(t.children ? { children: kids } : {}) }
+  }
+  return strip(tree) as T
 }

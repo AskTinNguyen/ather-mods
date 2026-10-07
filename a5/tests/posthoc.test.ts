@@ -41,7 +41,7 @@ test('A23: a PR line added by hand is scored after the fact: the card names the 
   w.put(`${INTENT}/progress.md`, progress('#812'))
   await minutes(w, 5)
   expect(prLines(w).length).toBe(1)
-  expect(prLines(w)[0]).toContain('PR #812 (intent tail-vfx) was opened without nghiệm thu A5 and fails 1 of 5 (4 Giữ gìn vệ sinh thật tốt)')
+  expect(prLines(w)[0]).toContain('PR #812 (intent tail-vfx) was opened without A5 acceptance and fails 1 of 5 (4 Keep it clean)')
   expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
   expect(await head($)).toContain('● 1 of 5 not mettail-vfx · PR #812 · scored after the fact')
   await minutes(w, 11)

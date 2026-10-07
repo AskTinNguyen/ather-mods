@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync, titleFromRecord, type SessionFile } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, A5PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
+import { LOCK, ME, NOW, A5PANE, PROJ, all, atherTree, find, minWidth, opts, text, still, world } from './world.ts'
 
 // A26 (one line per row since A29; open sessions only since A31): the session overview is a short named list: one row
 // per S2 session the app lists as open (★ this one; title, then a status that is never cut: what it holds or waits
@@ -56,8 +56,8 @@ for (const surface of ['terminal', 'desktop'] as const)
     const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50) // titles are looked up off the render
-    const tree = await $.ui.render(P)
-    expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 7 đang mở')
+    const tree = still(await $.ui.render(P))
+    expect(text(find(tree, 'hai-overview-head'))).toBe('SESSIONS · 7 OPEN')
     const rows = (find(tree, 'hai-overview')?.children ?? []).map(c => text(c))
     expect(rows.slice(1)).toEqual([
       '★3️⃣ Loco fix' + 'no intent · now',
@@ -98,7 +98,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50)
-    const tree = await $.ui.render(P)
+    const tree = still(await $.ui.render(P))
     const blank = find(tree, 'hai-session-bbbbbbbb')
     expect(text(blank)).toBe('●bbbbbbbbEditor →15:10 · 2m') // no app list here: live lanes only
     const multi = find(tree, 'hai-session-dddddddd')
@@ -131,8 +131,8 @@ for (const surface of ['terminal', 'desktop'] as const)
     const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: 44 } } as never
     await $.ui.render(P)
     await w.clock.advance(50) // record titles are looked up off the render
-    const tree = await $.ui.render(P)
-    expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 đang mở')
+    const tree = still(await $.ui.render(P))
+    expect(text(find(tree, 'hai-overview-head'))).toBe('SESSIONS · 3 OPEN')
     const ids = (find(tree, 'hai-overview')?.children ?? []).map(c => String((c as { props?: { key?: string } }).props?.key)).slice(1)
     expect(ids).toEqual([`hai-session-${ME.slice(0, 8)}`, 'hai-session-bbbbbbbb', 'hai-session-eeeeeeee'])
     expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('★3️⃣ Loco fix' + 'no intent · now')
