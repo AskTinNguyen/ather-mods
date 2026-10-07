@@ -1,5 +1,5 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5, freshTurn, gitTargets, newLines, norm, under, type A5Config, type Decision, type Located, type Places, type Proof, type Turn } from './a5.ts'
+import { A5, gitTargets, newLines, norm, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -54,9 +54,6 @@ let engine: A5 | null = null
 let rulesA5 = ''
 let rulesFlow = ''
 let places: Places = {}
-let turn: Turn = freshTurn()
-let mcpWrote = false // an Unreal MCP write this turn: a read-back after it is proof
-const where = new Map<string, Located>()
 const approved = new Set<string>()
 const rootOf = new Map<string, string | null>()
 const isLinked = new Map<string, boolean>() // git root -> a linked worktree (one session's own), not the shared checkout
@@ -321,11 +318,6 @@ async function applyMarker($: Engine, opts: Opts, m: NonNullable<Marker>, isInFi
   }
 }
 
-async function lastAssistantText($: Engine): Promise<string> {
-  const rows = await $.session.messages()
-  if (!Array.isArray(rows)) return ''
-  return [...rows].reverse().find(r => r.role === 'assistant')?.text ?? ''
-}
 
 /** The line under the prompt says only what the pane would not tell at a glance: ★ A5 while it is on, and
  * an Editor lease run over or RAM under the PIE gate. The normal state is silence (the pane has it). */
@@ -1580,25 +1572,8 @@ export const register: Register = (on, options) => {
       if (text && PIE_STOP.test(text)) isPieRunning = false
       if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, opts, locs)
     }
-    if (EDIT_TOOLS.has(tool) && ran.isError !== true) {
-      parts.forEach(([path, old, neu], n) => {
-        const added = newLines(old, neu)
-        if (isFindingsFile(path) && added.some(isDirectorCallLine)) wroteDirectorCall = true
-        // The report covers this loop's own edits; a worker reports its own (intent skill: progress.md).
-        if (e.agentId !== undefined) return
-        where.set(norm(path).toLowerCase(), locs[n] ?? { root: null, rel: null })
-        a5.recordEdit(turn, path, added)
-      })
-    } else if (SHELL_TOOLS.has(tool)) {
-      a5.recordShell(turn, what, ran.text ?? '', ran.isError !== true, input.run_in_background === true)
-    } else if (isUnrealMcp(tool)) {
-      // Proof Ather counts for a tech artist counts for A5 too: a PIE start, or a read-back after a write.
-      const kind = mcpKind(JSON.stringify(input).slice(0, 4000))
-      const ok = ran.isError !== true
-      if (kind === 'write' && ok) mcpWrote = true
-      if (kind === 'pie') a5.recordProof(turn, 'PIE started (Ather proof)', ok)
-      else if (kind === 'read' && mcpWrote && ok) a5.recordProof(turn, 'MCP read-back after a write (Ather proof)', true)
-    }
+    // A director call added to an intent's findings this turn (🟥 routing); no per-turn report is kept (D10).
+    if (EDIT_TOOLS.has(tool) && ran.isError !== true && parts.some(([path, old, neu]) => isFindingsFile(path) && newLines(old, neu).some(isDirectorCallLine))) wroteDirectorCall = true
     // Mid-turn, queued notices ride the main loop's next tool result (D6); a worker's results carry none.
     if (isOn && isMain && pending.length > 0) {
       const texts = drain()
@@ -1606,38 +1581,6 @@ export const register: Register = (on, options) => {
       return { ...ran, context: [...(ran.context ?? []), ...texts] }
     }
     return ran
-  })
-
-  on('classic.Stop', async ($, e, next) => {
-    const res = await next(e)
-    if (res.block) return res
-    const a5 = await load($)
-    const reset = () => {
-      turn = freshTurn()
-      mcpWrote = false
-    }
-    if (!(await readA5($))) {
-      reset()
-      return res
-    }
-    const current = new Map<string, string>()
-    for (const [k, { path }] of turn.edits) current.set(k, await $.fs.read(path).catch(() => ''))
-    const text = e.last_assistant_message || (await lastAssistantText($))
-    // With an intent tracked, Ather's proof for it is the record `Verified:` answers to (one status read).
-    const proof = turn.edits.size ? proofOf(await atherStatus($)) : null
-    const probs = a5.gate(turn, text, where, current, proof)
-    if (!probs.length) {
-      reset()
-      return res
-    }
-    probs.forEach(p => count(p.slice(0, 2)))
-    turn.blocks = e.stop_hook_active ? turn.blocks + 1 : 1
-    if (turn.blocks > a5.cfg.max_gate_blocks) {
-      $.ui.toast(`A5 report gate gave up after ${a5.cfg.max_gate_blocks} tries: ${probs[0] ?? ''}`, { timeoutMs: 12_000 })
-      reset()
-      return res
-    }
-    return { ...res, block: `A5 · report — the final answer is not ready → fix these, then give it again:\n- ${probs.join('\n- ')}` }
   })
 
   on('turn.complete', async ($, e, next) => {

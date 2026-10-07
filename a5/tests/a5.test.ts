@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { A5, freshTurn, proofProblems, verdict } from '../hooks/a5.ts'
+import { A5, proofProblems } from '../hooks/a5.ts'
 import { CONFIG } from './config.fixture.ts'
 import { lockProblem, mcpKind, parseEditorLock, isEditorStartStop } from '../hooks/editor.ts'
 import { readMarker, markedTitle, bareTitle, isDirectorCallLine, isFindingsFile } from '../hooks/decision.ts'
@@ -111,19 +111,6 @@ test('with an intent tracked, Verified answers to Ather\'s proof', () => {
   expect(proofProblems({ ...noRole, evidence: ev({ build: 'pass' }) }, 'build ok').some(p => p.includes('PIE, or build and tests'))).toBe(true)
 })
 
-test('the gate: a tracked intent replaces the per-turn check, a failed check still says FAILED', async $ => {
-  const a5 = await engine($)
-  const t = freshTurn()
-  const where = new Map([['e:/proj/source/s2/foo.cpp', { root: 'E:/proj', rel: 'Source/S2/Foo.cpp' }]])
-  const now = new Map([['e:/proj/source/s2/foo.cpp', 'int x = 2;\n']])
-  a5.recordEdit(t, 'E:/proj/Source/S2/Foo.cpp', ['int x = 2;'])
-  const proof = { intent: 'x', role: 'designer', evidence: { pie: { state: 'none' } } }
-  expect(a5.gate(t, 'Changed: Foo.cpp\nVerified: chưa: PIE (Build stage)\nRisk: low\nOpen: none', where, now, proof)).toEqual([])
-  expect(a5.gate(t, 'Changed: Foo.cpp\nVerified: compiles\nRisk: low\nOpen: none', where, now, proof).some(p => p.includes('not proven yet'))).toBe(true)
-  a5.recordShell(t, 'Build.bat S2Editor', 'Result: Failed (x)', true)
-  expect(a5.gate(t, 'Changed: Foo.cpp\nVerified: chưa: PIE\nRisk: low\nOpen: none', where, now, proof).some(p => p.includes('FAILED'))).toBe(true)
-})
-
 test('director calls Ather lists under Needs you', () => {
   expect(isFindingsFile('E:\\Projects\\s2\\docs\\intent\\tail-vfx\\findings.md')).toBe(true)
   expect(isFindingsFile('E:/Projects/s2/docs/intent/tail-vfx/progress.md')).toBe(false)
@@ -132,32 +119,6 @@ test('director calls Ather lists under Needs you', () => {
   expect(isDirectorCallLine('## F-5 (2026-10-06) | blocking: no | status: open (worker)')).toBe(false)
   expect(isDirectorCallLine('## F-3 (2026-10-06) | blocking: no | status: accepted (director)')).toBe(false)
   expect(isDirectorCallLine('- status: open (director)')).toBe(false)
-})
-
-test('a build counts by its own Result line', () => {
-  const bat = '"D:/GameEditors/5.8/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development'
-  expect(verdict(bat, '...\nResult: Failed (OtherCompilationError)', true)[0]).toBe(false)
-  expect(verdict(bat, 'Result: Succeeded', true)[0]).toBe(true)
-  expect(verdict(`${bat} | tail -3`, 'Total time 12s', true)[0]).toBe(null)
-  expect(verdict('pytest -q', '3 passed', true)[0]).toBe(true)
-  expect(verdict('pytest -q', '1 failed, 2 passed', true)[0]).toBe(false)
-  expect(verdict('pytest -q', '', false)[0]).toBe(false)
-})
-
-test('the report gate: honest Verified, files named in any case, leftovers', async $ => {
-  const a5 = await engine($)
-  const t = freshTurn()
-  const where = new Map([['e:/proj/source/s2/foo.cpp', { root: 'E:/proj', rel: 'Source/S2/Foo.cpp' }]])
-  a5.recordEdit(t, 'E:/proj/Source/S2/Foo.cpp', ['int x = 2; // A5TMP'])
-  a5.recordShell(t, 'Build.bat S2Editor', 'Result: Failed (x)', true)
-  const now = new Map([['e:/proj/source/s2/foo.cpp', 'int x = 2; // A5TMP\n']])
-  const probs = a5.gate(t, 'Changed: foo.cpp\nVerified: ok\nRisk: none\nOpen: none', where, now)
-  expect(probs.some(p => p.includes('FAILED'))).toBe(true)
-  expect(probs.some(p => p.includes('A5TMP'))).toBe(true)
-  expect(probs.some(p => p.includes('must list'))).toBe(false)
-  const clean = new Map([['e:/proj/source/s2/foo.cpp', 'int x = 2;\n']])
-  expect(a5.gate(t, 'Changed: Foo.cpp\nVerified: FAILED: Build.bat\nRisk: build broken\nOpen: fix', where, clean)).toEqual([])
-  expect(a5.gate(freshTurn(), 'Xong.', where, clean)).toEqual([])
 })
 
 test('Editor lock: only the session it names may drive the Editor', () => {

@@ -34,18 +34,6 @@ export type Decision = { kind: 'deny' | 'ask'; rule: string; why: string; key: s
 export type Places = Record<string, string | undefined>
 /** Where a file lives: its git project root and its path inside it, or nulls outside any project. */
 export type Located = { root: string | null; rel: string | null }
-export type Verify = { seq: number; ok: boolean | null; why: string; cmd: string }
-export type Turn = {
-  seq: number
-  edits: Map<string, { path: string; seq: number }>
-  verifies: Verify[]
-  added: Map<string, string[]>
-  snap: Map<string, Set<string>>
-  blocks: number
-}
-
-export const freshTurn = (): Turn => ({ seq: 0, edits: new Map(), verifies: [], added: new Map(), snap: new Map(), blocks: 0 })
-
 // A segment whose verb only reads may mention protected paths and never counts as a verify run.
 const READERS = new Set(['cat', 'type', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'ls', 'dir',
   'get-childitem', 'gci', 'get-content', 'gc', 'wc', 'stat', 'file', 'test-path', 'get-item', 'gi', 'resolve-path', 'echo', 'write-output', 'write-host'])
@@ -54,12 +42,6 @@ const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd']
 const WRAPPERS = new Set(['&', 'sudo', 'command', 'builtin', 'exec', 'time', 'nohup', 'xargs', 'call'])
 const PS_VALUE_PARAMS = new Set(['-erroraction', '-ea', '-exclude', '-include', '-filter', '-warningaction', '-wa'])
 
-const UBT_RESULT = /Result:\s*(Succeeded|Failed[^\r\n]*)/g
-const UAT_RESULT = /BUILD (SUCCESSFUL|FAILED)/g
-const TEST_FAIL = /EXIT CODE:\s*-?[1-9]|Result=\{?Fail|\b[1-9]\d* (tests? )?failed\b|\bno (automation )?tests? (were )?(found|matched|run)\b|\b0 tests? (found|ran|run|executed|passed)\b/i
-const TEST_PASS = /\b[1-9]\d* (tests? )?passed\b|\b([1-9]\d*)\/\1 (tests? )?pass/i
-// These exit 0 even when the build failed: only their own Result line counts.
-const RESULT_LINE_ONLY = /Build\.(bat|sh|cmd)\b|UnrealBuildTool|RunUAT/i
 
 /** A config pattern as a JS RegExp; a leading Python `(?i)` becomes the `i` flag. */
 const compiled = new Map<string, RegExp>()
@@ -264,24 +246,6 @@ export const proofProblems = (proof: Proof, verified: string): string[] => {
   return probs
 }
 
-/** (ok, why) of a verify command from its own output: true, false, or null when unknown. */
-export const verdict = (command: string, output: string, exitOk: boolean | null, background = false): [boolean | null, string] => {
-  if (background) return [null, 'it ran in the background, so there is no result yet']
-  const out = output ?? ''
-  const ubt = [...out.matchAll(UBT_RESULT)].map(m => m[1] ?? '')
-  if (ubt.length) {
-    const last = ubt[ubt.length - 1] ?? ''
-    return [last.startsWith('Succeeded'), `Result: ${last.slice(0, 40)}`]
-  }
-  const uat = [...out.matchAll(UAT_RESULT)].map(m => m[1] ?? '')
-  if (uat.length) return [uat[uat.length - 1] === 'SUCCESSFUL', `BUILD ${uat[uat.length - 1]}`]
-  if (TEST_FAIL.test(out)) return [false, 'the output reports test failures']
-  if (exitOk === false) return [false, 'non-zero exit']
-  if (RESULT_LINE_ONLY.test(command ?? '')) return [null, "build output has no 'Result:' line (Build.bat exits 0 even when the build fails; do not pipe it to tail)"]
-  if (TEST_PASS.test(out)) return [true, 'tests passed']
-  return exitOk === null ? [null, 'no exit code'] : [true, 'exit 0']
-}
-
 const decision = (kind: Decision['kind'], rule: string, why: string, k: string): Decision => ({ kind, rule, why, key: k })
 
 export class A5 {
@@ -399,77 +363,5 @@ export class A5 {
 
   secret(text: string): string | null {
     return this.cfg.secret_regex.find(p => rx(p).test(text ?? '')) ?? null
-  }
-
-  isVerify(command: string): boolean {
-    return segments(stripHeredocs(command ?? '')).some(raw => !READERS.has(commandVerb(tokenize(raw))[0]) && rx(this.cfg.verify_regex).test(raw))
-  }
-
-  // ---------- after a tool ran ----------
-  recordEdit(turn: Turn, path: string, added: string[]): void {
-    turn.seq += 1
-    const k = key(path)
-    turn.edits.set(k, { path: norm(path), seq: turn.seq })
-    const flagged = added.filter(x => this.cfg.forbidden_added.some(f => rx(f).test(x)) || rx(this.cfg.todo_regex).test(x))
-    if (flagged.length) turn.added.set(k, [...(turn.added.get(k) ?? []), ...flagged].slice(-50))
-  }
-
-  recordShell(turn: Turn, command: string, output: string, exitOk: boolean | null, background = false): Verify | null {
-    if (!this.isVerify(command)) return null
-    const [ok, why] = verdict(command, output, exitOk, background)
-    turn.seq += 1
-    const v = { seq: turn.seq, ok, why, cmd: (command ?? '').slice(0, 200) }
-    turn.verifies = [...turn.verifies, v].slice(-20)
-    return v
-  }
-
-  /** Proof Ather also counts (a PIE start, an MCP read-back after a write) stands as a verify run. */
-  recordProof(turn: Turn, why: string, ok: boolean): Verify {
-    turn.seq += 1
-    const v = { seq: turn.seq, ok, why, cmd: why }
-    turn.verifies = [...turn.verifies, v].slice(-20)
-    return v
-  }
-
-  // ---------- when the agent wants to finish ----------
-  /** Problems with the final report, or [] when it may finish. `where` and `current` (each edited file's
-   * text now) come from register.ts, keyed like turn.edits; `proof` is Ather's for the tracked intent. */
-  gate(turn: Turn, text: string, where: Map<string, Located>, current: Map<string, string>, proof: Proof | null = null): string[] {
-    const gated: [string, string, number][] = []
-    for (const [k, { seq }] of turn.edits) {
-      const loc = where.get(k)
-      if (!loc?.root || !loc.rel || matchRel(loc.rel, null, this.cfg.gate_ignore)) continue // outside a git project: memory, scratch
-      gated.push([k, loc.rel, seq])
-    }
-    if (!gated.length) return []
-    const names = this.cfg.report_sections
-    const probs: string[] = []
-    const secs = new Map(names.map(n => [n, section(text ?? '', n, names)] as const))
-    for (const [n, v] of secs) if (v === null) probs.push(`D5 report is missing the section '${n}:'`)
-    const changed = (secs.get('Changed') ?? '').toLowerCase()
-    const opened = (secs.get('Open') ?? '').toLowerCase()
-    for (const [, rel] of gated) if (!changed.includes(basename(rel).toLowerCase()) && !changed.includes(rel.toLowerCase())) probs.push(`D5 'Changed' must list ${rel}`)
-    const verified = secs.get('Verified') ?? ''
-    const lastEdit = Math.max(...gated.map(([, , seq]) => seq))
-    const after = turn.verifies.filter(v => v.seq > lastEdit)
-    const needsVerify = !gated.every(([, rel]) => matchRel(rel, null, this.cfg.no_verify_needed))
-    const last = after[after.length - 1]
-    // A check that failed this turn is a fact either way (a tool build Ather does not count, too).
-    if (last?.ok === false && !/FAIL/i.test(verified)) probs.push(`D5 the last check FAILED (${last.why}: ${last.cmd.slice(0, 80)}) -> 'Verified' must say FAILED`)
-    if (proof) probs.push(...proofProblems(proof, verified)) // an intent is tracked: Ather's proof is the record
-    else if (last?.ok === null && needsVerify && !NOT_YET.test(verified))
-      probs.push(`D2 the last check has no readable result (${last.why}) -> rerun it in the foreground and read its result, or write 'chưa: <why>'`)
-    else if (!last && needsVerify && !NOT_YET.test(verified)) probs.push("D2 nothing checked the last edit -> run a build/test, start PIE, or write 'chưa: <why>'")
-    for (const [k, rel] of gated) {
-      const now = new Set(lines(current.get(k) ?? '').map(x => x.trim()))
-      for (const line of turn.added.get(k) ?? []) {
-        if (!now.has(line.trim())) continue // added, then removed again
-        const f = this.cfg.forbidden_added.find(x => rx(x).test(line))
-        if (f) probs.push(`D4 ${rel}: leftover debug line (${f}) -> remove it`)
-        else if (rx(this.cfg.todo_regex).test(line) && !opened.includes(basename(rel).toLowerCase()) && !opened.includes(rel.toLowerCase()))
-          probs.push(`D2 ${rel}: new TODO/FIXME is not listed under 'Open'`)
-      }
-    }
-    return [...new Set(probs)]
   }
 }

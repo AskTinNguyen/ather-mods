@@ -65,26 +65,19 @@ test('shared config edit in a git project needs Hai', opts(), async ($, on) => {
   expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Config/DefaultGame.ini`, content: '[x]' }))).toContain('Config/*.ini')
 })
 
-test('report gate: a failed Build.bat reported as fine keeps the turn going', opts(), async ($, on) => {
+test('A17: no per-turn report: a turn with edits, a failed build and no report ends; the action gates still hold', opts(), async ($, on) => {
   const w = world(on, { out: { [BAT]: 'Building...\nResult: Failed (OtherCompilationError)' } })
   w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
   await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5TMP' })
-  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2; // A5TMP\n')
   await $.tool.call({ tool: 'Bash', command: BAT })
-  const first = await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Changed: foo.cpp\nVerified: Build.bat ok\nRisk: none\nOpen: none' })
-  expect(first.block).toContain('FAILED')
-  expect(first.block).toContain('A5TMP')
-  expect(first.block).not.toContain('must list')
-  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2;\n')
-  const second = await $.classic.Stop({ stop_hook_active: true, last_assistant_message: 'Changed: Foo.cpp\nVerified: FAILED: Build.bat S2Editor\nRisk: build broken\nOpen: fix the compile error' })
-  expect(second.block).toBeUndefined()
+  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
+  // What cannot be undone is still checked at the action (D10).
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5 · D1/D5')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain("needs Hai's approval")
+  expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Source/S2/Key.cpp`, content: `k = 'ghp_${'a'.repeat(36)}'` }))).toContain('secret')
+  expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toContain('mcp__a5__editor')
 })
 
-test('report gate: memory and scratch files outside a git project need no report', opts(), async ($, on) => {
-  world(on)
-  await $.tool.call({ tool: 'Write', file_path: 'C:/Users/hai.huynh/.claude/projects/x/memory/m.md', content: 'x' })
-  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Đã lưu.' })).block).toBeUndefined()
-})
 
 // ---------- A5 inside Ather's intent flow ----------
 const STATUS_TOOL = 'mcp__ather-automata__status'
@@ -110,25 +103,6 @@ test('a worker (subagent) is never put to Hai: refused at once with stop-and-rep
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard', agentId: 'worker-1' } as never))).toContain('a worker does not ask Hai')
   expect(asked.length).toBe(0)
   expect(w.seen.length).toBe(0)
-})
-
-test('the report covers this loop\'s edits; a worker\'s edits are its own report', opts(), async ($, on) => {
-  const w = world(on)
-  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
-  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2;', agentId: 'worker-1' } as never)
-  expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Worker báo xong bước 2.' })).block).toBeUndefined()
-})
-
-test('intent tracked: Verified answers to Ather\'s proof, and says chưa until the role\'s proof is complete', opts(), async ($, on) => {
-  const w = world(on, { out: { [STATUS_TOOL]: status({ tracked: { slug: 'tail-vfx', directorCalls: [] }, evidence: { pie: { state: 'pass', detail: 'PIE started' }, editor: { state: 'none', detail: '' } } }) } })
-  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
-  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2;' })
-  w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 2;\n')
-  const claim = await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Changed: Foo.cpp\nVerified: PIE ✓, build ✓\nRisk: low\nOpen: none' })
-  expect(claim.block).toContain('claims build')
-  expect(claim.block).toContain('Editor check')
-  const honest = await $.classic.Stop({ stop_hook_active: true, last_assistant_message: 'Changed: Foo.cpp\nVerified: PIE ✓ · chưa: Editor check (Hai: /ather checked)\nRisk: low\nOpen: none' })
-  expect(honest.block).toBeUndefined()
 })
 
 test('🟥 that relays an intent\'s director call: Ather lists it, so no PENDING.md line; title and unread still mark it', opts(), async ($, on) => {
@@ -240,15 +214,6 @@ test('pane: views other than home get no tiles (A5 still seals and recolors them
 })
 
 // ---------- one inbox, Ather's proof, icons, motion ----------
-test('A5: a PIE start after an edit is the verify run (Ather\'s proof counts)', opts(), async ($, on) => {
-  const w = world(on)
-  w.put(LOCK, `slot since 14:30. session ${ME.slice(0, 8)}\n`)
-  w.put(`${PROJ}/Config/Tuning.json`, '{"a":1}\n')
-  await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Config/Tuning.json`, old_string: '"a":1', new_string: '"a":2' })
-  await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'McpPieToolset.StartPIE' } as never)
-  const res = await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Changed: Tuning.json\nVerified: PIE started, MC moves\nRisk: low\nOpen: none' })
-  expect(res.block).toBeUndefined()
-})
 
 test('pane on the desktop: each tile carries a pixel icon; still unless its state just turned over', opts(), async ($, on) => {
   const w = world(on, { a5: true })
