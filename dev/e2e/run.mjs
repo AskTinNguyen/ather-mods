@@ -151,9 +151,31 @@ const pressIn = (tree, label) => {
   expect('without a pane, part of an intent name typed in the dialog says where it stands and how to work on it, and does not track it', engine.store.get('pinned:harness-session-0001') === undefined && /^fluid-snow-sand-look · .+\. To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(name.out) && name.sent.length === 0, name.out)
   const words = await run(engine, [], 'ather', 'fluid snow')
   expect('without a pane, words after /ather that match one intent do not track it either', engine.store.get('pinned:harness-session-0001') === undefined && /To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(words.out) && words.dialogs.length === 0, words.out)
-  // F-1 (b): the Work question asks what this session works on, so a name typed there tracks, as its choices do.
-  const workTyped = await run(engine, [pick('Pick something to work on'), typed('fluid')])
-  expect('in the Work question ("What should this session work on?"), the same words typed track the one intent they match', workTyped.dialogs[1]?.header === 'Work' && /^What should this session work on\?/.test(workTyped.dialogs[1]?.question ?? '') && engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && workTyped.out === 'Now tracking fluid-snow-sand-look.' && workTyped.sent.length === 0, [workTyped.dialogs.map(d => d.header), workTyped.out])
+  // D5: in the Work question a typed name opens one follow-up (the phone's Intent view) that says where it
+  // stands and what working on it here means; each of the question's own choices says what it does.
+  const pinnedNow = () => engine.store.get('pinned:harness-session-0001')
+  const consequence = 'This session gets its next step, your builds and PIE count as its proof, other sessions see you on it; /ather untrack undoes it.'
+  const work = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Work on it here')])
+  screens.push(['Desktop · a name typed in the Work question, then Work on it here', `${dialogText(work.dialogs)}\n  → output: ${work.out}`])
+  const [, workQ, follow] = work.dialogs
+  expect("each Work-question choice says what it does: an intent's works on it here, with the consequence", workQ?.header === 'Work' && (workQ?.options ?? []).length > 0 && workQ.options.every(o => o.description.endsWith(consequence) || o.description.endsWith('Drafts an intent with you first.')), workQ?.options)
+  expect('a name typed in the Work question opens one follow-up: the slug, where it stands, what working on it here means, three choices', follow?.header === 'fluid-snow-s' && new RegExp(`^fluid-snow-sand-look: [A-Z][a-z ]+, \\d+/\\d+ done, [^.]+\\. Work on it here\\? ${consequence.replace(/[.?/()]/g, '\\$&')}$`).test(follow?.question ?? '') && (follow?.options ?? []).map(o => o.label).join('|') === 'Work on it here|Just look|Pick something else', follow)
+  expect('… Work on it here tracks it and moves "Continue …" to it', pinnedNow() === 'fluid-snow-sand-look' && engine.store.get('last:tinnguyen') === 'fluid-snow-sand-look' && work.out === 'Now tracking fluid-snow-sand-look.' && work.sent.length === 0, work.out)
+  await run(engine, [], 'ather', 'untrack')
+  const look = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Just look')])
+  expect('… Just look says where it stands and its next step, and tracks nothing', pinnedNow() === undefined && /^fluid-snow-sand-look: .+ Its next step: .+\. Not tracked here; \/ather intent fluid-snow-sand-look works on it in this session\.$/.test(look.out) && look.sent.length === 0, look.out)
+  const other = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Pick something else'), dismiss])
+  expect('… Pick something else asks the Work question again, tracking nothing', pinnedNow() === undefined && other.dialogs.map(d => d.header).join(',') === 'Ather,Work,fluid-snow-s,Work', other.dialogs.map(d => d.header))
+  const noDialog = await run(engine, [pick('Pick something to work on'), typed('fluid'), () => { throw new Error('no dialog in this session') }])
+  expect('… where the follow-up cannot be asked, the reply names /ather intent <slug> and nothing is tracked', pinnedNow() === undefined && /To work on it in this session: \/ather intent fluid-snow-sand-look$/.test(noDialog.out), noDialog.out)
+  const sandbox = await engine.$.session.root()
+  for (const slug of ['zz-guard-alpha', 'zz-guard-beta']) {
+    fs.mkdirSync(path.join(sandbox, 'docs/intent', slug), { recursive: true })
+    fs.writeFileSync(path.join(sandbox, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Rev: 1\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: It works.\n`)
+  }
+  const several = await run(engine, [pick('Pick something to work on'), typed('guard'), pick('zz-guard-beta')])
+  expect('several matches in the Work question become its choices, each with the consequence; picking one tracks it', several.dialogs[2]?.header === 'Work' && /^2 intents match "guard"\. Which one should this session work on\?$/.test(several.dialogs[2]?.question ?? '') && (several.dialogs[2]?.options ?? []).map(o => o.label).sort().join('|') === 'zz-guard-alpha|zz-guard-beta' && several.dialogs[2].options.every(o => o.description.endsWith(consequence)) && pinnedNow() === 'zz-guard-beta', several.dialogs[2])
+  for (const slug of ['zz-guard-alpha', 'zz-guard-beta']) fs.rmSync(path.join(sandbox, 'docs/intent', slug), { recursive: true, force: true })
   await run(engine, [], 'ather', 'untrack')
   const exact = await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
   expect('/ather intent with the exact name tracks it at once, with no dialog, without a pane too', engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && exact.out === 'Now tracking fluid-snow-sand-look.' && exact.dialogs.length === 0, exact.out)

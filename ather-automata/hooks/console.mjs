@@ -10,10 +10,10 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, untrackText } from './home.mjs'
+import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { clockText, closestWord, localMinutes, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { crewOf } from './crew.mjs'
@@ -565,6 +565,12 @@ async function showIntent($, slug) {
     intentBack = 'home'
     return openPane($, 'intent')
   }
+  return whereText($, slug)
+}
+
+// Without a pane or a dialog: where an intent stands, and the command that works on it here.
+/** @param {Engine} $ @param {string} slug */
+async function whereText($, slug) {
   const pinned = await state.readPinned(io($))
   const one = (await home($)).work.find(work => work.kind === 'intent' && work.slug === slug)
   const where = one ? one.hint : slug
@@ -777,24 +783,76 @@ async function workQuestion($) {
   return ask($, {
     header: 'Work',
     question: 'What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number.',
-    choices: work.map(one => ({ label: cut(one.label, 40), description: one.hint, run: () => startWork($, one) })),
+    // The question is the verb: a choice works on it at once, and says so (D5).
+    choices: work.map(one => ({ label: cut(one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
     fallback: 'Nothing chosen.',
     onTyped: text => typedWork($, text),
   })
 }
 
-// Typed in the Work question, which itself asks what this session works on: a name that matches one
-// intent tracks it, as the question's choices do. Anything else is read as in any other dialog.
+// A Work-question choice's line: where it stands, then what choosing it does.
+/** @param {Work} one */
+function workChoiceText(one) {
+  return one.kind === 'intent' ? `${ended(workDetail(one))} ${trackConsequence(pack)}` : `${ended(one.hint)} Drafts an intent with you first.`
+}
+
+// A line ended as a sentence, unless it was cut short ("…").
+/** @param {string} text */
+const ended = text => (/[.…]$/.test(text) ? text : `${text}.`)
+
+// Typed in the Work question: a name never tracks at once (D5). One match asks what to do with it
+// (the phone's Intent view); a few become the choices; more are listed; anything else is read as in any dialog.
 /** @param {Engine} $ @param {string} text */
 async function typedWork($, text) {
   const words = text.trim()
   // The tour and an issue number mean what they mean anywhere.
   if (/^tours?$/i.test(words) || /^#?\d+$/.test(words)) return typed($, text)
-  const matches = searchIntents(intents, words)
+  const matches = intents.some(one => one.slug === words) ? intents.filter(one => one.slug === words) : searchIntents(intents, words)
   const [only] = matches
-  if (intents.some(one => one.slug === words)) return trackSlug($, words)
-  if (matches.length === 1 && only) return trackSlug($, only.slug)
+  if (matches.length === 1 && only) return intentQuestion($, only.slug)
+  if (matches.length > 1 && matches.length <= 4) {
+    const work = (await home($)).work
+    return ask($, {
+      header: 'Work',
+      question: `${matches.length} intents match "${words}". Which one should this session work on?`,
+      choices: matches.map(one => {
+        const row = work.find(item => item.kind === 'intent' && item.slug === one.slug)
+        return { label: cut(one.slug, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackSlug($, one.slug) }
+      }),
+      fallback: await lookUp($, words),
+      onTyped: more => typed($, more),
+    })
+  }
   return typed($, text)
+}
+
+// One intent named in the Work question, without a pane: where it stands, what working on it here
+// means, and three ways on. Where no dialog can be asked, the reply says how to work on it instead.
+/** @param {Engine} $ @param {string} slug */
+async function intentQuestion($, slug) {
+  const intent = intents.find(one => one.slug === slug)
+  if (!intent) return lookUp($, slug)
+  const files = io($)
+  const { root, pack: chosen } = await laneOf($)
+  const { role } = await state.readProfile(files, me, chosen)
+  const evidence = await state.readEvidence(files, slug, chosen)
+  const prs = await state.readPrStates(files)
+  const stands = intentStands(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, heldByLine(await state.readPeers(files, root, chosen.localDir), slug, Date.now()))
+  const look = async () => {
+    const step = nextStep(role, intent, evidence, 0, me, prs, chosen)
+    return `${stands}${step ? ` Its next step: ${step.label}.` : ''} Not tracked here; /ather intent ${slug} works on it in this session.`
+  }
+  return ask($, {
+    header: slug,
+    question: `${stands} Work on it here? ${trackConsequence(chosen)}`,
+    choices: [
+      { label: 'Work on it here', description: 'Tracks it in this session now.', run: () => trackSlug($, slug) },
+      { label: 'Just look', description: 'Says where it stands and its next step; tracks nothing.', run: look },
+      { label: 'Pick something else', description: 'Back to what this session could work on.', run: () => workQuestion($) },
+    ],
+    fallback: await whereText($, slug),
+    onTyped: more => typed($, more),
+  })
 }
 
 /** @param {Engine} $ @param {string} goal */

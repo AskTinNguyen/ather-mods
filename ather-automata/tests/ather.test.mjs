@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { buildHome, heldByLine, parseWeek, proofLine, untrackText, weekText, workList } from '../hooks/home.mjs'
+import { buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, weekText, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
@@ -775,6 +775,12 @@ describe('track guard', () => {
     await state.endAway(io)
     expect((await state.untrack(io, 'Tin Nguyen')).result).toBe('untracked')
     expect((await state.readAway(io)).phase).toBe('review')
+  })
+
+  test('without a pane, an intent is said in one line, and so is what working on it here means (D5)', () => {
+    expect(intentStands(SPAWNER, 'Build', 'Tin Nguyen')).toBe('spawner: Build, 1/2 done, yours.')
+    expect(intentStands(THEIRS, 'Build', 'Tin Nguyen', 'Also tracked in 1 other session · active now')).toBe("pause-ai: Build, 1/2 done, TienPham's. Also tracked in 1 other session · active now.")
+    expect(trackConsequence()).toBe('This session gets its next step, your builds and PIE count as its proof, other sessions see you on it; /ather untrack undoes it.')
   })
 
   test("auto-track (A3) reads only the orchestrator's files: an intent's prompt.md and log.md", () => {

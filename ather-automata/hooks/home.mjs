@@ -46,6 +46,17 @@ const skillPrompt = (name, target) =>
 /** @param {string} question @param {Pack} [pack] */
 export const askPrompt = (question, pack = unreal) => pack.prompts.ask(question)
 
+// What working on an intent in this session means, said wherever a press tracks one without a view (D5).
+/** @param {Pack} [pack] */
+export const trackConsequence = (pack = unreal) =>
+  `This session gets its next step, your ${pack.id === 'unreal' ? 'builds and PIE' : 'tests and builds'} count as its proof, other sessions see you on it; /ather untrack undoes it.`
+
+// "fluid-snow-sand-look: Build, 8/17 done, Tin Nguyen's. Also tracked in 1 other session · active 3m ago.":
+// where an intent stands, in one line, for a surface without a pane.
+/** @param {Intent} intent @param {string} stage @param {string} me @param {string} [heldBy] */
+export const intentStands = (intent, stage, me, heldBy = '') =>
+  `${intent.slug}: ${stage}, ${intent.acceptanceTotal > 0 ? `${intent.acceptanceDone}/${intent.acceptanceTotal} done` : 'no checklist yet'}, ${isMine(intent, me) ? 'yours' : intent.owner ? `${intent.owner}'s` : 'no owner named'}.${heldBy ? ` ${heldBy}.` : ''}`
+
 // What stopping tracking said: done (proof stays with the intent), nothing tracked, or refused while away.
 /** @param {{ result: 'untracked' | 'none' | 'away', slug: string }} outcome */
 export const untrackText = outcome =>
