@@ -203,9 +203,9 @@ test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand; th
   expect(brandColor(tree)).toBe(GOLD)
   expect(find(tree, 'strip')?.props?.borderColor).toBe('#3a3c36')
   const a5 = await $.ui.render(A5PANE as never)
-  expect(text(find(a5, 'hai-a5-rules-head')).startsWith('The five rules')).toBe(true) // A32: seals under a heading; rule 1's word is its own element (A20)
+  expect(text(find(a5, 'hai-a5-rules-head')).startsWith('THE FIVE RULES')).toBe(true) // A32: seals under a heading; rule 1's word is its own element (A20)
   expect(find(a5, 'hai-rule1')?.type).toBe('Client')
-  expect(find(a5, 'hai-a5-seal-5')).toBeDefined()
+  expect(find(a5, 'hai-a5-chip-5')).toBeDefined()
 })
 
 test('pane: views other than home get no A5 line (A5 still seals and recolors them)', opts(), async ($, on) => {

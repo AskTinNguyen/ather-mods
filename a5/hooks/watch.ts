@@ -4,7 +4,7 @@
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
-import { A5_LOOK, ATHER, STATUS, TRACK, V2 } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
 
 const A5_MARK = A5_LOOK.gold // A31: this session's ★
 
@@ -198,10 +198,6 @@ export const mainTile = (s: Sync | undefined, plan: SyncData, action?: unknown):
 /** The status line's color: the most severe one any of its parts carries, else quiet. */
 const statusColor = (parts: { color?: string }[], quiet: string = ATHER.quiet): string =>
   parts.some(p => p.color === STATUS.bad) ? STATUS.bad : parts.some(p => p.color === STATUS.warn) ? STATUS.warn : quiet
-
-/** A35: the hairline that divides list rows and sets off a card: a full-width rule clipped to one line. */
-export const hairline = (el: El, key: string, color: string = V2.hair): unknown =>
-  el.Box({ key, width: '100%', height: 1, overflow: 'hidden', children: [el.Text({ color, children: '─'.repeat(240) })] })
 
 /** A35 (mockup v2): the three tools as ONE grouped list in a single hairline-bordered box, rows divided by
  * hairlines. Each row: the icon, a fixed label column ("Editor", "Memory", "Sync main"), the bold value (its

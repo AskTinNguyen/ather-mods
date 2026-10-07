@@ -16,7 +16,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await ui.advance(500)
       const word = (await ui.find({ in: 'hai-rule1', text: /Love/ } as never))?.text
       if (word && /^Love the (country|project)$/.test(word)) words.add(word)
-      rest.add(String((await ui.findAll({ type: 'Text', text: /The five rules/ } as never)).map(f => f.text).join('|'))) // A32: the heading the word rides
+      rest.add(String((await ui.findAll({ type: 'Text', text: /THE FIVE RULES/ } as never)).map(f => f.text).join('|'))) // A32: the heading the word rides
     }
     expect([...words].sort()).toEqual(['Love the country', 'Love the project'])
     expect(rest.size).toBe(1) // the rest of the footer never moved
@@ -29,7 +29,7 @@ test('A20: with motion off the footer says "Love the project" and holds no switc
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const tree = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
-  expect(text(find(tree, 'hai-a5-rules-head'))).toBe('The five rules·Love the project') // A32: rule 1's motto rides the seals' heading
+  expect(text(find(tree, 'hai-a5-rules-head'))).toBe('THE FIVE RULES·Love the project') // A32: rule 1's motto rides the seals' heading
   expect(find(tree, 'hai-rule1')).toBeUndefined()
 })
 

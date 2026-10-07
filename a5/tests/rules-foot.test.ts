@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { ruleCards } from '../hooks/theme.ts'
 import { A5PANE, LOCK, PANE, PENDING, PROJ, all, atherTree, find, keys, opts, text, world } from './world.ts'
 
-// A27 → A32 (rev 9): the five rules are the A5 pane's last block as five round seals (red fill, gold rim, gold
+// A27 → A32 (rev 9) → A36 (rev 10, mockup v2): the five rules are the A5 pane's last block as five round seals (red fill, gold rim, gold
 // numeral) in one row under "The five rules" (rule 1's country / project word beside it); pressing a seal opens that rule's
 // card (name, purpose, "At the action", "Nghiệm thu", "Hits today"), pressing it again closes it. No paragraph.
 // The rule lines below follow rules-a5.md's format (`- <n> <name> (<purpose>) [H] … [N] … [P] …`).
@@ -23,8 +23,12 @@ test('A32: unit: the cards come from the rule lines: name, purpose, the first se
   expect(ruleCards('').map(c => [c.name, c.purpose, c.action])).toEqual([['Love the project, love your fellow sessions', '', ''], ['Study well, work well', '', ''], ['Unity and discipline', '', ''], ['Keep it clean', '', ''], ['Modest, honest, brave', '', '']])
 })
 
+const RIM = { neutral: '#3A3833', red: '#B3261E', gold: '#F2C14E' }
+const SHORT = ['1 Love the project', '2 Study and work well', '3 Unity and discipline', '4 Keep it clean', '5 Modest, honest, brave']
+const rims = (tree: unknown) => [1, 2, 3, 4, 5].map(n => find(tree, `hai-a5-chip-${n}-box`)?.props?.borderColor)
+
 for (const surface of ['terminal', 'desktop'] as const)
-  test(`A32 (${surface}): five seal buttons, last in the A5 pane; a press opens the right card with its four parts; again closes it`, opts(), async ($, on) => {
+  test(`A36 (${surface}): five quiet chips, last in the A5 pane; a press shows the right card below a hairline; again hides it`, opts(), async ($, on) => {
     world(on, { a5: true, rules: RULES_MD })
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
@@ -32,41 +36,47 @@ for (const surface of ['terminal', 'desktop'] as const)
     let tree = await $.ui.render(P)
     expect(keys(tree).at(-1)).toBe('hai-a5-rules')
     expect(find(await $.ui.render({ ...PANE, surface } as never), 'hai-a5-rules')).toBeUndefined() // none in Ather's pane
-    expect(text(find(tree, 'hai-a5-rules-head')).startsWith('The five rules')).toBe(true)
-    expect(find(tree, 'hai-rule1')?.type).toBe('Client') // A20: the switch rides the heading
-    const seals = all(find(tree, 'hai-a5-seals')).filter(n => n.type === 'Button').map(n => [n.props?.key, n.props?.label])
-    expect(seals).toEqual([1, 2, 3, 4, 5].map(n => [`hai-a5-seal-${n}`, String(n)]))
-    for (const n of [1, 2, 3, 4, 5]) expect(find(tree, `hai-a5-seal-${n}-box`)?.props).toMatchObject({ borderStyle: 'round', flexShrink: 0 })
+    expect(text(find(tree, 'hai-a5-rules-head')).startsWith('THE FIVE RULES')).toBe(true)
+    expect(find(tree, 'hai-rule1')?.type).toBe('Client') // A20: the switch rides the label
+    const chips = all(find(tree, 'hai-a5-chips')).filter(n => n.type === 'Button').map(n => [n.props?.key, n.props?.label])
+    expect(chips).toEqual(SHORT.map((label, i) => [`hai-a5-chip-${i + 1}`, label]))
+    expect(find(tree, 'hai-a5-chips')?.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' })
+    for (const n of [1, 2, 3, 4, 5]) expect(find(tree, `hai-a5-chip-${n}-box`)?.props).toMatchObject({ borderStyle: 'round', flexShrink: 0 })
+    expect(rims(tree)).toEqual([RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral]) // nothing hit: no red
     expect(find(tree, 'hai-a5-rule-card')).toBeUndefined()
-    // Rule 3 is hit once (an edit outside the scope file would; here the counter is driven through a refused call).
-    await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-3', surface } as never)
+    await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-3', surface } as never)
     tree = await $.ui.render(P)
+    expect(rims(tree)).toEqual([RIM.neutral, RIM.neutral, RIM.gold, RIM.neutral, RIM.neutral]) // the selected one gold
+    expect(keys(find(tree, 'hai-a5-rules'))).toEqual(['hai-a5-rules-head', 'hai-a5-chips', 'hai-a5-rule-hair', 'hai-a5-rule-card'])
     const card = (find(tree, 'hai-a5-rule-card')?.children ?? []).map(c => text(c))
-    expect(card).toEqual(['3 · Unity and discipline', 'right role, right scope, right channel', 'At the action: With a scope file, edits outside it need approval.', 'At acceptance: The diff stays within the paths the intent names.', 'Hits today: 0'])
-    expect(text(find(tree, 'hai-a5-seals'))).toBe('') // no paragraph: the seals carry nothing but their numeral labels
-    expect(keys(find(tree, 'hai-a5-rules'))).toEqual(['hai-a5-rules-head', 'hai-a5-seals', 'hai-a5-rule-card'])
-    await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-2', surface } as never)
+    expect(card).toEqual(['Unity and discipline', 'right role, right scope, right channel', 'At the action: With a scope file, edits outside it need approval.', 'At acceptance: The diff stays within the paths the intent names.', 'Hits today: 0'])
+    await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-2', surface } as never)
     tree = await $.ui.render(P)
     expect((find(tree, 'hai-a5-rule-card')?.children ?? []).map(c => text(c))[2]).toBe('At the action: — (nothing is blocked at the call)')
-    await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-2', surface } as never)
-    expect(find(await $.ui.render(P), 'hai-a5-rule-card')).toBeUndefined()
+    await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-2', surface } as never)
+    tree = await $.ui.render(P)
+    expect([find(tree, 'hai-a5-rule-card'), find(tree, 'hai-a5-rule-hair')]).toEqual([undefined, undefined])
+    expect(rims(tree)).toEqual([RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral])
   })
 
-test('A32: "Hits today" counts the rule\'s hits (a refused --no-verify is rule 1 and 5)', opts(), async ($, on) => {
+test('A36: a rule hit today turns its chip\'s rim red (only that rule), and its card says "Hits today: 1" in red', opts(), async ($, on) => {
   world(on, { a5: true, rules: RULES_MD })
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' })
-  await $.ui.render(A5PANE as never)
-  await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-1', surface: 'terminal' } as never)
-  const card = (find(await $.ui.render(A5PANE as never), 'hai-a5-rule-card')?.children ?? []).map(c => text(c))
-  expect(card.at(-1)).toBe('Hits today: 1')
+  await $.tool.call({ tool: 'Bash', command: 'git push --force origin HaiHuynh/x' }) // rule 1, asked and refused (deny mode)
+  let tree = await $.ui.render(A5PANE as never)
+  expect(rims(tree)).toEqual([RIM.red, RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral])
+  await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-1', surface: 'terminal' } as never)
+  tree = await $.ui.render(A5PANE as never)
+  expect(rims(tree)[0]).toBe(RIM.gold) // selected wins over hit
+  const last = (find(tree, 'hai-a5-rule-card')?.children ?? []).at(-1) as { props?: { color?: string } }
+  expect([text(last), last.props?.color]).toEqual(['Hits today: 1', RIM.red])
 })
 
-test('A32: motion off keeps the seals with a still "Love the project" beside the heading', { options: { a5WhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('A36: motion off keeps the chips with a still "Love the project" beside the label', { options: { a5WhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
   world(on, { a5: true })
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const tree = await $.ui.render({ ...A5PANE, surface: 'desktop' } as never)
-  expect(text(find(tree, 'hai-a5-rules-head'))).toBe('The five rules·Love the project')
+  expect(text(find(tree, 'hai-a5-rules-head'))).toBe('THE FIVE RULES·Love the project')
   expect(find(tree, 'hai-rule1')).toBeUndefined()
   expect(keys(tree).at(-1)).toBe('hai-a5-rules')
 })

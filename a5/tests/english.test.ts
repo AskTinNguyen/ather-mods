@@ -28,7 +28,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     said.push(...(w.calls['prompt.submit'] ?? []).map(e => String((e as Rec).text)), ...(w.calls['ui.toast'] ?? []).map(e => JSON.stringify(e)), ...(w.calls['ui.status'] ?? []).map(e => JSON.stringify(e)))
     // Both panes, with a rule card open and the acceptance card drawn.
     await $.ui.render({ ...A5PANE, surface } as never)
-    await $.ui.press({ plugin: 'a5', key: 'hai-a5-seal-1', surface } as never)
+    await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-1', surface } as never)
     const drawn = [...strings(await $.ui.render({ ...A5PANE, surface } as never)), ...strings(await $.ui.render({ ...PANE, surface } as never))]
     expect(drawn.length).toBeGreaterThan(20)
     expect(vietnamese(drawn)).toEqual([])

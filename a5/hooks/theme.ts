@@ -97,50 +97,55 @@ export const ruleCards = (md: string): RuleCard[] =>
 
 type ElB = El & { Button: (p: Record<string, unknown>) => unknown }
 
-/** A32: the five rules as five round seals in one row (red fill, gold rim, gold numeral; the numeral is a Button so a
- * press opens its card), then the open rule's card under them (gold border): "<n> · <name>" in gold, the purpose,
- * "At the action: …", "At acceptance: …", "Hits today: <hits>" in red. Pressing the open seal again closes it. Rule 1's
- * country / project word (A20) rides the heading. No paragraph of rule text. */
-export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, open: number | null, press: (n: number) => () => void, motto: unknown, look: { seal: string; rim: string; numeral: string; ink: string; quiet: string; hit: string }): unknown => {
+/** A34: the rules' short names, for the chips and the refusal gates. */
+export const RULE_SHORT: Record<(typeof RULES)[number][0], string> = { D1: 'Love the project', D2: 'Study and work well', D3: 'Unity and discipline', D4: 'Keep it clean', D5: 'Modest, honest, brave' }
+
+/** A36: a chip's rim: gold when selected, the seal red when its rule was hit today, else the neutral rim. */
+export const chipRim = (selected: boolean, hit: boolean): string => (selected ? A5_LOOK.gold : hit ? A5_LOOK.sealBg : V2.rim)
+
+/** A36 (mockup v2): the five rules as quiet outlined chips "<n> <short name>" in a wrapping row, under the section
+ * label "THE FIVE RULES" (rule 1's country / project word beside it, A20). A chip's rim is neutral by default, red only
+ * when its rule was hit today, gold when selected. Pressing a chip shows its card below a hairline: the full name, the
+ * purpose, "At the action: …", "At acceptance: …", "Hits today: n" (red when above zero); pressing it again hides it.
+ * `extra(n)` adds a chip's event marks (A38). */
+export const rulesChips = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, open: number | null, press: (n: number) => () => void, motto: unknown, look: { ink: string; quiet: string; hit: string }, extra: (n: number) => unknown[] = () => []): unknown => {
   const card = cards.find(c => c.n === open)
   return el.Box({
     key: 'hai-a5-rules',
     flexDirection: 'column',
     width: '100%',
-    marginTop: 1,
     children: [
-      el.Box({ key: 'hai-a5-rules-head', flexDirection: 'row', columnGap: 1, children: [el.Text({ color: look.numeral, bold: true, children: 'The five rules' }), el.Text({ color: look.quiet, children: '·' }), motto] }),
+      el.Box({ key: 'hai-a5-rules-head', flexDirection: 'row', columnGap: 1, children: [el.Text({ color: V2.label, children: 'THE FIVE RULES' }), el.Text({ color: V2.label, children: '·' }), motto] }),
       el.Box({
-        key: 'hai-a5-seals',
+        key: 'hai-a5-chips',
         flexDirection: 'row',
+        flexWrap: 'wrap',
         columnGap: 1,
         children: cards.map(c =>
           el.Box({
-            key: `hai-a5-seal-${c.n}-box`,
+            key: `hai-a5-chip-${c.n}-box`,
             flexShrink: 0,
+            flexDirection: 'row',
             borderStyle: 'round',
-            borderColor: look.rim,
-            backgroundColor: look.seal,
+            borderColor: chipRim(open === c.n, hits[c.id] > 0),
             paddingX: 1,
-            children: [el.Button({ key: `hai-a5-seal-${c.n}`, label: String(c.n), plain: true, onPress: press(c.n) })],
+            children: [el.Button({ key: `hai-a5-chip-${c.n}`, label: `${c.n} ${RULE_SHORT[c.id]}`, plain: true, onPress: press(c.n) }), ...extra(c.n)],
           }),
         ),
       }),
       ...(card
         ? [
+            hairline(el, 'hai-a5-rule-hair'),
             el.Box({
               key: 'hai-a5-rule-card',
               flexDirection: 'column',
               width: '100%',
-              borderStyle: 'round',
-              borderColor: look.rim,
-              paddingX: 1,
               children: [
-                el.Text({ color: look.numeral, bold: true, wrap: 'wrap', children: `${card.n} · ${card.name}` }),
-                ...(card.purpose ? [el.Text({ color: look.ink, wrap: 'wrap', children: card.purpose })] : []),
+                el.Text({ color: look.ink, bold: true, wrap: 'wrap', children: card.name }),
+                ...(card.purpose ? [el.Text({ color: look.quiet, wrap: 'wrap', children: card.purpose })] : []),
                 el.Text({ color: look.quiet, wrap: 'wrap', children: `At the action: ${card.action || '— (nothing is blocked at the call)'}` }),
                 el.Text({ color: look.quiet, wrap: 'wrap', children: `At acceptance: ${card.accept || '—'}` }),
-                el.Text({ color: look.hit, wrap: 'wrap', children: `Hits today: ${hits[card.id]}` }),
+                el.Text({ color: hits[card.id] > 0 ? look.hit : look.quiet, wrap: 'wrap', children: `Hits today: ${hits[card.id]}` }),
               ],
             }),
           ]
@@ -148,6 +153,10 @@ export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
     ],
   })
 }
+
+/** A35: the hairline that divides rows and sets off the rule card: a full-width rule clipped to one line. */
+export const hairline = (el: El, key: string, color: string = V2.hair): unknown =>
+  el.Box({ key, width: '100%', height: 1, overflow: 'hidden', children: [el.Text({ color, children: '─'.repeat(240) })] })
 
 /** A33: "A5 · THE FIVE RULES" letter-spaced (a space between letters, two between words). */
 export const bandTitle = (s: string): string => s.toUpperCase().split(' ').map(w => [...w].join(' ')).join('  ')

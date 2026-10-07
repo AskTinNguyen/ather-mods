@@ -12,7 +12,7 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesSeals, withSeal, type RuleHits } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
@@ -50,7 +50,7 @@ const PANE_INK = { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet } // A33: the A5 pan
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
-const RULE_NAMES: Record<string, string> = { D1: 'Love the project', D2: 'Study and work well', D3: 'Unity and discipline', D4: 'Keep it clean', D5: 'Modest, honest, brave' } // D9, short for refusals
+const RULE_NAMES: Record<string, string> = RULE_SHORT // D9 / A34, short for refusals
 const INK = '#ECE9E2'
 
 let engine: A5 | null = null
@@ -1891,7 +1891,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   // A27: the five rules, last; A20: rule 1's word switches country / project in a Client of its own.
   const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }
   const rule1 = opts.motion !== 'off' && Client ? Client({ key: 'hai-rule1', module: './rule1.ts', props: { dither: isDesktop, color: ATHER.quiet, dim: true } }) : undefined
-  // A32: the five seals; a press opens or closes that rule's card. "Hits today": the counts start over each day.
+  // A36: the five chips; a press shows or hides that rule's card. "Hits today": the counts start over each day.
   const today = ymd(now)
   if (hitsDay !== today) {
     if (hitsDay) hits = noHits()
@@ -1903,7 +1903,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     openRule = openRule === n ? null : n
     $.ui.invalidate('ui.render')
   }
-  kids.push(rulesSeals(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { seal: A5_LOOK.sealBg, rim: A5_LOOK.gold, numeral: A5_LOOK.gold, ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.meter }))
+  kids.push(rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.sealBg }))
   return recolor(paneOf(el, kids))
 }
 

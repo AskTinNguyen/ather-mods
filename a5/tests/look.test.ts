@@ -35,8 +35,8 @@ for (const surface of ['terminal', 'desktop'] as const)
     // Ivory text: the tools' values and the session titles.
     expect(colorsIn(find(tree, 'hai-tile-memory-main'))).toContain(LOOK.ivory)
     expect(colorsIn(find(tree, 'hai-overview'))).toContain(LOOK.ivory)
-    // The seals: red fill, gold rim.
-    expect(find(tree, 'hai-a5-seal-1-box')?.props).toMatchObject({ backgroundColor: LOOK.red, borderColor: LOOK.gold })
+    // A36 supersedes A33's red seals: quiet chips, neutral rim until a rule is hit.
+    expect(find(tree, 'hai-a5-chip-1-box')?.props).toMatchObject({ borderColor: '#3A3833' })
   })
 
 test("A33: Ather's pane stays restrained: no band, the line in quiet grey, the seal red only behind the A5 button", opts(), async ($, on) => {
