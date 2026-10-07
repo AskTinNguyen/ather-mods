@@ -1487,6 +1487,20 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   deskSync?.props.onPress()
   await until(async () => /late-one/.test(await text(110)))
   expect('↻ fetches now, and two quick presses make one fetch; the new intent shows (A4)', fetches().length === 2 && /late-one/.test(await text(110)), fetches().length)
+  // An intent only on origin/main can't be worked on here, but can be asked about: the session reads it from main.
+  findKey(await pane(110, 'desktop'), 'pick-intent:late-one')?.props.onPress({})
+  const lateView = await pane(110, 'desktop')
+  expect('an intent only on origin/main offers Ask about it (primary), no Work on this here, and says why', findKey(lateView, 'intent-ask')?.props.variant === 'primary' && !findKey(lateView, 'intent-work') && /pull main to work on it here/.test(JSON.stringify(lateView)), findKey(lateView, 'intent-actions'))
+  const asked = engine.record.submits.length
+  findKey(lateView, 'intent-ask')?.props.onPress({})
+  await engine.flush()
+  const askText = engine.record.submits.slice(asked).join('\n')
+  // The section around Back shares its key: the press is on the Button inside.
+  const backBox = findKey(await pane(110, 'desktop'), 'intent-back')
+  const backTo = backBox?.type === 'Button' ? backBox : backBox?.children.find(child => child?.type === 'Button')
+  expect('the intent view has its Back press', typeof backTo?.props.onPress === 'function', backTo)
+  backTo?.props.onPress?.({})
+  expect('Ask about it hands the session a read-only look at the intent on origin/main: its files by git show, its recent history, no fetch, pull, checkout or tracking', askText.includes('git show origin/main:docs/intent/late-one/<file>') && askText.includes('origin/main -- docs/intent/late-one') && askText.includes('Do not fetch, pull, check out, track it or write anything'), askText)
   // A failing fetch keeps the list and says so.
   git(root, ['remote', 'set-url', 'origin', path.join(base, 'gone.git')])
   findKey(await pane(), 'sync')?.props.onPress()

@@ -398,6 +398,17 @@ export const currentStage = (intent, evidence, role, prs = {}, pack = unreal) =>
   return pack.isProven(evidence, role) ? 'ship' : 'prove'
 }
 
+// Asking the session what an intent is and where it stands, changing nothing. One that this checkout
+// does not have (or has as it is on main) is read from origin/main itself, read-only.
+/** @param {string} slug @param {boolean} fromMain */
+export const aboutIntentPrompt = (slug, fromMain) => {
+  const files = ['prompt.md', 'findings.md', 'progress.md', 'log.md']
+  const read = fromMain
+    ? `Read it from GitHub main, since this checkout may not have it or may be behind: use \`git show origin/main:docs/intent/${slug}/<file>\` for ${files.join(', ')} (those that exist) and \`git log -5 --format="%cs %an %s" origin/main -- docs/intent/${slug}\` for its recent history, with GIT_OPTIONAL_LOCKS=0. Do not fetch, pull, check out, track it or write anything.`
+    : `Read docs/intent/${slug}/ only; change nothing.`
+  return `Tell me about intent ${slug} in under ten lines: what it is for, who owns it, its status and stage (Plan, Build, Prove, Ship) and why, its checklist progress, which decisions are open and whose they are, and what the next step would be. ${read}`
+}
+
 /**
  * The one next step for the tracked intent and the person's role.
  * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me @param {PrStates} [prs] @param {Pack} [pack]
@@ -407,7 +418,7 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = u
   if (!intent) return { key: 'start', label: 'Start an intent', prompt: '/intent ', hint: 'Type what you want after /intent; the intent skill takes it from there.', isDraft: true }
   const slug = intent.slug
   if (!isMine(intent, me)) {
-    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: `Explain intent ${slug} to me in under ten lines: what it is for, which stage it is in (Plan, Build, Prove, Ship) and why, which decisions are open and whose they are, and what the next step would be. Read docs/intent/${slug}/ only; change nothing.` }
+    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: aboutIntentPrompt(slug, intent.source === 'main') }
   }
   const stage = currentStage(intent, evidence, role, prs, pack)
   if (stage === 'close') {
