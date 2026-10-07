@@ -1,0 +1,106 @@
+import { expect, test } from 'claude-code/testing'
+import { blankSession, heldLine, newSync } from '../hooks/coord.ts'
+import { LOCK, ME, NOW, PANE, PROJ, atherTree, find, opts, text, world, type Tree } from './world.ts'
+
+// A25: the three tools never leave their box, at the narrowest and a wide pane, desktop and terminal: every tool
+// is a full-width row whose narrowest possible layout (wrapping text at words, nothing truncated) fits the pane,
+// its one action sits in a box that never shrinks, and each tool has the action set it should.
+const HF = 'E:/s2/Saved/A5'
+const ME8 = ME.slice(0, 8)
+const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
+const LONG_LANE = '1006-walkerext-s9-retarget' // a long holder name, like the ones Hai's screenshot cut to "Edi…"
+
+/** The narrowest width a node can be laid out in, in cells, the way the surface lays boxes out: text that wraps
+ * breaks at words, any other text keeps its whole line; a row lays its children side by side (with its gaps)
+ * unless it wraps; a column takes its widest child; padding and a border add to it. */
+export const minWidth = (node: unknown, wraps = false): number => {
+  if (node === null || node === undefined || node === false) return 0
+  if (typeof node === 'string' || typeof node === 'number') {
+    const s = String(node)
+    return wraps ? Math.max(0, ...s.split(/\s+/).map(w => [...w].length)) : [...s].length
+  }
+  if (Array.isArray(node)) return node.reduce((n: number, c) => n + minWidth(c, wraps), 0)
+  const t = node as Tree
+  const p = (t.props ?? {}) as Record<string, unknown>
+  const kids = t.children ?? (p.children === undefined ? [] : [p.children].flat())
+  if (t.type === 'Text') {
+    const isWrap = p.wrap === 'wrap' || wraps
+    const s = text(t)
+    return isWrap ? Math.max(0, ...s.split(/\s+/).map(w => [...w].length)) : [...s].length
+  }
+  if (t.type === 'Button') return [...String(p.label ?? '')].length + (p.plain ? 0 : 4)
+  if (t.type === 'Svg') return Math.ceil(Number(p.width ?? 16) / 8)
+  if (t.type === 'Client') return 11
+  const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0)
+  const widths = kids.map(c => minWidth(c))
+  if (p.flexDirection === 'column' || p.flexWrap === 'wrap') return pad + Math.max(0, ...widths)
+  const gap = Number(p.columnGap ?? p.gap ?? 0)
+  return pad + widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, widths.length - 1)
+}
+
+const all = (t: unknown, out: Tree[] = []): Tree[] => {
+  if (t && typeof t === 'object' && !Array.isArray(t)) {
+    out.push(t as Tree)
+    for (const c of (t as Tree).children ?? []) all(c, out)
+  }
+  return out
+}
+const buttons = (tree: unknown, key: string): string[] => all(find(tree, key)).filter(n => n.type === 'Button').map(n => String(n.props?.label))
+
+const setup = async ($: any, on: any, surface: 'terminal' | 'desktop', mine: boolean) => {
+  const w = world(on, { ram: '28.5' })
+  const holder = mine ? { lane: 'tail-vfx', sessionName: 'tail-vfx', id8: ME8 } : { lane: LONG_LANE, sessionName: LONG_LANE, id8: 'bbbbbbbb' }
+  w.put(LOCK, `${heldLine({ ...holder, since: T(14, 30), pid: null, end: T(15, 10), mode: 'interactive', pausable: false, nextSafe: 'after save', note: 'capture' })}\n`)
+  if (!mine) w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify({ ...blankSession('bbbbbbbb-1111', LONG_LANE, '', NOW), holding: { since: T(14, 30), end: T(15, 10), extended: 0 } }))
+  else w.put(`${HF}/sync.json`, JSON.stringify(newSync(T(16, 0), { session: ME, id8: ME8, lane: 'tail-vfx' }, 'tail-vfx', NOW)))
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
+  await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+  return w
+}
+
+for (const surface of ['terminal', 'desktop'] as const)
+  for (const columns of surface === 'terminal' ? [44, 100] : [40, 100])
+    test(`A25 (${surface}, ${columns} columns): each tool fits its row, nothing truncated, one action at most, inside a box that never shrinks`, opts(), async ($, on) => {
+      const w = await setup($, on, surface, false)
+      const P = { ...PANE, surface, props: { ...PANE.props, bodyColumns: columns } } as never
+      await $.ui.render(P)
+      await w.clock.advance(50)
+      const tree = await $.ui.render(P)
+      for (const k of ['editor', 'memory', 'main']) {
+        const row = find(tree, `hai-tile-${k}`)
+        expect([k, row?.props?.width]).toEqual([k, '100%'])
+        expect([k, minWidth(row) <= columns]).toEqual([k, true])
+        expect(all(row).filter(n => typeof n.props?.wrap === 'string' && String(n.props?.wrap).startsWith('truncate'))).toEqual([])
+        const action = find(tree, `hai-tile-${k}-action`)
+        if (action) expect([k, action.props?.flexShrink, find(tree, `hai-tile-${k}-main`)?.props?.flexShrink]).toEqual([k, 0, 1])
+      }
+      const labels = surface === 'desktop' ? ['Editor holder', 'Memory', 'Sync main'] : ['Editor', 'Memory', 'Sync']
+      for (const [n, k] of ['editor', 'memory', 'main'].entries()) expect(text(find(tree, `hai-tile-${k}-main`))).toContain(labels[n] as string)
+      expect(text(find(tree, 'hai-tile-editor'))).toContain(LONG_LANE)
+      expect([buttons(tree, 'hai-tile-editor'), buttons(tree, 'hai-tile-memory'), buttons(tree, 'hai-tile-main')]).toEqual([[], [], ['Plan sync']])
+      expect(text(find(tree, 'hai-tile-memory'))).not.toMatch(/[−+] ?1 GB/)
+    })
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`A25 (${surface}): holding the Editor and the sync, the actions are Release and Sync ⋯; Release frees the Editor`, opts(), async ($, on) => {
+    const w = await setup($, on, surface, true)
+    const P = { ...PANE, surface, props: { ...PANE.props, bodyColumns: surface === 'terminal' ? 44 : 40 } } as never
+    let tree = await $.ui.render(P)
+    expect([buttons(tree, 'hai-tile-editor'), buttons(tree, 'hai-tile-memory'), buttons(tree, 'hai-tile-main')]).toEqual([['Release'], [], ['Sync ⋯']])
+    for (const k of ['editor', 'main']) expect([k, minWidth(find(tree, `hai-tile-${k}`)) <= (surface === 'terminal' ? 44 : 40)]).toEqual([k, true])
+    await $.ui.press({ plugin: 'a5', key: 'hai-editor-release', surface })
+    expect(w.read(LOCK).startsWith('FREE')).toBe(true)
+    tree = await $.ui.render(P)
+    expect(buttons(tree, 'hai-tile-editor')).toEqual([])
+  })
+
+test('A25: /a5 gate shows, sets and resets the launch gate; a bad argument explains itself', opts(), async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
+  const run = async (args: string) => String((await $.command.run({ command: 'a5', args } as never)).text)
+  expect(await run('gate')).toContain('≥ 31 GB with PIE, ≥ 28 GB without (plugin options)')
+  expect(await run('gate 33 30')).toContain('≥ 33 GB with PIE, ≥ 30 GB without')
+  expect(await run('gate')).toContain('(set with /a5 gate)')
+  expect(await run('gate many')).toContain('/a5 gate <with PIE GB> <without PIE GB>')
+  expect(await run('gate reset')).toContain('back to the plugin options: ≥ 31 GB with PIE, ≥ 28 GB without')
+})

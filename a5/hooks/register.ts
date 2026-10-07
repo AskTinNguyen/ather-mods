@@ -1595,62 +1595,89 @@ function syncData(now: number): SyncData {
 
 type ButtonEl = { Button: (p: Record<string, unknown>) => unknown }
 
-/** The Memory tile's controls (D5): the launch gate down or up by 1 GB for every session (the plugin store), or
- * back to the plugin options. */
-function gateButtons($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean): unknown[] {
-  const shift = (d: number) => () =>
-    void (async () => {
-      const g = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
-      await $.store.set('gates', { pieGb: clampGate(g.pieGb + d), nopieGb: clampGate(g.nopieGb + d) })
-      await runTick($, opts)
-    })()
-  const reset = () =>
-    void (async () => {
-      await $.store.delete('gates')
-      await runTick($, opts)
-    })()
-  const plain = isDesktop ? undefined : true
-  return [
-    el.Button({ key: 'hai-gate-down', label: isDesktop ? '− 1 GB' : '−1', plain, onPress: shift(-1) }),
-    el.Button({ key: 'hai-gate-up', label: isDesktop ? '+ 1 GB' : '+1', plain, onPress: shift(1) }),
-    ...(gates.source === 'panel' ? [el.Button({ key: 'hai-gate-reset', label: 'Reset', plain: true, dimColor: true, onPress: reset })] : []),
-  ]
+/** D5 / A25: `/a5 gate <pie> <nopie>` sets the launch gate for every session (the plugin store, as the panel's
+ * ±1 GB did before 0.8); `/a5 gate reset` goes back to the plugin options. */
+async function gateCommand($: Engine, opts: Opts, args: string): Promise<string> {
+  const words = args.trim().split(/\s+/).filter(Boolean)
+  if (words[0]?.toLowerCase() === 'reset') {
+    await $.store.delete('gates')
+    await runTick($, opts)
+    return `A5 · launch gate back to the plugin options: ≥ ${clampGate(Number(opts.launchGatePieGb ?? 31))} GB with PIE, ≥ ${clampGate(Number(opts.launchGateGb ?? 28))} GB without.`
+  }
+  const [pie, nopie] = words.map(Number)
+  if (words.length === 0) return `A5 · launch gate: ≥ ${gates.pieGb} GB with PIE, ≥ ${gates.nopieGb} GB without (${gates.source === 'panel' ? 'set with /a5 gate' : 'plugin options'}). Change it: /a5 gate <with PIE> <without PIE>, or /a5 gate reset.`
+  if (!Number.isFinite(pie) || !Number.isFinite(nopie ?? pie)) return 'A5 · /a5 gate <with PIE GB> <without PIE GB>, e.g. /a5 gate 31 28; or /a5 gate reset.'
+  const g = { pieGb: clampGate(pie as number), nopieGb: clampGate((nopie ?? pie) as number) }
+  await $.store.set('gates', g)
+  await runTick($, opts)
+  return `A5 · launch gate for every session: ≥ ${g.pieGb} GB with PIE, ≥ ${g.nopieGb} GB without (the PIE gate stays 5 GB start / 3 GB abort). /a5 gate reset goes back to the plugin options.`
 }
 
-/** The Sync main tile's controls (D4): plan at a preset time; the holder moves or cancels it before the freeze,
- * ends it during the freeze; a gone holder's sync can be taken over. Every press goes through syncAction. */
-function syncButtons($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean, now: number): unknown[] {
+/** A25: the Editor tile's one action: Release, only while this session holds the Editor. */
+function editorAction($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean): unknown {
+  if (!holdsLock()) return undefined
+  return el.Button({
+    key: 'hai-editor-release',
+    label: 'Release',
+    plain: isDesktop ? undefined : true,
+    onPress: () =>
+      void (async () => {
+        const text = await editorTool($, opts, { action: 'release', dont_save: [] } as unknown as Input)
+        $.ui.toast(text.length > 200 ? `${text.slice(0, 197)}…` : text, { timeoutMs: 8_000 })
+        await runTick($, opts)
+      })(),
+  })
+}
+
+/** A25: the Sync main tile's one action (D4): "Plan sync" when none is open (one dialog with the preset times),
+ * else "Sync ⋯", one dialog with what this session may do now: the holder moves, switches the build or cancels
+ * before the freeze and ends it during it; a gone holder's sync can be taken over; Refresh always. Every choice
+ * goes through syncAction. */
+function syncActionButton($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean, now: number): unknown {
   const s = syncFile
   const phase = phaseOf(s, now)
-  const act = (action: string, a: { at?: string; note?: string; build?: boolean }) => () =>
-    void (async () => {
+  const run = (action: string, a: { at?: string; note?: string; build?: boolean }) =>
+    (async () => {
       const text = await syncAction($, opts, action, a)
       $.ui.toast(text.length > 200 ? `${text.slice(0, 197)}…` : text, { timeoutMs: 8_000 })
       await runTick($, opts)
     })()
-  const plain = isDesktop ? undefined : true
-  const refresh = el.Button({
-    key: 'hai-sync-refresh',
-    label: 'Refresh',
-    plain: true,
-    dimColor: true,
-    onPress: () => {
-      syncAt = 0
-      void refreshSync($, opts)
-      void runTick($, opts)
-    },
+  const refresh = async () => {
+    syncAt = 0
+    await refreshSync($, opts)
+    await runTick($, opts)
+  }
+  const choices: [string, () => Promise<void>][] = []
+  if (!s || !isOpenPhase(phase)) for (const t of presetTimes(now)) choices.push([`Plan ${clockOf(t)}`, () => run('plan', { at: clockOf(t) })])
+  else if (s.holder.id8 !== me8) {
+    if (!isLive(s.holder.id8, now)) choices.push(['Take over', () => run('takeover', {})])
+  } else if (phase === 'frozen') choices.push(['Done', () => run('done', { note: 'ended on the panel' })], ['Abort', () => run('abort', { note: 'aborted on the panel' })])
+  else {
+    choices.push([`Move to ${clockOf(s.at + 30 * 60_000)}`, () => run('move', { at: clockOf(s.at + 30 * 60_000) })])
+    choices.push([s.build ? 'Build: off' : 'Build: on', () => run('build', { build: !s.build })])
+    choices.push(['Cancel the sync', () => run('cancel', { note: 'cancelled on the panel' })])
+  }
+  choices.push(['Refresh', refresh])
+  if (choices.length < 2) choices.push(['Close', async () => undefined]) // the dialog takes 2-4 choices
+  const isPlan = !s || !isOpenPhase(phase)
+  // The dialog's free-text "Other" takes a time: plan at it, or (the holder, before the freeze) move to it.
+  const isMover = isPlan || (s?.holder.id8 === me8 && phase !== 'frozen')
+  const question = isPlan
+    ? 'Plan a merge of origin/main at… (another time: type HH:MM)'
+    : `Sync ${s ? clockOf(s.at) : ''} by ${s?.holder.id8 === me8 ? 'this session' : (s?.holder.lane ?? '?')} (${phase})${isMover ? ' · type HH:MM to move it' : ''}`
+  return el.Button({
+    key: 'hai-sync-action',
+    label: isPlan ? 'Plan sync' : 'Sync ⋯',
+    plain: isDesktop ? undefined : true,
+    onPress: () =>
+      void (async () => {
+        const answer = await $.ui.ask(question, { options: choices.map(c => c[0]).slice(0, 4), header: 'Sync main' }).catch(() => null)
+        const pick = choices.find(c => c[0] === answer)
+        const typed = /^\s*(\d{1,2}:\d{2})\s*$/.exec(answer ?? '')?.[1]
+        if (pick) await pick[1]()
+        else if (typed && isMover) await run(isPlan ? 'plan' : 'move', { at: typed })
+      })(),
   })
-  if (!s || !isOpenPhase(phase)) return [...presetTimes(now).map((t, n) => el.Button({ key: `hai-sync-plan-${n}`, label: `${isDesktop ? 'Plan ' : ''}${clockOf(t)}`, plain, onPress: act('plan', { at: clockOf(t) }) })), refresh]
-  if (s.holder.id8 !== me8) return isLive(s.holder.id8, now) ? [refresh] : [el.Button({ key: 'hai-sync-takeover', label: 'Take over', plain, onPress: act('takeover', {}) }), refresh]
-  if (phase === 'frozen')
-    return [el.Button({ key: 'hai-sync-done', label: 'Done', plain, onPress: act('done', { note: 'ended on the panel' }) }), el.Button({ key: 'hai-sync-abort', label: 'Abort', plain, onPress: act('abort', { note: 'aborted on the panel' }) }), refresh]
-  return [
-    ...(s.at - 30 * 60_000 > now ? [el.Button({ key: 'hai-sync-earlier', label: '−30 min', plain, onPress: act('move', { at: clockOf(s.at - 30 * 60_000) }) })] : []),
-    el.Button({ key: 'hai-sync-later', label: '+30 min', plain, onPress: act('move', { at: clockOf(s.at + 30 * 60_000) }) }),
-    el.Button({ key: 'hai-sync-build', label: s.build ? 'Build: yes' : 'Build: no', plain, onPress: act('build', { build: !s.build }) }),
-    el.Button({ key: 'hai-sync-cancel', label: 'Cancel', plain, onPress: act('cancel', { note: 'cancelled on the panel' }) }),
-    refresh,
-  ]
 }
 
 const keyOf = (node: unknown): string => {
@@ -1691,9 +1718,10 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     const plan = syncData(now)
     const tiles = [
       editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
-      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }, gateButtons($, opts, el, isDesktop)),
-      mainTile(sync, plan, syncButtons($, opts, el, isDesktop, now)),
+      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }),
+      mainTile(sync, plan, syncActionButton($, opts, el, isDesktop, now)),
     ]
+    tiles[0] = { ...tiles[0], action: editorAction($, opts, el, isDesktop) } as (typeof tiles)[number]
     const names = { editor: 'editor', memory: 'memory', main: 'branch' } as const
     for (const t of tiles) {
       const name = names[t.key as keyof typeof names]
@@ -1740,8 +1768,8 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     await $.command.register({
       name: 'a5',
-      description: 'A5: /a5 on · /a5 off · /a5 status · /a5 accept (nghiệm thu A5 now) · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at nghiệm thu before a PR; Editor holder, RAM and Sync main)',
-      argumentHint: 'on | off | status | accept | sync HH:MM',
+      description: 'A5: /a5 on · /a5 off · /a5 status · /a5 accept (nghiệm thu A5 now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at nghiệm thu before a PR; Editor holder, RAM and Sync main)',
+      argumentHint: 'on | off | status | accept | gate <pie> <nopie> | sync HH:MM',
     })
     await readA5($)
     a5FlipAt = 0 // a session that starts with A5 already on does not stamp the seal
@@ -1770,6 +1798,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'a5' }, async ($, e) => {
     if (/^sync\b/i.test(e.args.trim())) return { text: await syncCommand($, opts, e.args.trim().slice(4)) }
     if (/^accept\b/i.test(e.args.trim())) return { text: await acceptCommand($, opts) }
+    if (/^gate\b/i.test(e.args.trim())) return { text: await gateCommand($, opts, e.args.trim().slice(4)) }
     const arg = e.args.trim().toLowerCase()
     if (arg === 'on' || arg === 'off') {
       await $.store.set('a5', { on: arg === 'on' })

@@ -188,7 +188,7 @@ test('pane on the desktop: the tiles are cards in Ather\'s strip language', opts
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const tree = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
   expect(find(tree, 'hai-tile-editor')?.props?.borderStyle).toBe('round')
-  expect(find(tree, 'hai-tile-main-buttons')).toBeDefined()
+  expect(find(tree, 'hai-tile-main-action')).toBeDefined() // A25: one action per tool
 })
 
 test('pane, A5 on: the accent turns lacquer gold, a red seal joins the brand, the five rules sit at the foot', opts(), async ($, on) => {
@@ -221,13 +221,13 @@ test('pane on the desktop: each tile carries a pixel icon; still unless its stat
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const first = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
-  const svg = (find(first, 'hai-tile-editor-head')?.children ?? [])[0] as Tree
+  const svg = (find(first, 'hai-tile-editor-main')?.children ?? [])[0] as Tree
   expect(svg?.type).toBe('Svg')
   expect(svg?.props?.isInteractive).toBeUndefined()
   w.put(LOCK, `1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n`)
   await w.clock.advance(60_000) // the minute refresh reads the new holder
   const changed = await $.ui.render({ ...PANE, surface: 'desktop' } as never)
-  const moving = (find(changed, 'hai-tile-editor-head')?.children ?? [])[0] as Tree
+  const moving = (find(changed, 'hai-tile-editor-main')?.children ?? [])[0] as Tree
   expect(moving?.props?.isInteractive).toBe(true)
   expect(String(moving?.props?.source)).toContain('<set attributeName="fill"')
 })

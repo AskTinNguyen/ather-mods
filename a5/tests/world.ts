@@ -96,6 +96,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return value({ exitCode: hit?.exitCode ?? 0, stdout, stderr: '', isStdoutTruncated: hit?.truncated === true, isStderrTruncated: false })
   })
   const calls: Record<string, unknown[]> = {}
+  let answer = ask // what Hai picks in the next dialog; `say` changes it
   for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'tool.register'])
     on(ev, async (_$: unknown, e: unknown) => {
       ;(calls[ev] ??= []).push(e)
@@ -120,16 +121,19 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   on('classic.Stop', async () => ({}))
   on('tool.call', async (_$: unknown, e: Rec) => {
     // The dialog (`$.ui.ask` → AskUserQuestion): Hai picks `ask` when the test gives one.
-    if (e.tool === 'AskUserQuestion' && ask !== undefined) {
+    if (e.tool === 'AskUserQuestion' && answer !== undefined) {
       ;(calls.ask ??= []).push(e)
       const q = String(((e.questions as Rec[] | undefined) ?? [])[0]?.question ?? '')
-      return { result: { questions: e.questions, answers: { [q]: ask } }, text: ask }
+      return { result: { questions: e.questions, answers: { [q]: answer } }, text: answer }
     }
     seen.push(e)
     const t = out[String(e.command ?? e.tool)] ?? (e.tool === 'mcp__ccd_session_mgmt__get_session' ? '{"title":"3️⃣ Loco fix"}' : 'ok')
     return { result: { stdout: t, stderr: '', interrupted: false }, text: t }
   })
   return {
+    say: (label: string | undefined) => {
+      answer = label
+    },
     files,
     mtimes,
     seen,
