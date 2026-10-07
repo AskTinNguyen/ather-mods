@@ -18,7 +18,7 @@ const promptOf = (acceptance, status = 'active') => `# Board\n\n- Status: ${stat
 const progressOf = (rows, pr = '- PR: #32372') =>
   `# Board: Progress\n\n- Working under rev: 1\n${pr}\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n${rows.map(([id, verdict]) => `| ${id} | ${verdict} | proof/${id}.png |`).join('\n')}\n\n## Steps\n\n- PR #99999 mentioned in a step, not the header.\n`
 /** @param {string} prompt @param {string} progress */
-const parsed = (prompt, progress) => model.parseIntent({ slug: 'board', prompt, findings: '', progress, files: [], hasDebrief: false, mtimeMs: 1 })
+const parsed = (prompt, progress) => model.parseIntent({ slug: 'board', prompt, findings: '', progress, files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' })
 
 // The new format: ids with their proof, no boxes; sub-bullets belong to the item above.
 const NEW_PROMPT = promptOf(IDS.map(id => `- ${id}: Thing ${id}. Proof: tests.\n  - a detail, not an item`).join('\n'))

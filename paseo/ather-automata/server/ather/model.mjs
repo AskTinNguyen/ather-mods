@@ -247,7 +247,8 @@ export const isReadyToClose = (intent, prs) => isAllMet(intent) && intent.prs.le
 export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number} ${prs[number] === 'UNREAD' ? 'could not be read' : (prs[number] ?? 'not read yet')}`)
 
 /**
- * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, mtimeMs: number }} IntentFiles
+ * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string }} IntentFiles
+ * `updatedAt`: when it last changed (its last commit on main, or its files'); `source`: where it was read; `firstAuthor`: who first committed its folder
  * @typedef {ReturnType<typeof parseIntent>} Intent
  */
 
@@ -274,7 +275,9 @@ export const parseIntent = (input, pack = unreal) => {
     hasReview: input.files.some(name => /review/i.test(name)) || /\b(plan|opus|design)[- ]review\b|reviewed by|after (an? )?(opus )?review/i.test(prompt + progress.slice(0, 20000)),
     hasWorker: /^\s*[-*]?\s*\**worker\**\s*[:=-]\s*\S/im.test(progress) || /^(###\s+S\d+|-\s+S\d+\b)/m.test(progress),
     hasDebrief: input.hasDebrief,
-    mtimeMs: input.mtimeMs,
+    updatedAt: input.updatedAt,
+    source: input.source,
+    firstAuthor: input.firstAuthor,
   }
 }
 
@@ -299,7 +302,7 @@ export const intentOwner = prompt => field(prompt, 'Owner')
 /** @param {readonly Intent[]} intents @param {string} me @param {string} area */
 export const pickCandidates = (intents, me, area) => {
   const rank = (/** @type {Intent} */ one) => (me !== '' && isSamePerson(one.owner, me) ? 0 : 4) + (area !== '' && one.area !== area ? 2 : 0) + (directorCalls(one).length > 0 ? 0 : 1)
-  return intents.filter(one => one.status === 'active' || one.status === 'parked').sort((a, b) => rank(a) - rank(b) || b.mtimeMs - a.mtimeMs)
+  return intents.filter(one => one.status === 'active' || one.status === 'parked').sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt)
 }
 
 /** @param {readonly Intent[]} intents @param {string} text */

@@ -36,7 +36,9 @@ export async function readIntent(ctx: Ctx, slug: string) {
       progress: (await readText(`${dir}/progress.md`)) ?? "",
       files: (await list(dir).catch(() => [])).map((entry) => entry.name),
       hasDebrief: await ctx.io.exists(`${root}/${pack.debriefPath(slug)}`),
-      mtimeMs: 0,
+      updatedAt: 0,
+      source: "local",
+      firstAuthor: "",
     },
     pack,
   );
