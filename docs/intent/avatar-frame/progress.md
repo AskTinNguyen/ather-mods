@@ -3,8 +3,8 @@
 - Working under rev: 1
 - Worker: avatar-frame worker (Claude Opus subagent, worktree `D:/Projects/ather-mods-wt/avatar-frame`)
 - Current step: none (stopped for review)
-- Next step: Hai looks at a running worker's avatar on the real desktop pane in the light and the dark theme (A1's review half); then merge (A4)
-- PR: (set when opened)
+- Next step: the orchestrator opens the PR (the a5 gate stops a worker); then Hai looks at a running worker's avatar on the real desktop pane in light and dark (A1's review half), then merge (A4)
+- PR: none yet: the branch is on origin (1ba6c3f), but `gh pr create` was refused by the a5 mod's PR gate (hai-flow), which scored the live checkout's hai-flow-a5 intent and a5/ files, not this worktree; body drafted for the orchestrator
 
 ## Acceptance
 
