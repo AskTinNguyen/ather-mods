@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 9
+- Rev: 10
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -80,6 +80,11 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A31 (rev 9): The Sessions list shows only sessions that are open now: rows come from the app's session list (`list_sessions`, not archived) matched to Ather lanes/a5 files, with the app's current title (renamed sessions show the new title; closed or archived ones are gone); without the app list it falls back to live lanes only (heartbeat fresh, not ended). This session is marked with a ★ before its title (no "(this session)" text); the status part (holds, "no a5", age) stays at the row's end and is never cut, only the title is. Proof: gate: sessions tests with a closed, an archived and a renamed session.
 - A32 (rev 9): The five rules are five round seals (red, gold rim, gold numeral) in one row; pressing one opens its card in the A5 pane: the rule's name, its purpose, what it checks at the action, what it checks at nghiệm thu, and how many times it was hit today; pressing again closes it. No paragraph of rule text. Proof: gate: pane tests (five seal buttons; press opens the right card with the four parts; press again closes).
 - A33 (rev 9): The A5 pane's look per the approved mockup: a seal-red title band with a gold star and "A5 · NĂM ĐIỀU" in pale gold, gold icons and accents, RAM meter in red on a dark red track; Ather's pane stays restrained (seal and the red A5 button only). Proof: gate: pane tests on the band and colours; review by Hai on the real pane.
+- A34 (rev 10): Everything a5 shows is in English (pane, compact line, notices, refusals, rule cards, README stays bilingual where it is Hai's own guide). The five rules' short names: 1 Love the project · 2 Study and work well · 3 Unity and discipline · 4 Keep it clean · 5 Modest, honest, brave; full names: "Love the project, love your fellow sessions" · "Study well, work well" · "Unity and discipline" · "Keep it clean" · "Modest, honest, brave"; the rule-1 switch alternates "Love the country" / "Love the project". Proof: gate: tests scan every drawn string and notice for Vietnamese letters (none).
+- A35 (rev 10): Mockup v2 layout of the A5 pane: a thin seal-red band aligned to the content edges ("★ A5" left, "on"/"off" right); the three tools as ONE grouped list with hairline dividers (icon, label column, bold value, at most one button; one quiet sub-line under each), not three cards; one 16-column-equivalent gutter and one gap between blocks; section labels "SESSIONS · N OPEN" and "THE FIVE RULES" in one small spaced style; Memory reads "<n> GB free · below launch gate" with the gate details in its sub-line. Proof: gate: pane tests on the structure (one list, dividers, labels) and the width check.
+- A36 (rev 10): The five rules as quiet outlined chips "<n> <short name>": neutral rim by default, red rim only when that rule was hit today, gold rim on the selected one; pressing one shows its card below a hairline (full name, purpose, "At the action:", "At acceptance:", "Hits today:"), pressing again hides it. Proof: gate: pane tests (rims by state, card parts).
+- A37 (rev 10): Entrance: when the A5 pane opens (and when the compact line first draws), each part dithers in from seal-red pixels in sequence (band, tools, sessions, rules), the whole sequence within 0.3 s, then still; desktop only (SVG/SMIL), terminal draws at once; off with `motion: off`. If the engine cannot lay a dither over text, the worker records a finding with the closest feasible form (e.g. each block's own SVG mask or a short red pixel curtain per block) before building it. Proof: gate: pane tests (each block carries its entrance with begin offsets summing ≤ 300 ms; none with motion off; terminal none); review by Hai on the real pane.
+- A38 (rev 10): Event dithers (one shot, ≤ 1 s, never looping except while something runs): a rule chip stamps red once when its rule is hit; the sync freeze sweeps the band with a ❄ dithering in, reversed at the lift; a nghiệm thu score resolves the five chips one by one from dither to ✓/✗. Proof: gate: pane tests for each trigger and none without it.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -93,6 +98,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 10 (2026-10-07): L-13: A34 English, A35 mockup v2 layout, A36 quiet rule chips, A37 red pixel-dither entrance ≤ 0.3 s, A38 event dithers (rule hit, sync freeze, nghiệm thu).
 - rev 9 (2026-10-07): L-12: A30 compact line icons and values, A31 only open sessions with ★ for this one, A32 rule seals with cards, A33 communist look on the A5 pane (approved mockup).
 - rev 8 (2026-10-07): L-11: A28 one compact A5 line in Ather's pane, A29 everything else in a separate A5 pane; session rows one line with an id8 fallback.
 - rev 7 (2026-10-07): L-10: A25 tool boxes that never overflow, no ±1 GB; A26 the session overview as a named list; A27 the five rules at the bottom, one per line, small.

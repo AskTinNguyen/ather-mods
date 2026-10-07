@@ -92,3 +92,14 @@ With a screenshot of 0.8.0: the A5 block (three tool rows and the sessions list)
 > (after the mockup) Ok duyệt
 
 The approved mockup: compact line with icons and uncut numbers and a red "★ A5 ›"; a seal-red title band "★ A5 · NĂM ĐIỀU" on the A5 pane, gold icons; sessions only open ones, ★ for this session; five red seals that open a card per rule.
+
+## L-13 (2026-10-07 15:30) | class: intent | -> rev 10
+
+> Chuyển sang tiếng Anh hết nhé.
+> Ngoài ra phần layout margin canh lề canh góc canh khoảng trống tệ quá.
+> Các nút 1 2 3 4 5 cũng quá nổi bật và dùng màu chưa đủ subtle, hiện tại nhìn như lỗi. Chỉ đỏ rực khi có issue thôi.
+> Dùng skill /design đánh giá lại toàn bộ
+> (after mockup v2) Ok better. Remember the pixelate dithering animation i mentioned before? give me 5 places that could be improved by that?
+> Ngay cả khi xuất hiện anh muốn toàn bộ UI sẽ được pixelating dither vào bằng sắc đỏ. Mỗi bộ phận sẽ tuần tự được hiện lên theo cách đó. Tổng thời gian không quá 0.3s
+
+Mockup v2 taken as approved ("Ok better"); of the five dither places, the default 2, 3, 5 (rule hit, sync freeze, nghiệm thu); plus a sequential red dither entrance within 0.3 s.
