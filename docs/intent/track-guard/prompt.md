@@ -1,7 +1,7 @@
 # Ather Automata track guard
 
 - Rev: 3
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: HaiHuynh
 - Skill: `plugin-authoring`
@@ -60,3 +60,4 @@ A session tracks the intent it works on, and only by a deliberate act. Today one
 - rev 1 (2026-10-06): created from L-1, L-2 and the two adversarial reviews.
 - rev 3 (2026-10-07): L-4: D5, the Work question's typed name opens a follow-up instead of tracking (replaces F-1 b); its choices state their consequence.
 - rev 2 (2026-10-06): L-3: F-1 (b), a name typed in the Work question tracks like its choices.
+- rev 3 (2026-10-07): completed. A1-A8 met; merged as ather-mods PR #6 (squash ebd8881), release 0.1.2, merged by Hai with Tin's go (Slack 10:21: "có thể PR và Merge luôn"). The duplicate local and fork branch `intent/track-guard` was deleted (same tree as ebd8881).
