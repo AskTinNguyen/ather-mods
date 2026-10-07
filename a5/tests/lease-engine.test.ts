@@ -154,6 +154,7 @@ test('A15: before T (and for any session not holding the sync) the same commands
 
 // ---------- A16: the session overview ----------
 const LANES = 'E:/s2/Saved/AtherAutomata/lanes'
+const RECORDS = 'C:/Users/hai.huynh/.claude/projects/E--s2'
 const SID_B = 'bbbbbbbb-1111-4000-8000-000000000000'
 const SID_D = 'dddddddd-2222-4000-8000-000000000000'
 const laneFile = (sessionId: string, intent: string) => JSON.stringify({ sessionId, intent, branch: 'HaiHuynh/20261005', updatedAt: NOW, hasEnded: false })
@@ -173,16 +174,22 @@ const machine = (w: ReturnType<typeof world>) => {
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`A16 (${surface}): the panel counts the sessions, by intent, names who holds what and who runs without a5 0.4`, opts(), async ($, on) => {
-    const w = world(on, { out: { mcp__ccd_session_mgmt__list_sessions: CLIENTS } })
+    // Since 0.10 (A31) the app's list decides which sessions are open; its ids are its own, so B and D are matched by
+    // the titles in their Claude Code records ("Loco" and "Old" here), and show the app's titles.
+    const w = world(on, { out: { mcp__ccd_session_mgmt__list_sessions: CLIENTS }, git: { [SID_B]: { stdout: '"customTitle":"Loco"\n' }, [SID_D]: { stdout: '"customTitle":"Old"\n' } } })
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     machine(w)
+    w.put(`${RECORDS}/${SID_B}.jsonl`, '{}\n')
+    w.put(`${RECORDS}/${SID_D}.jsonl`, '{}\n')
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
+    await $.ui.render({ ...A5PANE, surface } as never)
+    await w.clock.advance(50) // record titles are looked up off the render
     const tree = await $.ui.render({ ...A5PANE, surface } as never)
     // Since 0.8 (A26) the overview is a named list (one row per session) instead of one line; the same facts.
-    expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 in S2 · 1 elsewhere')
-    expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('●3️⃣ Loco fix (this session)no intent · active now')
-    expect(text(find(tree, 'hai-session-bbbbbbbb'))).toBe('●bbbbbbbbEditor →15:10tail-vfx · seen now') // A29: holds beside the title, one line
-    expect(text(find(tree, 'hai-session-dddddddd'))).toBe('●ddddddddloco · seen nowno a5')
+    expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 đang mở')
+    expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('★3️⃣ Loco fix' + 'no intent · now')
+    expect(text(find(tree, 'hai-session-bbbbbbbb'))).toBe('●Loco' + 'Editor →15:10 · 1m') // A31: the app's title and activity
+    expect(text(find(tree, 'hai-session-dddddddd'))).toBe('●Old' + 'no a5 · 3h')
   })
 }
 
@@ -192,7 +199,7 @@ test('A16: without the client\'s session list the overview falls back to Ather\'
   machine(w)
   await $.session.start(START)
   const tree = await $.ui.render(A5PANE as never)
-  expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 in S2')
+  expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 đang mở') // A31 fallback: live lanes
   expect(['bbbbbbbb', 'dddddddd'].map(id8 => Boolean(find(tree, `hai-session-${id8}`)))).toEqual([true, true])
 })
 

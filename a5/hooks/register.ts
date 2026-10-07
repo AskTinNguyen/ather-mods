@@ -4,7 +4,7 @@ import { acceptText, closesIntent, failed, isPrCommand, isPrTool, namedPaths, op
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
-  CUTOFF_MS, DIR, HARD_END_WARN_MS, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
+  CUTOFF_MS, DIR, HARD_END_WARN_MS, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
@@ -504,7 +504,7 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
 // A26: session titles from Claude Code's records, looked up off the render, at most every 10 min per session.
 const sessionNames = new Map<string, string>()
 const namesAt = new Map<string, number>()
-const NAME_TTL_MS = 10 * 60_000
+const NAME_TTL_MS = 2 * 60_000 // A31: a rename shows within two minutes
 let isNaming = false
 
 /** This checkout's records folder under Claude Code's config (`<config>/projects/<root with - for each other
@@ -1854,8 +1854,9 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     // A26: the sessions on this machine as a short named list, one line each.
     const view = sessionsView({ me8: id8, meTitle: me?.title ?? '', files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now), names: sessionNames })
     kids.push(sessionsBox(el, view, isDesktop))
-    const unnamed = view.rows.filter(r => r.title === r.id8 && !r.isMe).map(r => r.id8)
-    if (unnamed.length > 0 && !isNaming && unnamed.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, unnamed))
+    // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
+    const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
+    if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
   } else kids.push(el.Box({ key: 'hai-a5-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'This session is not in the S2 checkout: the Editor, Memory and Sync main tools and the sessions list live in an S2 session.' })] }))
   // A19: the Nghiệm thu A5 card, once there is a score or the tracked intent is in Ship.
   if (lastAccept) {

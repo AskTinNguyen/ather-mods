@@ -902,21 +902,34 @@ export const titleFromRecord = (lines: string): string => {
 export const projectFolder = (root: string): string => root.replace(/[^a-zA-Z0-9]/g, '-')
 
 export type SessionRow = { id8: string; title: string; intent: string; holds: string[]; hasA5: boolean; isMe: boolean; activeMin: number | null; activeKind: 'active' | 'seen' }
-export type SessionsView = { header: string; rows: SessionRow[]; more: number }
+export type SessionsView = { header: string; rows: SessionRow[]; more: number; source: 'app' | 'lanes' }
 export const SESSION_ROWS = 6
+/** The record title Claude Code keeps is cut to 60 characters (`titleFromRecord`); the app's is whole. */
+const titleKey = (s: string | undefined | null): string => oneLine(s).slice(0, 60).trim().toLowerCase()
 
-/** A26: the live S2 sessions as a short named list: this session first, then whoever holds the Editor or the sync or
- * waits in the queue, then the most recently active; at most six rows and how many more. A title comes from the
- * a5 session file, else Claude Code's record (`names`), else the first 8 hex. "Active" is Ather's `lastActiveAt`
- * when its lane has one, else the a5 heartbeat ("seen"). */
+/** A26/A31: the S2 sessions that are open now, as a short named list: this session first (★), then whoever holds the
+ * Editor or the sync or waits in the queue, then the most recently active; at most six rows and how many more.
+ *
+ * Open means in the app's own session list (`clients`: not archived, in the S2 checkout). The app's ids are its own
+ * (`local_<uuid>`, MEASURED: not the CLI session ids that Ather's lanes and a5's files use), so a live lane or a5 file
+ * is matched to an app row by title: its Claude Code record title (`names`) or its a5 file title against the app's
+ * current title (first 60 characters). A matched session shows the app's current title (a rename shows at once); a
+ * session the app does not list (closed, archived, or not matched) is dropped. Without the app's list: live lanes
+ * only (fresh, not ended), titled from the record. This session is always listed, titled from the app. */
 export const sessionsView = (x: { me8: string; meTitle: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase; names: ReadonlyMap<string, string> }): SessionsView => {
   const { now } = x
   const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
   const freshFiles = x.files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS)
-  const ids = [...new Set<string>([x.me8, ...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...freshFiles.map(f => f.id8)].filter(Boolean))]
+  const appRows = x.clients?.filter(r => !r.isArchived && x.isS2Cwd(r.cwd)) ?? null
+  const candidates = [...new Set<string>([...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...(appRows ? freshFiles.map(f => f.id8) : [])].filter(id8 => id8 && id8 !== x.me8))]
+  const appOf = (id8: string): ClientRow | null | undefined => {
+    if (!appRows) return undefined // no app list: lanes decide
+    const keys = [x.names.get(id8), freshFiles.find(f => f.id8 === id8)?.title].map(titleKey).filter(Boolean)
+    return appRows.find(r => keys.includes(titleKey(r.title))) ?? null
+  }
   const queue = queueOf(x.files, x.lanes, now, x.sync).map(f => f.id8)
   const syncOpen = x.sync && isOpenPhase(x.phase) ? x.sync : null
-  const rows = ids.map((id8): SessionRow => {
+  const rowOf = (id8: string, app: ClientRow | null | undefined): SessionRow => {
     const lane = liveLanes.find(l => l.sessionId.toLowerCase().startsWith(id8))
     const file = freshFiles.find(f => f.id8 === id8)
     const isMe = id8 === x.me8
@@ -925,11 +938,11 @@ export const sessionsView = (x: { me8: string; meTitle: string; files: readonly 
     if (syncOpen && syncOpen.holder.id8 === id8) holds.push(`sync ${hhmm(syncOpen.at)}`)
     const place = queue.indexOf(id8)
     if (place >= 0) holds.push(`queue #${place + 1}`)
-    const activeAt = lane?.lastActiveAt ?? null
+    const activeAt = lane?.lastActiveAt ?? (app && app.lastActivityAt > 0 ? app.lastActivityAt : null)
     const seenAt = activeAt ?? (isMe ? now : (file?.heartbeatAt ?? lane?.mtimeMs ?? null))
     return {
       id8,
-      title: oneLine(isMe ? x.meTitle : '') || oneLine(file?.title) || oneLine(x.names.get(id8)) || id8,
+      title: oneLine(isMe ? x.meTitle : app?.title) || oneLine(file?.title) || oneLine(x.names.get(id8)) || id8,
       intent: lane?.intent || 'no intent',
       holds,
       hasA5: isMe || Boolean(file),
@@ -937,19 +950,28 @@ export const sessionsView = (x: { me8: string; meTitle: string; files: readonly 
       activeMin: seenAt === null ? null : Math.max(0, Math.round((now - seenAt) / 60_000)),
       activeKind: activeAt !== null || isMe ? 'active' : 'seen',
     }
-  })
+  }
+  const rows = [rowOf(x.me8, null)]
+  for (const id8 of candidates) {
+    const app = appOf(id8)
+    if (app === null) continue // the app does not list it: closed, archived, or not matched
+    if (app === undefined && !liveLanes.some(l => l.sessionId.toLowerCase().startsWith(id8))) continue
+    rows.push(rowOf(id8, app))
+  }
   const rank = (r: SessionRow) => (r.isMe ? 0 : r.holds.length > 0 ? 1 : 2)
   rows.sort((a, b) => rank(a) - rank(b) || (a.activeMin ?? 1e9) - (b.activeMin ?? 1e9) || a.id8.localeCompare(b.id8))
-  const active = x.clients?.filter(r => !r.isArchived && (r.isRunning || now - r.lastActivityAt <= CLIENT_ACTIVE_MS)) ?? null
-  const elsewhere = active ? active.filter(r => !x.isS2Cwd(r.cwd)).length : null
-  const header = ['Sessions', `${ids.length} in S2`, ...(elsewhere !== null ? [`${elsewhere} elsewhere`] : [])].join(' · ')
-  return { header, rows: rows.slice(0, SESSION_ROWS), more: Math.max(0, rows.length - SESSION_ROWS) }
+  return { header: `Sessions · ${rows.length} đang mở`, rows: rows.slice(0, SESSION_ROWS), more: Math.max(0, rows.length - SESSION_ROWS), source: appRows ? 'app' : 'lanes' }
 }
 
 /** A29: a title on one line: newlines, tabs and runs of spaces become one space; blank stays blank (the row then
  * shows the first 8 hex, never a lone dot). */
 export const oneLine = (s: string | undefined | null): string => (s ?? '').replace(/[\u0000-\u001f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim()
 
-/** One row's quiet words after its title and holds: intent · active how long ago. */
-export const sessionDetail = (r: SessionRow): string =>
-  [r.intent, r.activeMin === null ? '' : r.activeMin < 1 ? `${r.activeKind} now` : `${r.activeKind} ${r.activeMin < 60 ? `${r.activeMin}m` : `${Math.round(r.activeMin / 60)}h`} ago`].filter(Boolean).join(' · ')
+/** A31: a row's status, at its end and never cut: what it holds or waits for (else "no a5", else its intent), then
+ * how long ago it was active (`now`, `4m`, `2h`). */
+export const sessionStatus = (r: SessionRow): string => {
+  const what = r.holds.length ? r.holds : [!r.hasA5 ? 'no a5' : r.intent]
+  if (r.holds.length && !r.hasA5) what.push('no a5')
+  const age = r.activeMin === null ? '' : r.activeMin < 1 ? 'now' : r.activeMin < 60 ? `${r.activeMin}m` : `${Math.round(r.activeMin / 60)}h`
+  return [...what, age].filter(Boolean).join(' · ')
+}

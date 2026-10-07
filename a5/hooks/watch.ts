@@ -3,8 +3,10 @@
 // the right, one quiet status line under it that wraps inside the row. Nothing is truncated and nothing can leave
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
-import { parseLockLine, sessionDetail, type SessionRow, type SessionsView } from './coord.ts'
-import { ATHER, STATUS, TRACK } from './theme.ts'
+import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
+import { A5_LOOK, ATHER, STATUS, TRACK } from './theme.ts'
+
+const A5_MARK = A5_LOOK.gold // A31: this session's ★
 
 export const PIE_START_GB = 5
 export const PIE_ABORT_GB = 3
@@ -272,9 +274,9 @@ export const acceptCard = (el: El, title: string, sub: string, rows: readonly Ac
  * "no a5" for a session that runs without it; "+N more" past six. Every piece wraps; nothing is cut. */
 export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknown => {
   const { Box, Text } = el
-  const dot = (r: SessionRow) => (!r.hasA5 ? STATUS.warn : r.activeMin !== null && r.activeMin < 5 ? STATUS.ok : ATHER.quiet)
-  // A29: one line per session: the title and the quiet words shrink and end in "…"; the dot, what it holds or waits
-  // for, and "no a5" never shrink.
+  // A31: ★ marks this session (no "(this session)" text); others a dot: ok green with a5, warn without. The title is
+  // the only part that shortens; the status (holds, "no a5", age) sits at the end and is never cut.
+  const mark = (r: SessionRow) => (r.isMe ? Text({ color: A5_MARK, children: '★' }) : Text({ color: r.hasA5 ? STATUS.ok : STATUS.warn, children: '●' }))
   const row = (r: SessionRow) =>
     Box({
       key: `hai-session-${r.id8}`,
@@ -282,11 +284,9 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknow
       width: '100%',
       columnGap: 1,
       children: [
-        Box({ key: `hai-session-${r.id8}-dot`, flexShrink: 0, children: [Text({ color: dot(r), children: '●' })] }),
-        Box({ key: `hai-session-${r.id8}-title`, flexShrink: 1, minWidth: 0, children: [Text({ bold: r.isMe, wrap: 'truncate-end', children: r.isMe ? `${r.title} (this session)` : r.title })] }),
-        ...(r.holds.length ? [Box({ key: `hai-session-${r.id8}-holds`, flexShrink: 0, children: [Text({ children: r.holds.join(' · ') })] })] : []),
-        Box({ key: `hai-session-${r.id8}-detail`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ color: ATHER.quiet, wrap: 'truncate-end', children: sessionDetail(r) })] }),
-        ...(r.hasA5 ? [] : [Box({ key: `hai-session-${r.id8}-noa5`, flexShrink: 0, children: [Text({ color: STATUS.warn, children: 'no a5' })] })]),
+        Box({ key: `hai-session-${r.id8}-dot`, flexShrink: 0, children: [mark(r)] }),
+        Box({ key: `hai-session-${r.id8}-title`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ bold: r.isMe, wrap: 'truncate-end', children: r.title })] }),
+        Box({ key: `hai-session-${r.id8}-status`, flexShrink: 0, children: [Text({ color: r.hasA5 ? ATHER.quiet : STATUS.warn, children: sessionStatus(r) })] }),
       ],
     })
   return Box({
