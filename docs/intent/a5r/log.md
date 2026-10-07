@@ -129,3 +129,9 @@ The review (Fable, read-only) of a5 0.11.1–0.11.2 found a HIGH regression: sin
 > A5 này nãy giờ bị lẫn lộn trong nhiều tình huống quá, nhất là flow intent dùng A để kí hiệu Acceptant
 > Từ giờ hãy sửa tên feature đang làm này là A5R (Agent 5 rules) để tránh nhầm lẫn nhé.
 > Chưa có PR nào thuộc feature này bị đẩy vào ather-mods nên bạn hãy fix thoải mái
+
+## L-18 (2026-10-07 18:20) | class: intent | -> rev 16
+
+> Đây
+
+With two screenshots (dark theme) from an S2 session after the restart: the A5R pane (A5R on; rule chips with grey dots, no squares; the Sessions rows' "· 2m" / "· 1m" cut at the right edge; the Memory row's whole sub-line amber at 41.6 GB free with "10 git processes") and Ather's pane (★ A5R seal, compact line `free · 41.6 GB · −98 · ★ A5R ›`).
