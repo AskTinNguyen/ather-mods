@@ -1,12 +1,12 @@
 // A5's coordination core for the sessions that share one S2 checkout and one machine: the Editor holder,
 // RAM and the Sync main holder. Pure: no `$`; register.ts reads the files, probes the machine, writes and
 // delivers. Every session computes the same answers from the same files, so there is no arbiter to keep
-// alive: each session writes only its own files (Saved/HaiFlow/editor/<id8>.json, touch/<id8>.json), the
-// sync holder alone writes Saved/HaiFlow/sync.json, and the head of the queue alone takes a free lock.
+// alive: each session writes only its own files (Saved/A5/editor/<id8>.json, touch/<id8>.json), the
+// sync holder alone writes Saved/A5/sync.json, and the head of the queue alone takes a free lock.
 // Files are the truth; a notice is only a doorbell.
 import { commandVerb, nestedCommand, segments, stripHeredocs, tokenize } from './a5.ts'
 
-export const DIR = 'Saved/HaiFlow'
+export const DIR = 'Saved/A5'
 export const HEARTBEAT_STALE_MS = 3 * 60_000 // a session file not refreshed for 3 min: that session is gone
 export const LANE_STALE_MS = 10 * 60_000 // Ather's lane heartbeat (30 s) not written for 10 min: gone
 export const YIELD_MAX_MIN = 20 // a request this short, without a build, may ask the holder to yield
@@ -22,7 +22,7 @@ export const PIE_ABORT_GB = 3
 export const DEFAULT_GATES = { pieGb: 31, nopieGb: 28 } as const // D5: Editor ≈ 25.7 GB idle, ≈ 31.4 GB at PIE peak (L_TALab, 28/09)
 export const GATE_MIN_GB = 10
 export const GATE_MAX_GB = 60
-export const MARK = 'hai-flow ·'
+export const MARK = 'A5 ·'
 
 // ---------- time ----------
 const pad = (n: number): string => String(n).padStart(2, '0')
@@ -68,13 +68,13 @@ export const presetTimes = (now: number): number[] => {
   return [first, first + 3_600_000, first + 7_200_000]
 }
 
-// ---------- session files (Saved/HaiFlow/editor/<id8>.json, one writer each) ----------
+// ---------- session files (Saved/A5/editor/<id8>.json, one writer each) ----------
 export type Mode = 'interactive' | 'unattended'
 /** What a session asked the Editor for. */
 export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean }
 /** The lease a session holds, as it took it. */
 export type Holding = { since: number; end: number; extended: number }
-/** A request to a holder to yield (or a standard `UE request:` line sent to a holder without hai-flow). */
+/** A request to a holder to yield (or a standard `UE request:` line sent to a holder without a5). */
 export type YieldAsk = { holder: string; at: number; via: 'file' | 'send'; minutes: number; lane: string }
 export type SessionFile = {
   v: 1
@@ -267,7 +267,7 @@ export const parseProbe = (stdout: string): Probe | null => {
   }
 }
 
-/** Saved/HaiFlow/probe.json: the last machine reading, shared by every A5 session (A9). A session probes only when
+/** Saved/A5/probe.json: the last machine reading, shared by every A5 session (A9). A session probes only when
  * it is older than this; the session probing writes it (a claim first, then the reading). */
 export const PROBE_FRESH_MS = 50_000
 export type SharedProbe = { at: number; by: string; probe: Probe | null }
@@ -420,11 +420,11 @@ export const mayAskYield = (x: GrantInput): { holder: string } | null => {
   return asked ? null : { holder: x.lock.id8 }
 }
 
-/** The standard's request line (section 6) for a holder that runs without hai-flow. */
+/** The standard's request line (section 6) for a holder that runs without a5. */
 export const ueRequestLine = (lane: string, minutes: number, what: string, waitUntil: number): string =>
   `UE request: ${lane} cần Editor ~${minutes} phút để ${what.replace(/\s+/g, ' ').slice(0, 120)}, build=no, chờ được tới ${hhmm(waitUntil)}.`
 
-// ---------- the sync timeline (Saved/HaiFlow/sync.json, written by the holder alone) ----------
+// ---------- the sync timeline (Saved/A5/sync.json, written by the holder alone) ----------
 export type SyncState = 'planned' | 'done' | 'aborted' | 'cancelled' | 'expired'
 /** D8: how long a freeze may last past T (its hard end), by default: a merge, or a merge with a build. */
 export const SYNC_MERGE_MIN = 45
@@ -449,10 +449,10 @@ export type SyncFile = {
   build: boolean
   /** D8: the freeze's hard end (T + 45 min, T + 90 min with a build): past it the sync expires. */
   hardEnd: number
-  /** D7: the sync worker the holder's hai-flow spawned at T (once per sync), and when. */
+  /** D7: the sync worker the holder's a5 spawned at T (once per sync), and when. */
   workerId: string | null
   workerAt: number | null
-  /** A16: sessions without hai-flow 0.4 the holder has sent the standard message to (by session id). */
+  /** A16: sessions without a5 0.4 the holder has sent the standard message to (by session id). */
   messaged: string[]
   endedAt: number | null
   note: string
@@ -566,7 +566,7 @@ export const classify = (path: string, mainBlob: string, blobs: Map<string, stri
   return match ? { path, kind: 'self', match: match.slice(0, 12) } : { path, kind: 'foreign' }
 }
 
-/** Saved/HaiFlow/touch/<id8>.json: the repo-relative paths a session and its workers edited in the shared
+/** Saved/A5/touch/<id8>.json: the repo-relative paths a session and its workers edited in the shared
  * checkout, so a conflict reaches the session that owns it. */
 export type Touch = { session: string; id8: string; lane: string; paths: string[]; updatedAt: number }
 export const parseTouch = (text: string | null): Touch | null => {
@@ -684,7 +684,7 @@ export type Notice = { id: string; text: string; isActionable: boolean }
 export const noticeText = (gate: string, what: string, todo: string): string => `${MARK} ${gate} — ${what} → ${todo}`
 export const isIntentFile = (path: string): boolean => /(^|\/)docs\/intent\//i.test((path ?? '').replace(/\\/g, '/'))
 export const addsNotice = (added: readonly string[]): boolean => added.some(l => l.includes(MARK))
-/** A shell command that writes a hai-flow line into an intent file (a redirect, tee or a PowerShell writer, a
+/** A shell command that writes a a5 line into an intent file (a redirect, tee or a PowerShell writer, a
  * heredoc body included). Best effort, like every shell check here. */
 export const writesNoticeToIntent = (command: string): boolean =>
   (command ?? '').includes(MARK) && /(>>?|\btee\b|Out-File|Set-Content|Add-Content)\s*(-\w+\s+)*['"]?[^|;&\n]*docs[\\/]+intent[\\/]/i.test(command ?? '')
@@ -704,7 +704,7 @@ export const NOTICES = {
   disk: (drive: string, free: number): string => noticeText('Disk', `${drive} has ${free} GB free, under ${DISK_MIN_GB} GB (the DDC refuses writes under 10 GB)`, 'tell Hai; move old Saved/_restore_backup or _train_residue copies to another drive, never delete them'),
   cutoff: (s: SyncFile, isHolder: boolean, lockMine: boolean): string =>
     isHolder
-      ? noticeText('Sync main', `cutoff: you hold the sync at ${hhmm(s.at)}`, `checkpoint your own work now and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; the conflict dry-run runs now and lands in sync.json; at ${hhmm(s.at)} hai-flow starts the sync worker, which runs the merge and ends it with done or abort (at the latest ${hhmm(s.hardEnd)})`)
+      ? noticeText('Sync main', `cutoff: you hold the sync at ${hhmm(s.at)}`, `checkpoint your own work now and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; the conflict dry-run runs now and lands in sync.json; at ${hhmm(s.at)} a5 starts the sync worker, which runs the merge and ends it with done or abort (at the latest ${hhmm(s.hardEnd)})`)
       : noticeText('Sync main', `cutoff: ${s.holder.lane} merges origin/main at ${hhmm(s.at)}`, `commit your own paths now (exact paths, wip: is fine), write your resume note in Saved/LANE_NOTES/<session id>.md, stop PIE and ${lockMine ? 'release the Editor' : 'leave the Editor alone'} by ${hhmm(s.at - RELEASE_BEFORE_MS)}; keep Source/ and Plugins/ edits out of the shared tree from now; from ${hhmm(s.at)} git writes and the Editor wait until the sync is done`),
   releaseBy: (s: SyncFile): string => noticeText('Sync main', `the sync at ${hhmm(s.at)} needs the Editor free by ${hhmm(s.at - RELEASE_BEFORE_MS)} and this session still holds it`, 'stop PIE, save your own assets, release with the editor tool now'),
   frozen: (s: SyncFile): string => noticeText('Sync main', `frozen: ${s.holder.lane} merges origin/main since ${hhmm(s.at)}`, 'no git writes in the shared checkout and no Editor use until it is done; keep working without them (or in your own worktree); you will be told when it lifts'),
@@ -735,13 +735,13 @@ export const NOTICES = {
   holderUntracked: (s: SyncFile, rows: { path: string; owners: string[] }[]): string =>
     noticeText('Sync main', `origin/main adds ${plural(rows.length, 'file')} that already ${rows.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout ("untracked would be overwritten"): ${rows.map(r => `${r.path} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')}`, `the owners are told to commit or move theirs before ${hhmm(s.at)}; owner unknown → 🟥 to Hai; never delete or overwrite one to get the merge through`),
   holderWithoutMod: (s: SyncFile, rows: { n: NoMod; isDelivered: boolean }[]): string =>
-    noticeText('Sync main', `${plural(rows.length, 'live S2 session')} without hai-flow 0.4 cannot be frozen for the sync at ${hhmm(s.at)}: ${rows.map(r => `${r.n.intent} (session ${r.n.id8}${r.n.branch ? `, ${r.n.branch}` : ''})${r.isDelivered ? '' : ' — the message did not reach it'}`).join('; ')}`, `each got the standard message once; before the merge check that their paths are committed and that they are off git and the Editor; one that is not → tell Hai before ${hhmm(s.at)}`),
+    noticeText('Sync main', `${plural(rows.length, 'live S2 session')} without a5 0.4 cannot be frozen for the sync at ${hhmm(s.at)}: ${rows.map(r => `${r.n.intent} (session ${r.n.id8}${r.n.branch ? `, ${r.n.branch}` : ''})${r.isDelivered ? '' : ' — the message did not reach it'}`).join('; ')}`, `each got the standard message once; before the merge check that their paths are committed and that they are off git and the Editor; one that is not → tell Hai before ${hhmm(s.at)}`),
   hardEndSoon: (s: SyncFile): string =>
     noticeText('Sync main', `the freeze of the sync at ${hhmm(s.at)} ends at ${hhmm(s.hardEnd)} (its hard end) and the sync is not done`, 'finish it with done or abort before then; at the hard end it expires, git and the Editor open again for every session, and Hai is asked'),
   expired: (s: SyncFile): string =>
     noticeText('Sync main', `the sync at ${hhmm(s.at)} expired at ${hhmm(s.endedAt ?? s.updatedAt)} without done or abort (${s.note || 'its lease ran out'})`, 'git and the Editor are open again (a merge left in .git/MERGE_HEAD still blocks git writes: leave it to its holder and Hai); your work stays as it is'),
   expiredRed: (s: SyncFile, why: string): string => `Sync main ${hhmm(s.at)} (holder ${s.holder.lane}) expired without done or abort: ${why}. Check the shared checkout (git status, .git/MERGE_HEAD) and decide: finish the merge, abort it, or plan a new sync`,
-  syncHolderNamed: (s: SyncFile): string => noticeText('Sync main', `you were named holder of the sync at ${hhmm(s.at)} (planned by ${s.plannedBy})`, `at ${hhmm(s.at - CUTOFF_MS)} the cutoff notice reaches every session; at ${hhmm(s.at)} this session's hai-flow starts the sync worker, which ends the sync with done or abort (at the latest ${hhmm(s.hardEnd)}); keep this session open until then`),
+  syncHolderNamed: (s: SyncFile): string => noticeText('Sync main', `you were named holder of the sync at ${hhmm(s.at)} (planned by ${s.plannedBy})`, `at ${hhmm(s.at - CUTOFF_MS)} the cutoff notice reaches every session; at ${hhmm(s.at)} this session's a5 starts the sync worker, which ends the sync with done or abort (at the latest ${hhmm(s.hardEnd)}); keep this session open until then`),
 } as const
 
 export const noticeIds = {
@@ -789,7 +789,7 @@ export const parseClients = (text: string): ClientRow[] | null => {
 export type NoMod = { sessionId: string; id8: string; intent: string; branch: string }
 export type Overview = { active: number | null; s2: number; elsewhere: number | null; intents: [string, number][]; editor: string; waiting: string[]; sync: string; withoutMod: NoMod[] }
 
-/** Live S2 sessions that run without hai-flow 0.4: a fresh Ather lane with no fresh hai-flow session file. */
+/** Live S2 sessions that run without a5 0.4: a fresh Ather lane with no fresh a5 session file. */
 export const withoutModOf = (me8: string, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): NoMod[] => {
   const fresh = new Set(files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.id8))
   return lanes
@@ -799,8 +799,8 @@ export const withoutModOf = (me8: string, files: readonly SessionFile[], lanes: 
 }
 
 /** What the panel says about the sessions on this machine: how many run (the client's list), how many in S2 (Ather's
- * lanes and hai-flow's files), by intent, who holds or waits for the Editor, who holds the sync, and the live S2
- * sessions without hai-flow 0.4. */
+ * lanes and a5's files), by intent, who holds or waits for the Editor, who holds the sync, and the live S2
+ * sessions without a5 0.4. */
 export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase }): Overview => {
   const { now } = x
   const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
@@ -830,29 +830,29 @@ export const overviewLine = (o: Overview): string =>
     o.intents.length ? `by intent: ${o.intents.map(([i, n]) => `${i} ${n}`).join(', ')}` : '',
     `Editor: ${o.editor}${o.waiting.length ? ` (waiting: ${o.waiting.join(', ')})` : ''}`,
     `Sync: ${o.sync}`,
-    o.withoutMod.length ? `without hai-flow 0.4: ${o.withoutMod.map(n => `${n.intent} (session ${n.id8})`).join(', ')}` : '',
+    o.withoutMod.length ? `without a5 0.4: ${o.withoutMod.map(n => `${n.intent} (session ${n.id8})`).join(', ')}` : '',
   ]
     .filter(Boolean)
     .join(' · ')
 
-/** A16: the one standard message a live S2 session without hai-flow 0.4 gets at the cutoff (it cannot be frozen). */
+/** A16: the one standard message a live S2 session without a5 0.4 gets at the cutoff (it cannot be frozen). */
 export const noModMessage = (s: SyncFile, checkout: string): string =>
-  `Sync main (hai-flow): ${s.holder.lane} merges origin/main into ${checkout} at ${hhmm(s.at)}. This session runs without hai-flow 0.4, so nothing freezes it: before ${hhmm(s.at)} commit your own paths (exact paths), write your resume note, stop PIE and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; from ${hhmm(s.at)} until the holder is done (at the latest ${hhmm(s.hardEnd)}) make no git writes in that checkout and do not use the Editor.`
+  `Sync main (a5): ${s.holder.lane} merges origin/main into ${checkout} at ${hhmm(s.at)}. This session runs without a5 0.4, so nothing freezes it: before ${hhmm(s.at)} commit your own paths (exact paths), write your resume note, stop PIE and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; from ${hhmm(s.at)} until the holder is done (at the latest ${hhmm(s.hardEnd)}) make no git writes in that checkout and do not use the Editor.`
 
 /** D7: the sync worker's system prompt, the procedure of runbook-sync-lane and s2-sync-main as A12 fixes it. */
 export const SYNC_WORKER_PROMPT = [
-  'You are the hai-flow sync worker for the shared S2 checkout. The sync holder\'s hai-flow started you at the planned sync time T, in the holder\'s session. Every other session is frozen (no git writes, no Editor) until you call the tool mcp__hai-flow__sync with action "done" or "abort", or until the hard end, when the sync expires and Hai is asked. End with exactly one of those calls; never leave without it.',
+  'You are the a5 sync worker for the shared S2 checkout. The sync holder\'s a5 started you at the planned sync time T, in the holder\'s session. Every other session is frozen (no git writes, no Editor) until you call the tool mcp__a5__sync with action "done" or "abort", or until the hard end, when the sync expires and Hai is asked. End with exactly one of those calls; never leave without it.',
   'Rules (the checkout\'s AGENTS.md and the user\'s machine profile win over this list):',
   '1. Git never prompts. Run every git command with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never in its environment (Bash: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> …`; PowerShell: set $env:GIT_TERMINAL_PROMPT=\'0\' and $env:GCM_INTERACTIVE=\'never\' first) and a timeout on the tool call: fetch and merge 10 min at most, everything else 2 min. A credential, network or LFS failure is an abort, never a retry loop. Never set GIT_LFS_SKIP_SMUDGE.',
   '2. Always `git -C <checkout>`. Never rebase, reset --hard, stash, clean, push or switch branches. Your git writes are exactly: `git merge --no-edit origin/main`, `git merge --abort`, `git checkout --ours|--theirs -- <paths>`, `git add -- <paths>`, `git commit --no-edit`, `git revert -m 1 <merge sha> --no-edit`. If any command is refused, abort the sync with the refusal as the reason.',
-  '3. The Editor. Before any merge, take the Editor lock for the sync with mcp__hai-flow__editor (action "request", minutes up to the hard end, launch false, build true when the sync builds). If another lane holds it: never close, kill or drive that Editor; wait a few minutes and request again (you are first in the queue); if it is not yours 10 minutes before the hard end, abort. If an Editor is open while the lock is yours (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone. Release the lock with mcp__hai-flow__editor (action "release") before you end.',
+  '3. The Editor. Before any merge, take the Editor lock for the sync with mcp__a5__editor (action "request", minutes up to the hard end, launch false, build true when the sync builds). If another lane holds it: never close, kill or drive that Editor; wait a few minutes and request again (you are first in the queue); if it is not yours 10 minutes before the hard end, abort. If an Editor is open while the lock is yours (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone. Release the lock with mcp__a5__editor (action "release") before you end.',
   '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
   '5. Merge: `git merge --no-edit origin/main` (never rebase). For each conflicted path (`git diff --name-only --diff-filter=U`): rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
   '6. Build, only when the sync builds: the engine root comes from the machine profile; a build succeeded only when its own `Result: Succeeded` line says so (Build.bat exits 0 on failure). A failed build: `git revert -m 1 <merge sha> --no-edit`, then abort with its first error lines.',
-  '7. End: release the Editor lock, then mcp__hai-flow__sync with "done" (note: merge sha, pre-merge HEAD, conflicts and how they were resolved, build result) or "abort" (note: why, and the state the checkout is in). Your final answer is one short report of the same.',
+  '7. End: release the Editor lock, then mcp__a5__sync with "done" (note: merge sha, pre-merge HEAD, conflicts and how they were resolved, build result) or "abort" (note: why, and the state the checkout is in). Your final answer is one short report of the same.',
 ].join('\n')
 
-/** The task the holder's hai-flow hands the sync worker: this sync's facts. */
+/** The task the holder's a5 hands the sync worker: this sync's facts. */
 export const syncWorkerTask = (s: SyncFile, checkout: string, lock: string): string =>
   [
     `Run the sync of origin/main planned for ${hhmm(s.at)} in ${checkout} (holder ${s.holder.lane}, session ${s.holder.id8}). Hard end ${hhmm(s.hardEnd)}: by then call the sync tool with done or abort. Build: ${s.build ? 'yes' : 'no'}.`,

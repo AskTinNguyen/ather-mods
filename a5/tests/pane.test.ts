@@ -4,7 +4,7 @@ import { LOCK, ME, NOW, PANE, PROJ, atherTree, find, keys, opts, text, world } f
 
 // A2: with A5 on, one row of three tiles right under Ather's strip (Editor holder, Memory, Sync main), each with
 // what it must show and, for Memory and Sync main, the controls Hai uses (D4, D5), on the terminal and the desktop.
-const HF = 'E:/s2/Saved/HaiFlow'
+const HF = 'E:/s2/Saved/A5'
 const ME8 = ME.slice(0, 8)
 const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
 const label = (tree: unknown, key: string): string => String((find(tree, key)?.props as { label?: unknown } | undefined)?.label ?? '')
@@ -17,7 +17,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify({ ...blankSession('bbbbbbbb-1111', 'walker', '', NOW), holding: { since: T(14, 30), end: T(15, 10), extended: 0 } }))
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
-    await $.tool.call({ tool: 'mcp__hai-flow__editor', action: 'request', minutes: 20, what: 'PIE proof', pie: true } as never)
+    await $.tool.call({ tool: 'mcp__a5__editor', action: 'request', minutes: 20, what: 'PIE proof', pie: true } as never)
     await $.ui.render(PANE_AT)
     await w.clock.advance(50) // the branch read runs off the render
     let tree = await $.ui.render(PANE_AT)
@@ -36,23 +36,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(label(tree, 'hai-sync-plan-0')).toBe(surface === 'desktop' ? 'Plan 15:30' : '15:30')
 
     // D5: Hai moves the launch gate for every session (the plugin store), and can put it back.
-    await $.ui.press({ plugin: 'hai-flow', key: 'hai-gate-up', surface })
+    await $.ui.press({ plugin: 'a5', key: 'hai-gate-up', surface })
     tree = await $.ui.render(PANE_AT)
     expect(text(find(tree, 'hai-tile-memory'))).toContain(surface === 'desktop' ? 'launch ≥ 32 GB with PIE · 29 GB without (set here)' : 'gate 32/29 GB')
     expect(text(find(tree, 'hai-tile-memory'))).toContain('under the launch gate')
-    await $.ui.press({ plugin: 'hai-flow', key: 'hai-gate-reset', surface })
+    await $.ui.press({ plugin: 'a5', key: 'hai-gate-reset', surface })
     tree = await $.ui.render(PANE_AT)
     expect(text(find(tree, 'hai-tile-memory'))).toContain(surface === 'desktop' ? 'launch ≥ 31 GB with PIE · 28 GB without' : 'gate 31/28 GB')
 
     // D4: Hai plans a sync at a preset; this session holds it; it can be moved or cancelled.
-    await $.ui.press({ plugin: 'hai-flow', key: 'hai-sync-plan-0', surface })
+    await $.ui.press({ plugin: 'a5', key: 'hai-sync-plan-0', surface })
     expect(parseSyncFile(w.read(`${HF}/sync.json`))?.holder.id8).toBe(ME8)
     tree = await $.ui.render(PANE_AT)
     expect(text(find(tree, 'hai-tile-main'))).toContain('next sync 15:30 by this session · cutoff 15:00')
     expect([label(tree, 'hai-sync-earlier'), label(tree, 'hai-sync-later'), label(tree, 'hai-sync-cancel')]).toEqual(['−30 min', '+30 min', 'Cancel'])
-    await $.ui.press({ plugin: 'hai-flow', key: 'hai-sync-later', surface })
+    await $.ui.press({ plugin: 'a5', key: 'hai-sync-later', surface })
     expect(parseSyncFile(w.read(`${HF}/sync.json`))?.at).toBe(T(16, 0))
-    await $.ui.press({ plugin: 'hai-flow', key: 'hai-sync-cancel', surface })
+    await $.ui.press({ plugin: 'a5', key: 'hai-sync-cancel', surface })
     expect(parseSyncFile(w.read(`${HF}/sync.json`))?.state).toBe('cancelled')
     tree = await $.ui.render(PANE_AT)
     expect(text(find(tree, 'hai-tile-main'))).toContain('last sync 16:00 cancelled')

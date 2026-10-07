@@ -4,7 +4,7 @@ import { LOCK, ME, NOW, PANE, PENDING, PROJ, atherTree, find, opts, refused, tex
 
 // Rev 4 through the engine: the freeze as a lease (A13), the merge guard (A14), the sync's own commands (A15),
 // the sync worker (A12) and the session overview (A16). Other sessions are only their files.
-const HF = 'E:/s2/Saved/HaiFlow'
+const HF = 'E:/s2/Saved/A5'
 const SYNC = `${HF}/sync.json`
 const ME8 = ME.slice(0, 8)
 const START = { cwd: PROJ, surface: 'terminal', isInteractive: true } as never
@@ -19,7 +19,7 @@ const prompts = (w: ReturnType<typeof world>): string[] => (w.calls['prompt.subm
 const syncOf = (w: ReturnType<typeof world>): SyncFile | null => parseSyncFile(w.read(SYNC) || null)
 const a5 = async ($: any, args: string): Promise<string> => String((await $.command.run({ command: 'a5', args } as never)).text)
 const idle = async ($: any) => $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
-/** Another session's hai-flow keeps its file fresh every minute while `alive`; the test does it for it. */
+/** Another session's a5 keeps its file fresh every minute while `alive`; the test does it for it. */
 const advance = async (w: ReturnType<typeof world>, minutes: number, id8: string | null = 'bbbbbbbb') => {
   for (let n = 0; n < minutes; n += 1) {
     const at = w.clock.now() + MIN
@@ -40,7 +40,7 @@ test('A14: while .git/MERGE_HEAD exists, a non-holder\'s git writes in the share
   w.put(SYNC, JSON.stringify({ ...newSync(T(14, 0), B, PLANNED_BY_B, NOW - 60 * MIN), state: 'expired', endedAt: T(14, 30), note: 'its hard end 14:45 passed' }))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
   await $.session.start(START)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBe('hai-flow · Merge guard — a merge is in progress in the shared checkout (.git/MERGE_HEAD; sync-lane holds the sync at 14:00 (expired)): no git commit there until it is finished or aborted → leave the merge state alone (no commit, reset, abort or stash of yours); its holder or Hai ends it; work without git or in your own worktree')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBe('A5 · Merge guard — a merge is in progress in the shared checkout (.git/MERGE_HEAD; sync-lane holds the sync at 14:00 (expired)): no git commit there until it is finished or aborted → leave the merge state alone (no commit, reset, abort or stash of yours); its holder or Hai ends it; work without git or in your own worktree')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge --abort' }))).toContain('Merge guard')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 status && git -C E:/s2 diff --stat' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x commit -m "own worktree"' }))).toBeUndefined()
@@ -71,7 +71,7 @@ const planMine = async ($: any, _w: ReturnType<typeof world>) => {
   await idle($)
 }
 
-test('A12: at T the holder\'s hai-flow spawns the sync worker once, with the non-interactive procedure; the model is never offered it', opts(), async ($, on) => {
+test('A12: at T the holder\'s a5 spawns the sync worker once, with the non-interactive procedure; the model is never offered it', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
@@ -79,16 +79,16 @@ test('A12: at T the holder\'s hai-flow spawns the sync worker once, with the non
   await $.session.start(START)
   const spec = (w.calls['agent.register'] ?? [])[0] as Rec
   expect([spec?.name, spec?.background]).toEqual(['sync', true])
-  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'mcp__hai-flow__sync'])
+  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'mcp__a5__sync'])
     expect([must, String(spec?.prompt).includes(must)]).toEqual([must, true])
-  expect(await $.agent.offer({ agent: 'hai-flow:sync', description: 'x', source: 'plugin', provider: { plugin: 'hai-flow', tier: 'user' } } as never)).toEqual({ isOffered: false })
+  expect(await $.agent.offer({ agent: 'a5:sync', description: 'x', source: 'plugin', provider: { plugin: 'a5', tier: 'user' } } as never)).toEqual({ isOffered: false })
   await planMine($, w)
   await w.clock.advance(4 * MIN)
   expect(spawns(w)).toEqual([])
   await idle($)
   await w.clock.advance(MIN) // 14:45
   expect(spawns(w).length).toBe(1)
-  expect(spawns(w)[0]?.subagent_type ?? spawns(w)[0]?.subagentType).toBe('hai-flow:sync')
+  expect(spawns(w)[0]?.subagent_type ?? spawns(w)[0]?.subagentType).toBe('a5:sync')
   expect(String(spawns(w)[0]?.prompt)).toContain('Run the sync of origin/main planned for 14:45 in E:/s2 (holder 3️⃣-Loco-fix, session ab12cd34). Hard end 15:30')
   expect([syncOf(w)?.workerId, syncOf(w)?.workerAt]).toEqual(['w-sync', T(14, 45)])
   await w.clock.advance(3 * MIN)
@@ -106,7 +106,7 @@ test('A12: a worker that ends without done or abort aborts the sync for it; the 
   await $.turn.complete({ agentId: 'w-sync', answer: 'Stopped: git reset --hard was refused.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
   expect(syncOf(w)?.state).toBe('aborted')
   expect(syncOf(w)?.note).toBe('the sync worker ended without done or abort: Stopped: git reset --hard was refused.')
-  expect(prompts(w).some(p => p.includes('hai-flow · Sync main — the sync worker ended without done or abort, so the sync at 14:45 was aborted for it'))).toBe(true)
+  expect(prompts(w).some(p => p.includes('A5 · Sync main — the sync worker ended without done or abort, so the sync at 14:45 was aborted for it'))).toBe(true)
 })
 
 test('A12: the worker ends the sync with done: the sync is done and its end is no abort', opts(), async ($, on) => {
@@ -116,7 +116,7 @@ test('A12: the worker ends the sync with done: the sync is done and its end is n
   await $.session.start(START)
   await planMine($, w)
   await w.clock.advance(5 * MIN)
-  expect(out(await $.tool.call({ tool: 'mcp__hai-flow__sync', action: 'done', note: 'merged 1a2b3c (pre-merge 9f8e7d)', agentId: 'w-sync' } as never))).toContain('done: git and the Editor are open again')
+  expect(out(await $.tool.call({ tool: 'mcp__a5__sync', action: 'done', note: 'merged 1a2b3c (pre-merge 9f8e7d)', agentId: 'w-sync' } as never))).toContain('done: git and the Editor are open again')
   await $.turn.complete({ agentId: 'w-sync', answer: 'Merged 1a2b3c.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
   expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c (pre-merge 9f8e7d)'])
   expect(prompts(w).some(p => p.includes('worker ended without done'))).toBe(false)
@@ -163,7 +163,7 @@ const CLIENTS = JSON.stringify([
   { sessionId: 'local_2', title: 'Mods', cwd: 'D:\\Projects\\ather-mods', isArchived: false, isRunning: false, lastActivityAt: ago(5 * MIN) },
   { sessionId: 'local_3', title: 'Old', cwd: 'E:\\s2', isArchived: false, isRunning: false, lastActivityAt: ago(3 * 3_600_000) },
 ])
-/** Two S2 sessions besides this one: B runs hai-flow 0.4 (a fresh session file) and holds the Editor; D runs only Ather. */
+/** Two S2 sessions besides this one: B runs a5 0.4 (a fresh session file) and holds the Editor; D runs only Ather. */
 const machine = (w: ReturnType<typeof world>) => {
   w.put(`${LANES}/${SID_B}.json`, laneFile(SID_B, 'tail-vfx'))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
@@ -172,17 +172,17 @@ const machine = (w: ReturnType<typeof world>) => {
 }
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`A16 (${surface}): the panel counts the sessions, by intent, names who holds what and who runs without hai-flow 0.4`, opts(), async ($, on) => {
+  test(`A16 (${surface}): the panel counts the sessions, by intent, names who holds what and who runs without a5 0.4`, opts(), async ($, on) => {
     const w = world(on, { out: { mcp__ccd_session_mgmt__list_sessions: CLIENTS } })
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     machine(w)
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
     const tree = await $.ui.render({ ...PANE, surface } as never)
-    expect(text(find(tree, 'hai-overview'))).toBe('Sessions: 3 active · S2 3 · elsewhere 1 · by intent: loco 1, no intent 1, tail-vfx 1 · Editor: sync-lane · Sync: none · without hai-flow 0.4: loco (session dddddddd)')
+    expect(text(find(tree, 'hai-overview'))).toBe('Sessions: 3 active · S2 3 · elsewhere 1 · by intent: loco 1, no intent 1, tail-vfx 1 · Editor: sync-lane · Sync: none · without a5 0.4: loco (session dddddddd)')
   })
 }
 
-test('A16: without the client\'s session list the overview falls back to Ather\'s lanes and hai-flow\'s files', opts(), async ($, on) => {
+test('A16: without the client\'s session list the overview falls back to Ather\'s lanes and a5\'s files', opts(), async ($, on) => {
   const w = world(on, { out: { mcp__ccd_session_mgmt__list_sessions: 'Error: No such tool available: mcp__ccd_session_mgmt__list_sessions' } })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   machine(w)
@@ -191,7 +191,7 @@ test('A16: without the client\'s session list the overview falls back to Ather\'
   expect(text(find(tree, 'hai-overview')).startsWith('Sessions: S2 3 live (client list unavailable) · by intent: loco 1, no intent 1, tail-vfx 1 · Editor: sync-lane')).toBe(true)
 })
 
-test('A16: at the cutoff the holder sends each live S2 session without hai-flow 0.4 one standard message, and its notice names them', opts(), async ($, on) => {
+test('A16: at the cutoff the holder sends each live S2 session without a5 0.4 one standard message, and its notice names them', opts(), async ($, on) => {
   const w = world(on)
   repo(w, 'E:/s2')
   machine(w)
@@ -200,9 +200,9 @@ test('A16: at the cutoff the holder sends each live S2 session without hai-flow 
   await advance(w, 1)
   expect(w.sent.length).toBe(1)
   expect(JSON.stringify(w.sent[0])).toContain(SID_D)
-  expect(String(w.sent[0]?.text)).toBe('Sync main (hai-flow): 3️⃣-Loco-fix merges origin/main into E:/s2 at 15:00. This session runs without hai-flow 0.4, so nothing freezes it: before 15:00 commit your own paths (exact paths), write your resume note, stop PIE and release the Editor by 14:50; from 15:00 until the holder is done (at the latest 15:45) make no git writes in that checkout and do not use the Editor.')
+  expect(String(w.sent[0]?.text)).toBe('Sync main (a5): 3️⃣-Loco-fix merges origin/main into E:/s2 at 15:00. This session runs without a5 0.4, so nothing freezes it: before 15:00 commit your own paths (exact paths), write your resume note, stop PIE and release the Editor by 14:50; from 15:00 until the holder is done (at the latest 15:45) make no git writes in that checkout and do not use the Editor.')
   expect(syncOf(w)?.messaged).toEqual([SID_D])
-  expect(prompts(w)[0]).toContain('hai-flow · Sync main — 1 live S2 session without hai-flow 0.4 cannot be frozen for the sync at 15:00: loco (session dddddddd, HaiHuynh/20261005)')
+  expect(prompts(w)[0]).toContain('A5 · Sync main — 1 live S2 session without a5 0.4 cannot be frozen for the sync at 15:00: loco (session dddddddd, HaiHuynh/20261005)')
   await advance(w, 2)
   expect(w.sent.length).toBe(1) // once per sync
 })
@@ -222,7 +222,7 @@ test('A13: at its hard end the freeze expires for every session: marked expired,
   await idle($)
   await advance(w, 30) // 15:30: the hard end (T + 45)
   expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['expired', 'its hard end 15:30 passed'])
-  expect(prompts(w).some(p => p.includes('hai-flow · Sync main — the sync at 14:45 expired at 15:30 without done or abort (its hard end 15:30 passed) → git and the Editor are open again'))).toBe(true)
+  expect(prompts(w).some(p => p.includes('A5 · Sync main — the sync at 14:45 expired at 15:30 without done or abort (its hard end 15:30 passed) → git and the Editor are open again'))).toBe(true)
   expect(w.read(PENDING)).toContain('Sync main 14:45 (holder sync-lane) expired without done or abort: its hard end 15:30 passed')
   expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
   expect(w.seen.some(e => e.tool === 'mcp__ccd_sidebar__set_unread' && e.unread === true)).toBe(true)
@@ -266,5 +266,5 @@ test('A13: every sync has a hard end (45 min, 90 with a build, from the options)
     await idle($)
   }
   // 15:05: ten minutes before the hard end 15:15, the holder is told once.
-  expect(prompts(w).filter(p => p.includes('hai-flow · Sync main — the freeze of the sync at 14:45 ends at 15:15 (its hard end) and the sync is not done → finish it with done or abort before then')).length).toBe(1)
+  expect(prompts(w).filter(p => p.includes('A5 · Sync main — the freeze of the sync at 14:45 ends at 15:15 (its hard end) and the sync is not done → finish it with done or abort before then')).length).toBe(1)
 })

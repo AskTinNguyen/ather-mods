@@ -16,23 +16,23 @@ import { editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, til
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
-// - A5 (a5.ts, a5/config.json), only while `/a5 on`: refuses or asks before risky tool calls, records
+// - A5 (a5.ts, rules/config.json), only while `/a5 on`: refuses or asks before risky tool calls, records
 //   edits and checks, and at Stop keeps the agent going until its report is honest. Fitted to Ather's
 //   intent flow: rules about the shared checkout skip a worker's own worktree; a worker (subagent) never
 //   asks Hai, it reports; with an intent tracked, `Verified:` is held to Ather's proof for it.
 // - A5's coordination (coord.ts) for the sessions sharing one S2 checkout and one machine: the Editor
-//   holder (model tool `editor`: a queue computed alike by every session from Saved/HaiFlow files, a lease
+//   holder (model tool `editor`: a queue computed alike by every session from Saved/A5 files, a lease
 //   with a hard end, the lock written in the S2 standard's lines), RAM (safe cleanup before a grant, the
 //   launch gate, PIE 5/3 GB fixed) and the Sync main holder (`/a5 sync`, model tool `sync`: cutoff, freeze,
 //   conflicts to their owners). One minute timer reads files and probes; it wakes the model only for an
-//   event addressed to this session. Notices start "hai-flow ·" and are never logged in docs/intent.
+//   event addressed to this session. Notices start "A5 ·" and are never logged in docs/intent.
 // - 🟥 / ⏯️ (decision.ts), always: the title is marked and unread set. A 🟥 that relays an intent's director
 //   call (a worker added it to findings.md, intent skill) is in Ather's Needs you already; any other 🟥 gets
 //   one PENDING.md line, so no decision is lost.
 // - Ather's pane (theme.ts, watch.ts, icons.ts), A5 on only: its home view gains Editor holder · Memory ·
 //   Sync main tiles with pixel icons; the accent turns gold, a red seal joins the brand, the five rules sit
 //   at the foot. Icons move only when a state turns over (a dither reveal) or a sync runs (a dither sweep).
-// Every refusal reads the same: "hai-flow · <gate> — <why> → <what next>".
+// Every refusal reads the same: "A5 · <gate> — <why> → <what next>".
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
@@ -79,14 +79,14 @@ const seen = new Map<string, { sig: string; color: string; at: number; from: str
 let chain: string[] | null = null // the plugins beneath this one on a tool call: Ather there means the pane can be wrapped
 
 // A5's coordination: what this session last read from the files and the machine (coord.ts decides).
-const EDITOR_TOOL = 'mcp__hai-flow__editor'
-const SYNC_TOOL = 'mcp__hai-flow__sync'
-const SYNC_AGENT = 'hai-flow:sync' // D7: the sync worker's agent type
+const EDITOR_TOOL = 'mcp__a5__editor'
+const SYNC_TOOL = 'mcp__a5__sync'
+const SYNC_AGENT = 'a5:sync' // D7: the sync worker's agent type
 const CLEANUP_EVERY_MS = 5 * 60_000 // while a slot waits on RAM, the safe cleanup runs at most this often
 const PIE_STOP = /StopPIE|EndPIE|StopPlayInEditor|EndPlayMap|RequestEndPlayMap/i
 const EDITOR_WORK = /Build\.(bat|sh|cmd)\b|UnrealEditor|RunUAT/i
 let hasTools = false
-let me: SessionFile | null = null // this session's own file (Saved/HaiFlow/editor/<id8>.json), as last written
+let me: SessionFile | null = null // this session's own file (Saved/A5/editor/<id8>.json), as last written
 let me8 = ''
 let peers: SessionFile[] = [] // every other session's file
 let lanes: LaneBeat[] = [] // Ather's lane heartbeats
@@ -129,14 +129,14 @@ const stampOf = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() +
 const count = (rule: string) => {
   for (const id of rule.match(/D[1-5]/g) ?? []) hits[id as keyof RuleHits] += 1
 }
-const gateOf = (rule: string): string => `A5 ${rule} ${rule.split('/').map(r => RULE_NAMES[r]).filter(Boolean).join(' / ')}`
+const gateOf = (rule: string): string => `${rule} ${rule.split('/').map(r => RULE_NAMES[r]).filter(Boolean).join(' / ')}`
 /** The one shape of every refusal: which gate, why, and what to do instead. */
-const blocked = (gate: string, why: string, next: string): string => `hai-flow · ${gate} — ${why} → ${next}`
+const blocked = (gate: string, why: string, next: string): string => `A5 · ${gate} — ${why} → ${next}`
 
 async function load($: Engine): Promise<A5> {
   if (engine) return engine
   const root = $.plugin.root.replace(/\\/g, '/')
-  const cfg = JSON.parse(await $.fs.read(`${root}/a5/config.json`)) as A5Config
+  const cfg = JSON.parse(await $.fs.read(`${root}/rules/config.json`)) as A5Config
   const local = await $.env.get('LOCALAPPDATA')
   places = {
     KIT: root,
@@ -148,8 +148,8 @@ async function load($: Engine): Promise<A5> {
     HERMES_HOME: (await $.env.get('HERMES_HOME')) ?? (local ? `${local}/hermes` : undefined),
     PROJECT: await $.session.root(),
   }
-  rulesA5 = await $.fs.read(`${root}/a5/rules-a5.md`).catch(() => '')
-  rulesFlow = await $.fs.read(`${root}/a5/rules-flow.md`).catch(() => '')
+  rulesA5 = await $.fs.read(`${root}/rules/rules-a5.md`).catch(() => '')
+  rulesFlow = await $.fs.read(`${root}/rules/rules-flow.md`).catch(() => '')
   engine = new A5(cfg, places)
   return engine
 }
@@ -228,7 +228,7 @@ const namesDirectorCall = (s: AtherStatus | null, answer: string): boolean =>
   })
 
 async function scopeGlobs($: Engine): Promise<string[]> {
-  const text: string = await $.fs.read(`${$.plugin.root}/a5/scope`).catch(() => '')
+  const text: string = await $.fs.read(`${$.plugin.root}/rules/scope`).catch(() => '')
   return text.split(/\r?\n/).map(x => x.trim()).filter(x => x && !x.startsWith('#'))
 }
 
@@ -396,7 +396,7 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   lock = parseLockLine(lockRaw)
   if (lockRaw && lock.id8 === old8 && (lock.kind === 'held' || lock.kind === 'handed')) {
     const line = lockRaw.trim().replace(new RegExp(`\\bsession\\s+${old8}\\b`, 'gi'), `session ${new8}`)
-    if (!(await writeLock($, opts, line))) $.ui.log('hai-flow: the lock changed while moving it to the cleared session id', { to: 'debug' })
+    if (!(await writeLock($, opts, line))) $.ui.log('a5: the lock changed while moving it to the cleared session id', { to: 'debug' })
   }
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   if (s && s.holder.id8 === old8 && isOpenPhase(syncPhase(s, now)))
@@ -424,7 +424,7 @@ async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
   me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
-  await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`hai-flow: session file not written: ${String(err)}`, { to: 'debug' }))
+  await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
 async function readJson($: Engine, path: string): Promise<string | null> {
@@ -439,7 +439,7 @@ async function freshProbe($: Engine, opts: Opts): Promise<Probe | null> {
   return p
 }
 
-/** A9: the machine reading every A5 session shares. A session probes only when Saved/HaiFlow/probe.json is older
+/** A9: the machine reading every A5 session shares. A session probes only when Saved/A5/probe.json is older
  * than 50 s, and only after claiming it by read-compare-write and a re-read, so two sessions rarely both probe;
  * everyone else reads the file. */
 async function sharedProbe($: Engine, opts: Opts, now: number): Promise<Probe | null> {
@@ -512,7 +512,7 @@ async function deliverIdle($: Engine, opts: Opts): Promise<void> {
   const texts = drain()
   isBusy = true
   await saveMe($, opts)
-  await $.prompt.submit({ text: texts.join('\n\n') }).catch(err => $.ui.log(`hai-flow: notice prompt not queued: ${String(err)}`, { to: 'debug' }))
+  await $.prompt.submit({ text: texts.join('\n\n') }).catch(err => $.ui.log(`a5: notice prompt not queued: ${String(err)}`, { to: 'debug' }))
 }
 
 /** The model tools, registered the first time A5 is seen on in this session (D1: none while it is off). */
@@ -522,7 +522,7 @@ async function ensureTools($: Engine): Promise<void> {
   await $.tool.register({
     name: 'editor',
     description:
-      'hai-flow A5 Editor holder for the shared S2 checkout: the only way to take or give the Unreal Editor while A5 is on. ' +
+      'a5 A5 Editor holder for the shared S2 checkout: the only way to take or give the Unreal Editor while A5 is on. ' +
       '"request" asks for a slot (minutes, pie, build, what): sessions are served in the order they asked, a slot must end before the next sync cutoff, and launching needs the RAM launch gate; ' +
       'you are granted at once when you are at the head and the lock is free, else you get your place and are told when it is yours. ' +
       '"release" gives it back (stop PIE and every background process of yours that could call MCP first; list packages to discard in dont_save). ' +
@@ -546,12 +546,12 @@ async function ensureTools($: Engine): Promise<void> {
       },
       required: ['action'],
     },
-  }).catch(err => $.ui.log(`hai-flow: editor tool not registered: ${String(err)}`, { to: 'debug' }))
+  }).catch(err => $.ui.log(`a5: editor tool not registered: ${String(err)}`, { to: 'debug' }))
   await $.tool.register({
     name: 'sync',
     description:
-      'hai-flow A5 Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
-      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and Hai is asked. At the sync time the holder\'s hai-flow starts the sync worker, which runs the merge and ends with done or abort. ' +
+      'a5 A5 Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
+      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and Hai is asked. At the sync time the holder\'s a5 starts the sync worker, which runs the merge and ends with done or abort. ' +
       '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "done" (note), "abort" (note: why), "status". Only the holder changes a planned sync.',
     inputSchema: {
       type: 'object',
@@ -565,12 +565,12 @@ async function ensureTools($: Engine): Promise<void> {
       },
       required: ['action'],
     },
-  }).catch(err => $.ui.log(`hai-flow: sync tool not registered: ${String(err)}`, { to: 'debug' }))
+  }).catch(err => $.ui.log(`a5: sync tool not registered: ${String(err)}`, { to: 'debug' }))
   // D7: the sync worker's agent type, spawned by this mod at the sync time and hidden from the model (agent.offer).
-  await $.agent.register({ name: 'sync', description: 'hai-flow sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by hai-flow only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`hai-flow: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
+  await $.agent.register({ name: 'sync', description: 'a5 sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by a5 only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`a5: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
 }
 
-/** D7: at T the holder's hai-flow starts the sync worker, once per sync (sync.json records it before the spawn,
+/** D7: at T the holder's a5 starts the sync worker, once per sync (sync.json records it before the spawn,
  * so a reload or a second tick never starts another). */
 async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   if (!(await writeSync($, opts, { ...s, workerAt: now, updatedAt: now }, s))) return
@@ -581,7 +581,7 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
     return
   }
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
-  const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'hai-flow').pop()?.id
+  const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'a5').pop()?.id
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
 }
 
@@ -606,7 +606,7 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
 
 /** One minute tick, serialized with the tool's own runs: read, decide, write this session's files, notify. */
 function runTick($: Engine, opts: Opts): Promise<void> {
-  tickChain = tickChain.then(() => tick($, opts)).catch(err => $.ui.log(`hai-flow tick: ${String(err)}`, { to: 'debug' }))
+  tickChain = tickChain.then(() => tick($, opts)).catch(err => $.ui.log(`a5 tick: ${String(err)}`, { to: 'debug' }))
   return tickChain
 }
 
@@ -712,7 +712,7 @@ async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number |
 }
 
 /** A short request without a build asks the holder to yield, once per holder per hour: through the holder's own
- * hai-flow (a field in this session's file it reads), or the standard `UE request:` line to a holder without it. */
+ * a5 (a field in this session's file it reads), or the standard `UE request:` line to a holder without it. */
 async function askYield($: Engine, now: number): Promise<void> {
   const want = me?.want
   const y = want ? mayAskYield(grantInput(now)) : null
@@ -723,7 +723,7 @@ async function askYield($: Engine, now: number): Promise<void> {
     if (!lane) return // no address for it: the waiter is told its place, nothing is sent
     const until = atNearest(lock.end, now) ?? now + 60 * 60_000
     const sent = await $.session.send({ to: { sessionId: lane.sessionId }, text: ueRequestLine(me.lane, want.minutes, want.what, Math.max(until, now + 15 * 60_000)) }).catch(err => ({ isDelivered: false as const, reason: String(err) }))
-    if (!sent.isDelivered) $.ui.log(`hai-flow: UE request to ${y.holder} not delivered: ${sent.reason}`, { to: 'debug' })
+    if (!sent.isDelivered) $.ui.log(`a5: UE request to ${y.holder} not delivered: ${sent.reason}`, { to: 'debug' })
   }
   me = { ...me, yieldAsks: [...me.yieldAsks, { holder: y.holder, at: now, via: withMod ? 'file' : 'send', minutes: want.minutes, lane: me.lane }] }
 }
@@ -749,7 +749,7 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
   cleanupNote = [`${clockOf(now)} ${done.join(', ') || 'nothing to clean'}: free ${before} → ${probe?.freeGb ?? '?'} GB`, ...plan.report].join('; ')
 }
 
-// ---------- Sync main holder: Saved/HaiFlow/sync.json, written by the holder alone ----------
+// ---------- Sync main holder: Saved/A5/sync.json, written by the holder alone ----------
 const syncPath = (opts: Opts): string => `${hfDir(opts)}/sync.json`
 const isLive = (id8: string, now: number): boolean => livenessOf(id8, me ? [me, ...peers] : peers, lanes, now) !== 'gone'
 /** The sync's phase for every reader alike, the freeze lease included (D8: hard end, holder gone). */
@@ -771,7 +771,7 @@ async function claimAlert($: Engine, opts: Opts, key: string): Promise<boolean> 
 
 /** A 🟥 for Hai from the coordination layer: the title, unread and one PENDING.md line (decision.ts). */
 async function raiseRed($: Engine, opts: Opts, question: string, fallback: string): Promise<void> {
-  await applyMarker($, opts, { kind: 'decision', question, fallback }, false).catch(err => $.ui.log(`hai-flow: 🟥 not raised: ${String(err)}`, { to: 'debug' }))
+  await applyMarker($, opts, { kind: 'decision', question, fallback }, false).catch(err => $.ui.log(`a5: 🟥 not raised: ${String(err)}`, { to: 'debug' }))
 }
 
 /** D8: a freeze past its hard end, or whose holder is gone, is written down as expired (a terminal state any
@@ -821,7 +821,7 @@ async function classifyAll($: Engine, opts: Opts, paths: readonly string[]): Pro
   return [...out, ...paths.slice(MAX_CLASSIFIED).map(p => ({ path: p, kind: 'foreign' as const }))]
 }
 
-/** At the cutoff the holder's hai-flow dry-runs the merge against the last fetched origin/main (no fetch, 60 s). */
+/** At the cutoff the holder's a5 dry-runs the merge against the last fetched origin/main (no fetch, 60 s). */
 async function dryRun($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   const r = await $.process.run(['git', '-C', s2Root(opts), 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
   if (!r || (r.exitCode !== 0 && r.exitCode !== 1)) {
@@ -1021,7 +1021,7 @@ async function refreshClients($: Engine, opts: Opts, now: number): Promise<void>
   }
 }
 
-/** A16: at the cutoff the holder sends each live S2 session without hai-flow 0.4 the standard message once (they
+/** A16: at the cutoff the holder sends each live S2 session without a5 0.4 the standard message once (they
  * cannot be frozen), records them in sync.json, and its own notice names them. */
 async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   const targets = withoutModOf(me8, me ? [me, ...peers] : peers, lanes, now).filter(n => !s.messaged.includes(n.sessionId))
@@ -1145,11 +1145,11 @@ async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): 
     const parts = await editParts($, tool, input)
     if (parts.some(([path]) => isLockPath(path))) return blocked('Editor lock', 'under A5 the lock is written by the editor tool, never by hand', viaTool)
     if (parts.some(([path, old, neu]) => isIntentFile(path) && addsNotice(newLines(old, neu))))
-      return blocked('Notices', 'hai-flow notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "hai-flow ·" line out; the files under Saved/HaiFlow are the record')
+      return blocked('Notices', 'a5 notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5 ·" line out; the files under Saved/A5 are the record')
   }
   if (SHELL_TOOLS.has(tool) && writesLock(str(input.command))) return blocked('Editor lock', 'under A5 the lock is written by the editor tool, never by a command', viaTool)
   if (SHELL_TOOLS.has(tool) && writesNoticeToIntent(str(input.command)))
-    return blocked('Notices', 'hai-flow notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "hai-flow ·" line out; the files under Saved/HaiFlow are the record')
+    return blocked('Notices', 'a5 notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5 ·" line out; the files under Saved/A5 are the record')
   return null
 }
 
@@ -1190,7 +1190,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     await saveMe($, opts, now)
     await runTick($, opts)
     const asked = me.yieldAsks.find(a => a.at === now)
-    return tail(`${placeText(decision)}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without hai-flow)' : ''}` : ''}`)
+    return tail(`${placeText(decision)}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5)' : ''}` : ''}`)
   }
   if (action === 'release') {
     lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
@@ -1430,7 +1430,7 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
       t.icon = icon(el, name, color, motionFor(t.key, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
     kids.splice(stripAt + 1, 0, tilesRow(el, tiles, isDesktop))
-    // A16: one line under the tiles: the sessions on this machine, who holds what, who runs without hai-flow 0.4.
+    // A16: one line under the tiles: the sessions on this machine, who holds what, who runs without a5 0.4.
     const overview = overviewOf({ me8: id8, files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now) })
     const line = overviewLine(overview)
     kids.splice(stripAt + 2, 0, el.Box({ key: 'hai-overview', flexDirection: 'row', width: '100%', marginTop: isDesktop ? 1 : 0, children: [el.Text({ color: overview.withoutMod.length > 0 ? STATUS.warn : ATHER.quiet, ...(isDesktop ? { wrap: 'wrap' } : {}), children: line })] }))
@@ -1499,12 +1499,12 @@ export const register: Register = (on, options) => {
       }
     }
     await readA5($)
-    const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put hai-flow first in CLAUDE_CODE_PLUGIN_DIRS`
+    const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put a5 first in CLAUDE_CODE_PLUGIN_DIRS`
     const coord =
       a5On && isS2
         ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)} (holder ${syncFile.holder.lane}, hard end ${clockOf(syncFile.hardEnd)})` : 'none planned'}. ${overviewLine(overviewOf({ me8, files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now: nowMs, phase: phaseOf(syncFile, nowMs) }))}.`
         : ''
-    return { text: `A5 is ${a5On ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. hai-flow sits ${where2}.${coord}` }
+    return { text: `A5 is ${a5On ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. a5 sits ${where2}.${coord}` }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -1523,7 +1523,7 @@ export const register: Register = (on, options) => {
     const a5 = await load($)
     const isOn = await readA5($)
 
-    // The Editor gate is A5's (D1): with A5 off nothing of hai-flow's refuses an Editor call.
+    // The Editor gate is A5's (D1): with A5 off nothing of a5's refuses an Editor call.
     const frozen = isOn ? await freezeProblem($, opts, a5, tool, input) : null
     if (frozen) return { deny: frozen }
     const editor = isOn ? await editorProblem($, opts, tool, input) : null
@@ -1569,7 +1569,7 @@ export const register: Register = (on, options) => {
       // folder (a write inside it would reload the mod), for /a5 status and for checking by hand.
       chain = next.trace.map(t => t.plugin).filter(p => p !== 'engine')
       const id8 = (await $.session.id()).slice(0, 8)
-      await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/hai-flow/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
+      await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
     if (isOn && ran.isError !== true) {
@@ -1637,14 +1637,14 @@ export const register: Register = (on, options) => {
       reset()
       return res
     }
-    return { ...res, block: `hai-flow · A5 report — the final answer is not ready → fix these, then give it again:\n- ${probs.join('\n- ')}` }
+    return { ...res, block: `A5 · report — the final answer is not ready → fix these, then give it again:\n- ${probs.join('\n- ')}` }
   })
 
   on('turn.complete', async ($, e, next) => {
     const res = await next(e)
     // A12: the sync worker's run ended; without done or abort the sync is aborted for it.
     if (e.agentId !== undefined && isS2 && (await readA5($))) {
-      await workerEnded($, opts, e.agentId, 'answer' in e && typeof e.answer === 'string' ? e.answer : '').catch(err => $.ui.log(`hai-flow: worker end: ${String(err)}`, { to: 'debug' }))
+      await workerEnded($, opts, e.agentId, 'answer' in e && typeof e.answer === 'string' ? e.answer : '').catch(err => $.ui.log(`a5: worker end: ${String(err)}`, { to: 'debug' }))
       if (!isBusy) await deliverIdle($, opts)
     }
     if (e.agentId === undefined) {
@@ -1687,7 +1687,7 @@ export const register: Register = (on, options) => {
     const id8 = (await $.session.id()).slice(0, 8)
     const text = [rulesFlow, isOn ? rulesA5 : ''].filter(Boolean).join('\n\n').replaceAll('{SESSION8}', id8)
     if (!text) return res
-    return { ...res, sections: [...res.sections, { id: 'hai-flow:rules', text, scope: 'session' as const }] }
+    return { ...res, sections: [...res.sections, { id: 'a5:rules', text, scope: 'session' as const }] }
   })
 
   // Ather's pane: drawn by Ather beneath; this wraps what it drew.

@@ -5,7 +5,7 @@ import { lockProblem, mcpKind, parseEditorLock, isEditorStartStop } from '../hoo
 import { readMarker, markedTitle, bareTitle, isDirectorCallLine, isFindingsFile } from '../hooks/decision.ts'
 
 // The same shell and path cases the Hermes kit's tests/test_core.py runs, so both engines agree.
-const KIT = 'C:/Users/hai.huynh/.claude/mods/hai-flow'
+const KIT = 'C:/Users/hai.huynh/.claude/mods/a5'
 const PLACES = { KIT, HOME: 'C:/Users/hai.huynh', USERPROFILE: 'C:/Users/hai.huynh', TEMP: 'C:/Users/HAI~1.HUY/AppData/Local/Temp', LOCALAPPDATA: 'C:/Users/hai.huynh/AppData/Local', HERMES_HOME: 'C:/Users/hai.huynh/AppData/Local/hermes' }
 const ENV = { TEMP: PLACES.TEMP, LOCALAPPDATA: PLACES.LOCALAPPDATA, USERPROFILE: PLACES.USERPROFILE }
 
@@ -41,12 +41,12 @@ const SHELL: [string, 'deny' | 'ask' | null][] = [
   ['powershell -NoProfile -Command "Remove-Item -Recurse E:/Projects/s2/Saved"', 'ask'],
   ['cmd /c "rd /s /q E:\\Projects\\s2\\Saved"', 'ask'],
   ['git rm -r --cached Saved/x', null],
-  [`cat ${KIT}/a5/config.json`, null],
+  [`cat ${KIT}/rules/config.json`, null],
   [`D="${KIT}/a5"`, null],
-  [`D=x > ${KIT}/a5/config.json`, 'deny'],
-  [`echo x > ${KIT}/a5/config.json`, 'deny'],
-  [`Set-Content ${KIT}/a5/config.json '{}'`, 'deny'],
-  ['Remove-Item .claude/mods/hai-flow/a5/scope', 'deny'],
+  [`D=x > ${KIT}/rules/config.json`, 'deny'],
+  [`echo x > ${KIT}/rules/config.json`, 'deny'],
+  [`Set-Content ${KIT}/rules/config.json '{}'`, 'deny'],
+  ['Remove-Item .claude/mods/a5/rules/scope', 'deny'],
 ]
 
 test('shell commands get the same decisions as the Hermes kit', async $ => {
@@ -65,7 +65,7 @@ test('file writes: shared config asks, the kit and secrets are refused', async $
   expect(kind('E:/proj/Content/S2/.gitignore', 'Content/S2/.gitignore')).toBe(null)
   expect(kind('E:/proj/S2.uproject', 'S2.uproject')).toBe('ask')
   expect(kind('E:/proj/Source/S2/S2.Build.cs', 'Source/S2/S2.Build.cs')).toBe('ask')
-  expect(kind(`${KIT}/a5/config.json`, null)).toBe('deny')
+  expect(kind(`${KIT}/rules/config.json`, null)).toBe('deny')
   expect(kind('C:/Users/hai.huynh/.claude/settings.json', null)).toBe('ask')
   expect(kind('E:/proj/Source/S2/Foo.cpp', 'Source/S2/Foo.cpp', `k = 'ghp_${'a'.repeat(36)}'`)).toBe('deny')
   expect(kind('E:/proj/Source/S2/Tests/FooTest.cpp', 'Source/S2/Tests/FooTest.cpp', 'TestTrue(a);', 'TestTrue(a);\nTestEqual(b,c);')).toBe('ask')

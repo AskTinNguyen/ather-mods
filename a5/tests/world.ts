@@ -48,9 +48,9 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   mock.store(on, { a5: { on: a5 }, ...store })
   const clock = mock.clock(on, { now: NOW })
   on('fs.read', async (_$: unknown, e: { path: string }) => {
-    if (k(e.path).endsWith('/a5/config.json')) return value(JSON.stringify(CONFIG))
-    if (k(e.path).endsWith('/a5/rules-a5.md')) return value('A5 RULES {SESSION8}')
-    if (k(e.path).endsWith('/a5/rules-flow.md')) return value('FLOW RULES {SESSION8}')
+    if (k(e.path).endsWith('/rules/config.json')) return value(JSON.stringify(CONFIG))
+    if (k(e.path).endsWith('/rules/rules-a5.md')) return value('A5 RULES {SESSION8}')
+    if (k(e.path).endsWith('/rules/rules-flow.md')) return value('FLOW RULES {SESSION8}')
     const t = files.get(k(e.path))
     return t === undefined ? { deny: `ENOENT: ${e.path}` } : value(t)
   })
@@ -98,19 +98,19 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   for (const ev of ['ui.toast', 'ui.log', 'ui.status', 'ui.invalidate', 'command.register', 'tool.register'])
     on(ev, async (_$: unknown, e: unknown) => {
       ;(calls[ev] ??= []).push(e)
-      return value(ev === 'tool.register' ? { tool: `mcp__hai-flow__${String((e as Rec).name)}` } : undefined)
+      return value(ev === 'tool.register' ? { tool: `mcp__a5__${String((e as Rec).name)}` } : undefined)
     })
   // D7: an agent type registers; a spawned subagent starts as `w-sync` (its end is the test's turn.complete).
   on('agent.register', async (_$: unknown, e: Rec) => {
     ;(calls['agent.register'] ??= []).push(e)
-    return value({ agent: `hai-flow:${String(e.name)}` })
+    return value({ agent: `a5:${String(e.name)}` })
   })
   on('agent.spawn', async (_$: unknown, e: Rec) => {
     ;(calls['agent.spawn'] ??= []).push(e)
     return { model: 'claude-test', agentId: 'w-sync' }
   })
   // The session's agents: the sync worker once one was spawned (the harness drops a spawn's agentId).
-  on('agent.list', async () => value((calls['agent.spawn'] ?? []).length > 0 ? [{ id: 'w-sync', description: 'Sync main', type: 'hai-flow:sync', status: 'running', spawnedBy: 'hai-flow' }] : []))
+  on('agent.list', async () => value((calls['agent.spawn'] ?? []).length > 0 ? [{ id: 'w-sync', description: 'Sync main', type: 'a5:sync', status: 'running', spawnedBy: 'a5' }] : []))
   // A prompt the plugin submits enters as it was sent (an event: it answers { text }).
   on('prompt.submit', async (_$: unknown, e: { text: string; context?: string[] }) => {
     ;(calls['prompt.submit'] ??= []).push(e)

@@ -1,7 +1,7 @@
 {
-  "name": "hai-flow",
+  "name": "a5",
   "version": "0.5.0",
-  "description": "Hai's S2 flow beside Ather Automata, which it never changes. A5 off: Ather exactly as it ships, plus the 🟥/⏯️ title marks. /a5 on: the five rules and the report gate fitted to Ather's intent flow and proof, and coordination for the sessions sharing one S2 checkout: Editor holder (queue, leases, the S2 standard's lock lines), RAM (safe cleanup, launch and PIE gates), Sync main holder (cutoff, a freeze that is a lease with a hard end, a sync worker that runs the merge, the MERGE_HEAD guard, conflicts to their owners), with hai-flow notices that never enter intent files, three tiles and a session overview in Ather's pane.",
+  "description": "Hai's S2 flow beside Ather Automata, which it never changes. A5 off: Ather exactly as it ships, plus the 🟥/⏯️ title marks. /a5 on: the five rules and the report gate fitted to Ather's intent flow and proof, and coordination for the sessions sharing one S2 checkout: Editor holder (queue, leases, the S2 standard's lock lines), RAM (safe cleanup, launch and PIE gates), Sync main holder (cutoff, a freeze that is a lease with a hard end, a sync worker that runs the merge, the MERGE_HEAD guard, conflicts to their owners), with a5 notices that never enter intent files, three tiles and a session overview in Ather's pane.",
   "author": { "name": "HaiHuynh" },
   "userConfig": {
     "a5WhenPresent": {

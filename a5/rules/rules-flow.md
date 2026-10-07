@@ -1,4 +1,4 @@
-# Hai's flow (hai-flow mod, beside Ather Automata)
+# A5 (beside Ather Automata)
 
 ## Decisions that are Hai's (🟥 / ⏯️)
 Only when a decision is truly Hai's (cost, taste, hard to reverse). Where it goes:

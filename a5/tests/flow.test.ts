@@ -5,7 +5,7 @@ import { PROJ, LOCK, PENDING, ME, ENV, opts, BAT, NOW, LIME, type Rec, type Tree
 // ---------- A5 ----------
 test('A5 on: a refused command never reaches the tool', opts(), async ($, on) => {
   const w = world(on)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('hai-flow · A5 D1/D5')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5 · D1/D5')
   expect(w.seen.length).toBe(0)
 })
 
@@ -43,7 +43,7 @@ test('A5 off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; �
 test('/a5 on and /a5 off flip the switch every session reads', opts(), async ($, on) => {
   world(on, { a5: false })
   expect((await $.command.run({ command: 'a5', args: 'on' } as never)).text).toContain('A5 on')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('hai-flow · A5')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5 · D1/D5')
   expect((await $.command.run({ command: 'a5', args: 'off' } as never)).text).toContain('A5 off')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
 })
@@ -158,7 +158,7 @@ test('Editor: writes need the lock to name this session; reads pass; never save-
   const w = world(on)
   const save = { tool: 'mcp__unreal-mcp__call_tool', name: 'save_assets', arguments: { paths: ['/Game/X'] } }
   w.put(LOCK, '1006-other-s9 (worker) since 14:30, expected end 15:10. session ffffffff\n')
-  expect(refused(await $.tool.call(save as never))).toContain('hai-flow · Editor lock')
+  expect(refused(await $.tool.call(save as never))).toContain('A5 · Editor lock')
   expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'get_actor' } as never))).toBeUndefined()
   w.put(LOCK, `1006-me-s1 (this lane) since 14:30, expected end 15:10. session ${ME.slice(0, 8)}\n`)
   expect(refused(await $.tool.call(save as never))).toBeUndefined()

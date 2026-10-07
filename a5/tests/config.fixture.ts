@@ -1,4 +1,4 @@
-// Generated from a5/config.json (tests have no file system). Regenerate after editing the config:
+// Generated from rules/config.json (tests have no file system). Regenerate after editing the config:
 //   python make_fixture.py <mod folder>
 import type { A5Config } from '../hooks/a5.ts'
 
