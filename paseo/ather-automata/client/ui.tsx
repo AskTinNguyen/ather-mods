@@ -9,6 +9,42 @@ import { AccessibilityInfo, Animated, Easing, Platform, Pressable, Text, View, t
 
 export type Theme = PluginSurfaceProps["theme"];
 
+// Each person gets one colour for good (a hash of their name), so Tin is always the same colour. Two sets of
+// the same hues: lighter on dark pages, deeper on light ones, so a name holds its contrast in either.
+const PEOPLE_DARK = ["#7aa2ff", "#ff8f6b", "#4fd1a5", "#d68cff", "#ffd166", "#5fd0e8", "#ff7eb6", "#a3d977"];
+const PEOPLE_LIGHT = ["#2f5fd0", "#c4501f", "#14866a", "#8a3fc4", "#a3720a", "#0f7f99", "#c2306f", "#4a8a14"];
+// A colour for each of these people. Each starts at its hash, and steps on to the next free colour when
+// someone on screen already has it, so no two of them share one (up to the palette's eight).
+export function personColours(names: readonly string[], light: boolean): Record<string, string> {
+  const palette = light ? PEOPLE_LIGHT : PEOPLE_DARK;
+  const taken = new Set<number>();
+  const out: Record<string, string> = {};
+  for (const name of [...new Set(names)].sort()) {
+    let hash = 0;
+    for (const char of name.trim().toLowerCase()) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+    let at = hash % palette.length;
+    for (let tries = 0; tries < palette.length && taken.has(at); tries += 1) at = (at + 1) % palette.length;
+    taken.add(at);
+    out[name] = palette[at] ?? "#7aa2ff";
+  }
+  return out;
+}
+
+// A person's name in their colour, bold, for the end of a title's line; pressing it can filter to them.
+export function PersonName({ name, colour, onPress }: { name: string; colour: string; onPress?: () => void }) {
+  const text = (
+    <Text numberOfLines={1} style={{ color: colour, fontSize: 13, fontWeight: "400", maxWidth: 190, opacity: 0.7 }}>
+      {name}
+    </Text>
+  );
+  if (!onPress) return text;
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`Show only ${name}'s work`} hitSlop={6} onPress={onPress} style={({ pressed }) => (pressed ? { opacity: 0.6 } : null)}>
+      {text}
+    </Pressable>
+  );
+}
+
 export function useKit(theme: Theme, compact: boolean) {
   return useMemo(() => {
     const c = theme.colors;
@@ -28,6 +64,7 @@ export function useKit(theme: Theme, compact: boolean) {
         section: { marginTop: compact ? 20 : 28, gap: compact ? 2 : 4 },
         sectionHead: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, marginBottom: 6 },
         label: { color: c.accent, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1.5 },
+        subLabelPlain: { color: c.foregroundMuted, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1 },
         subLabel: { color: c.foregroundMuted, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1, marginTop: 8, marginBottom: 2 },
         row: { flexDirection: "row" as const, gap: 10, alignItems: "flex-start" as const, paddingVertical: compact ? 10 : 8, paddingHorizontal: 8, borderRadius: 8, minHeight: compact ? 40 : 36 },
         rowPressed: { backgroundColor: c.surface1 },
@@ -131,6 +168,7 @@ export function Row({
   accessibilityLabel,
   index,
   pulse = false,
+  aside,
   onPress,
 }: {
   kit: Kit;
@@ -147,6 +185,8 @@ export function Row({
   index?: number;
   // The icon breathes while the row waits on the person.
   pulse?: boolean;
+  // Something at the end of the title's line (a teammate's name).
+  aside?: ReactNode;
   onPress?: () => void;
 }) {
   const { s, c } = kit;
@@ -160,7 +200,14 @@ export function Row({
         </View>
       ) : null}
       <View style={s.rowBody}>
-        <Text style={quiet ? [s.rowTitle, { color: c.foregroundMuted, fontWeight: "400" as const }] : s.rowTitle}>{title}</Text>
+        {aside ? (
+          <View style={{ flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", columnGap: 10 }}>
+            <Text style={[quiet ? [s.rowTitle, { color: c.foregroundMuted, fontWeight: "400" as const }] : s.rowTitle]}>{title}</Text>
+            {aside}
+          </View>
+        ) : (
+          <Text style={quiet ? [s.rowTitle, { color: c.foregroundMuted, fontWeight: "400" as const }] : s.rowTitle}>{title}</Text>
+        )}
         {hint && hint !== title ? <Text style={s.hint}>{hint}</Text> : null}
         {detail ? <Text style={s.hint}>{detail}</Text> : null}
       </View>
