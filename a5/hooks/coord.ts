@@ -119,7 +119,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
 
 /** Ather's lane heartbeat (Saved/AtherAutomata/lanes/<sessionId>.json): liveness, and the intent and branch it
  * names (A16). */
-export type LaneBeat = { sessionId: string; hasEnded: boolean; mtimeMs: number; intent?: string; branch?: string }
+export type LaneBeat = { sessionId: string; hasEnded: boolean; mtimeMs: number; intent?: string; branch?: string; lastActiveAt?: number }
 export type Liveness = 'alive' | 'gone' | 'unknown'
 
 /** Whether the session named by its first 8 hex is alive, from files only: Ather's lane says ended or is older
@@ -874,3 +874,78 @@ export const hash = (text: string): string => {
   }
   return h.toString(16).padStart(8, '0')
 }
+
+// ---------- A26: the sessions list ----------
+/** A session's name from Claude Code's record of it (the `"customTitle"` / `"aiTitle"` lines a search found): the
+ * last title the person or the session set, else the last one Claude Code generated. Mirrors Ather's
+ * `model.mjs sessionTitle` (read-only; Ather is never changed). */
+export const titleFromRecord = (lines: string): string => {
+  const rows = lines.split(/\r?\n/)
+  const last = (kind: string): string => {
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const m = new RegExp(`"${kind}":"([^"]*)"`).exec(rows[i] ?? '')
+      if (m) return m[1] ?? ''
+    }
+    return ''
+  }
+  const raw = last('customTitle') || last('aiTitle')
+  let title = raw
+  try {
+    title = JSON.parse(`"${raw}"`) as string
+  } catch {
+    // an escape the search cut in half: the raw text is close enough
+  }
+  return title.replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, 60)
+}
+
+/** Claude Code's records folder name for a checkout root (`E:/s2` → `E--s2`). */
+export const projectFolder = (root: string): string => root.replace(/[^a-zA-Z0-9]/g, '-')
+
+export type SessionRow = { id8: string; title: string; intent: string; holds: string[]; hasA5: boolean; isMe: boolean; activeMin: number | null; activeKind: 'active' | 'seen' }
+export type SessionsView = { header: string; rows: SessionRow[]; more: number }
+export const SESSION_ROWS = 6
+
+/** A26: the live S2 sessions as a short named list: this session first, then whoever holds the Editor or the sync or
+ * waits in the queue, then the most recently active; at most six rows and how many more. A title comes from the
+ * a5 session file, else Claude Code's record (`names`), else the first 8 hex. "Active" is Ather's `lastActiveAt`
+ * when its lane has one, else the a5 heartbeat ("seen"). */
+export const sessionsView = (x: { me8: string; meTitle: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase; names: ReadonlyMap<string, string> }): SessionsView => {
+  const { now } = x
+  const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
+  const freshFiles = x.files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS)
+  const ids = [...new Set<string>([x.me8, ...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...freshFiles.map(f => f.id8)].filter(Boolean))]
+  const queue = queueOf(x.files, x.lanes, now, x.sync).map(f => f.id8)
+  const syncOpen = x.sync && isOpenPhase(x.phase) ? x.sync : null
+  const rows = ids.map((id8): SessionRow => {
+    const lane = liveLanes.find(l => l.sessionId.toLowerCase().startsWith(id8))
+    const file = freshFiles.find(f => f.id8 === id8)
+    const isMe = id8 === x.me8
+    const holds: string[] = []
+    if (x.lock.id8 === id8 && (x.lock.kind === 'held' || x.lock.kind === 'handed')) holds.push(`Editor${x.lock.end ? ` until ${x.lock.end}` : ''}`)
+    if (syncOpen && syncOpen.holder.id8 === id8) holds.push(`sync ${hhmm(syncOpen.at)}`)
+    const place = queue.indexOf(id8)
+    if (place >= 0) holds.push(`Editor queue #${place + 1}`)
+    const activeAt = lane?.lastActiveAt ?? null
+    const seenAt = activeAt ?? (isMe ? now : (file?.heartbeatAt ?? lane?.mtimeMs ?? null))
+    return {
+      id8,
+      title: (isMe ? x.meTitle : '') || file?.title || x.names.get(id8) || id8,
+      intent: lane?.intent || 'no intent',
+      holds,
+      hasA5: isMe || Boolean(file),
+      isMe,
+      activeMin: seenAt === null ? null : Math.max(0, Math.round((now - seenAt) / 60_000)),
+      activeKind: activeAt !== null || isMe ? 'active' : 'seen',
+    }
+  })
+  const rank = (r: SessionRow) => (r.isMe ? 0 : r.holds.length > 0 ? 1 : 2)
+  rows.sort((a, b) => rank(a) - rank(b) || (a.activeMin ?? 1e9) - (b.activeMin ?? 1e9) || a.id8.localeCompare(b.id8))
+  const active = x.clients?.filter(r => !r.isArchived && (r.isRunning || now - r.lastActivityAt <= CLIENT_ACTIVE_MS)) ?? null
+  const elsewhere = active ? active.filter(r => !x.isS2Cwd(r.cwd)).length : null
+  const header = ['Sessions', `${ids.length} in S2`, ...(elsewhere !== null ? [`${elsewhere} elsewhere`] : [])].join(' · ')
+  return { header, rows: rows.slice(0, SESSION_ROWS), more: Math.max(0, rows.length - SESSION_ROWS) }
+}
+
+/** One row's words after its title: intent · holds · active how long ago (· no a5). */
+export const sessionDetail = (r: SessionRow): string =>
+  [r.intent, ...r.holds, r.activeMin === null ? '' : r.activeMin < 1 ? `${r.activeKind} now` : `${r.activeKind} ${r.activeMin < 60 ? `${r.activeMin}m` : `${Math.round(r.activeMin / 60)}h`} ago`].filter(Boolean).join(' · ')

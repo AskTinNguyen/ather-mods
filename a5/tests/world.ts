@@ -63,7 +63,10 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   on('fs.list', async (_$: unknown, e: { path: string }) => {
     const dir = `${k(e.path).replace(/\/$/, '')}/`
     const names = [...files.keys()].filter(p => p.startsWith(dir) && !p.slice(dir.length).includes('/'))
-    return names.length ? value(names.map(p => ({ name: p.slice(dir.length), kind: 'file', size: (files.get(p) ?? '').length, mtimeMs: mtimes.get(p) ?? NOW, isLink: false }))) : { deny: `ENOENT: ${e.path}` }
+    // Folders too: the first segment of any deeper path (a folder exists while it holds a file).
+    const dirs = [...new Set([...files.keys()].filter(p => p.startsWith(dir) && p.slice(dir.length).includes('/')).map(p => p.slice(dir.length).split('/')[0] ?? ''))].filter(Boolean)
+    const entries = [...names.map(p => ({ name: p.slice(dir.length), kind: 'file', size: (files.get(p) ?? '').length, mtimeMs: mtimes.get(p) ?? NOW, isLink: false })), ...dirs.map(name => ({ name, kind: 'dir', size: 0, mtimeMs: NOW, isLink: false }))]
+    return entries.length ? value(entries) : { deny: `ENOENT: ${e.path}` }
   })
   on('fs.stat', async (_$: unknown, e: { path: string }) =>
     k(e.path).endsWith('fetch_head')
@@ -162,3 +165,40 @@ export const atherTree = (home: boolean): never => ({
   ],
 }) as never
 export const PANE = { surface: 'terminal', component: 'Pane', requestId: 'ather', props: { title: 'ATHER AUTOMATA', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 22 }, view: {} } }
+
+// A25/A26: measuring a drawn tree the way the surface lays it out.
+/** The narrowest width a node can be laid out in, in cells, the way the surface lays boxes out: text that wraps
+ * breaks at words, any other text keeps its whole line; a row lays its children side by side (with its gaps)
+ * unless it wraps; a column takes its widest child; padding and a border add to it. */
+export const minWidth = (node: unknown, wraps = false): number => {
+  if (node === null || node === undefined || node === false) return 0
+  if (typeof node === 'string' || typeof node === 'number') {
+    const s = String(node)
+    return wraps ? Math.max(0, ...s.split(/\s+/).map(w => [...w].length)) : [...s].length
+  }
+  if (Array.isArray(node)) return node.reduce((n: number, c) => n + minWidth(c, wraps), 0)
+  const t = node as Tree
+  const p = (t.props ?? {}) as Record<string, unknown>
+  const kids = t.children ?? (p.children === undefined ? [] : [p.children].flat())
+  if (t.type === 'Text') {
+    const isWrap = p.wrap === 'wrap' || wraps
+    const s = text(t)
+    return isWrap ? Math.max(0, ...s.split(/\s+/).map(w => [...w].length)) : [...s].length
+  }
+  if (t.type === 'Button') return [...String(p.label ?? '')].length + (p.plain ? 0 : 4)
+  if (t.type === 'Svg') return Math.ceil(Number(p.width ?? 16) / 8)
+  if (t.type === 'Client') return 11
+  const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0)
+  const widths = kids.map(c => minWidth(c))
+  if (p.flexDirection === 'column' || p.flexWrap === 'wrap') return pad + Math.max(0, ...widths)
+  const gap = Number(p.columnGap ?? p.gap ?? 0)
+  return pad + widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, widths.length - 1)
+}
+
+export const all = (t: unknown, out: Tree[] = []): Tree[] => {
+  if (t && typeof t === 'object' && !Array.isArray(t)) {
+    out.push(t as Tree)
+    for (const c of (t as Tree).children ?? []) all(c, out)
+  }
+  return out
+}

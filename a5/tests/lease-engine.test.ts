@@ -178,7 +178,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
     machine(w)
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
     const tree = await $.ui.render({ ...PANE, surface } as never)
-    expect(text(find(tree, 'hai-overview'))).toBe('Sessions: 3 active · S2 3 · elsewhere 1 · by intent: loco 1, no intent 1, tail-vfx 1 · Editor: sync-lane · Sync: none · without a5 0.4: loco (session dddddddd)')
+    // Since 0.8 (A26) the overview is a named list (one row per session) instead of one line; the same facts.
+    expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 in S2 · 1 elsewhere')
+    expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('●3️⃣ Loco fix (this session)no intent · active now')
+    expect(text(find(tree, 'hai-session-bbbbbbbb'))).toBe('●bbbbbbbbtail-vfx · Editor until 15:10 · seen now')
+    expect(text(find(tree, 'hai-session-dddddddd'))).toBe('●ddddddddloco · seen nowno a5')
   })
 }
 
@@ -188,7 +192,8 @@ test('A16: without the client\'s session list the overview falls back to Ather\'
   machine(w)
   await $.session.start(START)
   const tree = await $.ui.render(PANE as never)
-  expect(text(find(tree, 'hai-overview')).startsWith('Sessions: S2 3 live (client list unavailable) · by intent: loco 1, no intent 1, tail-vfx 1 · Editor: sync-lane')).toBe(true)
+  expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 in S2')
+  expect(['bbbbbbbb', 'dddddddd'].map(id8 => Boolean(find(tree, `hai-session-${id8}`)))).toEqual([true, true])
 })
 
 test('A16: at the cutoff the holder sends each live S2 session without a5 0.4 one standard message, and its notice names them', opts(), async ($, on) => {

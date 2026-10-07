@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, newSync } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PANE, PROJ, atherTree, find, opts, text, world, type Tree } from './world.ts'
+import { LOCK, ME, NOW, PANE, PROJ, all, atherTree, find, minWidth, opts, text, world } from './world.ts'
 
 // A25: the three tools never leave their box, at the narrowest and a wide pane, desktop and terminal: every tool
 // is a full-width row whose narrowest possible layout (wrapping text at words, nothing truncated) fits the pane,
@@ -10,41 +10,6 @@ const ME8 = ME.slice(0, 8)
 const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
 const LONG_LANE = '1006-walkerext-s9-retarget' // a long holder name, like the ones Hai's screenshot cut to "Edi…"
 
-/** The narrowest width a node can be laid out in, in cells, the way the surface lays boxes out: text that wraps
- * breaks at words, any other text keeps its whole line; a row lays its children side by side (with its gaps)
- * unless it wraps; a column takes its widest child; padding and a border add to it. */
-export const minWidth = (node: unknown, wraps = false): number => {
-  if (node === null || node === undefined || node === false) return 0
-  if (typeof node === 'string' || typeof node === 'number') {
-    const s = String(node)
-    return wraps ? Math.max(0, ...s.split(/\s+/).map(w => [...w].length)) : [...s].length
-  }
-  if (Array.isArray(node)) return node.reduce((n: number, c) => n + minWidth(c, wraps), 0)
-  const t = node as Tree
-  const p = (t.props ?? {}) as Record<string, unknown>
-  const kids = t.children ?? (p.children === undefined ? [] : [p.children].flat())
-  if (t.type === 'Text') {
-    const isWrap = p.wrap === 'wrap' || wraps
-    const s = text(t)
-    return isWrap ? Math.max(0, ...s.split(/\s+/).map(w => [...w].length)) : [...s].length
-  }
-  if (t.type === 'Button') return [...String(p.label ?? '')].length + (p.plain ? 0 : 4)
-  if (t.type === 'Svg') return Math.ceil(Number(p.width ?? 16) / 8)
-  if (t.type === 'Client') return 11
-  const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0)
-  const widths = kids.map(c => minWidth(c))
-  if (p.flexDirection === 'column' || p.flexWrap === 'wrap') return pad + Math.max(0, ...widths)
-  const gap = Number(p.columnGap ?? p.gap ?? 0)
-  return pad + widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, widths.length - 1)
-}
-
-const all = (t: unknown, out: Tree[] = []): Tree[] => {
-  if (t && typeof t === 'object' && !Array.isArray(t)) {
-    out.push(t as Tree)
-    for (const c of (t as Tree).children ?? []) all(c, out)
-  }
-  return out
-}
 const buttons = (tree: unknown, key: string): string[] => all(find(tree, key)).filter(n => n.type === 'Button').map(n => String(n.props?.label))
 
 const setup = async ($: any, on: any, surface: 'terminal' | 'desktop', mine: boolean) => {

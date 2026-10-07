@@ -8,12 +8,12 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
 import { A5_LOOK, ATHER, STATUS, noHits, recolor, replaceKeyed, rulesFooter, withSeal, type RuleHits } from './theme.ts'
-import { acceptCard, editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
+import { acceptCard, sessionsBox, editorTile, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
@@ -486,8 +486,9 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
     await Promise.all(
       jsons<{ name: string; mtimeMs: number }>(laneList).map(async (f): Promise<LaneBeat | null> => {
         try {
-          const v = JSON.parse((await readJson($, `${root}/Saved/AtherAutomata/lanes/${f.name}`)) ?? '') as { sessionId?: string; hasEnded?: boolean; intent?: unknown; branch?: unknown }
-          return { sessionId: String(v.sessionId ?? f.name.replace(/\.json$/, '')), hasEnded: v.hasEnded === true, mtimeMs: f.mtimeMs, intent: typeof v.intent === 'string' ? v.intent : '', branch: typeof v.branch === 'string' ? v.branch : '' }
+          const v = JSON.parse((await readJson($, `${root}/Saved/AtherAutomata/lanes/${f.name}`)) ?? '') as { sessionId?: string; hasEnded?: boolean; intent?: unknown; branch?: unknown; lastActiveAt?: unknown }
+          const activeAt = Number(v.lastActiveAt)
+          return { sessionId: String(v.sessionId ?? f.name.replace(/\.json$/, '')), hasEnded: v.hasEnded === true, mtimeMs: f.mtimeMs, intent: typeof v.intent === 'string' ? v.intent : '', branch: typeof v.branch === 'string' ? v.branch : '', ...(Number.isFinite(activeAt) && activeAt > 0 ? { lastActiveAt: activeAt } : {}) }
         } catch {
           return null // a half-written heartbeat; the next tick reads it
         }
@@ -497,6 +498,58 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
   syncFile = parseSyncFile(syncText)
   touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
   probe = shared
+}
+
+// A26: session titles from Claude Code's records, looked up off the render, at most every 10 min per session.
+const sessionNames = new Map<string, string>()
+const namesAt = new Map<string, number>()
+const NAME_TTL_MS = 10 * 60_000
+let isNaming = false
+
+/** This checkout's records folder under Claude Code's config (`<config>/projects/<root with - for each other
+ * character>`; any letter case), or ''. */
+async function recordsDir($: Engine, opts: Opts): Promise<string> {
+  const slash = (v: string | undefined | null) => (v ?? '').replace(/\\/g, '/')
+  const home = slash(await $.env.get('USERPROFILE').catch(() => '')) || slash(await $.env.get('HOME').catch(() => ''))
+  const config = slash(await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || (home ? `${home}/.claude` : '')
+  if (!config) return ''
+  const want = projectFolder(s2Root(opts))
+  const all = (await $.fs.list(`${config}/projects`).catch(() => [])).filter(d => d.kind === 'dir')
+  const hit = all.find(d => d.name === want) ?? all.find(d => d.name.toLowerCase() === want.toLowerCase())
+  return hit ? `${config}/projects/${hit.name}` : ''
+}
+
+/** The title lines of one record: grep, or PowerShell where there is none (as Ather's transcripts.mjs does). */
+async function titleLines($: Engine, path: string): Promise<string> {
+  const pattern = '"(customTitle|aiTitle)":"[^"]*"'
+  const grep = await $.process.run(['grep', '-oE', pattern, path], { timeoutMs: 15_000 }).catch(() => null)
+  if (grep && (grep.exitCode === 0 || grep.exitCode === 1)) return grep.stdout
+  const select = `Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${pattern}' -AllMatches | ForEach-Object { $_.Matches.Value }`
+  const ps = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', select], { timeoutMs: 20_000 }).catch(() => null)
+  return ps?.exitCode === 0 ? ps.stdout : ''
+}
+
+/** A26: names for the live sessions whose a5 file gives none (Ather-only sessions), from their records. */
+async function refreshNames($: Engine, opts: Opts, ids: string[]): Promise<void> {
+  if (isNaming) return
+  isNaming = true
+  try {
+    const now = await $.clock.now()
+    const todo = ids.filter(id8 => now - (namesAt.get(id8) ?? 0) > NAME_TTL_MS)
+    if (todo.length === 0) return
+    for (const id8 of todo) namesAt.set(id8, now)
+    const dir = await recordsDir($, opts)
+    if (!dir) return
+    const list = await $.fs.list(dir).catch(() => [])
+    for (const id8 of todo) {
+      const f = list.find(x => x.kind === 'file' && x.name.toLowerCase().startsWith(id8) && x.name.endsWith('.jsonl'))
+      const title = f ? titleFromRecord(await titleLines($, `${dir}/${f.name}`)) : ''
+      if (title) sessionNames.set(id8, title)
+    }
+    $.ui.invalidate('ui.render')
+  } finally {
+    isNaming = false
+  }
 }
 
 /** Queues a notice for this session, once per id (D6). */
@@ -1729,10 +1782,12 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
       t.icon = icon(el, name, color, motionFor(t.key, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
     kids.splice(stripAt + 1, 0, tilesRow(el, tiles, isDesktop))
-    // A16: one line under the tiles: the sessions on this machine, who holds what, who runs without a5 0.4.
-    const overview = overviewOf({ me8: id8, files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now) })
-    const line = overviewLine(overview)
-    kids.splice(stripAt + 2, 0, el.Box({ key: 'hai-overview', flexDirection: 'row', width: '100%', marginTop: isDesktop ? 1 : 0, children: [el.Text({ color: overview.withoutMod.length > 0 ? STATUS.warn : ATHER.quiet, ...(isDesktop ? { wrap: 'wrap' } : {}), children: line })] }))
+    // A26: under the tools, the sessions on this machine as a short named list: who, on what, holding or waiting
+    // for what, how recently active; sessions without a5 marked; at most six rows.
+    const view = sessionsView({ me8: id8, meTitle: me?.title ?? '', files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now), names: sessionNames })
+    kids.splice(stripAt + 2, 0, sessionsBox(el, view, isDesktop))
+    const unnamed = view.rows.filter(r => r.title === r.id8 && !r.isMe).map(r => r.id8)
+    if (unnamed.length > 0 && !isNaming && unnamed.some(id8 => now - (namesAt.get(id8) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, unnamed))
   }
   if (on && stripAt >= 0) {
     // A19: the Nghiệm thu A5 card, once there is a score (a PR attempt, /a5 accept) or the tracked intent is in

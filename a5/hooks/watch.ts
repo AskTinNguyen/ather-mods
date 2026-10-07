@@ -3,7 +3,7 @@
 // the right, one quiet status line under it that wraps inside the row. Nothing is truncated and nothing can leave
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
-import { parseLockLine } from './coord.ts'
+import { parseLockLine, sessionDetail, type SessionRow, type SessionsView } from './coord.ts'
 import { ATHER, STATUS, TRACK } from './theme.ts'
 
 export const PIE_START_GB = 5
@@ -227,7 +227,7 @@ export const tilesRow = (el: El, tiles: Tile[], isDesktop: boolean): unknown => 
         ...(t.action ? [Box({ key: `hai-tile-${t.key}-action`, flexShrink: 0, flexGrow: 0, children: [t.action] })] : []),
       ],
     })
-    const status = parts.length ? [Text({ key: `hai-tile-${t.key}-status`, color: statusColor(parts), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })] : []
+    const status = parts.length ? [Box({ key: `hai-tile-${t.key}-status`, width: '100%', children: [Text({ color: statusColor(parts), wrap: 'wrap', children: parts.map(l => l.text).join(' · ') })] })] : []
     return Box({
       key: `hai-tile-${t.key}`,
       flexDirection: 'column',
@@ -265,4 +265,37 @@ export const acceptCard = (el: El, title: string, sub: string, rows: readonly Ac
   if (isDesktop)
     return Box({ key: 'hai-accept', flexDirection: 'column', width: '100%', marginTop: 1, borderStyle: 'round', borderColor: ATHER.line, paddingX: 1, children: [Box({ key: 'hai-accept-head', flexDirection: 'row', columnGap: 1, children: head }), ...rows.map(row)] })
   return Box({ key: 'hai-accept', flexDirection: 'column', width: '100%', marginTop: 1, children: [Box({ key: 'hai-accept-head', flexDirection: 'row', columnGap: 1, flexWrap: 'wrap', children: head }), ...rows.map(row)] })
+}
+
+/** A26: the sessions list under the tools: a quiet header ("Sessions · 8 in S2 · 1 elsewhere"), then one row per
+ * live session: a status dot, its title, then intent · what it holds or waits for · how recently active, and
+ * "no a5" for a session that runs without it; "+N more" past six. Every piece wraps; nothing is cut. */
+export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean): unknown => {
+  const { Box, Text } = el
+  const dot = (r: SessionRow) => (!r.hasA5 ? STATUS.warn : r.activeMin !== null && r.activeMin < 5 ? STATUS.ok : ATHER.quiet)
+  const row = (r: SessionRow) =>
+    Box({
+      key: `hai-session-${r.id8}`,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      width: '100%',
+      columnGap: 1,
+      children: [
+        Text({ color: dot(r), children: '●' }),
+        Text({ bold: r.isMe, wrap: 'wrap', children: r.isMe ? `${r.title} (this session)` : r.title }),
+        Text({ color: ATHER.quiet, wrap: 'wrap', children: sessionDetail(r) }),
+        ...(r.hasA5 ? [] : [Text({ color: STATUS.warn, children: 'no a5' })]),
+      ],
+    })
+  return Box({
+    key: 'hai-overview',
+    flexDirection: 'column',
+    width: '100%',
+    marginTop: 1,
+    children: [
+      Box({ key: 'hai-overview-head', children: [Text({ color: ATHER.quiet, bold: isDesktop, wrap: 'wrap', children: v.header })] }),
+      ...v.rows.map(row),
+      ...(v.more > 0 ? [Box({ key: 'hai-overview-more', children: [Text({ color: ATHER.quiet, children: `+${v.more} more` })] })] : []),
+    ],
+  })
 }
