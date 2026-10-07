@@ -74,3 +74,11 @@ The two known limits of rev 5 (Ather's Ship is not seen; PRs opened outside `gh`
 > * Đoạn A5 dưới cùng nên canh dưới cùng, xuống hàng cho hợp lý, dùng font nhỏ hơn nhiều để tránh rối bố cục.
 
 With a screenshot of the desktop pane (Editor tile cut to "Edi…", the Sync tile's Refresh button past the edge, the sessions line on two wrapped lines, the five rules as a wrapped paragraph above the bottom).
+
+## L-11 (2026-10-07 12:50) | class: intent | -> rev 8
+
+> Nhóm info này quá dài ảnh hưởng đến chức năng chính của AtherAutomata.
+> Cân nhắc dời hết chức năng của A5 xuống dưới, hoặc có phương án compact hoặc tab hoặc separated panel
+> (choice) 1 dòng compact + pane A5 riêng (Recommended)
+
+With a screenshot of 0.8.0: the A5 block (three tool rows and the sessions list) pushes Needs you and Next below the fold; one session row shows a lone dot (blank title) and one title wraps over two lines.
