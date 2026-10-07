@@ -2,9 +2,9 @@
 
 - Working under rev: 3
 - Worker: track-guard worker (Claude Opus subagent, worktree `D:/Projects/ather-mods-wt/track-guard`)
-- Current step: none (stopped for review)
-- Next step: Tin's review of PR #6 (A8's review half); per L-4 the orchestrator merges once green
-- PR: https://github.com/AskTinNguyen/ather-mods/pull/6 (#6, from HaiHuynh-TA/ather-mods `intent/track-guard`)
+- Current step: none (completed)
+- Next step: none; follow-ups for Tin are listed in prompt.md
+- PR: https://github.com/AskTinNguyen/ather-mods/pull/6 (merged, squash ebd8881)
 
 ## Acceptance
 
@@ -19,7 +19,7 @@
 | A5 | met | S1, S3. Unit: `setRung` and `noteMcp` (pie, write then read) records carry `by` = the writing session's first 8 characters (`1a2b3c4d`, `9f8e7d6c`); `proofLine` names another session's records ("build ✓ by session 1a2b3c4d", by title when known: "read-back ✓ by \"Snow proof\"") and not this one's, and records without `by` name nobody. e2e: the status tool's `evidence.build.by` is `harness-`; the Intent view reads "Proof: build ✓ by session 1a2b3c4d". |
 | A6 | met | S4. e2e: after `/ather intent box-scale-tool` and /clear, `pinned:harness-session-0003` is box-scale-tool and the toast "Ather: Still tracking box-scale-tool · /ather untrack" shows; nothing is said after a /clear with nothing tracked; a morning session that adopts the away window keeps box-scale-tool and shows the same toast beside "your away window from an earlier session is still running". `218/219 passed` (pre-existing failure only). |
 | A7 | met | S5, S7, S8, re-run S9 (rev 3): `node --test ather-automata/tests/*.test.mjs` → `# pass 118 # fail 0`; back to back on the live checkout, `origin/main` 10582c1 `109/109` + `189/189`, this branch `118/118` + `230/230`; layouts-110 identical; layouts-72 identical except #20 (Intent view: `s: Stop tracking` beside Back) and 7 appended Intent-view layouts; `claude plugin test ather-automata` → `2 pass 0 fail`; `claude plugin validate ather-automata` → `✔ Validation passed`. |
-| A8 | open | Gate half done (S6, S8): 0.1.2 in both manifests (main took 0.1.1), a 0.1.2 Changes line, README "Tracking" paragraph and Commands rows; `claude plugin validate ather-automata` → `✔ Validation passed`, `claude plugin test ather-automata` → `2 pass 0 fail`; PR body drafted. PR #6 open (S8 pushed the merge to the fork). Open: Tin's review. |
+| A8 | met | S6, S8 (gate half): 0.1.2 in both manifests, Changes line, README Tracking and Commands; validate passed, plugin test 2 pass 0 fail. Review half: Tin granted Hai write and said "có thể PR và Merge luôn" (Slack 2026-10-07 10:21); the orchestrator re-ran the gates on the PR head 614b943 (`118/118 passed`, `230/230 passed`, validate passed, plugin test 0 fail; GitHub MERGEABLE/CLEAN) and merged PR #6 by Hai's go (squash ebd8881, 2026-10-07). |
 
 ## Steps
 
@@ -60,3 +60,4 @@
 - rev 1 -> 2 (2026-10-06, L-3, F-1 accepted as (b)): A2 now excepts the Work question ("What should this session work on?"), whose typed name tracks when it matches one intent. Still valid: A1, A3 to A8 and their evidence, and A2's other checks (rows, words after `/ather`, the no-pane menu question's typed words only show). Redo: A2's evidence with a check for the Work question's typed name, and the A7 gates after the change (S7). Dropped: nothing.
 - rev 2, merge (2026-10-07): `origin/main` moved to 10582c1 (Tin's 0.1.1) after PR #6 opened; merged it in, kept both sides' behaviour, moved this release to 0.1.2, re-ran the A7 gates (S8). Every acceptance verdict stands.
 - rev 2 -> 3 (2026-10-07, L-4, D5; replaces F-1 b): the Work question's typed name opens a follow-up instead of tracking, and its choices state their consequence. Still valid: A1, A3 to A8 and their evidence, and A2's other checks. Redo: A2's Work-question check (S9) and the A7 gates. Dropped: F-1 (b)'s typed name tracking at once.
+- Close (2026-10-07, orchestrator): PR #6 merged (squash ebd8881); every Acceptance row met; Status completed in prompt.md.
