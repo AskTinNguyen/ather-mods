@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText } from './home.mjs'
+import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, AGE_RANGES, WORK_GROUPS, dimColour, filterWork, personColours, workGroup } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
@@ -55,6 +55,11 @@ let issueBack = /** @type {'home' | 'pick'} */ ('home')
 // The intent whose view is open (paneMode 'intent'; '' is the tracked one), and the view to go back to.
 let intentShown = ''
 let intentBack = /** @type {'home' | 'pick'} */ ('home')
+// The "Everything open" list: the words searched, the age filter in days (0: any time), and the folded groups.
+let pickQuery = ''
+let pickDays = 0
+/** @type {Set<string>} */
+const pickFolded = new Set()
 /** @type {{ name: string, description: string }[]} */
 let skills = []
 // The band's ✕: hidden until it has something new to say.
@@ -212,10 +217,13 @@ async function openConsole($, folder) {
   intentSeenAt = Date.now()
   intentShown = ''
   intentBack = 'home'
+  pickQuery = ''
+  pickDays = 0
+  pickFolded.clear()
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -640,7 +648,7 @@ async function skipTour($) {
 }
 
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -649,6 +657,11 @@ async function atherCommand($, args) {
   if (word === 'tour' || word === 'tours') return startTour($)
   if (word === 'skip') return skipTour($)
   if (word === 'untrack' && rest === '') return untrackHere($)
+  if (word === 'find') {
+    if (rest) setSearch($, rest)
+    if (await hasPane($)) return openPane($, 'pick')
+    return rest ? findText($) : searchQuestion($)
+  }
   if ((word === 'intent' || word === 'pick') && rest) return pickIntent($, rest)
   if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
   if (word === 'role') {
@@ -875,6 +888,47 @@ async function presetQuestion($, goal) {
   })
 }
 
+// ---------------------------------------------------------------- the work list's search and filters
+
+// Narrows "Everything open" to the words (title, number, area or owner); '' shows everything.
+/** @param {Engine} $ @param {string} text */
+function setSearch($, text) {
+  pickQuery = text.trim()
+  $.ui.invalidate('ui.render')
+  return pickQuery ? `Searching for "${pickQuery}".` : 'Showing everything.'
+}
+
+/** @param {Engine} $ @param {number} days */
+function setAge($, days) {
+  pickDays = days
+  $.ui.invalidate('ui.render')
+}
+
+/** @param {Engine} $ @param {string} key */
+function foldGroup($, key) {
+  if (!pickFolded.delete(key)) pickFolded.add(key)
+  $.ui.invalidate('ui.render')
+}
+
+// Without a pane: what the search found, in a line.
+/** @param {Engine} $ */
+async function findText($) {
+  const found = filterWork((await home($)).work, { query: pickQuery, days: pickDays }, Date.now())
+  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(one => one.label).join(', ')}${found.length > 8 ? ', …' : ''}.`
+}
+
+// The pane has no text box: one question, and what is typed under Other is the search.
+/** @param {Engine} $ */
+async function searchQuestion($) {
+  return ask($, {
+    header: 'Search',
+    question: `Search everything open by title, issue number, area or owner. Type the words under Other.${pickQuery ? ` Searching for "${pickQuery}" now.` : ''}`,
+    choices: [{ label: 'Show everything', description: 'Clear the search.', run: async () => setSearch($, '') }],
+    fallback: pickQuery ? `Still searching for "${pickQuery}".` : 'Nothing searched.',
+    onTyped: async text => setSearch($, text),
+  })
+}
+
 // ---------------------------------------------------------------- the pane (terminal)
 
 /** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} mode */
@@ -945,15 +999,19 @@ const LIME = '#DDFF00'
 const QUIET = '#8E918A'
 // A notice that is not a fault: the Editor held, another session on the same intent.
 const AMBER = '#f2a516'
+// Each source of work has its colour, and each teammate theirs (set when the pane is drawn, from everyone in the list).
+const GROUP_COLOURS = { mine: LIME, issues: AMBER, others: '#3ccf7a' }
+/** @type {Record<string, string>} */
+let peopleColours = {}
 
 // The Ather mark: the A, its lime I, and the 5 raised as a power.
 const MARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100"><polygon points="6,98 40,14 60,14 94,98 76,98 50,36 24,98" fill="#C9CCCC"/><rect x="47.5" y="56" width="5" height="28" fill="#DDFF00"/><text x="86" y="40" font-family="Arial Black, Impact, sans-serif" font-weight="900" font-size="40" fill="#DDFF00">5</text></svg>'
 
 // A section label, spaced out as the studio's are ("N E E D S   Y O U"), plain when too wide.
-/** @param {any} el @param {string} key @param {string} text @param {number} width */
-function label(el, key, text, width) {
+/** @param {any} el @param {string} key @param {string} text @param {number} width @param {string} [colour] */
+function label(el, key, text, width, colour = LIME) {
   const spaced = text.toUpperCase().split('').join(' ')
-  return el.Text({ key, color: LIME, bold: true, children: spaced.length <= width ? spaced : fit(text.toUpperCase(), width) })
+  return el.Text({ key, color: colour, bold: true, children: spaced.length <= width ? spaced : fit(text.toUpperCase(), width) })
 }
 
 // On the desktop the pane is clicked, and its keys reach it only once it is clicked into (opened from
@@ -965,7 +1023,7 @@ const hotkeyFor = hotkey => (isClicked ? undefined : hotkey)
 // One choice: its key and what it does, then one quiet line of detail beneath.
 /**
  * @param {any} el
- * @param {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQuiet?: boolean, autoFocus?: boolean, aside?: string, lead?: string, mark?: string, marginTop?: number, width: number, onPress: () => void }} row
+ * @param {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQuiet?: boolean, autoFocus?: boolean, aside?: string, asideColor?: string, asideNear?: boolean, lead?: string, mark?: string, marginTop?: number, width: number, onPress: () => void }} row
  */
 function choice(el, row) {
   const title = `${row.isSent ? '✓ sent · ' : ''}${row.title}`
@@ -973,7 +1031,8 @@ function choice(el, row) {
   const aside = row.aside ? fit(row.aside, 24) : ''
   const button = el.Button({ key: row.key, label: fit(title, row.width - 3 - (aside ? aside.length + 2 : 0) - (row.mark ? 2 : 0)), hotkey: hotkeyFor(row.hotkey), plain: true, dimColor: row.isSent || row.isQuiet ? true : undefined, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress })
   const body = [
-    aside ? el.Box({ key: `${row.key}-line`, flexDirection: 'row', justifyContent: 'space-between', gap: 2, width: '100%', children: [el.Box({ key: `${row.key}-main`, flexGrow: 1, flexShrink: 1, children: [button] }), el.Text({ key: `${row.key}-aside`, color: QUIET, children: aside })] }) : button,
+    // The aside is a right-hand column; `asideNear` puts it right after the title instead, in its own colour.
+    aside ? el.Box({ key: `${row.key}-line`, flexDirection: 'row', ...(row.asideNear ? {} : { justifyContent: 'space-between', width: '100%' }), gap: 2, children: [el.Box({ key: `${row.key}-main`, ...(row.asideNear ? {} : { flexGrow: 1 }), flexShrink: 1, children: [button] }), el.Text({ key: `${row.key}-aside`, color: row.asideColor ?? QUIET, children: aside })] }) : button,
     // The whole name, wrapped, where a button's one line would cut it (the desktop).
     ...(row.lead ? [el.Box({ key: `${row.key}-lead`, paddingLeft: isClicked ? 1 : 3, children: [el.Text({ wrap: 'wrap', children: row.lead })] })] : []),
     // The desktop wraps the detail whole; the terminal keeps it to three lines.
@@ -1068,7 +1127,7 @@ const workTitle = one => (one.kind === 'intent' ? one.slug : one.label)
 const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug} · `, '') : one.hint)
 // A teammate's intent: their name moves out of the detail into the right-hand column.
 /** @param {Work} one @returns {{ detail: string, aside?: string }} */
-const asideOf = one => (one.kind === 'intent' && !one.isMine && one.owner ? { detail: workDetail(one).replace(` · ${one.owner}`, ''), aside: one.owner } : { detail: workDetail(one) })
+const asideOf = one => (one.kind === 'intent' && !one.isMine && one.owner ? { detail: workDetail(one).replace(` · ${one.owner}`, ''), aside: one.owner, asideNear: true, asideColor: dimColour(peopleColours[one.owner] ?? QUIET, 0.3) } : { detail: workDetail(one) })
 // A work row's text. On the desktop an issue's button says its number and its whole title wraps beneath.
 /** @param {Work} one */
 const workRowProps = one => ({ title: one.kind === 'issue' && isClicked ? `#${one.issue.number}` : workTitle(one), ...(one.kind === 'issue' && isClicked ? { lead: one.issue.name } : {}), ...asideOf(one) })
@@ -1230,6 +1289,7 @@ function metaRow(el, header) {
 
 /** @param {any} el @param {Engine} $ @param {Home} model @param {number} columns @param {string} [surface] @param {Crew[]} [crew] */
 function paneView(el, $, model, columns, surface, crew = []) {
+  peopleColours = personColours(model.work.flatMap(one => (one.kind === 'intent' && !one.isMine && one.owner ? [one.owner] : [])))
   const { Box, Text, Button } = el
   isClicked = surface === 'desktop'
   const width = isClicked ? 1000 : Math.max(30, columns - 4)
@@ -1238,22 +1298,58 @@ function paneView(el, $, model, columns, surface, crew = []) {
   const foot = isClicked ? [] : [section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Enter chooses · Esc closes' })])]
 
   if (paneMode === 'pick') {
-    rows.push(masthead(el, [label(el, 'brand', 'Ather Automata', width), Text({ key: 'title', bold: true, children: 'Everything open' }), Text({ key: 'status', color: QUIET, children: 'Yours first' })], surface))
-    /** @type {Map<string, Work[]>} */
-    const groups = new Map()
-    for (const one of model.work) {
-      const group = one.kind === 'issue' ? 'Your GitHub issues' : one.area
-      groups.set(group, [...(groups.get(group) ?? []), one])
-    }
+    const now = Date.now()
+    const shown = filterWork(model.work, { query: pickQuery, days: pickDays }, now)
+    const isFiltering = pickQuery !== '' || pickDays > 0
+    rows.push(masthead(el, [label(el, 'brand', 'Ather Automata', width), Text({ key: 'title', bold: true, children: 'Everything open' }), Text({ key: 'status', color: QUIET, children: isFiltering ? `${shown.length} of ${model.work.length}` : 'Yours first' })], surface))
+    // The search and the age filter: the pane has no text box, so Search asks one question and takes the words typed under Other.
+    const search = Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: press($, () => searchQuestion($), true) })
+    const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
+    rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', gap: 3, marginTop: 1, children: [search, ...clear] }))
+    rows.push(
+      Box({
+        key: 'pick-ranges',
+        flexDirection: 'row',
+        gap: 2,
+        children: AGE_RANGES.map(days =>
+          Button({ key: `pick-range-${days}`, label: `${pickDays === days ? '●' : '○'} ${days === 0 ? 'Any time' : `${days} days`}`, plain: true, dimColor: pickDays === days ? undefined : true, onPress: () => setAge($, days) }),
+        ),
+      }),
+    )
     let index = 0
-    for (const group of [...new Set(['Your GitHub issues', ...pack.areas, 'Unsorted', ...groups.keys()])].filter(name => groups.has(name))) {
-      const list = (groups.get(group) ?? []).map(one => {
-        index += 1
-        return choice(el, { key: `pick-${one.id}`, ...workRowProps(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : viewIntent($, one.slug, 'pick') })
+    for (const group of WORK_GROUPS) {
+      const list = shown.filter(one => workGroup(one) === group.key)
+      const hasNone = group.key === 'issues' && !model.work.some(one => one.kind === 'issue')
+      if (list.length === 0 && !(hasNone && !isFiltering)) continue
+      const colour = GROUP_COLOURS[group.key]
+      const isFolded = pickFolded.has(group.key)
+      // Without a name to compare, nobody's work is called a teammate's.
+      const title = group.key === 'others' && !me ? 'Open intents' : group.title
+      const head = Box({
+        key: `group-${group.key}-head`,
+        flexDirection: 'row',
+        gap: 1,
+        marginTop: 1,
+        children: [
+          Button({ key: `group-${group.key}-fold`, label: isFolded ? '▸' : '▾', plain: true, onPress: () => foldGroup($, group.key) }),
+          label(el, `group-${group.key}-label`, `${title} · ${list.length}`, width, colour),
+        ],
       })
-      rows.push(section(el, `group-${group}`, [label(el, `group-${group}-label`, group, width), ...list, ...(group === 'Your GitHub issues' ? [refreshIssuesButton(el, $)] : [])]))
+      const body = isFolded
+        ? []
+        : list.map(one => {
+            index += 1
+            return choice(el, { key: `pick-${one.id}`, ...workRowProps(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : viewIntent($, one.slug, 'pick') })
+          })
+      rows.push(
+        Box({
+          key: `group-${group.key}`,
+          flexDirection: 'column',
+          children: [head, ...body, ...(group.key === 'issues' && !isFolded ? [...(hasNone ? [Text({ key: 'issues-none', color: QUIET, children: 'None assigned to you right now.' })] : []), refreshIssuesButton(el, $)] : [])],
+        }),
+      )
     }
-    if (!groups.has('Your GitHub issues')) rows.push(section(el, 'group-issues-none', [label(el, 'group-issues-none-label', 'Your GitHub issues', width), Text({ key: 'issues-none', color: QUIET, children: 'None assigned to you right now.' }), refreshIssuesButton(el, $)]))
+    if (shown.length === 0 && isFiltering) rows.push(section(el, 'pick-empty', [Text({ key: 'pick-empty-text', color: QUIET, children: 'Nothing matches.' })]))
     rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }

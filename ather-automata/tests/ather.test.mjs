@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, weekText, workList } from '../hooks/home.mjs'
+import { AGE_RANGES, PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
@@ -870,5 +870,66 @@ describe('worker clocks and kinds (0.1.1)', () => {
     expect(crewWords({ ...base, origin: 'unknown', elapsed: null })).toEqual({ doing: 'working', line: 'running · start unknown' })
     expect(crewWords({ ...base, state: 'done', origin: 'seen', elapsed: 1280000, tools: 1 })).toEqual({ doing: 'finished', line: 'took 21:20 · 1 tool call' })
     expect(crewWords({ ...base, state: 'done', origin: 'adopted', elapsed: null })).toEqual({ doing: 'finished', line: '' })
+  })
+})
+
+describe('the work list: sources, search, age and people', () => {
+  const DAY = 86400000
+  /** @param {string} slug @param {Record<string, unknown>} [over] */
+  const work = (slug, over = {}) => /** @type {any} */ ({ id: `intent:${slug}`, kind: 'intent', slug, label: slug, hint: `${slug} · Tools · 2/4`, isMine: false, area: 'Tools', owner: 'Hai Huynh', updatedAt: NOON - DAY, ...over })
+  const issue = (/** @type {number} */ number, /** @type {string} */ title, over = {}) => /** @type {any} */ ({ id: `issue:${number}`, kind: 'issue', label: `#${number} ${title}`, hint: 'Combat · 5 days ago', isMine: true, area: 'Combat', updatedAt: NOON - 5 * DAY, issue: { number, title: `Task_${title}`, updatedAt: NOON - 5 * DAY }, ...over })
+
+  test('where each item comes from: your intents, your issues, a teammate\'s intents', () => {
+    expect(workGroup(work('a', { isMine: true }))).toBe('mine')
+    expect(workGroup(issue(1, 'x'))).toBe('issues')
+    expect(workGroup(work('b'))).toBe('others')
+    expect(WORK_GROUPS.map(group => group.key)).toEqual(['mine', 'issues', 'others'])
+  })
+
+  test('every word must match: title, detail, an issue\'s own title, or an intent\'s owner', () => {
+    const all = [work('quest-debug-panel', { owner: 'Tin Nguyen' }), work('lead-vfx', { owner: 'TienDang-VFX' }), issue(28459, 'SmartObject_ContextPreview')]
+    const ids = (/** @type {string} */ query) => filterWork(all, { query }, NOON).map(one => one.id)
+    expect(ids('')).toHaveLength(3)
+    expect(ids('quest panel')).toEqual(['intent:quest-debug-panel'])
+    expect(ids('tin')).toEqual(['intent:quest-debug-panel'])
+    expect(ids('#28459')).toEqual(['issue:28459'])
+    expect(ids('smartobject preview')).toEqual(['issue:28459'])
+    expect(ids('QUEST nothing')).toEqual([])
+  })
+
+  test('the age filter keeps what changed within the days, and what has no date', () => {
+    const all = [work('fresh', { updatedAt: NOON - 2 * DAY }), work('month', { updatedAt: NOON - 20 * DAY }), work('old', { updatedAt: NOON - 60 * DAY }), work('undated', { updatedAt: 0 })]
+    const within = (/** @type {number} */ days) => filterWork(all, { days }, NOON).map(one => one.slug)
+    expect(AGE_RANGES).toEqual([0, 7, 30, 90])
+    expect(within(0)).toEqual(['fresh', 'month', 'old', 'undated'])
+    expect(within(7)).toEqual(['fresh', 'undated'])
+    expect(within(30)).toEqual(['fresh', 'month', 'undated'])
+    expect(within(90)).toEqual(['fresh', 'month', 'old', 'undated'])
+    // The words and the age both apply; an undated item that matches the words stays.
+    expect(filterWork(all, { query: 'month', days: 7 }, NOON)).toEqual([])
+    expect(filterWork(all, { query: 'month', days: 30 }, NOON).map(one => one.slug)).toEqual(['month'])
+    expect(filterWork(all, { query: 'undated', days: 7 }, NOON).map(one => one.slug)).toEqual(['undated'])
+  })
+
+  test('work carries when it last changed: an intent\'s files, an issue\'s update', () => {
+    const list = workList([intent('mine', { Owner: 'Tin Nguyen' }, { mtimeMs: 1234 })], [{ number: 7, title: 'x', name: 'X', url: '', labels: [], updatedAt: 5678, area: 'Unsorted', isUrgent: false }], 'Tin Nguyen', '', NOON)
+    expect(list.map(one => one.updatedAt)).toEqual([1234, 5678])
+  })
+
+  test('each person gets one colour, never shared on screen, the same however the list is ordered', () => {
+    const names = ['Tin Nguyen', 'TienDang-VFX', 'HaiHuynhTA', 'TienDang', 'ThangtrinhGEatherlabs', 'Duy Tran', 'quest-bot']
+    const colours = personColours(names)
+    expect(Object.keys(colours).sort()).toEqual([...names].sort())
+    expect(new Set(Object.values(colours)).size).toBe(names.length)
+    expect(personColours([...names].reverse())).toEqual(colours)
+    expect(personColours(['Tin Nguyen', 'Tin Nguyen'])['Tin Nguyen']).toMatch(/^#[0-9a-f]{6}$/)
+    expect(PEOPLE_COLOURS).toHaveLength(8)
+  })
+
+  test('a colour dimmed by 30% moves 30% of the way to the page it sits on', () => {
+    expect(dimColour('#ffffff', 0.3, '#000000')).toBe('#b3b3b3')
+    expect(dimColour('#000000', 0.3, '#ffffff')).toBe('#4d4d4d')
+    expect(dimColour('#7aa2ff', 0, '#1a1b1e')).toBe('#7aa2ff')
+    expect(dimColour('#7aa2ff', 1, '#1a1b1e')).toBe('#1a1b1e')
   })
 })

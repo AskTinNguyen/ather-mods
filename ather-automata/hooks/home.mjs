@@ -77,8 +77,8 @@ export const batchPrompt = items => `Take me through these one at a time, with a
 /**
  * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked' }} Next
  * Something to work on: an open intent to track, or an assigned GitHub issue to start an intent from.
- * @typedef {{ id: string, kind: 'intent', slug: string, label: string, hint: string, isMine: boolean, area: string, owner: string }
- *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, label: string, hint: string, prompt: string, isMine: true, area: string }} Work
+ * @typedef {{ id: string, kind: 'intent', slug: string, label: string, hint: string, isMine: boolean, area: string, owner: string, updatedAt: number }
+ *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, label: string, hint: string, prompt: string, isMine: true, area: string, updatedAt: number }} Work
  * @typedef {{
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
@@ -120,12 +120,67 @@ export const workList = (intents, issues, me, area, now, role = 'set', prs = {},
   const linked = new Set(intents.map(one => one.issue).filter(Boolean))
   const ranked = pickCandidates(intents, me, area)
   /** @param {Intent} one @returns {Work} */
-  const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area, owner: one.owner })
+  const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area, owner: one.owner, updatedAt: one.mtimeMs })
   return [
     ...ranked.filter(one => isMine(one, me)).map(toIntent),
-    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area }))),
+    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area, updatedAt: issue.updatedAt }))),
     ...ranked.filter(one => !isMine(one, me)).map(toIntent),
   ]
+}
+
+// ---------------------------------------------------------------- the work list: sources, search, age, people
+
+// Where each piece of work comes from, in the order the list shows them. `key` is workGroup's answer.
+export const WORK_GROUPS = /** @type {const} */ ([
+  { key: 'mine', title: 'Your intents' },
+  { key: 'issues', title: 'Assigned issues' },
+  { key: 'others', title: "Teammates' intents" },
+])
+
+// The age filter's choices: 0 is any time, the rest are days since an item last changed.
+export const AGE_RANGES = [0, 7, 30, 90]
+
+/** @param {Work} one @returns {'mine' | 'issues' | 'others'} */
+export const workGroup = one => (one.kind === 'issue' ? 'issues' : one.isMine ? 'mine' : 'others')
+
+// The work that matches every word of `query` (in its title, detail, an issue's own title or an intent's
+// owner) and changed within `days`. An item with no known date is kept: nobody knows it is old.
+/** @param {readonly Work[]} work @param {{ query?: string, days?: number }} filter @param {number} now */
+export const filterWork = (work, { query = '', days = 0 }, now) => {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return work.filter(one => {
+    const text = `${one.label} ${one.hint} ${one.kind === 'issue' ? one.issue.title : one.owner}`.toLowerCase()
+    if (!words.every(word => text.includes(word))) return false
+    return days === 0 || !one.updatedAt || now - one.updatedAt <= days * 86400000
+  })
+}
+
+// Eight colours that read on the pane's dark page: one per person, so a name is always the same colour.
+export const PEOPLE_COLOURS = ['#7aa2ff', '#ff8f6b', '#4fd1a5', '#d68cff', '#ffd166', '#5fd0e8', '#ff7eb6', '#a3d977']
+
+// A colour for each of these people: it starts at the hash of the name and steps on to the next free
+// colour when someone in the list already has it, so no two of them share one (up to eight).
+/** @param {readonly string[]} names @returns {Record<string, string>} */
+export const personColours = names => {
+  const taken = new Set()
+  /** @type {Record<string, string>} */
+  const out = {}
+  for (const name of [...new Set(names)].sort()) {
+    let hash = 0
+    for (const char of name.trim().toLowerCase()) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+    let at = hash % PEOPLE_COLOURS.length
+    for (let tries = 0; tries < PEOPLE_COLOURS.length && taken.has(at); tries += 1) at = (at + 1) % PEOPLE_COLOURS.length
+    taken.add(at)
+    out[name] = PEOPLE_COLOURS[at] ?? '#7aa2ff'
+  }
+  return out
+}
+
+// A colour dimmed by `amount` (0.3: 30%), blended toward the page it sits on: a terminal has no opacity.
+/** @param {string} hex '#rrggbb' @param {number} amount @param {string} [backdrop] */
+export const dimColour = (hex, amount, backdrop = '#1a1b1e') => {
+  const part = (/** @type {string} */ colour, /** @type {number} */ at) => parseInt(colour.slice(1 + at * 2, 3 + at * 2), 16)
+  return `#${[0, 1, 2].map(at => Math.round(part(hex, at) * (1 - amount) + part(backdrop, at) * amount).toString(16).padStart(2, '0')).join('')}`
 }
 
 /** @param {HomeInput} input */
