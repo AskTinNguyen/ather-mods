@@ -181,7 +181,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     // Since 0.8 (A26) the overview is a named list (one row per session) instead of one line; the same facts.
     expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 in S2 · 1 elsewhere')
     expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('●3️⃣ Loco fix (this session)no intent · active now')
-    expect(text(find(tree, 'hai-session-bbbbbbbb'))).toBe('●bbbbbbbbtail-vfx · Editor until 15:10 · seen now')
+    expect(text(find(tree, 'hai-session-bbbbbbbb'))).toBe('●bbbbbbbbEditor →15:10tail-vfx · seen now') // A29: holds beside the title, one line
     expect(text(find(tree, 'hai-session-dddddddd'))).toBe('●ddddddddloco · seen nowno a5')
   })
 }
