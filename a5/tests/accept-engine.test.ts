@@ -1,0 +1,78 @@
+import { expect, test } from 'claude-code/testing'
+import { PROJ, opts, refused, world, type Rec } from './world.ts'
+
+// A18 through the engine: the PR-opening call is scored over the branch; a failing score refuses it with the
+// list, Hai may let one PR through, a worker is refused; an intent's close is scored the same way.
+const STATUS_TOOL = 'mcp__ather-automata__status'
+const INTENT = `${PROJ}/docs/intent/tail-vfx`
+const PROMPT = ['# Tail VFX', '- Rev: 2', '- Status: active', 'Change `Source/S2/Tail/` only.', '## Acceptance', '- A1: the tail glows. Proof: PIE.', '- A2 (rev 2): the trail fades. Proof: PIE.'].join('\n')
+const MET = ['| Item | Verdict | Evidence |', '| --- | --- | --- |', '| A1 | met | PIE: glow visible |', '| A2 | met | PIE: fade 0.4 s |'].join('\n')
+const status = (evidence: Rec) => JSON.stringify({ me: 'hai', role: 'techart', tracked: { slug: 'tail-vfx', directorCalls: [] }, evidence })
+const PROVEN = { pie: { state: 'pass' }, editor: { state: 'pass' } }
+const DIFF = '+++ b/Source/S2/Tail/Glow.cpp\n+float Glow = 1.f;\n'
+const branch = (files: string, diff = DIFF) => ({
+  'diff --name-only': { stdout: files },
+  'diff -U0': { stdout: diff },
+  'worktree list': { stdout: `worktree ${PROJ}\nbranch refs/heads/HaiHuynh/tail-vfx\n` },
+  'rev-parse --abbrev-ref HEAD': { stdout: 'HaiHuynh/tail-vfx\n' },
+})
+const PR = 'gh pr create --title "Tail glow" --body "## Verified\\nPIE ✓, Editor check ✓"'
+const setup = (w: ReturnType<typeof world>, progress = MET) => {
+  w.put(`${INTENT}/prompt.md`, PROMPT)
+  w.put(`${INTENT}/progress.md`, progress)
+  w.put(`${INTENT}/findings.md`, '# Findings\n')
+}
+const ran = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'Bash' && String(e.command).startsWith('gh pr create')).length
+
+test('A18: a PR whose branch fails the score is refused with the list (rule, file, what to do); the gh call never runs', opts(), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status({ pie: { state: 'pass' }, editor: { state: 'none' } }) }, git: branch('Source/S2/Tail/Glow.cpp\nSource/S2/Combat/Hit.cpp\n', `${DIFF}+++ b/Source/S2/Combat/Hit.cpp\n+int x = 2; // A5TMP\n`) })
+  setup(w, MET.replace('| A2 | met | PIE: fade 0.4 s |', '| A2 | open | |'))
+  const why = refused(await $.tool.call({ tool: 'Bash', command: PR }))
+  expect(why?.split('\n')[0]).toBe('A5 · Nghiệm thu — 4 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
+  expect(why).toContain('- 2 Học tập tốt, lao động tốt: docs/intent/tail-vfx/progress.md: A2 is open → prove it, or record in findings.md why this PR ships without it')
+  expect(why).toContain("- 2 Học tập tốt, lao động tốt: Ather's proof is incomplete for the role techart: still needs Editor check")
+  expect(why).toContain('- 3 Đoàn kết tốt, kỷ luật tốt: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
+  expect(why).toContain('- 4 Giữ gìn vệ sinh thật tốt: Source/S2/Combat/Hit.cpp: a debug leftover')
+  expect(why).toContain('- 5 Khiêm tốn, thật thà, dũng cảm: PR body: \'Verified\' claims Editor check')
+  expect(ran(w)).toBe(0)
+})
+
+test('A18: a clean branch passes and the PR opens; the score is never a per-turn check', opts(), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Tail/Glow.cpp\ndocs/intent/tail-vfx/progress.md\n') })
+  setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect(ran(w)).toBe(1)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'gh pr view 12' }))).toBeUndefined()
+  expect(w.runs.filter(r => r.includes('diff --name-only')).length).toBe(1) // only the PR call was scored
+  expect(w.runs.some(r => /\bstatus\b(?! --porcelain --untracked-files=all --)/.test(r) && r.startsWith('git'))).toBe(false) // never a whole-tree status
+})
+
+test('A18: Hai can let one PR through in the dialog; the next PR is scored and asked again', opts('ask'), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Cho PR này qua' })
+  setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([2, 2])
+})
+
+test('A18: a worker opening a failing PR is refused at once, never asked', opts('ask'), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Cho PR này qua' })
+  setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR, agentId: 'worker-1' } as never))).toContain('a worker does not ask Hai')
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 0])
+})
+
+test('A18: closing an intent is scored the same way; /a5 accept shows the score on demand', opts(), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Tail/Glow.cpp\n') })
+  setup(w, MET.replace('| A2 | met | PIE: fade 0.4 s |', '| A2 | open | |'))
+  expect(refused(await $.tool.call({ tool: 'Edit', file_path: `${INTENT}/prompt.md`, old_string: '- Status: active', new_string: '- Status: closed' }))).toContain('A5 · Nghiệm thu — 1 of 5 rules not met before closing intent tail-vfx')
+  const shown = String((await $.command.run({ command: 'a5', args: 'accept' } as never)).text)
+  expect(shown.split('\n')).toEqual([
+    'Nghiệm thu A5 (1 of 5 not met):',
+    '✓ 1 Yêu Project, yêu đồng bào: no other session\'s or intent\'s paths; not on main',
+    '✗ 2 Học tập tốt, lao động tốt: docs/intent/tail-vfx/progress.md: A2 is open',
+    '✓ 3 Đoàn kết tốt, kỷ luật tốt: within the intent\'s paths',
+    '✓ 4 Giữ gìn vệ sinh thật tốt: no leftovers, secrets, stray files or background work',
+    '✓ 5 Khiêm tốn, thật thà, dũng cảm: claims match the evidence',
+  ])
+})

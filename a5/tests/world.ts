@@ -35,7 +35,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number }>, store = {} as Record<string, unknown> } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -118,6 +118,12 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   })
   on('classic.Stop', async () => ({}))
   on('tool.call', async (_$: unknown, e: Rec) => {
+    // The dialog (`$.ui.ask` → AskUserQuestion): Hai picks `ask` when the test gives one.
+    if (e.tool === 'AskUserQuestion' && ask !== undefined) {
+      ;(calls.ask ??= []).push(e)
+      const q = String(((e.questions as Rec[] | undefined) ?? [])[0]?.question ?? '')
+      return { result: { questions: e.questions, answers: { [q]: ask } }, text: ask }
+    }
     seen.push(e)
     const t = out[String(e.command ?? e.tool)] ?? (e.tool === 'mcp__ccd_session_mgmt__get_session' ? '{"title":"3️⃣ Loco fix"}' : 'ok')
     return { result: { stdout: t, stderr: '', interrupted: false }, text: t }

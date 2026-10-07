@@ -226,6 +226,15 @@ const RUNGS: readonly [string, RegExp, string][] = [
 const REQUIRED: Record<string, string[]> = { techart: ['editor', 'pie'], engineer: ['build', 'automation'], designer: ['pie'] }
 const wordOf = (rung: string): string => RUNGS.find(r => r[0] === rung)?.[2] ?? rung
 
+/** What Ather's proof still lacks for the role (its isProven), or null once it is complete. */
+export const proofGap = (proof: Proof): string | null => {
+  const state = (k: string) => proof.evidence[k]?.state ?? 'none'
+  const required = REQUIRED[proof.role] ?? []
+  const missing = required.filter(k => state(k) !== 'pass')
+  const proven = required.length ? missing.length === 0 : state('pie') === 'pass' || (state('build') === 'pass' && state('automation') === 'pass')
+  return proven ? null : required.length ? missing.map(wordOf).join(' and ') : 'PIE, or build and tests'
+}
+
 /** A Verified line held to Ather's proof: claim only what Ather read pass, say FAILED for a failed rung,
  * and say "chưa: …" while the role's proof is incomplete (not a block in itself: Ather's Next asks to prove). */
 export const proofProblems = (proof: Proof, verified: string): string[] => {

@@ -1,5 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5, gitTargets, newLines, norm, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
+import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
+import { acceptText, closesIntent, failed, isPrCommand, namedPaths, ruleName, score, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -108,6 +109,7 @@ let decision: GrantDecision | null = null
 const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run this holder has started
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
+let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string } | null = null // A18/A19: the last nghiệm thu
 const CLIENTS_EVERY_MS = 5 * 60_000 // A16: the client's session list is read at most this often
 let clients: ClientRow[] | null = null // A16: null when the client's list tool is missing or refused
 let clientsAt = 0
@@ -1027,6 +1029,145 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
   push({ id: noticeIds.withoutMod(s, targets.map(t => t.id8)), text: NOTICES.holderWithoutMod(s, rows), isActionable: false })
 }
 
+// ---------- Nghiệm thu A5 (A18): the five rules over the branch, before a PR and when an intent closes ----------
+const PASS_ONCE = 'Cho PR này qua'
+
+/** The added lines per file of `git diff -U0`. */
+const addedLines = (diff: string): Map<string, string[]> => {
+  const out = new Map<string, string[]>()
+  let file = ''
+  for (const l of diff.replace(/\r/g, '').split('\n')) {
+    if (l.startsWith('+++ ')) file = l.replace(/^\+\+\+ (b\/)?/, '').trim()
+    else if (l.startsWith('+') && file && file !== '/dev/null') out.set(file, [...(out.get(file) ?? []), l.slice(1)])
+  }
+  return out
+}
+
+/** The PR body a `gh pr create` / `gh api …/pulls` command carries (inline, or the file it names). */
+async function prBody($: Engine, command: string, dir: string): Promise<string> {
+  const toks = tokenize(command)
+  for (let i = 0; i < toks.length; i += 1) {
+    const t = toks[i] ?? ''
+    const next = toks[i + 1] ?? ''
+    if (t === '--body' || t === '-b') return next.replace(/\\n/g, '\n')
+    if (t.startsWith('--body=')) return t.slice(7).replace(/\\n/g, '\n')
+    if (t === '--body-file' || (t === '-F' && !next.includes('='))) return $.fs.read(norm(next, dir)).catch(() => '')
+    if ((t === '-f' || t === '--raw-field' || t === '--field') && next.startsWith('body=')) return next.slice(5).replace(/\\n/g, '\n')
+    if (t === '-F' && next.startsWith('body=@')) return $.fs.read(norm(next.slice(6), dir)).catch(() => '')
+  }
+  return ''
+}
+
+/** A18: everything the score reads, cheap and path-scoped: the branch diff against main (names and added lines),
+ * the intent's four files, Ather's proof, the other sessions' touch files and active intents, this session's
+ * untracked files in the shared checkout, worktrees on the same branch, running background agents. */
+async function gatherAccept($: Engine, opts: Opts, a5: A5, root: string, slugHint: string | null, body: string, agentId: string | undefined): Promise<AcceptInput> {
+  const git = async (args: string[]): Promise<string> => {
+    const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
+    return r && r.exitCode === 0 ? r.stdout : ''
+  }
+  const base = (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'main'], { timeoutMs: 15_000 }).catch(() => null))?.exitCode === 0 ? 'main' : 'origin/main'
+  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  const files = (await git(['diff', '--name-only', `${base}...HEAD`])).split(/\r?\n/).map(f => f.trim()).filter(Boolean)
+  const added = addedLines(await git(['diff', '-U0', '--no-color', `${base}...HEAD`]))
+  const status = await atherStatus($)
+  const fromDiff = [...new Set(files.map(f => /^docs\/intent\/([^/]+)\//.exec(f)?.[1]).filter((s): s is string => Boolean(s)))]
+  const slug = slugHint ?? status?.tracked?.slug ?? (fromDiff.length === 1 ? (fromDiff[0] ?? null) : null)
+  const read = (rel: string) => $.fs.read(`${root}/${rel}`).catch(() => '')
+  const [prompt, progress, findings] = slug ? await Promise.all([read(`docs/intent/${slug}/prompt.md`), read(`docs/intent/${slug}/progress.md`), read(`docs/intent/${slug}/findings.md`)]) : ['', '', '']
+  const otherIntents: { slug: string; names: string[] }[] = []
+  for (const d of await $.fs.list(`${root}/docs/intent`).catch(() => [])) {
+    if (d.name === slug || d.kind === 'file') continue
+    const p = await read(`docs/intent/${d.name}/prompt.md`)
+    if (/^-\s*Status:\s*active\b/im.test(p)) otherIntents.push({ slug: d.name, names: namedPaths(p, d.name).filter(n => n !== `docs/intent/${d.name}/`) })
+  }
+  const now = await $.clock.now()
+  const isS2Repo = isS2 && (sameRoot(root, s2Root(opts)) || (await $.fs.exists(`${root}/S2.uproject`)))
+  const othersTouch = isS2Repo ? touches.filter(t => isLive(t.id8, now)).map(t => ({ lane: t.lane, paths: t.paths })) : []
+  const mine = [...touched].slice(0, 100)
+  const untrackedLeft = isS2Repo && mine.length
+    ? ((await $.process.run(['git', '-C', s2Root(opts), 'status', '--porcelain', '--untracked-files=all', '--', ...mine], { timeoutMs: 30_000 }).catch(() => null))?.stdout ?? '').split(/\r?\n/).filter(l => l.startsWith('?? ')).map(l => l.slice(3).trim())
+    : []
+  const strayWorktrees: string[] = []
+  let wt = ''
+  for (const l of (await git(['worktree', 'list', '--porcelain'])).split(/\r?\n/)) {
+    if (l.startsWith('worktree ')) wt = l.slice(9).trim()
+    else if (l === `branch refs/heads/${branch}` && wt && !sameRoot(wt, root)) strayWorktrees.push(wt)
+  }
+  const runningAgents = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running' && a.type !== SYNC_AGENT && a.id !== agentId).map(a => `${a.type}: ${a.description}`)
+  return {
+    slug,
+    branch,
+    files,
+    added,
+    prompt,
+    progress,
+    findings,
+    promptDiff: slug ? await git(['diff', `${base}...HEAD`, '--', `docs/intent/${slug}/prompt.md`]) : '',
+    proof: status?.tracked?.slug === slug ? proofOf(status) : null,
+    body,
+    othersTouch,
+    otherIntents,
+    untrackedLeft,
+    strayWorktrees,
+    runningAgents,
+    cfg: a5.cfg,
+  }
+}
+
+/** A18: the score at the PR-opening call (main loop or worker) or at an intent's close; a failing score refuses it
+ * with the list, Hai may let this one through in the dialog, a worker is never asked. */
+async function acceptGate($: Engine, opts: Opts, a5: A5, tool: string, input: Input, agentId: string | undefined): Promise<string | null> {
+  let root: string | null = null
+  let slug: string | null = null
+  let body = ''
+  let what = 'this PR'
+  const cwd = await $.session.cwd()
+  if (SHELL_TOOLS.has(tool) && isPrCommand(str(input.command))) {
+    const command = str(input.command)
+    const cdDir = /^\s*cd\s+("[^"]+"|'[^']+'|\S+)\s*&&/.exec(command)?.[1]?.replace(/^["']|["']$/g, '')
+    const dir = norm(cdDir ?? cwd, cwd)
+    root = (await locate($, a5, `${dir}/_`)).root
+    body = await prBody($, command, dir)
+  } else if (EDIT_TOOLS.has(tool)) {
+    for (const [path, old, neu] of await editParts($, tool, input)) {
+      const closing = closesIntent(norm(path, cwd), newLines(old, neu))
+      if (closing) {
+        slug = closing
+        root = (await locate($, a5, path)).root
+        what = `closing intent ${closing}`
+      }
+    }
+  }
+  if (!root) return null
+  const scores = score(await gatherAccept($, opts, a5, root, slug, body, agentId))
+  lastAccept = { at: await $.clock.now(), slug: slug ?? null, scores, what }
+  $.ui.invalidate('ui.render')
+  const bad = failed(scores)
+  if (bad.length === 0) return null
+  const text = acceptText(scores, what)
+  if (agentId !== undefined) return `${text}\n(a worker does not ask Hai: leave it undone, stop and report it to the session that briefed you)`
+  if (opts.a5WhenPresent === 'deny') return text
+  try {
+    const answer = await $.ui.ask(`Nghiệm thu A5: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Cho qua lần này?`, { options: [PASS_ONCE, 'Không'], header: 'Nghiệm thu A5' })
+    return answer === PASS_ONCE ? null : `${text}\n(Hai said no)`
+  } catch {
+    return `${text}\n(nobody could approve it now)`
+  }
+}
+
+/** /a5 accept: the score on demand for the repository this session works in (no PR body). */
+async function acceptCommand($: Engine, opts: Opts): Promise<string> {
+  const a5 = await load($)
+  const cwd = await $.session.cwd()
+  const root = (await locate($, a5, `${cwd}/_`)).root
+  if (!root) return 'Nghiệm thu A5: this session is not in a git repository.'
+  const scores = score(await gatherAccept($, opts, a5, root, null, '', undefined))
+  lastAccept = { at: await $.clock.now(), slug: null, scores, what: 'on demand' }
+  $.ui.invalidate('ui.render')
+  return [`Nghiệm thu A5 (${failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
+}
+
 /** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */
 async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
   const s = parseSyncFile(await readJson($, syncPath(opts)))
@@ -1475,6 +1616,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'a5' }, async ($, e) => {
     if (/^sync\b/i.test(e.args.trim())) return { text: await syncCommand($, opts, e.args.trim().slice(4)) }
+    if (/^accept\b/i.test(e.args.trim())) return { text: await acceptCommand($, opts) }
     const arg = e.args.trim().toLowerCase()
     if (arg === 'on' || arg === 'off') {
       await $.store.set('a5', { on: arg === 'on' })
@@ -1522,6 +1664,9 @@ export const register: Register = (on, options) => {
     if (editor) return { deny: blocked('Editor lock', editor.split(' → ')[0] ?? editor, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
     const coord = isOn ? await coordProblem($, opts, tool, input) : null
     if (coord) return { deny: coord }
+    // A18: nghiệm thu A5 on the PR-opening call and on an intent close (D10: at acceptance, never per turn).
+    const accepted = isOn ? await acceptGate($, opts, a5, tool, input, e.agentId) : null
+    if (accepted) return { deny: accepted }
 
     let d: Decision | null = null
     let what = ''
