@@ -197,7 +197,9 @@ export const minWidth = (node: unknown, wraps = false): number => {
   if (t.type === 'Button') return [...String(p.label ?? '')].length + (p.plain ? 0 : 4)
   if (t.type === 'Svg') return Math.ceil(Number(p.width ?? 16) / 8)
   if (t.type === 'Client') return 11
-  const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0)
+  // A35: a box that clips (overflow hidden: a hairline) needs no width of its own; margins add like padding.
+  if (p.overflow === 'hidden') return Number(p.marginX ?? 0) * 2
+  const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0) + Number(p.marginX ?? 0) * 2 + Number(p.marginLeft ?? 0) + Number(p.marginRight ?? 0)
   const widths = kids.map(c => minWidth(c))
   if (p.flexDirection === 'column' || p.flexWrap === 'wrap') return pad + Math.max(0, ...widths)
   const gap = Number(p.columnGap ?? p.gap ?? 0)

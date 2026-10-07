@@ -28,21 +28,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
     for (const want of ['walker', 'until 15:10 · 30 min left', 'you: next']) expect(editor).toContain(want)
     // Memory: free RAM against the launch gate and the PIE gate; no buttons (A25).
     const memory = text(find(tree, 'hai-tile-memory'))
-    for (const want of ['28.5 GB free', 'a launch fits without PIE', 'PIE ≥ 5 GB ok', surface === 'desktop' ? 'launch ≥ 31 GB with PIE · 28 GB without' : 'gate 31/28 GB']) expect(memory).toContain(want)
+    // A35: "<n> GB free · <note>" with the gates in the sub-line.
+    for (const want of ['28.5 GB free · launch fits without PIE', 'gate 31 GB with PIE, 28 without · PIE needs 5 GB']) expect(memory).toContain(want)
     expect(find(tree, 'hai-tile-memory-action')).toBeUndefined()
     // Sync main: branch behind/ahead, no sync yet, one "Plan sync".
     const main = text(find(tree, 'hai-tile-main'))
-    for (const want of ['12 behind', '3 ahead', 'no sync planned']) expect(main).toContain(want)
+    for (const want of ['12 behind', 'fetched 2 h ago · no sync planned']) expect(main).toContain(want) // A35: the sub-line as in mockup v2
     expect(label(tree, 'hai-sync-action')).toBe('Plan sync')
 
     // D5: /a5 gate moves the launch gate for every session (the plugin store), and /a5 gate reset puts it back.
     expect(String((await $.command.run({ command: 'a5', args: 'gate 32 29' } as never)).text)).toContain('≥ 32 GB with PIE, ≥ 29 GB without')
     tree = await $.ui.render(PANE_AT)
-    expect(text(find(tree, 'hai-tile-memory'))).toContain(surface === 'desktop' ? 'launch ≥ 32 GB with PIE · 29 GB without (/a5 gate)' : 'gate 32/29 GB')
-    expect(text(find(tree, 'hai-tile-memory'))).toContain('under the launch gate')
+    expect(text(find(tree, 'hai-tile-memory'))).toContain('gate 32 GB with PIE, 29 without')
+    expect(text(find(tree, 'hai-tile-memory'))).toContain('28.5 GB free · below launch gate')
     await $.command.run({ command: 'a5', args: 'gate reset' } as never)
     tree = await $.ui.render(PANE_AT)
-    expect(text(find(tree, 'hai-tile-memory'))).toContain(surface === 'desktop' ? 'launch ≥ 31 GB with PIE · 28 GB without' : 'gate 31/28 GB')
+    expect(text(find(tree, 'hai-tile-memory'))).toContain('gate 31 GB with PIE, 28 without')
 
     // D4: Hai plans a sync at a preset in the one dialog; this session holds it; Sync ⋯ moves or cancels it.
     w.say('Plan 15:30')

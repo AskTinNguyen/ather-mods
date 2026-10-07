@@ -12,8 +12,8 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { icon, sealSvg, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesSeals, withSeal, type RuleHits } from './theme.ts'
-import { acceptCard, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
+import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesSeals, withSeal, type RuleHits } from './theme.ts'
+import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
@@ -1825,6 +1825,13 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   return recolor({ ...(tree as object), children: kids } as unknown as RenderElement)
 }
 
+/** A35 (mockup v2): the A5 pane's frame: the band at full width, then every block on one gutter, one gap between blocks. */
+function paneOf(el: { Box: (p: Record<string, unknown>) => unknown }, kids: unknown[]): RenderElement {
+  const [band, ...blocks] = kids as { props?: Record<string, unknown> }[]
+  const onGutter = blocks.map(b => ({ ...b, props: { ...(b.props ?? {}), marginX: V2.gutter, marginTop: 0 } }))
+  return el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
+}
+
 /** A29: the A5 pane: the three tool rows (A25), the sessions list (A26), the Nghiệm thu card (A19), and the five
  * rules as its last block (A27). With A5 off it says how to turn it on; outside the S2 checkout it has no tools. */
 async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { bodyColumns?: number } }): Promise<RenderElement> {
@@ -1835,7 +1842,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   const kids: unknown[] = [a5Band(el, isOn)] // A33: the seal-red title band first
   if (!isOn) {
     kids.push(el.Box({ key: 'hai-a5-off', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'A5 is off: Ather runs as it ships. /a5 on turns on the five rules, the Editor holder, RAM and Sync main for every session.' })] }))
-    return el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement
+    return paneOf(el, kids)
   }
   scheduleReads($, opts, now)
   if (isS2) {
@@ -1848,6 +1855,19 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
       mainTile(sync, plan, syncActionButton($, opts, el, isDesktop, now)),
     ]
     tiles[0] = { ...tiles[0], action: editorAction($, opts, el, isDesktop) } as (typeof tiles)[number]
+    // A35 (mockup v2): Memory reads "<n> GB free · below launch gate" (the note in amber only when below); its gate
+    // details are the sub-line; no meter. Sync main's sub-line: when main was fetched, the planned or last sync.
+    const free = vitals?.freeGb
+    const extra = [...(probe?.diskGb !== null && probe?.diskGb !== undefined && probe.diskGb < DISK_MIN_GB ? [`${s2Root(opts).slice(0, 2)} ${probe.diskGb} GB free`] : []), ...(vitals && vitals.git >= 10 ? [`${vitals.git} git processes`] : [])]
+    tiles[1] = {
+      ...tiles[1],
+      value: free === undefined ? 'probe failed' : `${free} GB free`,
+      meter: undefined,
+      ...(free !== undefined && free < gates.nopieGb ? { note: { text: 'below launch gate', warn: true } } : free !== undefined && free < gates.pieGb ? { note: { text: 'launch fits without PIE', warn: false } } : {}),
+      sub: [`gate ${gates.pieGb} GB with PIE, ${gates.nopieGb} without`, `PIE needs ${PIE_START_GB} GB`, ...extra].join(' · '),
+      subWarn: extra.length > 0,
+    } as (typeof tiles)[number]
+    if (sync) tiles[2] = { ...tiles[2], sub: [`fetched ${ago(sync.fetchedMinAgo)}`, plan.line, plan.conflicts, ...sync.flags].filter(Boolean).join(' · '), subWarn: Boolean(plan.conflicts) || sync.flags.length > 0 } as (typeof tiles)[number]
     const names = { editor: 'editor', memory: 'memory', main: 'branch' } as const
     for (const t of tiles) {
       const name = names[t.key as keyof typeof names]
@@ -1884,7 +1904,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     $.ui.invalidate('ui.render')
   }
   kids.push(rulesSeals(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { seal: A5_LOOK.sealBg, rim: A5_LOOK.gold, numeral: A5_LOOK.gold, ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.meter }))
-  return recolor(el.Box({ key: 'hai-a5-pane', flexDirection: 'column', width: '100%', children: kids }) as unknown as RenderElement)
+  return recolor(paneOf(el, kids))
 }
 
 export const register: Register = (on, options) => {

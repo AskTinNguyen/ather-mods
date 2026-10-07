@@ -57,7 +57,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     await $.ui.render(P)
     await w.clock.advance(50) // titles are looked up off the render
     const tree = await $.ui.render(P)
-    expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 7 open')
+    expect(text(find(tree, 'hai-overview-head'))).toBe('SESSIONS · 7 OPEN')
     const rows = (find(tree, 'hai-overview')?.children ?? []).map(c => text(c))
     expect(rows.slice(1)).toEqual([
       '★3️⃣ Loco fix' + 'no intent · now',
@@ -132,7 +132,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     await $.ui.render(P)
     await w.clock.advance(50) // record titles are looked up off the render
     const tree = await $.ui.render(P)
-    expect(text(find(tree, 'hai-overview-head'))).toBe('Sessions · 3 open')
+    expect(text(find(tree, 'hai-overview-head'))).toBe('SESSIONS · 3 OPEN')
     const ids = (find(tree, 'hai-overview')?.children ?? []).map(c => String((c as { props?: { key?: string } }).props?.key)).slice(1)
     expect(ids).toEqual([`hai-session-${ME.slice(0, 8)}`, 'hai-session-bbbbbbbb', 'hai-session-eeeeeeee'])
     expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('★3️⃣ Loco fix' + 'no intent · now')

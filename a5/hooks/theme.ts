@@ -7,6 +7,8 @@
 
 export const ATHER = { accent: '#DDFF00', quiet: '#8E918A', line: '#3a3c36' } as const
 export const A5_LOOK = { gold: '#F2C14E', sealBg: '#B3261E', sealText: '#F6D98A', ivory: '#E9E4D8', quiet: '#8E8A80', meter: '#E8473C', meterTrack: '#4A2220' } as const
+/** A35/A36 (mockup v2): the thin band's darker red, the list's hairline, a chip's neutral rim, the section label grey. */
+export const V2 = { band: '#7A1712', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', gutter: 2 } as const
 export const STATUS = { ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' } as const
 // The unfilled part of a meter: a dark step of the fill's own hue (dataviz: same-ramp track).
 export const TRACK = { ok: '#2E4A37', warn: '#4A3D1E', bad: '#4A2220' } as const
@@ -150,18 +152,19 @@ export const rulesSeals = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
 /** A33: "A5 · THE FIVE RULES" letter-spaced (a space between letters, two between words). */
 export const bandTitle = (s: string): string => s.toUpperCase().split(' ').map(w => [...w].join(' ')).join('  ')
 
-/** A33: the A5 pane's title band: seal red, full width, a gold ★, the title in pale gold, "on" (or "off") on the right. */
+/** A35 (mockup v2): the A5 pane's thin band: the darker seal red, full width, its words on the content gutter: a gold
+ * ★ and "A 5" (pale gold, letter-spaced) on the left, "on" / "off" on the right. */
 export const a5Band = (el: El, isOn = true): unknown =>
   el.Box({
     key: 'hai-a5-band',
     flexDirection: 'row',
     width: '100%',
     columnGap: 1,
-    paddingX: 1,
-    backgroundColor: A5_LOOK.sealBg,
+    paddingX: V2.gutter,
+    backgroundColor: V2.band,
     children: [
       el.Box({ key: 'hai-a5-band-star', flexShrink: 0, children: [el.Text({ color: A5_LOOK.gold, bold: true, children: '★' })] }),
-      el.Box({ key: 'hai-a5-band-title', flexShrink: 1, minWidth: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, wrap: 'truncate-end', children: bandTitle('A5') })] }),
+      el.Box({ key: 'hai-a5-band-title', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, children: bandTitle('A5') })] }),
       el.Box({ key: 'hai-a5-band-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
       el.Box({ key: 'hai-a5-band-on', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: isOn ? 'on' : 'off' })] }),
     ],
