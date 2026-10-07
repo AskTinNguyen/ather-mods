@@ -253,9 +253,34 @@ export const withScarf = (source: string): string => {
 
 /** A43: an interactive SVG a5 changes gets FRAME_STYLE as its first child, if it has none yet (a still one is left alone). */
 export const withFrameStyle = (source: string, isInteractive: boolean): string => {
-  if (!isInteractive || source.includes(FRAME_STYLE)) return source
-  const end = source.indexOf('>', source.indexOf('<svg'))
-  return end < 0 ? source : source.slice(0, end + 1) + FRAME_STYLE + source.slice(end + 1)
+  if (!isInteractive) return source
+  const end = svgOpenEnd(source)
+  if (end < 0 || source.startsWith(FRAME_STYLE, end + 1)) return source
+  return source.slice(0, end + 1) + FRAME_STYLE + source.slice(end + 1)
+}
+
+/** A47 (c): the index of the `>` that ends the root `<svg …>` open tag: the first `<svg` outside comments (`<!-- … -->`;
+ * an XML declaration or doctype before it is passed over), then the first `>` outside quoted attribute values (a `>`
+ * inside `style="a>b"` or `aria-label='x > y'` does not end it). -1 when there is none. */
+export const svgOpenEnd = (source: string): number => {
+  let i = 0
+  for (; i < source.length; i += 1) {
+    if (source.startsWith('<!--', i)) {
+      const close = source.indexOf('-->', i + 4)
+      if (close < 0) return -1
+      i = close + 2
+    } else if (/^<svg[\s>/]/i.test(source.slice(i, i + 5))) break
+  }
+  if (i >= source.length) return -1
+  let quote = ''
+  for (let j = i + 4; j < source.length; j += 1) {
+    const c = source[j]
+    if (quote) {
+      if (c === quote) quote = ''
+    } else if (c === '"' || c === "'") quote = c
+    else if (c === '>') return j
+  }
+  return -1
 }
 
 /** A39: every avatar Svg in a drawn tree, scarfed. */

@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5, gitTargets, newLines, norm, tokenize, under, type A5Config, type Decision, type Located, type Places, type Proof } from './a5.ts'
-import { acceptText, closesIntent, failed, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
+import { acceptText, closesIntent, failed, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -1122,6 +1122,16 @@ const PASS_ONCE = 'Let this PR through'
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
 type PrRefs = { repo?: string; head?: string; base?: string; problem?: string } // A46: problem: the call's refs cannot be read
 
+/** A47 (b): a repository's remotes from `git remote -v`. */
+const remotesOf = (text: string): { name: string; url: string }[] =>
+  [...new Map(text.split(/\r?\n/).map(l => /^(\S+)\s+(\S+)/.exec(l)).filter((m): m is RegExpExecArray => Boolean(m)).map(m => [m[1] ?? '', { name: m[1] ?? '', url: m[2] ?? '' }])).values()]
+/** A47 (b): whether a remote URL is `owner/name` (https, ssh or scp form, with or without .git). */
+const urlIsRepo = (url: string, repo: string): boolean => {
+  const u = url.replace(/\.git$/i, '').toLowerCase()
+  const r = repo.replace(/\.git$/i, '').toLowerCase()
+  return u.endsWith(`/${r}`) || u.endsWith(`:${r}`)
+}
+
 /** A42: the a5 kit's rules/ and tests/ folders as paths in the repository at `root`: where the kit sits inside it, else
  * under the kit's own folder name (the same mod checked out in another worktree of that repository). */
 const kitDirsIn = (root: string): string[] => {
@@ -1198,17 +1208,22 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHi
   const hasRef = async (ref: string) => (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { timeoutMs: 15_000 }).catch(() => null))?.exitCode === 0
   // A22: a PR tool names its base, head and repository; each is checked here, and one that cannot be read is no pass.
   const baseName = refs.base?.trim() || 'main'
-  const base = (await hasRef(`origin/${baseName}`)) ? `origin/${baseName}` : (await hasRef(baseName)) ? baseName : null
+  // A47 (b): the PR's repository may be any remote of this repository (a fork PR: `-R upstream/x --head me:branch` from a
+  // clone whose origin is the fork); its base is then that remote's branch.
+  const remotes = refs.repo ? remotesOf(await git(['remote', '-v'])) : []
+  const repoRemote = refs.repo ? (remotes.find(x => urlIsRepo(x.url, refs.repo ?? '')) ?? null) : null
+  const isOtherRepo = Boolean(refs.repo) && !repoRemote
+  const baseRefs = [...(repoRemote && repoRemote.name !== 'origin' ? [`${repoRemote.name}/${baseName}`] : []), `origin/${baseName}`, baseName]
+  let base: string | null = null
+  for (const ref of baseRefs) if (!base && (await hasRef(ref))) base = ref
   const head = target.head
   const branch = target.branch || (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-  const origin = refs.repo ? (await git(['remote', 'get-url', 'origin'])).trim() : ''
-  const isOtherRepo = Boolean(refs.repo) && !origin.replace(/\.git$/i, '').toLowerCase().endsWith(`/${(refs.repo ?? '').toLowerCase()}`) && !origin.replace(/\.git$/i, '').toLowerCase().endsWith(`:${(refs.repo ?? '').toLowerCase()}`)
   const refProblem = target.problem
     ? target.problem
     : isOtherRepo
-      ? `the PR is for ${refs.repo}, not the repository at ${root} (${origin || 'no origin remote'})`
+      ? `the PR is for ${refs.repo}, which is not a remote of the repository at ${root} (${remotes.map(x => x.url).join(', ') || 'no remote'})`
       : !base
-        ? `no origin/${baseName} or ${baseName} to diff against`
+        ? `no ${baseRefs.join(' or ')} to diff against`
         : !head
           ? `head ${target.branch} is not in this repository (fetch it, or open the PR from its own checkout)`
           : null
@@ -1223,7 +1238,6 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHi
   const range = `${base}...${head}`
   const names = refProblem ? { out: '', why: refProblem } : await whole(['diff', '--name-only', range])
   const text = !names.why ? await whole(['diff', '-U0', '--no-color', range, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
-  const diffProblem = names.why ?? text.why
   const files = names.out.split(/\r?\n/).map(f => f.trim()).filter(Boolean)
   const added = addedLines(text.out)
   const status = await atherStatus($)
@@ -1231,8 +1245,24 @@ async function gatherAccept($: Engine, opts: Opts, a5: A5, start: string, slugHi
   // A41: the intent is the one this branch's diff touches (docs/intent/<slug>/); the session's tracked intent only when the
   // diff touches none (or is among those it touches).
   const tracked = status?.tracked?.slug ?? null
-  const slug = slugHint ?? (fromDiff.length > 0 ? (tracked && fromDiff.includes(tracked) ? tracked : (fromDiff[0] ?? null)) : tracked)
   const read = (rel: string) => $.fs.read(`${root}/${rel}`).catch(() => '')
+  // A47 (a): several intents touched, none of them the tracked one: the one whose prompt names most of the diff's
+  // paths; a tie is "not scored", naming the candidates (never the alphabetically first).
+  let slug: string | null = slugHint ?? (fromDiff.length === 0 ? tracked : tracked && fromDiff.includes(tracked) ? tracked : fromDiff.length === 1 ? (fromDiff[0] ?? null) : null)
+  let slugProblem: string | null = null
+  if (!slugHint && slug === null && fromDiff.length > 1) {
+    const counts = await Promise.all(
+      fromDiff.map(async s => {
+        const named = namedPaths(await read(`docs/intent/${s}/prompt.md`), s).filter(p => p !== `docs/intent/${s}/`)
+        return { s, n: files.filter(f => inScope(f, named)).length }
+      }),
+    )
+    counts.sort((x, y) => y.n - x.n || x.s.localeCompare(y.s))
+    const top = counts.filter(c => c.n === counts[0]?.n)
+    if (top.length === 1) slug = top[0]?.s ?? null
+    else slugProblem = `the diff touches the intents ${top.map(c => c.s).join(', ')} equally (${top[0]?.n ?? 0} of its paths named by each): open one PR per intent`
+  }
+  const diffProblem = names.why ?? text.why ?? slugProblem
   const [prompt, progress, findings] = slug ? await Promise.all([read(`docs/intent/${slug}/prompt.md`), read(`docs/intent/${slug}/progress.md`), read(`docs/intent/${slug}/findings.md`)]) : ['', '', '']
   const otherIntents: { slug: string; names: string[] }[] = []
   for (const d of await $.fs.list(`${root}/docs/intent`).catch(() => [])) {
@@ -1407,7 +1437,7 @@ async function acceptCommand($: Engine, opts: Opts): Promise<string> {
   if (!root) return 'A5 acceptance: this session is not in a git repository.'
   const x = await gatherAccept($, opts, a5, root, null, '', undefined)
   const scores = score(x)
-  lastAccept = { at: await $.clock.now(), slug: null, scores, what: 'on demand' }
+  lastAccept = { at: await $.clock.now(), slug: x.slug, scores, what: 'on demand' } // A47: the intent the score read
   $.ui.invalidate('ui.render')
   return [`A5 acceptance (${x.diffProblem ? 'not scored' : failed(scores).length ? `${failed(scores).length} of 5 not met` : '5 of 5'}):`, ...scores.map(s => `${s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–'} ${s.rule} ${ruleName(s.rule)}: ${s.line}`)].join('\n')
 }

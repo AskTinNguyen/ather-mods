@@ -12,7 +12,7 @@ const PROMPT = ['# Tail VFX', '- Rev: 2', '- Status: active', 'Change `Source/S2
 const MET = ['| Item | Verdict | Evidence |', '| --- | --- | --- |', '| A1 | met | PIE: glow visible |'].join('\n')
 const status = JSON.stringify({ me: 'hai', role: 'techart', tracked: { slug: 'tail-vfx', directorCalls: [] }, evidence: { pie: { state: 'pass' }, editor: { state: 'pass' } } })
 const git = (files: string, diff: string) => ({
-  'remote get-url origin': { stdout: 'https://github.com/sipherxyz/s2.git\n' },
+  'remote -v': { stdout: 'origin\thttps://github.com/sipherxyz/s2.git (fetch)\norigin\thttps://github.com/sipherxyz/s2.git (push)\n' }, // A47 (b): remotes from git remote -v
   'diff --name-only': { stdout: files },
   'diff -U0': { stdout: diff },
   'worktree list': { stdout: '' },
@@ -63,7 +63,7 @@ test('A22: a PR for another repository, or a head this checkout does not have, i
   const w = world(on, { out: { [STATUS_TOOL]: status }, git: { ...CLEAN, 'origin/HaiHuynh/gone^{commit}': { stdout: '', exitCode: 1 }, 'HaiHuynh/gone^{commit}': { stdout: '', exitCode: 1 } } })
   setup(w)
   expect(refused(await $.tool.call({ tool: GITHUB, ...input({ owner: 'someone', repo: 'other' }) } as never))).toBe(
-    "A5 · Acceptance — could not read the whole branch diff (the PR is for someone/other, not the repository at E:/proj (https://github.com/sipherxyz/s2.git)) → open the PR from a slice branch cut from origin/main, or Hai lets this one through",
+    "A5 · Acceptance — could not read the whole branch diff (the PR is for someone/other, which is not a remote of the repository at E:/proj (https://github.com/sipherxyz/s2.git)) → open the PR from a slice branch cut from origin/main, or Hai lets this one through",
   )
   expect(refused(await $.tool.call({ tool: GITHUB, ...input({ head: 'HaiHuynh/gone' }) } as never))).toContain('head HaiHuynh/gone is neither checked out in a worktree of this repository nor at origin/HaiHuynh/gone')
   expect(ran(w, GITHUB)).toBe(0)

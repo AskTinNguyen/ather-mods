@@ -29,7 +29,7 @@ const git = (wtDiff: string, extra: Record<string, { stdout: string; exitCode?: 
   [`${WT} diff -U0`]: { stdout: wtDiff },
   [`${PROJ} diff --name-only`]: { stdout: 'a5/hooks/register.ts\na5/rules/config.json\n' },
   [`${PROJ} diff -U0`]: { stdout: '+++ b/a5/hooks/register.ts\n+const x = 1 // A5TMP\n' },
-  'remote get-url origin': { stdout: 'https://github.com/AskTinNguyen/ather-mods.git\n' },
+  'remote -v': { stdout: 'origin\thttps://github.com/AskTinNguyen/ather-mods.git (fetch)\norigin\thttps://github.com/AskTinNguyen/ather-mods.git (push)\n' }, // A47 (b): remotes from git remote -v
 })
 const CLEAN = '+++ b/ather-automata/hooks/squad.mjs\n+const frame = 1\n'
 

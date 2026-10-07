@@ -1,25 +1,20 @@
 import { expect, test } from 'claude-code/testing'
 import { FRAME_STYLE, curtainSvg, pixelSvg, sealSvg, stampSvg, sweepSvg, ICONS } from '../hooks/icons.ts'
-import { withFrameStyle } from '../hooks/theme.ts'
+import { svgOpenEnd, withFrameStyle } from '../hooks/theme.ts'
 import { AVATARS } from './avatars.fixture.ts'
-import { SVG_CALLS } from './svg-calls.fixture.ts'
 import { A5PANE, PANE, PROJ, all, atherTree, opts, world, type Tree } from './world.ts'
 
 // A43 (rev 13): every Svg a5 draws with isInteractive carries `<style>:root{color-scheme:light dark;background:transparent}</style>`
 // as the first child of its svg, so the sandboxed frame's page takes the app's scheme and stays transparent (the svg
 // root's style alone does not reach it: Hai's dark-theme screenshot showed a white square beside each rule chip).
-// SVG_CALLS lists every `Svg(` call in a5/hooks (tests/make_svg_calls_fixture.mjs; regenerate it when one is added).
-const firstChild = (source: string): string => source.slice(source.indexOf('>', source.indexOf('<svg')) + 1).slice(0, FRAME_STYLE.length)
+// A47 (d): the evidence that every interactive Svg a5 draws has the rule is the engine test below (both panes, both
+// themes, every effect drawn); rev 13's generated list of Svg calls (a fixture the suite could not regenerate, blind to a
+// multi-line, reordered or destructured call) was dropped. The unit test covers each SVG source a5 builds.
+const firstChild = (source: string): string => source.slice(svgOpenEnd(source) + 1).slice(0, FRAME_STYLE.length)
 const starts = (source: string) => firstChild(source) === FRAME_STYLE
 
-test('A43: unit: every Svg call in a5/hooks, its isInteractive, and the source each one draws: FRAME_STYLE first', () => {
+test('A43: unit: every SVG source a5 builds has FRAME_STYLE as its first child', () => {
   expect(FRAME_STYLE).toBe('<style>:root{color-scheme:light dark;background:transparent}</style>')
-  expect(SVG_CALLS.map(c => [c.file, c.source.slice(0, 20), c.isInteractive])).toEqual([
-    ['icons.ts', 'pixelSvg(ICONS[name]', true], // the tool icons (interactive only while they move)
-    ['register.ts', 'sealSvg(A5_LOOK.seal', true], // the brand seal while it stamps in
-    ['register.ts', 'source', true], // withOverlay: the entrance curtains and the event dithers
-    ['theme.ts', "`${svgOpen('viewBox=", true], // the rule chips' tooltip dots
-  ])
   // What each call draws.
   const moving = pixelSvg(ICONS.editor, '#F2C14E', { kind: 'reveal', from: '#000000', ms: 700 })
   const sweeping = pixelSvg(ICONS.branch, '#F2C14E', { kind: 'sweep' })
@@ -48,3 +43,13 @@ for (const theme of ['dark', 'light'] as const)
     expect(svgs.filter(n => !starts(String(n.props?.source))).map(n => String(n.props?.source).slice(0, 90))).toEqual([])
     expect(svgs.some(n => String(n.props?.alt) === 'editor')).toBe(true) // the running avatar was checked too
   })
+
+test('A47 (c): the frame rule goes right after the real end of the svg open tag: quotes and comments are passed over', () => {
+  const tricky = '<?xml version="1.0"?><!-- <svg> in a comment --><svg xmlns="http://www.w3.org/2000/svg" aria-label="a > b" style=\'x>y\' viewBox="0 0 1 1"><rect/></svg>'
+  const out = withFrameStyle(tricky, true)
+  expect(out).toBe(tricky.replace("viewBox=\"0 0 1 1\">", `viewBox="0 0 1 1">${FRAME_STYLE}`))
+  expect(withFrameStyle(out, true)).toBe(out) // once
+  expect(withFrameStyle('<svg viewBox="0 0 1 1"><style>p{}</style><rect/></svg>', true).startsWith(`<svg viewBox="0 0 1 1">${FRAME_STYLE}<style>p{}`)).toBe(true) // another style first: ours still goes first
+  expect(withFrameStyle('<!-- no svg here -->', true)).toBe('<!-- no svg here -->')
+  expect(svgOpenEnd('<svg>')).toBe(4)
+})
