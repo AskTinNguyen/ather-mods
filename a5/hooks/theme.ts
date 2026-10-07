@@ -163,7 +163,7 @@ export const bandTitle = (s: string): string => s.toUpperCase().split(' ').map(w
 
 /** A35 (mockup v2): the A5 pane's thin band: the darker seal red, full width, its words on the content gutter: a gold
  * ★ and "A 5" (pale gold, letter-spaced) on the left, "on" / "off" on the right. */
-export const a5Band = (el: El, isOn = true): unknown =>
+export const a5Band = (el: El, isOn = true, isFrozen = false): unknown =>
   el.Box({
     key: 'hai-a5-band',
     flexDirection: 'row',
@@ -175,6 +175,7 @@ export const a5Band = (el: El, isOn = true): unknown =>
       el.Box({ key: 'hai-a5-band-star', flexShrink: 0, children: [el.Text({ color: A5_LOOK.gold, bold: true, children: '★' })] }),
       el.Box({ key: 'hai-a5-band-title', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, children: bandTitle('A5') })] }),
       el.Box({ key: 'hai-a5-band-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
+      ...(isFrozen ? [el.Box({ key: 'hai-a5-band-freeze', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: '❄' })] })] : []), // A38: the sync freeze
       el.Box({ key: 'hai-a5-band-on', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: isOn ? 'on' : 'off' })] }),
     ],
   })

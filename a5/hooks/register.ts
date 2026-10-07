@@ -11,7 +11,7 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { curtainEnd, curtainSvg, icon, sealSvg, type Curtain, type Motion } from './icons.ts'
+import { curtainSvg, icon, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
@@ -72,6 +72,16 @@ let paneEnterAt = 0
 let lineEnterAt = 0
 const ENTRANCE_MS = 1_000 // how long after the opening the curtains stay in the tree (they finish within 300 ms)
 const ENTRANCE_BUDGET_MS = 300
+// A38: one-shot event dithers (≤ 1 s): a rule chip stamps red when its rule is hit; the band sweeps at the sync freeze
+// (❄ in) and back at the lift; a new acceptance score resolves the chips one by one to ✓ / ✗.
+const FX_MS = 1_000
+const freshHits = new Set<string>() // rules hit since the A5 pane last drew
+const hitStampAt: Record<string, number> = {}
+let lastPhaseSeen: Phase | null = null
+let freezeAt = 0
+let liftAt = 0
+let scoreSeenAt = 0
+let scoreFxAt = 0
 let isS2 = false
 let lockView: LockView | undefined
 let vitals: Vitals | undefined
@@ -144,6 +154,7 @@ const s2Root = (opts: Opts): string => parentOf(parentOf(norm(opts.editorLock)))
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const stampOf = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hhmm(d)}`
 const count = (rule: string) => {
+  for (const id of rule.match(/D[1-5]/g) ?? []) freshHits.add(id) // A38: the chip stamps at the next draw
   for (const id of rule.match(/D[1-5]/g) ?? []) hits[id as keyof RuleHits] += 1
 }
 const gateOf = (rule: string): string => `${rule} ${rule.split('/').map(r => RULE_NAMES[r]).filter(Boolean).join(' / ')}`
@@ -1841,10 +1852,15 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
 /** A37/A38: a pixel curtain laid over a block: an absolute box spanning it (painted over what it holds, clipped to
  * it) holding one SVG whose cells clear or fill in Bayer order. The block becomes the curtain's positioning parent. */
 function withCurtain(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, c: Curtain): unknown {
+  return withOverlay(el, block, key, curtainSvg(c))
+}
+
+/** A37/A38: any one-shot SVG laid over a block the same way (an absolute box spanning it, clipped to it). */
+function withOverlay(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, source: string): unknown {
   if (!el.Svg) return block
   const b = block as { props?: Record<string, unknown>; children?: unknown[] }
-  const curtain = el.Box({ key, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', children: [el.Svg({ source: curtainSvg(c), alt: '', width: 2400, height: 480, isInteractive: true })] })
-  return { ...b, props: { ...(b.props ?? {}), position: 'relative' }, children: [...(b.children ?? []), curtain] }
+  const over = el.Box({ key, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', children: [el.Svg({ source, alt: '', width: 2400, height: 480, isInteractive: true })] })
+  return { ...b, props: { ...(b.props ?? {}), position: 'relative' }, children: [...(b.children ?? []), over] }
 }
 
 /** A37: the entrance: each block in turn (band, tools, sessions, card, rules) dithers in from seal-red pixels, the
@@ -1869,7 +1885,22 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   const isDesktop = e.surface === 'desktop'
   const now = await $.clock.now()
   const isOn = await readA5($)
-  const kids: unknown[] = [a5Band(el, isOn)] // A33: the seal-red title band first
+  // A38: the sync freeze and its lift, seen at the draw after they happen.
+  const phaseNow = phaseOf(syncFile, now)
+  if (lastPhaseSeen !== null && phaseNow === 'frozen' && lastPhaseSeen !== 'frozen') freezeAt = now
+  if (lastPhaseSeen === 'frozen' && phaseNow !== 'frozen') liftAt = now
+  lastPhaseSeen = phaseNow
+  const isFx = isDesktop && opts.motion !== 'off'
+  let fxPlaced = false
+  let band = a5Band(el, isOn, isOn && phaseNow === 'frozen')
+  if (isFx && now - freezeAt < FX_MS) {
+    band = withOverlay(el as never, band, 'hai-a5-fx-freeze', sweepSvg(A5_LOOK.sealText, false))
+    fxPlaced = true
+  } else if (isFx && now - liftAt < FX_MS) {
+    band = withOverlay(el as never, band, 'hai-a5-fx-lift', sweepSvg(A5_LOOK.sealText, true))
+    fxPlaced = true
+  }
+  const kids: unknown[] = [band] // A33/A35: the band first
   if (!isOn) {
     kids.push(el.Box({ key: 'hai-a5-off', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'A5 is off: Ather runs as it ships. /a5 on turns on the five rules, the Editor holder, RAM and Sync main for every session.' })] }))
     return paneOf(el, kids)
@@ -1933,7 +1964,31 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     openRule = openRule === n ? null : n
     $.ui.invalidate('ui.render')
   }
-  kids.push(rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.sealBg }))
+  for (const id of freshHits) hitStampAt[id] = now
+  freshHits.clear()
+  if (lastAccept && lastAccept.at !== scoreSeenAt) {
+    scoreSeenAt = lastAccept.at
+    scoreFxAt = now
+  }
+  const marks = (n: number): unknown[] => {
+    const s = lastAccept?.scores.find(x => x.rule === n)
+    return s ? [el.Text({ key: `hai-a5-chip-${n}-mark`, color: s.state === 'pass' ? STATUS.ok : s.state === 'fail' ? STATUS.bad : A5_LOOK.quiet, children: s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–' })] : []
+  }
+  let rules = rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.sealBg }, marks)
+  if (isFx)
+    for (const n of [1, 2, 3, 4, 5]) {
+      const id = `D${n}`
+      if (now - (hitStampAt[id] ?? -FX_MS) < FX_MS) {
+        rules = replaceKeyed(rules, `hai-a5-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5-fx-hit-${n}`, stampSvg(A5_LOOK.sealBg)))
+        fxPlaced = true
+      }
+      if (lastAccept && now - scoreFxAt < FX_MS) {
+        rules = replaceKeyed(rules, `hai-a5-chip-${n}-box`, box => withOverlay(el as never, box, `hai-a5-fx-score-${n}`, curtainSvg({ color: A5_LOOK.gold, begin: (n - 1) * 150, step: 4, clear: true })))
+        fxPlaced = true
+      }
+    }
+  if (fxPlaced) $.clock.after(FX_MS + 10, () => $.ui.invalidate('ui.render')) // then still
+  kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
   if (paneEnterAt === 0) paneEnterAt = now
   const isEntering = isDesktop && opts.motion !== 'off' && now - paneEnterAt < ENTRANCE_MS

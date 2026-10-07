@@ -90,3 +90,28 @@ export const curtainSvg = (c: Curtain): string => {
     }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="480" shape-rendering="crispEdges"><defs><pattern id="a5c" width="8" height="8" patternUnits="userSpaceOnUse">${cells.join('')}</pattern></defs><rect width="2400" height="480" fill="url(#a5c)"/></svg>`
 }
+
+/** A38: a one-shot stamp over a chip: each cell fills and clears once (opacity 0 → 1 → 0) at its Bayer threshold. */
+export const stampSvg = (color: string, begin = 0, step = 8, dur = 600): string => {
+  const cells: string[] = []
+  for (let y = 0; y < 4; y += 1)
+    for (let x = 0; x < 4; x += 1) {
+      const t = BAYER[y]?.[x] ?? 0
+      cells.push(`<rect x="${x * 2}" y="${y * 2}" width="2" height="2" fill="${color}" opacity="0"><animate attributeName="opacity" values="0;1;0" begin="${begin + t * step}ms" dur="${dur}ms" fill="freeze"/></rect>`)
+    }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="480" shape-rendering="crispEdges"><defs><pattern id="a5s" width="8" height="8" patternUnits="userSpaceOnUse">${cells.join('')}</pattern></defs><rect width="2400" height="480" fill="url(#a5s)"/></svg>`
+}
+
+/** A38: a one-shot sweep across a band: columns of cells fill and clear in turn, left to right (or right to left), with
+ * a little Bayer jitter, the whole sweep within `ms`. */
+export const sweepSvg = (color: string, reverse: boolean, ms = 900, cols = 120, rows = 2): string => {
+  const cells: string[] = []
+  const pass = ms - 300
+  for (let x = 0; x < cols; x += 1)
+    for (let y = 0; y < rows; y += 1) {
+      const order = reverse ? cols - 1 - x : x
+      const begin = Math.round((order / cols) * pass + at(x, y) * 40)
+      cells.push(`<rect x="${x * 20}" y="${y * 12}" width="20" height="12" fill="${color}" opacity="0"><animate attributeName="opacity" values="0;1;0" begin="${begin}ms" dur="250ms" fill="freeze"/></rect>`)
+    }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${cols * 20}" height="${rows * 12}" shape-rendering="crispEdges">${cells.join('')}</svg>`
+}
