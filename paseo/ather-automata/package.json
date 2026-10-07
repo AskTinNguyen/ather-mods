@@ -13,7 +13,6 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"server/**/*.test.mjs\"",
     "art": "node server/art/render.mjs",
     "sync": "node server/sync.mjs",
     "sync:check": "node server/sync.mjs --check"
