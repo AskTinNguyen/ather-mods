@@ -65,3 +65,12 @@ Hai approved the proposal: five rules rewritten for the workflow, checked at the
 > Làm rev 6
 
 The two known limits of rev 5 (Ather's Ship is not seen; PRs opened outside `gh` are not scored) become A21-A24.
+
+## L-10 (2026-10-07 12:10) | class: intent | -> rev 7
+
+> Feedback về UIUX của các thành phần trong AtherAutomataA5
+> * Box layout của bộ 3 tool A5 trình bày không khoa học, chữ hoặc item dài lấn nút cả ra ngoài bound. Nút -1GB +1GB không cần thiết
+> * Session Active không thể hiện rõ session nào, viết dài tất cả trên một dòng rất tệ
+> * Đoạn A5 dưới cùng nên canh dưới cùng, xuống hàng cho hợp lý, dùng font nhỏ hơn nhiều để tránh rối bố cục.
+
+With a screenshot of the desktop pane (Editor tile cut to "Edi…", the Sync tile's Refresh button past the edge, the sessions line on two wrapped lines, the five rules as a wrapped paragraph above the bottom).

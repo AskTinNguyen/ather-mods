@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 6
+- Rev: 7
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -71,6 +71,9 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A22 (rev 6): PRs opened through MCP tools: a tool call whose name creates a pull request (GitHub MCP `create_pull_request` and similar names in any server) is gated like `gh pr create` (score, refusal with the list, Hai's pass-once, worker refused). Proof: gate: engine tests for two tool-name spellings.
 - A23 (rev 6): PRs opened outside the agent (GitHub web, the desktop app's own Create PR if it bypasses the agent): when a PR number appears on the tracked intent's `- PR:` line (or in Ather's status `tracked.prs`) that a5 has not scored, a5 scores it then (post-hoc), shows the result on the Nghiệm thu card with the PR number, and raises one 🟥 when it fails. Proof: gate: engine test with a PR line added by hand.
 - A24 (rev 6): Measure the desktop app's Create PR button: record in progress.md what it does in this app build (a prompt to the session, a tool call, or the app calling GitHub itself), from evidence (the button's tooltip/docs, a session transcript, or a dry observation that creates no PR); no PR is opened for the measurement. A23 covers it either way. Proof: review.
+- A25 (rev 7): The three A5 tools are laid out so nothing leaves its bounds at any pane width the app gives (narrow included): no truncated label like "Edi…", no button past the edge, text wraps inside its box; one primary action per tool at most, the rest behind one "More" choice; the Memory tile has no −1 GB / +1 GB buttons (the launch gate stays adjustable in the plugin options and by `/a5 gate <pie> <nopie>`). Proof: gate: pane tests at the narrowest and a wide width on desktop and terminal assert no button or text overflows its box (each row's measured width ≤ its box) and the button set per tile.
+- A26 (rev 7): The session overview names the sessions: a short list, one row per live session (its title when known, else its first 8 hex; its intent or "no intent"; what it holds or waits for: Editor, sync, queue place; active how long ago), the sessions without a5 marked, at most 6 rows then "+N more"; no single long line. Proof: gate: pane tests with a mocked list of 8 sessions.
+- A27 (rev 7): The five rules sit at the very bottom of the pane, below everything else, one rule per line under a small "A5 · Năm điều" heading, in the smallest, dimmest text the surface offers (desktop: a small text style; terminal: dim), with the rule-1 tổ quốc/project switch kept. Proof: gate: pane tests (last block of the tree, five lines, small/dim style).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -84,6 +87,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 7 (2026-10-07): L-10: A25 tool boxes that never overflow, no ±1 GB; A26 the session overview as a named list; A27 the five rules at the bottom, one per line, small.
 - rev 6 (2026-10-07): L-9: A21 score at Ship, A22 MCP PR tools gated, A23 post-hoc score for PRs opened outside the agent, A24 measure the app's Create PR.
 - rev 5 (2026-10-07): L-8: D9 five rules for the real workflow, D10 when they are checked (action / acceptance, nothing per turn); A17-A20.
 - rev 4 (2026-10-06): L-6: D7 option B (sync worker), D8 freeze as a lease plus the merge guard; A12-A16 from the failure review (no end to the freeze, A5 blocking the sync worker, a worker dying mid-merge, sessions without 0.4, credential hangs, an Editor left open).
