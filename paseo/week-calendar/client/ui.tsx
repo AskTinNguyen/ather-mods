@@ -154,13 +154,9 @@ export function Row({
     <>
       {icon ? (
         <View style={s.rowIcon}>
-          {pulse ? (
-            <Pulse>
-              <Icon name={icon} size={12} color={iconColor ?? c.accent} />
-            </Pulse>
-          ) : (
+          <Beacon active={pulse} size={12} color={iconColor ?? c.accent} stroke={1.5} maxScale={2.6} duration={2000}>
             <Icon name={icon} size={12} color={iconColor ?? c.accent} />
-          )}
+          </Beacon>
         </View>
       ) : null}
       <View style={s.rowBody}>
@@ -219,12 +215,12 @@ export function FadeIn({ children, delay = 0, style }: { children: ReactNode; de
       progress.setValue(1);
       return;
     }
-    const animation = Animated.timing(progress, { toValue: 1, duration: 220, delay, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE });
+    const animation = Animated.timing(progress, { toValue: 1, duration: 360, delay, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE });
     animation.start();
     return () => animation.stop();
   }, [progress, delay, reduced]);
   return (
-    <Animated.View style={[style, { opacity: progress, transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) }] }]}>{children}</Animated.View>
+    <Animated.View style={[style, { opacity: progress, transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] }]}>{children}</Animated.View>
   );
 }
 
@@ -247,9 +243,75 @@ export function Pulse({ children }: { children: ReactNode }) {
     return () => loop.stop();
   }, [value, reduced]);
   return (
-    <Animated.View style={{ opacity: value.interpolate({ inputRange: [0, 1], outputRange: [1, 0.55] }), transform: [{ scale: value.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] }) }] }}>
+    <Animated.View style={{ opacity: value.interpolate({ inputRange: [0, 1], outputRange: [1, 0.35] }), transform: [{ scale: value.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }) }] }}>
       {children}
     </Animated.View>
+  );
+}
+
+// Rings that expand from `children` and fade out, like a sonar: `count` rings a period apart, so
+// there is always one on its way. `size` is the child's box; the rings start at its edge. Still when inactive
+// or when the system asks for reduced motion.
+export function Beacon({
+  children,
+  size,
+  color,
+  active = true,
+  count = 3,
+  duration = 2400,
+  maxScale = 2.8,
+  stroke = 2,
+}: {
+  children: ReactNode;
+  size: number;
+  color: string;
+  active?: boolean;
+  count?: number;
+  duration?: number;
+  maxScale?: number;
+  stroke?: number;
+}) {
+  const reduced = useReducedMotion();
+  const phase = useRef(new Animated.Value(0)).current;
+  const on = active && !reduced;
+  useEffect(() => {
+    if (!on) {
+      phase.stopAnimation();
+      phase.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(Animated.timing(phase, { toValue: 1, duration, easing: Easing.linear, useNativeDriver: NATIVE }));
+    loop.start();
+    return () => loop.stop();
+  }, [phase, duration, on]);
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      {on
+        ? Array.from({ length: count }, (_, ring) => {
+            // Each ring is a step behind the last: the same sweep, shifted by a fraction of the period.
+            const progress = Animated.modulo(Animated.add(phase, ring / count), 1);
+            return (
+              <Animated.View
+                key={ring}
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: size,
+                  height: size,
+                  borderRadius: size / 2,
+                  borderWidth: stroke,
+                  borderColor: color,
+                  opacity: progress.interpolate({ inputRange: [0, 0.08, 1], outputRange: [0, 0.85, 0] }),
+                  transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, maxScale] }) }],
+                }}
+              />
+            );
+          })
+        : null}
+      {children}
+    </View>
   );
 }
 
@@ -351,4 +413,36 @@ export function CountUp({ value, format, style }: { value: number; format: (n: n
     };
   }, [anim, value, reduced]);
   return <Text style={style}>{format(shown)}</Text>;
+}
+
+// Floats up and down slowly while `active` (a worker that is running).
+export function Bob({ children, active }: { children: ReactNode; active: boolean }) {
+  const reduced = useReducedMotion();
+  const value = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!active || reduced) {
+      value.stopAnimation();
+      value.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(value, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: NATIVE }),
+        Animated.timing(value, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: NATIVE }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [value, active, reduced]);
+  return <Animated.View style={{ transform: [{ translateY: value.interpolate({ inputRange: [0, 1], outputRange: [0, -2.5] }) }] }}>{children}</Animated.View>;
+}
+
+// Whether the host theme is light, from its page colour (hex or rgb); dark when it cannot tell.
+export function isLight(theme: Theme) {
+  const colour = String(theme.colors.surface0);
+  const hex = /^#([0-9a-f]{6})/i.exec(colour)?.[1];
+  const rgb = hex ? [0, 2, 4].map((at) => parseInt(hex.slice(at, at + 2), 16)) : (/rgba?\(([^)]+)\)/i.exec(colour)?.[1] ?? "").split(",").slice(0, 3).map((part) => Number(part.trim()));
+  if (rgb.length !== 3 || rgb.some((part) => !Number.isFinite(part))) return false;
+  const [r = 0, g = 0, b = 0] = rgb;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150;
 }
