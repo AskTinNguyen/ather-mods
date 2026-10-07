@@ -1,6 +1,6 @@
 # hai-flow A5: Editor holder, RAM and Sync main holder
 
-- Rev: 11
+- Rev: 12
 - Status: active
 - Area: hai-flow
 - Owner: HaiHuynh
@@ -87,6 +87,8 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A38 (rev 10): Event dithers (one shot, ≤ 1 s, never looping except while something runs): a rule chip stamps red once when its rule is hit; the sync freeze sweeps the band with a ❄ dithering in, reversed at the lift; a nghiệm thu score resolves the five chips one by one from dither to ✓/✗. Proof: gate: pane tests for each trigger and none without it.
 - A39 (rev 11): With A5 on, every worker avatar Ather draws wears a red Young Pioneer scarf (a red triangle knotted at the neck, inside the round badge, under the face), added by a5 to the avatar's SVG as it wraps Ather's pane; the badge stays round and transparent; with A5 off the avatar is Ather's own. Proof: gate: pane tests (scarf in each avatar kind's source with A5 on, none with it off).
 - A40 (rev 11): a5 reads right in both app themes: every colour a5 draws (A5 pane, compact line, the accent it gives Ather's pane, notices' colours) is chosen per theme (the app's light/dark from `$.config.list()` "theme", or theme keys where the engine has one), text at ≥ 4.5:1 and icons/marks at ≥ 3:1 against that theme's pane background, measured with a contrast check, for light and dark. Any Svg drawn with `isInteractive` (animations, entrance, scarf on a running avatar) must not show an opaque white or black box in either theme (the engine paints a sandboxed frame white when its colour scheme differs from the app's); where that cannot be ruled out, the animated Svg falls back to a still image. The rule chips' tooltips use the Svg `<title>` the engine supports in interactive frames. Proof: gate: unit test over both palettes' contrast; review by Hai in light and dark.
+- A41 (rev 12): Nghiệm thu scores the branch the PR is opened from, never the session's own checkout by default: the PR's repository and head come from the command (`-R/--repo`, `--head`, `gh api` path and fields, a `cd <dir> &&` before it, the MCP tool's input) and are matched to the local worktree that has that branch checked out (`git worktree list`), scored there; a head no local worktree holds is scored from `origin/<head>` against `origin/main`; when neither can be determined the score is "not scored" with the reason, never another branch's score. Proof: gate: engine tests (a PR from a second worktree scores that worktree; a session cwd with a different intent is ignored; an unknown head is "not scored").
+- A42 (rev 12): The debug-leftover check (rule 4) never flags the patterns' own definitions or docs: the a5 kit's files (its config, rules text and tests) and Markdown files are skipped for forbidden markers like `A5TMP`. Proof: gate: unit test (a5's own config/tests/rules in a diff raise nothing; the same marker in a source file still fails).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -100,6 +102,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 12 (2026-10-07): F-? from the avatar-frame worker: A41 score the PR's own branch/worktree, A42 no false A5TMP hits on a5's own files.
 - rev 11 (2026-10-07): L-14: A39 red scarf on worker avatars with A5 on, A40 both themes (contrast, interactive frames).
 - rev 10 (2026-10-07): L-13: A34 English, A35 mockup v2 layout, A36 quiet rule chips, A37 red pixel-dither entrance ≤ 0.3 s, A38 event dithers (rule hit, sync freeze, nghiệm thu).
 - rev 9 (2026-10-07): L-12: A30 compact line icons and values, A31 only open sessions with ★ for this one, A32 rule seals with cards, A33 communist look on the A5 pane (approved mockup).
