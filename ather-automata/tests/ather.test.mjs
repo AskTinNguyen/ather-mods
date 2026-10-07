@@ -586,7 +586,12 @@ describe('avatar frame (0.1.3)', () => {
 
   test('every Svg Ather draws, with whether it is framed (isInteractive) and why', async () => {
     const fs = await import('node:fs')
-    const sources = ['console.mjs', 'squad.mjs', 'crew.mjs', 'home.mjs'].map(name => fs.readFileSync(new URL(`../hooks/${name}`, import.meta.url), 'utf8'))
+    // Every hooks file, at any depth: an Svg drawn anywhere (any prop order, over several lines, a destructured Svg,
+    // JSX) is counted, so a new one fails this test until it is listed below with its reason.
+    const hooks = new URL('../hooks/', import.meta.url)
+    const sources = fs.readdirSync(hooks, { recursive: true }).map(String).filter(name => /\.(m?js|tsx?)$/.test(name)).map(name => fs.readFileSync(new URL(name.replace(/\\/g, '/'), hooks), 'utf8'))
+    const uses = sources.reduce((n, text) => n + [...text.matchAll(/\bSvg\(|<Svg\b|\bh\(\s*Svg\b/g)].length, 0)
+    expect(uses).toBe(3)
     // Each `Svg({` call in the hooks, with its isInteractive expression ('' when it has none: a still image).
     const drawn = sources.flatMap(text => [...text.matchAll(/\bSvg\(\{([^\n]*?)\}\)/g)].map(([, props]) => ({ source: /source: ([^,]+)/.exec(props)?.[1] ?? '', framed: /isInteractive: ([^,}]+)/.exec(props)?.[1]?.trim() ?? '' })))
     expect(drawn).toEqual([
