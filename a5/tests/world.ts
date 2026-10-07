@@ -35,7 +35,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5 RULES {SESSION8}' } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5 = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5 RULES {SESSION8}', theme = 'dark' } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -122,6 +122,13 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return { text: e.text, ...(e.context ? { context: e.context } : {}) }
   })
   on('classic.Stop', async () => ({}))
+  // A40: the app theme as /config lists it, and its change through /config.
+  let themeValue = theme
+  on('config.list', async () => value([{ key: 'theme', label: 'Theme', kind: 'choice', value: themeValue, options: ['dark', 'light', 'dark-daltonized', 'light-daltonized'], provider: 'engine', isLocked: false }]))
+  on('config.set', async (_$: unknown, e: Rec) => {
+    if (e.key === 'theme') themeValue = String(e.value)
+    return value(e.value)
+  })
   // The surface places every pane a5 opens (A29), and the test can see which.
   on('ui.open', async (_$: unknown, e: Rec) => {
     ;(calls['ui.open'] ??= []).push(e)

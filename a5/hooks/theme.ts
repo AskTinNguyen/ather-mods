@@ -5,11 +5,39 @@
 // seal, the gold accent and the red "★ A5 ›" button. Contrast (dataviz contrast()): pale gold on seal red ≈ 4.6:1,
 // gold and ivory on the pane's near-black well above 7:1. Pure: no `$`.
 
-export const ATHER = { accent: '#DDFF00', quiet: '#8E918A', line: '#3a3c36' } as const
-export const A5_LOOK = { gold: '#F2C14E', sealBg: '#B3261E', sealText: '#F6D98A', ivory: '#E9E4D8', quiet: '#8E8A80', meter: '#E8473C', meterTrack: '#4A2220' } as const
+// A40: two palettes, one per app theme; the shared colour objects below are switched to the theme in force
+// (`applyTheme`), so every draw reads the right one. Text ≥ 4.5:1 and marks ≥ 3:1 against the theme's pane background
+// (tests/theme.test.ts measures both). Seal red, the band red, pale gold on them and the scarf sit on their own
+// backgrounds and stay the same in both themes.
+/** The band's star sits on the band red in both themes, so it keeps the bright gold (6.4:1 on #7A1712). */
+export const BAND_GOLD = '#F2C14E'
+export type ThemeName = 'dark' | 'light'
+export const PALETTES = {
+  dark: { bg: '#17181A', quiet: '#8E918A', line: '#3a3c36', gold: '#F2C14E', ink: '#E9E4D8', paneInk: '#ECE9E2', a5Quiet: '#8E8A80', hit: '#E5534B', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' },
+  light: { bg: '#FFFFFF', quiet: '#5F625C', line: '#C9C6BE', gold: '#8A6100', ink: '#1F1D1A', paneInk: '#1F1D1A', a5Quiet: '#5E5A52', hit: '#B3261E', hair: '#D9D5CC', rim: '#C9C4B8', label: '#5E5A52', ok: '#2E7D4A', warn: '#8F5B00', bad: '#B3261E' },
+} as const
+/** A40: which palette each colour role of a5 draws as text (≥ 4.5:1) and which as a mark (≥ 3:1). */
+export const TEXT_ROLES = ['quiet', 'ink', 'paneInk', 'a5Quiet', 'label', 'gold', 'ok', 'warn', 'bad', 'hit'] as const
+export const MARK_ROLES = ['gold', 'ok', 'warn', 'bad', 'hit'] as const
+
+export const ATHER: { accent: string; quiet: string; line: string } = { accent: '#DDFF00', quiet: '#8E918A', line: '#3a3c36' }
+export const A5_LOOK: { gold: string; sealBg: string; sealText: string; ivory: string; quiet: string; meter: string; meterTrack: string; hit: string; paneInk: string } = { gold: '#F2C14E', sealBg: '#B3261E', sealText: '#F6D98A', ivory: '#E9E4D8', quiet: '#8E8A80', meter: '#E8473C', meterTrack: '#4A2220', hit: '#E5534B', paneInk: '#ECE9E2' }
 /** A35/A36 (mockup v2): the thin band's darker red, the list's hairline, a chip's neutral rim, the section label grey. */
-export const V2 = { band: '#7A1712', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', gutter: 2 } as const
-export const STATUS = { ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' } as const
+export const V2: { band: string; hair: string; rim: string; label: string; gutter: number } = { band: '#7A1712', hair: '#2E2C29', rim: '#3A3833', label: '#8E8A80', gutter: 2 }
+export const STATUS: { ok: string; warn: string; bad: string } = { ok: '#5FB87A', warn: '#E0A93B', bad: '#E5534B' }
+let themeInForce: ThemeName = 'dark'
+/** A40: the app theme's palette name from `/config`'s "theme" value (dark, light, dark-daltonized, light-ansi, …). */
+export const themeOf = (value: unknown): ThemeName => (/light/i.test(String(value ?? '')) ? 'light' : 'dark')
+export const currentTheme = (): ThemeName => themeInForce
+/** A40: every shared colour object takes the theme's palette. */
+export const applyTheme = (name: ThemeName): void => {
+  const p = PALETTES[name]
+  themeInForce = name
+  Object.assign(ATHER, { quiet: p.quiet, line: p.line })
+  Object.assign(A5_LOOK, { gold: p.gold, ivory: p.ink, quiet: p.a5Quiet, hit: p.hit, paneInk: p.paneInk })
+  Object.assign(V2, { hair: p.hair, rim: p.rim, label: p.label })
+  Object.assign(STATUS, { ok: p.ok, warn: p.warn, bad: p.bad })
+}
 // The unfilled part of a meter: a dark step of the fill's own hue (dataviz: same-ramp track).
 export const TRACK = { ok: '#2E4A37', warn: '#4A3D1E', bad: '#4A2220' } as const
 
@@ -101,7 +129,7 @@ type ElB = El & { Button: (p: Record<string, unknown>) => unknown }
 export const RULE_SHORT: Record<(typeof RULES)[number][0], string> = { D1: 'Love the project', D2: 'Study and work well', D3: 'Unity and discipline', D4: 'Keep it clean', D5: 'Modest, honest, brave' }
 
 /** A36: a chip's rim: gold when selected, the seal red when its rule was hit today, else the neutral rim. */
-export const chipRim = (selected: boolean, hit: boolean): string => (selected ? A5_LOOK.gold : hit ? A5_LOOK.sealBg : V2.rim)
+export const chipRim = (selected: boolean, hit: boolean): string => (selected ? A5_LOOK.gold : hit ? A5_LOOK.hit : V2.rim)
 
 /** A36 (mockup v2): the five rules as quiet outlined chips "<n> <short name>" in a wrapping row, under the section
  * label "THE FIVE RULES" (rule 1's country / project word beside it, A20). A chip's rim is neutral by default, red only
@@ -129,7 +157,7 @@ export const rulesChips = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
             borderStyle: 'round',
             borderColor: chipRim(open === c.n, hits[c.id] > 0),
             paddingX: 1,
-            children: [el.Button({ key: `hai-a5-chip-${c.n}`, label: `${c.n} ${RULE_SHORT[c.id]}`, plain: true, onPress: press(c.n) }), ...extra(c.n)],
+            children: [el.Button({ key: `hai-a5-chip-${c.n}`, label: `${c.n} ${RULE_SHORT[c.id]}`, plain: true, onPress: press(c.n) }), ...tip(el, c), ...extra(c.n)],
           }),
         ),
       }),
@@ -154,6 +182,16 @@ export const rulesChips = (el: ElB, cards: readonly RuleCard[], hits: RuleHits, 
   })
 }
 
+const xml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+/** A40: a chip's tooltip: the engine shows an SVG's `<title>` in an interactive frame, so each chip carries a small dot
+ * whose title is the rule's full name and purpose (desktop; the root stays transparent in both themes). */
+const tip = (el: ElB, c: RuleCard): unknown[] => {
+  const svg = (el as unknown as { Svg?: (p: Record<string, unknown>) => unknown }).Svg
+  if (!svg) return []
+  const title = xml(c.purpose ? `${c.name} — ${c.purpose}` : c.name)
+  return [svg({ source: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" style="color-scheme: light dark; background: transparent"><title>${title}</title><circle cx="5" cy="5" r="2.2" fill="${V2.label}"/></svg>`, alt: c.name, width: 10, height: 10, isInteractive: true })]
+}
+
 /** A35: the hairline that divides rows and sets off the rule card: a full-width rule clipped to one line. */
 export const hairline = (el: El, key: string, color: string = V2.hair): unknown =>
   el.Box({ key, width: '100%', height: 1, overflow: 'hidden', children: [el.Text({ color, children: '─'.repeat(240) })] })
@@ -172,7 +210,7 @@ export const a5Band = (el: El, isOn = true, isFrozen = false): unknown =>
     paddingX: V2.gutter,
     backgroundColor: V2.band,
     children: [
-      el.Box({ key: 'hai-a5-band-star', flexShrink: 0, children: [el.Text({ color: A5_LOOK.gold, bold: true, children: '★' })] }),
+      el.Box({ key: 'hai-a5-band-star', flexShrink: 0, children: [el.Text({ color: BAND_GOLD, bold: true, children: '★' })] }),
       el.Box({ key: 'hai-a5-band-title', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, bold: true, children: bandTitle('A5') })] }),
       el.Box({ key: 'hai-a5-band-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
       ...(isFrozen ? [el.Box({ key: 'hai-a5-band-freeze', flexShrink: 0, children: [el.Text({ color: A5_LOOK.sealText, children: '❄' })] })] : []), // A38: the sync freeze

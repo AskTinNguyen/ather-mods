@@ -23,7 +23,7 @@ test('A32: unit: the cards come from the rule lines: name, purpose, the first se
   expect(ruleCards('').map(c => [c.name, c.purpose, c.action])).toEqual([['Love the project, love your fellow sessions', '', ''], ['Study well, work well', '', ''], ['Unity and discipline', '', ''], ['Keep it clean', '', ''], ['Modest, honest, brave', '', '']])
 })
 
-const RIM = { neutral: '#3A3833', red: '#B3261E', gold: '#F2C14E' }
+const RIM = { neutral: '#3A3833', red: '#E5534B', gold: '#F2C14E' } // A40: the dark theme's hit red (#B3261E reads 2.7:1 on the dark pane)
 const SHORT = ['1 Love the project', '2 Study and work well', '3 Unity and discipline', '4 Keep it clean', '5 Modest, honest, brave']
 const rims = (tree: unknown) => [1, 2, 3, 4, 5].map(n => find(tree, `hai-a5-chip-${n}-box`)?.props?.borderColor)
 

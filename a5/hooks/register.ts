@@ -12,7 +12,7 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { curtainSvg, icon, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
-import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
+import { A5_LOOK, ATHER, STATUS, V2, a5Band, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5 off it draws nothing into Ather's
@@ -46,12 +46,12 @@ const ALLOW_ONCE = 'Allow once'
 const ALLOW_SESSION = 'Allow for this session'
 const ATHER_PANE = 'ather'
 const A5_PANE = 'a5'
-const PANE_INK = { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet } // A33: the A5 pane's text: ivory, and its quiet grey // A29: the A5 pane's id ($.ui.open) and its render requestId
+const PANE_INK = (): { ink: string; quiet: string } => ({ ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet }) // A33/A40: the A5 pane's text and quiet grey, per theme // A29: the A5 pane's id ($.ui.open) and its render requestId
 const EDITOR_PERIOD_MS = 60_000
 const SYNC_STALE_MS = 3 * 60_000
 const MOTION_MS = 2_500 // a state change animates in renders within this window
 const RULE_NAMES: Record<string, string> = RULE_SHORT // D9 / A34, short for refusals
-const INK = '#ECE9E2'
+const INK = (): string => A5_LOOK.paneInk // A40: the pane's ink, per theme
 
 let engine: A5 | null = null
 let rulesA5 = ''
@@ -691,6 +691,7 @@ function runTick($: Engine, opts: Opts): Promise<void> {
 }
 
 async function tick($: Engine, opts: Opts): Promise<void> {
+  await readTheme($)
   if ((await readA5($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
   if (!(await readA5($))) {
     showStatus($)
@@ -1771,6 +1772,17 @@ function motionFor(key: string, sig: string, color: string, now: number, running
   return s && s.at > 0 && now - s.at < MOTION_MS ? { kind: 'reveal', from: s.from, ms: 700 } : { kind: 'still' }
 }
 
+/** A40: the app theme from `/config` ("theme"), applied to every colour a5 draws; dark when it cannot be read. */
+async function readTheme($: Engine): Promise<void> {
+  const rows = await $.config.list().catch(() => [])
+  const row = rows.find(x => x.key === 'theme')
+  const name = themeOf(row?.value)
+  if (name !== currentTheme()) {
+    applyTheme(name)
+    $.ui.invalidate('ui.render')
+  }
+}
+
 /** The reads both panes need, off the render: the branch state, the nghiệm thu score (when one is wanted, or the
  * Ship check is due), the PR lines. */
 function scheduleReads($: Engine, opts: Opts, now: number): void {
@@ -1811,9 +1823,9 @@ function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolea
   const tint = (warn: boolean, base: string) => (warn ? STATUS.warn : base)
   const still: Motion = { kind: 'still' }
   return [
-    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK, now, false, opts), isDesktop), ...(editorName ? { name: editorName } : {}), value: editorValue, isWarn: editorWarn },
+    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK()), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK(), now, false, opts), isDesktop), ...(editorName ? { name: editorName } : {}), value: editorValue, isWarn: editorWarn },
     { key: 'memory', icon: icon(el, 'memory', tint(under, STATUS.ok), still, isDesktop), value: memText, isWarn: under },
-    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK), opts.motion === 'off' ? still : motionFor('main', syncText, INK, now, phase === 'frozen', opts), isDesktop), value: syncText, isWarn: syncWarn },
+    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK()), opts.motion === 'off' ? still : motionFor('main', syncText, INK(), now, phase === 'frozen', opts), isDesktop), value: syncText, isWarn: syncWarn },
   ]
 }
 
@@ -1833,7 +1845,8 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     scheduleReads($, opts, now)
     // A30: "★ A5 ›" on the seal red (a Button has no colour of its own: the red is its box's background).
     const button = el.Button({ key: 'hai-a5-open', label: '★ A5 ›', plain: true, onPress: () => void openA5Pane($) })
-    let line = compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, A5_LOOK.sealBg)
+    // A40: the button's label is the surface's ink; seal red behind it reads in the dark theme, a red rim in the light one.
+    let line = compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, currentTheme() === 'dark' ? A5_LOOK.sealBg : undefined, currentTheme() === 'light' ? A5_LOOK.hit : undefined)
     // A37: the compact line's entrance when it first draws (desktop, motion on).
     if (lineEnterAt === 0) lineEnterAt = now
     if (isDesktop && opts.motion !== 'off' && now - lineEnterAt < ENTRANCE_MS) {
@@ -1937,10 +1950,10 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
       const color = t.dot && t.dot !== STATUS.ok ? t.dot : A5_LOOK.gold
       t.icon = icon(el, name, color, motionFor(`pane-${t.key}`, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
-    kids.push(tilesRow(el, tiles, isDesktop, PANE_INK))
+    kids.push(tilesRow(el, tiles, isDesktop, PANE_INK()))
     // A26: the sessions on this machine as a short named list, one line each.
     const view = sessionsView({ me8: id8, meTitle: me?.title ?? '', files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now), names: sessionNames })
-    kids.push(sessionsBox(el, view, isDesktop, PANE_INK))
+    kids.push(sessionsBox(el, view, isDesktop, PANE_INK()))
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
@@ -1975,7 +1988,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     const s = lastAccept?.scores.find(x => x.rule === n)
     return s ? [el.Text({ key: `hai-a5-chip-${n}-mark`, color: s.state === 'pass' ? STATUS.ok : s.state === 'fail' ? STATUS.bad : A5_LOOK.quiet, children: s.state === 'pass' ? '✓' : s.state === 'fail' ? '✗' : '–' })] : []
   }
-  let rules = rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.sealBg }, marks)
+  let rules = rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.hit }, marks)
   if (isFx)
     for (const n of [1, 2, 3, 4, 5]) {
       const id = `D${n}`
@@ -2008,6 +2021,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const res = await next(e)
+    await readTheme($) // A40
     await $.command.register({
       name: 'a5',
       description: 'A5: /a5 (opens the A5 pane) · /a5 on · /a5 off · /a5 status · /a5 accept (A5 acceptance now) · /a5 gate <with PIE GB> <without PIE GB> | reset · /a5 sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5 acceptance before a PR; Editor holder, RAM and Sync main)',
@@ -2220,6 +2234,15 @@ export const register: Register = (on, options) => {
 
   // Ather's pane: drawn by Ather beneath; this wraps what it drew.
   on('ui.render', { component: 'Pane', requestId: ATHER_PANE }, async ($, e, next) => drawPane($, opts, e, await next(e)))
+  // A40: the theme changed in /config: every colour follows at once.
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const res = await next(e)
+    if (!('deny' in res && res.deny)) {
+      applyTheme(themeOf(e.value))
+      $.ui.invalidate('ui.render')
+    }
+    return res
+  })
   // A29: the A5 pane is this plugin's own: drawn here, never by anything beneath.
   on('ui.render', { component: 'Pane', requestId: A5_PANE }, async ($, e) => drawA5Pane($, opts, e))
 }

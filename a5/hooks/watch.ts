@@ -6,7 +6,7 @@
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
 import { A5_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
 
-const A5_MARK = A5_LOOK.gold // A31: this session's ★
+// A31: this session's ★ takes the theme's gold (read at each draw, A40).
 
 export const PIE_START_GB = 5
 export const PIE_ABORT_GB = 3
@@ -283,7 +283,7 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
   const { Box, Text } = el
   // A31: ★ marks this session (no "(this session)" text); others a dot: ok green with a5, warn without. The title is
   // the only part that shortens; the status (holds, "no a5", age) sits at the end and is never cut.
-  const mark = (r: SessionRow) => (r.isMe ? Text({ color: A5_MARK, children: '★' }) : Text({ color: r.hasA5 ? STATUS.ok : STATUS.warn, children: '●' }))
+  const mark = (r: SessionRow) => (r.isMe ? Text({ color: A5_LOOK.gold, children: '★' }) : Text({ color: r.hasA5 ? STATUS.ok : STATUS.warn, children: '●' }))
   const row = (r: SessionRow) =>
     Box({
       key: `hai-session-${r.id8}`,
@@ -316,7 +316,7 @@ export type LinePart = { key: string; icon: unknown; name?: string; value: strin
 /** A28/A30: the one A5 block in Ather's pane: icons and values only (no words), in a single row: the Editor holder
  * and until, free RAM, main's behind count (or the planned sync's time), then "★ A5 ›" on the seal red. Only the
  * holder's name shortens and ends in "…"; numbers and times keep their width; the button never shrinks. */
-export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean, buttonBg?: string): unknown => {
+export const compactLine = (el: El, parts: LinePart[], button: unknown, isDesktop: boolean, buttonBg?: string, buttonRim?: string): unknown => {
   const { Box, Text } = el
   const ink = (p: LinePart) => (p.isWarn ? STATUS.warn : ATHER.quiet)
   return Box({
@@ -342,7 +342,7 @@ export const compactLine = (el: El, parts: LinePart[], button: unknown, isDeskto
         }),
       ),
       Box({ key: 'hai-a5-line-gap', flexGrow: 1, flexShrink: 1, minWidth: 0 }),
-      Box({ key: 'hai-a5-line-open', flexShrink: 0, ...(buttonBg ? { backgroundColor: buttonBg } : {}), children: [button] }),
+      Box({ key: 'hai-a5-line-open', flexShrink: 0, ...(buttonBg ? { backgroundColor: buttonBg } : {}), ...(buttonRim ? { borderStyle: 'round', borderColor: buttonRim } : {}), children: [button] }),
     ],
   })
 }
