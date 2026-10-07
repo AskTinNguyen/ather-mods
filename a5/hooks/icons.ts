@@ -70,3 +70,23 @@ export const icon = (el: El, name: IconName, color: string, motion: Motion, isDe
   isDesktop && el.Svg
     ? el.Svg({ source: pixelSvg(ICONS[name], color, motion), alt: name, width: 14, height: 14, ...(motion.kind === 'still' ? {} : { isInteractive: true }) })
     : el.Text({ color, children: GLYPH[name] })
+
+// ---------- A37 / A38: pixel curtains laid over a block (an absolute box over it, its own SVG) ----------
+/** A curtain's cells clear (opacity 1 → 0) or fill (0 → 1) in the 4×4 Bayer order, `step` ms apart from `begin`. */
+export type Curtain = { color: string; begin: number; step: number; clear: boolean }
+
+/** The latest moment (ms) a curtain's last cell finishes: what the entrance budget (≤ 300 ms) is checked against. */
+export const curtainEnd = (c: Curtain): number => c.begin + 15 * c.step + c.step
+
+/** A full-block pixel curtain: one 8×8 pattern of 4×4 two-pixel cells, each animating once at its Bayer threshold, tiled
+ * over a canvas wider and taller than any block (the box over it clips it to the block). One shot: `fill="freeze"`. */
+export const curtainSvg = (c: Curtain): string => {
+  const cells: string[] = []
+  for (let y = 0; y < 4; y += 1)
+    for (let x = 0; x < 4; x += 1) {
+      const t = BAYER[y]?.[x] ?? 0
+      const [from, to] = c.clear ? ['1', '0'] : ['0', '1']
+      cells.push(`<rect x="${x * 2}" y="${y * 2}" width="2" height="2" fill="${c.color}" opacity="${from}"><animate attributeName="opacity" from="${from}" to="${to}" begin="${c.begin + t * c.step}ms" dur="${c.step}ms" fill="freeze"/></rect>`)
+    }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="480" shape-rendering="crispEdges"><defs><pattern id="a5c" width="8" height="8" patternUnits="userSpaceOnUse">${cells.join('')}</pattern></defs><rect width="2400" height="480" fill="url(#a5c)"/></svg>`
+}

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { ruleCards } from '../hooks/theme.ts'
-import { A5PANE, LOCK, PANE, PENDING, PROJ, all, atherTree, find, keys, opts, text, world } from './world.ts'
+import { A5PANE, LOCK, PANE, PENDING, PROJ, all, atherTree, find, keys, opts, text, still, world } from './world.ts'
 
 // A27 → A32 (rev 9) → A36 (rev 10, mockup v2): the five rules are the A5 pane's last block as five round seals (red fill, gold rim, gold
 // numeral) in one row under "The five rules" (rule 1's country / project word beside it); pressing a seal opens that rule's
@@ -33,7 +33,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
     await $.session.start({ cwd: PROJ, surface, isInteractive: true } as never)
     const P = { ...A5PANE, surface } as never
-    let tree = await $.ui.render(P)
+    let tree = still(await $.ui.render(P))
     expect(keys(tree).at(-1)).toBe('hai-a5-rules')
     expect(find(await $.ui.render({ ...PANE, surface } as never), 'hai-a5-rules')).toBeUndefined() // none in Ather's pane
     expect(text(find(tree, 'hai-a5-rules-head')).startsWith('THE FIVE RULES')).toBe(true)
@@ -45,16 +45,16 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(rims(tree)).toEqual([RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral]) // nothing hit: no red
     expect(find(tree, 'hai-a5-rule-card')).toBeUndefined()
     await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-3', surface } as never)
-    tree = await $.ui.render(P)
+    tree = still(await $.ui.render(P))
     expect(rims(tree)).toEqual([RIM.neutral, RIM.neutral, RIM.gold, RIM.neutral, RIM.neutral]) // the selected one gold
     expect(keys(find(tree, 'hai-a5-rules'))).toEqual(['hai-a5-rules-head', 'hai-a5-chips', 'hai-a5-rule-hair', 'hai-a5-rule-card'])
     const card = (find(tree, 'hai-a5-rule-card')?.children ?? []).map(c => text(c))
     expect(card).toEqual(['Unity and discipline', 'right role, right scope, right channel', 'At the action: With a scope file, edits outside it need approval.', 'At acceptance: The diff stays within the paths the intent names.', 'Hits today: 0'])
     await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-2', surface } as never)
-    tree = await $.ui.render(P)
+    tree = still(await $.ui.render(P))
     expect((find(tree, 'hai-a5-rule-card')?.children ?? []).map(c => text(c))[2]).toBe('At the action: — (nothing is blocked at the call)')
     await $.ui.press({ plugin: 'a5', key: 'hai-a5-chip-2', surface } as never)
-    tree = await $.ui.render(P)
+    tree = still(await $.ui.render(P))
     expect([find(tree, 'hai-a5-rule-card'), find(tree, 'hai-a5-rule-hair')]).toEqual([undefined, undefined])
     expect(rims(tree)).toEqual([RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral, RIM.neutral])
   })

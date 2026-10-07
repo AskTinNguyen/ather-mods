@@ -199,6 +199,7 @@ export const minWidth = (node: unknown, wraps = false): number => {
   if (t.type === 'Client') return 11
   // A35: a box that clips (overflow hidden: a hairline) needs no width of its own; margins add like padding.
   if (p.overflow === 'hidden') return Number(p.marginX ?? 0) * 2
+  if (p.position === 'absolute') return 0 // A37: a curtain lies over its block and takes no room
   const pad = Number(p.paddingX ?? 0) * 2 + Number(p.paddingLeft ?? 0) + Number(p.paddingRight ?? 0) + (p.borderStyle ? 2 : 0) + Number(p.marginX ?? 0) * 2 + Number(p.marginLeft ?? 0) + Number(p.marginRight ?? 0)
   const widths = kids.map(c => minWidth(c))
   if (p.flexDirection === 'column' || p.flexWrap === 'wrap') return pad + Math.max(0, ...widths)
@@ -212,4 +213,16 @@ export const all = (t: unknown, out: Tree[] = []): Tree[] => {
     for (const c of (t as Tree).children ?? []) all(c, out)
   }
   return out
+}
+
+/** A37: a drawn tree without its entrance and event curtains (absolute boxes keyed hai-a5-in… / hai-a5-fx…), for tests
+ * that read a block's own children while a curtain may still lie over it. */
+export const still = <T>(tree: T): T => {
+  const strip = (n: unknown): unknown => {
+    if (!n || typeof n !== 'object' || Array.isArray(n)) return n
+    const t = n as Tree
+    const kids = (t.children ?? []).filter(c => !/^hai-a5-(in|fx)/.test(String((c as Tree)?.props?.key ?? ''))).map(strip)
+    return { ...t, ...(t.children ? { children: kids } : {}) }
+  }
+  return strip(tree) as T
 }

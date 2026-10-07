@@ -11,7 +11,7 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { icon, sealSvg, type Motion } from './icons.ts'
+import { curtainEnd, curtainSvg, icon, sealSvg, type Curtain, type Motion } from './icons.ts'
 import { A5_LOOK, ATHER, STATUS, V2, a5Band, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
@@ -67,6 +67,11 @@ let a5FlipAt = 0
 let hits: RuleHits = noHits()
 let hitsDay = '' // A32: the day the counts are for ('Hits today')
 let openRule: number | null = null // A32: the rule whose card is open in the A5 pane
+// A37: when the A5 pane opened (or first drew) and when the compact line first drew: their entrance plays then.
+let paneEnterAt = 0
+let lineEnterAt = 0
+const ENTRANCE_MS = 1_000 // how long after the opening the curtains stay in the tree (they finish within 300 ms)
+const ENTRANCE_BUDGET_MS = 300
 let isS2 = false
 let lockView: LockView | undefined
 let vitals: Vitals | undefined
@@ -1765,6 +1770,7 @@ function scheduleReads($: Engine, opts: Opts, now: number): void {
 
 /** A29: open (or bring back) the A5 pane; a toast when the surface could not place it. */
 async function openA5Pane($: Engine): Promise<string> {
+  paneEnterAt = await $.clock.now() // A37: the entrance plays at the next draw
   const r = await $.ui.open({ id: A5_PANE, title: 'A5' }).catch(err => ({ isPlaced: false, reason: String(err) }) as const)
   if (r.isPlaced) return 'A5 pane opened.'
   const why = 'reason' in r ? String(r.reason) : 'not placed'
@@ -1816,13 +1822,37 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
     scheduleReads($, opts, now)
     // A30: "★ A5 ›" on the seal red (a Button has no colour of its own: the red is its box's background).
     const button = el.Button({ key: 'hai-a5-open', label: '★ A5 ›', plain: true, onPress: () => void openA5Pane($) })
-    kids.splice(stripAt + 1, 0, compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, A5_LOOK.sealBg))
+    let line = compactLine(el, lineParts(el, opts, isDesktop, now), button, isDesktop, A5_LOOK.sealBg)
+    // A37: the compact line's entrance when it first draws (desktop, motion on).
+    if (lineEnterAt === 0) lineEnterAt = now
+    if (isDesktop && opts.motion !== 'off' && now - lineEnterAt < ENTRANCE_MS) {
+      line = withCurtain(el as never, line, 'hai-a5-line-in', entrance(1)[0] as Curtain)
+      $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render'))
+    }
+    kids.splice(stripAt + 1, 0, line)
   }
   // The pixel seal only while it stamps in on the desktop; the crisp text seal the rest of the time.
   const stamp = opts.motion !== 'off' && now - a5FlipAt < MOTION_MS
   const sealEl = stamp && isDesktop && el.Svg ? el.Svg({ source: sealSvg(A5_LOOK.sealBg, A5_LOOK.sealText, true), alt: 'A5 on', width: 27, height: 14, isInteractive: true }) : undefined
   kids = kids.map(k => replaceKeyed(k, 'head-words', words => withSeal(el, words, sealEl)))
   return recolor({ ...(tree as object), children: kids } as unknown as RenderElement)
+}
+
+/** A37/A38: a pixel curtain laid over a block: an absolute box spanning it (painted over what it holds, clipped to
+ * it) holding one SVG whose cells clear or fill in Bayer order. The block becomes the curtain's positioning parent. */
+function withCurtain(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, c: Curtain): unknown {
+  if (!el.Svg) return block
+  const b = block as { props?: Record<string, unknown>; children?: unknown[] }
+  const curtain = el.Box({ key, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', children: [el.Svg({ source: curtainSvg(c), alt: '', width: 2400, height: 480, isInteractive: true })] })
+  return { ...b, props: { ...(b.props ?? {}), position: 'relative' }, children: [...(b.children ?? []), curtain] }
+}
+
+/** A37: the entrance: each block in turn (band, tools, sessions, card, rules) dithers in from seal-red pixels, the
+ * whole sequence ending within 300 ms; the cells take 4 ms apiece. */
+const entrance = (n: number): Curtain[] => {
+  const step = 4
+  const last = ENTRANCE_BUDGET_MS - 16 * step
+  return Array.from({ length: n }, (_, i) => ({ color: A5_LOOK.sealBg, begin: n > 1 ? Math.floor((i * last) / (n - 1)) : 0, step, clear: true }))
 }
 
 /** A35 (mockup v2): the A5 pane's frame: the band at full width, then every block on one gutter, one gap between blocks. */
@@ -1904,6 +1934,16 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     $.ui.invalidate('ui.render')
   }
   kids.push(rulesChips(el as never, ruleCards(rulesA5), hits, openRule, pressSeal, motto, { ink: A5_LOOK.ivory, quiet: A5_LOOK.quiet, hit: A5_LOOK.sealBg }))
+  // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
+  if (paneEnterAt === 0) paneEnterAt = now
+  const isEntering = isDesktop && opts.motion !== 'off' && now - paneEnterAt < ENTRANCE_MS
+  if (isEntering) {
+    const plan = entrance(kids.length)
+    kids.forEach((k, i) => {
+      kids[i] = withCurtain(el as never, k, `hai-a5-in-${i}`, plan[i] as Curtain)
+    })
+    $.clock.after(ENTRANCE_MS + 10, () => $.ui.invalidate('ui.render')) // then still: the curtains leave the tree
+  }
   return recolor(paneOf(el, kids))
 }
 

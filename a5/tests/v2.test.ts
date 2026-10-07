@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine } from '../hooks/coord.ts'
-import { A5PANE, LOCK, NOW, PROJ, all, find, keys, minWidth, opts, text, world, type Tree } from './world.ts'
+import { A5PANE, LOCK, NOW, PROJ, all, find, keys, minWidth, opts, text, still, world, type Tree } from './world.ts'
 
 // A35 (mockup v2, Hai: "Ok better"): the A5 pane as one gutter and one gap: a thin band whose words sit on the
 // content gutter, the three tools as ONE list in one hairline box with hairline dividers (icon, a fixed label column,
@@ -21,7 +21,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       const P = { ...A5PANE, surface, props: { ...A5PANE.props, bodyColumns: columns } } as never
       await $.ui.render(P)
       await w.clock.advance(50)
-      const tree = (await $.ui.render(P)) as Tree
+      const tree = still((await $.ui.render(P))) as Tree
       // One gap between blocks; the band full width with its words on the gutter; every other block on the gutter.
       expect(keys(tree)).toEqual(['hai-a5-band', 'hai-tiles', 'hai-overview', 'hai-a5-rules'])
       expect(tree.props?.rowGap).toBe(1)
