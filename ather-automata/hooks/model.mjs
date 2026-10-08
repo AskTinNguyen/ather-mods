@@ -231,7 +231,7 @@ export const intentPrs = (progress, prompt) => {
 
 /**
  * @typedef {'MERGED' | 'OPEN' | 'CLOSED' | 'UNREAD'} PrState what gh last said about a PR; UNREAD when it could not say
- * @typedef {Readonly<Record<string, PrState>>} PrStates PR number → its last read state
+ * @typedef {Readonly<Record<string, PrState>>} PrStates PR number (prKey) → its last read state
  */
 
 // Open, with a checklist whose every item is met: the only intents whose PRs decide anything.
@@ -241,11 +241,20 @@ export const isAllMet = intent => intent.status !== 'completed' && intent.accept
 // Every item met and every named PR merged, yet not closed: the orchestrator's Close step is owed.
 // An intent with no PR named is not ready: nothing says the work has landed.
 /** @param {Intent} intent @param {PrStates} prs */
-export const isReadyToClose = (intent, prs) => isAllMet(intent) && intent.prs.length > 0 && intent.prs.every(number => prs[number] === 'MERGED')
+export const isReadyToClose = (intent, prs) => isAllMet(intent) && intent.prs.length > 0 && intent.prs.every(number => prs[prKey(intent, number)] === 'MERGED')
 
 // "#32372 MERGED", "#32398 not read yet": each PR the intent names, with what gh last said.
 /** @param {Intent} intent @param {PrStates} prs */
-export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number} ${prs[number] === 'UNREAD' ? 'could not be read' : (prs[number] ?? 'not read yet')}`)
+export const prStatusList = (intent, prs) =>
+  intent.prs.map(number => {
+    const state = prs[prKey(intent, number)]
+    return `#${number} ${state === 'UNREAD' ? 'could not be read' : (state ?? 'not read yet')}`
+  })
+
+// Where an intent's PR is in a PrStates that holds several checkouts' PRs: its number for the session's
+// own checkout, `<root>#<number>` for another (the same number names another PR in another repository).
+/** @param {{ slug: string, key: string, root: string }} intent @param {number} number */
+export const prKey = (intent, number) => (otherRoot(intent) ? `${otherRoot(intent)}#${number}` : String(number))
 
 /**
  * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string,

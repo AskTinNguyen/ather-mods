@@ -312,16 +312,17 @@ export const readRecurring = async (io, pack = unreal) => {
   }))
   return recurring.filter((_, index) => !isWritten[index])
 }
-/** @param {Io} io @param {string} me @returns {Promise<import('./issues.mjs').Issue[]>} */
-export const readIssues = async (io, me) => {
-  const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me, await repoOf(io))))
+// The issues, PR records and PR states below are the session's repository's, or with `repo` that repository's.
+/** @param {Io} io @param {string} me @param {string} [repo] @returns {Promise<import('./issues.mjs').Issue[]>} */
+export const readIssues = async (io, me, repo) => {
+  const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me, repo ?? (await repoOf(io)))))
   return cached?.list && Date.now() - (cached.at ?? 0) < ISSUES_TTL_MS ? cached.list : []
 }
-/** @param {Io} io @returns {Promise<Record<string, import('./prs.mjs').PrRecord>>} */
-export const readPrRecords = async io => /** @type {Record<string, import('./prs.mjs').PrRecord>} */ ((await io.get(KEY.prs(await repoOf(io)))) ?? {})
+/** @param {Io} io @param {string} [repo] @returns {Promise<Record<string, import('./prs.mjs').PrRecord>>} */
+export const readPrRecords = async (io, repo) => /** @type {Record<string, import('./prs.mjs').PrRecord>} */ ((await io.get(KEY.prs(repo ?? (await repoOf(io))))) ?? {})
 // PR number → its last read state, for the pure readers in model.mjs.
-/** @param {Io} io @returns {Promise<import('./model.mjs').PrStates>} */
-export const readPrStates = async io => Object.fromEntries(Object.entries(await readPrRecords(io)).map(([number, record]) => [number, record.state]))
+/** @param {Io} io @param {string} [repo] @returns {Promise<import('./model.mjs').PrStates>} */
+export const readPrStates = async (io, repo) => Object.fromEntries(Object.entries(await readPrRecords(io, repo)).map(([number, record]) => [number, record.state]))
 // The person's "Continue …" in a repository: the session's, or with `root` the checkout holding that docs/intent.
 /** @param {Io} io @param {string} me @param {string} [root] @returns {Promise<string | null>} */
 export const readLast = async (io, me, root) => {
@@ -335,10 +336,10 @@ export const readScore = async io => /** @type {Record<string, number>} */ ((awa
 
 // ---------------------------------------------------------------- changing
 
-/** @param {Io} io @param {string} me @param {import('./issues.mjs').Issue[]} issues */
-export const setIssues = (io, me, issues) =>
+/** @param {Io} io @param {string} me @param {import('./issues.mjs').Issue[]} issues @param {string} [repo] */
+export const setIssues = (io, me, issues, repo) =>
   serial(async () => {
-    await io.set(KEY.issues(me, await repoOf(io)), { at: Date.now(), list: issues })
+    await io.set(KEY.issues(me, repo ?? (await repoOf(io))), { at: Date.now(), list: issues })
     changed(io)
   })
 
@@ -346,12 +347,13 @@ export const setIssues = (io, me, issues) =>
 const PRS_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 // What gh just said about some PRs ('UNREAD' when it could not say), each stamped `at`.
-/** @param {Io} io @param {import('./model.mjs').PrStates} states @param {number} at */
-export const setPrStates = (io, states, at) =>
+/** @param {Io} io @param {import('./model.mjs').PrStates} states @param {number} at @param {string} [repo] */
+export const setPrStates = (io, states, at, repo) =>
   serial(async () => {
     if (Object.keys(states).length === 0) return
-    const kept = Object.entries(await readPrRecords(io)).filter(([, record]) => at - record.at < PRS_TTL_MS)
-    await io.set(KEY.prs(await repoOf(io)), { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
+    const scope = repo ?? (await repoOf(io))
+    const kept = Object.entries(await readPrRecords(io, scope)).filter(([, record]) => at - record.at < PRS_TTL_MS)
+    await io.set(KEY.prs(scope), { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
     changed(io)
   })
 

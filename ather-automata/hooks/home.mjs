@@ -3,7 +3,7 @@
 // the person picks something. Pure: no `$`.
 
 import { windowDecisions } from './away.mjs'
-import { issueLabel, issuePrompt } from './issues.mjs'
+import { issueId, issueLabel, issuePrompt } from './issues.mjs'
 import { STAGE_LABELS, clockText, currentStage, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
@@ -88,7 +88,7 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * in the pane (model.mjs's Intent), `repoName` its repository's short name when the list holds several checkouts' intents.
  * @typedef {{ id: string, kind: 'intent', slug: string, key: string, root: string, repoName: string, label: string, hint: string, isMine: boolean, area: string, owner: string, who: string, updatedAt: number,
  *   stage: import('./worklist.mjs').ListStage, done: number, total: number, source: 'main' | 'local', warn: string }
- *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, label: string, hint: string, prompt: string, isMine: true, area: string, updatedAt: number, stage: '' }} Work
+ *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, repoName: string, label: string, hint: string, prompt: string, isMine: true, area: string, updatedAt: number, stage: '' }} Work
  * @typedef {{
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
@@ -124,13 +124,14 @@ export const weekText = week =>
   week ? [`This week: ${plural(week.prsMerged, 'PR')} merged`, week.productive === null ? '' : `${Math.round(week.productive * 100)}% productive`].filter(Boolean).join(' · ') : ''
 
 // What to work on, in one list: your open intents, then your GitHub issues that have no intent
-// yet (most urgent, then most recent), then teammates' intents you could follow. Intents from more
-// than one checkout each carry their repository's short name.
+// yet (most urgent, then most recent), then teammates' intents you could follow. Intents and issues
+// from more than one checkout each carry their repository's short name.
 /** @param {readonly Intent[]} intents @param {readonly import('./issues.mjs').Issue[]} issues @param {string} me @param {string} area @param {number} now @param {string} [role] @param {import('./model.mjs').PrStates} [prs] @param {Pack} [pack] @returns {Work[]} */
 export const workList = (intents, issues, me, area, now, role = 'set', prs = {}, pack = unreal) => {
-  const linked = new Set(intents.map(one => one.issue).filter(Boolean))
+  // An issue already started is hidden behind its intent: one in the same checkout.
+  const linked = new Set(intents.filter(one => one.issue).map(one => `${one.root}#${one.issue}`))
   const ranked = pickCandidates(intents, me, area)
-  const isMany = new Set(intents.map(one => one.root)).size > 1
+  const isMany = new Set([...intents.map(one => one.root), ...issues.map(issue => issue.root ?? '')]).size > 1
   /** @param {Intent} one @returns {Work} */
   const toIntent = one => ({
     id: `intent:${one.key}`, kind: 'intent', slug: one.slug, key: one.key, root: one.root, repoName: isMany ? one.repoName : '', label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area,
@@ -139,7 +140,9 @@ export const workList = (intents, issues, me, area, now, role = 'set', prs = {},
   })
   return [
     ...ranked.filter(one => isMine(one, me)).map(toIntent),
-    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area, updatedAt: issue.updatedAt, stage: '' }))),
+    ...issues
+      .filter(issue => !linked.has(`${issue.root ?? ''}#${issue.number}`))
+      .map(issue => (/** @type {Work} */ ({ id: issueId(issue), kind: 'issue', issue, repoName: isMany ? (issue.repoName ?? '') : '', label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area, updatedAt: issue.updatedAt, stage: '' }))),
     ...ranked.filter(one => !isMine(one, me)).map(toIntent),
   ]
 }

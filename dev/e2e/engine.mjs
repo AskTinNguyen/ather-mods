@@ -13,13 +13,13 @@ const element = type => (props = {}) => ({ type, props, children: [props.childre
 const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Markdown', 'Link', 'Code', 'Svg'].map(name => [name, element(name)]))
 
 // `writable`: more folders the model's Write and Edit may change (a sibling checkout); with it, a relative path is taken from `root`.
-export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env, writable }) => {
+export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable }) => {
   const store = new Map()
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
+  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -129,11 +129,14 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env, writa
         if (user !== undefined && argv.join(' ') === 'git config user.name') return { exitCode: 0, stdout: `${user}\n`, stderr: '' }
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
         if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
+        if (argv[0] === 'gh') record.ghAt.push({ argv: argv.join(' '), cwd: init.cwd ?? root })
+        // `ghAt` ({ [folder]: { issues, prs } }): each checkout's own fixtures, by the folder gh runs in.
+        const { issues: ghIssuesHere, prs: ghPrsHere } = ghAt ? (ghAt[init.cwd ?? root] ?? {}) : { issues: ghIssues, prs: ghPrs }
         // Every git call, with the variables it was given: the checks read its argv and env.
         if (argv[0] === 'git') record.gitRuns.push({ argv: [...argv], env: { ...(init.env ?? {}) } })
         // `gh pr view <n>`: the PR states are a fixture too ({ [n]: 'MERGED' | 'OPEN' }); an unknown PR is not found.
-        if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return ghPrs?.[argv[3]] ? { exitCode: 0, stdout: JSON.stringify({ state: ghPrs[argv[3]], mergedAt: ghPrs[argv[3]] === 'MERGED' ? '2026-10-04T01:31:16Z' : null }), stderr: '' } : { exitCode: 1, stdout: '', stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${argv[3]}.` }
-        if (argv[0] === 'gh') return ghIssues === undefined ? { exitCode: 1, stdout: '', stderr: 'gh: To get started with GitHub CLI, please run: gh auth login' } : { exitCode: 0, stdout: JSON.stringify(ghIssues), stderr: '' }
+        if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return ghPrsHere?.[argv[3]] ? { exitCode: 0, stdout: JSON.stringify({ state: ghPrsHere[argv[3]], mergedAt: ghPrsHere[argv[3]] === 'MERGED' ? '2026-10-04T01:31:16Z' : null }), stderr: '' } : { exitCode: 1, stdout: '', stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${argv[3]}.` }
+        if (argv[0] === 'gh') return ghIssuesHere === undefined ? { exitCode: 1, stdout: '', stderr: 'gh: To get started with GitHub CLI, please run: gh auth login' } : { exitCode: 0, stdout: JSON.stringify(ghIssuesHere), stderr: '' }
         try {
           const stdout = execFileSync(argv[0], argv.slice(1), { cwd: init.cwd ?? root, env: { ...process.env, ...(init.env ?? {}) }, encoding: 'utf8', timeout: init.timeoutMs ?? 30000, input: init.stdin, stdio: [init.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
           return { exitCode: 0, stdout, stderr: '' }

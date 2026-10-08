@@ -62,8 +62,8 @@ const makeWorkspace = () => {
 }
 
 // A session opened in `root`, started as the app starts it.
-const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable }) => {
-  const engine = createEngine({ root, surfaces: [], user, writable })
+const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable, ghAt }) => {
+  const engine = createEngine({ root, surfaces: [], user, writable, ghAt })
   engine.setSessionId(sessionId)
   register(engine.on, { briefGate: 'warn', ...options })
   await engine.start()
@@ -312,6 +312,111 @@ const writeIntent = (root, slug, text = LOGIN) => {
   expect('with no repository name', rows.length === 1 && rows.every(one => !one.warn.includes('s2')), rows.map(one => one.warn))
   await engine.flush()
   expect('and fetches its one origin', fetchRuns(engine).length === 1, fetchRuns(engine).map(run => run.argv))
+}
+
+// ---------------------------------------------------------------- issues and PRs from every checkout
+
+// `gh issue list --json …` rows.
+const issue = (number, title) => ({ number, title, url: `https://github.com/x/y/issues/${number}`, labels: [], updatedAt: '2026-10-01T00:00:00Z' })
+// An intent whose every item is met, naming PR #12: its stage waits on that PR.
+const SHIPPED = '# Pay\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: it pays.\n'
+const withPr = (root, slug) => {
+  writeIntent(root, slug, SHIPPED)
+  fs.writeFileSync(path.join(root, 'docs/intent', slug, 'progress.md'), '# Progress\n\n- PR: #12\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | t |\n')
+}
+const LIST = 'gh issue list --assignee @me --state open --limit 30 --json number,title,url,labels,updatedAt'
+// The issue rows a pane draws: each row's work id and its warn cell.
+const issueRows = tree =>
+  nodesOf(tree)
+    .filter(node => node.type === 'Button' && /^(pick|work)-issue:/.test(node.props?.key ?? ''))
+    .map(node => ({ id: node.props.key.replace(/^(pick|work)-/, ''), warn: textIn(byKey(tree, `${node.props.key}-warn`)).trim(), press: node.props.onPress }))
+// An intent row's stage glyph, from its drawn label.
+const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button' && [`pick-${id}`, `work-${id}`].includes(node.props?.key))?.props.label ?? '').trim().charAt(0)
+
+{
+  // A parent-folder session over s2/ and web/: each has its own issues and its own PR #12.
+  const { parent, s2, web } = makeWorkspace()
+  withPr(s2, 'pay')
+  withPr(web, 'pay')
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield'), issue(3, 'Rain')], prs: { 12: 'OPEN' } }, [web]: { issues: [issue(7, 'Login form')], prs: { 12: 'MERGED' } } }
+  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0009', ghAt })
+  engine.setSurfaces(['terminal'])
+  await engine.flush()
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect('gh issue list runs once in each checkout, with the same argv', JSON.stringify(lists) === JSON.stringify([s2, web]), engine.record.ghAt)
+  expect('each list is kept under its repository', engine.store.get('issues:sipher/s2|tinnguyen')?.list?.length === 2 && engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 1, [...engine.store.keys()].filter(key => key.startsWith('issues')))
+
+  await engine.command('ather', 'pick')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const rows = issueRows(await pane())
+  const ids = rows.map(one => one.id).sort()
+  expect('both lists show, #7 in both as two rows', JSON.stringify(ids) === JSON.stringify(['issue:s2#3', 'issue:s2#7', 'issue:web#7']), ids)
+  expect("each issue row carries its repository's name", rows.length === 3 && rows.every(one => one.warn === one.id.slice('issue:'.length).split('#')[0]), rows.map(one => [one.id, one.warn]))
+
+  // PRs: each checkout's #12 read with gh there and kept under its repository; each intent's stage follows its own.
+  await engine.flush()
+  const prViews = engine.record.ghAt.filter(run => run.argv.startsWith('gh pr view 12 ')).map(run => run.cwd).sort()
+  expect("gh pr view 12 runs in each intent's checkout", JSON.stringify(prViews) === JSON.stringify([s2, web].sort()), engine.record.ghAt.filter(run => run.argv.startsWith('gh pr')))
+  expect("web's #12 is MERGED and s2's OPEN, each under its repository", engine.store.get('prStates:asktinnguyen/web')?.[12]?.state === 'MERGED' && engine.store.get('prStates:sipher/s2')?.[12]?.state === 'OPEN', [engine.store.get('prStates:asktinnguyen/web'), engine.store.get('prStates:sipher/s2')])
+  const staged = await pane()
+  expect("web/pay is ready to close on web's merged #12; s2/pay still waits on s2's open #12", glyphOf(staged, 'intent:web/pay') === '✓' && glyphOf(staged, 'intent:s2/pay') === '◐', [glyphOf(staged, 'intent:web/pay'), glyphOf(staged, 'intent:s2/pay')])
+
+  // Start an intent on web#7: the session is told to create it under web's docs/intent.
+  rows.find(one => one.id === 'issue:web#7')?.press()
+  const card = await pane()
+  byKey(card, 'issue-start')?.props.onPress()
+  await engine.flush()
+  const sent = engine.record.submits.at(-1) ?? ''
+  const text = typeof sent === 'string' ? sent : (sent.text ?? '')
+  expect("Start an intent on web#7 names web's docs/intent", text.includes(`${web}/docs/intent`) && text.includes('#7'), text)
+
+  // /ather issue: s2's #3 alone; web#7 exactly.
+  await engine.command('ather', 'issue 3')
+  await engine.flush()
+  const three = engine.record.submits.at(-1)
+  const threeText = typeof three === 'string' ? three : (three?.text ?? '')
+  expect('/ather issue 3 starts the first checkout that has it (s2)', threeText.includes(`${s2}/docs/intent`), threeText)
+  await engine.command('ather', 'issue web#7')
+  await engine.flush()
+  const seven = engine.record.submits.at(-1)
+  const sevenText = typeof seven === 'string' ? seven : (seven?.text ?? '')
+  expect('/ather issue web#7 picks web', sevenText.includes(`${web}/docs/intent`), sevenText)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+}
+
+{
+  // One checkout: a session in s2/ alone runs the one gh issue list and keeps issue:<n> ids.
+  const { s2 } = makeWorkspace()
+  writeIntent(s2, 'login')
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0010', ghAt: { [s2]: { issues: [issue(7, 'Boss shield')] } } })
+  engine.setSurfaces(['terminal'])
+  await engine.flush()
+  const lists = engine.record.ghAt.filter(run => run.argv.startsWith('gh issue list'))
+  expect('a session in s2 alone runs one gh issue list, in s2, as before', lists.length === 1 && lists[0].argv === LIST && lists[0].cwd === s2, lists)
+  await engine.command('ather', 'pick')
+  const rows = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
+  expect('its issue is issue:7, with no repository name', JSON.stringify(rows.map(one => [one.id, one.warn])) === JSON.stringify([['issue:7', '']]), rows.map(one => [one.id, one.warn]))
+}
+
+{
+  // A session in s2/ with web/ as well: /ather issue 7 is s2's own #7 (as before); web#7 is web's.
+  const { s2, web } = makeWorkspace()
+  writeIntent(s2, 'login')
+  writeIntent(web, 'search')
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(7, 'Login form')] } }
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0011', options: { repos: '../web' }, ghAt })
+  await engine.flush()
+  await engine.command('ather', 'issue 7')
+  await engine.flush()
+  const own = String(engine.record.submits.at(-1) ?? '')
+  expect("/ather issue 7 prefers the session checkout's #7", own.includes('Boss shield') && !own.includes(`${web}/docs/intent`), own)
+  await engine.command('ather', 'issue #7')
+  await engine.flush()
+  expect('#7 is the same issue', String(engine.record.submits.at(-1) ?? '') === own, engine.record.submits.at(-1))
+  await engine.command('ather', 'issue web#7')
+  await engine.flush()
+  const other = String(engine.record.submits.at(-1) ?? '')
+  expect('/ather issue web#7 is web\'s', other.includes('Login form') && other.includes(`${web}/docs/intent`), other)
 }
 
 // ---------------------------------------------------------------- report

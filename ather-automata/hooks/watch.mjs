@@ -344,7 +344,7 @@ async function laneText($) {
   if (tracked && intent) {
     const { pack: its } = tracked.lane
     const { role } = await state.readProfile(io($), me, its)
-    const prs = await state.readPrStates(io($))
+    const prs = await state.readPrStates(io($), tracked.isOwn ? undefined : tracked.lane.repo)
     const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), its), role, prs, its)]
     const folder = tracked.isOwn ? `docs/intent/${intent.slug}/` : `${tracked.lane.root}/docs/intent/${intent.slug}/`
     lines.push(`Tracked intent: ${intent.slug} (${folder}), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
@@ -473,7 +473,7 @@ async function statusText($) {
   const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)), its)
   const away = await state.readAway(io($))
   const tz = await state.readTz(io($))
-  const prs = await state.readPrStates(io($))
+  const prs = await state.readPrStates(io($), tracked && !tracked.isOwn ? tracked.lane.repo : undefined)
   return JSON.stringify(
     {
       me,

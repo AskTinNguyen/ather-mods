@@ -4,8 +4,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
-import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
+import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
 import { checkoutOf, parseRepos, readWorkspace } from '../hooks/workspace.mjs'
 import { KINDS, avatarSvg, classifyWorker, crewWords, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
@@ -1512,3 +1512,74 @@ describe('one pane over the workspace', () => {
   })
 })
 
+describe('issues and PRs from every workspace checkout', () => {
+  const ISSUE = { number: 7, title: 'Fix login', name: 'Fix login', url: 'u', labels: [], area: 'Unsorted', isUrgent: false, updatedAt: 1 }
+  // An issue read in a checkout: its key is its number in the session's own checkout, `<repoName>#<n>` in another.
+  const at = (root, repoName, isOwn, number = 7) => ({ ...ISSUE, number, root, repo: `o/${repoName}`, repoName, key: isOwn ? String(number) : `${repoName}#${number}` })
+  const linkedTo = (root, repoName, slug, isOwn, number) => {
+    const one = parseIntent({ slug, prompt: prompt({ Status: 'active', Area: 'Combat', Owner: 'Tin Nguyen', Issue: `#${number}` }), findings: '', progress: '', files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' })
+    return { ...one, root, repoName, key: isOwn ? slug : `${repoName}/${slug}` }
+  }
+  const ids = (/** @type {any[]} */ work) => work.filter(one => one.kind === 'issue').map(one => one.id)
+
+  test('ids: issue:<n> in the session checkout, issue:<repoName>#<n> elsewhere; two #7s are two rows with names', () => {
+    const work = workList([], [at('/ws/s2', 's2', true), at('/ws/web', 'web', false)], 'Tin Nguyen', '', NOON)
+    expect(ids(work)).toEqual(['issue:7', 'issue:web#7'])
+    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn)).toEqual(['s2', 'web'])
+    expect(issueId(ISSUE)).toBe('issue:7')
+    expect(issueOtherRoot(at('/ws/web', 'web', false))).toBe('/ws/web')
+    expect(issueOtherRoot(at('/ws/s2', 's2', true))).toBe('')
+    expect(issueOtherRoot(ISSUE)).toBe('')
+  })
+
+  test('one checkout: no name, ids issue:<n>', () => {
+    const work = workList([], [at('/ws/s2', 's2', true), at('/ws/s2', 's2', true, 9)], 'Tin Nguyen', '', NOON)
+    expect(ids(work)).toEqual(['issue:7', 'issue:9'])
+    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn)).toEqual(['', ''])
+    expect(ids(workList([], [ISSUE], 'Tin Nguyen', '', NOON))).toEqual(['issue:7'])
+  })
+
+  test('an issue hides behind an intent only in the same checkout', () => {
+    const issues = [at('/ws/s2', 's2', false), at('/ws/web', 'web', false)]
+    expect(ids(workList([linkedTo('/ws/web', 'web', 'login', false, 7)], issues, 'Tin Nguyen', '', NOON))).toEqual(['issue:s2#7'])
+    expect(ids(workList([linkedTo('/ws/s2', 's2', 'login', false, 7)], issues, 'Tin Nguyen', '', NOON))).toEqual(['issue:web#7'])
+    // Without checkouts (Paseo, tests) as before.
+    expect(ids(workList([linkedTo('', '', 'login', true, 7)], [ISSUE], 'Tin Nguyen', '', NOON))).toEqual([])
+  })
+
+  test("an issue in another checkout names that checkout's docs/intent", () => {
+    expect(issuePrompt(at('/ws/web', 'web', false), 'Tin Nguyen')).toContain('/ws/web/docs/intent')
+    expect(issuePrompt(at('/ws/s2', 's2', true), 'Tin Nguyen')).toBe(issuePrompt(ISSUE, 'Tin Nguyen'))
+  })
+
+  test("an intent's PRs are read under its own checkout's key", () => {
+    const met = (/** @type {string} */ root, /** @type {string} */ key) => /** @type {any} */ ({ slug: 'login', key, root, status: 'active', acceptanceDone: 1, acceptanceTotal: 1, prs: [12] })
+    const own = met('/ws/s2', 'login')
+    const web = met('/ws/web', 'web/login')
+    const prs = { 12: 'OPEN', '/ws/web#12': 'MERGED' }
+    expect(prKey(own, 12)).toBe('12')
+    expect(prKey(web, 12)).toBe('/ws/web#12')
+    expect(isReadyToClose(own, prs)).toBe(false)
+    expect(isReadyToClose(web, prs)).toBe(true)
+    expect(listStage(web, prs)).toBe('met')
+    expect(prStatusList(web, prs)).toEqual(prStatusList(own, { 12: 'MERGED' }))
+  })
+
+  test('the issue and PR readers take an explicit repository, the session one by default', async () => {
+    const memory = memoryIo()
+    const io = { ...memory.io, repo: async () => 'sipher/s2' }
+    await state.setIssues(io, 'Tin Nguyen', [ISSUE])
+    await state.setIssues(io, 'Tin Nguyen', [{ ...ISSUE, number: 8 }], 'o/web')
+    expect((await state.readIssues(io, 'Tin Nguyen')).map(one => one.number)).toEqual([7])
+    expect((await state.readIssues(io, 'Tin Nguyen', 'sipher/s2')).map(one => one.number)).toEqual([7])
+    expect((await state.readIssues(io, 'Tin Nguyen', 'o/web')).map(one => one.number)).toEqual([8])
+    await state.setPrStates(io, { 12: 'OPEN' }, NOON)
+    await state.setPrStates(io, { 12: 'MERGED' }, NOON, 'o/web')
+    expect(await state.readPrStates(io)).toEqual({ 12: 'OPEN' })
+    expect(await state.readPrStates(io, 'o/web')).toEqual({ 12: 'MERGED' })
+    expect(Object.keys(await state.readPrRecords(io, 'o/web'))).toEqual(['12'])
+    // The session's keys are the ones written before.
+    expect(memory.store.has('prStates:sipher/s2')).toBe(true)
+    expect(memory.store.has('prStates:o/web')).toBe(true)
+  })
+})

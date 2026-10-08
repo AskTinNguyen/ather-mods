@@ -11,7 +11,7 @@
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
 import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
-import { issuePrompt, parseIssues } from './issues.mjs'
+import { issueId, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
@@ -54,7 +54,7 @@ const createOpen = new Set()
 // Intent changes after this were not seen yet: they make the band's notice.
 let intentSeenAt = 0
 // The issue whose card is open (paneMode 'issue'), and the view to go back to.
-let issueShown = 0
+let issueShown = ''
 let issueBack = /** @type {'home' | 'pick'} */ ('home')
 // The intent whose view is open (paneMode 'intent'; its key, '' for the tracked one), and the view to go back to.
 let intentShown = ''
@@ -471,15 +471,17 @@ async function refreshPrs($) {
   if (isPrsReading) return
   isPrsReading = true
   try {
-    const { root } = await laneOf($)
-    /** @type {Record<string, import('./model.mjs').PrState>} */
-    const read = {}
-    // The session's own checkout's intents: their PRs are its repository's.
-    for (const number of prsToRead(intents.filter(one => otherRoot(one) === ''), await state.readPrRecords(io($)), Date.now())) {
-      const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
-      read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
+    // Each checkout's intents: their PRs are its repository's, read with gh there.
+    for (const { root, repo: scope } of await issueLanes($)) {
+      const its = intents.filter(one => normalFolder(one.root) === normalFolder(root))
+      /** @type {Record<string, import('./model.mjs').PrState>} */
+      const read = {}
+      for (const number of prsToRead(its, await state.readPrRecords(io($), scope), Date.now())) {
+        const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
+        read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
+      }
+      await state.setPrStates(io($), read, Date.now(), scope)
     }
-    await state.setPrStates(io($), read, Date.now())
   } finally {
     isPrsReading = false
   }
@@ -529,26 +531,69 @@ function stale() {
 
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
-/** @param {Engine} $ @returns {Promise<string>} why the read failed, or '' when it worked */
+// Each pane checkout is read in turn and its list kept under its repository.
+/** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
 async function refreshIssues($) {
-  const { root } = await laneOf($)
-  const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
-  if (!run || run.exitCode !== 0) {
+  const lanes = await issueLanes($)
+  const failures = []
+  for (const { root, repo: scope } of lanes) {
+    const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
+    if (run && run.exitCode === 0) {
+      await state.setIssues(io($), me, parseIssues(run.stdout), scope)
+      continue
+    }
     // Signed out: the last list may be stale, so none is shown.
-    if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [])
+    if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [], scope)
     if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
     isIssuesWarned = true
-    // A slow first start or a network blip is tried again in a minute, three times at most:
-    // without gh at all, the 15-minute refresh is enough.
-    if (issueRetries < 3) {
-      issueRetries += 1
-      $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
-    }
-    return (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
+    const failure = (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
+    failures.push(lanes.length > 1 ? `${root}: ${failure}` : failure)
   }
-  issueRetries = 0
-  await state.setIssues(io($), me, parseIssues(run.stdout))
-  return ''
+  if (failures.length === 0) {
+    issueRetries = 0
+    return ''
+  }
+  // A slow first start or a network blip is tried again in a minute, three times at most:
+  // without gh at all, the 15-minute refresh is enough.
+  if (issueRetries < 3) {
+    issueRetries += 1
+    $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
+  }
+  return failures.join('; ')
+}
+
+// The checkouts whose issues and PRs are read: the pane's, else the session's own.
+/** @param {Engine} $ */
+async function issueLanes($) {
+  const lanes = await paneLanes($)
+  return lanes.length > 0 ? lanes : [await laneOf($)]
+}
+
+// The assigned issues of every pane checkout, in workspace order, each tagged with its checkout: its key is
+// its number in the session's own checkout and `<short name>#<number>` in another.
+/** @param {Engine} $ @returns {Promise<import('./issues.mjs').Issue[]>} */
+async function paneIssues($) {
+  const session = await laneOf($)
+  const read = []
+  for (const lane of await issueLanes($)) {
+    const isOwn = normalFolder(lane.root) === normalFolder(session.root)
+    const tag = { root: lane.root, repo: lane.repo, repoName: shortName(lane) }
+    for (const issue of await state.readIssues(io($), me, lane.repo)) read.push({ ...issue, ...tag, key: isOwn ? String(issue.number) : `${tag.repoName}#${issue.number}` })
+  }
+  return read
+}
+
+// Every pane checkout's PR states in one map: the session's own by number, another's by `<root>#<number>` (prKey).
+/** @param {Engine} $ @returns {Promise<import('./model.mjs').PrStates>} */
+async function panePrs($) {
+  const session = await laneOf($)
+  /** @type {Record<string, import('./model.mjs').PrState>} */
+  const all = {}
+  for (const lane of await issueLanes($)) {
+    const isOwn = normalFolder(lane.root) === normalFolder(session.root)
+    for (const [number, value] of Object.entries(await state.readPrStates(io($), lane.repo))) all[isOwn ? number : `${lane.root}#${number}`] = value
+  }
+  return all
 }
 
 /** @param {Engine} $ @returns {Promise<Home>} */
@@ -579,8 +624,8 @@ async function home($) {
     lost: await state.readLost(files),
     lock: await namedLock($, root, chosen.parseLock(chosen.lockFile ? await files.read(`${root}/${chosen.lockFile}`) : null, localMinutes(now, tz))),
     recurring: await state.readRecurring(files, chosen),
-    issues: await state.readIssues(files, me),
-    prs: await state.readPrStates(files),
+    issues: (await paneIssues($)).sort(issueOrder),
+    prs: await panePrs($),
     week: userHome ? parseWeek(await files.read(`${userHome}/.calendar/latest.json`), now) : null,
     last: await lastKey($),
     sent: [...sent],
@@ -723,22 +768,33 @@ async function startWork($, work) {
   return `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`
 }
 
-// An issue by number, from the assigned list or not.
-/** @param {Engine} $ @param {number} number @param {boolean} [isInQuestion] */
-async function startIssue($, number, isInQuestion = false) {
-  const assigned = (await state.readIssues(io($), me)).find(one => one.number === number)
+// An issue by number, from the assigned list or not: `7` or `#7` the session checkout's issue 7, else the first
+// pane checkout's; `web#7` web's.
+/** @param {Engine} $ @param {string} ref @param {boolean} [isInQuestion] */
+async function startIssue($, ref, isInQuestion = false) {
+  const [, name, digits] = /^(?:([\w.-]+)#|#)?(\d+)$/.exec(ref.trim()) ?? []
+  const number = Number(digits)
+  const listed = (await paneIssues($)).filter(one => one.number === number)
+  const assigned = name ? listed.find(one => one.repoName === name) : (listed.find(one => one.key === String(number)) ?? listed[0])
   if (assigned) {
-    handOff($, [`issue:${number}`], issuePrompt(assigned, me))
+    handOff($, [issueId(assigned)], issuePrompt(assigned, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
   }
-  const issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
+  /** @type {import('./issues.mjs').Issue} */
+  let issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
+  if (name) {
+    const lane = (await issueLanes($)).find(one => shortName(one) === name)
+    if (!lane) return `No checkout here is named ${name}.`
+    const session = await laneOf($)
+    if (normalFolder(lane.root) !== normalFolder(session.root)) issue = { ...issue, key: `${name}#${number}`, root: lane.root, repo: lane.repo, repoName: name }
+  }
   const go = async () => {
-    handOff($, [`issue:${number}`], issuePrompt(issue, me))
+    handOff($, [issueId(issue)], issuePrompt(issue, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
   }
   // Already inside a question: the session confirms instead of a third dialog.
   if (isInQuestion) {
-    handOff($, [`issue:${number}`], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`)
+    handOff($, [issueId(issue)], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`)
     return `Sent issue #${number} to the session; it confirms with you first, since it is not assigned to you.`
   }
   return ask($, {
@@ -848,7 +904,7 @@ async function startAway($, choice) {
 async function typed($, text, isInQuestion = true) {
   if (/^tours?$/i.test(text.trim())) return startTour($)
   const number = /^#(\d+)$|^(\d{3,7})$/.exec(text.trim())
-  if (number) return startIssue($, Number(number[1] ?? number[2]), isInQuestion)
+  if (number) return startIssue($, number[1] ?? number[2] ?? '', isInQuestion)
   if (searchIntents(intents, text).length > 0) return lookUp($, text)
   const question = /^(help|\?)$/i.test(text.trim()) ? 'What can Ather do for me?' : text
   void deliver($, askPrompt(question, pack)).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
@@ -891,7 +947,7 @@ async function atherCommand($, args) {
     return rest ? findText($) : searchQuestion($)
   }
   if ((word === 'intent' || word === 'pick') && rest) return pickIntent($, rest)
-  if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
+  if ((word === 'issue' || word === 'issues') && /^(?:[\w.-]+#|#)?\d+$/.test(rest)) return startIssue($, rest)
   if (word === 'role') {
     const role = pack.parseRole(rest)
     if (!role) return pack.roleHelp
@@ -908,7 +964,7 @@ async function atherCommand($, args) {
     // Read them now: a list that never showed up is explained here instead of staying empty.
     const failure = await refreshIssues($).catch(error => String(error))
     if (failure) return `Could not read your GitHub issues: ${failure}`
-    if ((await state.readIssues(io($), me)).length === 0) return 'No open GitHub issues are assigned to you.'
+    if ((await paneIssues($)).length === 0) return 'No open GitHub issues are assigned to you.'
     return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
   }
   if (word === 'pick') return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
@@ -1081,7 +1137,7 @@ async function intentQuestion($, key) {
   const { root, pack: chosen } = await laneFor($, intent.root)
   const { role } = await state.readProfile(files, me, chosen)
   const evidence = await state.readEvidence(files, await state.intentScope(files, slug, otherRoot(intent) || undefined), chosen)
-  const prs = await state.readPrStates(files)
+  const prs = await panePrs($)
   const stands = intentStands(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, heldByLine(await state.readPeers(files, root, chosen.localDir), slug, Date.now()))
   const look = async () => {
     const step = nextStep(role, intent, evidence, 0, me, prs, chosen)
@@ -1193,7 +1249,7 @@ function refreshIssuesButton(el, $) {
     void refreshIssues($)
       .catch(error => String(error))
       .then(async failure => {
-        const count = failure ? 0 : (await state.readIssues(io($), me)).length
+        const count = failure ? 0 : (await paneIssues($)).length
         $.ui.toast(failure ? `Ather: could not read your GitHub issues: ${failure}` : `Ather: ${count === 0 ? 'no open GitHub issues are assigned to you' : `${count} open GitHub issue${count === 1 ? '' : 's'} assigned to you`}.`)
       })
       .finally(() => {
@@ -1243,11 +1299,12 @@ function linkOf(url) {
   }
 }
 
-/** @param {Engine} $ @param {number} number @param {string} link */
-function openIssue($, number, link) {
+// gh opens it from the checkout it was read in.
+/** @param {Engine} $ @param {import('./issues.mjs').Issue} issue @param {string} link */
+function openIssue($, { number, root }, link) {
   return () =>
-    void laneOf($)
-      .then(({ root }) => $.process.run(['gh', 'issue', 'view', String(number), '--web'], { cwd: root, timeoutMs: 20000 }))
+    void (root ? Promise.resolve({ root }) : laneOf($))
+      .then(({ root: at }) => $.process.run(['gh', 'issue', 'view', String(number), '--web'], { cwd: at, timeoutMs: 20000 }))
       .then(run => $.ui.toast(run.exitCode === 0 ? `Ather: opened issue #${number} in your browser.` : `Ather: could not open the browser; the link is ${link}`))
       .catch(() => $.ui.toast(`Ather: could not open the browser; the link is ${link}`))
 }
@@ -1255,7 +1312,7 @@ function openIssue($, number, link) {
 // Open on GitHub: a link the desktop opens on a click; in the terminal, a button.
 /** @param {any} el @param {Engine} $ @param {import('./issues.mjs').Issue} issue @param {string} link @param {{ key: string, label: string, hotkey?: string, isQuiet?: boolean }} look */
 function openControl(el, $, issue, link, look) {
-  return isClicked ? el.Link({ key: look.key, href: link, label: look.label }) : el.Button({ key: look.key, label: look.label, plain: true, hotkey: look.hotkey, dimColor: look.isQuiet ? true : undefined, onPress: openIssue($, issue.number, link) })
+  return isClicked ? el.Link({ key: look.key, href: link, label: look.label }) : el.Button({ key: look.key, label: look.label, plain: true, hotkey: look.hotkey, dimColor: look.isQuiet ? true : undefined, onPress: openIssue($, issue, link) })
 }
 
 /** @param {Engine} $ @param {string} link */
@@ -1267,10 +1324,10 @@ function copyLink($, link) {
       .catch(error => $.ui.toast(`Ather: could not copy the link: ${String(error)}`))
 }
 
-/** @param {Engine} $ @param {number} number @param {'home' | 'pick'} back */
-function showIssue($, number, back) {
+/** @param {Engine} $ @param {string} id the issue's work id @param {'home' | 'pick'} back */
+function showIssue($, id, back) {
   return () => {
-    issueShown = number
+    issueShown = id
     issueBack = back
     paneMode = 'issue'
     $.ui.invalidate('ui.render')
@@ -1314,7 +1371,7 @@ const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug}
 // press that shows the intent (or the issue's card), never tracking it.
 /** @param {Engine} $ @param {number} width @param {'home' | 'pick'} back @returns {import('./rows.mjs').Look} */
 function lookOf($, width, back) {
-  return { isClicked, width, now: Date.now(), isTagged: checkouts.some(({ root }) => syncs.get(root)?.hasMain), ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.issue.number, back) : viewIntent($, one.key, back)) }
+  return { isClicked, width, now: Date.now(), isTagged: checkouts.some(({ root }) => syncs.get(root)?.hasMain), ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.id, back) : viewIntent($, one.key, back)) }
 }
 
 // The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
@@ -1543,7 +1600,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'issue') {
-    const one = model.work.find(work => work.kind === 'issue' && work.issue.number === issueShown)
+    const one = model.work.find(work => work.kind === 'issue' && work.id === issueShown)
     if (one?.kind === 'issue') {
       const { issue } = one
       rows.push(masthead(el, [label(el, 'brand', `Issue #${issue.number}`, width), Text({ key: 'title', bold: true, wrap: 'wrap', children: issue.name }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: one.hint })], surface))
