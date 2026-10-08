@@ -263,29 +263,53 @@ export const sectionLabel = (el: El, key: string, text: string, extra: unknown[]
   el.Box({ key, flexDirection: 'row', columnGap: 1, children: [el.Text({ color: V2.label, children: text.toUpperCase() }), ...extra] })
 
 
-/** A19: one rule's row on the A5R acceptance card. */
-export type AcceptRow = { rule: number; name: string; state: 'pass' | 'fail' | 'na'; line: string }
+/** A19: one rule's row on the A5R acceptance card. A53: `items` are its lines under the name (at most three, then
+ * grouped by folder and "and N more", accept.cappedItems); `line` when there are none. */
+export type AcceptRow = { rule: number; name: string; state: 'pass' | 'fail' | 'na'; line: string; items?: readonly string[] }
+/** A52: one PR's own score on the card (after the fact): its number, a label (head, state) and its five rows. */
+export type AcceptPr = { n: number; label: string; rows: readonly AcceptRow[] }
 const MARK = { pass: '✓', fail: '✗', na: '–' } as const
 
 /** A19: the A5R acceptance card, in Ather's card language: a quiet label, a bold verdict, then the five rules,
- * one line each, ✓ / ✗ / – carried by the mark's color (never the text's). Terminal: one line per rule. */
-export const acceptCard = (el: El, title: string, sub: string, rows: readonly AcceptRow[], isDesktop: boolean): unknown => {
+ * ✓ / ✗ / – carried by the mark's color (never the text's). A53: each rule's name on its own line, its items under it
+ * (indented, wrapping at the card's width), so a long list never squeezes the name into a narrow column. A52: with
+ * `prs`, one section per PR, each with its own verdict and five rows; the head's verdict is the worst of them. */
+export const acceptCard = (el: El, title: string, sub: string, rows: readonly AcceptRow[], isDesktop: boolean, prs?: readonly AcceptPr[]): unknown => {
   const { Box, Text } = el
-  const bad = rows.filter(r => r.state === 'fail').length
-  const unscored = rows.length > 0 && rows.every(r => r.state === 'na') // e.g. the branch diff could not be read whole
+  const verdictOf = (rs: readonly AcceptRow[]) => {
+    const bad = rs.filter(r => r.state === 'fail').length
+    const unscored = rs.length > 0 && rs.every(r => r.state === 'na') // e.g. the branch diff could not be read whole
+    return { color: bad ? STATUS.bad : unscored ? STATUS.warn : STATUS.ok, text: bad ? `${bad} of 5 not met` : unscored ? 'not scored' : '5 of 5 met' }
+  }
   const color = (r: AcceptRow) => (r.state === 'pass' ? STATUS.ok : r.state === 'fail' ? STATUS.bad : ATHER.quiet)
-  const head = [Text({ color: ATHER.quiet, children: title }), Text({ bold: true, children: [Text({ color: bad ? STATUS.bad : unscored ? STATUS.warn : STATUS.ok, children: '● ' }), bad ? `${bad} of 5 not met` : unscored ? 'not scored' : '5 of 5 met'] }), ...(sub ? [Text({ color: ATHER.quiet, children: sub })] : [])]
-  const row = (r: AcceptRow) =>
+  const v = verdictOf(rows)
+  const head = [Text({ color: ATHER.quiet, children: title }), Text({ bold: true, children: [Text({ color: v.color, children: '● ' }), v.text] }), ...(sub ? [Text({ color: ATHER.quiet, wrap: 'wrap', children: sub })] : [])]
+  const row = (prefix: string) => (r: AcceptRow) =>
     Box({
-      key: `hai-accept-${r.rule}`,
-      flexDirection: 'row',
-      columnGap: 1,
-      ...(isDesktop ? { minWidth: 0 } : { flexWrap: 'wrap' }),
-      children: [Text({ color: color(r), bold: true, children: MARK[r.state] }), Text({ children: `${r.rule} ${r.name}` }), Text({ color: ATHER.quiet, ...(isDesktop ? { wrap: 'wrap' } : {}), children: `· ${r.line}` })],
+      key: `${prefix}${r.rule}`,
+      flexDirection: 'column',
+      width: '100%',
+      children: [
+        Box({ key: `${prefix}${r.rule}-name`, flexDirection: 'row', columnGap: 1, children: [Text({ color: color(r), bold: true, children: MARK[r.state] }), Box({ key: `${prefix}${r.rule}-title`, flexGrow: 1, flexShrink: 1, minWidth: 0, children: [Text({ wrap: 'wrap', children: `${r.rule} ${r.name}` })] })] }),
+        ...(r.items && r.items.length ? r.items : [r.line]).map((t, i) => Box({ key: `${prefix}${r.rule}-item-${i}`, paddingLeft: 2, width: '100%', children: [Text({ color: ATHER.quiet, wrap: 'wrap', children: t })] })),
+      ],
     })
-  if (isDesktop)
-    return Box({ key: 'hai-accept', flexDirection: 'column', width: '100%', marginTop: 1, borderStyle: 'round', borderColor: ATHER.line, paddingX: 1, children: [Box({ key: 'hai-accept-head', flexDirection: 'row', columnGap: 1, children: head }), ...rows.map(row)] })
-  return Box({ key: 'hai-accept', flexDirection: 'column', width: '100%', marginTop: 1, children: [Box({ key: 'hai-accept-head', flexDirection: 'row', columnGap: 1, flexWrap: 'wrap', children: head }), ...rows.map(row)] })
+  const section = (p: AcceptPr) => {
+    const pv = verdictOf(p.rows)
+    return Box({
+      key: `hai-accept-pr-${p.n}`,
+      flexDirection: 'column',
+      width: '100%',
+      marginTop: 1,
+      children: [
+        Box({ key: `hai-accept-pr-${p.n}-head`, flexDirection: 'row', columnGap: 1, flexWrap: 'wrap', children: [Text({ bold: true, children: `PR #${p.n}` }), Text({ bold: true, children: [Text({ color: pv.color, children: '● ' }), pv.text] }), ...(p.label ? [Text({ color: ATHER.quiet, wrap: 'wrap', children: p.label })] : [])] }),
+        ...p.rows.map(row(`hai-accept-pr-${p.n}-`)),
+      ],
+    })
+  }
+  const body = prs && prs.length ? prs.map(section) : rows.map(row('hai-accept-'))
+  const frame = isDesktop ? { borderStyle: 'round', borderColor: ATHER.line, paddingX: 1 } : {}
+  return Box({ key: 'hai-accept', flexDirection: 'column', width: '100%', marginTop: 1, ...frame, children: [Box({ key: 'hai-accept-head', flexDirection: 'row', columnGap: 1, flexWrap: 'wrap', children: head }), ...body] })
 }
 
 /** A26: the sessions list under the tools: a quiet header ("Sessions · 8 in S2 · 1 elsewhere"), then one row per

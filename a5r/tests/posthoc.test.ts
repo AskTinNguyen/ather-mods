@@ -9,7 +9,9 @@ const INTENT = `${PROJ}/docs/intent/tail-vfx`
 const PROMPT = ['# Tail VFX', '- Rev: 2', '- Status: active', 'Change `Source/S2/Tail/` only.', '## Acceptance', '- A1: the tail glows. Proof: PIE.'].join('\n')
 const progress = (pr: string) => [`# tail-vfx: Progress`, '', `- PR: ${pr}`, '', '## Acceptance', '| Item | Verdict | Evidence |', '| --- | --- | --- |', '| A1 | met | PIE: glow visible |'].join('\n')
 const status = (prs: string[] = []) => JSON.stringify({ me: 'hai', role: 'techart', tracked: { slug: 'tail-vfx', stage: 'Build', prs, directorCalls: [] }, evidence: { pie: { state: 'pass' }, editor: { state: 'pass' } } })
-const git = (diff: string) => ({ 'diff --name-only': { stdout: 'Source/S2/Tail/Glow.cpp\n' }, 'diff -U0': { stdout: diff }, 'worktree list': { stdout: '' } })
+// A52: GitHub names each PR's head and base (`gh pr view`); the head is found at origin/<head> (the world's rev-parse passes).
+const view = (head: string, state = 'OPEN') => ({ stdout: JSON.stringify({ headRefName: head, baseRefName: 'main', state }) })
+const git = (diff: string) => ({ 'pr view 812': view('tail-glow'), 'pr view 901': view('tail-fade'), 'diff --name-only': { stdout: 'Source/S2/Tail/Glow.cpp\n' }, 'diff -U0': { stdout: diff }, 'worktree list': { stdout: '' } })
 const DIRTY = git('+++ b/Source/S2/Tail/Glow.cpp\n+float Glow = 1.f; // A5TMP\n')
 const CLEAN = git('+++ b/Source/S2/Tail/Glow.cpp\n+float Glow = 1.f;\n')
 const MIN = 60_000
@@ -44,6 +46,7 @@ test('A23: a PR line added by hand is scored after the fact: the card names the 
   expect(prLines(w)[0]).toContain('PR #812 (intent tail-vfx) was opened without A5R acceptance and fails 1 of 5 (4 Keep it clean)')
   expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
   expect(await head($)).toContain('● 1 of 5 not mettail-vfx · PR #812 · scored after the fact')
+  expect(text(find(await $.ui.render(A5RPANE as never), 'hai-accept-pr-812-head'))).toBe('PR #812● 1 of 5 not mettail-glow → main · open · 1 files, read from local branches')
   await minutes(w, 11)
   expect(prLines(w).length).toBe(1) // one 🟥 per PR
 })
