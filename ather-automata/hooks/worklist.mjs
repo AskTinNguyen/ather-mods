@@ -58,6 +58,92 @@ export const stageBlocks = list => {
   return [...STAGE_BLOCKS.map(({ key, title }) => ({ key, title, items: sorted.filter(one => one.stage === key) })), { key: 'other', title: '', items: sorted.filter(one => !one.stage) }].filter(block => block.items.length > 0)
 }
 
+// ---------------------------------------------------------------- grouping a long list (D7, D8)
+
+// How Everything open sub-groups the teammates' intents: by person, by area, by stage, or not at all.
+export const GROUP_BYS = /** @type {const} */ (['person', 'area', 'stage', 'none'])
+/** @typedef {typeof GROUP_BYS[number]} GroupBy */
+export const GROUP_LABELS = { person: 'Person', area: 'Area', stage: 'Stage', none: 'None' }
+
+/** @param {GroupBy} by @returns {GroupBy} */
+export const nextGroup = by => GROUP_BYS[(GROUP_BYS.indexOf(by) + 1) % GROUP_BYS.length] ?? 'person'
+
+// A stored choice read back: anything else is the default, Person.
+/** @param {unknown} value @returns {GroupBy} */
+export const groupByOf = value => (GROUP_BYS.includes(/** @type {GroupBy} */ (value)) ? /** @type {GroupBy} */ (value) : 'person')
+
+// A sub-group larger than this starts folded.
+export const FOLD_OVER = 6
+
+/** @typedef {{ stage?: ListStage | '', who?: string, area?: string }} Groupable */
+
+// The list cut into sub-groups, each titled, in a fixed order: people by name (no owner last); areas in the
+// pack's order (`areas`), then any other by name, Unsorted last; stages as the stage blocks are. Each keeps the
+// list's order. Grouped by none: one untitled group.
+/** @template {Groupable} T @param {readonly T[]} list @param {GroupBy} by @param {readonly string[]} [areas] @returns {{ key: string, title: string, items: T[] }[]} */
+export const subGroups = (list, by, areas = []) => {
+  if (by === 'none') return list.length > 0 ? [{ key: 'all', title: '', items: [...list] }] : []
+  const NO_OWNER = 'No owner'
+  /** @param {T} one */
+  const titleOf = one => (by === 'person' ? one.who || NO_OWNER : by === 'area' ? one.area || 'Unsorted' : (STAGE_BLOCKS.find(block => block.key === one.stage)?.title ?? 'Other'))
+  const titles = [...new Set(list.map(titleOf))]
+  /** @param {string} title */
+  const rank = title => {
+    if (by === 'stage') return STAGE_BLOCKS.findIndex(block => block.title === title) >>> 0
+    if (by === 'area') return title === 'Unsorted' ? 2 * areas.length + 1 : areas.indexOf(title) >= 0 ? areas.indexOf(title) : areas.length
+    return title === NO_OWNER ? 1 : 0
+  }
+  titles.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+  return titles.map(title => ({ key: title, title, items: list.filter(one => titleOf(one) === title) }))
+}
+
+// Parked intents leave the list for a folded block at its end (D8).
+/** @template {Groupable} T @param {readonly T[]} list @returns {{ open: T[], parked: T[] }} */
+export const splitParked = list => ({ open: list.filter(one => one.stage !== 'parked'), parked: list.filter(one => one.stage === 'parked') })
+
+// A head's count: "5", or "2 of 5" while a search narrows the list (D9).
+/** @param {number} shown @param {number} total @param {boolean} isSearching */
+export const countText = (shown, total, isSearching) => (isSearching ? `${shown} of ${total}` : String(shown))
+
+/**
+ * One block of a group in Everything open: `kind` 'sub' (a foldable sub-head: a person, area or stage, or Parked),
+ * 'stage' (a bold stage title, sorted for closing), 'plain' (rows only). `total`: the block's size in the whole
+ * list, for "x of y"; `foldKey`: what a press on its head toggles.
+ * @template T @typedef {{ key: string, title: string, items: T[], total: number, kind: 'sub' | 'stage' | 'plain', startsFolded: boolean, foldKey: string }} Block
+ */
+
+export const PARKED_KEY = '‖parked'
+
+/**
+ * A group's blocks, in the order drawn (D7-D9): the teammates' intents by `groupBy` (a sub-group larger than
+ * FOLD_OVER starts folded), anything else in stage blocks when sorted for closing, or as one plain block; then
+ * the parked intents, a folded block at the end. While searching nothing starts folded, so every match shows.
+ * `list`: the group's items the search kept; `all`: the group's items before the search.
+ * @template {Groupable & Sortable} T
+ * @param {'mine' | 'issues' | 'others'} group @param {readonly T[]} list @param {readonly T[]} all
+ * @param {{ sort: Sort, groupBy: GroupBy, areas?: readonly string[], isSearching: boolean }} how
+ * @returns {Block<T>[]}
+ */
+export const blocksOf = (group, list, all, { sort, groupBy, areas = [], isSearching }) => {
+  const by = group === 'others' ? groupBy : 'none'
+  const mode = by !== 'none' ? 'sub' : group !== 'issues' && sort === 'close' ? 'stage' : 'plain'
+  const subKey = (/** @type {T} */ one) => subGroups([one], by, areas)[0]?.key ?? ''
+  /** @param {T} one */
+  const keyOf = one => (one.stage === 'parked' ? PARKED_KEY : mode === 'sub' ? subKey(one) : mode === 'stage' ? one.stage || 'other' : 'all')
+  /** @type {Map<string, number>} */
+  const totals = new Map()
+  for (const one of all) totals.set(keyOf(one), (totals.get(keyOf(one)) ?? 0) + 1)
+  const { open, parked } = splitParked(sortWork(list, sort))
+  const raw = mode === 'sub' ? subGroups(open, by, areas) : mode === 'stage' ? stageBlocks(open) : open.length > 0 ? [{ key: 'all', title: '', items: open }] : []
+  /** @type {Block<T>[]} */
+  const blocks = raw.map(block => {
+    const total = totals.get(block.key) ?? block.items.length
+    return { ...block, total, kind: mode, startsFolded: mode === 'sub' && !isSearching && total > FOLD_OVER, foldKey: `${group}:${by}:${block.key}` }
+  })
+  if (parked.length > 0) blocks.push({ key: PARKED_KEY, title: '‖ Parked', items: parked, total: totals.get(PARKED_KEY) ?? parked.length, kind: 'sub', startsFolded: !isSearching, foldKey: `${group}:parked` })
+  return blocks
+}
+
 // ---------------------------------------------------------------- what needs the person
 
 // Parked, and nobody said why: its row warns, and its owner is asked to add one.

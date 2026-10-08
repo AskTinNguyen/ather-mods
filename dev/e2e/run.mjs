@@ -571,18 +571,22 @@ const GH_ISSUES = [
   const all = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · Everything open (72 columns)', all.lines.join('\n')])
   expect('"Everything open" groups by source, each with its count and a fold: your assigned issues, then the teammates\' intents', /▾ A S S I G N E D {3}I S S U E S {3}· {3}1\n1: #28887/.test(all.lines.join('\n')) && /▾ T E A M M A T E S ' {3}I N T E N T S/.test(all.lines.join('\n')) && all.problems.length === 0, all.problems)
+  const subHeads = all.lines.map(line => /^([▸▾]) ([^‖].*) · (\d+)$/.exec(line)).filter(Boolean)
+  expect('A7: in a real team list every sub-group of more than six starts folded and every smaller one open', subHeads.length > 0 && subHeads.every(([, fold, , count]) => (Number(count) > 6) === (fold === '▸')), subHeads.map(([line]) => line))
   // The list's own controls: fold a group, filter by age, search, and a teammate's name after the title in its colour.
   const pickTree = () => engine.render('Pane', { bodyColumns: 72 }, 'ather')
   const pickText = async () => check(await pickTree(), 72).lines.join('\n')
   const collect = (node, test) => (!node || typeof node !== 'object' ? [] : [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => collect(child, test))])
-  expect('"Everything open" starts unfiltered and sorted by Recent; the age chips are gone (A5)', /s: Search… {3}o: Sort: Recent\n/.test(await pickText()) && !/Any time|7 days/.test(await pickText()))
-  // A teammate's intent in this checkout, whichever it is: the first row under their heading.
-  const teammate = /T E A M M A T E S '[^\n]*\n\d: \S+ (\S+)/.exec(await pickText())?.[1] ?? ''
+  expect('"Everything open" starts unfiltered and sorted by Recent; the age chips are gone (A5)', /s: Search… {3}o: Sort: Recent {3}g: Group: Person\n/.test(await pickText()) && !/Any time|7 days/.test(await pickText()))
+  // A teammate's intent in this checkout, whichever it is: the first row under their heading (past its sub-heads).
+  const teammate = /T E A M M A T E S '[^\n]*\n(?:[^\n]*\n)*?\d: \S+ (\S+)/.exec(await pickText())?.[1] ?? ''
   find(await pickTree(), 'group-issues-fold')?.props.onPress()
   const folded = await pickText()
   expect('folding a group hides its rows and keeps its heading and count', /▸ A S S I G N E D {3}I S S U E S {3}· {3}1/.test(folded) && !/#28887/.test(folded) && teammate !== '' && folded.includes(teammate), folded)
   find(await pickTree(), 'group-issues-fold')?.props.onPress()
   expect('… and unfolding brings them back', /#28887/.test(await pickText()))
+  // The stage blocks are the ungrouped list's (Group: None); grouped, each sub-group keeps the sort's order.
+  for (let turn = 0; turn < 3; turn += 1) find(await pickTree(), 'pick-group')?.props.onPress()
   const sorts = []
   for (let turn = 0; turn < 3; turn += 1) {
     find(await pickTree(), 'pick-sort')?.props.onPress()
@@ -595,6 +599,7 @@ const GH_ISSUES = [
   expect('the stage blocks are subgroups: bold, not letter-spaced, and never lime', blockHeads.length > 0 && blockHeads.every(node => node.props.bold && node.props.color !== '#DDFF00' && !/ {2}/.test(node.props.children)), blockHeads.map(node => node.props))
   find(await pickTree(), 'pick-sort')?.props.onPress()
   find(await pickTree(), 'pick-sort')?.props.onPress()
+  find(await pickTree(), 'pick-group')?.props.onPress()
   engine.script.length = 0
   engine.script.push(typed('dodge'))
   find(await pickTree(), 'pick-search')?.props.onPress()
@@ -1342,6 +1347,176 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   fs.rmSync(home, { recursive: true, force: true })
 }
 
+{
+  // 0.1.9: who waits on whom. Calls held in flight (a foreground Agent call, a long build, a wait on the Editor
+  // lock), workers drawn under the worker that started them, and the quiet-worker toast on the same rule.
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' } })
+  const findAll = (node, test) => (!node || typeof node !== 'object' ? [] : [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => findAll(child, test))])
+  const keyed = (node, key) => findAll(node, one => one.props?.key === key)[0]
+  const squash = text => text.replace(/ /g, '')
+  const realNow = Date.now
+  const at = minutes => {
+    const base = realNow()
+    Date.now = () => base + minutes * 60000
+  }
+  fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'Lane B holds the Editor until 15:40 for the snow proof\nsession 1a2b3c4d')
+  const brief = 'Fix it in Source/S2/A.cpp. Acceptance: S2Editor builds. Shared tree: path-scoped staging only.'
+  await engine.spawn({ agentId: 'w-lead', description: 'Thermo round 1 fixes', prompt: `Apply the thermo-nuclear review findings. ${brief}` })
+  // The lead calls Agent in the foreground: the call stays in flight until its worker ends.
+  const agentCall = engine.holdTool('w-lead', { tool: 'Agent', tool_use_id: 'agent-f1', description: 'F1 thermo fixes', prompt: `Fix finding F1. ${brief}`, subagent_type: 'general-purpose' })
+  await agentCall.reached
+  await engine.spawn({ agentId: 'w-f1', description: 'F1 thermo fixes', prompt: `Fix finding F1. ${brief}`, parentId: 'w-lead', toolUseId: 'agent-f1', background: false })
+  const build = engine.holdTool('w-f1', { tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', description: 'Build S2Editor Development' })
+  await build.reached
+  // Four fixers the lead started earlier have finished: three are drawn under it, the fourth folds.
+  for (const n of [2, 3, 4, 5]) {
+    await engine.spawn({ agentId: `w-f${n}`, description: `F${n} thermo fixes`, prompt: `Fix finding F${n}. ${brief}`, parentId: 'w-lead' })
+    await engine.agentTool(`w-f${n}`, { tool: 'Edit', file_path: 'Source/S2/A.cpp', old_string: 'a', new_string: 'b' })
+    await engine.agentTurnEnd(`w-f${n}`)
+    engine.setAgentStatus(`w-f${n}`, 'completed')
+  }
+  // A worker whose starter has finished, one waiting on the Editor lock, one that has gone quiet, one found running later.
+  await engine.spawn({ agentId: 'w-gone', description: 'Snow proof planner', prompt: `Plan the snow proof. ${brief}` })
+  await engine.spawn({ agentId: 'w-orphan', description: 'Snow proof runner', prompt: `Prove it in PIE. ${brief}`, parentId: 'w-gone' })
+  await engine.agentTurnEnd('w-gone')
+  engine.setAgentStatus('w-gone', 'completed')
+  const lockWait = engine.holdTool('w-orphan', { tool: 'PowerShell', command: 'while ((Get-Content Saved/EDITOR_OWNER.txt) -notmatch "free") { Start-Sleep 30 }', description: 'Wait for the Editor lock' })
+  await lockWait.reached
+  await engine.spawn({ agentId: 'w-quiet', description: 'Says nothing', prompt: `Implement A2. ${brief}` })
+  await engine.agentTool('w-quiet', { tool: 'Edit', file_path: 'Source/S2/B.cpp', old_string: 'a', new_string: 'b' })
+  engine.addAgent({ id: 'w-adopted', description: 'Worker with no record' })
+  engine.setAgentStatus('w-adopted', 'running')
+  // A call whose permission dialog was shown to the person (classic.PermissionRequest): it waits on a decision, not running.
+  await engine.spawn({ agentId: 'w-ask', description: 'Clean-up worker', prompt: `Implement A3. ${brief}` })
+  const asking = engine.holdTool('w-ask', { tool: 'Bash', command: 'rm -rf Saved/Cache', description: 'Delete the old build cache' }, { dialog: true })
+  await asking.reached
+  // tool.check said "ask" but no dialog was shown (auto mode's classifier allowed it): it is running, not asking.
+  await engine.spawn({ agentId: 'w-auto', description: 'Auto-approved worker', prompt: `Implement A4. ${brief}` })
+  const approved = engine.holdTool('w-auto', { tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', description: 'Long approved build' }, { ask: true })
+  await approved.reached
+  engine.record.toasts.length = 0
+  let term = null
+  let wide = ''
+  let desk = null
+  let toasts = []
+  let stuck = ''
+  try {
+    at(11)
+    term = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
+    wide = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).lines.join('\n')
+    desk = await engine.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
+    await engine.timers()
+    toasts = [...engine.record.toasts]
+    at(26)
+    stuck = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  } finally {
+    Date.now = realNow
+  }
+  const text = term.lines.join('\n')
+  screens.push(['Terminal · the worker tree, calls in flight (72 columns)', text])
+  screens.push(['Terminal · the worker tree, calls in flight (110 columns)', wide])
+  const heading = term.lines.find(line => /^W O R K E R S|^WORKERS/.test(line)) ?? ''
+  expect('A6: the heading reads "Workers · Running N · Waiting on M", waiting on counting the ⏳ lines', squash(heading) === 'WORKERS·RUNNING7·WAITINGON5' && (text.match(/⏳/g) ?? []).length === 5, heading)
+  expect('round 3: tool.check said "ask" but no permission dialog was shown: the call reads as running (its own ⏳ line), never "asked permission", and raises no toast', /● Auto-approved worker\n  Builder · Opus · building\n  running 11:\d\d · 1 tool call\n  ⏳ Long approved build\n/.test(text) && !/asked permission[^\n]*Long approved build/.test(text) && !toasts.some(one => /Auto-approved worker/.test(one)), text)
+  expect('round 2: a call waiting on the permission dialog reads "⏳ asked permission N min ago: <what>" (only what is known), not quiet; past 25 min it warns like any call, since an approved build may run on', /● Clean-up worker\n  Builder · Opus · working\n  running 11:\d\d · 1 tool call\n  ⏳ asked permission (just now|\d+ min ago): Delete the old build cache\n/.test(text) && /Delete the old build cache\n  ⚠ one call running \d+ min/.test(stuck), [text, stuck])
+  expect('round 2: past the threshold the toast names the worker waiting on permission, and what for', toasts.some(one => /^Ather: worker "Clean-up worker" asked permission to run Bash \d+ min ago and has not finished: Delete the old build cache\.$/.test(one)) && toasts.length === 2, toasts)
+  expect('A1, A4: a foreground Agent call in flight reads "⏳ waiting on <its worker>" under the worker that made it', /● Thermo round 1 fixes\n  Builder · Opus · [^\n]*\n  running 11:\d\d · 1 tool call\n  ⏳ waiting on F1 thermo fixes\n/.test(text), text)
+  expect('A3: a worker is drawn under the one that started it, with no "started by" when that one is right above', /⏳ waiting on F1 thermo fixes\n└ ● F1 thermo fixes\n    Builder · Opus · building\n    running 11:\d\d · 1 tool call\n    ⏳ Build S2Editor Development\n/.test(text) && !/started by Thermo round 1 fixes/.test(text), text)
+  expect('A3: past three finished workers under one parent, the rest fold to "+N finished"', (text.match(/└ ✓ F\d thermo fixes/g) ?? []).length === 3 && /\n└ \+1 finished\n/.test(text), text)
+  expect('A3: a worker whose starter finished is a root that says "started by X (finished)"', /● Snow proof runner\n[^\n]*\n  running 11:\d\d · 1 tool call · started by Snow proof planner \(finished\)\n/.test(text), text)
+  expect('A4: a long shell call that names the lock file quotes its description and the lock file\'s first line', /  ⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the…\n|  ⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the snow …\n/.test(text) || /⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the snow …/.test(wide), [text, wide])
+  expect('A2: a worker with nothing in flight and nothing heard for minutes reads quiet; one in flight does not', /● Says nothing\n  Builder · Opus · quiet\n/.test(text) && !/F1 thermo fixes\n    Builder · Opus · quiet/.test(text), text)
+  expect('A4: a worker found running later, with no call seen, shows no in-flight line', /● Worker with no record\n  General · working\n  running · start unknown\n(?!  ⏳)/.test(text), text)
+  expect('A2: past ten minutes the stuck-permission toast names the quiet worker only, never one with a call in flight', toasts.some(one => /"Says nothing" has been quiet for 11 min after Edit\. Possibly a stuck permission prompt/.test(one)) && !toasts.some(one => /Thermo round 1 fixes|F1 thermo fixes|Snow proof runner/.test(one)), toasts)
+  expect('A5: one call in flight 25 minutes or more says "⚠ one call running N min"', /⏳ Build S2Editor Development\n    ⚠ one call running 26 min\n/.test(stuck), stuck)
+  expect('A3: the terminal tree lays out cleanly at 72 and 110 columns, keys and hotkeys unique', term.problems.length === 0 && check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).problems.length === 0, term.problems)
+  const nested = keyed(desk, 'tree-w-f1')
+  expect('A3 (desktop): a child sits in an indented box under its parent with its own avatar; the fold line is indented too; no hotkeys', nested?.props.paddingLeft === 4 && findAll(nested, one => one.type === 'Svg').length === 1 && keyed(desk, 'fold-w-lead-finished')?.props.paddingLeft === 4 && !findAll(desk, one => one.type === 'Button' && one.props.hotkey).length && findAll(desk, one => one.type === 'Text' && one.props.children === '⏳ waiting on F1 thermo fixes' && one.props.color === '#f2a516').length === 1, nested?.props)
+  // The calls settle: the build ran, the lead's worker ended and its Agent call returned; nothing waits any more.
+  build.release()
+  await build.done
+  await engine.agentTurnEnd('w-f1')
+  engine.setAgentStatus('w-f1', 'completed')
+  agentCall.release()
+  await agentCall.done
+  lockWait.release()
+  await lockWait.done
+  asking.release()
+  await asking.done
+  approved.release()
+  await approved.done
+  // A refused call and a call that throws are cleared too.
+  const refused = engine.holdTool('w-lead', { tool: 'Bash', command: 'npm run lint', description: 'Run the linter' })
+  await refused.reached
+  const failing = engine.holdTool('w-orphan', { tool: 'Monitor', command: 'tail -f S2.log', description: 'Watch the PIE log' })
+  await failing.reached
+  // A dispatch aborted (Esc) and a worker whose turn ended: their calls never settle, and are cleared anyway.
+  const aborted = engine.holdTool('w-quiet', { tool: 'Bash', command: 'sleep 9999', description: 'A soak that is cut' })
+  await aborted.reached
+  const orphaned = engine.holdTool('w-ask', { tool: 'Bash', command: 'sleep 9999', description: 'A call left behind' })
+  await orphaned.reached
+  let held = ''
+  let after = ''
+  try {
+    at(3)
+    held = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).lines.join('\n')
+    refused.deny()
+    await refused.done
+    failing.fail()
+    await failing.done.catch(() => undefined)
+    aborted.abort()
+    await engine.agentTurnEnd('w-ask')
+    after = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).lines.join('\n')
+  } finally {
+    Date.now = realNow
+  }
+  expect('A1: calls in flight are cleared when they run, are refused, throw, are aborted or their turn ends: the ⏳ lines go, and so does "Waiting on"', /⏳ Run the linter/.test(held) && /⏳ Watch the PIE log/.test(held) && /⏳ A soak that is cut/.test(held) && /⏳ A call left behind/.test(held) && !/⏳/.test(after) && !squash(after.split('\n').find(line => /^W O R K E R S|^WORKERS/.test(line)) ?? '').includes('WAITINGON'), [held, after])
+  expect('no hook threw in the worker-tree scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  // Round 2 (D7, D9): a search opens the sub-groups and the Parked block that hold its matches. A list of its own:
+  // nine intents for one teammate (a sub-group that starts folded), one for another, one parked.
+  const root = sandbox()
+  fs.rmSync(path.join(root, 'docs/intent'), { recursive: true, force: true })
+  const intentFile = (slug, owner, status = 'active') => {
+    fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
+    fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Status: ${status}\n- Area: Tools\n- Owner: ${owner}\n\n## Acceptance\n\n- A1: one\n- A2: two\n`)
+  }
+  for (const slug of ['alpha-one', 'beta-two', 'gamma-three', 'delta-four', 'epsilon-five', 'zeta-north', 'zeta-south', 'eta-eight', 'theta-nine']) intentFile(slug, 'HaiHuynhTA')
+  intentFile('small-one', 'DuyTranSipher')
+  intentFile('resting-quietly', 'LamPhung-Art', 'parked')
+  const engine = createEngine({ root, surfaces: ['terminal'], user: 'Tin Nguyen' })
+  engine.store.set('tz', tzFor(12))
+  register(engine.on, { briefGate: 'warn' })
+  await engine.start()
+  await new Promise(resolve => setTimeout(resolve, 1500))
+  await run(engine, [])
+  const pane = () => engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  const text = async () => check(await pane(), 72).lines.join('\n')
+  findKey(await pane(), 'all')?.props.onPress()
+  const opened = await text()
+  expect('round 2: unsearched, the teammate with nine intents starts folded and the Parked block too', /\n▸ Hai Huynh · 9\n/.test(opened) && /\n▾ Duy Tran · 1\n\d: ● small-one/.test(opened) && /\n▸ ‖ Parked · 1\n/.test(opened) && !/zeta-north|resting-quietly/.test(opened), opened)
+  const search = async words => {
+    engine.script.length = 0
+    engine.script.push(typed(words))
+    findKey(await pane(), 'pick-search')?.props.onPress()
+    await engine.flush()
+    return text()
+  }
+  const zeta = await search('zeta')
+  screens.push(['Terminal · a search opens the folded sub-group holding its matches (72 columns)', zeta])
+  expect('round 2: a search matching 2 of 9 in a folded sub-group opens it and shows both rows', /\n▾ Hai Huynh · 2 of 9\n\d: ● zeta-(north|south)[^\n]*\n\d: ● zeta-(north|south)/.test(zeta) && !/Duy Tran/.test(zeta), zeta)
+  findKey(await pane(), 'sub-others-0-fold')?.props.onPress()
+  expect('round 2: … and a press on its head still folds it', /\n▸ Hai Huynh · 2 of 9\n/.test(await text()) && !/zeta-north/.test(await text()), await text())
+  const parked = await search('resting')
+  expect('round 2: a search matching only a parked intent shows it in an open Parked block', /\n▾ ‖ Parked · 1 of 1\n\d: ‖ resting-quietly/.test(parked), parked)
+  expect('no hook threw in the search-opens-groups scenario', engine.record.hookErrors.length === 0 && check(await pane(), 72).problems.length === 0, engine.record.hookErrors)
+  fs.rmSync(root, { recursive: true, force: true })
+}
+
 // ---------------------------------------------------------------- the team's real state (0.1.5)
 
 {
@@ -1472,6 +1647,32 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
     const counts = rows.map(line => /\d+\/\d+/.exec(line)).map(match => (match ? match.index + match[0].length : -1))
     expect(`one anatomy @${cols}: every intent row as wide as the pane, its count column ending at one place, a mini bar beside it (A8)`, rows.length >= 6 && rows.every(line => line.length === cols && /[▰▱]{5}/.test(line)) && new Set(counts).size === 1, rows)
   }
+  // 0.1.9: the teammates' intents grouped by Person when the list opens; each group's parked intents folded at its end.
+  const byPerson = await text(72)
+  screens.push(['Terminal · Everything open grouped by Person, parked folded (72 columns)', byPerson])
+  expect("A7: Everything open groups the teammates' intents by Person when it opens: foldable sub-heads with counts, tidied names, a team with its lead", /▾ T E A M M A T E S ' {3}I N T E N T S {3}· {3}5\n▾ Duy Tran · 1\n\d: ● teammate-c[^\n]*\n▾ Lam Phung · 1\n\d: ● teammate-a[^\n]*\n▾ Tien Dang · Cinematic · 1\n\d: ● teammate-b[^\n]*\n▾ Truc Nguyen · 1\n\d: ● ownerless[^\n]*\n▸ ‖ Parked · 1\n/.test(byPerson) && /g: Group: Person/.test(byPerson), byPerson)
+  expect('A8: parked intents fold into "‖ Parked · N" at the end of each top group, yours and teammates\'', /Y O U R {3}I N T E N T S[^\n]*\n(?:\d: [●◐✓][^\n]*\n)+▸ ‖ Parked · 1\n/.test(byPerson) && !/mine-parked|teammate-d/.test(byPerson), byPerson)
+  findKey(await pane(), 'park-others-fold')?.props.onPress()
+  expect('A8: unfolded, a parked intent with no reason keeps its ⚠ on its row inside', /▾ ‖ Parked · 1\n\d: ‖ teammate-d ⚠ parked, no reason/.test(await text(72)), await text(72))
+  findKey(await pane(), 'park-others-fold')?.props.onPress()
+  const groupings = []
+  for (let turn = 0; turn < 4; turn += 1) {
+    findKey(await pane(), 'pick-group')?.props.onPress()
+    groupings.push(await text(72))
+  }
+  expect('A7: Group cycles Person → Area → Stage → None → Person: area and stage sub-heads with counts, None draws the rows under the group head', /g: Group: Area/.test(groupings[0]) && /\n▾ Tools · 3\n/.test(groupings[0]) && /\n▾ VFX · 1\n/.test(groupings[0]) && /g: Group: Stage/.test(groupings[1]) && /\n▾ Building · 4\n/.test(groupings[1]) && /g: Group: None/.test(groupings[2]) && /I N T E N T S {3}· {3}5\n\d: ●/.test(groupings[2]) && /g: Group: Person/.test(groupings[3]), groupings.map(one => one.split('\n').filter(line => /^[▸▾]|Group/.test(line)).join(' | ')))
+  const deskGroup = findKey(await pane(110, 'desktop'), 'pick-group')
+  expect('A7: on the desktop Group is a visible button with no key drawn', deskGroup?.type === 'Button' && deskGroup.props.label === 'Group: Person' && deskGroup.props.hotkey === undefined, deskGroup?.props)
+  expect('A7: the Group key g is unique on the pick view, and Home has no Group button', check(await pane(72), 72).problems.length === 0 && (findKey(await pane(), 'pick-back')?.props.onPress(), !findKey(await pane(), 'pick-group')), check(await pane(72), 72).problems)
+  findKey(await pane(), 'all')?.props.onPress()
+  engine.script.length = 0
+  engine.script.push(typed('teammate'))
+  findKey(await pane(), 'pick-search')?.props.onPress()
+  await engine.flush()
+  const searchedGroups = await text(72)
+  screens.push(['Terminal · Everything open searched, heads show x of y (72 columns)', searchedGroups])
+  expect('A9: while a search is active, the group and sub-group heads say "x of y"', /T E A M M A T E S ' {3}I N T E N T S {3}· {3}4 {3}O F {3}5\n/.test(searchedGroups) && /\n▾ Duy Tran · 1 of 1\n/.test(searchedGroups) && /\n▾ ‖ Parked · 1 of 1\n/.test(searchedGroups) && !/Y O U R {3}I N T E N T S/.test(searchedGroups), searchedGroups)
+  findKey(await pane(), 'pick-search-clear')?.props.onPress()
   // The desktop: the same columns as fixed-width boxes, no keys drawn, the sync line a press.
   const desk = await pane(110, 'desktop')
   // The bar is an SVG of fixed pixels (glyphs took the font's widths and spilled into the count); the other columns are boxes.
@@ -1520,6 +1721,18 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   }
   await until(async () => !/syncing…/.test(await text()), 5000)
   expect('after ten minutes the timer fetches again on its own', fetches().length === 4, fetches().length)
+  // A7: the Group choice is the person's, kept across a reload (a new session on the same store); folds are not.
+  if (!findKey(await pane(), 'pick-group')) findKey(await pane(), 'all')?.props.onPress()
+  findKey(await pane(), 'pick-group')?.props.onPress()
+  await until(async () => engine.store.get('groupBy:tinnguyen') === 'area', 3000)
+  const reloaded = createEngine({ root, surfaces: ['terminal'], user: 'Tin Nguyen' })
+  for (const [key, value] of engine.store) reloaded.store.set(key, value)
+  register(reloaded.on, { briefGate: 'warn' })
+  await reloaded.start()
+  await run(reloaded, [])
+  findKey(await reloaded.render('Pane', { bodyColumns: 72 }, 'ather'), 'all')?.props.onPress()
+  const afterReload = check(await reloaded.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  expect('A7: the Group choice is remembered across a reload, read from the store (Area here)', engine.store.get('groupBy:tinnguyen') === 'area' && /g: Group: Area/.test(afterReload) && /\n▾ Tools · \d+\n/.test(afterReload), afterReload.split('\n').filter(line => /Group|^[▸▾]/.test(line)))
   expect('no hook threw on the git checkout', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   fs.rmSync(base, { recursive: true, force: true })
 }

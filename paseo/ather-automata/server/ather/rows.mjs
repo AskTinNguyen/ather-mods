@@ -3,7 +3,7 @@
 // arrives as a closure from console.mjs.
 
 import { WORK_GROUPS, workGroup } from './home.mjs'
-import { BAR_CELLS, LEGEND, callBlocks, listCells, miniBarSvg, sortWork, stageBlocks } from './worklist.mjs'
+import { BAR_CELLS, LEGEND, PARKED_KEY, blocksOf, callBlocks, countText, listCells, miniBarSvg } from './worklist.mjs'
 
 /** @typedef {import('./worklist.mjs').RowCells} RowCells */
 /** @typedef {ReturnType<typeof import('./worklist.mjs').rowColumns>} Columns */
@@ -163,26 +163,45 @@ export const needsRows = (el, isClicked, { items, open, opened, width, key, onAc
 // Then "Nothing matches" when a search found nothing, and the glyphs' legend.
 /**
  * @param {any} el @param {Look} look
- * @param {{ work: readonly Work[], shown: readonly Work[], query: string, sort: import('./worklist.mjs').Sort, folded: ReadonlySet<string>, me: string, onFold: (key: string) => () => void, issuesFoot: any[] }} spec
+ * @param {{ work: readonly Work[], shown: readonly Work[], query: string, sort: import('./worklist.mjs').Sort, groupBy?: import('./worklist.mjs').GroupBy, areas?: readonly string[], folded: ReadonlySet<string>, me: string, onFold: (key: string) => () => void, issuesFoot: any[] }} spec
  */
-export const workGroups = (el, look, { work, shown, query, sort, folded, me, onFold, issuesFoot }) => {
+export const workGroups = (el, look, { work, shown, query, sort, groupBy = 'none', areas = [], folded, me, onFold, issuesFoot }) => {
   const { cells, cols } = listCells(shown, look.now, look.isTagged, look.width)
+  const isSearching = query !== ''
   let index = 0
   /** @param {Work} one */
   const line = one => {
     index += 1
     return rowOf(el, look, one, cells, cols, `pick-${one.id}`, index < 10 ? String(index) : undefined, index === 1)
   }
+  // `folded` holds the heads pressed: a head that starts folded (a large sub-group, Parked; nothing while searching) opens when pressed.
+  /** @param {string} key @param {boolean} startsFolded */
+  const isFoldedAt = (key, startsFolded) => folded.has(key) !== startsFolded
+  // A sub-head: its fold, then its title and count in bold (not letter-spaced, never lime).
+  /** @param {string} key @param {string} foldKey @param {string} text @param {boolean} isFolded */
+  const subHead = (key, foldKey, text, isFolded) => el.Box({ key, flexDirection: 'row', gap: 1, children: [el.Button({ key: `${key}-fold`, label: isFolded ? '▸' : '▾', plain: true, onPress: onFold(foldKey) }), el.Text({ key: `${key}-text`, bold: true, children: text })] })
   const out = []
   for (const group of WORK_GROUPS) {
-    const list = sortWork(shown.filter(one => workGroup(one) === group.key), sort)
+    const all = work.filter(one => workGroup(one) === group.key)
+    const list = shown.filter(one => workGroup(one) === group.key)
     const hasNone = group.key === 'issues' && !work.some(one => one.kind === 'issue')
     if (list.length === 0 && !(hasNone && !query)) continue
-    const isFolded = folded.has(group.key)
+    const isFolded = isFoldedAt(group.key, false)
     // Without a name to compare, nobody's work is called a teammate's.
     const title = group.key === 'others' && !me ? 'Open intents' : group.title
-    const head = el.Box({ key: `group-${group.key}-head`, flexDirection: 'row', gap: 1, marginTop: 1, children: [el.Button({ key: `group-${group.key}-fold`, label: isFolded ? '▸' : '▾', plain: true, onPress: onFold(group.key) }), label(el, `group-${group.key}-label`, `${title} · ${list.length}`, look.width, GROUP_COLOURS[group.key])] })
-    const body = isFolded ? [] : sort === 'close' && group.key !== 'issues' ? stageBlocks(list).flatMap(block => [el.Text({ key: `group-${group.key}-${block.key}`, bold: true, children: `${block.title} · ${block.items.length}` }), ...block.items.map(line)]) : list.map(line)
+    const head = el.Box({ key: `group-${group.key}-head`, flexDirection: 'row', gap: 1, marginTop: 1, children: [el.Button({ key: `group-${group.key}-fold`, label: isFolded ? '▸' : '▾', plain: true, onPress: onFold(group.key) }), label(el, `group-${group.key}-label`, `${title} · ${countText(list.length, all.length, isSearching)}`, look.width, GROUP_COLOURS[group.key])] })
+    // The group's blocks (worklist.mjs blocksOf): sub-groups, stage blocks or plain rows, then Parked (D7-D9).
+    let subAt = 0
+    const body = isFolded
+      ? []
+      : blocksOf(group.key, list, all, { sort, groupBy, areas, isSearching }).flatMap(block => {
+          if (block.kind === 'plain') return block.items.map(line)
+          const count = `${block.title} · ${countText(block.items.length, block.total, isSearching)}`
+          if (block.kind === 'stage') return [el.Text({ key: `group-${group.key}-${block.key}`, bold: true, children: count }), ...block.items.map(line)]
+          const isBlockFolded = isFoldedAt(block.foldKey, block.startsFolded)
+          const key = block.key === PARKED_KEY ? `park-${group.key}` : `sub-${group.key}-${subAt++}`
+          return [subHead(key, block.foldKey, count, isBlockFolded), ...(isBlockFolded ? [] : block.items.map(line))]
+        })
     const foot = group.key === 'issues' && !isFolded ? [...(hasNone ? [el.Text({ key: 'issues-none', color: QUIET, children: 'None assigned to you right now.' })] : []), ...issuesFoot] : []
     out.push(el.Box({ key: `group-${group.key}`, flexDirection: 'column', children: [head, ...body, ...foot] }))
   }

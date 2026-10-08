@@ -12,6 +12,7 @@ import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
+import { groupByOf } from './worklist.mjs'
 
 /**
  * @typedef {{
@@ -37,6 +38,8 @@ const KEY = {
   area: (/** @type {string} */ me) => `area:${personId(me)}`,
   tour: (/** @type {string} */ me) => `tour:${personId(me)}`,
   nudged: (/** @type {string} */ me) => `nudged:${personId(me)}`,
+  // How this person groups the teammates' intents in Everything open (person, area, stage or none).
+  groupBy: (/** @type {string} */ me) => `groupBy:${personId(me)}`,
   // The sessions holding an away window for this person, so a new session finds them without a scan.
   windows: (/** @type {string} */ person) => `windows:${person}`,
   issues: (/** @type {string} */ me) => `issues:${personId(me)}`,
@@ -201,6 +204,9 @@ export const readPrRecords = async io => /** @type {Record<string, import('./prs
 export const readPrStates = async io => Object.fromEntries(Object.entries(await readPrRecords(io)).map(([number, record]) => [number, record.state]))
 /** @param {Io} io @param {string} me @returns {Promise<string | null>} */
 export const readLast = async (io, me) => /** @type {string | null} */ ((await io.get(KEY.last(me))) ?? null)
+// The person's grouping for Everything open; Person until they choose another.
+/** @param {Io} io @param {string} me */
+export const readGroupBy = async (io, me) => groupByOf(await io.get(KEY.groupBy(me)))
 /** @param {Io} io */
 export const readScore = async io => /** @type {Record<string, number>} */ ((await io.get(KEY.score)) ?? {})
 
@@ -265,6 +271,13 @@ export const setProfile = (io, me, fields, pack = unreal) =>
     if (fields.area !== undefined) await io.set(KEY.area(me), fields.area)
     if (fields.tourDone !== undefined) await io.set(KEY.tour(me), { isDone: fields.tourDone })
     if (fields.isNudged !== undefined) await io.set(KEY.nudged(me), fields.isNudged)
+    changed(io)
+  })
+
+/** @param {Io} io @param {string} me @param {import('./worklist.mjs').GroupBy} by */
+export const setGroupBy = (io, me, by) =>
+  serial(async () => {
+    await io.set(KEY.groupBy(me), by)
     changed(io)
   })
 

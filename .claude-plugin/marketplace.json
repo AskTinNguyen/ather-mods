@@ -7,7 +7,7 @@
     {
       "name": "ather-automata",
       "description": "What needs you, what to do next, and a safe pair of hands while you are away: the S2 way of working with Claude Code.",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "author": { "name": "Tin Nguyen" },
       "category": "productivity",
       "source": "./ather-automata"

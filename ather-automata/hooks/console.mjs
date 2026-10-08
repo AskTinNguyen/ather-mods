@@ -17,12 +17,13 @@ import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, 
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { crewOf } from './crew.mjs'
-import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, crewWords, propSvg, trailWords } from './squad.mjs'
+import { crewSections } from './crew-rows.mjs'
 import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
 import { recordEnd } from './workers.mjs'
+import { endLoop } from './inflight.mjs'
 import { changeGlyph } from './changes.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from './team.mjs'
-import { SORT_LABELS, nextSort } from './worklist.mjs'
+import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, INK, LIME, QUIET, choiceRow, fit, homePreview, label, needsRows, section, statusLine, workGroups } from './rows.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
@@ -58,9 +59,14 @@ let issueBack = /** @type {'home' | 'pick'} */ ('home')
 // The intent whose view is open (paneMode 'intent'; '' is the tracked one), and the view to go back to.
 let intentShown = ''
 let intentBack = /** @type {'home' | 'pick'} */ ('home')
-// The "Everything open" list: the words searched, its sort, and the folded groups.
+// The "Everything open" list: the words searched, its sort, how the teammates' intents are grouped
+// (read from the person's stored choice once a session), and the heads pressed to fold or unfold.
 let pickQuery = ''
 let pickSort = /** @type {import('./worklist.mjs').Sort} */ ('recent')
+let pickGroup = /** @type {import('./worklist.mjs').GroupBy} */ ('person')
+let isGroupRead = false
+// Presses of Group: a stored choice read back after a press does not undo it.
+let groupPresses = 0
 /** @type {Set<string>} */
 const pickFolded = new Set()
 // Needs you's intents opened to show each of their decisions.
@@ -174,6 +180,8 @@ export function register(on) {
     if (!e.agentId && (await laneOf($)).isS2) void refresh($).catch(() => undefined)
     // A worker's turn ended: it finished now, not when the pane is next drawn.
     if (e.agentId) recordEnd(e.agentId, Date.now())
+    // Its turn is over: nothing in its loop is in flight, whatever did not settle.
+    if (e.agentId) endLoop(e.agentId)
     if (e.agentId) $.ui.invalidate('ui.render')
     return result
   })
@@ -226,7 +234,8 @@ export function register(on) {
     isDrawn = true
     void syncMain($)
     if (paneMode === 'intent') await readIntentView($)
-    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($))))
+    if (paneMode === 'pick' && !isGroupRead) await readGroup($)
+    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack))
   })
 
   on('ui.close', ($, e, next) => {
@@ -255,6 +264,8 @@ async function openConsole($, folder) {
   pickQuery = ''
   pickSort = 'recent'
   pickFolded.clear()
+  pickGroup = 'person'
+  isGroupRead = false
   callsOpen.clear()
   teamCache = EMPTY_CACHE
   sync = NO_SYNC
@@ -969,6 +980,24 @@ function setSearch($, text) {
   return pickQuery ? `Searching for "${pickQuery}".` : 'Showing everything.'
 }
 
+// Group: Person → Area → Stage → None, remembered for the person (folds are not).
+/** @param {Engine} $ */
+function cycleGroup($) {
+  pickGroup = nextGroup(pickGroup)
+  groupPresses += 1
+  isGroupRead = true
+  $.ui.invalidate('ui.render')
+  void state.setGroupBy(io($), me, pickGroup).catch(() => undefined)
+}
+
+/** @param {Engine} $ */
+async function readGroup($) {
+  const pressesBefore = groupPresses
+  const stored = await state.readGroupBy(io($), me).catch(() => pickGroup)
+  if (groupPresses === pressesBefore) pickGroup = stored
+  isGroupRead = true
+}
+
 /** @param {Engine} $ */
 function cycleSort($) {
   pickSort = nextSort(pickSort)
@@ -1209,53 +1238,14 @@ async function seeIntent($) {
   await openPane($, 'intent')
 }
 
-// ---------------------------------------------------------------- workers
+// ---------------------------------------------------------------- workers (drawn in crew-rows.mjs)
 
 /** @typedef {import('./crew.mjs').Crew} Crew */
 
-const DONE_SHOWN = 3
-
-// Running workers, then the last few done: avatar, title, kind and model, and how it went.
-/** @param {any} el @param {Engine} $ @param {Crew[]} crew @param {number} width */
-function crewSections(el, $, crew, width) {
-  const running = crew.filter(one => one.state === 'running' || one.state === 'waiting')
-  const done = crew.filter(one => one.state === 'done' || one.state === 'failed').slice(0, DONE_SHOWN)
-  const sections = []
-  if (running.length > 0) sections.push(section(el, 'workers', [label(el, 'workers-label', `Workers · running ${running.length}`, width), ...running.map(one => crewRow(el, $, one, width))]))
-  if (done.length > 0) sections.push(section(el, 'workers-done', [label(el, 'workers-done-label', `Done ${done.length}`, width), ...done.map(one => crewRow(el, $, one, width))]))
-  return sections
-}
-
-/** @param {any} el @param {Engine} $ @param {Crew} one @param {number} width */
-function crewRow(el, $, one, width) {
-  const look = KINDS[one.kind]
-  const isLive = one.state === 'running' || one.state === 'waiting'
-  const { doing, line } = crewWords(one)
-  const kindLine = el.Box({ key: `${one.id}-kind`, flexDirection: 'row', children: [el.Text({ color: look.fill, bold: true, children: look.word }), el.Text({ color: QUIET, children: ` · ${[one.model, doing].filter(Boolean).join(' · ')}` })] })
-  const how = isLive
-    ? el.Text({ key: `${one.id}-how`, color: QUIET, wrap: 'wrap', children: line })
-    : el.Box({
-        key: `${one.id}-how`,
-        flexDirection: 'row',
-        children: [
-          ...(isClicked && one.trail.length > 0
-            ? one.trail.flatMap((prop, index) => [...(index > 0 ? [el.Text({ color: QUIET, children: ' → ' })] : []), el.Svg({ source: propSvg(prop), alt: PROP_WORDS[prop], width: 22, height: 22 })])
-            : one.trail.length > 0 ? [el.Text({ color: QUIET, children: trailWords(one.trail) })] : []),
-          el.Text({ color: STATE_COLOURS[one.state], children: `${one.trail.length > 0 ? ' ' : ''}${STATE_GLYPHS[one.state]}` }),
-          ...(line ? [el.Text({ color: QUIET, children: ` · ${line}` })] : []),
-        ],
-      })
-  const words = el.Box({
-    key: `${one.id}-words`,
-    flexDirection: 'column',
-    flexGrow: 1,
-    children: [el.Button({ key: `worker-${one.id}`, label: fit(one.title, width - 8), plain: true, onPress: press($, async () => { handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`); return `asked the session about ${one.title}` }, false) }), kindLine, how],
-  })
-  const glyph = el.Text({ key: `${one.id}-glyph`, color: STATE_COLOURS[one.state], children: STATE_GLYPHS[one.state] })
-  // The desktop draws the worker's avatar; the terminal leads with its state glyph.
-  return isClicked
-    ? el.Box({ key: `crew-${one.id}`, flexDirection: 'row', gap: 2, width: '100%', alignItems: 'center', marginTop: 1, children: [el.Svg({ source: avatarSvg(one.kind, one.prop, one.state), alt: `${look.word}, ${one.state}`, width: 40, height: 40, isInteractive: one.state === 'running' ? true : undefined }), words, glyph] })
-    : el.Box({ key: `crew-${one.id}`, flexDirection: 'row', gap: 1, children: [glyph, words] })
+// A press on a worker: the session gives its status, without stopping or redirecting it.
+/** @param {Engine} $ @param {Crew} one */
+function askWorker($, one) {
+  return press($, async () => { handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`); return `asked the session about ${one.title}` }, false)
 }
 
 // ---------------------------------------------------------------- the summary strip
@@ -1332,12 +1322,13 @@ function paneView(el, $, model, columns, surface, crew = []) {
   if (paneMode === 'pick') {
     const shown = filterWork(model.work, pickQuery)
     rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
-    // The pane has no text box: Search asks one question and takes the words typed under Other. Sort cycles Recent, Ready to close, Oldest.
+    // The pane has no text box: Search asks one question and takes the words typed under Other. Sort cycles Recent, Ready to close, Oldest; Group cycles Person, Area, Stage, None.
     const search = Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: press($, () => searchQuestion($), true) })
     const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
     const sort = Button({ key: 'pick-sort', label: `Sort: ${SORT_LABELS[pickSort]}`, hotkey: hotkeyFor('o'), plain: true, onPress: () => cycleSort($) })
-    rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', gap: 3, marginTop: 1, children: [search, ...clear, sort] }))
-    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, folded: pickFolded, me, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
+    const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
+    rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
+    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
     rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
@@ -1551,7 +1542,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card]))
   }
 
-  rows.push(...crewSections(el, $, crew, width))
+  rows.push(...crewSections(el, { crew, width, isClicked, onWorker: one => askWorker($, one) }))
 
   rows.push(...homePreview(el, lookOf($, width, 'home'), { own: model.own, team: model.teamPreview, isNewcomer: model.isNewcomer, me, onAll: show($, 'pick') }))
 
