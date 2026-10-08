@@ -140,3 +140,9 @@ With two screenshots (dark theme) from an S2 session after the restart: the A5R 
 
 > 1. Cant see any red entrance, only the icon of A5R appear in Ather Automata pane
 > 2. Yes, I see the red scarf
+
+## L-20 (2026-10-08) | class: intent | -> rev 18
+
+> Why?
+
+With a screenshot of the A5R pane in the filler-enemies-tech-support session: "A5R acceptance · 3 of 5 not met · filler-enemies-tech-support · PR #32806, #32788, #32791 · scored after the fact · 17:02", rule 1 listing dozens of `tools/TALab/scenarios/…` paths "intent mc-loco-stop-triage names it", rule 2 "Ather's proof is incomplete for the role techart: still needs Editor check and PIE", rule 3 dozens of paths outside the intent's, the rule names wrapped one word per line.
