@@ -489,6 +489,9 @@ const lastSubmit = engine => {
   const S2_CALL = 'call:s2/login:F-1'
   let home = await pane()
   expect("Needs you lists both checkouts' decisions, each by its intent's key", [WEB_CALL, S2_CALL].every(id => keys(home).includes(`item-${id}`)), keys(home).filter(key => key.startsWith('item-')))
+  const desk = keys(await pane('desktop'))
+  expect('on the desktop too: both decisions, and no element key drawn twice', [WEB_CALL, S2_CALL].every(id => desk.includes(`item-${id}`)) && desk.every((key, at, list) => list.indexOf(key) === at), desk.filter(key => /call:/.test(key)))
+  home = await pane()
   // Open web's decision if the other is the one opened, then answer A.
   if (!byKey(home, `option-${WEB_CALL}-A`)) {
     byKey(home, `item-${WEB_CALL}`)?.props.onPress()
@@ -552,7 +555,7 @@ const lastSubmit = engine => {
   const home = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
   byKey(home, 'option-call:login:F-1-A')?.props.onPress()
   await engine.flush()
-  expect('a session in s2 alone: the answer names the plain slug and no path', lastSubmit(engine).startsWith('Decide F-1 on login: A — One page.'), lastSubmit(engine))
+  expect('a session in s2 alone: the answer names the plain slug and no path', lastSubmit(engine).includes('F-1 on login:') && !lastSubmit(engine).includes('findings.md'), lastSubmit(engine))
 }
 
 // ---------------------------------------------------------------- report
