@@ -151,3 +151,9 @@ With a screenshot of the A5R pane in the filler-enemies-tech-support session: "A
 
 > 1. The slow entrance test: did you see red pixels clear over about 3 s? ---- not really but its ok
 > 2. PR #9: did the running avatar show no square in both dark and light? --- yep
+
+## L-22 (2026-10-08) | class: intent | -> closed
+
+> Ok all
+
+After the orchestrator listed the rows waiting on Hai's look (A33, A43, A44, A49, A53, A47(e)).

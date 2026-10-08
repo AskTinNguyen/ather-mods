@@ -1,7 +1,7 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
 - Rev: 19
-- Status: active
+- Status: closed
 - Area: a5r
 - Owner: HaiHuynh
 - Skill: `plugin-authoring`
@@ -113,6 +113,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- closed (2026-10-08): L-22: Hai reviewed every open row ("Ok all"): 53 met, A37 waived. Live at A5R 0.12.3 on `intent/a5r` (branch only, no PR, by Hai's choice).
 - rev 19 (2026-10-08): L-21: A37 waived by Hai (entrance not visible on the desktop pane, accepted); A51 reviewed.
 - rev 18 (2026-10-08): L-20: A52 after-the-fact scoring on each PR's own diff, A53 a readable acceptance card.
 - rev 17 (2026-10-07): L-19: A51 a slow motion setting to tell a too-fast entrance from one the desktop does not draw.
