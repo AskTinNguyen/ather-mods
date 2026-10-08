@@ -38,13 +38,14 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
   }
   const matches = (matcher, e) => !matcher || Object.entries(matcher).every(([key, value]) => e[key] === value)
 
-  const dispatch = async (event, e, bottom, origin = 'engine') => {
+  // `signal`: the dispatch's own AbortSignal (the person's Esc); a fresh one that never aborts by default.
+  const dispatch = async (event, e, bottom, origin = 'engine', signal = undefined) => {
     const chain = hooks.filter(one => one.event === event && matches(one.matcher, e))
     const run = async (index, ev) => {
       if (index >= chain.length) return bottom(ev)
       const next = next2 => run(index + 1, next2 ?? ev)
       next.origin = { plugin: origin, tier: 'user' }
-      next.signal = new AbortController().signal
+      next.signal = signal ?? new AbortController().signal
       return chain[index].hook($, ev, next)
     }
     return run(0, e)
@@ -233,9 +234,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     },
     modelTool: input => dispatch('tool.call', input, toolBottom, 'engine'),
     // A background worker: dispatched with a brief, then calling tools in its own loop.
-    // `parentId`: a worker another worker dispatched from its own loop.
-    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5', parentId }) => {
-      const result = await dispatch('agent.spawn', { tool_use_id: `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model, ...(parentId ? { agentId: parentId } : {}) }, () => ({ model, agentId }))
+    // `parentId`: a worker another worker dispatched from its own loop (the spawn's parentAgentId, as the engine
+    // pins it). `toolUseId`: the Agent call this spawn belongs to; `background`: false for a foreground call that waits.
+    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5', parentId, toolUseId, background = true }) => {
+      const result = await dispatch('agent.spawn', { tool_use_id: toolUseId ?? `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model, background, fork: false, ...(parentId ? { parentAgentId: parentId } : {}) }, () => ({ model, agentId }))
       agents.push({ id: agentId, description, type: subagentType, status: 'running', ...(parentId ? { parentId } : {}) })
       return result
     },
@@ -244,6 +246,34 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     // A worker's own turn ends (its answer), as Claude Code reports it.
     agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', agentId }, () => ({ text: '' })),
     agentTool: (agentId, input) => dispatch('tool.call', { ...input, agentId }, toolBottom, 'engine'),
+    // A tool call held in flight: it reaches the tool (`reached`) and stays there until released (it runs),
+    // refused (the tool answers with a deny) or failed (the tool throws). `agentId` undefined: the main loop.
+    // `ask`: the engine's tool.check answers "ask" first (the mode then settles it: in auto mode the classifier
+    // may allow it at once). `dialog`: the permission dialog is then shown to the person, as Claude Code reports it
+    // (classic.PermissionRequest: agent_id inside a subagent, tool_name, tool_input, no tool_use_id); the call waits
+    // there. `abort()`: the dispatch is aborted (Esc) and the call never settles.
+    holdTool: (agentId, input, { ask = false, dialog = false } = {}) => {
+      const stop = new AbortController()
+      let release = () => undefined
+      let fail = () => undefined
+      let reach = () => undefined
+      const gate = new Promise((resolve, reject) => {
+        release = resolve
+        fail = reject
+      })
+      const reached = new Promise(resolve => (reach = resolve))
+      const done = dispatch('tool.call', { tool_use_id: `held-${Math.random().toString(36).slice(2, 10)}`, ...input, ...(agentId ? { agentId } : {}) }, async ev => {
+        if (ask || dialog) await dispatch('tool.check', { tool: ev.tool, input: ev, tool_use_id: ev.tool_use_id }, () => ({ decision: 'ask', reason: 'not in the allow list' }))
+        if (dialog) {
+          const { tool, tool_use_id: _id, agentId: loop, ...toolInput } = ev
+          await dispatch('classic.PermissionRequest', { hook_event_name: 'PermissionRequest', session_id: sessionId, transcript_path: '', cwd: root, tool_name: tool, tool_input: toolInput, ...(loop ? { agent_id: loop, agent_type: 'general-purpose' } : {}) }, () => ({}))
+        }
+        reach(ev)
+        const how = await gate
+        return how === 'deny' ? { deny: 'refused by the person' } : toolBottom(ev)
+      }, 'engine', stop.signal)
+      return { done, reached, release: () => release('run'), deny: () => release('deny'), fail: (error = new Error('the tool threw')) => fail(error), abort: () => stop.abort() }
+    },
     setAgentStatus: (agentId, status) => {
       const agent = agents.find(one => one.id === agentId)
       if (agent) agent.status = status

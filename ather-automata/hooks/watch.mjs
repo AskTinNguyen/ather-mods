@@ -12,7 +12,8 @@ import { clampHours, isHolding, mandateText, offAway, windowEndText } from './aw
 import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, gitFolders, heldKindsOf, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
 import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
-import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
+import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
+import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { heldByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
@@ -25,8 +26,7 @@ let cwd = ''
 let briefGate = 'warn'
 // Traps already counted in this session: each counts once per session.
 const seenTraps = new Set()
-// Last tool each worker called, for the idle-worker toast.
-const lastTools = new Map()
+// Workers already warned about (quiet, or waiting on permission): each is warned once.
 const idleWarned = new Set()
 // When the person last typed a prompt: after an away window has ended, it means they are back.
 let lastPersonAt = 0
@@ -65,9 +65,9 @@ export function register(on, options) {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     seenTraps.clear()
-    lastTools.clear()
     idleWarned.clear()
     resetWorkers()
+    resetCalls()
     lastPersonAt = 0
     sessionStartedAt = Date.now()
     state.markActive()
@@ -153,7 +153,17 @@ export function register(on, options) {
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
     if (spawned.agentId) recordSpawn({ agentId: spawned.agentId, subagentType: e.subagentType, prompt: e.prompt, description: e.description, model: spawned.model, at: Date.now() })
+    // A foreground Agent call now waits on this worker: its loop's call in flight names it.
+    if (spawned.agentId) linkChild({ loop: e.parentAgentId ?? '', toolUseId: e.tool_use_id, childId: spawned.agentId, isBackground: e.background })
     return spawned
+  })
+
+  // A permission dialog shown to the person (not tool.check's "ask", which in auto mode the classifier often
+  // settles at once): until it settles, that call waits on their decision, not running, and a long wait is what
+  // the toast is for. Watched only: the dialog's answer is never decided here.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    markAsking({ loop: e.agent_id ?? '', tool: e.tool_name, input: e.tool_input, at: Date.now() })
+    return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
@@ -163,7 +173,6 @@ export function register(on, options) {
     if (e.agentId) recordTool(e.agentId, tool, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), Date.now())
     const isMcp = tool.startsWith('mcp__') && !tool.startsWith('mcp__ather-automata__')
     const input = JSON.stringify(e).slice(0, 4000)
-    if (e.agentId) lastTools.set(e.agentId, { tool, at: Date.now() })
     if (isMcp && (await laneOf($)).pack.isAssetSave(input)) {
       const denied = await hold($, 'asset-save', `${tool} ${input.slice(0, 300)}`).catch(() => null)
       if (denied) return { deny: denied }
@@ -177,7 +186,10 @@ export function register(on, options) {
     // An edit to an intent's prompt, findings or progress: what it changed, read off the file before and after.
     const intentFile = isWrite ? intentFileOf(path) : null
     const before = intentFile ? ((await readFile($, String(path))) ?? '') : ''
-    const ran = await next(e)
+    // In flight until it settles (ran, refused or threw) or the dispatch aborts, in its loop (a worker's, or the
+    // main loop's); then heard from.
+    const settled = () => (e.agentId ? recordHeard(e.agentId, Date.now()) : undefined)
+    const ran = await during({ loop: e.agentId ?? '', toolUseId: String(e.tool_use_id ?? ''), tool, input: /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), at: Date.now() }, () => next(e), settled, next.signal)
     const hasRun = ran.deny === undefined && ran.isError !== true
     if (orchestrated && hasRun) void laneOf($).then(({ root }) => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
@@ -349,10 +361,20 @@ async function tick($) {
   await heartbeat($, false)
   const now = Date.now()
   for (const agent of await $.agent.list().catch(() => [])) {
-    const last = lastTools.get(agent.id)
-    if (agent.status !== 'running' || !last || now - last.at < IDLE_MS || idleWarned.has(agent.id)) continue
+    const seen = workerOf(agent.id)
+    if (agent.status !== 'running' || !seen?.lastTool || idleWarned.has(agent.id)) continue
+    // A call waiting on permission: warned once it has waited the threshold, whatever else is quiet.
+    const [asking] = askingIn(agent.id)
+    if (asking) {
+      if (asking.askedAt === undefined || now - asking.askedAt < IDLE_MS) continue
+      idleWarned.add(agent.id)
+      $.ui.toast(`Ather: worker "${agent.description}" asked permission to run ${asking.tool} ${Math.round((now - asking.askedAt) / 60000)} min ago and has not finished: ${asking.what}.`)
+      continue
+    }
+    // The same rule as the pane's: a call running (a long build, a PIE run, a foreground worker) is never quiet.
+    if (!isSilent({ isInFlight: isInFlight(agent.id), lastAt: seen.lastAt, now, quietMs: IDLE_MS })) continue
     idleWarned.add(agent.id)
-    $.ui.toast(`Ather: worker "${agent.description}" has been quiet for ${Math.round((now - last.at) / 60000)} min after ${last.tool}. Possibly a stuck permission prompt.`)
+    $.ui.toast(`Ather: worker "${agent.description}" has been quiet for ${Math.round((now - seen.lastAt) / 60000)} min after ${seen.lastTool}. Possibly a stuck permission prompt.`)
   }
   // A window ends at its time, or when the session reports the goal done; holds stay until the review.
   const away = await state.readAway(io($))

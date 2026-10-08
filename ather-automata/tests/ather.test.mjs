@@ -7,12 +7,15 @@ import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLi
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
-import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
-import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
+import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
+import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
+import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
+import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
+import { workGroups } from '../hooks/rows.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
-import { unreal } from '../hooks/packs/unreal.mjs'
+import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncText } from '../hooks/team.mjs'
-import { LEGEND, ageText, callBlocks, listStage, miniBar, needsAttention, nextSort, ownerName, rowCells, rowColumns, sortWork, stageBlocks, tidyName } from '../hooks/worklist.mjs'
+import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
 const EVENING = Date.UTC(2026, 9, 3, 14, 0) // 21:00 at UTC+7
@@ -1206,5 +1209,300 @@ describe('asking about an intent (0.1.6)', () => {
     expect(main).toContain('origin/main -- docs/intent/worn-edges')
     expect(main).toContain('Do not fetch, pull, check out, track it or write anything.')
     expect(main).toContain('who owns it, its status and stage')
+  })
+})
+
+describe('who waits on whom: calls in flight and the worker tree (0.1.9)', () => {
+  const fakeHost = (/** @type {any[]} */ agents, /** @type {Record<string, string>} */ files = {}) => /** @type {any} */ ({ home: async () => '', configDir: async () => '', list: async () => [], read: async (/** @type {string} */ path) => files[path] ?? null, exists: async () => false, run: async () => undefined, agents: async () => agents })
+  /** @template T @param {number} at @param {() => Promise<T>} run */
+  const atTime = async (at, run) => {
+    const real = Date.now
+    Date.now = () => at
+    try {
+      return await run()
+    } finally {
+      Date.now = real
+    }
+  }
+
+  test('A1: a call is in flight in its own loop until it settles: it ran, was refused or threw; onSettled runs every time', async () => {
+    resetCalls()
+    let settled = 0
+    const onSettled = () => void (settled += 1)
+    let seenInside = false
+    const ran = await during({ loop: 'w1', toolUseId: 't1', tool: 'Bash', input: { command: 'Build.bat', description: 'Build S2Editor' }, at: 0 }, async () => {
+      seenInside = isInFlight('w1') && !isInFlight('') && callsIn('w1')[0]?.what === 'Build S2Editor'
+      return { result: 'ok' }
+    }, onSettled)
+    expect(seenInside).toBe(true)
+    expect(ran).toEqual({ result: 'ok' })
+    expect(isInFlight('w1')).toBe(false)
+    const denied = await during({ loop: 'w1', tool: 'Bash', input: { command: 'rm -rf x' }, at: 0 }, async () => ({ deny: 'no' }), onSettled)
+    expect(denied).toEqual({ deny: 'no' })
+    expect(isInFlight('w1')).toBe(false)
+    let threw = ''
+    await during({ tool: 'Read', input: {}, at: 0 }, async () => {
+      throw new Error('boom')
+    }, onSettled).catch(error => void (threw = String(error)))
+    expect(threw).toContain('boom')
+    expect(isInFlight('')).toBe(false)
+    expect(settled).toBe(3)
+  })
+
+  test("A1: a foreground Agent call is linked to the worker it started, by the call's id or else the loop's open Agent call; a background one is not", () => {
+    resetCalls()
+    const first = startCall({ loop: 'parent', toolUseId: 'agent-1', tool: 'Agent', input: { description: 'Fix F1' }, at: 0 })
+    startCall({ loop: 'parent', toolUseId: 'bash-1', tool: 'Bash', input: { command: 'git status' }, at: 0 })
+    linkChild({ loop: 'parent', toolUseId: 'agent-1', childId: 'child' })
+    expect(callsIn('parent').find(one => one.tool === 'Agent')?.childId).toBe('child')
+    endCall(first)
+    startCall({ loop: '', toolUseId: '', tool: 'Agent', input: {}, at: 0 })
+    linkChild({ loop: '', childId: 'bg', isBackground: true })
+    expect(callsIn('')[0]?.childId).toBe(undefined)
+    linkChild({ loop: '', childId: 'fg' })
+    expect(callsIn('')[0]?.childId).toBe('fg')
+    // What a call is: its own description, else its command's first line, cut.
+    expect(callWhat('Bash', { command: 'Wait-ForS2EditorCloseAndBuild.ps1 -Target S2Editor\necho done' })).toBe('Wait-ForS2EditorCloseAndBuild.ps1 -Target S2Editor')
+    expect(callWhat('Bash', { command: 'x'.repeat(80) })).toHaveLength(60)
+    expect(callWhat('Read', {})).toBe('Read')
+  })
+
+  test('A2: one rule for a quiet worker: a call in flight is never quiet, however long; silence past the threshold is', () => {
+    expect(isSilent({ isInFlight: true, lastAt: 0, now: 3600000, quietMs: 90000 })).toBe(false)
+    expect(isSilent({ isInFlight: false, lastAt: 0, now: 91000, quietMs: 90000 })).toBe(true)
+    expect(isSilent({ isInFlight: false, lastAt: 0, now: 60000, quietMs: 90000 })).toBe(false)
+  })
+
+  test('A2: in the pane a worker with a long call in flight is not quiet; a truly silent one is; a call that ends starts the quiet clock then', async () => {
+    resetWorkers()
+    resetCalls()
+    recordSpawn({ agentId: 'busy', subagentType: 'general-purpose', prompt: 'Build it.', description: 'Builds for long', model: 'opus', at: 0 })
+    recordSpawn({ agentId: 'still', subagentType: 'general-purpose', prompt: 'Build it.', description: 'Says nothing', model: 'opus', at: 0 })
+    recordTool('busy', 'Bash', { command: 'Build.bat S2Editor' }, 1000)
+    startCall({ loop: 'busy', tool: 'Bash', input: { command: 'Build.bat S2Editor', description: 'Build S2Editor Development' }, at: 1000 })
+    recordTool('still', 'Edit', {}, 1000)
+    const host = fakeHost([{ id: 'busy', description: 'Builds for long', type: 'general-purpose', status: 'running' }, { id: 'still', description: 'Says nothing', type: 'general-purpose', status: 'running' }])
+    const crew = await atTime(11 * 60000, () => crewOf(host, 'R', 's1'))
+    const busy = crew.find(one => one.id === 'busy')
+    const still = crew.find(one => one.id === 'still')
+    expect(busy?.prop).toBe('building')
+    expect(busy?.wait).toBe('⏳ Build S2Editor Development')
+    expect(still?.prop).toBe('idle')
+    expect(crewWords(/** @type {any} */ (still)).doing).toBe('quiet')
+    recordHeard('still', 11 * 60000)
+    expect(workerOf('still')?.lastAt).toBe(11 * 60000)
+  })
+
+  test("A4: waiting lines from facts only: the child a foreground Agent call waits on; a shell or Monitor call past a minute, quoted; the pack's lock line", () => {
+    resetCalls()
+    const titles = (/** @type {string} */ id) => (id === 'c1' ? 'F1 thermo fixes' : 'a worker')
+    startCall({ loop: 'p', toolUseId: 'a1', tool: 'Agent', input: { description: 'F1' }, at: 0 })
+    linkChild({ loop: 'p', toolUseId: 'a1', childId: 'c1' })
+    expect(waitWords(callsIn('p'), 5000, titles)).toEqual({ wait: '⏳ waiting on F1 thermo fixes', stuck: '' })
+    startCall({ loop: 'q', tool: 'Bash', input: { command: 'Build.bat', description: 'Build S2Editor' }, at: 0 })
+    expect(waitWords(callsIn('q'), 59000, titles).wait).toBe('')
+    expect(waitWords(callsIn('q'), 61000, titles).wait).toBe('⏳ Build S2Editor')
+    startCall({ loop: 'm', tool: 'Monitor', input: { description: 'PIE log until the boss dies' }, at: 0 })
+    expect(waitWords(callsIn('m'), 61000, titles).wait).toBe('⏳ PIE log until the boss dies')
+    startCall({ loop: 'l', tool: 'PowerShell', input: { command: 'while ((Get-Content Saved/EDITOR_OWNER.txt) -notmatch "free") { Start-Sleep 30 }', description: 'Wait for the Editor lock' }, at: 0 })
+    const lockOf = (/** @type {string} */ command) => editorLockLine(command, 'Lane B holds the Editor until 15:40 for the snow proof, session 1a2b3c4d\nmore')
+    expect(waitWords(callsIn('l'), 61000, titles, lockOf).wait).toBe('⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the snow …')
+    // No resource is inferred: a command that does not name the lock file gets no lock line.
+    expect(editorLockLine('Build.bat S2Editor', 'held by Lane B')).toBe('')
+    expect(unreal.lockLine).toBe(editorLockLine)
+  })
+
+  test('A4: a worker found later with no call seen shows no in-flight line', async () => {
+    resetWorkers()
+    resetCalls()
+    adoptWorker({ id: 'old', type: 'general-purpose', description: 'Found later', model: 'opus', startedAt: 0, now: 0 })
+    startCall({ loop: 'old', tool: 'Bash', input: { description: 'A long thing' }, at: 0 })
+    const crew = await atTime(30 * 60000, () => crewOf(fakeHost([{ id: 'old', description: 'Found later', type: 'general-purpose', status: 'running' }]), 'R', 's1'))
+    expect([crew[0]?.wait, crew[0]?.stuck]).toEqual(['', ''])
+  })
+
+  test('A5: one call running 25 minutes or more says so', () => {
+    resetCalls()
+    startCall({ loop: 's', tool: 'Bash', input: { description: 'PIE soak' }, at: 0 })
+    expect(waitWords(callsIn('s'), 24 * 60000, () => '').stuck).toBe('')
+    expect(waitWords(callsIn('s'), 25 * 60000, () => '').stuck).toBe('⚠ one call running 25 min')
+    expect(waitWords(callsIn('s'), 31.5 * 60000, () => '').stuck).toBe('⚠ one call running 31 min')
+  })
+
+  test('A3: the tree draws each worker under the one that started it; "started by" only when that one is not drawn above; past three finished, "+N finished"', () => {
+    /** @param {string} id @param {string} state @param {string} [parentId] @returns {any} */
+    const one = (id, state, parentId = '') => ({ id, title: id, state, parentId, via: parentId, wait: '', stuck: '' })
+    const crew = [one('f5', 'done', 'lead'), one('f4', 'done', 'lead'), one('f3', 'done', 'lead'), one('f2', 'done', 'lead'), one('f1', 'running', 'lead'), one('lead', 'running'), one('orphan', 'running', 'gone-lead'), one('gone-lead', 'done')]
+    crew[6].via = 'gone-lead (finished)'
+    const tree = crewTree(crew)
+    const drawn = tree.live.map(line => (line.kind === 'worker' ? `${'  '.repeat(line.depth)}${line.one.id}${line.one.via ? ` < ${line.one.via}` : ''}` : `${'  '.repeat(line.depth)}+${line.count} finished`))
+    expect(drawn).toEqual(['lead', '  f1', '  f5', '  f4', '  f3', '  +1 finished', 'orphan < gone-lead (finished)'])
+    expect(tree.done.map(line => (line.kind === 'worker' ? line.one.id : ''))).toEqual(['gone-lead'])
+    expect([tree.running, tree.queued, tree.waitingOn]).toEqual([3, 0, 0])
+  })
+
+  test("A6: the heading counts running and waiting on; Claude Code's pending reads \"queued\"", () => {
+    expect(crewHeading({ running: 2, queued: 0, waitingOn: 1 })).toBe('Workers · Running 2 · Waiting on 1')
+    expect(crewHeading({ running: 1, queued: 1, waitingOn: 0 })).toBe('Workers · Running 1 · Queued 1')
+    expect(crewWords({ state: 'waiting', prop: null, origin: 'seen', elapsed: 5000, tools: 0, via: '' })).toEqual({ doing: 'queued', line: 'queued 0:05 · 0 tool calls' })
+    // A message sent waits on nothing: SendMessage does not make a worker look idle.
+    expect(propForTool('SendMessage', { to: 'w2' })).toBe(null)
+    expect(propForTool('AskUserQuestion', {})).toBe('asking')
+  })
+})
+
+describe('a team list that groups (0.1.9)', () => {
+  /** @param {string} slug @param {Record<string, unknown>} [over] */
+  const work = (slug, over = {}) => /** @type {any} */ ({ id: `intent:${slug}`, kind: 'intent', slug, label: slug, isMine: false, area: 'Tools', who: 'Hai Huynh', stage: 'build', updatedAt: 1, ...over })
+
+  test('A7: Group cycles Person, Area, Stage, None; a stored choice reads back, anything else is Person', () => {
+    expect([nextGroup('person'), nextGroup('area'), nextGroup('stage'), nextGroup('none')]).toEqual(['area', 'stage', 'none', 'person'])
+    expect([groupByOf('stage'), groupByOf(undefined), groupByOf('tabs')]).toEqual(['stage', 'person', 'person'])
+    expect(GROUP_LABELS.person).toBe('Person')
+  })
+
+  test("A7: sub-groups by person (no owner last), by area in the pack's order (Unsorted last), by stage in block order", () => {
+    const list = [work('a', { who: 'Lam Phung', area: 'VFX', stage: 'met' }), work('b', { who: '', area: '' }), work('c', { who: 'Duy Tran', area: 'Combat', stage: 'prove' }), work('d', { who: 'Lam Phung', area: 'Tools' })]
+    const titles = (/** @type {any} */ by) => subGroups(list, by, ['Combat', 'Tools', 'VFX']).map(group => `${group.title}:${group.items.map(one => one.slug).join('')}`)
+    expect(titles('person')).toEqual(['Duy Tran:c', 'Lam Phung:ad', 'No owner:b'])
+    expect(titles('area')).toEqual(['Combat:c', 'Tools:d', 'VFX:a', 'Unsorted:b'])
+    expect(titles('stage')).toEqual(['Ready to close:a', 'Proving:c', 'Building:bd'])
+    expect(titles('none')).toEqual([':abcd'])
+    expect(subGroups([], 'none')).toEqual([])
+    expect(FOLD_OVER).toBe(6)
+  })
+
+  test('A8, A9: parked intents split off for their own block; heads count "x of y" while searching', () => {
+    const { open, parked } = splitParked([work('a'), work('p', { stage: 'parked' }), work('b')])
+    expect([open.map(one => one.slug), parked.map(one => one.slug)]).toEqual([['a', 'b'], ['p']])
+    expect([countText(3, 9, false), countText(3, 9, true)]).toEqual(['3', '3 of 9'])
+  })
+
+  test('A7: the choice is kept per person in the store', async () => {
+    const memory = memoryIo()
+    expect(await state.readGroupBy(memory.io, 'Tin Nguyen')).toBe('person')
+    await state.setGroupBy(memory.io, 'Tin Nguyen', 'area')
+    expect(await state.readGroupBy(memory.io, 'Tin Nguyen')).toBe('area')
+    expect(await state.readGroupBy(memory.io, 'Lan Vo')).toBe('person')
+  })
+})
+
+describe('a team list that groups: drawn (0.1.9)', () => {
+  const node = (/** @type {string} */ type) => (/** @type {any} */ props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
+  const el = Object.fromEntries(['Box', 'Text', 'Button', 'Svg'].map(name => [name, node(name)]))
+  /** @param {any} tree @param {(one: any) => boolean} test @returns {any[]} */
+  const all = (tree, test) => (!tree || typeof tree !== 'object' ? [] : [...(test(tree) ? [tree] : []), ...(tree.children ?? []).flatMap((/** @type {any} */ child) => all(child, test))])
+  const look = { isClicked: false, width: 68, now: 10, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined }
+  /** @param {string} slug @param {string} who @param {string} [stage] */
+  const theirs = (slug, who, stage = 'build') => /** @type {any} */ ({ id: `intent:${slug}`, kind: 'intent', slug, label: slug, hint: '', isMine: false, area: 'Tools', owner: who, who, updatedAt: 1, stage, done: 0, total: 2, source: 'main', warn: '' })
+
+  test('A7, A8: a sub-group of more than six starts folded, six or fewer open, Parked folded; a press on a head opens it', () => {
+    const work = [...Array.from({ length: 7 }, (_, n) => theirs(`big-${n}`, 'Lam Phung')), ...Array.from({ length: 6 }, (_, n) => theirs(`six-${n}`, 'Duy Tran')), theirs('resting', 'Duy Tran', 'parked')]
+    const pressed = new Set()
+    const draw = () => workGroups(el, look, { work, shown: work, query: '', sort: 'recent', groupBy: 'person', areas: [], folded: pressed, me: 'Tin Nguyen', onFold: key => () => void (pressed.has(key) ? pressed.delete(key) : pressed.add(key)), issuesFoot: [] })
+    const rows = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Button' && /^pick-intent:/.test(one.props.key)).map(one => one.props.key.slice('pick-intent:'.length))
+    const heads = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Text' && /^(sub|park)-/.test(one.props.key ?? '')).map(one => one.props.children)
+    const first = draw()
+    expect(heads(first)).toEqual(['Duy Tran · 6', 'Lam Phung · 7', '‖ Parked · 1'])
+    expect(rows(first)).toEqual(Array.from({ length: 6 }, (_, n) => `six-${n}`))
+    all({ children: first }, one => one.type === 'Button' && one.props.key === 'sub-others-1-fold')[0].props.onPress()
+    all({ children: first }, one => one.type === 'Button' && one.props.key === 'park-others-fold')[0].props.onPress()
+    expect(rows(draw())).toHaveLength(14)
+  })
+})
+
+describe('crew-tree-and-groups round 2: permission, leaks, one clock, blocks (0.1.9)', () => {
+  test('a call whose permission dialog was shown is asking, not running: it never counts as in flight, and its ⏳ line says so', () => {
+    resetCalls()
+    startCall({ loop: 'w', toolUseId: 't-ask', tool: 'Bash', input: { command: 'rm -rf build', description: 'Clean the build folder' }, at: 0 })
+    expect(isInFlight('w')).toBe(true)
+    markAsking({ loop: 'w', tool: 'Bash', input: { command: 'rm -rf build' }, at: 1000 })
+    expect(isInFlight('w')).toBe(false)
+    expect(askingIn('w').map(one => one.askedAt)).toEqual([1000])
+    expect(isSilent({ isInFlight: isInFlight('w'), lastAt: 0, now: 11 * 60000, quietMs: 10 * 60000 })).toBe(true)
+    // Not a long shell (it may not be running yet); the line says only that permission was asked, and when.
+    // A call asked about still warns once it has gone on 25 minutes: an approved build may run on.
+    expect(longShell(callsIn('w'), 30 * 60000)).toBe(undefined)
+    const asked = waitWords(callsIn('w'), 30 * 60000, () => '')
+    expect(asked.wait).toBe('⏳ asked permission 29 min ago: Clean the build folder')
+    expect(/^⚠ one call running \d+ min$/.test(asked.stuck)).toBe(true)
+    expect(waitWords(callsIn('w'), 1000 + 30000, () => '').wait).toBe('⏳ asked permission just now: Clean the build folder')
+    // A dialog for another loop or another tool marks nothing here.
+    markAsking({ loop: '', tool: 'Bash', input: { command: 'rm -rf build' }, at: 5 })
+    markAsking({ loop: 'w', tool: 'Write', input: {}, at: 5 })
+    expect(askingIn('w')).toHaveLength(1)
+    expect(askingIn('')).toHaveLength(0)
+  })
+
+  test("the dialog is matched to its loop's newest call of that tool, the one with the same command first", () => {
+    resetCalls()
+    startCall({ loop: 'w', tool: 'Bash', input: { command: 'git push', description: 'Push' }, at: 0 })
+    startCall({ loop: 'w', tool: 'Bash', input: { command: 'Build.bat', description: 'Build' }, at: 1 })
+    markAsking({ loop: 'w', tool: 'Bash', input: { command: 'git push' }, at: 2 })
+    expect(askingIn('w').map(one => one.what)).toEqual(['Push'])
+    expect(isInFlight('w')).toBe(true)
+    // No command to match: the newest call of the tool not already asking.
+    markAsking({ loop: 'w', tool: 'Bash', input: {}, at: 3 })
+    expect(askingIn('w').map(one => one.what)).toEqual(['Push', 'Build'])
+  })
+
+  test('an aborted dispatch clears its call though the call never settles; a finished turn clears its loop; a throwing onSettled is swallowed', async () => {
+    resetCalls()
+    const stop = new AbortController()
+    let release = () => undefined
+    const pending = during({ loop: 'w', tool: 'Bash', input: { command: 'sleep 999' }, at: 0 }, () => new Promise(resolve => (release = () => resolve('done'))), () => {
+      throw new Error('bookkeeping broke')
+    }, stop.signal)
+    expect(isInFlight('w')).toBe(true)
+    stop.abort()
+    expect(isInFlight('w')).toBe(false)
+    release()
+    expect(await pending).toBe('done')
+    startCall({ loop: 'gone', tool: 'Bash', input: {}, at: 0 })
+    startCall({ loop: 'gone', tool: 'Read', input: {}, at: 0 })
+    startCall({ loop: 'kept', tool: 'Read', input: {}, at: 0 })
+    endLoop('gone')
+    expect([callsIn('gone').length, callsIn('kept').length]).toEqual([0, 1])
+  })
+
+  test('over the cap, a live long call is kept: asking calls go first, then the loop piling calls up', () => {
+    resetCalls()
+    startCall({ loop: 'long', tool: 'Bash', input: { description: 'The real build' }, at: 0 })
+    startCall({ loop: 'q', toolUseId: 'asked', tool: 'Bash', input: {}, at: 1 })
+    markAsking({ loop: 'q', tool: 'Bash', input: {}, at: 1 })
+    for (let n = 0; n < 199; n += 1) startCall({ loop: 'leaky', tool: 'Read', input: {}, at: 2 + n })
+    expect(askingIn('q')).toHaveLength(0)
+    startCall({ loop: 'leaky', tool: 'Read', input: {}, at: 500 })
+    expect(callsIn('long').map(one => one.what)).toEqual(['The real build'])
+    expect(callsIn('leaky')).toHaveLength(199)
+  })
+
+  test('one clock: a worker\'s last call and when it was heard from live on its record', () => {
+    resetWorkers()
+    recordSpawn({ agentId: 'w', subagentType: 'general-purpose', prompt: 'x', description: 'x', model: 'opus', at: 0 })
+    recordTool('w', 'Edit', {}, 100)
+    recordHeard('w', 900)
+    expect([workerOf('w')?.lastTool, workerOf('w')?.lastAt]).toEqual(['Edit', 900])
+    recordTool('w', 'AskUserQuestion', {}, 1000)
+    expect([workerOf('w')?.prop, workerOf('w')?.trail]).toEqual(['asking', ['editing']])
+    expect(crewWords({ state: 'running', prop: 'asking', origin: 'seen', elapsed: 5000, tools: 2, via: '' }).doing).toBe('asking you')
+    expect(['running', 'waiting', 'done', 'failed'].map(one => isLive(/** @type {any} */ (one)))).toEqual([true, true, false, false])
+  })
+
+  test('blocksOf: one shape for sub-groups, stage blocks, plain rows and Parked; totals from the whole list; nothing folded while searching', () => {
+    /** @param {string} slug @param {Record<string, unknown>} [over] */
+    const one = (slug, over = {}) => /** @type {any} */ ({ slug, who: 'Hai Huynh', area: 'Tools', stage: 'build', updatedAt: 1, ...over })
+    const all = [...Array.from({ length: 9 }, (_, n) => one(`h${n}`, { updatedAt: n })), one('d', { who: 'Duy Tran', stage: 'met' }), one('p', { stage: 'parked' })]
+    const view = (/** @type {any[]} */ blocks) => blocks.map(block => `${block.kind}:${block.title}:${block.items.length}/${block.total}:${block.startsFolded ? 'folded' : 'open'}`)
+    const how = { sort: /** @type {const} */ ('recent'), groupBy: /** @type {const} */ ('person'), areas: [], isSearching: false }
+    expect(view(blocksOf('others', all, all, how))).toEqual(['sub:Duy Tran:1/1:open', 'sub:Hai Huynh:9/9:folded', 'sub:‖ Parked:1/1:folded'])
+    const found = all.filter(each => each.slug === 'h1' || each.slug === 'h2' || each.slug === 'p')
+    expect(view(blocksOf('others', found, all, { ...how, isSearching: true }))).toEqual(['sub:Hai Huynh:2/9:open', 'sub:‖ Parked:1/1:open'])
+    expect(view(blocksOf('others', all, all, { ...how, groupBy: 'none' }))).toEqual(['plain::10/10:open', 'sub:‖ Parked:1/1:folded'])
+    expect(view(blocksOf('mine', all, all, { ...how, sort: 'close' }))).toEqual(['stage:Ready to close:1/1:open', 'stage:Building:9/9:open', 'sub:‖ Parked:1/1:folded'])
+    // Your intents are never sub-grouped; the order inside a block is the sort's.
+    expect(blocksOf('mine', all, all, how)[0]?.items.slice(0, 2).map(each => each.slug)).toEqual(['h8', 'h7'])
+    expect(blocksOf('others', all, all, how)[1]?.foldKey).toBe('others:person:Hai Huynh')
+    expect(blocksOf('others', [], all, how)).toEqual([])
   })
 })
