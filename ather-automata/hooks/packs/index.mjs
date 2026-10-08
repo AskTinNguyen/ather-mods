@@ -31,6 +31,7 @@ import { makeWebPack } from './web.mjs'
  *   requiredRungs: (role: string) => string[], isProven: (evidence: Record<string, Rung>, role: string) => boolean, anyProofText: string,
  *   localDir: string, debriefPath: (slug: string) => string,
  *   lockFile: string | null, parseLock: (raw: string | null, nowMinutes: number) => import('./unreal.mjs').EditorLock, lockRoles: readonly string[],
+ *   lockLine?: (command: string, raw: string) => string,
  *   ownCheck: { role: string, after: string, rung: string, label: string, hint: string, proveHint: string, detail: string, reply: string } | null,
  *   traps: readonly PackTrap[],
  *   held: { labels: Record<string, string>, nouns: Record<string, string>, kinds: readonly string[], defaults: readonly string[] },

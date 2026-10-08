@@ -113,3 +113,14 @@ export const issuePrompt = (issue, me, role = 'set', roleWords = 'designer, tech
   ]
     .filter(Boolean)
     .join(' ')
+
+// An issue's address, when it is one a Link may carry (https, printable ASCII); else none.
+/** @param {string} url */
+export function issueLink(url) {
+  try {
+    const href = new URL(url).href
+    return href.startsWith('https://') && /^[\x21-\x7e]+$/.test(href) && href.length <= 2048 ? href : ''
+  } catch {
+    return ''
+  }
+}

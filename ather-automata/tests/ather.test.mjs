@@ -5,15 +5,19 @@ import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nex
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
 import { checkoutOf, parseRepos, readWorkspace } from '../hooks/workspace.mjs'
-import { KINDS, avatarSvg, classifyWorker, crewWords, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
-import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
+import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
+import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
+import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
+import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
+import { workGroups } from '../hooks/rows.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
-import { unreal } from '../hooks/packs/unreal.mjs'
+import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
-import { LEGEND, ageText, callBlocks, listStage, miniBar, needsAttention, nextSort, ownerName, rowCells, rowColumns, sortWork, stageBlocks, tidyName } from '../hooks/worklist.mjs'
+import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
 const EVENING = Date.UTC(2026, 9, 3, 14, 0) // 21:00 at UTC+7
@@ -585,6 +589,43 @@ describe('the worker squad', () => {
     expect(avatarSvg('builder', null, 'running')).toContain('animateTransform')
     // A running avatar is framed; a frame whose colour scheme differs from the app's paints a white square behind it.
     expect(avatarSvg('builder', null, 'running')).toContain('color-scheme: light dark')
+  })
+})
+
+describe('avatar frame (0.1.7)', () => {
+  test("every avatar sets its frame page's root to light dark, first thing in the svg, so the frame is transparent in either theme", () => {
+    for (const state of /** @type {const} */ (['running', 'waiting', 'done', 'failed'])) {
+      for (const prop of /** @type {const} */ ([null, 'building', 'idle'])) {
+        const svg = avatarSvg('builder', prop, state)
+        // The desktop's frame page is <style>…</style><svg…>: only a rule on :root reaches the page's root.
+        expect(svg).toMatch(/^<svg [^>]*><style>:root\{color-scheme:light dark;background:transparent\}<\/style>/)
+        expect(svg.match(/<style>/g)?.length ?? 0).toBe(1)
+      }
+    }
+    expect(FRAME_SCHEME).toBe('<style>:root{color-scheme:light dark;background:transparent}</style>')
+  })
+
+  test('every Svg Ather draws, with whether it is framed (isInteractive) and why', async () => {
+    const fs = await import('node:fs')
+    // Every hooks file, at any depth: an Svg drawn anywhere (any prop order, over several lines, a destructured Svg,
+    // JSX) is counted, so a new one fails this test until it is listed below with its reason.
+    const hooks = new URL('../hooks/', import.meta.url)
+    const sources = fs.readdirSync(hooks, { recursive: true }).map(String).filter(name => /\.(m?js|tsx?)$/.test(name)).map(name => fs.readFileSync(new URL(name.replace(/\\/g, '/'), hooks), 'utf8'))
+    const uses = sources.reduce((n, text) => n + [...text.matchAll(/\bSvg\(|<Svg\b|\bh\(\s*Svg\b/g)].length, 0)
+    expect(uses).toBe(4)
+    // Each `Svg({` call in the hooks, with its isInteractive expression ('' when it has none: a still image).
+    const drawn = sources.flatMap(text => [...text.matchAll(/\bSvg\(\{([^\n]*?)\}\)/g)].map(([, props]) => ({ source: /source: ([^,]+)/.exec(props)?.[1] ?? '', framed: /isInteractive: ([^,}]+)/.exec(props)?.[1]?.trim() ?? '' })))
+    expect(drawn).toEqual([
+      // A finished worker's trail: still images, so no frame and no page behind them.
+      { source: 'propSvg(prop)', framed: '' },
+      // A worker's avatar: framed only while it runs (its bob); FRAME_SCHEME keeps that frame transparent.
+      { source: 'avatarSvg(one.kind', framed: "one.state === 'running' ? true : undefined" },
+      // A work row's progress bar on the desktop: a still image (exact pixels, where glyphs spilled into the count).
+      { source: 'miniBarSvg(done', framed: '' },
+      // The Ather mark in the desktop masthead (rows.mjs since 0.2.0): a still image, nothing moves.
+      { source: 'MARK', framed: '' },
+    ])
+    expect(propSvg('reading').startsWith('<svg')).toBe(true)
   })
 })
 
@@ -1585,5 +1626,509 @@ describe('issues and PRs from every workspace checkout', () => {
     // The session's keys are the ones written before.
     expect(memory.store.has('prStates:sipher/s2')).toBe(true)
     expect(memory.store.has('prStates:o/web')).toBe(true)
+  })
+})
+
+describe('who waits on whom: calls in flight and the worker tree (0.1.9)', () => {
+  const fakeHost = (/** @type {any[]} */ agents, /** @type {Record<string, string>} */ files = {}) => /** @type {any} */ ({ home: async () => '', configDir: async () => '', list: async () => [], read: async (/** @type {string} */ path) => files[path] ?? null, exists: async () => false, run: async () => undefined, agents: async () => agents })
+  /** @template T @param {number} at @param {() => Promise<T>} run */
+  const atTime = async (at, run) => {
+    const real = Date.now
+    Date.now = () => at
+    try {
+      return await run()
+    } finally {
+      Date.now = real
+    }
+  }
+
+  test('A1: a call is in flight in its own loop until it settles: it ran, was refused or threw; onSettled runs every time', async () => {
+    resetCalls()
+    let settled = 0
+    const onSettled = () => void (settled += 1)
+    let seenInside = false
+    const ran = await during({ loop: 'w1', toolUseId: 't1', tool: 'Bash', input: { command: 'Build.bat', description: 'Build S2Editor' }, at: 0 }, async () => {
+      seenInside = isInFlight('w1') && !isInFlight('') && callsIn('w1')[0]?.what === 'Build S2Editor'
+      return { result: 'ok' }
+    }, onSettled)
+    expect(seenInside).toBe(true)
+    expect(ran).toEqual({ result: 'ok' })
+    expect(isInFlight('w1')).toBe(false)
+    const denied = await during({ loop: 'w1', tool: 'Bash', input: { command: 'rm -rf x' }, at: 0 }, async () => ({ deny: 'no' }), onSettled)
+    expect(denied).toEqual({ deny: 'no' })
+    expect(isInFlight('w1')).toBe(false)
+    let threw = ''
+    await during({ tool: 'Read', input: {}, at: 0 }, async () => {
+      throw new Error('boom')
+    }, onSettled).catch(error => void (threw = String(error)))
+    expect(threw).toContain('boom')
+    expect(isInFlight('')).toBe(false)
+    expect(settled).toBe(3)
+  })
+
+  test("A1: a foreground Agent call is linked to the worker it started, by the call's id or else the loop's open Agent call; a background one is not", () => {
+    resetCalls()
+    const first = startCall({ loop: 'parent', toolUseId: 'agent-1', tool: 'Agent', input: { description: 'Fix F1' }, at: 0 })
+    startCall({ loop: 'parent', toolUseId: 'bash-1', tool: 'Bash', input: { command: 'git status' }, at: 0 })
+    linkChild({ loop: 'parent', toolUseId: 'agent-1', childId: 'child' })
+    expect(callsIn('parent').find(one => one.tool === 'Agent')?.childId).toBe('child')
+    endCall(first)
+    startCall({ loop: '', toolUseId: '', tool: 'Agent', input: {}, at: 0 })
+    linkChild({ loop: '', childId: 'bg', isBackground: true })
+    expect(callsIn('')[0]?.childId).toBe(undefined)
+    linkChild({ loop: '', childId: 'fg' })
+    expect(callsIn('')[0]?.childId).toBe('fg')
+    // What a call is: its own description, else its command's first line, cut.
+    expect(callWhat('Bash', { command: 'Wait-ForS2EditorCloseAndBuild.ps1 -Target S2Editor\necho done' })).toBe('Wait-ForS2EditorCloseAndBuild.ps1 -Target S2Editor')
+    expect(callWhat('Bash', { command: 'x'.repeat(80) })).toHaveLength(60)
+    expect(callWhat('Read', {})).toBe('Read')
+  })
+
+  test('A2: one rule for a quiet worker: a call in flight is never quiet, however long; silence past the threshold is', () => {
+    expect(isSilent({ isInFlight: true, lastAt: 0, now: 3600000, quietMs: 90000 })).toBe(false)
+    expect(isSilent({ isInFlight: false, lastAt: 0, now: 91000, quietMs: 90000 })).toBe(true)
+    expect(isSilent({ isInFlight: false, lastAt: 0, now: 60000, quietMs: 90000 })).toBe(false)
+  })
+
+  test('A2: in the pane a worker with a long call in flight is not quiet; a truly silent one is; a call that ends starts the quiet clock then', async () => {
+    resetWorkers()
+    resetCalls()
+    recordSpawn({ agentId: 'busy', subagentType: 'general-purpose', prompt: 'Build it.', description: 'Builds for long', model: 'opus', at: 0 })
+    recordSpawn({ agentId: 'still', subagentType: 'general-purpose', prompt: 'Build it.', description: 'Says nothing', model: 'opus', at: 0 })
+    recordTool('busy', 'Bash', { command: 'Build.bat S2Editor' }, 1000)
+    startCall({ loop: 'busy', tool: 'Bash', input: { command: 'Build.bat S2Editor', description: 'Build S2Editor Development' }, at: 1000 })
+    recordTool('still', 'Edit', {}, 1000)
+    const host = fakeHost([{ id: 'busy', description: 'Builds for long', type: 'general-purpose', status: 'running' }, { id: 'still', description: 'Says nothing', type: 'general-purpose', status: 'running' }])
+    const crew = await atTime(11 * 60000, () => crewOf(host, 'R', 's1'))
+    const busy = crew.find(one => one.id === 'busy')
+    const still = crew.find(one => one.id === 'still')
+    expect(busy?.prop).toBe('building')
+    expect(busy?.wait).toBe('⏳ Build S2Editor Development')
+    expect(still?.prop).toBe('idle')
+    expect(crewWords(/** @type {any} */ (still)).doing).toBe('quiet')
+    recordHeard('still', 11 * 60000)
+    expect(workerOf('still')?.lastAt).toBe(11 * 60000)
+  })
+
+  test("A4: waiting lines from facts only: the child a foreground Agent call waits on; a shell or Monitor call past a minute, quoted; the pack's lock line", () => {
+    resetCalls()
+    const titles = (/** @type {string} */ id) => (id === 'c1' ? 'F1 thermo fixes' : 'a worker')
+    startCall({ loop: 'p', toolUseId: 'a1', tool: 'Agent', input: { description: 'F1' }, at: 0 })
+    linkChild({ loop: 'p', toolUseId: 'a1', childId: 'c1' })
+    expect(waitWords(callsIn('p'), 5000, titles)).toEqual({ wait: '⏳ waiting on F1 thermo fixes', stuck: '' })
+    startCall({ loop: 'q', tool: 'Bash', input: { command: 'Build.bat', description: 'Build S2Editor' }, at: 0 })
+    expect(waitWords(callsIn('q'), 59000, titles).wait).toBe('')
+    expect(waitWords(callsIn('q'), 61000, titles).wait).toBe('⏳ Build S2Editor')
+    startCall({ loop: 'm', tool: 'Monitor', input: { description: 'PIE log until the boss dies' }, at: 0 })
+    expect(waitWords(callsIn('m'), 61000, titles).wait).toBe('⏳ PIE log until the boss dies')
+    startCall({ loop: 'l', tool: 'PowerShell', input: { command: 'while ((Get-Content Saved/EDITOR_OWNER.txt) -notmatch "free") { Start-Sleep 30 }', description: 'Wait for the Editor lock' }, at: 0 })
+    const lockOf = (/** @type {string} */ command) => editorLockLine(command, 'Lane B holds the Editor until 15:40 for the snow proof, session 1a2b3c4d\nmore')
+    expect(waitWords(callsIn('l'), 61000, titles, lockOf).wait).toBe('⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the snow …')
+    // No resource is inferred: a command that does not name the lock file gets no lock line.
+    expect(editorLockLine('Build.bat S2Editor', 'held by Lane B')).toBe('')
+    expect(unreal.lockLine).toBe(editorLockLine)
+  })
+
+  test('A4: a worker found later with no call seen shows no in-flight line', async () => {
+    resetWorkers()
+    resetCalls()
+    adoptWorker({ id: 'old', type: 'general-purpose', description: 'Found later', model: 'opus', startedAt: 0, now: 0 })
+    startCall({ loop: 'old', tool: 'Bash', input: { description: 'A long thing' }, at: 0 })
+    const crew = await atTime(30 * 60000, () => crewOf(fakeHost([{ id: 'old', description: 'Found later', type: 'general-purpose', status: 'running' }]), 'R', 's1'))
+    expect([crew[0]?.wait, crew[0]?.stuck]).toEqual(['', ''])
+  })
+
+  test('A5: one call running 25 minutes or more says so', () => {
+    resetCalls()
+    startCall({ loop: 's', tool: 'Bash', input: { description: 'PIE soak' }, at: 0 })
+    expect(waitWords(callsIn('s'), 24 * 60000, () => '').stuck).toBe('')
+    expect(waitWords(callsIn('s'), 25 * 60000, () => '').stuck).toBe('⚠ one call running 25 min')
+    expect(waitWords(callsIn('s'), 31.5 * 60000, () => '').stuck).toBe('⚠ one call running 31 min')
+  })
+
+  test('A3: the tree draws each worker under the one that started it; "started by" only when that one is not drawn above; past three finished, "+N finished"', () => {
+    /** @param {string} id @param {string} state @param {string} [parentId] @returns {any} */
+    const one = (id, state, parentId = '') => ({ id, title: id, state, parentId, via: parentId, wait: '', stuck: '' })
+    const crew = [one('f5', 'done', 'lead'), one('f4', 'done', 'lead'), one('f3', 'done', 'lead'), one('f2', 'done', 'lead'), one('f1', 'running', 'lead'), one('lead', 'running'), one('orphan', 'running', 'gone-lead'), one('gone-lead', 'done')]
+    crew[6].via = 'gone-lead (finished)'
+    const tree = crewTree(crew)
+    const drawn = tree.live.map(line => (line.kind === 'worker' ? `${'  '.repeat(line.depth)}${line.one.id}${line.one.via ? ` < ${line.one.via}` : ''}` : `${'  '.repeat(line.depth)}+${line.count} finished`))
+    expect(drawn).toEqual(['lead', '  f1', '  f5', '  f4', '  f3', '  +1 finished', 'orphan < gone-lead (finished)'])
+    expect(tree.done.map(line => (line.kind === 'worker' ? line.one.id : ''))).toEqual(['gone-lead'])
+    expect([tree.running, tree.queued, tree.waitingOn]).toEqual([3, 0, 0])
+  })
+
+  test("A6: the heading counts running and waiting on; Claude Code's pending reads \"queued\"", () => {
+    expect(crewHeading({ running: 2, queued: 0, waitingOn: 1 })).toBe('Workers · Running 2 · Waiting on 1')
+    expect(crewHeading({ running: 1, queued: 1, waitingOn: 0 })).toBe('Workers · Running 1 · Queued 1')
+    expect(crewWords({ state: 'waiting', prop: null, origin: 'seen', elapsed: 5000, tools: 0, via: '' })).toEqual({ doing: 'queued', line: 'queued 0:05 · 0 tool calls' })
+    // A message sent waits on nothing: SendMessage does not make a worker look idle.
+    expect(propForTool('SendMessage', { to: 'w2' })).toBe(null)
+    expect(propForTool('AskUserQuestion', {})).toBe('asking')
+  })
+})
+
+describe('a team list that groups (0.1.9)', () => {
+  /** @param {string} slug @param {Record<string, unknown>} [over] */
+  const work = (slug, over = {}) => /** @type {any} */ ({ id: `intent:${slug}`, kind: 'intent', slug, label: slug, isMine: false, area: 'Tools', who: 'Hai Huynh', stage: 'build', updatedAt: 1, ...over })
+
+  test('A7: Group cycles Person, Area, Stage, None; a stored choice reads back, anything else is Person', () => {
+    expect([nextGroup('person'), nextGroup('area'), nextGroup('stage'), nextGroup('none')]).toEqual(['area', 'stage', 'none', 'person'])
+    expect([groupByOf('stage'), groupByOf(undefined), groupByOf('tabs')]).toEqual(['stage', 'person', 'person'])
+    expect(GROUP_LABELS.person).toBe('Person')
+  })
+
+  test("A7: sub-groups by person (no owner last), by area in the pack's order (Unsorted last), by stage in block order", () => {
+    const list = [work('a', { who: 'Lam Phung', area: 'VFX', stage: 'met' }), work('b', { who: '', area: '' }), work('c', { who: 'Duy Tran', area: 'Combat', stage: 'prove' }), work('d', { who: 'Lam Phung', area: 'Tools' })]
+    const titles = (/** @type {any} */ by) => subGroups(list, by, ['Combat', 'Tools', 'VFX']).map(group => `${group.title}:${group.items.map(one => one.slug).join('')}`)
+    expect(titles('person')).toEqual(['Duy Tran:c', 'Lam Phung:ad', 'No owner:b'])
+    expect(titles('area')).toEqual(['Combat:c', 'Tools:d', 'VFX:a', 'Unsorted:b'])
+    expect(titles('stage')).toEqual(['Ready to close:a', 'Proving:c', 'Building:bd'])
+    expect(titles('none')).toEqual([':abcd'])
+    expect(subGroups([], 'none')).toEqual([])
+    expect(FOLD_OVER).toBe(6)
+  })
+
+  test('A8, A9: parked intents split off for their own block; heads count "x of y" while searching', () => {
+    const { open, parked } = splitParked([work('a'), work('p', { stage: 'parked' }), work('b')])
+    expect([open.map(one => one.slug), parked.map(one => one.slug)]).toEqual([['a', 'b'], ['p']])
+    expect([countText(3, 9, false), countText(3, 9, true)]).toEqual(['3', '3 of 9'])
+  })
+
+  test('A7: the choice is kept per person in the store', async () => {
+    const memory = memoryIo()
+    expect(await state.readGroupBy(memory.io, 'Tin Nguyen')).toBe('person')
+    await state.setGroupBy(memory.io, 'Tin Nguyen', 'area')
+    expect(await state.readGroupBy(memory.io, 'Tin Nguyen')).toBe('area')
+    expect(await state.readGroupBy(memory.io, 'Lan Vo')).toBe('person')
+  })
+})
+
+describe('a team list that groups: drawn (0.1.9)', () => {
+  const node = (/** @type {string} */ type) => (/** @type {any} */ props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
+  const el = Object.fromEntries(['Box', 'Text', 'Button', 'Svg'].map(name => [name, node(name)]))
+  /** @param {any} tree @param {(one: any) => boolean} test @returns {any[]} */
+  const all = (tree, test) => (!tree || typeof tree !== 'object' ? [] : [...(test(tree) ? [tree] : []), ...(tree.children ?? []).flatMap((/** @type {any} */ child) => all(child, test))])
+  const look = { isClicked: false, width: 68, now: 10, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined }
+  /** @param {string} slug @param {string} who @param {string} [stage] */
+  const theirs = (slug, who, stage = 'build') => /** @type {any} */ ({ id: `intent:${slug}`, kind: 'intent', slug, label: slug, hint: '', isMine: false, area: 'Tools', owner: who, who, updatedAt: 1, stage, done: 0, total: 2, source: 'main', warn: '' })
+
+  test('A7, A8: a sub-group of more than six starts folded, six or fewer open, Parked folded; a press on a head opens it', () => {
+    const work = [...Array.from({ length: 7 }, (_, n) => theirs(`big-${n}`, 'Lam Phung')), ...Array.from({ length: 6 }, (_, n) => theirs(`six-${n}`, 'Duy Tran')), theirs('resting', 'Duy Tran', 'parked')]
+    const pressed = new Set()
+    const draw = () => workGroups(el, look, { work, shown: work, query: '', sort: 'recent', groupBy: 'person', areas: [], folded: pressed, me: 'Tin Nguyen', onFold: key => () => void (pressed.has(key) ? pressed.delete(key) : pressed.add(key)), issuesFoot: [] })
+    const rows = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Button' && /^pick-intent:/.test(one.props.key)).map(one => one.props.key.slice('pick-intent:'.length))
+    const heads = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Text' && /^(sub|park)-/.test(one.props.key ?? '')).map(one => one.props.children)
+    const first = draw()
+    expect(heads(first)).toEqual(['Duy Tran · 6', 'Lam Phung · 7', '‖ Parked · 1'])
+    expect(rows(first)).toEqual(Array.from({ length: 6 }, (_, n) => `six-${n}`))
+    all({ children: first }, one => one.type === 'Button' && one.props.key === 'sub-others-1-fold')[0].props.onPress()
+    all({ children: first }, one => one.type === 'Button' && one.props.key === 'park-others-fold')[0].props.onPress()
+    expect(rows(draw())).toHaveLength(14)
+  })
+})
+
+describe('crew-tree-and-groups round 2: permission, leaks, one clock, blocks (0.1.9)', () => {
+  test('a call whose permission dialog was shown is asking, not running: it never counts as in flight, and its ⏳ line says so', () => {
+    resetCalls()
+    startCall({ loop: 'w', toolUseId: 't-ask', tool: 'Bash', input: { command: 'rm -rf build', description: 'Clean the build folder' }, at: 0 })
+    expect(isInFlight('w')).toBe(true)
+    markAsking({ loop: 'w', tool: 'Bash', input: { command: 'rm -rf build' }, at: 1000 })
+    expect(isInFlight('w')).toBe(false)
+    expect(askingIn('w').map(one => one.askedAt)).toEqual([1000])
+    expect(isSilent({ isInFlight: isInFlight('w'), lastAt: 0, now: 11 * 60000, quietMs: 10 * 60000 })).toBe(true)
+    // Not a long shell (it may not be running yet); the line says only that permission was asked, and when.
+    // A call asked about still warns once it has gone on 25 minutes: an approved build may run on.
+    expect(longShell(callsIn('w'), 30 * 60000)).toBe(undefined)
+    const asked = waitWords(callsIn('w'), 30 * 60000, () => '')
+    expect(asked.wait).toBe('⏳ asked permission 29 min ago: Clean the build folder')
+    expect(/^⚠ one call running \d+ min$/.test(asked.stuck)).toBe(true)
+    expect(waitWords(callsIn('w'), 1000 + 30000, () => '').wait).toBe('⏳ asked permission just now: Clean the build folder')
+    // A dialog for another loop or another tool marks nothing here.
+    markAsking({ loop: '', tool: 'Bash', input: { command: 'rm -rf build' }, at: 5 })
+    markAsking({ loop: 'w', tool: 'Write', input: {}, at: 5 })
+    expect(askingIn('w')).toHaveLength(1)
+    expect(askingIn('')).toHaveLength(0)
+  })
+
+  test("the dialog is matched to its loop's newest call of that tool, the one with the same command first", () => {
+    resetCalls()
+    startCall({ loop: 'w', tool: 'Bash', input: { command: 'git push', description: 'Push' }, at: 0 })
+    startCall({ loop: 'w', tool: 'Bash', input: { command: 'Build.bat', description: 'Build' }, at: 1 })
+    markAsking({ loop: 'w', tool: 'Bash', input: { command: 'git push' }, at: 2 })
+    expect(askingIn('w').map(one => one.what)).toEqual(['Push'])
+    expect(isInFlight('w')).toBe(true)
+    // No command to match: the newest call of the tool not already asking.
+    markAsking({ loop: 'w', tool: 'Bash', input: {}, at: 3 })
+    expect(askingIn('w').map(one => one.what)).toEqual(['Push', 'Build'])
+  })
+
+  test('an aborted dispatch clears its call though the call never settles; a finished turn clears its loop; a throwing onSettled is swallowed', async () => {
+    resetCalls()
+    const stop = new AbortController()
+    let release = () => undefined
+    const pending = during({ loop: 'w', tool: 'Bash', input: { command: 'sleep 999' }, at: 0 }, () => new Promise(resolve => (release = () => resolve('done'))), () => {
+      throw new Error('bookkeeping broke')
+    }, stop.signal)
+    expect(isInFlight('w')).toBe(true)
+    stop.abort()
+    expect(isInFlight('w')).toBe(false)
+    release()
+    expect(await pending).toBe('done')
+    startCall({ loop: 'gone', tool: 'Bash', input: {}, at: 0 })
+    startCall({ loop: 'gone', tool: 'Read', input: {}, at: 0 })
+    startCall({ loop: 'kept', tool: 'Read', input: {}, at: 0 })
+    endLoop('gone')
+    expect([callsIn('gone').length, callsIn('kept').length]).toEqual([0, 1])
+  })
+
+  test('over the cap, a live long call is kept: asking calls go first, then the loop piling calls up', () => {
+    resetCalls()
+    startCall({ loop: 'long', tool: 'Bash', input: { description: 'The real build' }, at: 0 })
+    startCall({ loop: 'q', toolUseId: 'asked', tool: 'Bash', input: {}, at: 1 })
+    markAsking({ loop: 'q', tool: 'Bash', input: {}, at: 1 })
+    for (let n = 0; n < 199; n += 1) startCall({ loop: 'leaky', tool: 'Read', input: {}, at: 2 + n })
+    expect(askingIn('q')).toHaveLength(0)
+    startCall({ loop: 'leaky', tool: 'Read', input: {}, at: 500 })
+    expect(callsIn('long').map(one => one.what)).toEqual(['The real build'])
+    expect(callsIn('leaky')).toHaveLength(199)
+  })
+
+  test('one clock: a worker\'s last call and when it was heard from live on its record', () => {
+    resetWorkers()
+    recordSpawn({ agentId: 'w', subagentType: 'general-purpose', prompt: 'x', description: 'x', model: 'opus', at: 0 })
+    recordTool('w', 'Edit', {}, 100)
+    recordHeard('w', 900)
+    expect([workerOf('w')?.lastTool, workerOf('w')?.lastAt]).toEqual(['Edit', 900])
+    recordTool('w', 'AskUserQuestion', {}, 1000)
+    expect([workerOf('w')?.prop, workerOf('w')?.trail]).toEqual(['asking', ['editing']])
+    expect(crewWords({ state: 'running', prop: 'asking', origin: 'seen', elapsed: 5000, tools: 2, via: '' }).doing).toBe('asking you')
+    expect(['running', 'waiting', 'done', 'failed'].map(one => isLive(/** @type {any} */ (one)))).toEqual([true, true, false, false])
+  })
+
+  test('blocksOf: one shape for sub-groups, stage blocks, plain rows and Parked; totals from the whole list; nothing folded while searching', () => {
+    /** @param {string} slug @param {Record<string, unknown>} [over] */
+    const one = (slug, over = {}) => /** @type {any} */ ({ slug, who: 'Hai Huynh', area: 'Tools', stage: 'build', updatedAt: 1, ...over })
+    const all = [...Array.from({ length: 9 }, (_, n) => one(`h${n}`, { updatedAt: n })), one('d', { who: 'Duy Tran', stage: 'met' }), one('p', { stage: 'parked' })]
+    const view = (/** @type {any[]} */ blocks) => blocks.map(block => `${block.kind}:${block.title}:${block.items.length}/${block.total}:${block.startsFolded ? 'folded' : 'open'}`)
+    const how = { sort: /** @type {const} */ ('recent'), groupBy: /** @type {const} */ ('person'), areas: [], isSearching: false }
+    expect(view(blocksOf('others', all, all, how))).toEqual(['sub:Duy Tran:1/1:open', 'sub:Hai Huynh:9/9:folded', 'sub:‖ Parked:1/1:folded'])
+    const found = all.filter(each => each.slug === 'h1' || each.slug === 'h2' || each.slug === 'p')
+    expect(view(blocksOf('others', found, all, { ...how, isSearching: true }))).toEqual(['sub:Hai Huynh:2/9:open', 'sub:‖ Parked:1/1:open'])
+    expect(view(blocksOf('others', all, all, { ...how, groupBy: 'none' }))).toEqual(['plain::10/10:open', 'sub:‖ Parked:1/1:folded'])
+    expect(view(blocksOf('mine', all, all, { ...how, sort: 'close' }))).toEqual(['stage:Ready to close:1/1:open', 'stage:Building:9/9:open', 'sub:‖ Parked:1/1:folded'])
+    // Your intents are never sub-grouped; the order inside a block is the sort's.
+    expect(blocksOf('mine', all, all, how)[0]?.items.slice(0, 2).map(each => each.slug)).toEqual(['h8', 'h7'])
+    expect(blocksOf('others', all, all, how)[1]?.foldKey).toBe('others:person:Hai Huynh')
+    expect(blocksOf('others', [], all, how)).toEqual([])
+  })
+})
+
+// Real excerpts from origin/main (2026-10-08): the two formats the findings use.
+const FLUID_F10 = `## F-10 (2026-09-29, rev 6) | blocking: no | status: open
+
+**Found:** in the snow/sand lab, neither Nine Tails hook can be driven by its production trigger, so both are proven by automation tests plus a lab force.
+- **N6 FoxScan.** The lab has no FoxScan Otherworld Reveal volume, and FoxScan has no test-simulation driver.
+
+**Options:**
+- A (recommended): prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial. Before that, decide whether N5 should also listen to the stance-form route (\`USipherStanceComponent::OnStanceEntered\`).
+- B: add a lab rig that grants Fox Form, which means driving the production ability with its resources set up.
+
+**Proposed amendment:** none; the director picks where the production trial happens (see the report).
+**Resolution:**
+
+## Reconciliation 2026-10-03 (rev 8, L-18)
+
+- F-10 stays open: N5 and N6 production-trigger proof on a map where Fox Form and FoxScan run for real.
+`
+
+const QUEST_F1 = `## F-1 (open, not blocking): Restart one quest also restores every flow-owned actor's authored state
+
+- Found by: P2 worker, 2026-10-05, while writing A5 (S4).
+- Today: the confirmation says both, in words, before the restart runs.
+- Options: (a) keep it as is, with the confirmation (no runtime change; recommended for P2, since the in-place reset of
+  every quest has the same actor behaviour); (b) add a runtime hook that restores only the restarted quest's flow-owned
+  actors, which touches \`S2\` quest runtime code outside the debug tool and widens A8; (c) after the import, re-run the
+  other quests' current beat entry actions, which can repeat spawns, items and dialogue. Recommendation: (a).
+- Decision needed from: owner, only if (b) is wanted.
+- Resolution (orchestrator, 2026-10-05): accepted (a). It needs no runtime change and keeps A8's scope. The
+  confirmation already names both effects. The owner can ask for (b) later, as its own rev. No rev bump.
+`
+
+// More verbatim findings from origin/main 9209256a5bc9 (2026-10-08, read with git show).
+const SO_F63 = "## F-63 (2026-09-30, rev 9) | blocking: no | status: open (AIScalable owners)\n\n**Found:** (proof run 3) On `L_Master_biome_01_AoBing`, `BP_AoBing_SoldierCamp_SwordAggressive_GuardPost_C_0` ran a patrol Smart Object find about once per frame (2,711 finds from 05.07.32 UTC until PIE stopped, made visible by the new `LogSipherSmartObjectEligibility` Verbose line); the camp's only patrol slot was already claimed by the PatrolFatigue soldier, so each find failed and was retried on the next frame. The retry pattern is pre-existing in the patrol goal generation (not introduced by this branch); the branch adds one eligibility query build per call.\n**Options:** (a) the patrol generator backs off after a failed find (for example the generator's min interval); (b) leave it.\n**Recommendation:** (a), owned by the AIScalable framework, outside this intent. Measure first (per-frame `FindSmartObjects` over the camp's query box).\n**Resolution:** open; reported for the AIScalable owners.\n"
+const WORLD_F2 = "## F-2 (2026-09-30) | blocking: no | Two terrain docs route a step through the disabled plugin\n\n`docs/engineer/Terrain/TerrainTechniques.md` and `RVTTerrainBlending.md` describe adjusting RVT blending in the Dash Edit Material panel. With the plugin disabled, that step has no tool unless an artist enables the plugin locally.\n\nProposed amendment: the selection material quick-edit panel (phase 6) covers this; it is the reason Q3 recommends building it.\n\nResolution: open (Q3).\n"
+const WORLD_F8 = "## F-8 (2026-10-01) | blocking: no | Idle cost with the toolbag open is not zero\n\nRound 2 measured about +0.65 ms of game-thread time with the toolbag open and a toy armed, against outcome O5's target of zero idle cost (an unfocused Editor window; FPS chart over about 37 s per run). No Tin's Toys tick is registered; the likely costs are the viewport mode's per-frame HUD drawing and the input pre-processor.\n\nProposed amendment: none. Engineering follow-up: profile with Unreal Insights and skip HUD work when nothing changed.\n\nResolution: partly addressed. The plugin CHANGELOG records redraw-on-change work (PR #32212); no new idle number was measured, so it stays open for a re-measure (follow-up in prompt.md Resolution).\n"
+const UVS_F1 = "## F-1 (2026-09-29, S1) | blocking | the function already exists\n\nS2 already ships object-scale-aware tiling: `/Game/S2/Core_Env/Shader/MF_TextureScale`\n(and `MF_TextureScale_VT`, core `MF_UVTriplanar`). It uses the engine `ObjectScale`\nfunction (object-to-world transform, not bounds), a local-space box projection, and a\n`Tiling Follow Object Scale` static switch that `M_Standard_Shader`, `M_Environment`,\n`M_WorldTriplanar` and `M_Env_Simple` already expose. Evidence and paths: progress.md S1.\n\nBuilding `MF_S2_AutoScaleUV` would duplicate shared shader code, which\n`Content/S2/Core_Env/Shader/AGENTS.md` forbids (\"Do not duplicate shader graphs\").\n\nOptions for the orchestrator/director:\n1. (Recommended) Re-scope to verify and document the existing path: a live read of\n   the `MF_TextureScale` graph, then A2 (scale 1, (4,1,1), (1,1,4) cubes with an MI of\n   `M_Standard_Shader` with `Tiling Follow Object Scale` on), A3 (a usage doc for the\n   existing switch, plus limits: ISM per-instance scale, Nanite, WPO), and A4 (stats\n   with the switch on vs off). Gaps found there become proposals to the env-art owner.\n2. Add only what is missing (for example a mesh-UV mode that scales UV0 by the two\n   dominant-face scale components, if MF_TextureScale only does box projection),\n   as an input on the existing function after env-art owner approval, not a new MF.\n3. Close the intent as already satisfied.\n\n**Resolution:** director chose option 3 (close as already done), 2026-09-29, L-2, rev 2.\n"
+const BOSS_F2 = "## F2 (2026-10-07, rev 1, non-blocking for this change, blocks a literal A3 \"passes\"): `validate_repository.py` fails for reasons outside this change\n\n- On the shared checkout (b0baa94 plus other lanes' files) it reports 100 errors: Unreal binaries in the \"harness diff\" (silent-bell and tins-lights work), the stale inventories, `.claude/settings.json`, `unreal-anti-slop-review` without SKILL.md, three skill descriptions over 400 characters, invalid YAML in `quest-from-brief/SKILL.md`, `foliage-grid-builder` over 500 lines, and about 30 broken links in `docs/exec-plans/` and `docs/runbooks/blockout-effects-authoring.md`. None touch `boss-bt-authoring` or this intent folder.\n- CI confirms it on this branch's full tree: Harness Validate (run 37606338991) passes its blocking inventory step and reports 35 advisory validator errors, all pre-existing (`.claude/settings.json`, three long skill descriptions, `quest-from-brief` YAML, `foliage-grid-builder` length, broken links in `docs/domains/` and `docs/exec-plans/`). The shared checkout adds 65 more from other lanes' local files.\n- What did run on the branch tree: the validator's skill-package rules on this package (PASS) and the inventory check (current after regenerating main's stale copies). The PR's Harness Validate check is the full-tree verdict.\n- Options: (a) accept A3 on the branch-tree checks plus the PR's CI result; (b) hold A3 until main's own errors are fixed (owner of each skill or doc; the inventory part is VuTruong's P3). Recommendation: (a).\n- Resolution (2026-10-08, coordinator for the Owner, standing autonomy L-2): **accepted (a).** A3 is met on the branch-tree checks plus green CI (Harness Validate success, inventories current), because the 35 advisory validator errors are already on main and none come from this change.\n"
+const TAILS_F2 = "## F-2 (2026-10-07, rev 3) | blocking: yes | status: open\n\n**Found:** A3 check on `L_S2Empty` with the scratch asset `/Game/Developers/NineTailsShapeDraft/DA_TailShape_DraftTest_A3`. Persona's requested path equals PIE's desired path (0.00 cm, all 9 tails), and PIE's final pose is within 5 cm of desired. Persona's final pose is 17-39 cm away from PIE's final pose, though. Pose diagnostics put the difference after the shape stage, in the `ABP_Tail_ChildVisualSync` post-process. That it predates this work is inferred, not proven. Evidence: `Saved/NineTailsShapeDrafting/A3/persona-vs-pie.json`, `diag.json`. Recorded by the orchestrator from the worker's S7 report.\n**Proposed amendment:** (recommended) measure one untouched existing preset the same way. If it shows the same gap, A3 compares the shape-stage path (which the tool controls), and the post-process gap is logged as a separate pre-existing issue. Alternatives: make the Persona preview match PIE's post-process (wider scope, may touch the ABP or preview runtime path), or accept the gap as is.\n**Proposed reading (worker, 2026-10-07 slot 19:18-19:27; status stays open):** the scratch asset was measured again on `L_S2Empty`, no ABP change, rotation-invariant (max pairwise joint-distance difference per tail), via `ReadPoseDiagnostics`.\n- (a) **Before Kawaii:** the motion node's output in Persona matches PIE at **0.00 cm on all 9 tails**, both in Shape Edit and with Shape Edit ended.\n- (b) **After Kawaii**, with the Persona body scrubbed to t=0 and not playing, and the PIE MainChar standing still: both final poses were stable from the first sample (0.00 cm change between consecutive reads, which are about 1-2 s apart because of MCP latency). Persona final vs PIE final is **0.13-3.12 cm per tail**.\n- **Likely cause of the earlier 17-39 cm gap:** a reading in Shape Edit. There the paired preview ticks the tail at zero delta (`NineTailsTailPersonaPreview.cpp` Tick: `TickAnimation(bShapeEditPolicy ? 0 : DeltaTime)`), so KawaiiPhysics holds a stale, unsettled state.\n- **Proposed reading of A3:** a drafted shape plays back the same in Persona and PIE, both at the motion-node output (exact) and after the post-process once the rig has settled outside Shape Edit (within about 3 cm).\n- **Not covered:** the pelvis pose was not matched or measured; the Persona body is at montage time 0, PIE is in idle.\n- **Possible follow-up for the owner** (not done): Shape Edit could tick the tail with real delta so the drafting view shows the settled post-process pose.\n- Evidence: `Saved/NineTailsShapeDrafting/A3/a3-compare.json`, `a3-persona.json`, `a3-pie.json`.\n\n**Resolution:** <pending owner>\n"
+const FLUID_F8 = "## F-8 (2026-09-29, rev 5) | blocking: no | status: open (updated S15: new blockers found)\n\n**Found:** two review fixes are out of reach without C++, so the material-only phase delivers them only in part.\n- R1 terracing: `Snow/Dust Interaction Parallax Sample Scale` 2.0 reduces the stair steps in the print walls; they still show at grazing angles (`Saved/FluidBlocksWPM/snowsand/fixes/`, BEFORE_R1 vs AFTER1_R1). Real Nanite displacement needs a Nanite-built lab landscape:\n  - Setting `bEnableNanite` through ObjectTools does not build Nanite data.\n  - Setting `landscape.Nanite.LiveRebuildOnModification 1` and toggling Nanite crashed the Editor (assert `Proxies.Contains`, LandscapeSubsystem.cpp:1443). Nothing saved was lost.\n- Footprint-shaped prints: the brush texture is inside the vendor `DLWE_Trail_Brush`, which UDW creates itself. The print-shape knobs (scale 0.7, scatter 0.5, size scatter 0.1) give narrower, crisper ovals, not feet.\n\n**Options:**\n- A (recommended): in the next C++ build, add a lab tool that calls `ULandscapeSubsystem::BuildNanite` on the lab landscape, then capture R1 with `For Nanite Tessellation` on and parallax off. Treat the foot shape as part of the preset-class hook (a Sipher brush material that UDW is told to use), and show it in the lab before any production use.\n- B: accept parallax-only depth for landscapes and leave foot-shaped prints to the Fluid Blocks hero patches (D11, 20 cm).\n\n**Proposed amendment:** none; engineering order within A11/A13. The look choice between A and B is the director's once A's captures exist.\n**Update (S15, 2026-09-29):**\n- Nanite build: the new `SetLandscapeNanite` tool builds the lab landscape's Nanite mesh without the crash (1 proxy up to date, 5 s). It refuses while live rebuild is on and checks proxy registration first.\n- The new blocker: on the Nanite landscape the weather snow does not render at all, so the ground shows the bare Layer 01 grass. The Look FX does not render either. This holds with the plain R1 instance and with `For Nanite Tessellation` on, and after a forced Nanite rebuild with each material. Only a distant ring, beyond the Nanite range, shows snow.\n  - The cause is not found. One hypothesis: UDS 9.0's DLWE snow path does not survive the landscape's Nanite material path.\n  - Evidence: `Saved/FluidBlocksWPM/snowsand/diag/shadowless_reruns/NANITE_*` (those runs also lost dynamic shadows, see S15).\n  - So real Nanite displacement for R1 is not proven, and parallax stays the landscape route for now.\n- Foot-shaped prints: `USipherDLWEFootprintStamperComponent` stamps one oriented print per planted foot, drawn into UDW's trail target with a Sipher copy of the vendor brush. The vendor stamps are swapped off for the pawn.\n  - In the lab (FOOT_R1) this gives separate oval prints along the walk direction, 44 x 20 cm, without the continuous trench or its stair-stepped walls.\n  - The brush copy still draws the vendor's noisy circle, stretched to the quad. A heel and toe silhouette needs a shape change in `M_SipherDLWE_FootBrush`, which is not done.\n\n**Options now:**\n- A: keep parallax for landscapes and use the stamper where separate prints read better (crust, salt, dust), with R1's deep-powder trench kept as the vendor draws it. Nanite snow is left for a UDS upgrade or a DLWE-on-Nanite investigation.\n- B: investigate DLWE on Nanite landscapes now. This is open-ended and may need a vendor material change on a Sipher copy.\n\n**Recommendation:** A. The director's call is whether deep powder should keep its trench or show separate prints (see the S15 captures).\n**Resolution:**\n"
+
+describe('decide in place (0.2.0)', () => {
+  test('a stale unsettled Resolution never reopens a heading that says resolved; "opened …" is a settled answer', () => {
+    // sipher-so-montage-in-step F-21 on origin/main: the heading and the Resolution line verbatim, the body cut.
+    const f21 = '# Findings\n\n## F-21 (2026-09-29, rev 5) | blocking: no | status: resolved (Phase 7 approved, D11 / L-16; shipped in PR #32137, `0889ee954fcc`)\n\n**Found:** Actor I/O lets designers wire events per placed actor.\n**Resolution:** pending Director; recommended.\n'
+    expect(parseFindings(f21, '').map(one => one.id)).toEqual([])
+    const opened = '# Findings\n\n## F-2 (2026-10-01) | blocking: no | status: open\n\n**Found:** x.\n**Resolution:** opened follow-up #123 and closed here.\n'
+    expect(parseFindings(opened, '').map(one => one.id)).toEqual([])
+  })
+  test('a heading that says "not blocking" or "non-blocking" does not block; "blocking" alone does', () => {
+    const findings = '# Findings\n\n## F-4 (open, not blocking): low-severity notes\n\nNotes.\n\n## F-5 (open, non-blocking for this change): later\n\nLater.\n\n## F-6 (open, blocking): the build fails\n\nIt fails.\n'
+    expect(parseFindings(findings, '').map(one => [one.id, one.isBlocking])).toEqual([['F-4', false], ['F-5', false], ['F-6', true]])
+  })
+
+  test('A1: the list format: options, letters and the recommended one, labels a first clause', () => {
+    const options = parseOptions(FLUID_F10)
+    expect(options.map(one => [one.letter, one.label, one.isRecommended])).toEqual([
+      ['A', 'Prove both on a map where Fox Form and FoxScan run for real', true],
+      ['B', 'Add a lab rig that grants Fox Form', false],
+    ])
+    expect(options[0]?.text.startsWith('Prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps')).toBe(true)
+    expect(options[0]?.text.endsWith('(USipherStanceComponent::OnStanceEntered).')).toBe(true)
+  })
+
+  test('A1: the list format is read from the last options heading, a qualifier allowed ("**Options now:**")', () => {
+    const options = parseOptions(FLUID_F8)
+    expect(options.map(one => [one.letter, one.isRecommended])).toEqual([['A', true], ['B', false]])
+    expect(options[0]?.text.startsWith('Keep parallax for landscapes and use the stamper')).toBe(true)
+    expect(options[1]?.text.startsWith('Investigate DLWE on Nanite landscapes now')).toBe(true)
+  })
+
+  test('A1: the inline format: (a) (b) (c) across continuation lines, "Recommendation: (a)", nothing after it', () => {
+    const options = parseOptions(QUEST_F1)
+    expect(options.map(one => [one.letter, one.label, one.isRecommended])).toEqual([
+      ['A', 'Keep it as is', true],
+      ['B', 'Add a runtime hook that restores only the restarted…', false],
+      ['C', "After the import, re-run the other quests' current beat…", false],
+    ])
+    expect(options[1]?.text).toBe("Add a runtime hook that restores only the restarted quest's flow-owned actors, which touches S2 quest runtime code outside the debug tool and widens A8")
+    expect(options[2]?.text).toBe("After the import, re-run the other quests' current beat entry actions, which can repeat spawns, items and dialogue")
+    // "**Options:** (a) …" on one line, "**Recommendation:** (a)" on the next.
+    expect(parseOptions(SO_F63).map(one => [one.letter, one.isRecommended])).toEqual([['A', true], ['B', false]])
+    // "recommended" inside one option's words, when nothing else says.
+    expect(parseOptions('- Options: (a) keep this rule (no change; recommended); (b) drop it.').map(one => one.isRecommended)).toEqual([true, false])
+  })
+
+  test('A1: lettered text is options only next to the word Options or Recommendation', () => {
+    // ninetails-shape-drafting F-2: "(a) Before Kawaii" and "(b) After Kawaii" are evidence, not choices.
+    expect(parseOptions(TAILS_F2)).toEqual([])
+    expect(parseOptions('Found: **drops only** or full respawn? (a) no, drops only (recommended); (b) full respawn.')).toEqual([])
+    expect(parseOptions('Which way? (a) north; (b) south. Recommendation: (b).').map(one => [one.letter, one.isRecommended])).toEqual([['A', false], ['B', true]])
+  })
+
+  test('A1: a button label is the first clause, or the whole option cut when that clause only sets the scene or is too short', () => {
+    expect(parseOptions(FLUID_F8.replace(/\*\*Options now:\*\*[\s\S]*$/, '')).map(one => one.label)).toEqual(['In the next C++ build, add a lab tool that calls…', 'Accept parallax-only depth for landscapes and leave…'])
+    expect(optionLabel('leave it, nothing changes')).toBe('Leave it, nothing changes')
+    expect(optionLabel('no, drops only')).toBe('No, drops only')
+  })
+
+  test('A1: none when a finding writes no options, or only one', () => {
+    expect(parseOptions('Pool size is an engineering call.')).toEqual([])
+    expect(parseOptions('**Options:**\n- A: the only way.\n')).toEqual([])
+    expect(parseOptions('**Options:**\n- A: one\n- B: two\n')).toEqual([
+      { letter: 'A', label: 'One', text: 'One', isRecommended: false },
+      { letter: 'B', label: 'Two', text: 'Two', isRecommended: false },
+    ])
+  })
+
+  test('A2: a filled Resolution decides, whatever the heading says; one that starts open, pending, partly, not yet, tbd, <…> or - does not close', () => {
+    const ids = (/** @type {string} */ findings) => parseFindings(findings, '').map(one => one.id)
+    // Closed on origin/main: a Resolution that settles it.
+    expect(ids(QUEST_F1)).toEqual([])
+    expect(ids(UVS_F1)).toEqual([])
+    expect(ids(BOSS_F2)).toEqual([])
+    // Still open on origin/main, a Resolution line notwithstanding.
+    expect(ids(SO_F63)).toEqual(['F-63'])
+    expect(ids(WORLD_F2)).toEqual(['F-2'])
+    expect(ids(WORLD_F8)).toEqual(['F-8'])
+    expect(ids(TAILS_F2)).toEqual(['F-2'])
+    // An empty "**Resolution:**" leaves the heading to decide.
+    const open = parseFindings(`# Findings\n\n${QUEST_F1}\n${FLUID_F10}`, '')
+    expect(open.map(one => one.id)).toEqual(['F-10'])
+    expect(open[0]?.options.map(one => one.letter)).toEqual(['A', 'B'])
+    expect(open[0]?.source.startsWith('## F-10 (2026-09-29, rev 6)')).toBe(true)
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: open (director)\n\nWhich? (a) x; (b) y.\n\n**Resolution:** accepted (a).\n')).toEqual([])
+    // A heading that says closed stays closed against an unsettled Resolution (often stale): a reopen changes the heading.
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: accepted\n\n- Resolution: not yet; reopened by the owner.\n')).toEqual([])
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: open\n\n- Resolution: not yet; reopened by the owner.\n')).toEqual(['F-1'])
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: open\n\n**Resolution:** - \n')).toEqual(['F-1'])
+  })
+
+  test('A4, A5: an option, Explain and a typed answer hand the session the exact words', () => {
+    const [f10] = parseFindings(FLUID_F10, '')
+    const answers = findingAnswers('fluid-snow-sand-look', /** @type {any} */ (f10))
+    expect(answers.options[0]?.prompt).toBe(
+      "Decide F-10 on fluid-snow-sand-look: A — Prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial. Before that, decide whether N5 should also listen to the stance-form route (USipherStanceComponent::OnStanceEntered). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.",
+    )
+    expect(answers.explain).toBe('Explain decision F-10 on fluid-snow-sand-look: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.')
+    expect(answers.typed('  try   the Winter map first ')).toBe(decidePrompt('fluid-snow-sand-look', 'F-10', '"try the Winter map first" (my own answer, in my words)'))
+    expect(answers.source?.startsWith('## F-10')).toBe(true)
+  })
+
+  test('A3: the decision drawn opened is the one pressed while it waits, else the first that waits; NONE_OPEN closes it', () => {
+    const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+    const waits = (/** @type {{ id: string }} */ one) => one.id !== 'a'
+    expect(openedDecision(items, '', waits)?.id).toBe('b')
+    expect(openedDecision(items, 'c', waits)?.id).toBe('c')
+    expect(openedDecision(items, 'a', waits)?.id).toBe('b')
+    expect(openedDecision(items, NONE_OPEN, waits)).toBe(undefined)
+  })
+
+  test('A3, A4: needsView lays out Needs you: blocks, each row decided, opened or a line, the folded answers and the focus', () => {
+    const answers = findingAnswers('q', { id: 'F-1', options: [] })
+    const call = (/** @type {string} */ slug, /** @type {string} */ id) => ({ id: callId(slug, id), kind: 'call', slug, answers })
+    const items = [call('q', 'F-1'), call('r', 'F-1'), call('r', 'F-2'), { id: 'editor', kind: 'editor' }, call('s', 'F-3')]
+    const [q1, r1, r2, editor, s3] = items
+    const now = 1_000_000
+    const none = new Set()
+    // The first answerable visible row opens; a two-decision intent is one folded block; the editor row only keeps its press.
+    let view = needsView(items, items, { ...FRESH_ANSWERS }, none, now, true)
+    expect(view.blocks.map(block => [block.slug, block.items.length])).toEqual([['q', 1], ['r', 2], ['', 1], ['s', 1]])
+    expect([view.shownId, view.states[q1?.id ?? ''], view.states[r1?.id ?? ''], view.opens.has('editor'), view.isFocusFree]).toEqual([q1?.id, 'opened', 'line', false, true])
+    // Answered just now: "decided" in place, and the next one opens; the typed field only for the opened row, where the surface has one.
+    const decided = [{ id: q1?.id ?? '', answer: 'A', at: now - 1000 }]
+    view = needsView(items, items.filter(one => one !== q1), { ...FRESH_ANSWERS, decided, typing: s3?.id ?? '' }, none, now, true)
+    expect([view.states[q1?.id ?? ''], view.shownId, view.typingId, view.isFocusFree]).toEqual(['decided', s3?.id, s3?.id, false])
+    expect(needsView(items, items.filter(one => one !== q1), { ...FRESH_ANSWERS, decided, typing: s3?.id ?? '' }, none, now, false).typingId).toBe('')
+    // Past DECIDED_SHOWN_MS it folds and leaves the blocks; an opened block's rows can be opened.
+    view = needsView(items, items.filter(one => one !== q1), { ...FRESH_ANSWERS, decided, opened: r2?.id ?? '' }, new Set(['r']), now + DECIDED_SHOWN_MS, true)
+    expect([view.folded.map(one => one.id), view.blocks.some(block => block.items.includes(/** @type {any} */ (q1))), view.shownId]).toEqual([[q1?.id], false, r2?.id])
+    expect(needsView(items, items, { ...FRESH_ANSWERS, opened: NONE_OPEN }, none, now, true).shownId).toBe('')
+    expect(editor?.kind).toBe('editor')
+  })
+
+  test('A4: an answer shows in place for 8 seconds, then folds, newest first; kept until the files read it resolved', () => {
+    const at = 1_000_000
+    let decided = withDecided([], { id: 'call:x:F-1', answer: 'A', at })
+    decided = withDecided(decided, { id: 'call:x:F-2', answer: 'try it', at: at + 1000 })
+    decided = withDecided(decided, { id: 'call:x:F-1', answer: 'B', at: at + 2000 })
+    expect(decided.map(one => `${one.id}=${one.answer}`)).toEqual(['call:x:F-1=B', 'call:x:F-2=try it'])
+    const items = [{ id: 'call:x:F-1' }, { id: 'call:x:F-2' }]
+    expect(decidedView(decided, items, at + 2000 + DECIDED_SHOWN_MS - 1).fresh.map(one => one.id)).toEqual(['call:x:F-1'])
+    const later = decidedView(decided, items, at + 2000 + DECIDED_SHOWN_MS)
+    expect([later.fresh.length, later.folded.map(one => one.id)]).toEqual([0, ['call:x:F-1', 'call:x:F-2']])
+    // Drawing reads only: an item not listed now (the away window's Home) hides its answer, the answer stays.
+    expect(decidedView(decided, [], at).fresh).toEqual([])
+    // Pruned only when the files are read again: kept while it waits, or for its 8 seconds.
+    expect(pruneDecided(decided, id => id === 'call:x:F-2', at + 60000).map(one => one.id)).toEqual(['call:x:F-2'])
+    expect(pruneDecided(decided, () => false, at + 2500).map(one => one.id)).toEqual(['call:x:F-1', 'call:x:F-2'])
+    expect(decidedText('A')).toBe('✓ Decided: A')
+  })
+
+  test('A8: "make it a rule?" answers in place: yes drafts and never commits, no closes it here; one wording for every rule request', () => {
+    const traps = [{ title: 'Live Coding blocks the build', count: 4, fix: 'Close the Editor first.' }]
+    const answers = ruleAnswers(traps, 'Tin')
+    expect(answers.options.map(one => [one.letter, one.label, one.prompt === ''])).toEqual([['A', 'Make it a rule', false], ['B', 'No, leave it', true]])
+    expect(answers.options[0]?.prompt).toContain('"Live Coding blocks the build", 4 sessions; its fix each time: Close the Editor first.')
+    const ending = 'draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diff for review by the owners (Tin); do not commit.'
+    expect([answers.options[0]?.prompt.endsWith(ending), answers.typed('later').endsWith(ending), rulePrompt(traps, 'Tin').endsWith(ending)]).toEqual([true, true, true])
+    expect(rulePrompt([...traps, { title: 'T2', count: 5, fix: 'F2.' }], 'Tin').endsWith(ending.replace('the diff', 'the diffs'))).toBe(true)
+    expect(ruleAnswers([{ title: 'T1', count: 3, fix: 'F1.' }, { title: 'T2', count: 5, fix: 'F2.' }], 'Tin').typed('only the first')).toContain('"only the first" (my own answer, in my words)')
+    // Home's items carry their answers: a decision its finding's, the rule its own and its walk-through.
+    const model = buildHome(/** @type {any} */ (base({ away: OFF, recurring: [{ id: 'x', title: 'Trap', fix: 'Fix.', count: 3 }] })))
+    const call = model.items.find(one => one.kind === 'call')
+    expect([call?.id, call?.answers?.explain]).toEqual(['call:spawner:F-1', 'Explain decision F-1 on spawner: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.'])
+    const rule = model.items.find(one => one.kind === 'rule')
+    expect([rule?.answers?.options.length, rule?.prompt]).toEqual([2, rulePrompt([{ title: 'Trap', fix: 'Fix.', count: 3 }], unreal.owners)])
   })
 })

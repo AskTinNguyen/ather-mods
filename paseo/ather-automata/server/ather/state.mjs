@@ -12,6 +12,7 @@ import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { normalFolder, readWorkspace } from './workspace.mjs'
+import { groupByOf } from './worklist.mjs'
 
 /**
  * @typedef {{
@@ -23,7 +24,7 @@ import { normalFolder, readWorkspace } from './workspace.mjs'
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository; without it the keys are unscoped
- *   (as before 0.1.7, and as the Paseo version still keeps them).
+ *   (as before 0.2.1, and as the Paseo version still keeps them).
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
  * @typedef {import('./model.mjs').Evidence} Evidence
@@ -47,6 +48,8 @@ const KEY = {
   area: (/** @type {string} */ me) => `area:${personId(me)}`,
   tour: (/** @type {string} */ me) => `tour:${personId(me)}`,
   nudged: (/** @type {string} */ me) => `nudged:${personId(me)}`,
+  // How this person groups the teammates' intents in Everything open (person, area, stage or none).
+  groupBy: (/** @type {string} */ me) => `groupBy:${personId(me)}`,
   // The sessions holding an away window for this person, so a new session finds them without a scan.
   windows: (/** @type {string} */ person) => `windows:${person}`,
   // Kept per repository: gh reads a checkout's own issues and PRs, and two repositories may share a slug.
@@ -175,7 +178,7 @@ const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(aw
 /** @param {Io} io @param {string} [root] */
 const repoAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? repoOf(io) : (await laneAt(io, normalFolder(root))).repo)
 
-// Before 0.1.7 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
+// Before 0.2.1 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
 // per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
 /** @param {Io} io @param {string} scoped @param {string} legacy */
 const readScoped = async (io, scoped, legacy) => {
@@ -239,7 +242,7 @@ export const checkoutScope = async (io, checkout) => {
 /** @param {Io} io @param {string} slug @param {string} [root] */
 export const intentScope = async (io, slug, root) => inRepo(await repoAt(io, root), slug)
 
-// What is kept for a scope: an intent's from before 0.1.7 too, while its scoped record has none.
+// What is kept for a scope: an intent's from before 0.2.1 too, while its scoped record has none.
 /** @param {Io} io @param {string} scope */
 const storedEvidence = async (io, scope) => /** @type {Record<string, any>} */ ((await readScoped(io, KEY.evidence(scope), KEY.evidence(scope.replace(/^[^|]*\|/, '')))) ?? {})
 
@@ -327,10 +330,13 @@ export const readPrStates = async (io, repo) => Object.fromEntries(Object.entrie
 /** @param {Io} io @param {string} me @param {string} [root] @returns {Promise<string | null>} */
 export const readLast = async (io, me, root) => {
   const scoped = KEY.last(me, await repoAt(io, root))
-  // Only the session's own repository reads through to the key from before 0.1.7.
+  // Only the session's own repository reads through to the key from before 0.2.1.
   const isOwn = root === undefined || (await isSessionRoot(io, root))
   return /** @type {string | null} */ ((await readScoped(io, scoped, isOwn ? KEY.last(me, '') : scoped)) ?? null)
 }
+// The person's grouping for Everything open; Person until they choose another.
+/** @param {Io} io @param {string} me */
+export const readGroupBy = async (io, me) => groupByOf(await io.get(KEY.groupBy(me)))
 /** @param {Io} io */
 export const readScore = async io => /** @type {Record<string, number>} */ ((await io.get(KEY.score)) ?? {})
 
@@ -402,6 +408,13 @@ export const setProfile = (io, me, fields, pack = unreal) =>
     changed(io)
   })
 
+/** @param {Io} io @param {string} me @param {import('./worklist.mjs').GroupBy} by */
+export const setGroupBy = (io, me, by) =>
+  serial(async () => {
+    await io.set(KEY.groupBy(me), by)
+    changed(io)
+  })
+
 // Whether this checkout has the intent's folder: what tracking it needs (asking about it does not).
 /** @param {Io} io @param {string} root @param {string} slug */
 export const hasIntentFolder = (io, root, slug) => io.exists(`${root}/docs/intent/${slug}/prompt.md`)
@@ -433,7 +446,7 @@ export const track = (io, root, slug, options = {}) =>
     if (options.me) {
       const last = KEY.last(options.me, await repoAt(io, at))
       await io.set(last, slug)
-      // Once a scoped "Continue …" is written, the unscoped one from before 0.1.7 must not read through again.
+      // Once a scoped "Continue …" is written, the unscoped one from before 0.2.1 must not read through again.
       if (last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
     }
     if (!options.isAuto && isStopped) await setList(io, KEY.untracked(sid), stopped.filter(one => !isStopOf(one, slug, isOwn ? null : at)))
@@ -455,7 +468,7 @@ export const untrack = (io, me) =>
     const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
     if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
     await io.remove(KEY.pinned(sid))
-    // The unscoped "Continue …" from before 0.1.7 goes too, or it would read through again.
+    // The unscoped "Continue …" from before 0.2.1 goes too, or it would read through again.
     for (const key of new Set([KEY.last(me, await repoAt(io, pin.isOwn ? undefined : pin.root)), ...(pin.isOwn ? [KEY.last(me, '')] : [])])) if ((await io.get(key)) === slug) await io.remove(key)
     const stopped = (await readStops(io, sid)).filter(one => !isStopOf(one, slug, pin.isOwn ? null : pin.root))
     await setList(io, KEY.untracked(sid), [...stopped, pin.isOwn ? slug : { slug, root: pin.root }])

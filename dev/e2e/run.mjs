@@ -102,6 +102,18 @@ const pressKey = (tree, key) => {
   return false
 }
 
+// The node with this key, anywhere in a tree.
+const nodeOf = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => nodeOf(child, key)).find(Boolean) ?? null)
+
+// Search as a surface with a text field does (0.2.0): Search… opens the field, Enter submits the words.
+// Returns the field, or null when none was drawn.
+const searchField = async (render, words) => {
+  nodeOf(await render(), 'pick-search')?.props.onPress()
+  const field = nodeOf(await render(), 'pick-search-field')
+  field?.props.onSubmit(words, {})
+  return field
+}
+
 const pressIn = (tree, label) => {
   const stack = [tree]
   while (stack.length > 0) {
@@ -576,18 +588,22 @@ const GH_ISSUES = [
   const all = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · Everything open (72 columns)', all.lines.join('\n')])
   expect('"Everything open" groups by source, each with its count and a fold: your assigned issues, then the teammates\' intents', /▾ A S S I G N E D {3}I S S U E S {3}· {3}1\n1: #28887/.test(all.lines.join('\n')) && /▾ T E A M M A T E S ' {3}I N T E N T S/.test(all.lines.join('\n')) && all.problems.length === 0, all.problems)
+  const subHeads = all.lines.map(line => /^([▸▾]) ([^‖].*) · (\d+)$/.exec(line)).filter(Boolean)
+  expect('A7: in a real team list every sub-group of more than six starts folded and every smaller one open', subHeads.length > 0 && subHeads.every(([, fold, , count]) => (Number(count) > 6) === (fold === '▸')), subHeads.map(([line]) => line))
   // The list's own controls: fold a group, filter by age, search, and a teammate's name after the title in its colour.
   const pickTree = () => engine.render('Pane', { bodyColumns: 72 }, 'ather')
   const pickText = async () => check(await pickTree(), 72).lines.join('\n')
   const collect = (node, test) => (!node || typeof node !== 'object' ? [] : [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => collect(child, test))])
-  expect('"Everything open" starts unfiltered and sorted by Recent; the age chips are gone (A5)', /s: Search… {3}o: Sort: Recent\n/.test(await pickText()) && !/Any time|7 days/.test(await pickText()))
-  // A teammate's intent in this checkout, whichever it is: the first row under their heading.
-  const teammate = /T E A M M A T E S '[^\n]*\n\d: \S+ (\S+)/.exec(await pickText())?.[1] ?? ''
+  expect('"Everything open" starts unfiltered and sorted by Recent; the age chips are gone (A5)', /s: Search… {3}o: Sort: Recent {3}g: Group: Person\n/.test(await pickText()) && !/Any time|7 days/.test(await pickText()))
+  // A teammate's intent in this checkout, whichever it is: the first row under their heading (past its sub-heads).
+  const teammate = /T E A M M A T E S '[^\n]*\n(?:[^\n]*\n)*?\d: \S+ (\S+)/.exec(await pickText())?.[1] ?? ''
   find(await pickTree(), 'group-issues-fold')?.props.onPress()
   const folded = await pickText()
   expect('folding a group hides its rows and keeps its heading and count', /▸ A S S I G N E D {3}I S S U E S {3}· {3}1/.test(folded) && !/#28887/.test(folded) && teammate !== '' && folded.includes(teammate), folded)
   find(await pickTree(), 'group-issues-fold')?.props.onPress()
   expect('… and unfolding brings them back', /#28887/.test(await pickText()))
+  // The stage blocks are the ungrouped list's (Group: None); grouped, each sub-group keeps the sort's order.
+  for (let turn = 0; turn < 3; turn += 1) find(await pickTree(), 'pick-group')?.props.onPress()
   const sorts = []
   for (let turn = 0; turn < 3; turn += 1) {
     find(await pickTree(), 'pick-sort')?.props.onPress()
@@ -600,12 +616,35 @@ const GH_ISSUES = [
   expect('the stage blocks are subgroups: bold, not letter-spaced, and never lime', blockHeads.length > 0 && blockHeads.every(node => node.props.bold && node.props.color !== '#DDFF00' && !/ {2}/.test(node.props.children)), blockHeads.map(node => node.props))
   find(await pickTree(), 'pick-sort')?.props.onPress()
   find(await pickTree(), 'pick-sort')?.props.onPress()
-  engine.script.length = 0
-  engine.script.push(typed('dodge'))
+  find(await pickTree(), 'pick-group')?.props.onPress()
+  engine.record.dialogs.length = 0
   find(await pickTree(), 'pick-search')?.props.onPress()
+  const fieldTree = await pickTree()
+  const fieldCheck = check(fieldTree, 72)
+  screens.push(['Terminal · Everything open, Search opened as a field (72 columns)', fieldCheck.lines.slice(0, 6).join('\n')])
+  const searchInput = find(fieldTree, 'pick-search-field')
+  expect('A7: Search opens a text field, focused, in place of the question dialog; the first row gives up its focus', searchInput?.type === 'Input' && searchInput.props.autoFocus === true && /^Search: \[title, issue number, area or owner\]/m.test(fieldCheck.lines.join('\n')) && fieldCheck.problems.length === 0, [searchInput?.props, fieldCheck.problems])
+  searchInput?.props.onSubmit('dodge', {})
   await engine.flush()
   const searched = await pickText()
-  expect('Search asks one question and the words typed under Other narrow the list (here to the Dodge issue)', /#28887/.test(searched) && !searched.includes(teammate) && /^1 of \d+$/m.test(searched) && /Search: dodge/.test(searched) && engine.record.dialogs.at(-1)?.header === 'Search', searched)
+  expect('A7: Enter in the field narrows the list (here to the Dodge issue), no dialog asked, and the field closes', /#28887/.test(searched) && !searched.includes(teammate) && /^1 of \d+$/m.test(searched) && /Search: dodge/.test(searched) && engine.record.dialogs.length === 0 && !find(await pickTree(), 'pick-search-field'), searched)
+  find(await pickTree(), 'pick-search-clear')?.props.onPress()
+  // Where the surface draws no field (the mobile app), Search is the question dialog as before.
+  engine.script.length = 0
+  engine.script.push(typed('dodge'))
+  find(await engine.render('Pane', { bodyColumns: 72 }, 'ather', 'mobile'), 'pick-search')?.props.onPress()
+  await engine.flush()
+  expect('A7: on a surface without a text field, Search asks one question and the words typed under Other narrow the list', engine.record.dialogs.at(-1)?.header === 'Search' && /Search: dodge/.test(await pickText()) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather', 'mobile'), 'pick-search-field'), engine.record.dialogs.at(-1))
+  find(await pickTree(), 'pick-search-clear')?.props.onPress()
+  // /ather find <words> is unchanged: the list searched in the pane, or the matches in a line without one.
+  engine.record.dialogs.length = 0
+  await run(engine, [], 'ather', 'find dodge')
+  expect('A7: /ather find <words> still opens Everything open searched, with no dialog', /Search: dodge/.test(await pickText()) && engine.record.dialogs.length === 0)
+  find(await pickTree(), 'pick-search-clear')?.props.onPress()
+  engine.setSurfaces([])
+  const foundLine = await run(engine, [], 'ather', 'find dodge')
+  engine.setSurfaces(['terminal'])
+  expect('A7: … and without a pane it answers in a line', /^1 match "dodge": #28887/.test(foundLine.out), foundLine.out)
   find(await pickTree(), 'pick-search-clear')?.props.onPress()
   expect('✕ Clear shows everything again', (await pickText()).includes(teammate) && !/Search: /.test(await pickText()))
   const owners = collect(await pickTree(), node => node.type === 'Text' && /^pick-intent:.*-owner-text$/.test(node.props.key ?? ''))
@@ -793,8 +832,10 @@ const hasFocus = tree => {
   await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Succeeded' })
   await engine.modelTool({ tool: 'Bash', command: 'Run-S2Automation -Filter Snow', __text: 'EXIT CODE: 0\n2 tests failed' })
   await engine.flush()
-  pressIn(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'Decide F-10')
-  await engine.flush()
+  // Handed over the walk-through way (/ather's question where nothing is drawn), not answered in place.
+  engine.setSurfaces([])
+  await run(engine, [question => question.options.find(option => /^(Decide F-10|Go through \d+ things)/.test(option.label))?.label ?? '__missing__'])
+  engine.setSurfaces(['terminal'])
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · tracked intent with proof and a sent decision (72 columns)', pane.lines.join('\n')])
   const text = pane.lines.join('\n')
@@ -834,12 +875,183 @@ const hasFocus = tree => {
   screens.push(['Terminal · All intents (72 columns)', all.lines.join('\n')])
   expect('All intents lists every open intent, cleanly, under one status line', all.problems.length === 0 && /Everything open\n\d+ open · yours first/.test(all.lines.join('\n')), all.problems)
   pressIn(await pane(110), 'Back')
-  const tree = await pane(110)
-  pressIn(tree, 'Decide F-')
+  // A decision's row opens it in place (0.2.0): nothing is sent and the pane stays (fixtures below check the answers).
+  const callKeys = []
+  const collectCalls = node => (!node || typeof node !== 'object' ? undefined : (node.type === 'Button' && /^item-call:/.test(node.props.key ?? '') && callKeys.push(node.props.key), (node.children ?? []).forEach(collectCalls)))
+  const before = await pane(110)
+  collectCalls(before)
+  const closesBefore = engine.record.closes.length
+  // One not opened yet; with a single decision (opened from the start), its press closes it and a second opens it again.
+  const lastCall = callKeys.find(key => !nodeOf(before, `explain-${key.slice('item-'.length)}`)) ?? callKeys[0] ?? ''
+  if (nodeOf(before, `explain-${lastCall.slice('item-'.length)}`)) pressKey(before, lastCall)
+  pressKey(await pane(110), lastCall)
   await engine.flush()
-  expect('pressing a Needs-you row hands it to the session and closes the pane', engine.record.submits.length === 1 && engine.record.closes.some(one => one.id === 'ather'), engine.record.submits)
+  expect('pressing a Needs-you decision opens its answers in place: nothing sent, the pane stays', lastCall !== '' && engine.record.submits.length === 0 && engine.record.closes.length === closesBefore && Boolean(nodeOf(await pane(110), `explain-${lastCall.slice('item-'.length)}`)), callKeys)
   await engine.close('ather')
   expect('no hook threw in the terminal', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+// ---------------------------------------------------------------- decide in place (0.2.0)
+
+{
+  // Two fixture intents of Tin's. zz-decide, tracked so it comes first: F-1 in the list format (A recommended)
+  // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended) and F-4 with no options,
+  // two decisions that wait as one block. A trap seen in three sessions waits too, and the Editor is held
+  // (a designer's Ask for the Editor: an item with nothing to answer).
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
+  const fixture = (slug, findings) => {
+    fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
+    fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: one\n- A2: two\n`)
+    fs.writeFileSync(path.join(root, 'docs/intent', slug, 'findings.md'), ['# Findings', '', ...findings, ''].join('\n'))
+  }
+  fixture('zz-decide', [
+    '## F-1 (2026-09-29, rev 6) | blocking: no | status: open (director)',
+    '',
+    '**Found:** in the snow/sand lab, neither Nine Tails hook can be driven by its production trigger, so both are proven by automation tests plus a lab force.',
+    '',
+    '**Options:**',
+    '- A (recommended): prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial.',
+    '- B: add a lab rig that grants Fox Form, which means driving the production ability with its resources set up.',
+    '',
+    '**Resolution:**',
+    '',
+    '## F-3 (open, not blocking): already settled',
+    '',
+    '- Options: (a) one way; (b) another way. Recommendation: (a).',
+    '- Resolution (orchestrator, 2026-10-05): accepted (a).',
+  ])
+  fixture('zz-group', [
+    '## F-2 (open, not blocking): restart one quest also restores every flow-owned actor',
+    '',
+    '- Options: (a) keep it as is, with the confirmation; (b) add a runtime hook that restores only the restarted quest; (c) re-run the',
+    "  other quests' entry actions. Recommendation: (b).",
+    '',
+    '## F-4 (2026-10-07) | blocking: yes | status: open (director)',
+    '',
+    'Which pool size should the spawner use?',
+  ])
+  fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'held by lane-7')
+  await run(engine, [], 'ather', 'intent zz-decide')
+  const pane = (cols = 72, surface = 'terminal') => engine.render('Pane', { bodyColumns: cols }, 'ather', surface)
+  const text = async (cols = 72) => check(await pane(cols), cols).lines.join('\n')
+  const id = n => `call:${n === 1 || n === 3 ? 'zz-decide' : 'zz-group'}:F-${n}`
+  const waiting = async () => Number(/N E E D S   Y O U   ·   (\d+)/.exec(await text(110))?.[1] ?? -1)
+
+  const first = await pane(72)
+  const first72 = check(first, 72)
+  screens.push(['Terminal · Needs you, the first decision opened with its answers (72 columns)', first72.lines.join('\n')])
+  const shown72 = first72.lines.join('\n')
+  expect(
+    'A3: the first decision is opened: its whole question, A (recommended, primary) and B as buttons, then Explain, Type an answer, Open findings',
+    /◆ \d: Decide F-1 on zz-decide\n {5}In the snow\/sand lab, neither Nine Tails hook can be driven/.test(shown72) &&
+      /\[ A: Prove both on a map where Fox Form and[^\]]*\(recommended\) \]/.test(shown72) &&
+      /\[ B: Add a lab rig that grants Fox Form \]/.test(shown72) &&
+      /x: Explain {3}t: Type an answer {3}Open findings ›/.test(shown72) &&
+      nodeOf(first, `option-${id(1)}-A`)?.props.variant === 'primary' &&
+      nodeOf(first, `option-${id(1)}-B`)?.props.variant === undefined,
+    first72.lines,
+  )
+  expect('A3: an intent with several decisions keeps its one folded row; a finding with a filled Resolution is not offered (A2)', /◆ \d: ▸ zz-group · 2 decisions\n/.test(shown72) && !nodeOf(first, `item-${id(2)}`) && !/F-3/.test(shown72), shown72)
+  pressKey(first, 'calls-zz-group')
+  const block = await text(72)
+  expect('A3: opened, the block shows its decisions one line each, the first decision still the one opened', /▾ zz-group · 2 decisions\n {2}· \d: F-2 · Restart one quest also restores every flow-owned actor\n(?: {3,}[^\n]*\n)*? {2}· \d: F-4 · Which pool size should the spawner use\?/.test(block) && Boolean(nodeOf(await pane(), `option-${id(1)}-A`)) && !nodeOf(await pane(), `option-${id(2)}-A`), block)
+  for (const cols of [72, 110]) {
+    const drawn = check(await pane(cols), cols)
+    expect(`A3: Needs you with a decision opened lays out cleanly at ${cols} columns, every hotkey unique`, drawn.problems.length === 0, drawn.problems)
+  }
+  const desk = await pane(110, 'desktop')
+  const deskDrawn = check(desk, 1000)
+  screens.push(['Desktop · Needs you, the first decision opened (tree drawn as text)', deskDrawn.lines.filter(line => /zz-decide|Decided|\[ [AB]:|Explain|snow\/sand/.test(line)).join('\n')])
+  expect('A3: on the desktop every answer is a visible button and no key is drawn', ['A', 'B'].every(letter => nodeOf(desk, `option-${id(1)}-${letter}`)?.type === 'Button') && nodeOf(desk, `explain-${id(1)}`)?.props.hotkey === undefined && nodeOf(desk, `type-${id(1)}`)?.props.hotkey === undefined && nodeOf(desk, `findings-${id(1)}`)?.type === 'Button' && deskDrawn.problems.length === 0, deskDrawn.problems)
+
+  // Another decision opens on its press, one at a time; a press on the opened one closes it.
+  pressKey(await pane(), `item-${id(2)}`)
+  const second = await pane()
+  expect('A3: pressing another decision opens it and closes the first (F-2: B recommended, from "Recommendation: (b)")', nodeOf(second, `option-${id(2)}-B`)?.props.variant === 'primary' && /^C: /.test(nodeOf(second, `option-${id(2)}-C`)?.props.label ?? '') && !nodeOf(second, `option-${id(1)}-A`), nodeOf(second, `option-${id(2)}-B`)?.props)
+  pressKey(await pane(), `item-${id(2)}`)
+  expect('… and pressing the opened one closes it', !nodeOf(await pane(), `option-${id(2)}-B`) && !nodeOf(await pane(), `option-${id(1)}-A`))
+  pressKey(await pane(), `item-${id(1)}`)
+
+  // Explain asks without deciding: the row stays open and still waits.
+  const waitingBefore = await waiting()
+  const closesBefore = engine.record.closes.length
+  pressKey(await pane(), `explain-${id(1)}`)
+  await engine.flush()
+  expect('A5: Explain hands the session the explain prompt; the row stays open and still counts as waiting; the pane stays', engine.record.submits.at(-1) === 'Explain decision F-1 on zz-decide: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.' && Boolean(nodeOf(await pane(), `option-${id(1)}-A`)) && (await waiting()) === waitingBefore && engine.record.closes.length === closesBefore, engine.record.submits.at(-1))
+
+  // An option decides: the session gets the D4 prompt, the row says so in place, then folds.
+  // Pressed twice before the pane redraws (a double click, a second Enter): one answer goes out.
+  const submitsBefore = engine.record.submits.length
+  const optionTree = await pane()
+  pressKey(optionTree, `option-${id(1)}-A`)
+  pressKey(optionTree, `option-${id(1)}-A`)
+  await engine.flush()
+  expect('A4: an option pressed twice before the redraw sends one prompt', engine.record.submits.length === submitsBefore + 1, engine.record.submits.slice(submitsBefore))
+  expect('A4: pressing an option hands the session "Decide F-1 on zz-decide: A — <full text>" and the record-it instruction; the pane stays', engine.record.submits.at(-1) === "Decide F-1 on zz-decide: A — Prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial. Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again." && engine.record.closes.length === closesBefore, engine.record.submits.at(-1))
+  const decided72 = check(await pane(72), 72)
+  screens.push(['Terminal · Needs you just after answering: "✓ Decided" in place (72 columns)', decided72.lines.join('\n')])
+  expect('A4: the row shows "✓ Decided: A" in place, Needs you counts one fewer, and the next decision opens', /✓ Decided: A · F-1 on zz-decide/.test(decided72.lines.join('\n')) && (await waiting()) === waitingBefore - 1 && Boolean(nodeOf(await pane(), `option-${id(2)}-B`)) && decided72.problems.length === 0, decided72.lines)
+  const realNow = Date.now
+  Date.now = () => realNow() + 9000
+  try {
+    const folded72 = check(await pane(72), 72)
+    pressKey(await pane(), 'decided-fold')
+    const unfolded = await text(72)
+    screens.push(['Terminal · Needs you 9 s later: folded into "▸ 1 decided", then unfolded (72 columns)', `${folded72.lines.join('\n')}\n\n— unfolded —\n${unfolded}`])
+    expect('A4: 8 seconds on, the row folds under "▸ 1 decided", which unfolds to the answer', !/✓ Decided: A/.test(folded72.lines.join('\n')) && /▸ 1 decided/.test(folded72.lines.join('\n')) && /▾ 1 decided\n {2}✓ F-1 on zz-decide: A/.test(unfolded) && folded72.problems.length === 0, folded72.lines)
+    pressKey(await pane(), 'decided-fold')
+  } finally {
+    Date.now = realNow
+  }
+
+  // Type an answer: a field under the row (the terminal has one); Enter sends the words as the choice.
+  pressKey(await pane(), `type-${id(2)}`)
+  const typing = await pane(72)
+  const typing72 = check(typing, 72)
+  const field = nodeOf(typing, `typed-${id(2)}`)
+  screens.push(['Terminal · Type an answer opens a field under the decision (72 columns)', typing72.lines.join('\n')])
+  expect('A6: Type an answer opens a focused field under the row, named for the decision; nothing else takes the focus', field?.type === 'Input' && field.props.autoFocus === true && field.props.placeholder === 'Your answer to F-2 on zz-group' && typing72.problems.length === 0, [field?.props, typing72.problems])
+  field?.props.onSubmit('keep it, but log which actors moved', {})
+  await engine.flush()
+  expect("A6: Enter hands the session the decision with the person's words as the choice", engine.record.submits.at(-1) === `Decide F-2 on zz-group: "keep it, but log which actors moved" (my own answer, in my words). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.` && /✓ Decided: keep it, but log which actors moved · F-2/.test(await text(110)), engine.record.submits.at(-1))
+
+  // A decision with no options: Explain, Type an answer and Open findings only.
+  const none = await pane()
+  expect('A1/D1: a finding without options opens with Explain, Type an answer and Open findings, and no option buttons', Boolean(nodeOf(none, `explain-${id(4)}`)) && !nodeOf(none, `option-${id(4)}-A`) && Boolean(nodeOf(none, `findings-${id(4)}`)), none)
+  // With its typed answer open, Open findings leaves the row: Back does not land in the field again.
+  pressKey(none, `type-${id(4)}`)
+  expect('A6: the typed field opens on F-4 before leaving it', Boolean(nodeOf(await pane(), `typed-${id(4)}`)))
+  pressKey(await pane(), `findings-${id(4)}`)
+  const finding = await text(72)
+  screens.push(['Terminal · Open findings › shows the finding as written (72 columns)', finding])
+  expect('D3: Open findings › shows the finding as written, with Back', /^F I N D I N G\nF-4 on zz-group$/m.test(finding) && /## F-4 \(2026-10-07\)/.test(finding) && /Which pool size should the spawner use\?/.test(finding) && /0: Back/.test(finding), finding)
+  pressKey(await pane(), 'finding-back')
+  expect('D3: back from the finding, the row is opened again with its typed field closed', Boolean(nodeOf(await pane(), `explain-${id(4)}`)) && !nodeOf(await pane(), `typed-${id(4)}`))
+
+  // Where the surface has no text field (mobile), Type an answer is the question dialog's Other.
+  engine.record.dialogs.length = 0
+  engine.script.length = 0
+  engine.script.push(typed('a pool of eight'))
+  const mobile = await pane(72, 'mobile')
+  pressKey(mobile, `type-${id(4)}`)
+  await engine.flush()
+  const asked = engine.record.dialogs.at(-1)
+  expect('A6: without a text field, Type an answer asks one question (2-4 answers) and the words typed under Other decide', asked?.header === 'Answer' && asked.options.length >= 2 && asked.options.length <= 4 && !nodeOf(await pane(72, 'mobile'), `typed-${id(4)}`) && engine.record.submits.at(-1) === `Decide F-4 on zz-group: "a pool of eight" (my own answer, in my words). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.`, [asked, engine.record.submits.at(-1)])
+
+  // D8: "make it a rule?" answers in place too.
+  pressKey(await pane(), 'item-rule:live-coding')
+  const rule = await pane(72)
+  expect('A8: the repeated-problem item opens with Make it a rule / No, leave it, Explain and Type an answer (no Open findings)', /^A: Make it a rule$/.test(nodeOf(rule, 'option-rule:live-coding-A')?.props.label ?? '') && /^B: No, leave it$/.test(nodeOf(rule, 'option-rule:live-coding-B')?.props.label ?? '') && Boolean(nodeOf(rule, 'explain-rule:live-coding')) && !nodeOf(rule, 'findings-rule:live-coding') && check(rule, 72).problems.length === 0, check(rule, 72).lines)
+  pressKey(rule, 'option-rule:live-coding-A')
+  await engine.flush()
+  expect('A8: Make it a rule hands the draft request (never a commit) and shows "✓ Decided: A" in place', /These traps keep coming back: "A running Editor blocks the build \(Live Coding\)", 3 sessions; its fix each time: Close the Editor\. Make it a rule: for each, draft the change that prevents it/.test(engine.record.submits.at(-1) ?? '') && /do not commit\.$/.test(engine.record.submits.at(-1) ?? '') && /✓ Decided: A · Turn a repeated problem into a rule\?/.test(await text(110)), engine.record.submits.at(-1))
+
+  // An item with nothing to answer keeps today's press: it goes to the session and the pane closes.
+  pressKey(await pane(), 'item-editor')
+  await engine.flush()
+  expect('D8: an item without options (Ask for the Editor) still hands over on its press and closes the pane', /^Find the session that holds the Editor owner lock/.test(engine.record.submits.at(-1) ?? '') && engine.record.closes.length > closesBefore, engine.record.submits.at(-1))
+  expect('no hook threw while deciding in place', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }
 
@@ -857,7 +1069,7 @@ const hasFocus = tree => {
   const issuesNow = await run(engine, [], 'ather', 'issues')
   expect('/ather issues reads them on the spot and says why when it cannot, or that there are none', /Could not read your GitHub issues|No open GitHub issues are assigned to you|N E X T|Pick/.test(issuesNow.out + issuesNow.dialogs.map(one => one.question).join(' ')) , issuesNow.out)
   expect('the desktop pane carries the Ather mark, is clicked (no hotkeys drawn) and lays out cleanly; the terminal draws no mark', find(desk, 'Svg')?.props.alt === 'Ather' && deskPane.problems.length === 0 && !/\b[a-z0-9]: /.test(deskPane.lines.join('\n')) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'Svg'), deskPane.problems)
-  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\nSix short steps/.test(pane.lines.join('\n')) && /T E A M M A T E S '   I N T E N T S   ·   \d( \d)*\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
+  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\n *Six short steps/.test(pane.lines.join('\n')) && /T E A M M A T E S '   I N T E N T S   ·   \d( \d)*\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
   done()
 }
 
@@ -930,6 +1142,7 @@ const hasFocus = tree => {
   const desk = await engine.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
   const avatars = find(desk, node => node.type === 'Svg' && /, (running|done)$/.test(node.props.alt))
   expect('on the desktop each worker has its avatar: the running Builder animated, the done Reviewer still', avatars.map(one => one.props.alt).join(' | ') === 'Builder, running | Reviewer, done' && avatars[0].props.isInteractive === true && !avatars[1].props.isInteractive && /#2f8cf0/.test(avatars[0].props.source) && /#ddff00/.test(avatars[0].props.source) && /#f2d27a/.test(avatars[1].props.source) && /#3ccf7a/.test(avatars[1].props.source), avatars.map(one => one.props.alt))
+  expect("the running avatar's frame page takes the app's colour scheme (its root set to light dark), so no square shows behind it in either theme", avatars.every(one => one.props.source.includes('<style>:root{color-scheme:light dark;background:transparent}</style>')), avatars.map(one => one.props.source.slice(0, 160)))
   expect("on the desktop a finished worker's trail is drawn as props", find(desk, node => node.type === 'Svg' && /^(reading|reviewing)$/.test(node.props.alt)).length === 2)
   find(term.lines ? await engine.render('Pane', { bodyColumns: 72 }, 'ather') : null, node => node.props?.key === 'worker-w-build')[0]?.props.onPress({})
   await engine.flush()
@@ -972,8 +1185,8 @@ const hasFocus = tree => {
   const list = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
   const listed = check(list, 72)
   screens.push(['Terminal · Skills (72 columns)', listed.lines.join('\n')])
-  expect('Skills lists the present skills by group, each with the first sentence of its description', /R E V I E W   A N D   P R O O F\n1: thermo-nuclear-code-quality-review\nWhat thermo-nuclear-code-quality-review does\.\n2: editor-video-walkthrough/.test(listed.lines.join('\n')) && /A G E N T I C   T E S T I N G\n3: talab/.test(listed.lines.join('\n')) && !/Use it when/.test(listed.lines.join('\n')) && listed.problems.length === 0, listed.lines)
-  expect('a skill from the manual library is listed under Explain it to me', /E X P L A I N   I T   T O   M E\n\d: show-me\nHelp the user understand the topic visually\./.test(listed.lines.join('\n')), listed.lines)
+  expect('Skills lists the present skills by group, each with the first sentence of its description', /R E V I E W   A N D   P R O O F\n1: thermo-nuclear-code-quality-review\n *What thermo-nuclear-code-quality-review does\.\n2: editor-video-walkthrough/.test(listed.lines.join('\n')) && /A G E N T I C   T E S T I N G\n3: talab/.test(listed.lines.join('\n')) && !/Use it when/.test(listed.lines.join('\n')) && listed.problems.length === 0, listed.lines)
+  expect('a skill from the manual library is listed under Explain it to me', /E X P L A I N   I T   T O   M E\n\d: show-me\n *Help the user understand the topic visually\./.test(listed.lines.join('\n')), listed.lines)
   find(list, 'skill:talab')?.props.onPress({})
   await engine.flush()
   expect('a skill hands the session its run, for the tracked intent', engine.record.submits.some(text => /Run the talab skill \(\.agents\/skills\/talab\/SKILL\.md\) for intent fluid-snow-sand-look/.test(text)), engine.record.submits)
@@ -1347,6 +1560,174 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   fs.rmSync(home, { recursive: true, force: true })
 }
 
+{
+  // 0.1.9: who waits on whom. Calls held in flight (a foreground Agent call, a long build, a wait on the Editor
+  // lock), workers drawn under the worker that started them, and the quiet-worker toast on the same rule.
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' } })
+  const findAll = (node, test) => (!node || typeof node !== 'object' ? [] : [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => findAll(child, test))])
+  const keyed = (node, key) => findAll(node, one => one.props?.key === key)[0]
+  const squash = text => text.replace(/ /g, '')
+  const realNow = Date.now
+  const at = minutes => {
+    const base = realNow()
+    Date.now = () => base + minutes * 60000
+  }
+  fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'Lane B holds the Editor until 15:40 for the snow proof\nsession 1a2b3c4d')
+  const brief = 'Fix it in Source/S2/A.cpp. Acceptance: S2Editor builds. Shared tree: path-scoped staging only.'
+  await engine.spawn({ agentId: 'w-lead', description: 'Thermo round 1 fixes', prompt: `Apply the thermo-nuclear review findings. ${brief}` })
+  // The lead calls Agent in the foreground: the call stays in flight until its worker ends.
+  const agentCall = engine.holdTool('w-lead', { tool: 'Agent', tool_use_id: 'agent-f1', description: 'F1 thermo fixes', prompt: `Fix finding F1. ${brief}`, subagent_type: 'general-purpose' })
+  await agentCall.reached
+  await engine.spawn({ agentId: 'w-f1', description: 'F1 thermo fixes', prompt: `Fix finding F1. ${brief}`, parentId: 'w-lead', toolUseId: 'agent-f1', background: false })
+  const build = engine.holdTool('w-f1', { tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', description: 'Build S2Editor Development' })
+  await build.reached
+  // Four fixers the lead started earlier have finished: three are drawn under it, the fourth folds.
+  for (const n of [2, 3, 4, 5]) {
+    await engine.spawn({ agentId: `w-f${n}`, description: `F${n} thermo fixes`, prompt: `Fix finding F${n}. ${brief}`, parentId: 'w-lead' })
+    await engine.agentTool(`w-f${n}`, { tool: 'Edit', file_path: 'Source/S2/A.cpp', old_string: 'a', new_string: 'b' })
+    await engine.agentTurnEnd(`w-f${n}`)
+    engine.setAgentStatus(`w-f${n}`, 'completed')
+  }
+  // A worker whose starter has finished, one waiting on the Editor lock, one that has gone quiet, one found running later.
+  await engine.spawn({ agentId: 'w-gone', description: 'Snow proof planner', prompt: `Plan the snow proof. ${brief}` })
+  await engine.spawn({ agentId: 'w-orphan', description: 'Snow proof runner', prompt: `Prove it in PIE. ${brief}`, parentId: 'w-gone' })
+  await engine.agentTurnEnd('w-gone')
+  engine.setAgentStatus('w-gone', 'completed')
+  const lockWait = engine.holdTool('w-orphan', { tool: 'PowerShell', command: 'while ((Get-Content Saved/EDITOR_OWNER.txt) -notmatch "free") { Start-Sleep 30 }', description: 'Wait for the Editor lock' })
+  await lockWait.reached
+  await engine.spawn({ agentId: 'w-quiet', description: 'Says nothing', prompt: `Implement A2. ${brief}` })
+  await engine.agentTool('w-quiet', { tool: 'Edit', file_path: 'Source/S2/B.cpp', old_string: 'a', new_string: 'b' })
+  engine.addAgent({ id: 'w-adopted', description: 'Worker with no record' })
+  engine.setAgentStatus('w-adopted', 'running')
+  // A call whose permission dialog was shown to the person (classic.PermissionRequest): it waits on a decision, not running.
+  await engine.spawn({ agentId: 'w-ask', description: 'Clean-up worker', prompt: `Implement A3. ${brief}` })
+  const asking = engine.holdTool('w-ask', { tool: 'Bash', command: 'rm -rf Saved/Cache', description: 'Delete the old build cache' }, { dialog: true })
+  await asking.reached
+  // tool.check said "ask" but no dialog was shown (auto mode's classifier allowed it): it is running, not asking.
+  await engine.spawn({ agentId: 'w-auto', description: 'Auto-approved worker', prompt: `Implement A4. ${brief}` })
+  const approved = engine.holdTool('w-auto', { tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', description: 'Long approved build' }, { ask: true })
+  await approved.reached
+  engine.record.toasts.length = 0
+  let term = null
+  let wide = ''
+  let desk = null
+  let toasts = []
+  let stuck = ''
+  try {
+    at(11)
+    term = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
+    wide = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).lines.join('\n')
+    desk = await engine.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
+    await engine.timers()
+    toasts = [...engine.record.toasts]
+    at(26)
+    stuck = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  } finally {
+    Date.now = realNow
+  }
+  const text = term.lines.join('\n')
+  screens.push(['Terminal · the worker tree, calls in flight (72 columns)', text])
+  screens.push(['Terminal · the worker tree, calls in flight (110 columns)', wide])
+  const heading = term.lines.find(line => /^W O R K E R S|^WORKERS/.test(line)) ?? ''
+  expect('A6: the heading reads "Workers · Running N · Waiting on M", waiting on counting the ⏳ lines', squash(heading) === 'WORKERS·RUNNING7·WAITINGON5' && (text.match(/⏳/g) ?? []).length === 5, heading)
+  expect('round 3: tool.check said "ask" but no permission dialog was shown: the call reads as running (its own ⏳ line), never "asked permission", and raises no toast', /● Auto-approved worker\n  Builder · Opus · building\n  running 11:\d\d · 1 tool call\n  ⏳ Long approved build\n/.test(text) && !/asked permission[^\n]*Long approved build/.test(text) && !toasts.some(one => /Auto-approved worker/.test(one)), text)
+  expect('round 2: a call waiting on the permission dialog reads "⏳ asked permission N min ago: <what>" (only what is known), not quiet; past 25 min it warns like any call, since an approved build may run on', /● Clean-up worker\n  Builder · Opus · working\n  running 11:\d\d · 1 tool call\n  ⏳ asked permission (just now|\d+ min ago): Delete the old build cache\n/.test(text) && /Delete the old build cache\n  ⚠ one call running \d+ min/.test(stuck), [text, stuck])
+  expect('round 2: past the threshold the toast names the worker waiting on permission, and what for', toasts.some(one => /^Ather: worker "Clean-up worker" asked permission to run Bash \d+ min ago and has not finished: Delete the old build cache\.$/.test(one)) && toasts.length === 2, toasts)
+  expect('A1, A4: a foreground Agent call in flight reads "⏳ waiting on <its worker>" under the worker that made it', /● Thermo round 1 fixes\n  Builder · Opus · [^\n]*\n  running 11:\d\d · 1 tool call\n  ⏳ waiting on F1 thermo fixes\n/.test(text), text)
+  expect('A3: a worker is drawn under the one that started it, with no "started by" when that one is right above', /⏳ waiting on F1 thermo fixes\n└ ● F1 thermo fixes\n    Builder · Opus · building\n    running 11:\d\d · 1 tool call\n    ⏳ Build S2Editor Development\n/.test(text) && !/started by Thermo round 1 fixes/.test(text), text)
+  expect('A3: past three finished workers under one parent, the rest fold to "+N finished"', (text.match(/└ ✓ F\d thermo fixes/g) ?? []).length === 3 && /\n└ \+1 finished\n/.test(text), text)
+  expect('A3: a worker whose starter finished is a root that says "started by X (finished)"', /● Snow proof runner\n[^\n]*\n  running 11:\d\d · 1 tool call · started by Snow proof planner \(finished\)\n/.test(text), text)
+  expect('A4: a long shell call that names the lock file quotes its description and the lock file\'s first line', /  ⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the…\n|  ⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the snow …\n/.test(text) || /⏳ Wait for the Editor lock · Lane B holds the Editor until 15:40 for the snow …/.test(wide), [text, wide])
+  expect('A2: a worker with nothing in flight and nothing heard for minutes reads quiet; one in flight does not', /● Says nothing\n  Builder · Opus · quiet\n/.test(text) && !/F1 thermo fixes\n    Builder · Opus · quiet/.test(text), text)
+  expect('A4: a worker found running later, with no call seen, shows no in-flight line', /● Worker with no record\n  General · working\n  running · start unknown\n(?!  ⏳)/.test(text), text)
+  expect('A2: past ten minutes the stuck-permission toast names the quiet worker only, never one with a call in flight', toasts.some(one => /"Says nothing" has been quiet for 11 min after Edit\. Possibly a stuck permission prompt/.test(one)) && !toasts.some(one => /Thermo round 1 fixes|F1 thermo fixes|Snow proof runner/.test(one)), toasts)
+  expect('A5: one call in flight 25 minutes or more says "⚠ one call running N min"', /⏳ Build S2Editor Development\n    ⚠ one call running 26 min\n/.test(stuck), stuck)
+  expect('A3: the terminal tree lays out cleanly at 72 and 110 columns, keys and hotkeys unique', term.problems.length === 0 && check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).problems.length === 0, term.problems)
+  const nested = keyed(desk, 'tree-w-f1')
+  expect('A3 (desktop): a child sits in an indented box under its parent with its own avatar; the fold line is indented too; no hotkeys', nested?.props.paddingLeft === 4 && findAll(nested, one => one.type === 'Svg').length === 1 && keyed(desk, 'fold-w-lead-finished')?.props.paddingLeft === 4 && !findAll(desk, one => one.type === 'Button' && one.props.hotkey).length && findAll(desk, one => one.type === 'Text' && one.props.children === '⏳ waiting on F1 thermo fixes' && one.props.color === '#f2a516').length === 1, nested?.props)
+  // The calls settle: the build ran, the lead's worker ended and its Agent call returned; nothing waits any more.
+  build.release()
+  await build.done
+  await engine.agentTurnEnd('w-f1')
+  engine.setAgentStatus('w-f1', 'completed')
+  agentCall.release()
+  await agentCall.done
+  lockWait.release()
+  await lockWait.done
+  asking.release()
+  await asking.done
+  approved.release()
+  await approved.done
+  // A refused call and a call that throws are cleared too.
+  const refused = engine.holdTool('w-lead', { tool: 'Bash', command: 'npm run lint', description: 'Run the linter' })
+  await refused.reached
+  const failing = engine.holdTool('w-orphan', { tool: 'Monitor', command: 'tail -f S2.log', description: 'Watch the PIE log' })
+  await failing.reached
+  // A dispatch aborted (Esc) and a worker whose turn ended: their calls never settle, and are cleared anyway.
+  const aborted = engine.holdTool('w-quiet', { tool: 'Bash', command: 'sleep 9999', description: 'A soak that is cut' })
+  await aborted.reached
+  const orphaned = engine.holdTool('w-ask', { tool: 'Bash', command: 'sleep 9999', description: 'A call left behind' })
+  await orphaned.reached
+  let held = ''
+  let after = ''
+  try {
+    at(3)
+    held = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).lines.join('\n')
+    refused.deny()
+    await refused.done
+    failing.fail()
+    await failing.done.catch(() => undefined)
+    aborted.abort()
+    await engine.agentTurnEnd('w-ask')
+    after = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 110).lines.join('\n')
+  } finally {
+    Date.now = realNow
+  }
+  expect('A1: calls in flight are cleared when they run, are refused, throw, are aborted or their turn ends: the ⏳ lines go, and so does "Waiting on"', /⏳ Run the linter/.test(held) && /⏳ Watch the PIE log/.test(held) && /⏳ A soak that is cut/.test(held) && /⏳ A call left behind/.test(held) && !/⏳/.test(after) && !squash(after.split('\n').find(line => /^W O R K E R S|^WORKERS/.test(line)) ?? '').includes('WAITINGON'), [held, after])
+  expect('no hook threw in the worker-tree scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  // Round 2 (D7, D9): a search opens the sub-groups and the Parked block that hold its matches. A list of its own:
+  // nine intents for one teammate (a sub-group that starts folded), one for another, one parked.
+  const root = sandbox()
+  fs.rmSync(path.join(root, 'docs/intent'), { recursive: true, force: true })
+  const intentFile = (slug, owner, status = 'active') => {
+    fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
+    fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Status: ${status}\n- Area: Tools\n- Owner: ${owner}\n\n## Acceptance\n\n- A1: one\n- A2: two\n`)
+  }
+  for (const slug of ['alpha-one', 'beta-two', 'gamma-three', 'delta-four', 'epsilon-five', 'zeta-north', 'zeta-south', 'eta-eight', 'theta-nine']) intentFile(slug, 'HaiHuynhTA')
+  intentFile('small-one', 'DuyTranSipher')
+  intentFile('resting-quietly', 'LamPhung-Art', 'parked')
+  const engine = createEngine({ root, surfaces: ['terminal'], user: 'Tin Nguyen' })
+  engine.store.set('tz', tzFor(12))
+  register(engine.on, { briefGate: 'warn' })
+  await engine.start()
+  await new Promise(resolve => setTimeout(resolve, 1500))
+  await run(engine, [])
+  const pane = () => engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  const text = async () => check(await pane(), 72).lines.join('\n')
+  findKey(await pane(), 'all')?.props.onPress()
+  const opened = await text()
+  expect('round 2: unsearched, the teammate with nine intents starts folded and the Parked block too', /\n▸ Hai Huynh · 9\n/.test(opened) && /\n▾ Duy Tran · 1\n\d: ● small-one/.test(opened) && /\n▸ ‖ Parked · 1\n/.test(opened) && !/zeta-north|resting-quietly/.test(opened), opened)
+  const search = async words => {
+    await searchField(pane, words)
+    await engine.flush()
+    return text()
+  }
+  const zeta = await search('zeta')
+  screens.push(['Terminal · a search opens the folded sub-group holding its matches (72 columns)', zeta])
+  expect('round 2: a search matching 2 of 9 in a folded sub-group opens it and shows both rows', /\n▾ Hai Huynh · 2 of 9\n\d: ● zeta-(north|south)[^\n]*\n\d: ● zeta-(north|south)/.test(zeta) && !/Duy Tran/.test(zeta), zeta)
+  findKey(await pane(), 'sub-others-0-fold')?.props.onPress()
+  expect('round 2: … and a press on its head still folds it', /\n▸ Hai Huynh · 2 of 9\n/.test(await text()) && !/zeta-north/.test(await text()), await text())
+  const parked = await search('resting')
+  expect('round 2: a search matching only a parked intent shows it in an open Parked block', /\n▾ ‖ Parked · 1 of 1\n\d: ‖ resting-quietly/.test(parked), parked)
+  expect('no hook threw in the search-opens-groups scenario', engine.record.hookErrors.length === 0 && check(await pane(), 72).problems.length === 0, engine.record.hookErrors)
+  fs.rmSync(root, { recursive: true, force: true })
+}
+
 // ---------------------------------------------------------------- the team's real state (0.1.5)
 
 {
@@ -1477,10 +1858,36 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
     const counts = rows.map(line => /\d+\/\d+/.exec(line)).map(match => (match ? match.index + match[0].length : -1))
     expect(`one anatomy @${cols}: every intent row as wide as the pane, its count column ending at one place, a mini bar beside it (A8)`, rows.length >= 6 && rows.every(line => line.length === cols && /[▰▱]{5}/.test(line)) && new Set(counts).size === 1, rows)
   }
+  // 0.1.9: the teammates' intents grouped by Person when the list opens; each group's parked intents folded at its end.
+  const byPerson = await text(72)
+  screens.push(['Terminal · Everything open grouped by Person, parked folded (72 columns)', byPerson])
+  expect("A7: Everything open groups the teammates' intents by Person when it opens: foldable sub-heads with counts, tidied names, a team with its lead", /▾ T E A M M A T E S ' {3}I N T E N T S {3}· {3}5\n▾ Duy Tran · 1\n\d: ● teammate-c[^\n]*\n▾ Lam Phung · 1\n\d: ● teammate-a[^\n]*\n▾ Tien Dang · Cinematic · 1\n\d: ● teammate-b[^\n]*\n▾ Truc Nguyen · 1\n\d: ● ownerless[^\n]*\n▸ ‖ Parked · 1\n/.test(byPerson) && /g: Group: Person/.test(byPerson), byPerson)
+  expect('A8: parked intents fold into "‖ Parked · N" at the end of each top group, yours and teammates\'', /Y O U R {3}I N T E N T S[^\n]*\n(?:\d: [●◐✓][^\n]*\n)+▸ ‖ Parked · 1\n/.test(byPerson) && !/mine-parked|teammate-d/.test(byPerson), byPerson)
+  findKey(await pane(), 'park-others-fold')?.props.onPress()
+  expect('A8: unfolded, a parked intent with no reason keeps its ⚠ on its row inside', /▾ ‖ Parked · 1\n\d: ‖ teammate-d ⚠ parked, no reason/.test(await text(72)), await text(72))
+  findKey(await pane(), 'park-others-fold')?.props.onPress()
+  const groupings = []
+  for (let turn = 0; turn < 4; turn += 1) {
+    findKey(await pane(), 'pick-group')?.props.onPress()
+    groupings.push(await text(72))
+  }
+  expect('A7: Group cycles Person → Area → Stage → None → Person: area and stage sub-heads with counts, None draws the rows under the group head', /g: Group: Area/.test(groupings[0]) && /\n▾ Tools · 3\n/.test(groupings[0]) && /\n▾ VFX · 1\n/.test(groupings[0]) && /g: Group: Stage/.test(groupings[1]) && /\n▾ Building · 4\n/.test(groupings[1]) && /g: Group: None/.test(groupings[2]) && /I N T E N T S {3}· {3}5\n\d: ●/.test(groupings[2]) && /g: Group: Person/.test(groupings[3]), groupings.map(one => one.split('\n').filter(line => /^[▸▾]|Group/.test(line)).join(' | ')))
+  const deskGroup = findKey(await pane(110, 'desktop'), 'pick-group')
+  expect('A7: on the desktop Group is a visible button with no key drawn', deskGroup?.type === 'Button' && deskGroup.props.label === 'Group: Person' && deskGroup.props.hotkey === undefined, deskGroup?.props)
+  expect('A7: the Group key g is unique on the pick view, and Home has no Group button', check(await pane(72), 72).problems.length === 0 && (findKey(await pane(), 'pick-back')?.props.onPress(), !findKey(await pane(), 'pick-group')), check(await pane(72), 72).problems)
+  findKey(await pane(), 'all')?.props.onPress()
+  await searchField(pane, 'teammate')
+  await engine.flush()
+  const searchedGroups = await text(72)
+  screens.push(['Terminal · Everything open searched, heads show x of y (72 columns)', searchedGroups])
+  expect('A9: while a search is active, the group and sub-group heads say "x of y"', /T E A M M A T E S ' {3}I N T E N T S {3}· {3}4 {3}O F {3}5\n/.test(searchedGroups) && /\n▾ Duy Tran · 1 of 1\n/.test(searchedGroups) && /\n▾ ‖ Parked · 1 of 1\n/.test(searchedGroups) && !/Y O U R {3}I N T E N T S/.test(searchedGroups), searchedGroups)
+  findKey(await pane(), 'pick-search-clear')?.props.onPress()
   // The desktop: the same columns as fixed-width boxes, no keys drawn, the sync line a press.
   const desk = await pane(110, 'desktop')
-  const colBoxes = slug => ['bar', 'count', 'age', 'owner'].map(name => findKey(desk, `pick-intent:${slug}-${name}`)?.props.width)
-  expect('on the desktop every row has the same column boxes (bar, count, age, owner) of the same widths, and no hotkeys (A8)', JSON.stringify(colBoxes('teammate-a')) === JSON.stringify(colBoxes('mine-met')) && colBoxes('teammate-a').every(width => width > 0) && !findKey(desk, 'pick-intent:teammate-a')?.props.hotkey, [colBoxes('teammate-a'), colBoxes('mine-met')])
+  // The bar is an SVG of fixed pixels (glyphs took the font's widths and spilled into the count); the other columns are boxes.
+  const barWidth = slug => findKey(desk, `pick-intent:${slug}-bar`)?.children.find(child => child?.type === 'Svg')?.props.width
+  const colBoxes = slug => [barWidth(slug), ...['count', 'age', 'owner'].map(name => findKey(desk, `pick-intent:${slug}-${name}`)?.props.width)]
+  expect('on the desktop every row has the same columns (an SVG bar, then count, age, owner boxes) of the same widths, and no hotkeys (A8)', JSON.stringify(colBoxes('teammate-a')) === JSON.stringify(colBoxes('mine-met')) && colBoxes('teammate-a').every(width => width > 0) && !findKey(desk, 'pick-intent:teammate-a')?.props.hotkey, [colBoxes('teammate-a'), colBoxes('mine-met')])
   const deskSync = findKey(desk, 'sync')
   expect('on the desktop the sync line is a press with no key drawn (A4)', /^synced just now ↻$/.test(deskSync?.props.label ?? '') && deskSync?.props.hotkey === undefined, deskSync?.props)
   // ↻ fetches now, one at a time; the timer fetches at most every ten minutes (A3, A4).
@@ -1523,6 +1930,18 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   }
   await until(async () => !/syncing…/.test(await text()), 5000)
   expect('after ten minutes the timer fetches again on its own', fetches().length === 4, fetches().length)
+  // A7: the Group choice is the person's, kept across a reload (a new session on the same store); folds are not.
+  if (!findKey(await pane(), 'pick-group')) findKey(await pane(), 'all')?.props.onPress()
+  findKey(await pane(), 'pick-group')?.props.onPress()
+  await until(async () => engine.store.get('groupBy:tinnguyen') === 'area', 3000)
+  const reloaded = createEngine({ root, surfaces: ['terminal'], user: 'Tin Nguyen' })
+  for (const [key, value] of engine.store) reloaded.store.set(key, value)
+  register(reloaded.on, { briefGate: 'warn' })
+  await reloaded.start()
+  await run(reloaded, [])
+  findKey(await reloaded.render('Pane', { bodyColumns: 72 }, 'ather'), 'all')?.props.onPress()
+  const afterReload = check(await reloaded.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  expect('A7: the Group choice is remembered across a reload, read from the store (Area here)', engine.store.get('groupBy:tinnguyen') === 'area' && /g: Group: Area/.test(afterReload) && /\n▾ Tools · \d+\n/.test(afterReload), afterReload.split('\n').filter(line => /Group|^[▸▾]/.test(line)))
   expect('no hook threw on the git checkout', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   fs.rmSync(base, { recursive: true, force: true })
 }

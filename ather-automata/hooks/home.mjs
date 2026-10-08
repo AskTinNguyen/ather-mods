@@ -3,6 +3,7 @@
 // the person picks something. Pure: no `$`.
 
 import { windowDecisions } from './away.mjs'
+import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
 import { issueId, issueLabel, issuePrompt } from './issues.mjs'
 import { STAGE_LABELS, clockText, currentStage, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
@@ -22,6 +23,13 @@ export { CREATE_GROUPS, SKILL_GROUPS, TOUR_PROMPT } from './packs/unreal.mjs'
 const callPrompt = (intent, finding) => {
   const root = otherRoot(intent)
   return `Walk me through decision ${finding.id} on intent ${intent.slug} (${root ? `${root}/` : ''}docs/intent/${intent.slug}/findings.md): what it is about, the options and your recommendation. Then ask me to choose with a question dialog, and record my answer in the intent.`
+}
+
+// How an answer given in place names the intent to the session: its key, with its findings file when it lives in another checkout.
+/** @param {Intent} intent */
+const callName = intent => {
+  const root = otherRoot(intent)
+  return root ? `${intent.key} (${root}/docs/intent/${intent.slug}/findings.md)` : intent.key
 }
 
 /** @param {Away} away @param {readonly { id: string, question: string }[]} decisions */
@@ -75,7 +83,7 @@ export const batchPrompt = items => `Take me through these one at a time, with a
 /**
  * What waits on the person. Every item goes to the session with its prompt; `kind`
  * says what else changes once it has been delivered (see settleItem in state.mjs).
- * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string }} ItemText `detail`: the pane's second line under `label`
+ * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string, answers?: import('./decide.mjs').Answers }} ItemText `detail`: the pane's second line under `label`; `answers`: what answers it in place (0.2.0)
  * A call's `slug` is its intent's key in the pane.
  * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
@@ -236,7 +244,7 @@ export const buildHome = input => {
   }
   for (const one of owned) {
     for (const finding of directorCalls(one)) {
-      items.push({ kind: 'call', slug: one.key, id: `call:${one.key}:${finding.id}`, label: `Decide ${finding.id} on ${one.key}`, title: `${finding.id} · ${one.key === pinned ? '' : `${one.key} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.key}: ${finding.title}`, prompt: callPrompt(one, finding) })
+      items.push({ kind: 'call', slug: one.key, id: callId(one.key, finding.id), label: `Decide ${finding.id} on ${one.key}`, title: `${finding.id} · ${one.key === pinned ? '' : `${one.key} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.key}: ${finding.title}`, prompt: callPrompt(one, finding), answers: findingAnswers(callName(one), finding) })
     }
   }
   if (intent && pack.lockRoles.includes(role) && (stage === 'build' || stage === 'prove') && lock.state === 'held' && !lock.isStale) {
@@ -254,8 +262,9 @@ export const buildHome = input => {
       label: 'Turn a repeated problem into a rule?',
       title: `Keeps coming back: ${one.title}`,
       detail: `"${one.title}" has come up in ${one.count} sessions.`,
+      answers: ruleAnswers([one], pack.owners),
       question: `"${one.title}" has come up in ${one.count} sessions`,
-      prompt: `The trap "${one.title}" has come up in ${one.count} separate sessions. Its fix each time: ${one.fix} Ask me with a question dialog whether to make it a rule. If yes, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diff for review by the owners (${pack.owners}); do not commit.`,
+      prompt: rulePrompt([one], pack.owners),
     })
   } else if (recurring.length > 1) {
     items.push({
@@ -265,8 +274,9 @@ export const buildHome = input => {
       label: 'Turn repeated problems into rules?',
       title: `${recurring.length} problems keep coming back: make them rules?`,
       detail: `${recurring.length} problems have each come up in 3 or more sessions.`,
+      answers: ruleAnswers(recurring, pack.owners),
       question: `${recurring.length} problems have each come up in 3 or more sessions`,
-      prompt: `These traps keep coming back, each in several separate sessions: ${recurring.map((one, index) => `(${index + 1}) "${one.title}", ${one.count} sessions; its fix each time: ${one.fix}`).join(' ')} Ask me in one question dialog (multiSelect, one option per trap, labels short enough to stand alone) which to make rules. For each I pick, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diffs for review by the owners (${pack.owners}); do not commit.`,
+      prompt: rulePrompt(recurring, pack.owners),
     })
   }
   const open = items.filter(one => !input.sent.includes(one.id))

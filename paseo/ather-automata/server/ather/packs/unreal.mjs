@@ -70,6 +70,15 @@ export const parseEditorLock = (raw, nowMinutes) => {
   return { state: 'held', holder: holder.slice(0, 60), until, isStale, raw: text, session }
 }
 
+// A worker's waiting line, when its long command names the lock file (a wait loop on the Editor):
+// the lock file's first line as written, cut. Nothing else is inferred from the command.
+/** @param {string} command @param {string} raw */
+export const editorLockLine = (command, raw) => {
+  if (!/EDITOR_OWNER/i.test(command)) return ''
+  const first = raw.trim().split(/\r?\n/)[0]?.trim() ?? ''
+  return first.length <= 50 ? first : `${first.slice(0, 49)}…`
+}
+
 // ---------------------------------------------------------------- evidence from tool output
 
 /** @param {string} command */
@@ -296,6 +305,7 @@ export const unreal = {
   debriefPath: slug => `Saved/AtherAutomata/debriefs/${slug}.md`,
   lockFile: 'Saved/EDITOR_OWNER.txt',
   parseLock: parseEditorLock,
+  lockLine: editorLockLine,
   lockRoles: ['techart', 'designer'],
   ownCheck: { role: 'techart', after: 'pie', rung: 'editor', label: 'I checked it in the Editor', hint: 'PIE proof ✓ · your own Editor check is the last proof.', proveHint: ' After your own Editor check, type /ather checked.', detail: 'checked by you in the Editor', reply: 'Recorded: you checked it in the Editor.' },
   traps: GOTCHAS,
