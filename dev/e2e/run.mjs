@@ -925,6 +925,7 @@ const hasFocus = tree => {
   const desk = await engine.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
   const avatars = find(desk, node => node.type === 'Svg' && /, (running|done)$/.test(node.props.alt))
   expect('on the desktop each worker has its avatar: the running Builder animated, the done Reviewer still', avatars.map(one => one.props.alt).join(' | ') === 'Builder, running | Reviewer, done' && avatars[0].props.isInteractive === true && !avatars[1].props.isInteractive && /#2f8cf0/.test(avatars[0].props.source) && /#ddff00/.test(avatars[0].props.source) && /#f2d27a/.test(avatars[1].props.source) && /#3ccf7a/.test(avatars[1].props.source), avatars.map(one => one.props.alt))
+  expect("the running avatar's frame page takes the app's colour scheme (its root set to light dark), so no square shows behind it in either theme", avatars.every(one => one.props.source.includes('<style>:root{color-scheme:light dark;background:transparent}</style>')), avatars.map(one => one.props.source.slice(0, 160)))
   expect("on the desktop a finished worker's trail is drawn as props", find(desk, node => node.type === 'Svg' && /^(reading|reviewing)$/.test(node.props.alt)).length === 2)
   find(term.lines ? await engine.render('Pane', { bodyColumns: 72 }, 'ather') : null, node => node.props?.key === 'worker-w-build')[0]?.props.onPress({})
   await engine.flush()

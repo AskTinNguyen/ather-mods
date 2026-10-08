@@ -134,8 +134,11 @@ const PROP_ART = {
 }
 
 // One worker's avatar as an SVG document: each is drawn isolated, so its ids never clash. A running avatar is drawn in a
-// sandboxed frame (for its bob), and a frame whose colour scheme differs from the app's paints an opaque white page;
-// "light dark" takes the app's scheme, so the frame stays transparent around the round badge.
+// sandboxed frame (for its bob): the desktop wraps the markup in an HTML page of its own, and the browser paints that
+// page opaque (white) when the page's colour scheme differs from the app's. Only the page's root decides it, so the
+// avatar carries a style sheet that sets the root to "light dark": the page then takes the app's scheme and stays
+// transparent around the round badge. In a still image the same rule names the svg itself and changes nothing.
+export const FRAME_SCHEME = '<style>:root{color-scheme:light dark;background:transparent}</style>'
 /** @param {Kind} kind @param {Prop | null} prop @param {WorkerState} state */
 export const avatarSvg = (kind, prop, state) => {
   const look = KINDS[kind]
@@ -144,7 +147,7 @@ export const avatarSvg = (kind, prop, state) => {
   const eyes = body.eyes.map(([x, y]) => ('tall' in body ? `<rect x="${x - 3}" y="${y - 7}" width="6" height="14" rx="3" fill="${eye}"/>` : `<ellipse cx="${x}" cy="${y}" rx="4.6" ry="6" fill="${eye}"/>`)).join('')
   const bob = state === 'running' ? '<animateTransform attributeName="transform" type="translate" values="0 0;0 -2.5;0 0" dur="1.8s" repeatCount="indefinite"/>' : ''
   const held = prop ? `<g transform="translate(67 75) scale(1.22) translate(-70 -82)">${PROP_ART[prop]}</g>` : ''
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" style="color-scheme: light dark; background: transparent"><defs><clipPath id="round"><circle cx="50" cy="50" r="43"/></clipPath></defs><circle cx="50" cy="50" r="43" fill="#17181a"/><g clip-path="url(#round)"><g><g transform="translate(50 106) scale(1.32) translate(-50 -106)">${body.shape(look.fill)}${eyes}</g>${held}${bob}</g></g><circle cx="50" cy="50" r="45.5" fill="none" stroke="${STATE_COLOURS[state]}" stroke-width="6"/></svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" style="color-scheme: light dark; background: transparent">${FRAME_SCHEME}<defs><clipPath id="round"><circle cx="50" cy="50" r="43"/></clipPath></defs><circle cx="50" cy="50" r="43" fill="#17181a"/><g clip-path="url(#round)"><g><g transform="translate(50 106) scale(1.32) translate(-50 -106)">${body.shape(look.fill)}${eyes}</g>${held}${bob}</g></g><circle cx="50" cy="50" r="45.5" fill="none" stroke="${STATE_COLOURS[state]}" stroke-width="6"/></svg>`
 }
 
 // A prop on its own, for the trail under a finished worker.
