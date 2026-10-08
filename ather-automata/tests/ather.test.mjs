@@ -1245,6 +1245,34 @@ describe('several repositories on one machine', () => {
     expect(await state.evidenceScope(io)).toBe('s1b')
   })
 
+  test('a stop is kept per checkout: stopping web/login does not stop a write tracking s2/login', async () => {
+    const memory = memoryIo()
+    const origins = /** @type {Record<string, string>} */ ({ '/s3stop/web': 'https://github.com/AskTinNguyen/web' })
+    const io = { ...memory.io, repo: async () => 'sipher/s2', origin: async (/** @type {string} */ root) => origins[root] ?? '' }
+    memory.files.set('/s3stop/web/docs/intent/login/prompt.md', '# Login\n')
+    memory.files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(io, '/s3stop/web', 'login')
+    await state.untrack(io, 'Tin Nguyen')
+    expect(memory.store.get('untracked:s1')).toEqual([{ slug: 'login', root: '/s3stop/web' }])
+    expect(await state.track(io, '/s3stop/web', 'login', { isAuto: true })).toBe(false)
+    expect(await state.track(io, 'R', 'login', { isAuto: true })).toBe(true)
+    expect(memory.store.get('pinned:s1')).toBe('login')
+    // Stopping the own one keeps its plain slug; tracking web's on purpose lifts only web's stop.
+    await state.untrack(io, 'Tin Nguyen')
+    expect(memory.store.get('untracked:s1')).toEqual([{ slug: 'login', root: '/s3stop/web' }, 'login'])
+    expect(await state.track(io, '/s3stop/web', 'login')).toBe(true)
+    expect(memory.store.get('untracked:s1')).toEqual(['login'])
+  })
+
+  test("prune takes a gone session's foreign pin and its proof in that repository, never the intent's proof", async () => {
+    const { io, store } = memoryIo('live')
+    store.set('pinned:gone', { slug: 'login', root: '/s3prune/web' })
+    store.set('evidence:gone|asktinnguyen/web', { tests: { state: 'pass', detail: '', at: Date.now() } })
+    store.set('evidence:asktinnguyen/web|login', { tests: { state: 'pass', detail: '', at: Date.now() } })
+    await state.prune(io, async sid => sid === 'gone')
+    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web|login'])
+  })
+
   test("an intent in the session's own checkout is kept as a plain slug, as before", async () => {
     const memory = memoryIo()
     const io = { ...memory.io, repo: async () => 'sipher/s2' }

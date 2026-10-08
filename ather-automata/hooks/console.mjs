@@ -1329,9 +1329,10 @@ function headerLine(el, $, text, width) {
 let intentToday = []
 
 // What the Intent view shows beside the intent's files: whether this session tracks it, its proof
-// (each record another session wrote named by it), the other live sessions tracking it.
-/** @type {{ key: string, slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string }} */
-let intentView = { key: '', slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '' }
+// (each record another session wrote named by it), the other live sessions tracking it. `intent`: the
+// tracked intent read from its own files when its checkout is not one the pane lists.
+/** @type {{ key: string, slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string, intent: import('./model.mjs').Intent | null }} */
+let intentView = { key: '', slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '', intent: null }
 
 // The shown intent (the tracked one unless a row or words chose another): its lines since the start
 // of the person's day, newest first, with their time; and the rest of what its view shows, read in
@@ -1356,7 +1357,32 @@ async function readIntentView($) {
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
   // Working on it here needs its folder in its checkout; asking about it does not.
   const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
-  intentView = { key, slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
+  const intent = isTracked && !shown ? await readTrackedIntent($, tracked, key) : null
+  intentView = { key, slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now), intent }
+}
+
+// The tracked intent from its own files, for a checkout outside the pane's (a write into a folder the
+// workspace does not name); undefined when its prompt is gone.
+/** @param {Engine} $ @param {{ slug: string, lane: import('./state.mjs').Checkout }} tracked @param {string} key */
+async function readTrackedIntent($, { slug, lane }, key) {
+  const files = io($)
+  const dir = `${lane.root}/docs/intent/${slug}`
+  const prompt = await files.read(`${dir}/prompt.md`)
+  if (prompt === null) return null
+  return parseIntent({
+    slug,
+    key,
+    root: lane.root,
+    repoName: shortName(lane),
+    prompt,
+    findings: (await files.read(`${dir}/findings.md`)) ?? '',
+    progress: (await files.read(`${dir}/progress.md`)) ?? '',
+    files: (await $.fs.list(dir).catch(() => [])).map(entry => entry.name),
+    hasDebrief: await files.exists(`${lane.root}/${lane.pack.debriefPath(slug)}`),
+    updatedAt: 0,
+    source: 'local',
+    firstAuthor: '',
+  }, lane.pack)
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
@@ -1546,7 +1572,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
 
   if (paneMode === 'intent') {
     const { key, slug, isHere } = intentView
-    const intent = intents.find(one => one.key === key)
+    const intent = intents.find(one => one.key === key) ?? (intentView.intent?.key === key ? intentView.intent : undefined)
     if (intent) {
       // Seeing the tracked intent's view settles the band's notice; another intent's view does not.
       if (isHere) intentSeenAt = Date.now()

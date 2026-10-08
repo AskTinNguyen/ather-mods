@@ -405,6 +405,14 @@ export const setProfile = (io, me, fields, pack = unreal) =>
 /** @param {Io} io @param {string} root @param {string} slug */
 export const hasIntentFolder = (io, root, slug) => io.exists(`${root}/docs/intent/${slug}/prompt.md`)
 
+// A stop on tracking an intent: its plain slug in the session's own checkout, `{ slug, root }` in another,
+// so the same slug in two checkouts is stopped on its own.
+/** @typedef {string | { slug: string, root: string }} Stop */
+/** @param {Stop} stop @param {string} slug @param {string | null} root null: the session's own checkout */
+const isStopOf = (stop, slug, root) => (typeof stop === 'string' ? root === null && stop === slug : root !== null && stop?.slug === slug && stop.root === root)
+/** @param {Io} io @param {string} sid @returns {Promise<Stop[]>} */
+const readStops = async (io, sid) => /** @type {Stop[]} */ ((await io.get(KEY.untracked(sid))) ?? [])
+
 // Tracks an intent, if it exists. The one path for /ather, the profile tool and a write into an intent.
 // `root`: the folder holding its docs/intent, the session's own or another checkout's.
 // `isAuto`: a write into the intent, which never tracks one this session stopped tracking; tracking one
@@ -416,8 +424,9 @@ export const track = (io, root, slug, options = {}) =>
     const at = isOwn ? root : normalFolder(root)
     if (!(await hasIntentFolder(io, at, slug))) return false
     const sid = await io.sessionId()
-    const stopped = /** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? [])
-    if (options.isAuto && stopped.includes(slug)) return false
+    const stopped = await readStops(io, sid)
+    const isStopped = stopped.some(one => isStopOf(one, slug, isOwn ? null : at))
+    if (options.isAuto && isStopped) return false
     if (options.onlyIfNone && (await io.get(KEY.pinned(sid))) !== undefined) return false
     await io.set(KEY.pinned(sid), isOwn ? slug : { slug, root: at })
     if (options.me) {
@@ -426,7 +435,7 @@ export const track = (io, root, slug, options = {}) =>
       // Once a scoped "Continue …" is written, the unscoped one from before 0.1.7 must not read through again.
       if (last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
     }
-    if (!options.isAuto && stopped.includes(slug)) await setList(io, KEY.untracked(sid), stopped.filter(one => one !== slug))
+    if (!options.isAuto && isStopped) await setList(io, KEY.untracked(sid), stopped.filter(one => !isStopOf(one, slug, isOwn ? null : at)))
     await beat(io)
     changed(io)
     return true
@@ -447,13 +456,14 @@ export const untrack = (io, me) =>
     await io.remove(KEY.pinned(sid))
     // The unscoped "Continue …" from before 0.1.7 goes too, or it would read through again.
     for (const key of new Set([KEY.last(me, await repoAt(io, pin.isOwn ? undefined : pin.root)), ...(pin.isOwn ? [KEY.last(me, '')] : [])])) if ((await io.get(key)) === slug) await io.remove(key)
-    await setList(io, KEY.untracked(sid), [.../** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? []), slug])
+    const stopped = (await readStops(io, sid)).filter(one => !isStopOf(one, slug, pin.isOwn ? null : pin.root))
+    await setList(io, KEY.untracked(sid), [...stopped, pin.isOwn ? slug : { slug, root: pin.root }])
     await beat(io)
     changed(io)
     return { result: /** @type {const} */ ('untracked'), slug }
   })
 
-/** @param {Io} io @param {string} key @param {string[]} list */
+/** @param {Io} io @param {string} key @param {Stop[]} list */
 const setList = async (io, key, list) => {
   const kept = [...new Set(list)]
   if (kept.length === 0) await io.remove(key)

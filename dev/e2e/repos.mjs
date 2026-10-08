@@ -149,6 +149,18 @@ const readJson = file => {
   const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
   expect("the status tool names login with web's files", status.tracked?.slug === 'login' && status.tracked.checkout === web && status.tracked.checklist === '1/2', status.tracked)
 
+  // web is not in this session's workspace (s2 is a checkout, no repos option): its view still draws.
+  engine.setSurfaces(['terminal'])
+  await engine.modelTool({ tool: 'Edit', file_path: '../web/docs/intent/login/prompt.md', old_string: '- [ ] A2', new_string: '- [x] A2' })
+  await engine.flush()
+  const flat = node => (!node || typeof node !== 'object' ? [] : [node, ...(node.children ?? []).flatMap(flat)])
+  const band = await engine.render('AbovePrompt', {}, 'band')
+  flat(band).find(node => node.props?.key === 'ather-intent-see')?.props.onPress()
+  await engine.flush()
+  const view = flat(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
+  const title = view.find(node => node.props?.key === 'title')
+  expect("the tracked intent's view draws from web's files, though web is not one of the pane's checkouts", title && /web\/login/.test(title.children.join('')) && view.some(node => node.props?.key === 'intent-untrack'), title?.children)
+
   await bash(engine, 'cd ../web && npm test', NODE_TEST_PASS)
   expect("npm test passing in web proves the intent: evidence:asktinnguyen/web|login", engine.store.get('evidence:asktinnguyen/web|login')?.tests?.state === 'pass', engine.store.get('evidence:asktinnguyen/web|login'))
   expect("and not the session's proof in web", !engine.store.has(`evidence:${sid}|asktinnguyen/web`), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
@@ -169,6 +181,14 @@ const readJson = file => {
   await engine.command('ather', 'untrack')
   expect('/ather untrack clears it', !engine.store.has(`pinned:${sid}`), engine.store.get(`pinned:${sid}`))
   expect("and web's Continue", engine.store.get('last:asktinnguyen/web|tinnguyen') === undefined, [...engine.store.keys()].filter(key => key.startsWith('last:')))
+
+  // The stop is web's: a write into web's login does not track it again, a new login in s2 does.
+  await engine.modelTool({ tool: 'Write', file_path: '../web/docs/intent/login/log.md', content: '# Log\n' })
+  await engine.flush()
+  expect("a write into web's login after the stop does not track it again", !engine.store.has(`pinned:${sid}`), engine.store.get(`pinned:${sid}`))
+  await engine.modelTool({ tool: 'Write', file_path: 'docs/intent/login/prompt.md', content: LOGIN })
+  await engine.flush()
+  expect("a new login in s2 is tracked: web's stop does not stop it", engine.store.get(`pinned:${sid}`) === 'login', [engine.store.get(`pinned:${sid}`), engine.store.get(`untracked:${sid}`)])
 
   await engine.end('other')
   const ended = [readJson(path.join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))]
@@ -268,6 +288,7 @@ const writeIntent = (root, slug, text = LOGIN) => {
   await engine.command('ather', 'intent web/login')
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
+  expect("on session end the parent-folder session's heartbeat in web says ended", readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))?.hasEnded === true, readJson(path.join(web, '.ather/local/lanes', `${sid}.json`)))
 
   // The next session in the parent folder offers to continue web's login, and Next tracks it there.
   const next = await boot({ root: parent, sessionId: 'harness-session-0007' })
