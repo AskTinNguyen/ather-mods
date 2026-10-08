@@ -630,6 +630,10 @@ const lastSubmit = engine => {
   await engine.command('ather', 'issue s2-b#7')
   await engine.flush()
   expect('/ather issue s2-b#7 starts the assigned issue in the second clone', lastSubmit(engine).includes('Boss shield') && lastSubmit(engine).includes(`${second}/docs/intent`), lastSubmit(engine))
+  // Without a pane, /ather find names each match by its key.
+  engine.setSurfaces([])
+  const found = String((await engine.command('ather', 'find login'))?.text ?? '')
+  expect('/ather find login without a pane names both clones\' intents by key', found.includes('s2/login') && found.includes('s2-b/login'), found)
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
 }
 

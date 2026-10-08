@@ -92,19 +92,29 @@ export const readWorkspace = async (files, sessionFolder, option) => {
 /**
  * Each checkout's short name, in the order given and each different: the last part of its repository's id
  * ("han-viet"), else of its folder. Those that would share one (two clones of one repository, `a/web` beside
- * `b/web`) are named by their folders instead, and a name already taken gets `-2`, `-3`, … in order.
- * @param {{ root: string, repo: string }[]} checkouts @returns {string[]}
+ * `b/web`) are named by their folders instead, and a name already taken gets `-2`, `-3`, … in order. A name
+ * holds only what `<name>#<number>` is read with (letters, digits, `_`, `.`, `-`): anything else becomes `-`.
+ * `outside`: checkouts named after those, each taking a name none has (its repository's, else its folder's,
+ * else numbered) and renaming none, so the names of `checkouts` do not depend on them.
+ * @param {{ root: string, repo: string }[]} checkouts @param {{ root: string, repo: string }[]} [outside] @returns {string[]}
  */
-export const checkoutNames = checkouts => {
-  const folders = checkouts.map(one => normalFolder(one.root).split('/').pop() ?? '')
-  const short = checkouts.map((one, at) => (one.repo ? (one.repo.split('/').pop() ?? '') : (folders[at] ?? '')))
+export const checkoutNames = (checkouts, outside = []) => {
+  /** @param {string} text */
+  const lastPart = text => (text.split('/').pop() ?? '').replace(/[^\w.-]/g, '-')
+  /** @param {{ root: string, repo: string }} one */
+  const folderOf = one => lastPart(normalFolder(one.root))
+  /** @param {{ root: string, repo: string }} one */
+  const shortOf = one => (one.repo ? lastPart(one.repo) : folderOf(one))
   /** @type {Set<string>} */
   const taken = new Set()
-  return short.map((name, at) => {
-    const base = short.indexOf(name) === short.lastIndexOf(name) ? name : (folders[at] ?? '')
+  /** @param {string} base */
+  const free = base => {
     let unique = base
     for (let count = 2; taken.has(unique); count += 1) unique = `${base}-${count}`
     taken.add(unique)
     return unique
-  })
+  }
+  const short = checkouts.map(shortOf)
+  const names = checkouts.map((one, at) => free(short.indexOf(short[at] ?? '') === short.lastIndexOf(short[at] ?? '') ? (short[at] ?? '') : folderOf(one)))
+  return [...names, ...outside.map(one => free(taken.has(shortOf(one)) ? folderOf(one) : shortOf(one)))]
 }

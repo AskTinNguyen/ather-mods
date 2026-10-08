@@ -1509,6 +1509,25 @@ describe('the workspace', () => {
     expect(new Set(names).size).toBe(3)
     expect(checkoutNames([])).toEqual([])
   })
+
+  test('a checkout outside the workspace takes a name that is left and renames none; a name holds only what <name>#<n> reads', () => {
+    const at = (/** @type {string} */ root, /** @type {string} */ repo) => ({ root, repo })
+    const inside = [at('/w/tools', 'sipher/tools'), at('/w/web', 'asktinnguyen/web')]
+    const alone = checkoutNames(inside)
+    // Another clone of a workspace repository, and a folder named as a workspace checkout is.
+    for (const outside of [at('/x/tools-b', 'sipher/tools'), at('/x/tools', 'sipher/tools'), at('/x/web', 'other/site'), at('/x/tools', 'path:/x/tools')]) {
+      const names = checkoutNames(inside, [outside])
+      expect(names.slice(0, 2)).toEqual(alone)
+      expect(alone.includes(names[2] ?? '')).toBe(false)
+    }
+    expect(checkoutNames(inside, [at('/x/tools-b', 'sipher/tools')])).toEqual(['tools', 'web', 'tools-b'])
+    expect(checkoutNames(inside, [at('/x/tools', 'sipher/tools')])).toEqual(['tools', 'web', 'tools-2'])
+    expect(checkoutNames(inside, [at('/x/docs', 'sipher/handbook')])).toEqual(['tools', 'web', 'handbook'])
+    // Two clones in folders with a space: different names that /ather issue <name>#<n> reads.
+    const spaced = checkoutNames([at('/w/S2 clone', 'sipher/s2'), at('/w/S2 other', 'sipher/s2'), at('/w/Trò chơi', 'path:/w/trò chơi')])
+    expect(new Set(spaced).size).toBe(3)
+    for (const name of spaced) expect(/^[\w.-]+$/.test(name)).toBe(true)
+  })
 })
 
 describe('one pane over the workspace', () => {

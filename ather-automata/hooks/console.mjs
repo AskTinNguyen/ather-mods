@@ -244,7 +244,8 @@ function keyOf(name, isOwn, slug) {
 }
 
 // The short name of each checkout the pane works with, by its folder: the workspace's checkouts in order, then
-// the tracked intent's when it is outside them. Each is different (checkoutNames), so keys and lookups by name agree.
+// the tracked intent's when it is outside them. Each is different (checkoutNames), so keys and lookups by name agree;
+// the workspace's never change in a session, whatever is tracked, so a key built earlier still names its intent.
 /** @param {Engine} $ @returns {Promise<Map<string, string>>} */
 async function laneNames($) {
   const session = await laneOf($)
@@ -252,9 +253,9 @@ async function laneNames($) {
   // A session folder with intents that is no checkout is in the pane, though no issues are read there.
   const lanes = session.isS2 && !listed.some(one => normalFolder(one.root) === normalFolder(session.root)) ? [session, ...listed] : [...listed]
   const tracked = await state.trackedLane(io($), cwd)
-  if (tracked && !lanes.some(one => normalFolder(one.root) === normalFolder(tracked.lane.root))) lanes.push(tracked.lane)
-  const names = checkoutNames(lanes)
-  return new Map(lanes.map((lane, at) => [normalFolder(lane.root), names[at] ?? '']))
+  const outside = tracked && !lanes.some(one => normalFolder(one.root) === normalFolder(tracked.lane.root)) ? [tracked.lane] : []
+  const names = checkoutNames(lanes, outside)
+  return new Map([...lanes, ...outside].map((lane, at) => [normalFolder(lane.root), names[at] ?? '']))
 }
 
 /** @param {Engine} $ @param {import('./state.mjs').Checkout} lane */
@@ -1184,6 +1185,12 @@ async function menuQuestion($) {
   return ask($, { header: 'Ather', question: `${lead}${waiting} What now?`, choices: choices.slice(0, 4), fallback: status, onTyped: text => typed($, text) })
 }
 
+// What a piece of work is called in a line or a choice: an intent by its key, since two checkouts may hold one slug.
+/** @param {Work} one */
+function workName(one) {
+  return one.kind === 'intent' ? one.key : one.label
+}
+
 /** @param {Engine} $ */
 async function workQuestion($) {
   const work = (await home($)).work.slice(0, 4)
@@ -1192,7 +1199,7 @@ async function workQuestion($) {
     header: 'Work',
     question: 'What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number.',
     // The question is the verb: a choice works on it at once, and says so (D5).
-    choices: work.map(one => ({ label: cutWords(one.kind === 'intent' ? one.key : one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
+    choices: work.map(one => ({ label: cutWords(workName(one), 40), description: workChoiceText(one), run: () => startWork($, one) })),
     fallback: 'Nothing chosen.',
     onTyped: text => typedWork($, text),
   })
@@ -1332,7 +1339,7 @@ function toggleIn($, opened, key) {
 /** @param {Engine} $ */
 async function findText($) {
   const found = filterWork((await home($)).work, pickQuery)
-  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(one => one.label).join(', ')}${found.length > 8 ? ', …' : ''}.`
+  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(workName).join(', ')}${found.length > 8 ? ', …' : ''}.`
 }
 
 // Where the surface draws no text field (and for /ather find without words): one question, and what is typed under Other is the search.
