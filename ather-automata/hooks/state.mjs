@@ -18,12 +18,20 @@ import { unreal } from './packs/unreal.mjs'
  *   get: (key: string) => Promise<unknown>, set: (key: string, value: unknown) => Promise<void>, remove: (key: string) => Promise<void>, keys: () => Promise<string[]>,
  *   read: (path: string) => Promise<string | null>, write: (path: string, text: string) => Promise<void>, exists: (path: string) => Promise<boolean>,
  *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: () => Promise<string>, redraw: () => void,
- *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>
- * }} Io
+ *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
+ *   origin?: () => Promise<string | null>, repo?: () => Promise<string>
+ * }} Io `origin`: the checkout's remote.origin.url, '' when it has none, null when git could not say.
+ *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository; without it the keys are unscoped
+ *   (as before 0.1.7, and as the Paseo version still keeps them).
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
  * @typedef {import('./model.mjs').Evidence} Evidence
  */
+
+// A key's id within one repository: the same slug, person or PR number in another repository is another key.
+// No repository (an Io without `repo`) keeps the unscoped key.
+/** @param {string} repo @param {string} id */
+const inRepo = (repo, id) => (repo ? `${repo}|${id}` : id)
 
 const KEY = {
   away: (/** @type {string} */ sid) => `away:${sid}`,
@@ -39,12 +47,13 @@ const KEY = {
   nudged: (/** @type {string} */ me) => `nudged:${personId(me)}`,
   // The sessions holding an away window for this person, so a new session finds them without a scan.
   windows: (/** @type {string} */ person) => `windows:${person}`,
-  issues: (/** @type {string} */ me) => `issues:${personId(me)}`,
-  last: (/** @type {string} */ me) => `last:${personId(me)}`,
+  // Kept per repository: gh reads a checkout's own issues and PRs, and two repositories may share a slug.
+  issues: (/** @type {string} */ me, /** @type {string} */ repo) => `issues:${inRepo(repo, personId(me))}`,
+  last: (/** @type {string} */ me, /** @type {string} */ repo) => `last:${inRepo(repo, personId(me))}`,
   // What edits recorded in an intent, newest last: shared by every session on the machine.
-  changes: (/** @type {string} */ slug) => `changes:${slug}`,
+  changes: (/** @type {string} */ slug, /** @type {string} */ repo) => `changes:${inRepo(repo, slug)}`,
   // What gh last said about the PRs intents name: shared by every session on the machine.
-  prs: 'prStates',
+  prs: (/** @type {string} */ repo) => (repo ? `prStates:${repo}` : 'prStates'),
   tz: 'tz',
   hits: 'gotchaHits',
   ruled: 'gotchaRuled',
@@ -78,11 +87,28 @@ const changed = io => {
 
 // ---------------------------------------------------------------- the lane
 
-/** @type {Map<string, Promise<{ root: string, isS2: boolean, me: string, pack: Pack }>>} */
+/** @type {Map<string, Promise<{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, isSure: boolean }>>} */
 const lanes = new Map()
 
+// A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
+// clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
+//   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → asktinnguyen/han-viet
+/** @param {string} url @param {string} root */
+export const repoId = (url, root) => {
+  const path = url
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\//i, '')
+    .replace(/^[^@/\s]+@[^:/\s]+:/, '')
+    .replace(/\.git\/?$/i, '')
+    .replace(/\/+$/, '')
+  const parts = path.split('/').filter(Boolean)
+  if (parts.length >= 2) return parts.slice(-2).join('/').toLowerCase()
+  return `path:${root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()}`
+}
+
 // Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
-// (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session).
+// (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session);
+// `repo` which repository it is (repoId), when the Io can say.
 /** @param {Io} io @param {string} cwd */
 export const lane = (io, cwd) => {
   const cached = lanes.get(cwd)
@@ -91,14 +117,27 @@ export const lane = (io, cwd) => {
     const root = (await io.root().catch(() => cwd)) || cwd
     const list = io.list ?? (async () => [])
     const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
-    return { root, isS2: await io.exists(`${root}/docs/intent`), me: await io.gitUser().catch(() => ''), pack }
+    const origin = io.origin ? await io.origin().catch(() => null) : ''
+    const me = await io.gitUser().catch(() => '')
+    return { root, repo: io.origin ? repoId(origin ?? '', root) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
   })()
   lanes.set(cwd, read)
-  // A git name that failed to read (a slow first start) is asked again next time, never kept.
+  // A git name or origin that failed to read (a slow first start) is asked again next time, never kept.
   void read.then(found => {
-    if (found.me === '' && lanes.get(cwd) === read) lanes.delete(cwd)
+    if (!found.isSure && lanes.get(cwd) === read) lanes.delete(cwd)
   })
   return read
+}
+
+/** @param {Io} io */
+const repoOf = io => (io.repo ? io.repo().catch(() => '') : Promise.resolve(''))
+
+// Before 0.1.7 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
+// per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
+/** @param {Io} io @param {string} scoped @param {string} legacy */
+const readScoped = async (io, scoped, legacy) => {
+  const value = await io.get(scoped)
+  return value !== undefined || scoped === legacy ? value : io.get(legacy)
 }
 
 /** @param {Io} io */
@@ -138,15 +177,23 @@ export const readAway = async io => /** @type {Away} */ ({ ...offAway(), .../** 
 /** @param {Io} io */
 export const evidenceScope = async io => {
   const pinned = /** @type {string | undefined} */ (await io.get(KEY.pinned(await io.sessionId())))
-  return pinned ?? io.sessionId()
+  return pinned === undefined ? io.sessionId() : intentScope(io, pinned)
 }
+
+// An intent's evidence scope: the intent in this repository, as evidenceScope names it.
+/** @param {Io} io @param {string} slug */
+export const intentScope = async (io, slug) => inRepo(await repoOf(io), slug)
+
+// What is kept for a scope: an intent's from before 0.1.7 too, while its scoped record has none.
+/** @param {Io} io @param {string} scope */
+const storedEvidence = async (io, scope) => /** @type {Record<string, any>} */ ((await readScoped(io, KEY.evidence(scope), KEY.evidence(scope.replace(/^[^|]*\|/, '')))) ?? {})
 
 // Proof older than this no longer counts: the code has likely moved on since.
 const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
 
 /** @param {Io} io @param {string} scope from evidenceScope @param {Pack} [pack] @returns {Promise<Evidence>} */
 export const readEvidence = async (io, scope, pack = unreal) => {
-  const stored = /** @type {Record<string, { state: string, detail: string, at?: number }>} */ ((await io.get(KEY.evidence(scope))) ?? {})
+  const stored = /** @type {Record<string, { state: string, detail: string, at?: number }>} */ (await storedEvidence(io, scope))
   const fresh = Object.fromEntries(Object.entries(stored).filter(([, rung]) => Date.now() - (rung.at ?? 0) < EVIDENCE_TTL_MS))
   return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh })
 }
@@ -158,7 +205,7 @@ export const shortSession = sid => sid.slice(0, 8)
 // Writes one scope's evidence, each record stamped with when it was seen and `by` the session that saw it.
 /** @param {Io} io @param {string} scope @param {Partial<Evidence>} change */
 const writeEvidence = async (io, scope, change) => {
-  const stored = /** @type {object} */ ((await io.get(KEY.evidence(scope))) ?? {})
+  const stored = await storedEvidence(io, scope)
   const by = shortSession(await io.sessionId())
   const stamped = Object.fromEntries(Object.entries(change).map(([rung, value]) => [rung, { ...value, at: Date.now(), by }]))
   await io.set(KEY.evidence(scope), { ...stored, ...stamped })
@@ -191,16 +238,16 @@ export const readRecurring = async (io, pack = unreal) => {
 }
 /** @param {Io} io @param {string} me @returns {Promise<import('./issues.mjs').Issue[]>} */
 export const readIssues = async (io, me) => {
-  const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me)))
+  const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me, await repoOf(io))))
   return cached?.list && Date.now() - (cached.at ?? 0) < ISSUES_TTL_MS ? cached.list : []
 }
 /** @param {Io} io @returns {Promise<Record<string, import('./prs.mjs').PrRecord>>} */
-export const readPrRecords = async io => /** @type {Record<string, import('./prs.mjs').PrRecord>} */ ((await io.get(KEY.prs)) ?? {})
+export const readPrRecords = async io => /** @type {Record<string, import('./prs.mjs').PrRecord>} */ ((await io.get(KEY.prs(await repoOf(io)))) ?? {})
 // PR number → its last read state, for the pure readers in model.mjs.
 /** @param {Io} io @returns {Promise<import('./model.mjs').PrStates>} */
 export const readPrStates = async io => Object.fromEntries(Object.entries(await readPrRecords(io)).map(([number, record]) => [number, record.state]))
 /** @param {Io} io @param {string} me @returns {Promise<string | null>} */
-export const readLast = async (io, me) => /** @type {string | null} */ ((await io.get(KEY.last(me))) ?? null)
+export const readLast = async (io, me) => /** @type {string | null} */ ((await readScoped(io, KEY.last(me, await repoOf(io)), KEY.last(me, ''))) ?? null)
 /** @param {Io} io */
 export const readScore = async io => /** @type {Record<string, number>} */ ((await io.get(KEY.score)) ?? {})
 
@@ -209,7 +256,7 @@ export const readScore = async io => /** @type {Record<string, number>} */ ((awa
 /** @param {Io} io @param {string} me @param {import('./issues.mjs').Issue[]} issues */
 export const setIssues = (io, me, issues) =>
   serial(async () => {
-    await io.set(KEY.issues(me), { at: Date.now(), list: issues })
+    await io.set(KEY.issues(me, await repoOf(io)), { at: Date.now(), list: issues })
     changed(io)
   })
 
@@ -222,7 +269,7 @@ export const setPrStates = (io, states, at) =>
   serial(async () => {
     if (Object.keys(states).length === 0) return
     const kept = Object.entries(await readPrRecords(io)).filter(([, record]) => at - record.at < PRS_TTL_MS)
-    await io.set(KEY.prs, { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
+    await io.set(KEY.prs(await repoOf(io)), { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
     changed(io)
   })
 
@@ -233,15 +280,16 @@ const CHANGES_TTL_MS = 36 * 60 * 60 * 1000
 
 // The lines an intent gained, newest first, from `since` on (the start of the person's day).
 /** @param {Io} io @param {string} slug @param {number} since @returns {Promise<Recorded[]>} */
-export const readChanges = async (io, slug, since) => (/** @type {Recorded[]} */ ((await io.get(KEY.changes(slug))) ?? [])).filter(one => one.at >= since).reverse()
+export const readChanges = async (io, slug, since) => (/** @type {Recorded[]} */ ((await io.get(KEY.changes(slug, await repoOf(io)))) ?? [])).filter(one => one.at >= since).reverse()
 
 // An edit's lines join the intent's; the same line again (a re-tick, a rewrite) replaces the older one.
 /** @param {Io} io @param {string} slug @param {readonly import('./changes.mjs').Change[]} lines @param {number} at */
 export const noteChanges = (io, slug, lines, at) =>
   serial(async () => {
     if (lines.length === 0) return
-    const kept = /** @type {Recorded[]} */ ((await io.get(KEY.changes(slug))) ?? []).filter(one => at - one.at < CHANGES_TTL_MS && !lines.some(line => line.kind === one.kind && line.id === one.id))
-    await io.set(KEY.changes(slug), [...kept, ...lines.map(line => ({ ...line, at }))].slice(-CHANGES_KEPT))
+    const key = KEY.changes(slug, await repoOf(io))
+    const kept = /** @type {Recorded[]} */ ((await io.get(key)) ?? []).filter(one => at - one.at < CHANGES_TTL_MS && !lines.some(line => line.kind === one.kind && line.id === one.id))
+    await io.set(key, [...kept, ...lines.map(line => ({ ...line, at }))].slice(-CHANGES_KEPT))
     changed(io)
   })
 
@@ -284,7 +332,7 @@ export const track = (io, root, slug, options = {}) =>
     if (options.isAuto && stopped.includes(slug)) return false
     if (options.onlyIfNone && (await io.get(KEY.pinned(sid))) !== undefined) return false
     await io.set(KEY.pinned(sid), slug)
-    if (options.me) await io.set(KEY.last(options.me), slug)
+    if (options.me) await io.set(KEY.last(options.me, await repoOf(io)), slug)
     if (!options.isAuto && stopped.includes(slug)) await setList(io, KEY.untracked(sid), stopped.filter(one => one !== slug))
     await beat(io)
     changed(io)
@@ -303,7 +351,8 @@ export const untrack = (io, me) =>
     const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
     if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
     await io.remove(KEY.pinned(sid))
-    if ((await io.get(KEY.last(me))) === slug) await io.remove(KEY.last(me))
+    // The unscoped "Continue …" from before 0.1.7 goes too, or it would read through again.
+    for (const key of new Set([KEY.last(me, await repoOf(io)), KEY.last(me, '')])) if ((await io.get(key)) === slug) await io.remove(key)
     await setList(io, KEY.untracked(sid), [.../** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? []), slug])
     await beat(io)
     changed(io)
@@ -404,7 +453,7 @@ export const setRung = (io, scope, rung, value) => serial(() => writeEvidence(io
 /** @param {Io} io @param {string} scope @param {'write' | 'read' | 'pie'} kind @param {string} server @param {boolean} isOk */
 export const noteMcp = (io, scope, kind, server, isOk) =>
   serial(async () => {
-    const evidence = { ...emptyEvidence(), .../** @type {object} */ ((await io.get(KEY.evidence(scope))) ?? {}) }
+    const evidence = { ...emptyEvidence(), ...(await storedEvidence(io, scope)) }
     const pending = `pending readback on ${server}`
     /** @type {Partial<Evidence>} */
     let change = {}

@@ -115,7 +115,17 @@ function io($) {
     gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
+    origin: () => readOrigin($),
+    repo: async () => (await laneOf($)).repo,
   }
+}
+
+// The checkout's origin URL ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @returns {Promise<string | null>} */
+async function readOrigin($) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: cwd || (await $.session.root()), env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  // Exit 1: no such key.
+  return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
 }
 
 // Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV.
@@ -919,7 +929,7 @@ async function intentQuestion($, slug) {
   const files = io($)
   const { root, pack: chosen } = await laneOf($)
   const { role } = await state.readProfile(files, me, chosen)
-  const evidence = await state.readEvidence(files, slug, chosen)
+  const evidence = await state.readEvidence(files, await state.intentScope(files, slug), chosen)
   const prs = await state.readPrStates(files)
   const stands = intentStands(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, heldByLine(await state.readPeers(files, root, chosen.localDir), slug, Date.now()))
   const look = async () => {
@@ -1185,7 +1195,7 @@ async function readIntentView($) {
   const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000) : []
   intentToday = lines.map(one => ({ kind: one.kind, text: one.text, time: clockText(one.at, tz) }))
   const mine = state.shortSession(await state.sessionId(files))
-  const evidence = await state.readEvidence(files, slug || mine, chosen)
+  const evidence = await state.readEvidence(files, slug ? await state.intentScope(files, slug) : mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
   // Working on it here needs its folder in this checkout; asking about it does not.

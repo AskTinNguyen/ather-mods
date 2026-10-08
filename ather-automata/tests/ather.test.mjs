@@ -1171,3 +1171,86 @@ describe('asking about an intent (0.1.6)', () => {
     expect(main).toContain('who owns it, its status and stage')
   })
 })
+
+describe('several repositories on one machine', () => {
+  // Two checkouts of different repositories over one store: what each keeps must stay its own.
+  const twoRepos = () => {
+    const memory = memoryIo()
+    const s2 = { ...memory.io, repo: async () => 'sipher/s2' }
+    const web = { ...memory.io, repo: async () => 'asktinnguyen/han-viet' }
+    return { ...memory, s2, web }
+  }
+  const ISSUE = { number: 7, title: 'Fix login', url: 'u', area: 'Unsorted', isUrgent: false, updatedAt: '' }
+
+  test('a repository is named by its origin, whatever the protocol; without one, by its folder', () => {
+    expect(state.repoId('git@github.com:AskTinNguyen/han-viet.git', 'R')).toBe('asktinnguyen/han-viet')
+    expect(state.repoId('https://github.com/AskTinNguyen/han-viet', 'R')).toBe('asktinnguyen/han-viet')
+    expect(state.repoId('ssh://git@github.com:22/Sipher/S2.git/', 'R')).toBe('sipher/s2')
+    expect(state.repoId('', 'C:\\Work\\S2\\')).toBe('path:c:/work/s2')
+  })
+
+  test('the same slug in two repositories keeps its own proof and changes', async () => {
+    const { s2, web, files } = twoRepos()
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login')
+    const scope = await state.evidenceScope(s2)
+    expect(scope).toBe('sipher/s2|login')
+    await state.setRung(s2, scope, 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    await state.noteChanges(s2, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now())
+    expect((await state.readEvidence(s2, await state.intentScope(s2, 'login'))).build.state).toBe('pass')
+    expect((await state.readEvidence(web, await state.intentScope(web, 'login'))).build.state).toBe('none')
+    expect(await state.readChanges(s2, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(web, 'login', 0)).toHaveLength(0)
+  })
+
+  test("issues, PR states and Continue are each repository's own", async () => {
+    const { s2, web, files } = twoRepos()
+    await state.setIssues(s2, 'Tin Nguyen', [ISSUE])
+    await state.setPrStates(s2, { 12: 'MERGED' }, Date.now())
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login', { me: 'Tin Nguyen' })
+    expect(await state.readIssues(s2, 'Tin Nguyen')).toHaveLength(1)
+    expect(await state.readIssues(web, 'Tin Nguyen')).toEqual([])
+    expect(await state.readPrStates(s2)).toEqual({ 12: 'MERGED' })
+    expect(await state.readPrStates(web)).toEqual({})
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(web, 'Tin Nguyen')).toBe(null)
+  })
+
+  test('without a repository (the Paseo version) the keys are as before', async () => {
+    const { io, store } = memoryIo()
+    await state.setIssues(io, 'Tin Nguyen', [ISSUE])
+    await state.setPrStates(io, { 12: 'OPEN' }, Date.now())
+    expect(store.has('issues:tinnguyen')).toBe(true)
+    expect(store.has('prStates')).toBe(true)
+  })
+
+  test("proof and Continue from before the upgrade read through until the scoped key is written; untracking clears both", async () => {
+    const { s2, store, files } = twoRepos()
+    store.set('evidence:login', { tests: { state: 'pass', detail: '12 passed', at: Date.now() } })
+    store.set('last:tinnguyen', 'login')
+    const scope = await state.intentScope(s2, 'login')
+    expect((await state.readEvidence(s2, scope)).tests.state).toBe('pass')
+    await state.setRung(s2, scope, 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    const kept = await state.readEvidence(s2, scope)
+    expect([kept.tests.state, kept.build.state]).toEqual(['pass', 'pass'])
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe('login')
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login', { me: 'Tin Nguyen' })
+    await state.untrack(s2, 'Tin Nguyen')
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe(null)
+    expect(store.has('last:tinnguyen')).toBe(false)
+  })
+
+  test('the lane names its repository when the Io can read the origin, and asks again when git could not say', async () => {
+    const { io } = memoryIo()
+    let origin = /** @type {string | null} */ (null)
+    const withOrigin = { ...io, origin: async () => origin }
+    const first = await state.lane(withOrigin, 'cwd-repo-test')
+    expect(first.repo).toBe('path:r')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    origin = 'git@github.com:Sipher/S2.git'
+    expect((await state.lane(withOrigin, 'cwd-repo-test')).repo).toBe('sipher/s2')
+    expect((await state.lane(io, 'cwd-no-origin')).repo).toBe('')
+  })
+})

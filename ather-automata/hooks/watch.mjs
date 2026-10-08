@@ -50,7 +50,17 @@ function io($) {
     gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
+    origin: () => readOrigin($),
+    repo: async () => (await laneOf($)).repo,
   }
+}
+
+// The checkout's origin URL ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @returns {Promise<string | null>} */
+async function readOrigin($) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: cwd || (await $.session.root()), env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  // Exit 1: no such key.
+  return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
 }
 
 /** @param {Engine} $ */
