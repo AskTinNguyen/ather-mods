@@ -12,7 +12,8 @@ const DISMISSED = '[User dismissed — do not proceed, wait for next instruction
 const element = type => (props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
 const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Markdown', 'Link', 'Code', 'Svg'].map(name => [name, element(name)]))
 
-export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => {
+// `writable`: more folders the model's Write and Edit may change (a sibling checkout); with it, a relative path is taken from `root`.
+export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env, writable }) => {
   const store = new Map()
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
@@ -59,10 +60,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
   }
 
   const toolBottom = input => {
-    if ((input.tool === 'Write' || input.tool === 'Edit') && typeof input.file_path === 'string' && input.file_path.startsWith(root)) {
+    const file = typeof input.file_path === 'string' && writable && !path.isAbsolute(input.file_path) ? path.resolve(root, input.file_path) : input.file_path
+    if ((input.tool === 'Write' || input.tool === 'Edit') && typeof file === 'string' && [root, ...(writable ?? [])].some(dir => file.startsWith(dir))) {
       // Write makes the folder it writes into, as the real tool does.
-      if (input.tool === 'Write') fs.mkdirSync(path.dirname(input.file_path), { recursive: true }), fs.writeFileSync(input.file_path, input.content ?? '')
-      else fs.writeFileSync(input.file_path, fs.readFileSync(input.file_path, 'utf8').replace(input.old_string, input.new_string))
+      if (input.tool === 'Write') fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, input.content ?? '')
+      else fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(input.old_string, input.new_string))
       return { result: 'ok', text: 'ok' }
     }
     if (input.tool === 'AskUserQuestion') {

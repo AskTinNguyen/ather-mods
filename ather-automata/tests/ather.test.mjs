@@ -1211,6 +1211,52 @@ describe('several repositories on one machine', () => {
     expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web')
   })
 
+  test('an intent tracked in another checkout is kept as its slug and root, and scoped by that repository', async () => {
+    const memory = memoryIo()
+    const { store, files } = memory
+    const origins = /** @type {Record<string, string>} */ ({ '/s3/web': 'https://github.com/AskTinNguyen/web' })
+    const io = { ...memory.io, repo: async () => 'sipher/s2', origin: async (/** @type {string} */ root) => origins[root] ?? '' }
+    const asWeb = { ...io, repo: async () => 'asktinnguyen/web' }
+    files.set('/s3/web/docs/intent/login/prompt.md', '# Login\n\n- Owner: Tin Nguyen\n')
+    expect(await state.track(io, '/s3/web/', 'login', { me: 'Tin Nguyen' })).toBe(true)
+    expect(store.get('pinned:s1')).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.readPinned(io)).toBe('login')
+    expect(await state.readTracked(io)).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.evidenceScope(io)).toBe('asktinnguyen/web|login')
+    // A command in the intent's checkout proves it; the session's own checkout and a third keep the session's.
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('asktinnguyen/web|login')
+    expect(await state.checkoutScope(io, { isOwn: true, repo: 'sipher/s2' })).toBe('s1')
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'sipher/tools', root: '/s3/tools' })).toBe('s1|sipher/tools')
+    // "Continue …" and the changes an edit records are web's.
+    expect(await state.readLast(asWeb, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(io, 'Tin Nguyen')).toBe(null)
+    await state.noteChanges(io, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now(), '/s3/web')
+    expect(await state.readChanges(io, 'login', 0, '/s3/web')).toHaveLength(1)
+    expect(await state.readChanges(asWeb, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(io, 'login', 0)).toHaveLength(0)
+    // /clear carries the pair as it is.
+    await state.moveLane(io, 's1', 's1b')
+    memory.switchSession('s1b')
+    expect(store.get('pinned:s1b')).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.readTracked(io)).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.untrack(io, 'Tin Nguyen')).toEqual({ result: 'untracked', slug: 'login' })
+    expect(store.has('pinned:s1b')).toBe(false)
+    expect(await state.readLast(asWeb, 'Tin Nguyen')).toBe(null)
+    expect(await state.evidenceScope(io)).toBe('s1b')
+  })
+
+  test("an intent in the session's own checkout is kept as a plain slug, as before", async () => {
+    const memory = memoryIo()
+    const io = { ...memory.io, repo: async () => 'sipher/s2' }
+    memory.store.set('pinned:s1', 'spawner')
+    expect(await state.readTracked(io)).toEqual({ slug: 'spawner', root: 'R' })
+    memory.files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(io, 'R', 'login')
+    expect(memory.store.get('pinned:s1')).toBe('login')
+    expect(await state.checkoutScope(io, { isOwn: true, repo: 'sipher/s2' })).toBe('sipher/s2|login')
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('s1|asktinnguyen/web')
+  })
+
   test('a repository is named by its origin, whatever the protocol; without one, by its folder', () => {
     expect(state.repoId('git@github.com:AskTinNguyen/han-viet.git', 'R')).toBe('asktinnguyen/han-viet')
     expect(state.repoId('https://github.com/AskTinNguyen/han-viet', 'R')).toBe('asktinnguyen/han-viet')

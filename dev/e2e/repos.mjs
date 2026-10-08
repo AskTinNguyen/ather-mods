@@ -61,8 +61,8 @@ const makeWorkspace = () => {
 }
 
 // A session opened in `root`, started as the app starts it.
-const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {} }) => {
-  const engine = createEngine({ root, surfaces: [], user })
+const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable }) => {
+  const engine = createEngine({ root, surfaces: [], user, writable })
   engine.setSessionId(sessionId)
   register(engine.on, { briefGate: 'warn', ...options })
   await engine.start()
@@ -125,6 +125,75 @@ const NODE_TEST_PASS = fs.readFileSync(new URL('../../ather-automata/tests/fixtu
   await bash(engine, 'npm test', NODE_TEST_PASS)
   expect("a session in web/ itself: npm test lands in the session's scope", engine.store.get(`evidence:${sid}`)?.tests?.state === 'pass', engine.store.get(`evidence:${sid}`))
   expect('and in no per-repository scope', !engine.store.has(`evidence:${sid}|asktinnguyen/web`), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+}
+
+// ---------------------------------------------------------------- an intent tracked in another checkout
+
+const LOGIN = '# Login\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: the form posts.\n- [ ] A2: errors show.\n'
+const readJson = file => {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+{
+  const { parent, s2, web } = makeWorkspace()
+  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0003', writable: [parent] })
+  await engine.modelTool({ tool: 'Write', file_path: '../web/docs/intent/login/prompt.md', content: LOGIN })
+  await engine.flush()
+  expect("a main-conversation write of ../web/docs/intent/login/prompt.md tracks login in web's checkout", JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: web }), engine.store.get(`pinned:${sid}`))
+
+  const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
+  expect("the status tool names login with web's files", status.tracked?.slug === 'login' && status.tracked.checkout === web && status.tracked.checklist === '1/2', status.tracked)
+
+  await bash(engine, 'cd ../web && npm test', NODE_TEST_PASS)
+  expect("npm test passing in web proves the intent: evidence:asktinnguyen/web|login", engine.store.get('evidence:asktinnguyen/web|login')?.tests?.state === 'pass', engine.store.get('evidence:asktinnguyen/web|login'))
+  expect("and not the session's proof in web", !engine.store.has(`evidence:${sid}|asktinnguyen/web`), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+  await bash(engine, 'Build.bat S2Editor Win64 Development', 'Result: Succeeded')
+  expect("a build in s2 itself lands in the session's scope, not the intent's", engine.store.get(`evidence:${sid}`)?.build?.state === 'pass' && engine.store.get('evidence:asktinnguyen/web|login')?.build?.state !== 'pass', engine.store.get(`evidence:${sid}`))
+
+  await startAway(engine)
+  const ledger = engine.store.get(`away:${sid}`)?.ledgerPath
+  expect("the owner's away ledger is web/docs/intent/login/decisions.md", ledger === `${web}/docs/intent/login/decisions.md` && fs.existsSync(ledger), ledger)
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+
+  await engine.timers()
+  const ownBeat = readJson(path.join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`))
+  const webBeat = readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))
+  expect("the heartbeat is in s2's lanes and in web's, naming login", ownBeat?.intent === 'login' && webBeat?.intent === 'login' && webBeat.branch === 'main' && ownBeat.branch === 'feat/x', { ownBeat, webBeat })
+
+  await engine.command('ather', 'untrack')
+  expect('/ather untrack clears it', !engine.store.has(`pinned:${sid}`), engine.store.get(`pinned:${sid}`))
+  expect("and web's Continue", engine.store.get('last:asktinnguyen/web|tinnguyen') === undefined, [...engine.store.keys()].filter(key => key.startsWith('last:')))
+
+  await engine.end('other')
+  const ended = [readJson(path.join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))]
+  expect('on session end both heartbeats say ended', ended.every(one => one?.hasEnded === true), ended)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+}
+
+{
+  // One checkout as before: an intent written in s2 itself is kept as its plain slug.
+  const { s2 } = makeWorkspace()
+  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0004', writable: [s2] })
+  await engine.modelTool({ tool: 'Write', file_path: 'docs/intent/own/prompt.md', content: LOGIN })
+  await engine.flush()
+  expect('an intent written in s2 itself is tracked as its plain slug', engine.store.get(`pinned:${sid}`) === 'own', engine.store.get(`pinned:${sid}`))
+  await bash(engine, 'Build.bat S2Editor Win64 Development', 'Result: Succeeded')
+  expect("and a build there proves it, as before", engine.store.get('evidence:sipher/s2|own')?.build?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+}
+
+{
+  // /ather intent <name>: a name only another workspace checkout has is tracked there.
+  const { s2, web } = makeWorkspace()
+  fs.mkdirSync(path.join(web, 'docs/intent/search'), { recursive: true })
+  fs.writeFileSync(path.join(web, 'docs/intent/search/prompt.md'), LOGIN)
+  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0005', options: { repos: '../web' } })
+  await engine.command('ather', 'intent search')
+  expect('/ather intent search tracks it in web, the workspace checkout that has it', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'search', root: web }), engine.store.get(`pinned:${sid}`))
 }
 
 // ---------------------------------------------------------------- report

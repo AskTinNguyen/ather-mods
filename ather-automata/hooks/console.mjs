@@ -349,7 +349,9 @@ async function readIntents($) {
   me = who
   pack = chosen
   const files = io($)
-  const pinned = await state.readPinned(files)
+  // This checkout's intents: an intent tracked in another checkout is not one of them.
+  const tracked = await state.trackedLane(files, cwd)
+  const pinned = tracked?.isOwn ? tracked.slug : null
   const team = await readTeam(repo($, root), root, { cache: teamCache, pinned })
   const read = []
   for (const one of team.intents) read.push(parseIntent({ ...one, hasDebrief: one.slug === pinned && (await files.exists(`${root}/${chosen.debriefPath(one.slug)}`)) }, chosen))
@@ -625,19 +627,26 @@ async function startIssue($, number, isInQuestion = false) {
 }
 
 // Tracks an intent by its folder name: the deliberate act (Work on this here, Next, /ather intent <name>).
-/** @param {Engine} $ @param {string} slug */
-async function trackSlug($, slug) {
+// `at`: another workspace checkout holding it.
+/** @param {Engine} $ @param {string} slug @param {string} [at] */
+async function trackSlug($, slug, at) {
   const { root } = await laneOf($)
   // An intent read from origin/main that this checkout does not have yet cannot be worked on here.
-  if (!(await state.track(io($), root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
+  if (!(await state.track(io($), at ?? root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
   return `Now tracking ${slug}.`
 }
 
 // /ather intent <name> and /ather pick <name>: an exact folder name tracks it; words show the one intent they match.
+// A name only another workspace checkout has is tracked there (this checkout first, then workspace order).
 /** @param {Engine} $ @param {string} text */
 async function pickIntent($, text) {
-  return intents.some(one => one.slug === text) ? trackSlug($, text) : lookUp($, text)
+  const { root } = await laneOf($)
+  if (intents.some(one => one.slug === text) || (await state.hasIntentFolder(io($), root, text))) return trackSlug($, text)
+  for (const other of await state.workspace(io($), cwd || root, repos)) {
+    if (await state.hasIntentFolder(io($), other, text)) return trackSlug($, text, other)
+  }
+  return lookUp($, text)
 }
 
 // Words that match one intent show it and never track it; several are listed; none is said.
@@ -1191,28 +1200,29 @@ let intentView = { slug: '', isHere: false, inCheckout: true, proof: '', heldBy:
 /** @param {Engine} $ */
 async function readIntentView($) {
   const files = io($)
-  const { root, pack: chosen } = await laneOf($)
-  const pinned = await state.readPinned(files)
-  const slug = intentShown || pinned || ''
+  const tracked = await state.trackedLane(files, cwd)
+  const slug = intentShown || tracked?.slug || ''
+  // The tracked intent is read in its own checkout; a row the person chose is this checkout's.
+  const isTracked = tracked !== null && slug === tracked.slug && (intentShown === '' || tracked.isOwn)
+  const { root, pack: chosen } = isTracked ? tracked.lane : await laneOf($)
   const tz = await state.readTz(files)
   const now = Date.now()
-  const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000) : []
+  const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000, root) : []
   intentToday = lines.map(one => ({ kind: one.kind, text: one.text, time: clockText(one.at, tz) }))
   const mine = state.shortSession(await state.sessionId(files))
-  const evidence = await state.readEvidence(files, slug ? await state.intentScope(files, slug) : mine, chosen)
+  const evidence = await state.readEvidence(files, slug ? await state.intentScope(files, slug, root) : mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
   // Working on it here needs its folder in this checkout; asking about it does not.
   const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
-  intentView = { slug, isHere: slug !== '' && slug === pinned, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
+  intentView = { slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
 /** @param {Engine} $ */
 async function unseenChanges($) {
-  const files = io($)
-  const slug = await state.readPinned(files)
-  return slug ? state.readChanges(files, slug, intentSeenAt + 1) : []
+  const tracked = await state.trackedLane(io($), cwd)
+  return tracked ? state.readChanges(io($), tracked.slug, intentSeenAt + 1, tracked.lane.root) : []
 }
 
 /** @param {Engine} $ */
