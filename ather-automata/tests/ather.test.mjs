@@ -7,6 +7,7 @@ import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLi
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
+import { checkoutOf, parseRepos, readWorkspace } from '../hooks/workspace.mjs'
 import { KINDS, avatarSvg, classifyWorker, crewWords, propForTool, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
@@ -1252,5 +1253,82 @@ describe('several repositories on one machine', () => {
     origin = 'git@github.com:Sipher/S2.git'
     expect((await state.lane(withOrigin, 'cwd-repo-test')).repo).toBe('sipher/s2')
     expect((await state.lane(io, 'cwd-no-origin')).repo).toBe('')
+  })
+})
+
+describe('the workspace', () => {
+  // Folders and files over plain maps: a folder exists when something is in it.
+  const disk = (/** @type {Record<string, string>} */ paths) => {
+    const files = new Map(Object.entries(paths))
+    const has = (/** @type {string} */ path) => [...files.keys()].some(one => one === path || one.startsWith(`${path}/`))
+    return {
+      files,
+      read: async (/** @type {string} */ path) => files.get(path) ?? null,
+      exists: async (/** @type {string} */ path) => has(path),
+      list: async (/** @type {string} */ dir) => {
+        const names = new Set([...files.keys()].filter(path => path.startsWith(`${dir}/`)).map(path => path.slice(dir.length + 1).split('/')[0]))
+        return [...names].map(name => ({ name, kind: files.has(`${dir}/${name}`) ? 'file' : 'dir' }))
+      },
+    }
+  }
+  const HEAD = 'ref: refs/heads/main\n'
+
+  test('a folder resolves to the checkout holding it: a .git folder, a worktree .git file, or none', async () => {
+    const files = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/Plugins/X/a.txt': '', '/w/tree/.git': 'gitdir: /w/s2/.git/worktrees/tree\n', '/w/loose/a.txt': '' })
+    expect(await checkoutOf(files, '/w/s2')).toBe('/w/s2')
+    expect(await checkoutOf(files, '/w/s2/Plugins/X')).toBe('/w/s2')
+    expect(await checkoutOf(files, '/w/s2/Plugins/X/../../')).toBe('/w/s2')
+    expect(await checkoutOf(files, '/w/tree/src')).toBe('/w/tree')
+    expect(await checkoutOf(files, '/w/loose')).toBe(null)
+  })
+
+  test('the repos option splits on ; and new lines, drops blanks, and takes relative folders from the session folder', () => {
+    expect(parseRepos(' ../web ;\n\n/abs/game\r\nC:\\Work\\S2\\ ; ', '/w/s2')).toEqual(['/w/web', '/abs/game', 'C:/Work/S2'])
+    expect(parseRepos('', '/w/s2')).toEqual([])
+  })
+
+  test('the workspace lists the session checkout first, then option folders, each once; a folder in no checkout is skipped', async () => {
+    const files = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/Source/a.cpp': '', '/w/web/.git/HEAD': HEAD, '/w/loose/a.txt': '', '/w/other/.git/HEAD': HEAD })
+    const found = await readWorkspace(files, '/w/s2/Source', '../../web; /w/s2/; Source; ../../loose')
+    expect(found.roots).toEqual(['/w/s2', '/w/web'])
+    expect(found.skipped).toEqual(['/w/loose'])
+  })
+
+  test("a session folder in no checkout adds its child checkouts by name, after the option's, at most 8 in all", async () => {
+    /** @type {Record<string, string>} */
+    const paths = { '/w/notes/a.md': '', '/w/x/.git/HEAD': HEAD, '/w/b/.git': 'gitdir: /w/x/.git/worktrees/b\n' }
+    for (const name of ['c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']) paths[`/w/${name}/.git/HEAD`] = HEAD
+    const found = await readWorkspace(disk(paths), '/w', 'x')
+    expect(found.roots).toEqual(['/w/x', '/w/b', '/w/c', '/w/d', '/w/e', '/w/f', '/w/g', '/w/h'])
+    // Inside a checkout, the children are not looked at.
+    const inside = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/sub/.git/HEAD': HEAD })
+    expect((await readWorkspace(inside, '/w/s2', '')).roots).toEqual(['/w/s2'])
+  })
+
+  test('each checkout gets its own lane: repository and pack', async () => {
+    const { io, files } = memoryIo()
+    files.set('/ws/game/Game.uproject', '{}')
+    // memoryIo's exists sees a folder only as its own entry.
+    files.set('/ws/game/docs/intent', '')
+    files.set('/ws/web/package.json', '{"name":"web"}')
+    const origins = /** @type {Record<string, string>} */ ({ '/ws/game': 'git@github.com:Sipher/S2.git', '/ws/web': 'https://github.com/AskTinNguyen/han-viet' })
+    const withOrigin = { ...io, origin: async (/** @type {string} */ root) => origins[root] ?? '' }
+    const game = await state.laneAt(withOrigin, '/ws/game')
+    const web = await state.laneAt(withOrigin, '/ws/web')
+    expect([game.root, game.repo, game.pack.id, game.isS2]).toEqual(['/ws/game', 'sipher/s2', 'unreal', true])
+    expect([web.root, web.repo, web.pack.id, web.isS2]).toEqual(['/ws/web', 'asktinnguyen/han-viet', 'web', false])
+  })
+
+  test('the workspace is read once per session folder and option, and the session lane is its root', async () => {
+    const memory = memoryIo()
+    memory.files.set('/ws2/a/.git/HEAD', HEAD)
+    memory.files.set('/ws2/web/.git/HEAD', HEAD)
+    const lines = /** @type {string[]} */ ([])
+    const first = await state.workspace(memory.io, '/ws2/a', '../web;../none', line => lines.push(line))
+    memory.files.set('/ws2/none/.git/HEAD', HEAD)
+    expect(await state.workspace(memory.io, '/ws2/a', '../web;../none', line => lines.push(line))).toEqual(first)
+    expect(first).toEqual(['/ws2/a', '/ws2/web'])
+    expect(lines).toHaveLength(2)
+    expect((await state.lane(memory.io, 'cwd-workspace-test')).root).toBe('R')
   })
 })

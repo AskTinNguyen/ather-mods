@@ -16,6 +16,7 @@ import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { heldByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
+import { checkoutOf, gitDirOf } from './workspace.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -23,6 +24,8 @@ const IDLE_MS = 10 * 60 * 1000
 
 let cwd = ''
 let briefGate = 'warn'
+// The `repos` option: more checkouts this session works with.
+let repos = ''
 // Traps already counted in this session: each counts once per session.
 const seenTraps = new Set()
 // Last tool each worker called, for the idle-worker toast.
@@ -50,15 +53,15 @@ function io($) {
     gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
-    origin: () => readOrigin($),
+    origin: root => readOrigin($, root),
     repo: async () => (await laneOf($)).repo,
   }
 }
 
-// The checkout's origin URL ('' without one), or null when git could not say: the lane asks again.
-/** @param {Engine} $ @returns {Promise<string | null>} */
-async function readOrigin($) {
-  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: cwd || (await $.session.root()), env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+// The origin URL of the checkout at `root` ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readOrigin($, root) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
   // Exit 1: no such key.
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
 }
@@ -71,6 +74,7 @@ function laneOf($) {
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} options */
 export function register(on, options) {
   briefGate = String(options?.briefGate ?? 'warn')
+  repos = String(options?.repos ?? '')
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -85,6 +89,7 @@ export function register(on, options) {
     try {
       const { me, root, isS2, pack } = await laneOf($)
       await registerTools($, pack)
+      void state.workspace(io($), cwd || root, repos, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
@@ -247,18 +252,10 @@ async function readBranch($, folder = null) {
   const { root } = await laneOf($)
   const base = folder === null ? root : /^([A-Za-z]:[\\/]|[\\/])/.test(folder) ? folder : `${root}/${folder}`
   const files = io($)
-  let head = null
-  // Walk up to the checkout the folder is in: `cd Plugins/X && git push` pushes the checkout's branch.
-  for (let folderAt = base.replace(/[\\/]+$/, ''), depth = 0; head === null && folderAt !== '' && depth < 12; depth += 1) {
-    head = await files.read(`${folderAt}/.git/HEAD`)
-    if (head === null) {
-      // A worktree: .git is a file naming its gitdir.
-      const gitdir = /gitdir:\s*(.+)/.exec((await files.read(`${folderAt}/.git`)) ?? '')?.[1]?.trim()
-      if (gitdir) head = await files.read(`${gitdir}/HEAD`)
-    }
-    const parent = folderAt.replace(/[\\/][^\\/]*$/, '')
-    folderAt = parent === folderAt ? '' : parent
-  }
+  // The checkout the folder is in: `cd Plugins/X && git push` pushes the checkout's branch.
+  const checkout = await checkoutOf(files, base)
+  const gitDir = checkout === null ? null : await gitDirOf(files, checkout)
+  const head = gitDir === null ? null : await files.read(`${gitDir}/HEAD`)
   return /ref:\s*refs\/heads\/(.+)/.exec(head ?? '')?.[1]?.trim() ?? (head ?? '').trim().slice(0, 12)
 }
 

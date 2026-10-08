@@ -93,6 +93,8 @@ let isPrsReading = false
 let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
 let isAwake = null
+// The `repos` option: more checkouts this session works with.
+let repos = ''
 /** @type {{ version: number, at: number, model: Home | null }} */
 let view = { version: -1, at: 0, model: null }
 // The pack this checkout's lane chose (packs/index.mjs), for the drawing; set whenever the view is rebuilt.
@@ -115,15 +117,15 @@ function io($) {
     gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
-    origin: () => readOrigin($),
+    origin: root => readOrigin($, root),
     repo: async () => (await laneOf($)).repo,
   }
 }
 
-// The checkout's origin URL ('' without one), or null when git could not say: the lane asks again.
-/** @param {Engine} $ @returns {Promise<string | null>} */
-async function readOrigin($) {
-  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: cwd || (await $.session.root()), env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+// The origin URL of the checkout at `root` ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readOrigin($, root) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
   // Exit 1: no such key.
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
 }
@@ -159,8 +161,9 @@ function laneOf($) {
   return state.lane(io($), cwd)
 }
 
-/** @param {import('claude-code').On} on */
-export function register(on) {
+/** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} [options] */
+export function register(on, options) {
+  repos = String(options?.repos ?? '')
   // The desktop app runs sessions the way the SDK does: not interactive at start, no surface yet.
   // So the commands are registered in every session, and the work behind the console (reading
   // intents and issues on timers) starts the first time someone draws or uses it, never in a
@@ -293,6 +296,7 @@ function wake($) {
 /** @param {Engine} $ */
 async function startConsoleWork($) {
   const lane = await laneOf($)
+  await state.workspace(io($), cwd || lane.root, repos, line => $.ui.log(line, { to: 'debug' }))
   if (lane.me !== '') me = lane.me
   pack = lane.pack
   if (!lane.isS2) return

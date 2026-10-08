@@ -10,5 +10,5 @@ import { register as registerConsole } from './console.mjs'
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} options */
 export function register(on, options) {
   registerWatch(on, options)
-  registerConsole(on)
+  registerConsole(on, options)
 }

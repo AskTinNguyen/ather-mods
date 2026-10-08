@@ -11,6 +11,7 @@ import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
+import { normalFolder, readWorkspace } from './workspace.mjs'
 
 /**
  * @typedef {{
@@ -18,8 +19,8 @@ import { unreal } from './packs/unreal.mjs'
  *   read: (path: string) => Promise<string | null>, write: (path: string, text: string) => Promise<void>, exists: (path: string) => Promise<boolean>,
  *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: () => Promise<string>, redraw: () => void,
  *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
- *   origin?: () => Promise<string | null>, repo?: () => Promise<string>
- * }} Io `origin`: the checkout's remote.origin.url, '' when it has none, null when git could not say.
+ *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>
+ * }} Io `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository; without it the keys are unscoped
  *   (as before 0.1.7, and as the Paseo version still keeps them).
  * @typedef {import('./packs/index.mjs').Pack} Pack
@@ -86,8 +87,12 @@ const changed = io => {
 
 // ---------------------------------------------------------------- the lane
 
-/** @type {Map<string, Promise<{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, isSure: boolean }>>} */
+/** @typedef {{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, isSure: boolean }} Checkout */
+// The session's lane by its folder, and each checkout's by its root.
+/** @type {Map<string, Promise<Checkout>>} */
 const lanes = new Map()
+/** @type {Map<string, Promise<Checkout>>} */
+const rootLanes = new Map()
 
 // A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
 // clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
@@ -108,24 +113,53 @@ export const repoId = (url, root) => {
 // Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
 // (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session);
 // `repo` which repository it is (repoId), when the Io can say.
-/** @param {Io} io @param {string} cwd */
-export const lane = (io, cwd) => {
-  const cached = lanes.get(cwd)
+/** @param {Io} io @param {string} root */
+const readCheckout = async (io, root) => {
+  const list = io.list ?? (async () => [])
+  const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
+  const origin = io.origin ? await io.origin(root).catch(() => null) : ''
+  const me = await io.gitUser().catch(() => '')
+  return { root, repo: io.origin ? repoId(origin ?? '', root) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
+}
+
+/** @param {typeof lanes} cache @param {string} key @param {() => Promise<Checkout>} read */
+const cachedLane = (cache, key, read) => {
+  const cached = cache.get(key)
   if (cached) return cached
-  const read = (async () => {
-    const root = (await io.root().catch(() => cwd)) || cwd
-    const list = io.list ?? (async () => [])
-    const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
-    const origin = io.origin ? await io.origin().catch(() => null) : ''
-    const me = await io.gitUser().catch(() => '')
-    return { root, repo: io.origin ? repoId(origin ?? '', root) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
-  })()
-  lanes.set(cwd, read)
+  const reading = read()
+  cache.set(key, reading)
   // A git name or origin that failed to read (a slow first start) is asked again next time, never kept.
-  void read.then(found => {
-    if (!found.isSure && lanes.get(cwd) === read) lanes.delete(cwd)
+  void reading.then(found => {
+    if (!found.isSure && cache.get(key) === reading) cache.delete(key)
   })
-  return read
+  return reading
+}
+
+// The session's lane: the lane of its own folder's root, which need not be a checkout.
+/** @param {Io} io @param {string} cwd */
+export const lane = (io, cwd) => cachedLane(lanes, cwd, async () => readCheckout(io, (await io.root().catch(() => cwd)) || cwd))
+
+// Any checkout's lane, by its root: its own pack and repository.
+/** @param {Io} io @param {string} root */
+export const laneAt = (io, root) => cachedLane(rootLanes, root, () => readCheckout(io, root))
+
+/** @type {Map<string, Promise<{ roots: string[], skipped: string[] }>>} */
+const workspaces = new Map()
+
+// The checkouts this session works with (workspace.mjs), read once per session folder and `repos` option
+// and shared by both halves. `log` hears the option folders that are in no checkout, once per read.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} [log] */
+export const workspace = (io, folder, option, log = () => undefined) => {
+  const key = `${normalFolder(folder)}\n${option}`
+  const cached = workspaces.get(key)
+  if (cached) return cached.then(found => found.roots)
+  const reading = readWorkspace({ read: io.read, exists: io.exists, list: io.list }, folder, option).catch(() => ({ roots: [], skipped: [] }))
+  workspaces.set(key, reading)
+  return reading.then(found => {
+    for (const skipped of found.skipped) log(`Ather: ${skipped} (repos) is not in a git checkout; skipped.`)
+    log(`Ather: workspace ${found.roots.join(', ') || '(no checkout)'}`)
+    return found.roots
+  })
 }
 
 /** @param {Io} io */
