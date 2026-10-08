@@ -1,0 +1,7 @@
+{
+  "id": "ather-automata",
+  "description": "Ather Automata for Paseo: what needs you and what is next (Plan, Build, Prove, Ship), away windows that hold merges and record decisions, and proof read from tool output.",
+  "requirements": {
+    "paseo": ">=0.10.2 <0.11.0"
+  }
+}

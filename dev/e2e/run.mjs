@@ -3,6 +3,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { execFileSync } from 'child_process'
 import { AFK, createEngine } from './engine.mjs'
 import { check, draw, layouts } from './screen.mjs'
 
@@ -81,6 +82,21 @@ const run = async (engine, answers, command = 'ather', args = '') => {
   return { out: out.text, dialogs: [...engine.record.dialogs], sent: engine.record.submits.slice(submits), filled: engine.record.fills.slice(fills), left: engine.script.length }
 }
 
+// Presses the Button with this key (a label can change with the data: "+19 more ›").
+const pressKey = (tree, key) => {
+  const stack = [tree]
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object') continue
+    if (node.type === 'Button' && node.props.key === key) {
+      node.props.onPress()
+      return true
+    }
+    stack.push(...(node.children ?? []))
+  }
+  return false
+}
+
 const pressIn = (tree, label) => {
   const stack = [tree]
   while (stack.length > 0) {
@@ -129,11 +145,12 @@ const pressIn = (tree, label) => {
 
 {
   const { engine, done } = await boot()
-  const first = await run(engine, [pick('Decide F-')])
+  // However many calls the checkout has: one is offered as itself, several as one walk-through.
+  const first = await run(engine, [question => question.options.find(option => /^(Decide F-|Go through \d+ things)/.test(option.label))?.label ?? '__missing__'])
   screens.push(['Desktop · /ather, decide the waiting call', `${dialogText(first.dialogs)}\n  → output: ${first.out}\n  → sent: ${first.sent[0] ?? '(nothing)'}`])
   const menu = first.dialogs[0]
   expect('/ather asks exactly one question', first.dialogs.length === 1 && menu?.header === 'Ather', first.dialogs.length)
-  expect('the question says where things stand and what waits', /Nothing tracked in this session\. Waiting on you: F-\d+ on [a-z-]+\. What now\?/.test(menu?.question ?? ''), menu?.question)
+  expect('the question says where things stand and what waits', /Nothing tracked in this session\. Waiting on you: F-\d+ on [a-z-]+(, F-\d+ on [a-z-]+)*\. What now\?/.test(menu?.question ?? ''), menu?.question)
   expect('the owner of open intents is not offered the tour', !(menu?.options ?? []).some(o => /tour/i.test(o.label)), menu?.options.map(o => o.label))
   expect('deciding hands the call to the session, once', first.sent.length === 1 && /Walk me through decision F-\d+ on intent .+ Then ask me to choose with a question dialog/.test(first.sent[0] ?? ''), first.sent)
   const again = await run(engine, [dismiss])
@@ -273,7 +290,7 @@ const pressIn = (tree, label) => {
   const pie = await engine.modelTool({ tool: 'mcp__unreal__StartPIE', map: 'L_S2Empty' })
   await engine.flush()
   expect('a PIE run through MCP is evidence', evidenceOf(engine)?.pie?.state === 'pass', pie)
-  const both = await run(engine, [pick('Go through 2 things')])
+  const both = await run(engine, [pick('Go through')])
   expect('two waiting things are one choice that sends one walk-through', both.sent.length === 1 && /one at a time/.test(both.sent[0] ?? '') && /Ask me with a question dialog whether to make it a rule/.test(both.sent[0] ?? ''), both.sent)
   expect('the trap is settled once sent', (engine.store.get('gotchaRuled') ?? []).includes('live-coding'))
   const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
@@ -550,10 +567,56 @@ const GH_ISSUES = [
   find(cardTree, 'issue-start')?.props.onPress({})
   await engine.flush()
   expect('Start an intent hands the issue to the session (preflight first)', engine.record.submits.some(text => /issue #31360/.test(text) && /issue-preflight/.test(text)), engine.record.submits)
-  pressIn(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'Everything open')
+  pressKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'all')
   const all = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · Everything open (72 columns)', all.lines.join('\n')])
-  expect('"Everything open" groups your GitHub issues first, then intents by area', /Y O U R   G I T H U B   I S S U E S\n1: #28887/.test(all.lines.join('\n')) && all.problems.length === 0, all.problems)
+  expect('"Everything open" groups by source, each with its count and a fold: your assigned issues, then the teammates\' intents', /▾ A S S I G N E D {3}I S S U E S {3}· {3}1\n1: #28887/.test(all.lines.join('\n')) && /▾ T E A M M A T E S ' {3}I N T E N T S/.test(all.lines.join('\n')) && all.problems.length === 0, all.problems)
+  // The list's own controls: fold a group, filter by age, search, and a teammate's name after the title in its colour.
+  const pickTree = () => engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const pickText = async () => check(await pickTree(), 72).lines.join('\n')
+  const collect = (node, test) => (!node || typeof node !== 'object' ? [] : [...(test(node) ? [node] : []), ...(node.children ?? []).flatMap(child => collect(child, test))])
+  expect('"Everything open" starts unfiltered and sorted by Recent; the age chips are gone (A5)', /s: Search… {3}o: Sort: Recent\n/.test(await pickText()) && !/Any time|7 days/.test(await pickText()))
+  // A teammate's intent in this checkout, whichever it is: the first row under their heading.
+  const teammate = /T E A M M A T E S '[^\n]*\n\d: \S+ (\S+)/.exec(await pickText())?.[1] ?? ''
+  find(await pickTree(), 'group-issues-fold')?.props.onPress()
+  const folded = await pickText()
+  expect('folding a group hides its rows and keeps its heading and count', /▸ A S S I G N E D {3}I S S U E S {3}· {3}1/.test(folded) && !/#28887/.test(folded) && teammate !== '' && folded.includes(teammate), folded)
+  find(await pickTree(), 'group-issues-fold')?.props.onPress()
+  expect('… and unfolding brings them back', /#28887/.test(await pickText()))
+  const sorts = []
+  for (let turn = 0; turn < 3; turn += 1) {
+    find(await pickTree(), 'pick-sort')?.props.onPress()
+    sorts.push(await pickText())
+  }
+  screens.push(['Terminal · Everything open sorted for closing (72 columns)', sorts[0]])
+  expect('Sort cycles Recent → Ready to close → Oldest → Recent; Ready to close shows bold stage blocks with counts (A5)', /o: Sort: Ready to close/.test(sorts[0]) && /^(Ready to close|Proving|Building|Parked) · \d+$/m.test(sorts[0]) && /o: Sort: Oldest/.test(sorts[1]) && !/^Proving · \d+$/m.test(sorts[1]) && /o: Sort: Recent/.test(sorts[2]), sorts[0])
+  const blockTree = (find(await pickTree(), 'pick-sort')?.props.onPress(), await pickTree())
+  const blockHeads = collect(blockTree, node => node.type === 'Text' && /^group-others-(met|prove|build|parked)$/.test(node.props.key ?? ''))
+  expect('the stage blocks are subgroups: bold, not letter-spaced, and never lime', blockHeads.length > 0 && blockHeads.every(node => node.props.bold && node.props.color !== '#DDFF00' && !/ {2}/.test(node.props.children)), blockHeads.map(node => node.props))
+  find(await pickTree(), 'pick-sort')?.props.onPress()
+  find(await pickTree(), 'pick-sort')?.props.onPress()
+  engine.script.length = 0
+  engine.script.push(typed('dodge'))
+  find(await pickTree(), 'pick-search')?.props.onPress()
+  await engine.flush()
+  const searched = await pickText()
+  expect('Search asks one question and the words typed under Other narrow the list (here to the Dodge issue)', /#28887/.test(searched) && !searched.includes(teammate) && /^1 of \d+$/m.test(searched) && /Search: dodge/.test(searched) && engine.record.dialogs.at(-1)?.header === 'Search', searched)
+  find(await pickTree(), 'pick-search-clear')?.props.onPress()
+  expect('✕ Clear shows everything again', (await pickText()).includes(teammate) && !/Search: /.test(await pickText()))
+  const owners = collect(await pickTree(), node => node.type === 'Text' && /^pick-intent:.*-owner-text$/.test(node.props.key ?? ''))
+  const ownerColours = new Map(owners.map(node => [node.props.children.trim(), node.props.color]))
+  expect("a teammate's name sits in the owner column, tidied, in its own colour, dimmed", owners.length > 0 && owners.every(node => /^#[0-9a-f]{6}$/.test(node.props.color) && node.props.color !== '#8E918A' && !/-(Art|VFX|TA)\b/.test(node.props.children)), [...ownerColours])
+  expect('no two teammates share a colour while there are eight or fewer', new Set(ownerColours.values()).size === Math.min(ownerColours.size, 8), [...ownerColours])
+  // One anatomy: every row's right-hand columns end at the same place, and the legend sits at the foot (A8).
+  for (const cols of [72, 110]) {
+    const drawn = check(await engine.render('Pane', { bodyColumns: cols }, 'ather'), cols)
+    const rowsDrawn = drawn.lines.filter(line => /^\d: [●◐✓‖#]/.test(line))
+    const ages = rowsDrawn.filter(line => /[●◐✓‖] /.test(line)).map(line => /\s(\d+[mhd])\s/.exec(line)).map(match => (match ? match.index + match[0].length : -1))
+    expect(`Everything open @${cols}: every intent row's age column ends at the same column, no line wider than the pane`, drawn.problems.length === 0 && ages.length > 0 && new Set(ages).size === 1 && rowsDrawn.every(line => line.length === cols), [drawn.problems, ages, rowsDrawn])
+    expect(`Everything open @${cols}: the legend at the foot`, /● Building {2}◐ Items met, PR not merged {2}✓ Ready to close {2}‖ Parked\n\n0: Back/.test(drawn.lines.join('\n')), drawn.lines.slice(-4))
+  }
+  const limes = collect(await pickTree(), node => (node.props.color === '#DDFF00' || node.props.borderColor === '#DDFF00'))
+  expect('Everything open has no lime: nothing there is waiting on the person (A9)', limes.length === 0, limes.map(node => node.props.key))
   const allTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
   const reads = engine.record.ghRuns.filter(text => text.startsWith('gh issue list')).length
   expect('"Everything open" has a refresh button for the GitHub issues (r)', find(allTree, 'issues-refresh')?.props.hotkey === 'r' && /Refresh GitHub issues/.test(all.lines.join('\n')), find(allTree, 'issues-refresh')?.props)
@@ -761,10 +824,10 @@ const hasFocus = tree => {
     return at > 0 && lines[at].length === 110 && name !== '' && !(lines[at + 1] ?? '').includes(name)
   })(), home)
   expect('NEXT leads and is focused', /N E X T\nn: Pick up /.test(home), home)
-  pressIn(await pane(110), 'Everything open')
+  pressKey(await pane(110), 'all')
   const all = check(await pane(72), 72)
   screens.push(['Terminal · All intents (72 columns)', all.lines.join('\n')])
-  expect('All intents lists every open intent by area, cleanly', all.problems.length === 0 && /Everything open\nYours first/.test(all.lines.join('\n')), all.problems)
+  expect('All intents lists every open intent, cleanly, under one status line', all.problems.length === 0 && /Everything open\n\d+ open · yours first/.test(all.lines.join('\n')), all.problems)
   pressIn(await pane(110), 'Back')
   const tree = await pane(110)
   pressIn(tree, 'Decide F-')
@@ -785,11 +848,11 @@ const hasFocus = tree => {
   const find = (node, type) => (!node || typeof node !== 'object' ? null : node.type === type ? node : (node.children ?? []).map(child => find(child, type)).find(Boolean) ?? null)
   const desk = await engine.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
   const deskPane = check(desk, 70)
-  expect('the pane is headed with the full name, Ather Automata', /^A T H E R   A U T O M A T A$/m.test(pane.lines.join('\n')) && engine.record.opens.some(one => one.title === 'ATHER AUTOMATA'), engine.record.opens)
+  expect('the title bar names Ather Automata, and no brand line under it repeats it (D7)', !/A T H E R   A U T O M A T A/.test(pane.lines.join('\n')) && engine.record.opens.some(one => one.title === 'ATHER AUTOMATA'), pane.lines.slice(0, 3))
   const issuesNow = await run(engine, [], 'ather', 'issues')
   expect('/ather issues reads them on the spot and says why when it cannot, or that there are none', /Could not read your GitHub issues|No open GitHub issues are assigned to you|N E X T|Pick/.test(issuesNow.out + issuesNow.dialogs.map(one => one.question).join(' ')) , issuesNow.out)
   expect('the desktop pane carries the Ather mark, is clicked (no hotkeys drawn) and lays out cleanly; the terminal draws no mark', find(desk, 'Svg')?.props.alt === 'Ather' && deskPane.problems.length === 0 && !/\b[a-z0-9]: /.test(deskPane.lines.join('\n')) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'Svg'), deskPane.problems)
-  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\nSix short steps/.test(pane.lines.join('\n')) && /F O L L O W   A   T E A M M A T E\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
+  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\nSix short steps/.test(pane.lines.join('\n')) && /T E A M M A T E S '   I N T E N T S   ·   \d( \d)*\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
   done()
 }
 
@@ -1098,7 +1161,7 @@ const hasFocus = tree => {
     pressIn(await pane(), 'Back')
   }
   expect('every home row (Also yours, Follow a teammate) opens its own Intent view and none tracks', rows.length > 1 && opened.join(',') === rows.join(',') && pinned() === undefined && sections.length === 2, { sections, rows, opened })
-  pressIn(await pane(), 'Everything open')
+  pressKey(await pane(), 'all')
   const pickRow = findWhere(await pane(), node => node.type === 'Button' && /^pick-intent:/.test(node.props.key ?? '') && node.props.key !== `pick-intent:${slug}`)
   const other = String(pickRow?.props.key ?? '').slice('pick-intent:'.length)
   pickRow?.props.onPress({})
@@ -1276,6 +1339,186 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   expect('a worker with no record shows no clock and no count rather than wrong ones', /Worker with no record\n  General · working\n  running · start unknown\n/.test(text), text)
   done()
   fs.rmSync(home, { recursive: true, force: true })
+}
+
+// ---------------------------------------------------------------- the team's real state (0.1.5)
+
+{
+  // A real git checkout behind its origin: main has intents the working tree lacks. Commits are dated
+  // days apart; the checkout's folders all carry one pull time.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-git-'))
+  const git = (cwd, args, env = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const at = days => new Date(Date.now() - days * 86400000).toISOString()
+  const write = (dir, file, text) => {
+    fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true })
+    fs.writeFileSync(path.join(dir, file), text)
+  }
+  const commit = (dir, message, days, author = 'Tin Nguyen') => {
+    git(dir, ['add', '-A'])
+    git(dir, ['-c', `user.name=${author}`, '-c', 'user.email=a@b.c', 'commit', '-q', '-m', message], { GIT_AUTHOR_DATE: at(days), GIT_COMMITTER_DATE: at(days) })
+  }
+  const intentText = (title, fields, items = ['A1: one', 'A2: two']) => `# ${title}\n\n${Object.entries(fields).map(([k, v]) => `- ${k}: ${v}`).join('\n')}\n\n## Acceptance\n\n${items.map(item => `- ${item}`).join('\n')}\n`
+  const verdicts = rows => `# Progress\n\n## Acceptance\n\n| Item | Verdict |\n| --- | --- |\n${rows.map(([id, verdict]) => `| ${id} | ${verdict} |`).join('\n')}\n`
+  const origin = path.join(base, 'origin.git')
+  const seed = path.join(base, 'seed')
+  const root = path.join(base, 'S2')
+  git(base, ['init', '-q', '--bare', '-b', 'main', origin])
+  git(base, ['init', '-q', '-b', 'main', seed])
+  git(seed, ['remote', 'add', 'origin', origin])
+  write(seed, 'S2.uproject', '{}\n')
+  write(seed, 'docs/intent/teammate-a/prompt.md', intentText('Teammate A', { Status: 'active', Area: 'Tools', Owner: 'LamPhung-Art' }, ['A1: one', 'A2: two', 'A3: three']))
+  write(seed, 'docs/intent/teammate-a/progress.md', verdicts([['A1', 'met'], ['A2', 'open'], ['A3', 'open']]))
+  commit(seed, 'teammate a', 3, 'LamPhung-Art')
+  write(seed, 'docs/intent/teammate-b/prompt.md', intentText('Teammate B', { Status: 'active', Area: 'VFX', Owner: 'Cinematic' }))
+  commit(seed, 'teammate b', 1, 'Cinematic')
+  git(seed, ['push', '-q', 'origin', 'main'])
+  git(base, ['clone', '-q', origin, root])
+  // Newer work reaches main after this checkout last pulled.
+  write(seed, 'docs/intent/ownerless/prompt.md', intentText('Ownerless', { Status: 'active', Area: 'Tools' }))
+  write(seed, 'docs/intent/teammate-c/prompt.md', intentText('Teammate C', { Status: 'active', Area: 'Tools', Owner: 'DuyTranSipher' }))
+  write(seed, 'docs/intent/teammate-d/prompt.md', intentText('Teammate D', { Status: 'parked', Area: 'VFX', Owner: 'TienDang-VFX' }))
+  write(seed, 'docs/intent/mine-met/prompt.md', intentText('Mine, all met', { Status: 'active', Area: 'Tools', Owner: 'Tin Nguyen' }))
+  write(seed, 'docs/intent/mine-met/progress.md', verdicts([['A1', 'met'], ['A2', 'met']]))
+  write(seed, 'docs/intent/mine-parked/prompt.md', intentText('Mine, parked', { Status: 'parked', Area: 'Tools', Owner: 'Tin Nguyen' }))
+  write(seed, 'docs/intent/quest-calls/prompt.md', intentText('Quest calls', { Status: 'active', Area: 'Tools', Owner: 'Tin Nguyen' }))
+  write(seed, 'docs/intent/quest-calls/findings.md', `# Findings\n\n${[1, 2, 3, 4].map(n => `## F-${n} (2026-10-07) | blocking: yes | status: open (director)\n\nCall number ${n}: which way?\n`).join('\n')}`)
+  commit(seed, 'newer intents', 0.1, 'trucnguyen')
+  git(seed, ['push', '-q', 'origin', 'main'])
+  // The checkout's own draft, never committed; and every folder it has carries the same pull time.
+  write(root, 'docs/intent/local-draft/prompt.md', intentText('Local draft', { Status: 'active', Area: 'Tools', Owner: 'Tin Nguyen' }))
+  write(root, 'Saved/EDITOR_OWNER.txt', 'free since 14:18')
+  const pulled = new Date(Date.now() - 3600000)
+  for (const dir of ['teammate-a', 'teammate-b', 'local-draft']) for (const file of fs.readdirSync(path.join(root, 'docs/intent', dir))) fs.utimesSync(path.join(root, 'docs/intent', dir, file), pulled, pulled)
+
+  const engine = createEngine({ root, surfaces: ['terminal'], user: 'Tin Nguyen' })
+  engine.store.set('tz', tzFor(12))
+  register(engine.on, { briefGate: 'warn' })
+  await engine.start()
+  const until = async (test, ms = 15000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 50))) if (await test()) return true
+    return false
+  }
+  const fetches = () => engine.record.gitRuns.filter(one => one.argv.includes('fetch'))
+  const pane = (cols = 72, surface = 'terminal') => engine.render('Pane', { bodyColumns: cols }, 'ather', surface)
+  const text = async (cols = 72) => check(await pane(cols), cols).lines.join('\n')
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  await new Promise(resolve => setTimeout(resolve, 1500))
+  // Before anything is drawn there is no fetch: the list is what origin/main held at the last pull.
+  engine.setSurfaces([])
+  const before = (await run(engine, [dismiss], 'ather', 'pick')).dialogs[0]?.options.map(one => one.label) ?? []
+  engine.setSurfaces(['terminal'])
+  expect('before the pane is drawn nothing is fetched, and the list is origin/main as last pulled plus the local draft', before.includes('teammate-a') && before.includes('local-draft') && !before.includes('mine-met') && fetches().length === 0, before)
+  await run(engine, [])
+  await pane()
+  const synced = await until(async () => /synced just now ↻/.test(await text()))
+  const home72 = await text()
+  screens.push(["Terminal · Home from origin/main, a checkout behind it (72 columns)", home72])
+  expect("the pane's first draw fetches origin's main in the background, and the list then holds main's open intents the checkout lacks (A1)", synced && fetches().length === 1 && /mine-met/.test(home72) && /quest-calls/.test(home72), home72)
+  const [fetch] = fetches()
+  expect('the fetch moves origin/main by an explicit refspec, no tags, no FETCH_HEAD, no submodules, no auto gc, with GIT_OPTIONAL_LOCKS=0 and no prompt (A3)', fetch?.argv.slice(3).join(' ') === '-c gc.auto=0 -c maintenance.auto=false fetch --no-tags --no-write-fetch-head --no-recurse-submodules origin +refs/heads/main:refs/remotes/origin/main' && fetch?.env.GIT_OPTIONAL_LOCKS === '0' && fetch?.env.GIT_TERMINAL_PROMPT === '0', fetch)
+  expect('every git call Ather makes runs with GIT_OPTIONAL_LOCKS=0, and none writes the working tree or the index (A3, D2)', engine.record.gitRuns.filter(one => one.argv.join(' ') !== 'git config user.name').every(one => one.env.GIT_OPTIONAL_LOCKS === '0') && !engine.record.gitRuns.some(one => one.argv.some(arg => ['checkout', 'reset', 'stash', 'add', 'restore', 'switch', 'pull', 'merge', 'update-index'].includes(arg))), engine.record.gitRuns.map(one => one.argv.slice(3).join(' ')))
+  // Reads run one at a time: three turn ends at once make at most two reads (the running one, then one more).
+  const reads = () => engine.record.gitRuns.filter(one => one.argv.includes('--show-toplevel')).length
+  const statuses = () => engine.record.gitRuns.filter(one => one.argv.includes('status')).length
+  const [readsBefore, statusesBefore] = [reads(), statuses()]
+  await Promise.all([engine.turnEnd(), engine.turnEnd(), engine.turnEnd()])
+  await until(async () => false, 1500)
+  expect('reads run one at a time: three turn ends at once make at most two reads, and with nothing changed none asks git status again (D2)', reads() - readsBefore <= 2 && reads() > readsBefore && statuses() === statusesBefore, [reads() - readsBefore, statuses() - statusesBefore])
+  const logs = engine.record.gitRuns.filter(one => one.argv.includes('log') && !one.argv.some(arg => arg.includes('..')))
+  expect('dates come from one batched git log for all of docs/intent, never one per intent (A2)', logs.length >= 1 && logs.every(one => one.argv.at(-1) === 'docs/intent' && !one.argv.some(arg => /docs\/intent\/./.test(arg))), logs.map(one => one.argv.slice(3).join(' ')))
+  expect('the status line ends in "synced N min ago ↻" in the terminal, f fetches now (A4)', /\nf: synced just now ↻\n/.test(home72) || /f: synced just now ↻$/m.test(home72), home72.split('\n').slice(0, 3))
+  const teamRows = /T E A M M A T E S '   I N T E N T S   ·   5\nRead-only[^\n]*\n((?:[a-z]: [●◐✓‖][^\n]*\n){4})i: \+1 more ›/.exec(home72)
+  expect("Home previews four teammates' intents, then \"+1 more ›\" (A8)", Boolean(teamRows) && check(await pane(), 72).problems.length === 0, home72)
+  const deskHome = await pane(110, 'desktop')
+  expect('… on the desktop too: four rows with their column boxes, then "+1 more ›", no keys drawn (A8)', findKey(deskHome, 'all')?.props.label === '+1 more ›' && ['teammate-a', 'teammate-b', 'teammate-c', 'teammate-d', 'ownerless'].filter(slug => findKey(deskHome, `work-intent:${slug}-cols`)).length === 4 && !findKey(deskHome, 'all')?.props.hotkey, findKey(deskHome, 'all')?.props)
+  // A teammate's parked intent warns on its row, but asks nothing of the person.
+  expect("a teammate's parked intent without a reason warns on its own row and is not in the person's Needs attention (D5, D7)", /teammate-d ⚠ parked, no reason/.test(await text(110)) && !/teammate-d · parked, no reason/.test(await text(110)), await text(110))
+  // Needs you: an intent's four decisions wait as one row that opens them (A9).
+  expect('four decisions on one intent wait as one block, "quest-calls · 4 decisions" (A9)', /◆ \d: ▸ quest-calls · 4 decisions/.test(home72) && !/Decide F-1 on quest-calls/.test(home72), home72)
+  findKey(await pane(), 'calls-quest-calls')?.props.onPress()
+  const opened = await text()
+  expect('… and pressing it opens the four, each its own press', /▾ quest-calls · 4 decisions/.test(opened) && (opened.match(/· \d: F-\d · Call number \d/g) ?? []).length === 4, opened)
+  findKey(await pane(), 'calls-quest-calls')?.props.onPress()
+  // Needs attention: the person's own all-met and parked-without-reason intents, above Next (A6).
+  const attention = home72.indexOf('N E E D S   A T T E N T I O N')
+  expect("Needs attention lists the person's own all-met and parked-without-reason intents, above Next (A6)", attention > 0 && attention < home72.indexOf('N E X T') && /✓ \d: mine-met · ready to close · Close it\?/.test(home72) && /‖ \d: mine-parked · parked, no reason · Add one\?/.test(home72) && !/teammate-a · ready to close/.test(home72), home72)
+  findKey(await pane(), 'attention:mine-met')?.props.onPress()
+  const view = await text()
+  expect('… each opens its intent, and nothing is done for them', /^I N T E N T\nmine-met$/m.test(view) && engine.record.submits.length === 0, view.split('\n').slice(0, 3))
+  pressIn(await pane(), 'Back')
+  // Lime only on what needs the person (A9).
+  const limes = []
+  const walkLime = (node, trail) => {
+    if (!node || typeof node !== 'object') return
+    const here = node.props?.key ? [...trail, node.props.key] : trail
+    if (node.props?.color === '#DDFF00' || node.props?.borderColor === '#DDFF00') limes.push(here)
+    for (const child of node.children ?? []) walkLime(child, here)
+  }
+  walkLime(await pane(), [])
+  expect('lime only on Needs you, Needs attention and Next (A9)', limes.length > 0 && limes.every(trail => trail.some(key => ['needs', 'attention', 'next-section', 'strip'].includes(key))), limes.map(trail => trail.join('>')))
+  // Everything open: sources, commit ages, tidied owners, one row anatomy.
+  findKey(await pane(), 'all')?.props.onPress()
+  const all110 = await text(110)
+  const all72 = await text(72)
+  screens.push(['Terminal · Everything open from origin/main (110 columns)', all110])
+  screens.push(['Terminal · Everything open from origin/main (72 columns)', all72])
+  const ageOf = slug => new RegExp(`${slug}\\b[^\\n]*?\\s(\\d+[mhd])\\s`).exec(all110)?.[1]
+  expect("folders with the same file times get their own ages from their commits: 3d and 1d, not the pull's 1h (A2)", ageOf('teammate-a') === '3d' && ageOf('teammate-b') === '1d', [ageOf('teammate-a'), ageOf('teammate-b')])
+  expect("each row records its source: the checkout's own draft is tagged local, main's are not (A1, D1)", /local-draft local/.test(all110) && !/teammate-a local/.test(all110), all110)
+  expect('owners tidied: LamPhung-Art is Lam Phung, Cinematic is "Tien Dang · Cinematic", the ownerless intent shows its first committer (A7)', /teammate-a[^\n]*Lam Phung/.test(all110) && /teammate-b[^\n]*Tien Dang · Cinematic/.test(all110) && /ownerless[^\n]*Truc Nguyen/.test(all110), all110)
+  for (const [cols, drawn] of [[72, all72], [110, all110]]) {
+    const rows = drawn.split('\n').filter(line => /^\d: [●◐✓‖]/.test(line))
+    const counts = rows.map(line => /\d+\/\d+/.exec(line)).map(match => (match ? match.index + match[0].length : -1))
+    expect(`one anatomy @${cols}: every intent row as wide as the pane, its count column ending at one place, a mini bar beside it (A8)`, rows.length >= 6 && rows.every(line => line.length === cols && /[▰▱]{5}/.test(line)) && new Set(counts).size === 1, rows)
+  }
+  // The desktop: the same columns as fixed-width boxes, no keys drawn, the sync line a press.
+  const desk = await pane(110, 'desktop')
+  const colBoxes = slug => ['bar', 'count', 'age', 'owner'].map(name => findKey(desk, `pick-intent:${slug}-${name}`)?.props.width)
+  expect('on the desktop every row has the same column boxes (bar, count, age, owner) of the same widths, and no hotkeys (A8)', JSON.stringify(colBoxes('teammate-a')) === JSON.stringify(colBoxes('mine-met')) && colBoxes('teammate-a').every(width => width > 0) && !findKey(desk, 'pick-intent:teammate-a')?.props.hotkey, [colBoxes('teammate-a'), colBoxes('mine-met')])
+  const deskSync = findKey(desk, 'sync')
+  expect('on the desktop the sync line is a press with no key drawn (A4)', /^synced just now ↻$/.test(deskSync?.props.label ?? '') && deskSync?.props.hotkey === undefined, deskSync?.props)
+  // ↻ fetches now, one at a time; the timer fetches at most every ten minutes (A3, A4).
+  write(seed, 'docs/intent/late-one/prompt.md', intentText('Late one', { Status: 'active', Area: 'Tools', Owner: 'HaiHuynhTA' }))
+  commit(seed, 'late one', 0, 'HaiHuynhTA')
+  git(seed, ['push', '-q', 'origin', 'main'])
+  await engine.timers()
+  expect('the minute timer does not fetch again within ten minutes', fetches().length === 1, fetches().length)
+  deskSync?.props.onPress()
+  deskSync?.props.onPress()
+  await until(async () => /late-one/.test(await text(110)))
+  expect('↻ fetches now, and two quick presses make one fetch; the new intent shows (A4)', fetches().length === 2 && /late-one/.test(await text(110)), fetches().length)
+  // An intent only on origin/main can't be worked on here, but can be asked about: the session reads it from main.
+  findKey(await pane(110, 'desktop'), 'pick-intent:late-one')?.props.onPress({})
+  const lateView = await pane(110, 'desktop')
+  expect('an intent only on origin/main offers Ask about it (primary), no Work on this here, and says why', findKey(lateView, 'intent-ask')?.props.variant === 'primary' && !findKey(lateView, 'intent-work') && /pull main to work on it here/.test(JSON.stringify(lateView)), findKey(lateView, 'intent-actions'))
+  const asked = engine.record.submits.length
+  findKey(lateView, 'intent-ask')?.props.onPress({})
+  await engine.flush()
+  const askText = engine.record.submits.slice(asked).join('\n')
+  // The section around Back shares its key: the press is on the Button inside.
+  const backBox = findKey(await pane(110, 'desktop'), 'intent-back')
+  const backTo = backBox?.type === 'Button' ? backBox : backBox?.children.find(child => child?.type === 'Button')
+  expect('the intent view has its Back press', typeof backTo?.props.onPress === 'function', backTo)
+  backTo?.props.onPress?.({})
+  expect('Ask about it hands the session a read-only look at the intent on origin/main: its files by git show, its recent history, no fetch, pull, checkout or tracking', askText.includes('git show origin/main:docs/intent/late-one/<file>') && askText.includes('origin/main -- docs/intent/late-one') && askText.includes('Do not fetch, pull, check out, track it or write anything'), askText)
+  // A failing fetch keeps the list and says so.
+  git(root, ['remote', 'set-url', 'origin', path.join(base, 'gone.git')])
+  findKey(await pane(), 'sync')?.props.onPress()
+  await until(async () => /sync failed/.test(await text()))
+  const failed = await text(110)
+  expect('a failed fetch keeps every row and the sync line says so (A3)', /sync failed · synced (just now|\d+ min ago) ↻/.test(failed) && /teammate-a/.test(failed) && /late-one/.test(failed) && fetches().length === 3, failed.split('\n').slice(0, 3))
+  const realNow = Date.now
+  Date.now = () => realNow() + 11 * 60000
+  try {
+    await engine.timers()
+    await until(async () => fetches().length === 4, 5000)
+  } finally {
+    Date.now = realNow
+  }
+  await until(async () => !/syncing…/.test(await text()), 5000)
+  expect('after ten minutes the timer fetches again on its own', fetches().length === 4, fetches().length)
+  expect('no hook threw on the git checkout', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  fs.rmSync(base, { recursive: true, force: true })
 }
 
 // ---------------------------------------------------------------- report

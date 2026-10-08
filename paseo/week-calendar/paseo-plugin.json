@@ -1,0 +1,7 @@
+{
+  "id": "week-calendar",
+  "description": "For agent PCs: a weekly calendar of every Claude Code session and a weekly report (PRs merged, productive agent time) pushed to the team's agent-reports repo.",
+  "requirements": {
+    "paseo": ">=0.10.2 <0.11.0"
+  }
+}

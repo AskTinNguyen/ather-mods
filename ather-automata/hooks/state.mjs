@@ -268,13 +268,17 @@ export const setProfile = (io, me, fields, pack = unreal) =>
     changed(io)
   })
 
+// Whether this checkout has the intent's folder: what tracking it needs (asking about it does not).
+/** @param {Io} io @param {string} root @param {string} slug */
+export const hasIntentFolder = (io, root, slug) => io.exists(`${root}/docs/intent/${slug}/prompt.md`)
+
 // Tracks an intent, if it exists. The one path for /ather, the profile tool and a write into an intent.
 // `isAuto`: a write into the intent, which never tracks one this session stopped tracking; tracking one
 // on purpose lifts that stop. `me`: the person's "Continue …" moves to it too.
 /** @param {Io} io @param {string} root @param {string} slug @param {{ onlyIfNone?: boolean, isAuto?: boolean, me?: string }} [options] */
 export const track = (io, root, slug, options = {}) =>
   serial(async () => {
-    if (!(await io.exists(`${root}/docs/intent/${slug}/prompt.md`))) return false
+    if (!(await hasIntentFolder(io, root, slug))) return false
     const sid = await io.sessionId()
     const stopped = /** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? [])
     if (options.isAuto && stopped.includes(slug)) return false

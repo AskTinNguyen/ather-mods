@@ -15,6 +15,7 @@ import * as state from './state.mjs'
 import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { heldByLine, untrackText } from './home.mjs'
+import { GIT_ENV } from './team.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -223,7 +224,9 @@ async function readIntent($, slug) {
     progress: (await files.read(`${dir}/progress.md`)) ?? '',
     files: (await $.fs.list(dir).catch(() => [])).map(entry => entry.name),
     hasDebrief: await files.exists(`${root}/${pack.debriefPath(slug)}`),
-    mtimeMs: 0,
+    updatedAt: 0,
+    source: 'local',
+    firstAuthor: '',
   }, pack)
 }
 
@@ -565,7 +568,7 @@ async function auditMerge($) {
   const { root, pack } = await laneOf($)
   const binary = pack.binaryAssets
   if (!binary) return []
-  const git = (/** @type {string[]} */ args) => $.process.run(['git', '-C', root, ...args], { env: { GIT_OPTIONAL_LOCKS: '0' }, timeoutMs: 30000 })
+  const git = (/** @type {string[]} */ args) => $.process.run(['git', '-C', root, ...args], { env: GIT_ENV, timeoutMs: 30000 })
   const [, ours = '', theirs = ''] = (await git(['rev-list', '--parents', '-n', '1', 'HEAD'])).stdout.trim().split(/\s+/)
   if (theirs === '') return []
   const base = (await git(['merge-base', ours, theirs])).stdout.trim()

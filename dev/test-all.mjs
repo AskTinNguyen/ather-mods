@@ -32,6 +32,19 @@ fs.writeFileSync(path.join(link, 'package.json'), JSON.stringify({ name: 'claude
 fs.writeFileSync(path.join(link, 'testing.mjs'), `export * from '${new URL('./shim/node-test.mjs', import.meta.url).href}'
 `)
 
+// The Paseo versions (paseo/): their copies of the mods' shared code must match, and they type-check
+// once `npm install` has run in each (skipped, and said so, before that).
+console.log('== paseo')
+const PASEO = path.resolve(HERE, '../paseo')
+const NODE = `"${process.execPath}"`
+sh(`${NODE} server/sync.mjs --check`, path.join(PASEO, 'ather-automata'))
+sh(`${NODE} server/embed.mjs --check`, path.join(PASEO, 'week-calendar'))
+for (const plugin of ['ather-automata', 'week-calendar']) {
+  const dir = path.join(PASEO, plugin)
+  if (fs.existsSync(path.join(dir, 'node_modules/typescript'))) sh(`${NODE} node_modules/typescript/bin/tsc --noEmit`, dir)
+  else console.log(`skipped: npm install in paseo/${plugin} to type-check it`)
+}
+
 console.log('== type-check')
 const types = process.env.CLAUDE_CODE_TYPES ?? [path.join(MOD, '.claude-plugin/types/claude-code/index.d.ts')].find(f => fs.existsSync(f))
 if (types) {

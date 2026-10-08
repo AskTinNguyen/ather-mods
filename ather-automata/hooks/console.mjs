@@ -10,10 +10,10 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText } from './home.mjs'
+import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { STAGE_LABELS, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { crewOf } from './crew.mjs'
@@ -21,6 +21,9 @@ import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, crewWords, p
 import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
 import { recordEnd } from './workers.mjs'
 import { changeGlyph } from './changes.mjs'
+import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from './team.mjs'
+import { SORT_LABELS, nextSort } from './worklist.mjs'
+import { AMBER, INK, LIME, QUIET, choiceRow, fit, homePreview, label, needsRows, section, statusLine, workGroups } from './rows.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {ReturnType<typeof buildHome>} Home */
@@ -55,6 +58,28 @@ let issueBack = /** @type {'home' | 'pick'} */ ('home')
 // The intent whose view is open (paneMode 'intent'; '' is the tracked one), and the view to go back to.
 let intentShown = ''
 let intentBack = /** @type {'home' | 'pick'} */ ('home')
+// The "Everything open" list: the words searched, its sort, and the folded groups.
+let pickQuery = ''
+let pickSort = /** @type {import('./worklist.mjs').Sort} */ ('recent')
+/** @type {Set<string>} */
+const pickFolded = new Set()
+// Needs you's intents opened to show each of their decisions.
+/** @type {Set<string>} */
+const callsOpen = new Set()
+// What the last read of the team's intents learned (team.mjs reads each part again only when it moved),
+// and where the background fetch stands. Both, and `intents`, change together, in readIntents.
+let teamCache = EMPTY_CACHE
+let sync = NO_SYNC
+// A fetch that ended (the `count`th), for the first read that began after it to apply with what it brought in.
+/** @type {{ count: number, sync: Partial<import('./team.mjs').Sync> } | null} */
+let fetched = null
+let fetchesEnded = 0
+// The read running now, and whether another was asked for while it ran.
+/** @type {Promise<void> | null} */
+let reading = null
+let isRereadAsked = false
+// The pane has been drawn: from then on the fetch runs on its own, at most every ten minutes.
+let isDrawn = false
 /** @type {{ name: string, description: string }[]} */
 let skills = []
 // The band's ✕: hidden until it has something new to say.
@@ -90,6 +115,18 @@ function io($) {
     gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
+  }
+}
+
+// Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV.
+/** @param {Engine} $ @param {string} root @returns {import('./team.mjs').Repo} */
+function repo($, root) {
+  return {
+    git: (args, { stdin, timeoutMs = 120000 } = {}) =>
+      $.process.run(['git', '-C', root, ...args], { cwd: root, env: GIT_ENV, timeoutMs, ...(stdin === undefined ? {} : { stdin }) }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error) })),
+    read: path => $.fs.read(path).then(text => (typeof text === 'string' ? text : null), () => null),
+    list: path => $.fs.list(path),
+    mtime: path => $.fs.stat(path).then(stat => stat.mtimeMs, () => 0),
   }
 }
 
@@ -133,7 +170,8 @@ export function register(on) {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (!e.agentId && (await laneOf($)).isS2) await refresh($).catch(() => undefined)
+    // Read again in the background: the turn's end never waits on git.
+    if (!e.agentId && (await laneOf($)).isS2) void refresh($).catch(() => undefined)
     // A worker's turn ended: it finished now, not when the pane is next drawn.
     if (e.agentId) recordEnd(e.agentId, Date.now())
     if (e.agentId) $.ui.invalidate('ui.render')
@@ -185,6 +223,8 @@ export function register(on) {
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE_ID) return next(e)
     void wake($)
+    isDrawn = true
+    void syncMain($)
     if (paneMode === 'intent') await readIntentView($)
     return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($))))
   })
@@ -212,10 +252,19 @@ async function openConsole($, folder) {
   intentSeenAt = Date.now()
   intentShown = ''
   intentBack = 'home'
+  pickQuery = ''
+  pickSort = 'recent'
+  pickFolded.clear()
+  callsOpen.clear()
+  teamCache = EMPTY_CACHE
+  sync = NO_SYNC
+  fetched = null
+  fetchesEnded = 0
+  isDrawn = false
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -238,7 +287,7 @@ async function startConsoleWork($) {
   pack = lane.pack
   if (!lane.isS2) return
   await refresh($)
-  $.clock.every(60000, () => void refresh($).catch(() => undefined))
+  $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
   // A running worker's clock: redrawn every five seconds while one runs, never otherwise.
   $.clock.every(5000, () => {
     void $.agent.list().then(agents => agents.some(agent => agent.status === 'running') && $.ui.invalidate('ui.render')).catch(() => undefined)
@@ -255,38 +304,46 @@ async function startConsoleWork($) {
 
 // ---------------------------------------------------------------- the view model
 
-// Re-reads the intents; the rest comes from shared state when the view is rebuilt.
+// Re-reads the intents (origin/main's and this checkout's, team.mjs), one read at a time: a call while
+// one runs asks for one more after it and waits for that, so the last read to land is the newest.
+// The rest comes from shared state when the view is rebuilt.
+/** @param {Engine} $ @returns {Promise<void>} */
+function refresh($) {
+  if (reading) {
+    isRereadAsked = true
+    return reading
+  }
+  reading = (async () => {
+    try {
+      do {
+        isRereadAsked = false
+        await readIntents($)
+      } while (isRereadAsked)
+    } finally {
+      reading = null
+    }
+  })()
+  return reading
+}
+
 /** @param {Engine} $ */
-async function refresh($) {
+async function readIntents($) {
+  // Only a fetch that ended before this read began is applied with what this read finds.
+  const seen = fetchesEnded
   const { root, me: who, pack: chosen } = await laneOf($)
   if (who !== me) stale()
   me = who
   pack = chosen
   const files = io($)
   const pinned = await state.readPinned(files)
+  const team = await readTeam(repo($, root), root, { cache: teamCache, pinned })
   const read = []
-  for (const entry of await $.fs.list(`${root}/docs/intent`).catch(() => [])) {
-    if (entry.kind !== 'dir') continue
-    const dir = `${root}/docs/intent/${entry.name}`
-    const prompt = await files.read(`${dir}/prompt.md`)
-    if (prompt === null) continue
-    const isOpen = !/^\s*-\s*Status:\s*completed/im.test(prompt)
-    const isPinned = entry.name === pinned
-    const stats = await Promise.all(['prompt.md', 'progress.md', 'log.md'].map(name => $.fs.stat(`${dir}/${name}`).then(s => s.mtimeMs).catch(() => 0)))
-    read.push(
-      parseIntent({
-        slug: entry.name,
-        prompt,
-        findings: isOpen ? ((await files.read(`${dir}/findings.md`)) ?? '') : '',
-        // Every open intent's (and the tracked one's): its Acceptance table says how much is met, its header names the PRs.
-        progress: isOpen || isPinned ? ((await files.read(`${dir}/progress.md`)) ?? '') : '',
-        files: isPinned ? (await $.fs.list(dir).catch(() => [])).map(one => one.name) : [],
-        hasDebrief: isPinned && (await files.exists(`${root}/${chosen.debriefPath(entry.name)}`)),
-        mtimeMs: Math.max(...stats),
-      }, chosen),
-    )
-  }
-  intents = read.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  for (const one of team.intents) read.push(parseIntent({ ...one, hasDebrief: one.slug === pinned && (await files.exists(`${root}/${chosen.debriefPath(one.slug)}`)) }, chosen))
+  const ended = fetched && fetched.count <= seen ? fetched : null
+  if (ended) fetched = null
+  teamCache = team.cache
+  intents = read.sort((a, b) => b.updatedAt - a.updatedAt)
+  sync = { ...sync, ...ended?.sync, isRepo: team.isRepo, hasMain: team.cache.main !== null }
   // The listed skills that exist here, each with the first sentence of its own description.
   const found = []
   for (const name of new Set([...chosen.skillGroups.flatMap(one => one.names), ...chosen.createGroups.flatMap(one => one.items.filter(item => !item.isGlobal).map(item => item.name))])) {
@@ -318,6 +375,27 @@ async function refreshPrs($) {
     await state.setPrStates(io($), read, Date.now())
   } finally {
     isPrsReading = false
+  }
+}
+
+// Fetches origin's main in the background (D2): once the pane is drawn, then at most every ten minutes,
+// or at once from ↻ (after a git lock, only at the next due time); one at a time. The sync line says
+// synced once the read after the fetch has landed; a failure keeps the last list and says so.
+/** @param {Engine} $ @param {boolean} [isAsked] */
+async function syncMain($, isAsked = false) {
+  if (!(isAsked ? canFetchNow : isFetchDue)(sync, Date.now())) return
+  sync = { ...sync, isFetching: true, triedAt: Date.now() }
+  $.ui.invalidate('ui.render')
+  const { error, lock, moved } = await fetchMain(repo($, (await laneOf($)).root))
+  $.ui.log(error ? `Ather: git fetch failed: ${error}` : `Ather: origin/main ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
+  fetchesEnded += 1
+  fetched = { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } }
+  await refresh($).catch(() => undefined)
+  // The reads failed: the fetch's outcome is still said.
+  if (fetched) {
+    sync = { ...sync, ...fetched.sync }
+    fetched = null
+    $.ui.invalidate('ui.render')
   }
 }
 
@@ -536,7 +614,8 @@ async function startIssue($, number, isInQuestion = false) {
 /** @param {Engine} $ @param {string} slug */
 async function trackSlug($, slug) {
   const { root } = await laneOf($)
-  if (!(await state.track(io($), root, slug, { me }))) return `No intent named "${slug}" in docs/intent.`
+  // An intent read from origin/main that this checkout does not have yet cannot be worked on here.
+  if (!(await state.track(io($), root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
   return `Now tracking ${slug}.`
 }
@@ -640,7 +719,7 @@ async function skipTour($) {
 }
 
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -649,6 +728,11 @@ async function atherCommand($, args) {
   if (word === 'tour' || word === 'tours') return startTour($)
   if (word === 'skip') return skipTour($)
   if (word === 'untrack' && rest === '') return untrackHere($)
+  if (word === 'find') {
+    if (rest) setSearch($, rest)
+    if (await hasPane($)) return openPane($, 'pick')
+    return rest ? findText($) : searchQuestion($)
+  }
   if ((word === 'intent' || word === 'pick') && rest) return pickIntent($, rest)
   if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
   if (word === 'role') {
@@ -875,6 +959,48 @@ async function presetQuestion($, goal) {
   })
 }
 
+// ---------------------------------------------------------------- the work list's search and filters
+
+// Narrows "Everything open" to the words (title, number, area or owner); '' shows everything.
+/** @param {Engine} $ @param {string} text */
+function setSearch($, text) {
+  pickQuery = text.trim()
+  $.ui.invalidate('ui.render')
+  return pickQuery ? `Searching for "${pickQuery}".` : 'Showing everything.'
+}
+
+/** @param {Engine} $ */
+function cycleSort($) {
+  pickSort = nextSort(pickSort)
+  $.ui.invalidate('ui.render')
+}
+
+// Folds or unfolds a group of Everything open, or opens or closes an intent's decisions in Needs you.
+/** @param {Engine} $ @param {Set<string>} opened @param {string} key */
+function toggleIn($, opened, key) {
+  if (!opened.delete(key)) opened.add(key)
+  $.ui.invalidate('ui.render')
+}
+
+// Without a pane: what the search found, in a line.
+/** @param {Engine} $ */
+async function findText($) {
+  const found = filterWork((await home($)).work, pickQuery)
+  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(one => one.label).join(', ')}${found.length > 8 ? ', …' : ''}.`
+}
+
+// The pane has no text box: one question, and what is typed under Other is the search.
+/** @param {Engine} $ */
+async function searchQuestion($) {
+  return ask($, {
+    header: 'Search',
+    question: `Search everything open by title, issue number, area or owner. Type the words under Other.${pickQuery ? ` Searching for "${pickQuery}" now.` : ''}`,
+    choices: [{ label: 'Show everything', description: 'Clear the search.', run: async () => setSearch($, '') }],
+    fallback: pickQuery ? `Still searching for "${pickQuery}".` : 'Nothing searched.',
+    onTyped: async text => setSearch($, text),
+  })
+}
+
 // ---------------------------------------------------------------- the pane (terminal)
 
 /** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} mode */
@@ -926,35 +1052,15 @@ function show($, mode) {
   }
 }
 
-// One row for a piece of work: an intent's own line, or an issue's number, title and age.
-/** @param {Work} one */
-function workRow(one) {
-  return one.kind === 'intent' ? one.hint : `${one.label} · ${one.hint}`
-}
-
-/** @param {string} text @param {number} width */
-function fit(text, width) {
-  const clean = text.replace(/[\r\n\t]+/g, ' ')
-  return clean.length <= width ? clean : `${clean.slice(0, Math.max(1, width - 1))}…`
-}
-
 // ---------------------------------------------------------------- the pane
 
-// Ather's look: near-black, one lime accent, quiet grey for everything secondary.
-const LIME = '#DDFF00'
-const QUIET = '#8E918A'
-// A notice that is not a fault: the Editor held, another session on the same intent.
-const AMBER = '#f2a516'
+// The palette is rows.mjs's: lime only for what needs the person. Each teammate has a colour (set when
+// the pane is drawn, from everyone in the list).
+/** @type {Record<string, string>} */
+let peopleColours = {}
 
 // The Ather mark: the A, its lime I, and the 5 raised as a power.
 const MARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100"><polygon points="6,98 40,14 60,14 94,98 76,98 50,36 24,98" fill="#C9CCCC"/><rect x="47.5" y="56" width="5" height="28" fill="#DDFF00"/><text x="86" y="40" font-family="Arial Black, Impact, sans-serif" font-weight="900" font-size="40" fill="#DDFF00">5</text></svg>'
-
-// A section label, spaced out as the studio's are ("N E E D S   Y O U"), plain when too wide.
-/** @param {any} el @param {string} key @param {string} text @param {number} width */
-function label(el, key, text, width) {
-  const spaced = text.toUpperCase().split('').join(' ')
-  return el.Text({ key, color: LIME, bold: true, children: spaced.length <= width ? spaced : fit(text.toUpperCase(), width) })
-}
 
 // On the desktop the pane is clicked, and its keys reach it only once it is clicked into (opened from
 // the band it never takes the keyboard): letters there promise what they cannot do, so none are drawn.
@@ -962,27 +1068,8 @@ let isClicked = false
 /** @param {string | undefined} hotkey */
 const hotkeyFor = hotkey => (isClicked ? undefined : hotkey)
 
-// One choice: its key and what it does, then one quiet line of detail beneath.
-/**
- * @param {any} el
- * @param {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQuiet?: boolean, autoFocus?: boolean, aside?: string, lead?: string, mark?: string, marginTop?: number, width: number, onPress: () => void }} row
- */
-function choice(el, row) {
-  const title = `${row.isSent ? '✓ sent · ' : ''}${row.title}`
-  // A right-hand column (a teammate's name) takes its width from the title, never the other way.
-  const aside = row.aside ? fit(row.aside, 24) : ''
-  const button = el.Button({ key: row.key, label: fit(title, row.width - 3 - (aside ? aside.length + 2 : 0) - (row.mark ? 2 : 0)), hotkey: hotkeyFor(row.hotkey), plain: true, dimColor: row.isSent || row.isQuiet ? true : undefined, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress })
-  const body = [
-    aside ? el.Box({ key: `${row.key}-line`, flexDirection: 'row', justifyContent: 'space-between', gap: 2, width: '100%', children: [el.Box({ key: `${row.key}-main`, flexGrow: 1, flexShrink: 1, children: [button] }), el.Text({ key: `${row.key}-aside`, color: QUIET, children: aside })] }) : button,
-    // The whole name, wrapped, where a button's one line would cut it (the desktop).
-    ...(row.lead ? [el.Box({ key: `${row.key}-lead`, paddingLeft: isClicked ? 1 : 3, children: [el.Text({ wrap: 'wrap', children: row.lead })] })] : []),
-    // The desktop wraps the detail whole; the terminal keeps it to three lines.
-    ...(row.detail ? [el.Box({ key: `${row.key}-detail`, paddingLeft: isClicked ? 1 : 3, children: [el.Text({ color: QUIET, wrap: 'wrap', children: isClicked ? row.detail : fit(row.detail, 3 * Math.max(20, row.width - 4)) })] })] : []),
-  ]
-  // A marked row (something that needs you) hangs its text beside the mark.
-  if (row.mark) return el.Box({ key: `row-${row.key}`, flexDirection: 'row', width: '100%', marginTop: row.marginTop, children: [el.Text({ key: `${row.key}-mark`, color: row.isSent ? QUIET : LIME, children: `${row.mark} ` }), el.Box({ key: `${row.key}-body`, flexDirection: 'column', flexGrow: 1, flexShrink: 1, children: body })] })
-  return el.Box({ key: `row-${row.key}`, flexDirection: 'column', width: '100%', marginTop: row.marginTop, children: body })
-}
+/** @param {any} el @param {import('./rows.mjs').Choice} row */
+const choice = (el, row) => choiceRow(el, row, isClicked)
 
 // An issue's address, when it is one a Link may carry (https, printable ASCII); else none.
 /** @param {string} url */
@@ -1038,11 +1125,6 @@ function withIssueIcons(el, $, issue, row) {
   return isClicked ? [el.Box({ key: 'next-with-icons', flexDirection: 'row', width: '100%', children: [el.Box({ key: 'next-main', flexGrow: 1, children: [row] }), icons] })] : [row, el.Box({ key: 'next-icons-row', paddingLeft: 3, children: [el.Box({ key: 'next-icons-words', flexDirection: 'row', gap: 2, children: [openControl(el, $, /** @type {import('./issues.mjs').Issue} */ (issue), link, { key: 'next-open', label: '↗ Open on GitHub', hotkey: 'o', isQuiet: true }), el.Button({ key: 'next-copy', label: '⧉ Copy link', plain: true, hotkey: 'y', dimColor: true, onPress: copyLink($, link) })] })] })]
 }
 
-/** @param {any} el @param {string} key @param {any[]} children */
-function section(el, key, children) {
-  return el.Box({ key, flexDirection: 'column', width: '100%', marginTop: 1, children })
-}
-
 // Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○, lit up to where the work is.
 /** @param {any} el @param {Home['header']['stages']} stages */
 function stageRow(el, stages) {
@@ -1051,7 +1133,7 @@ function stageRow(el, stages) {
     flexDirection: 'row',
     children: stages.flatMap((one, index) => [
       ...(index > 0 ? [el.Text({ key: `stage-gap-${index}`, color: QUIET, children: ' ─ ' })] : []),
-      el.Text({ key: `stage-${index}`, color: one.state === 'todo' ? QUIET : LIME, bold: one.state === 'now', children: `${one.label} ${one.state === 'done' ? '✓' : one.state === 'now' ? '●' : '○'}` }),
+      el.Text({ key: `stage-${index}`, color: one.state === 'todo' ? QUIET : INK, bold: one.state === 'now', children: `${one.label} ${one.state === 'done' ? '✓' : one.state === 'now' ? '●' : '○'}` }),
     ]),
   })
 }
@@ -1063,15 +1145,22 @@ function masthead(el, lines, surface) {
 }
 
 /** @param {Work} one */
-const workTitle = one => (one.kind === 'intent' ? one.slug : one.label)
-/** @param {Work} one */
 const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug} · `, '') : one.hint)
-// A teammate's intent: their name moves out of the detail into the right-hand column.
-/** @param {Work} one @returns {{ detail: string, aside?: string }} */
-const asideOf = one => (one.kind === 'intent' && !one.isMine && one.owner ? { detail: workDetail(one).replace(` · ${one.owner}`, ''), aside: one.owner } : { detail: workDetail(one) })
-// A work row's text. On the desktop an issue's button says its number and its whole title wraps beneath.
-/** @param {Work} one */
-const workRowProps = one => ({ title: one.kind === 'issue' && isClicked ? `#${one.issue.number}` : workTitle(one), ...(one.kind === 'issue' && isClicked ? { lead: one.issue.name } : {}), ...asideOf(one) })
+
+/** @typedef {import('./worklist.mjs').RowCells} RowCells */
+
+// How this pane draws work rows (rows.mjs): its surface and width, teammates' colours dimmed, and a
+// press that shows the intent (or the issue's card), never tracking it.
+/** @param {Engine} $ @param {number} width @param {'home' | 'pick'} back @returns {import('./rows.mjs').Look} */
+function lookOf($, width, back) {
+  return { isClicked, width, now: Date.now(), isTagged: sync.hasMain, ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.issue.number, back) : viewIntent($, one.slug, back)) }
+}
+
+// The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
+/** @param {any} el @param {Engine} $ @param {string} text @param {number} width */
+function headerLine(el, $, text, width) {
+  return statusLine(el, { text, fresh: syncText(sync, Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
+}
 
 // ---------------------------------------------------------------- what the intent recorded
 
@@ -1080,8 +1169,8 @@ let intentToday = []
 
 // What the Intent view shows beside the intent's files: whether this session tracks it, its proof
 // (each record another session wrote named by it), the other live sessions tracking it.
-/** @type {{ slug: string, isHere: boolean, proof: string, heldBy: string }} */
-let intentView = { slug: '', isHere: false, proof: '', heldBy: '' }
+/** @type {{ slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string }} */
+let intentView = { slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '' }
 
 // The shown intent (the tracked one unless a row or words chose another): its lines since the start
 // of the person's day, newest first, with their time; and the rest of what its view shows.
@@ -1099,7 +1188,9 @@ async function readIntentView($) {
   const evidence = await state.readEvidence(files, slug || mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
-  intentView = { slug, isHere: slug !== '' && slug === pinned, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
+  // Working on it here needs its folder in this checkout; asking about it does not.
+  const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
+  intentView = { slug, isHere: slug !== '' && slug === pinned, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
@@ -1173,7 +1264,7 @@ function crewRow(el, $, one, width) {
 /** @param {any} el @param {string} key @param {number} done @param {number} total */
 function bar(el, key, done, total) {
   const lit = total > 0 ? Math.round((done / total) * 10) : 0
-  return el.Box({ key, flexDirection: 'row', children: [el.Text({ color: LIME, children: '━'.repeat(lit) }), el.Text({ color: '#3a3c36', children: '━'.repeat(10 - lit) })] })
+  return el.Box({ key, flexDirection: 'row', children: [el.Text({ color: INK, children: '━'.repeat(lit) }), el.Text({ color: '#3a3c36', children: '━'.repeat(10 - lit) })] })
 }
 
 // How it is going, before anything is read: the checklist, workers running, decisions waiting on you.
@@ -1230,6 +1321,7 @@ function metaRow(el, header) {
 
 /** @param {any} el @param {Engine} $ @param {Home} model @param {number} columns @param {string} [surface] @param {Crew[]} [crew] */
 function paneView(el, $, model, columns, surface, crew = []) {
+  peopleColours = personColours(model.work.flatMap(one => (one.kind === 'intent' && !one.isMine && one.who ? [one.who] : [])))
   const { Box, Text, Button } = el
   isClicked = surface === 'desktop'
   const width = isClicked ? 1000 : Math.max(30, columns - 4)
@@ -1238,22 +1330,14 @@ function paneView(el, $, model, columns, surface, crew = []) {
   const foot = isClicked ? [] : [section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Enter chooses · Esc closes' })])]
 
   if (paneMode === 'pick') {
-    rows.push(masthead(el, [label(el, 'brand', 'Ather Automata', width), Text({ key: 'title', bold: true, children: 'Everything open' }), Text({ key: 'status', color: QUIET, children: 'Yours first' })], surface))
-    /** @type {Map<string, Work[]>} */
-    const groups = new Map()
-    for (const one of model.work) {
-      const group = one.kind === 'issue' ? 'Your GitHub issues' : one.area
-      groups.set(group, [...(groups.get(group) ?? []), one])
-    }
-    let index = 0
-    for (const group of [...new Set(['Your GitHub issues', ...pack.areas, 'Unsorted', ...groups.keys()])].filter(name => groups.has(name))) {
-      const list = (groups.get(group) ?? []).map(one => {
-        index += 1
-        return choice(el, { key: `pick-${one.id}`, ...workRowProps(one), hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'pick') : viewIntent($, one.slug, 'pick') })
-      })
-      rows.push(section(el, `group-${group}`, [label(el, `group-${group}-label`, group, width), ...list, ...(group === 'Your GitHub issues' ? [refreshIssuesButton(el, $)] : [])]))
-    }
-    if (!groups.has('Your GitHub issues')) rows.push(section(el, 'group-issues-none', [label(el, 'group-issues-none-label', 'Your GitHub issues', width), Text({ key: 'issues-none', color: QUIET, children: 'None assigned to you right now.' }), refreshIssuesButton(el, $)]))
+    const shown = filterWork(model.work, pickQuery)
+    rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
+    // The pane has no text box: Search asks one question and takes the words typed under Other. Sort cycles Recent, Ready to close, Oldest.
+    const search = Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: press($, () => searchQuestion($), true) })
+    const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
+    const sort = Button({ key: 'pick-sort', label: `Sort: ${SORT_LABELS[pickSort]}`, hotkey: hotkeyFor('o'), plain: true, onPress: () => cycleSort($) })
+    rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', gap: 3, marginTop: 1, children: [search, ...clear, sort] }))
+    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, folded: pickFolded, me, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
     rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
@@ -1314,8 +1398,12 @@ function paneView(el, $, model, columns, surface, crew = []) {
           surface,
         ),
       )
-      // Looking never tracks: working on it here is its own press.
-      if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', marginTop: 1, children: [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] }))
+      // Looking never tracks: working on it here is its own press, and needs its folder in this
+      // checkout. Asking about it never needs one: the session reads it from origin/main if it must.
+      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main')); return `asked the session about ${slug}` }, false) })
+      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] : []
+      if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
+      if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: 'Not in this checkout yet: pull main to work on it here.' }))
       const today = intentToday.slice(0, 5)
       rows.push(
         section(el, 'intent-today', [
@@ -1337,7 +1425,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
               )),
         ]),
       )
-      if (isHere && model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
+      if (isHere && model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
       const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
       // Stop tracking keeps the view on this intent, which then offers Work on this here again.
       const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = slug), untrackHere($)), true) })
@@ -1416,16 +1504,19 @@ function paneView(el, $, model, columns, surface, crew = []) {
     masthead(
       el,
       [
-        label(el, 'brand', 'Ather Automata', width),
+        // The pane's title bar names Ather: no brand line repeats it (D7).
         isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') }),
-        ...(status ? [Text({ key: 'status', children: fit(status, width) })] : []),
+        headerLine(el, $, status, width),
         ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
         ...(meta ? [metaRow(el, header)] : []),
-      ],
+      ].filter(Boolean),
       surface,
     ),
   )
   rows.push(summaryStrip(el, model, crew, width))
+  // Needs you and Needs attention share the digit keys.
+  let digits = 0
+  const digit = () => (digits < 9 ? String(++digits) : undefined)
   if (model.actions.length > 0) {
     // Start something new, or run the skill that fits now: one press each.
     rows.push(Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => { handOff($, [one.id], one.prompt ?? ''); return `sent to the session: ${one.label.replace(/^\S+ /, '')}` }, false) })) }))
@@ -1434,11 +1525,15 @@ function paneView(el, $, model, columns, surface, crew = []) {
   if (model.items.length > 0) {
     rows.push(
       section(el, 'needs', [
-        label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width),
-        // Each its own block: a lime mark, what to do, then what it is about, a blank line apart.
-        ...model.items.slice(0, 9).map((one, index) => choice(el, { key: `item-${one.id}`, title: one.label, detail: one.detail ?? (one.title === one.label ? '' : one.title), mark: '◆', marginTop: index === 0 ? undefined : 1, hotkey: String(index + 1), isSent: !model.open.includes(one), autoFocus: one === model.open[0], width, onPress: press($, () => act($, one), false) })),
+        label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width, LIME),
+        ...needsRows(el, isClicked, { items: model.items, open: model.open, opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), false), onToggle: slug => () => toggleIn($, callsOpen, slug) }),
       ]),
     )
+  }
+
+  if (model.attention.length > 0) {
+    // The person's own intents that want a press; each opens its intent, nothing is done for them.
+    rows.push(section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.slug, 'home') }))]))
   }
 
   const next = model.next
@@ -1453,23 +1548,12 @@ function paneView(el, $, model, columns, surface, crew = []) {
       paddingX: 1,
       children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })),
     })
-    rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width), card]))
+    rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card]))
   }
 
   rows.push(...crewSections(el, $, crew, width))
 
-  if (isUntracked) {
-    const mine = model.picks.filter(one => one.isMine)
-    const theirs = model.picks.filter(one => !one.isMine)
-    let index = 0
-    /** @param {Work} one */
-    // A row shows its intent (or its issue's card); only the view's Work on this here tracks it.
-    const pick = one => choice(el, { key: `work-${one.id}`, ...workRowProps(one), hotkey: String.fromCharCode(97 + index++), width, onPress: one.kind === 'issue' ? showIssue($, one.issue.number, 'home') : viewIntent($, one.slug, 'home') })
-    if (mine.length > 0) rows.push(section(el, 'picks-mine', [label(el, 'picks-mine-label', model.isNewcomer ? 'Or pick your own' : 'Also yours', width), ...mine.map(pick)]))
-    // Without a name to compare, nobody's work is called a teammate's.
-    if (theirs.length > 0) rows.push(section(el, 'picks-theirs', [label(el, 'picks-theirs-label', me ? 'Follow a teammate' : 'Open intents', width), ...(me ? [Text({ key: 'picks-theirs-note', color: QUIET, children: 'Read-only: their decisions stay theirs.' })] : []), ...theirs.map(pick)]))
-    rows.push(Box({ key: 'all-row', marginTop: mine.length + theirs.length > 0 ? 0 : 1, children: [Button({ key: 'all', label: 'Everything open…', hotkey: hotkeyFor('i'), plain: isClicked ? undefined : true, dimColor: isClicked ? undefined : true, onPress: show($, 'pick') })] }))
-  }
+  rows.push(...homePreview(el, lookOf($, width, 'home'), { own: model.own, team: model.teamPreview, isNewcomer: model.isNewcomer, me, onAll: show($, 'pick') }))
 
   if (model.offerAway) {
     const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: isClicked ? undefined : true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
