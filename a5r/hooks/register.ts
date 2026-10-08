@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5R, gitTargets, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
-import { acceptText, closesIntent, failed, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, type AcceptInput, type RuleScore } from './accept.ts'
+import { acceptText, cappedItems, closesIntent, failed, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -126,7 +126,8 @@ let decision: GrantDecision | null = null
 const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run this holder has started
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
-let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string } | null = null // A18/A19: the last acceptance score
+// A18/A19: the last acceptance score; A52: after the fact, one score per PR (`prs`) and `scores` the worst of them.
+let lastAccept: { at: number; slug: string | null; scores: RuleScore[]; what: string; prs?: { n: number; label: string; scores: RuleScore[] }[] } | null = null
 let acceptDirty = false // A19: a file changed since the last score
 let isScoring = false
 let shipCheckedAt = 0
@@ -448,7 +449,7 @@ function followClear($: Engine, opts: Opts, oldSid: string, tries: number): void
 async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
-  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -840,13 +841,15 @@ const freezeMinutes = (opts: Opts, build: boolean): number => {
 }
 
 /** One session raises an alert that every session sees (a 🟥 for Hai): the first to create its alert file wins. */
-async function claimAlert($: Engine, opts: Opts, key: string): Promise<boolean> {
-  const path = `${hfDir(opts)}/alerts/${key.replace(/[^\w.-]+/g, '_')}.json`
+async function claimAlert($: Engine, opts: Opts, key: string, extra: Record<string, unknown> = {}): Promise<boolean> {
+  const path = alertPath(opts, key)
   if (await $.fs.exists(path)) return false
-  const mine = JSON.stringify({ by: me8, at: await $.clock.now() })
+  const mine = JSON.stringify({ by: me8, at: await $.clock.now(), ...extra })
   await $.fs.write(path, mine).catch(() => undefined)
   return (await readJson($, path)) === mine
 }
+
+const alertPath = (opts: Opts, key: string): string => `${hfDir(opts)}/alerts/${key.replace(/[^\w.-]+/g, '_')}.json`
 
 /** A 🟥 for Hai from the coordination layer: the title, unread and one PENDING.md line (decision.ts). */
 async function raiseRed($: Engine, opts: Opts, question: string, fallback: string): Promise<void> {
@@ -1160,6 +1163,15 @@ async function prTarget($: Engine, start: string, refs: PrRefs): Promise<{ root:
   return { root: start, head: null, branch: headName, problem: `head ${headName} is neither checked out in a worktree of this repository nor at origin/${headName}: fetch it, or open the PR from its own checkout` }
 }
 
+/** A52: a PR's diff read from GitHub (`gh pr diff`): its file names, its patch, why it could not be read whole, its head. */
+type GivenDiff = { files: string; patch: string; why: string | null; branch: string }
+
+/** A52: one file's part of a whole patch (`diff --git a/<path> b/<path>` to the next file), or ''. */
+const fileDiff = (patch: string, path: string): string => {
+  const parts = patch.replace(/\r/g, '').split(/^(?=diff --git )/m)
+  return parts.find(p => p.startsWith('diff --git ') && (p.split('\n')[0] ?? '').endsWith(` b/${path}`)) ?? ''
+}
+
 /** Binaries left out of the added-lines diff (they carry no lines to score and make it big). */
 const BINARY_EXCLUDES = ['uasset', 'umap', 'ubulk', 'uexp', 'png', 'jpg', 'jpeg', 'tga', 'exr', 'hdr', 'psd', 'fbx', 'abc', 'wav', 'ogg', 'mp4', 'dll', 'exe', 'pdb', 'lib', 'zip', '7z'].map(x => `:(exclude,icase)*.${x}`)
 
@@ -1192,10 +1204,10 @@ async function prBody($: Engine, command: string, dir: string): Promise<string> 
 /** A18: everything the score reads, cheap and path-scoped: the branch diff against main (names and added lines),
  * the intent's four files, Ather's proof, the other sessions' touch files and active intents, this session's
  * untracked files in the shared checkout, worktrees on the same branch, running background agents. */
-async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slugHint: string | null, body: string, agentId: string | undefined, refs: PrRefs = {}): Promise<AcceptInput> {
+async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slugHint: string | null, body: string, agentId: string | undefined, refs: PrRefs = {}, given?: GivenDiff): Promise<AcceptInput> {
   // A41: the branch the PR is opened from: the worktree that has its head checked out, else origin/<head>; never the
-  // session's own checkout unless that is where the head is.
-  const target = await prTarget($, start, refs)
+  // session's own checkout unless that is where the head is. A52: a PR read from GitHub brings its own diff.
+  const target = given ? { root: start, head: null, branch: given.branch, problem: null } : await prTarget($, start, refs)
   const root = target.root
   const git = async (args: string[]): Promise<string> => {
     const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
@@ -1208,15 +1220,17 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
   const baseName = refs.base?.trim() || 'main'
   // A47 (b): the PR's repository may be any remote of this repository (a fork PR: `-R upstream/x --head me:branch` from a
   // clone whose origin is the fork); its base is then that remote's branch.
-  const remotes = refs.repo ? remotesOf(await git(['remote', '-v'])) : []
+  const remotes = refs.repo && !given ? remotesOf(await git(['remote', '-v'])) : []
   const repoRemote = refs.repo ? (remotes.find(x => urlIsRepo(x.url, refs.repo ?? '')) ?? null) : null
-  const isOtherRepo = Boolean(refs.repo) && !repoRemote
+  const isOtherRepo = Boolean(refs.repo) && !repoRemote && !given
   const baseRefs = [...(repoRemote && repoRemote.name !== 'origin' ? [`${repoRemote.name}/${baseName}`] : []), `origin/${baseName}`, baseName]
   let base: string | null = null
-  for (const ref of baseRefs) if (!base && (await hasRef(ref))) base = ref
+  if (!given) for (const ref of baseRefs) if (!base && (await hasRef(ref))) base = ref
   const head = target.head
   const branch = target.branch || (await git(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-  const refProblem = target.problem
+  const refProblem = given
+    ? null
+    : target.problem
     ? target.problem
     : isOtherRepo
       ? `the PR is for ${refs.repo}, which is not a remote of the repository at ${root} (${remotes.map(x => x.url).join(', ') || 'no remote'})`
@@ -1234,8 +1248,8 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
     return { out: r.stdout, why: null }
   }
   const range = `${base}...${head}`
-  const names = refProblem ? { out: '', why: refProblem } : await whole(['diff', '--name-only', range])
-  const text = !names.why ? await whole(['diff', '-U0', '--no-color', range, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
+  const names = given ? { out: given.files, why: given.why } : refProblem ? { out: '', why: refProblem } : await whole(['diff', '--name-only', range])
+  const text = given ? { out: given.patch, why: null } : !names.why ? await whole(['diff', '-U0', '--no-color', range, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
   const files = names.out.split(/\r?\n/).map(f => f.trim()).filter(Boolean)
   const added = addedLines(text.out)
   const status = await atherStatus($)
@@ -1294,7 +1308,8 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
     progress,
     findings,
     diffProblem,
-    promptDiff: slug && !refProblem ? await git(['diff', range, '--', `docs/intent/${slug}/prompt.md`]) : '',
+    refProblem,
+    promptDiff: slug && given ? fileDiff(given.patch, `docs/intent/${slug}/prompt.md`) : slug && !refProblem ? await git(['diff', range, '--', `docs/intent/${slug}/prompt.md`]) : '',
     proof: status?.tracked?.slug === slug ? proofOf(status) : null,
     body,
     othersTouch,
@@ -1383,6 +1398,9 @@ async function refreshAccept($: Engine, opts: Opts): Promise<void> {
     if (!root) return
     if (await postHoc($, opts, a5r, root, status, now)) return
     if (!shipSlug && !lastAccept) return
+    // A52: an after-the-fact card holds each PR's own score; a file changing in this checkout never re-scores the
+    // checkout under the PRs' names.
+    if (lastAccept?.prs) return
     acceptDirty = false
     const slug = lastAccept?.slug ?? shipSlug
     lastAccept = { at: now, slug, scores: score(await gatherAccept($, opts, a5r, root, slug, '', undefined)), what: lastAccept?.what ?? 'Ship' }
@@ -1392,38 +1410,138 @@ async function refreshAccept($: Engine, opts: Opts): Promise<void> {
   }
 }
 
+/** A52: the after-the-fact scorer's version, written in this session's file and in every PR alert it claims. Before it
+ * (0.12.2 and older) a PR was scored as the session's own checkout; an alert of that scorer is withdrawn and its PR
+ * scored once more. */
+const POSTHOC_SCORER = 2
+
+/** A52: a PR's head, base and state from GitHub (`gh pr view`, never prompting, 30 s), or why it could not be read. */
+async function prView($: Engine, root: string, link: PrLink): Promise<{ head: string; base: string; state: string } | string> {
+  const argv = ['gh', 'pr', 'view', String(link.n), ...(link.repo ? ['-R', link.repo] : []), '--json', 'headRefName,baseRefName,state']
+  const r = await $.process.run(argv, { cwd: root, env: GH_ENV, timeoutMs: 30_000 }).catch(() => null)
+  if (!r) return 'gh pr view timed out or did not start'
+  if (r.exitCode !== 0) return `gh pr view exited ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim().split(/\r?\n/)[0]?.slice(0, 120)}` : ''}`
+  try {
+    const v = JSON.parse(r.stdout) as { headRefName?: unknown; baseRefName?: unknown; state?: unknown }
+    if (typeof v.headRefName === 'string' && v.headRefName && typeof v.baseRefName === 'string' && v.baseRefName) return { head: v.headRefName, base: v.baseRefName, state: String(v.state ?? '').toUpperCase() }
+  } catch {
+    // falls through
+  }
+  return 'gh pr view gave no head and base'
+}
+const GH_ENV = { GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', NO_COLOR: '1' }
+
+/** A52: a PR's diff from GitHub (`gh pr diff`: its file names, then its patch), whole or with why not. */
+async function prDiffFromGitHub($: Engine, root: string, link: PrLink, head: string): Promise<GivenDiff> {
+  const run = async (extra: string[]): Promise<{ out: string; why: string | null }> => {
+    const r = await $.process.run(['gh', 'pr', 'diff', String(link.n), ...(link.repo ? ['-R', link.repo] : []), ...extra], { cwd: root, env: GH_ENV, timeoutMs: 60_000 }).catch(() => null)
+    if (!r) return { out: '', why: 'gh pr diff timed out or did not start' }
+    if (r.exitCode !== 0) return { out: '', why: `gh pr diff exited ${r.exitCode}` }
+    if (r.isStdoutTruncated) return { out: '', why: 'gh pr diff output passed 4 MiB' }
+    return { out: r.stdout, why: null }
+  }
+  const names = await run(['--name-only'])
+  const patch = names.why ? { out: '', why: null } : await run(['--color', 'never'])
+  return { files: names.out, patch: patch.out, why: names.why ?? patch.why, branch: head }
+}
+
+/** A52: one PR scored on its own diff: head, base and state from GitHub; an open PR from the worktree holding its head,
+ * else origin/<head> against origin/<base>; a merged or closed one (its branch merged in or gone), or one whose head
+ * is not here, from `gh pr diff`. `transient`: GitHub could not be asked, so it is tried again later. */
+async function scorePr($: Engine, opts: Opts, a5r: A5R, root: string, slug: string, link: PrLink): Promise<{ n: number; label: string; scores: RuleScore[]; problem: string | null; transient: boolean; state: string }> {
+  const v = await prView($, root, link)
+  if (typeof v === 'string') return { n: link.n, label: `not scored: ${v}`, scores: unscored(v), problem: v, transient: true, state: '' }
+  const refs: PrRefs = { ...(link.repo ? { repo: link.repo } : {}), head: v.head, base: v.base }
+  let x = v.state === 'OPEN' ? await gatherAccept($, opts, a5r, root, slug, '', undefined, refs) : null
+  let via = 'local branches'
+  if (!x || x.refProblem) {
+    x = await gatherAccept($, opts, a5r, root, slug, '', undefined, refs, await prDiffFromGitHub($, root, link, v.head))
+    via = 'its diff on GitHub'
+  }
+  const state = v.state.toLowerCase() || 'unknown'
+  return { n: link.n, label: `${v.head} → ${v.base} · ${state} · ${x.files.length} files, read from ${via}`, scores: score(x), problem: x.diffProblem ?? null, transient: false, state: v.state }
+}
+
+/** A52: an alert of the old scorer (no `scorer` in it, not withdrawn) for PR `n`: it scored the checkout, not the PR. */
+async function oldAlert($: Engine, opts: Opts, n: number): Promise<boolean> {
+  const text = await readJson($, alertPath(opts, `pr-${n}`))
+  if (text === null) return false
+  try {
+    const v = JSON.parse(text) as { scorer?: unknown; withdrawn?: unknown }
+    return v.scorer === undefined && v.withdrawn !== true
+  } catch {
+    return true
+  }
+}
+
+/** A52: withdraws an old scorer's alert for PR `n`: its alert file says so (so no session withdraws it twice) and its open
+ * PENDING.md line is ticked with why. */
+async function withdrawOldAlert($: Engine, opts: Opts, n: number): Promise<void> {
+  const now = await $.clock.now()
+  await $.fs.write(alertPath(opts, `pr-${n}`), JSON.stringify({ by: me8, at: now, scorer: POSTHOC_SCORER, withdrawn: true, why: 'scored the session checkout, not the PR (before a5r 0.12.3)' })).catch(() => undefined)
+  const file = opts.pendingFile || `${(places.USERPROFILE ?? '').replace(/\\/g, '/')}/.claude/PENDING.md`
+  const pending = await $.fs.read(file).catch(() => null)
+  if (pending === null) return
+  const mark = `PR #${n} (intent `
+  const lines = pending.split('\n')
+  let changed = false
+  const next = lines.map(l => {
+    if (!l.startsWith('- [ ]') || !l.includes(mark) || !l.includes('without A5R acceptance')) return l
+    changed = true
+    return `- [x]${l.slice(5).replace(/\r$/, '')} · withdrawn ${stampOf(new Date(now))}: that score read the session's checkout, not the PR; a5r 0.12.3 scored the PR on its own diff${l.endsWith('\r') ? '\r' : ''}`
+  })
+  if (changed) await $.fs.write(file, next.join('\n')).catch(() => undefined)
+}
+
 /** A23: a PR number on the tracked intent's `- PR:` line (or in Ather's `tracked.prs`) that this session never scored
  * (opened on GitHub, or by the app's own button) is scored now, shown on the card with its number, and one 🟥 is
  * raised per failing PR (the first session to claim its alert file). The first read of an intent only records the
- * numbers already there. Returns whether it scored. */
+ * numbers already there. A52: each PR is scored on its own diff (scorePr), one section per PR on the card, a 🟥 only
+ * for a PR whose own score fails; a PR an old scorer raised an alert for is scored again once and that alert is
+ * withdrawn. Returns whether it scored. */
 async function postHoc($: Engine, opts: Opts, a5r: A5R, root: string, status: AtherStatus | null, now: number): Promise<boolean> {
   const slug = status?.tracked?.slug
   if (!slug) return false
   const read = (rel: string) => $.fs.read(`${root}/${rel}`).catch(() => '')
-  const listed = [...new Set([...prNumbersOf(await read(`docs/intent/${slug}/progress.md`), await read(`docs/intent/${slug}/prompt.md`)), ...(status?.tracked?.prs ?? []).flatMap(p => prNumbersOf(`- PR: ${p}`, ''))])]
+  const links = new Map<number, PrLink>()
+  for (const l of [...prLinksOf(await read(`docs/intent/${slug}/progress.md`), await read(`docs/intent/${slug}/prompt.md`)), ...(status?.tracked?.prs ?? []).flatMap(p => prLinksOf(`- PR: ${p}`, ''))])
+    if (!links.has(l.n) || (l.repo && !links.get(l.n)?.repo)) links.set(l.n, l)
+  const listed = [...links.keys()]
   if (!prBaseline.has(slug)) {
     prBaseline.add(slug)
     for (const n of listed) prsKnown.add(n)
     await saveMe($, opts)
     return false
   }
-  const fresh = listed.filter(n => !prsKnown.has(n))
+  const again = new Set<number>()
+  for (const n of listed) if (prsKnown.has(n) && (await oldAlert($, opts, n))) again.add(n)
+  const fresh = listed.filter(n => !prsKnown.has(n) || again.has(n))
   if (fresh.length === 0) return false
-  const x = await gatherAccept($, opts, a5r, root, slug, '', undefined)
-  const scores = score(x)
-  for (const n of fresh) prsKnown.add(n)
-  lastAccept = { at: now, slug, scores, what: `PR #${fresh.join(', #')} · scored after the fact` }
+  const results = []
+  for (const n of fresh) results.push(await scorePr($, opts, a5r, root, slug, links.get(n) ?? { n, repo: null }))
+  for (const r of results) {
+    if (r.transient) continue
+    prsKnown.add(r.n)
+    if (again.has(r.n)) await withdrawOldAlert($, opts, r.n)
+  }
+  lastAccept = { at: now, slug, scores: worstOf(results.map(r => r.scores)), what: `PR #${fresh.join(', #')} · scored after the fact`, prs: results.map(r => ({ n: r.n, label: r.label, scores: r.scores })) }
   await saveMe($, opts)
-  const bad = failed(scores)
-  if (bad.length > 0 || x.diffProblem)
-    for (const n of fresh)
-      if (await claimAlert($, opts, `pr-${n}`))
-        await raiseRed(
-          $,
-          opts,
-          `PR #${n} (intent ${slug}) was opened without A5R acceptance and ${x.diffProblem ? `could not be scored: ${unreadLine(x.diffProblem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`}: fix it on its branch before it merges, or let it merge as it is?`,
-          'hold the merge until the branch scores 5 of 5',
-        )
+  for (const r of results) {
+    if (r.transient) continue
+    const bad = failed(r.scores)
+    if (bad.length === 0 && !r.problem) continue
+    if (!(await claimAlert($, opts, `pr2-${r.n}`, { scorer: POSTHOC_SCORER }))) continue
+    const isMerged = r.state === 'MERGED'
+    const verdict = r.problem ? `could not be scored: ${unreadLine(r.problem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`
+    await raiseRed(
+      $,
+      opts,
+      isMerged
+        ? `PR #${r.n} (intent ${slug}) was merged without A5R acceptance and ${verdict}: fix it in a follow-up PR, or leave it as it is?`
+        : `PR #${r.n} (intent ${slug}) was opened without A5R acceptance and ${verdict}: fix it on its branch before it merges, or let it merge as it is?`,
+      isMerged ? 'a follow-up PR fixes it' : 'hold the merge until the branch scores 5 of 5',
+    )
+  }
   return true
 }
 
@@ -2037,8 +2155,10 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   } else kids.push(el.Box({ key: 'hai-a5r-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'This session is not in the S2 checkout: the Editor, Memory and Sync main tools and the sessions list live in an S2 session.' })] }))
   // A19: the Nghiệm thu A5R card, once there is a score or the tracked intent is in Ship.
   if (lastAccept) {
-    const rows = lastAccept.scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line }))
-    kids.push(acceptCard(el, 'A5R acceptance', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rows, isDesktop))
+    // A53: each rule's items capped at three lines (grouped by folder, "and N more"); A52: one section per PR.
+    const rowsOf = (scores: RuleScore[]) => scores.map(s => ({ rule: s.rule, name: ruleName(s.rule), state: s.state, line: s.line, ...(s.state === 'fail' ? { items: cappedItems(s.issues).map(i => i.text) } : {}) }))
+    const prs = lastAccept.prs?.map(p => ({ n: p.n, label: p.label, rows: rowsOf(p.scores) }))
+    kids.push(acceptCard(el, 'A5R acceptance', `${lastAccept.slug ?? 'no intent'} · ${lastAccept.what} · ${clockOf(lastAccept.at)}`, rowsOf(lastAccept.scores), isDesktop, prs))
   }
   // A27: the five rules, last; A20: rule 1's word switches country / project in a Client of its own.
   const { Client } = el as unknown as { Client?: (p: Record<string, unknown>) => unknown }

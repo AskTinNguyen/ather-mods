@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 17
+- Rev: 18
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -98,6 +98,8 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A49 (rev 16): A Sessions row never cuts its status at the right edge: the row fits inside its parent's padding (Hai's screenshots, 2026-10-07: "· 2m" shows as "· 2" cut at the pane edge, in both the dark-theme screenshots), the title is the only part that shortens. Proof: gate: pane test (the status column's text is whole at the A5R pane's narrowest width and at the reviewed width); review on the pane.
 - A50 (rev 16): The Memory row colours only what is wrong: the amber note goes on the part that warns ("below launch gate", "N git processes", a low disk), and the gate details ("gate 31 GB with PIE, 28 without · PIE needs 5 GB") stay quiet when free memory is above the gate (Hai's screenshot: the whole line amber at 41.6 GB free because of "10 git processes"). Proof: gate: pane test over above-gate with and without the git warning, and below gate.
 - A51 (rev 17): The entrance (A37) can be told apart from "not drawn" on the real pane: the `motion` option gains `slow`, a review aid that plays the same entrance and event dithers (A38) ten times slower (the entrance over about 3 s, each curtain held in the tree until it has finished plus a margin), so Hai can see whether the curtains render at all. Hai's review on 2026-10-07 saw no entrance at 0.3 s. `on` stays within the ≤ 300 ms budget; the curtains' time in the tree (ENTRANCE_MS) covers a late-loading frame (at least 2 s), since a cleared curtain is transparent. The option's description says `slow` is for checking the animations. Proof: gate: unit tests (slow timings ×10, lifetime covers the last cell, `on` still ≤ 300 ms); review by Hai with `slow`: curtains seen or not, which decides the next step.
+- A52 (rev 18): Scoring after the fact (A23) scores each PR on its own diff, never the session's checkout: for every new number on the intent's `- PR:` line, its repository comes from the PR's URL, its head and base from `gh pr view <n> --json headRefName,baseRefName,state`, and the diff from the worktree holding that head, else `origin/<head>` against `origin/<base>`, else `gh pr diff <n>` (a merged PR whose branch is gone); one score per PR on the card, and a 🟥 only for a PR whose own score fails. MEASURED 2026-10-07 17:02: filler-enemies-tech-support's PRs #32806, #32788, #32791 (113, 28 and 18 files) were scored together as the shared checkout's branch `HaiHuynh/20261005`, 661 commits ahead of origin/main, so rules 1 and 3 listed other lanes' paths (mc-loco-stop-triage's `tools/TALab/scenarios/…`, `.agents/skills/explicit-commit-pr/…`, `Config/Tags/…`) and raised three false 🟥. A PR scored by the old after-the-fact path is scored once more after the fix, and the old alerts it raised are withdrawn. Proof: gate: engine tests (session on a branch far ahead of main, PR heads elsewhere: each PR scored on its own files; a merged PR from `gh pr diff`; no 🟥 for a clean PR).
+- A53 (rev 18): The acceptance card and the refusal list stay readable however long the list: per rule at most three lines, the rest grouped by folder with a count (`tools/TALab/scenarios/ · 38 files: named by intent mc-loco-stop-triage`) and "and N more"; the full list stays in the `/a5r accept` reply. The rule's name sits on its own line above its items, never wrapped word by word in a narrow column (Hai's screenshot: "1 Love / the / project, / love / your / fellow / sessions"). Proof: gate: pane tests with a 60-path list at narrow and wide widths; review on the pane.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -111,6 +113,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 18 (2026-10-08): L-20: A52 after-the-fact scoring on each PR's own diff, A53 a readable acceptance card.
 - rev 17 (2026-10-07): L-19: A51 a slow motion setting to tell a too-fast entrance from one the desktop does not draw.
 - rev 16 (2026-10-07): L-18: A49 session rows' status not cut at the edge, A50 amber only on the warning part of the Memory row.
 - rev 15 (2026-10-07): L-17: renamed A5R (Agent 5 Rules): intent folder `docs/intent/hai-flow-a5/` → `docs/intent/a5r/`, branch `intent/hai-flow-a5` → `intent/a5r`, mod `a5/` → `a5r/`; A48. Rows keep their numbers.

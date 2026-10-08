@@ -24,8 +24,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     let tree = await $.ui.render(P)
     expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-overview', 'hai-accept', 'hai-a5r-rules']) // A29: the A5R pane, the rules last; A33: the band first
     expect(text(find(tree, 'hai-accept-head'))).toContain('A5R acceptance● 1 of 5 not mettail-vfx · Ship · 14:40')
-    expect(rowText(tree, 1)).toBe('✓1 Love the project, love your fellow sessions· no other session\'s or intent\'s paths; not on main')
-    expect(rowText(tree, 2)).toBe('✗2 Study well, work well· docs/intent/tail-vfx/progress.md: A2 is open')
+    expect(rowText(tree, 1)).toBe('✓1 Love the project, love your fellow sessionsno other session\'s or intent\'s paths; not on main')
+    expect(rowText(tree, 2)).toBe('✗2 Study well, work welldocs/intent/tail-vfx/progress.md: A2 is open')
     for (const n of [3, 4, 5]) expect(rowText(tree, n).startsWith('✓')).toBe(true)
     if (surface === 'desktop') expect(find(tree, 'hai-accept')?.props?.borderStyle).toBe('round')
     // A2 is proved and progress.md edited: the card scores again.
@@ -49,7 +49,7 @@ test('A19: not in Ship, no card until /a5r accept asks for one; without an inten
   await $.command.run({ command: 'a5r', args: 'accept' } as never)
   const tree = await $.ui.render(A5RPANE as never)
   expect(text(find(tree, 'hai-accept-head'))).toContain('5 of 5 met')
-  expect(rowText(tree, 2)).toBe('–2 Study well, work well· no intent: acceptance rows not scored')
+  expect(rowText(tree, 2)).toBe('–2 Study well, work wellno intent: acceptance rows not scored')
 })
 
 test('review: when the branch diff cannot be read whole the card says "not scored" and every rule reads – with why', opts(), async ($, on) => {

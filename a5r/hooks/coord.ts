@@ -92,6 +92,8 @@ export type SessionFile = {
    * first read an intent's PR lines; the slugs whose PR lines it has read once (that first read only records). */
   prsKnown?: number[]
   prBaseline?: string[]
+  /** A52: the after-the-fact scorer that wrote `prsKnown` (absent: before 0.12.3, which scored the checkout). */
+  prScorer?: number
 }
 
 export const blankSession = (session: string, lane: string, title: string, now: number): SessionFile => ({
@@ -111,7 +113,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [] }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}) }
   } catch {
     return null
   }

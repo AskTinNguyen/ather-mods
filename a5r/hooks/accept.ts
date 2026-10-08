@@ -15,7 +15,9 @@ export const RULES5: readonly [RuleId, string][] = [
 ]
 export const ruleName = (r: RuleId): string => RULES5.find(([id]) => id === r)?.[1] ?? `rule ${r}`
 
-export type Issue = { file?: string; what: string; todo: string }
+/** One thing to fix. `group` (A53): what a run of files in one folder share, for the card's grouped line
+ * (`<folder> · <n> files: <group>`); `what` otherwise. */
+export type Issue = { file?: string; what: string; todo: string; group?: string }
 export type RuleScore = { rule: RuleId; state: 'pass' | 'fail' | 'na'; line: string; issues: Issue[] }
 
 export type AcceptInput = {
@@ -25,6 +27,9 @@ export type AcceptInput = {
   /** Why the branch diff could not be read whole (no base, a git failure or timeout, output cut), or null. Then
    * nothing is scored: every rule shows – with this, and the gate refuses (an unread diff never passes). */
   diffProblem?: string | null
+  /** A52: why the PR's head or base could not be found locally (no worktree, no origin/<head>, no base, another
+   * repository): after the fact the PR is then read from GitHub instead (`gh pr diff`). */
+  refProblem?: string | null
   /** `git diff --name-only origin/main...HEAD` (main when origin/main is missing). */
   files: string[]
   /** Added lines per text file (`git diff -U0 origin/main...HEAD`, binaries excluded). */
@@ -94,8 +99,11 @@ export const progressRows = (progress: string): Map<string, { verdict: string; e
 const isDoc = (f: string) => /\.(md|txt|rst)$/i.test(f) || lower(f).startsWith('docs/')
 
 /** The five rules over the branch: each passes, fails with its issues, or does not apply. */
+/** Every rule – with why the diff could not be read (nothing scored). */
+export const unscored = (why: string): RuleScore[] => RULES5.map(([rule]) => ({ rule, state: 'na' as const, line: unreadLine(why), issues: [] }))
+
 export const score = (x: AcceptInput): RuleScore[] => {
-  if (x.diffProblem) return RULES5.map(([rule]) => ({ rule, state: 'na' as const, line: unreadLine(x.diffProblem ?? ''), issues: [] }))
+  if (x.diffProblem) return unscored(x.diffProblem)
   const scores: RuleScore[] = []
   const mk = (rule: RuleId, issues: Issue[], passLine: string, na = false): RuleScore => ({ rule, state: na ? 'na' : issues.length ? 'fail' : 'pass', line: na ? passLine : issues.length ? issues.map(i => `${i.file ? `${i.file}: ` : ''}${i.what}`).join('; ') : passLine, issues })
   const own = x.slug ? namedPaths(x.prompt, x.slug) : []
@@ -105,9 +113,9 @@ export const score = (x: AcceptInput): RuleScore[] => {
   if (/^(main|master)$/i.test(x.branch)) r1.push({ what: `the branch is ${x.branch}`, todo: 'open the PR from a branch of its own, cut from main' })
   for (const f of x.files) {
     const s = x.othersTouch.find(t => t.paths.some(p => lower(p) === lower(f)))
-    if (s) r1.push({ file: f, what: `${s.lane} is editing it too (its touch file)`, todo: 'settle it with that session first, or leave the file to it' })
+    if (s) r1.push({ file: f, what: `${s.lane} is editing it too (its touch file)`, todo: 'settle it with that session first, or leave the file to it', group: `edited by ${s.lane} too` })
     const o = x.otherIntents.find(i => inScope(f, i.names))
-    if (o && !(x.slug && inScope(f, own))) r1.push({ file: f, what: `intent ${o.slug} names it`, todo: 'leave it to that intent, or record the overlap in findings.md' })
+    if (o && !(x.slug && inScope(f, own))) r1.push({ file: f, what: `intent ${o.slug} names it`, todo: 'leave it to that intent, or record the overlap in findings.md', group: `named by intent ${o.slug}` })
   }
   scores.push(mk(1, r1, 'no other session\'s or intent\'s paths; not on main'))
 
@@ -134,7 +142,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
   // 3 Unity and discipline: the diff stays within the intent's paths, or says why.
   const r3: Issue[] = []
   if (x.slug) {
-    for (const f of x.files) if (!inScope(f, own) && !mentions(x.progress, f) && !mentions(x.findings, f)) r3.push({ file: f, what: 'outside the paths the intent names', todo: 'explain it in progress.md or findings.md, or move it to its own PR' })
+    for (const f of x.files) if (!inScope(f, own) && !mentions(x.progress, f) && !mentions(x.findings, f)) r3.push({ file: f, what: 'outside the paths the intent names', todo: 'explain it in progress.md or findings.md, or move it to its own PR', group: 'outside the paths the intent names' })
   } else {
     for (const f of x.files) {
       const isConfig = x.cfg.ask_root_files.some(r => lower(r) === lower(f)) || x.cfg.ask_paths.some(g => globMatch(f, g) || globMatch(basename(f), g))
@@ -182,13 +190,71 @@ export const unreadText = (why: string): string =>
 
 export const failed = (scores: readonly RuleScore[]): RuleScore[] => scores.filter(s => s.state === 'fail')
 
-/** The refusal (or the ask) that lists what to fix: rule, file, what to do. */
+/** A53: one line of a rule's list on the card or in the refusal, with what to do about it. */
+export type ItemLine = { text: string; todo: string }
+/** A53: the most lines a rule shows before its issues are grouped by folder. */
+export const MAX_ITEMS = 3
+
+/** A53: a rule's issues as at most `max` lines: each issue on its own line when they fit; else grouped by folder (as
+ * deep as keeps the groups within `max`) with a count (`tools/TALab/scenarios/ · 38 files: named by intent x`), and
+ * "and N more" past the last group shown. Each line carries the first issue's `todo` of its group. */
+export const cappedItems = (issues: readonly Issue[], max = MAX_ITEMS): ItemLine[] => {
+  const one = (i: Issue): ItemLine => ({ text: `${i.file ? `${i.file}: ` : ''}${i.what}`, todo: i.todo })
+  if (issues.length <= max) return issues.map(one)
+  const segs = (f: string) => f.replace(/\\/g, '/').split('/').slice(0, -1)
+  const deepest = Math.max(1, ...issues.map(i => (i.file ? segs(i.file).length : 1)))
+  type Group = { key: string; folder: string; phrase: string; issues: Issue[] }
+  const groupAt = (depth: number): Group[] => {
+    const out = new Map<string, Group>()
+    for (const i of issues) {
+      const dir = i.file ? segs(i.file).slice(0, depth).join('/') : ''
+      const folder = i.file ? (dir ? `${dir}/` : '(repository root)') : ''
+      const phrase = i.group ?? i.what
+      const key = `${folder} | ${phrase}`
+      const g = out.get(key) ?? { key, folder, phrase, issues: [] }
+      g.issues.push(i)
+      out.set(key, g)
+    }
+    return [...out.values()].sort((a, b) => b.issues.length - a.issues.length || a.key.localeCompare(b.key))
+  }
+  // The deepest folders that fit in `max` lines; when none fit, the depth whose first `max` groups cover most issues
+  // (the deeper on a tie), the rest counted in "and N more".
+  let groups: Group[] | null = null
+  let best: { g: Group[]; covered: number } | null = null
+  for (let d = deepest; d >= 1 && !groups; d -= 1) {
+    const g = groupAt(d)
+    if (g.length <= max) groups = g
+    const covered = g.slice(0, max).reduce((n, x) => n + x.issues.length, 0)
+    if (!best || covered > best.covered) best = { g, covered }
+  }
+  groups ??= best?.g ?? []
+  const line = (g: Group): ItemLine => {
+    const first = g.issues[0] as Issue
+    if (g.issues.length === 1) return one(first)
+    if (!g.folder) return { text: `${g.phrase} (${g.issues.length} times)`, todo: first.todo }
+    return { text: `${g.folder} · ${g.issues.length} files: ${g.phrase}`, todo: first.todo }
+  }
+  const shown = groups.slice(0, max).map(line)
+  const rest = groups.slice(max).reduce((n, g) => n + g.issues.length, 0)
+  return rest > 0 ? [...shown, { text: `and ${rest} more (/a5r accept lists them all)`, todo: '' }] : shown
+}
+
+/** The refusal (or the ask) that lists what to fix: rule, file, what to do; A53: each rule capped as on the card. */
 export const acceptText = (scores: readonly RuleScore[], what: string): string => {
   const bad = failed(scores)
   return `A5R · Acceptance — ${bad.length} of 5 rules not met before ${what} → fix these, or ask Hai to let this one through:\n${bad
-    .flatMap(s => s.issues.map(i => `- ${s.rule} ${ruleName(s.rule)}: ${i.file ? `${i.file}: ` : ''}${i.what} → ${i.todo}`))
+    .flatMap(s => cappedItems(s.issues).map(i => `- ${s.rule} ${ruleName(s.rule)}: ${i.text}${i.todo ? ` → ${i.todo}` : ''}`))
     .join('\n')}`
 }
+
+/** A52: the worst state of each rule over several scores (one per PR): a fail anywhere is a fail, else a pass anywhere. */
+export const worstOf = (lists: readonly (readonly RuleScore[])[]): RuleScore[] =>
+  RULES5.map(([rule]) => {
+    const all = lists.map(l => l.find(s => s.rule === rule)).filter((s): s is RuleScore => Boolean(s))
+    const fail = all.filter(s => s.state === 'fail')
+    const pick = fail[0] ?? all.find(s => s.state === 'pass') ?? all[0]
+    return pick ? { ...pick, issues: fail.length ? fail.flatMap(s => s.issues) : pick.issues } : { rule, state: 'na' as const, line: '', issues: [] }
+  })
 
 /** A45 (rev 14): a command opens a PR when any command it runs is `gh pr create` or a POSTing `gh api …/pulls`, however
  * it is written (prcmd.ts: quote-aware commands, env prefixes and wrappers, PowerShell `if (…) { … }` and `&`, nested
@@ -230,6 +296,22 @@ export const shipText = (scores: readonly RuleScore[], slug: string, branch: str
 
 /** A23: the PR numbers on an intent's `- PR:` / `- PRs:` lines (in the header, before the first `## `), read as
  * Ather reads them: `#123`, `owner/repo#123`, `…/pull/123`; progress.md first, then a legacy prompt.md line. */
+/** A52: each PR on an intent's `- PR:` lines with the repository its link names (`owner/repo#123`,
+ * `https://github.com/owner/repo/pull/123`), or null for a bare `#123` (the checkout's own repository). */
+export type PrLink = { n: number; repo: string | null }
+export const prLinksOf = (progress: string, prompt: string): PrLink[] => {
+  const header = (text: string) => text.split(/^##\s/m)[0] ?? ''
+  const out = new Map<number, PrLink>()
+  for (const text of [progress, prompt])
+    for (const line of header(text).matchAll(/^\s*-\s*PRs?\s*:\s*(.+)$/gim))
+      for (const m of (line[1] ?? '').matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)|\b([\w.-]+\/[\w.-]+)#(\d+)|#(\d+)|pull\/(\d+)/g)) {
+        const n = Number(m[2] ?? m[4] ?? m[5] ?? m[6])
+        const repo = m[1] ?? m[3] ?? null
+        if (Number.isInteger(n) && n > 0 && (!out.has(n) || (repo && !out.get(n)?.repo))) out.set(n, { n, repo })
+      }
+  return [...out.values()]
+}
+
 export const prNumbersOf = (progress: string, prompt: string): number[] => {
   const header = (text: string) => text.split(/^##\s/m)[0] ?? ''
   const numbers = [progress, prompt].flatMap(text =>
