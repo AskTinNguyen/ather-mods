@@ -5,7 +5,8 @@ import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nex
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
 import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
@@ -600,14 +601,14 @@ describe('avatar frame (0.1.7)', () => {
     // Each `Svg({` call in the hooks, with its isInteractive expression ('' when it has none: a still image).
     const drawn = sources.flatMap(text => [...text.matchAll(/\bSvg\(\{([^\n]*?)\}\)/g)].map(([, props]) => ({ source: /source: ([^,]+)/.exec(props)?.[1] ?? '', framed: /isInteractive: ([^,}]+)/.exec(props)?.[1]?.trim() ?? '' })))
     expect(drawn).toEqual([
-      // The Ather mark in the desktop masthead: a still image, nothing moves.
-      { source: 'MARK', framed: '' },
       // A finished worker's trail: still images, so no frame and no page behind them.
       { source: 'propSvg(prop)', framed: '' },
       // A worker's avatar: framed only while it runs (its bob); FRAME_SCHEME keeps that frame transparent.
       { source: 'avatarSvg(one.kind', framed: "one.state === 'running' ? true : undefined" },
       // A work row's progress bar on the desktop: a still image (exact pixels, where glyphs spilled into the count).
       { source: 'miniBarSvg(done', framed: '' },
+      // The Ather mark in the desktop masthead (rows.mjs since 0.2.0): a still image, nothing moves.
+      { source: 'MARK', framed: '' },
     ])
     expect(propSvg('reading').startsWith('<svg')).toBe(true)
   })
@@ -1504,5 +1505,214 @@ describe('crew-tree-and-groups round 2: permission, leaks, one clock, blocks (0.
     expect(blocksOf('mine', all, all, how)[0]?.items.slice(0, 2).map(each => each.slug)).toEqual(['h8', 'h7'])
     expect(blocksOf('others', all, all, how)[1]?.foldKey).toBe('others:person:Hai Huynh')
     expect(blocksOf('others', [], all, how)).toEqual([])
+  })
+})
+
+// Real excerpts from origin/main (2026-10-08): the two formats the findings use.
+const FLUID_F10 = `## F-10 (2026-09-29, rev 6) | blocking: no | status: open
+
+**Found:** in the snow/sand lab, neither Nine Tails hook can be driven by its production trigger, so both are proven by automation tests plus a lab force.
+- **N6 FoxScan.** The lab has no FoxScan Otherworld Reveal volume, and FoxScan has no test-simulation driver.
+
+**Options:**
+- A (recommended): prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial. Before that, decide whether N5 should also listen to the stance-form route (\`USipherStanceComponent::OnStanceEntered\`).
+- B: add a lab rig that grants Fox Form, which means driving the production ability with its resources set up.
+
+**Proposed amendment:** none; the director picks where the production trial happens (see the report).
+**Resolution:**
+
+## Reconciliation 2026-10-03 (rev 8, L-18)
+
+- F-10 stays open: N5 and N6 production-trigger proof on a map where Fox Form and FoxScan run for real.
+`
+
+const QUEST_F1 = `## F-1 (open, not blocking): Restart one quest also restores every flow-owned actor's authored state
+
+- Found by: P2 worker, 2026-10-05, while writing A5 (S4).
+- Today: the confirmation says both, in words, before the restart runs.
+- Options: (a) keep it as is, with the confirmation (no runtime change; recommended for P2, since the in-place reset of
+  every quest has the same actor behaviour); (b) add a runtime hook that restores only the restarted quest's flow-owned
+  actors, which touches \`S2\` quest runtime code outside the debug tool and widens A8; (c) after the import, re-run the
+  other quests' current beat entry actions, which can repeat spawns, items and dialogue. Recommendation: (a).
+- Decision needed from: owner, only if (b) is wanted.
+- Resolution (orchestrator, 2026-10-05): accepted (a). It needs no runtime change and keeps A8's scope. The
+  confirmation already names both effects. The owner can ask for (b) later, as its own rev. No rev bump.
+`
+
+// More verbatim findings from origin/main 9209256a5bc9 (2026-10-08, read with git show).
+const SO_F63 = "## F-63 (2026-09-30, rev 9) | blocking: no | status: open (AIScalable owners)\n\n**Found:** (proof run 3) On `L_Master_biome_01_AoBing`, `BP_AoBing_SoldierCamp_SwordAggressive_GuardPost_C_0` ran a patrol Smart Object find about once per frame (2,711 finds from 05.07.32 UTC until PIE stopped, made visible by the new `LogSipherSmartObjectEligibility` Verbose line); the camp's only patrol slot was already claimed by the PatrolFatigue soldier, so each find failed and was retried on the next frame. The retry pattern is pre-existing in the patrol goal generation (not introduced by this branch); the branch adds one eligibility query build per call.\n**Options:** (a) the patrol generator backs off after a failed find (for example the generator's min interval); (b) leave it.\n**Recommendation:** (a), owned by the AIScalable framework, outside this intent. Measure first (per-frame `FindSmartObjects` over the camp's query box).\n**Resolution:** open; reported for the AIScalable owners.\n"
+const WORLD_F2 = "## F-2 (2026-09-30) | blocking: no | Two terrain docs route a step through the disabled plugin\n\n`docs/engineer/Terrain/TerrainTechniques.md` and `RVTTerrainBlending.md` describe adjusting RVT blending in the Dash Edit Material panel. With the plugin disabled, that step has no tool unless an artist enables the plugin locally.\n\nProposed amendment: the selection material quick-edit panel (phase 6) covers this; it is the reason Q3 recommends building it.\n\nResolution: open (Q3).\n"
+const WORLD_F8 = "## F-8 (2026-10-01) | blocking: no | Idle cost with the toolbag open is not zero\n\nRound 2 measured about +0.65 ms of game-thread time with the toolbag open and a toy armed, against outcome O5's target of zero idle cost (an unfocused Editor window; FPS chart over about 37 s per run). No Tin's Toys tick is registered; the likely costs are the viewport mode's per-frame HUD drawing and the input pre-processor.\n\nProposed amendment: none. Engineering follow-up: profile with Unreal Insights and skip HUD work when nothing changed.\n\nResolution: partly addressed. The plugin CHANGELOG records redraw-on-change work (PR #32212); no new idle number was measured, so it stays open for a re-measure (follow-up in prompt.md Resolution).\n"
+const UVS_F1 = "## F-1 (2026-09-29, S1) | blocking | the function already exists\n\nS2 already ships object-scale-aware tiling: `/Game/S2/Core_Env/Shader/MF_TextureScale`\n(and `MF_TextureScale_VT`, core `MF_UVTriplanar`). It uses the engine `ObjectScale`\nfunction (object-to-world transform, not bounds), a local-space box projection, and a\n`Tiling Follow Object Scale` static switch that `M_Standard_Shader`, `M_Environment`,\n`M_WorldTriplanar` and `M_Env_Simple` already expose. Evidence and paths: progress.md S1.\n\nBuilding `MF_S2_AutoScaleUV` would duplicate shared shader code, which\n`Content/S2/Core_Env/Shader/AGENTS.md` forbids (\"Do not duplicate shader graphs\").\n\nOptions for the orchestrator/director:\n1. (Recommended) Re-scope to verify and document the existing path: a live read of\n   the `MF_TextureScale` graph, then A2 (scale 1, (4,1,1), (1,1,4) cubes with an MI of\n   `M_Standard_Shader` with `Tiling Follow Object Scale` on), A3 (a usage doc for the\n   existing switch, plus limits: ISM per-instance scale, Nanite, WPO), and A4 (stats\n   with the switch on vs off). Gaps found there become proposals to the env-art owner.\n2. Add only what is missing (for example a mesh-UV mode that scales UV0 by the two\n   dominant-face scale components, if MF_TextureScale only does box projection),\n   as an input on the existing function after env-art owner approval, not a new MF.\n3. Close the intent as already satisfied.\n\n**Resolution:** director chose option 3 (close as already done), 2026-09-29, L-2, rev 2.\n"
+const BOSS_F2 = "## F2 (2026-10-07, rev 1, non-blocking for this change, blocks a literal A3 \"passes\"): `validate_repository.py` fails for reasons outside this change\n\n- On the shared checkout (b0baa94 plus other lanes' files) it reports 100 errors: Unreal binaries in the \"harness diff\" (silent-bell and tins-lights work), the stale inventories, `.claude/settings.json`, `unreal-anti-slop-review` without SKILL.md, three skill descriptions over 400 characters, invalid YAML in `quest-from-brief/SKILL.md`, `foliage-grid-builder` over 500 lines, and about 30 broken links in `docs/exec-plans/` and `docs/runbooks/blockout-effects-authoring.md`. None touch `boss-bt-authoring` or this intent folder.\n- CI confirms it on this branch's full tree: Harness Validate (run 37606338991) passes its blocking inventory step and reports 35 advisory validator errors, all pre-existing (`.claude/settings.json`, three long skill descriptions, `quest-from-brief` YAML, `foliage-grid-builder` length, broken links in `docs/domains/` and `docs/exec-plans/`). The shared checkout adds 65 more from other lanes' local files.\n- What did run on the branch tree: the validator's skill-package rules on this package (PASS) and the inventory check (current after regenerating main's stale copies). The PR's Harness Validate check is the full-tree verdict.\n- Options: (a) accept A3 on the branch-tree checks plus the PR's CI result; (b) hold A3 until main's own errors are fixed (owner of each skill or doc; the inventory part is VuTruong's P3). Recommendation: (a).\n- Resolution (2026-10-08, coordinator for the Owner, standing autonomy L-2): **accepted (a).** A3 is met on the branch-tree checks plus green CI (Harness Validate success, inventories current), because the 35 advisory validator errors are already on main and none come from this change.\n"
+const TAILS_F2 = "## F-2 (2026-10-07, rev 3) | blocking: yes | status: open\n\n**Found:** A3 check on `L_S2Empty` with the scratch asset `/Game/Developers/NineTailsShapeDraft/DA_TailShape_DraftTest_A3`. Persona's requested path equals PIE's desired path (0.00 cm, all 9 tails), and PIE's final pose is within 5 cm of desired. Persona's final pose is 17-39 cm away from PIE's final pose, though. Pose diagnostics put the difference after the shape stage, in the `ABP_Tail_ChildVisualSync` post-process. That it predates this work is inferred, not proven. Evidence: `Saved/NineTailsShapeDrafting/A3/persona-vs-pie.json`, `diag.json`. Recorded by the orchestrator from the worker's S7 report.\n**Proposed amendment:** (recommended) measure one untouched existing preset the same way. If it shows the same gap, A3 compares the shape-stage path (which the tool controls), and the post-process gap is logged as a separate pre-existing issue. Alternatives: make the Persona preview match PIE's post-process (wider scope, may touch the ABP or preview runtime path), or accept the gap as is.\n**Proposed reading (worker, 2026-10-07 slot 19:18-19:27; status stays open):** the scratch asset was measured again on `L_S2Empty`, no ABP change, rotation-invariant (max pairwise joint-distance difference per tail), via `ReadPoseDiagnostics`.\n- (a) **Before Kawaii:** the motion node's output in Persona matches PIE at **0.00 cm on all 9 tails**, both in Shape Edit and with Shape Edit ended.\n- (b) **After Kawaii**, with the Persona body scrubbed to t=0 and not playing, and the PIE MainChar standing still: both final poses were stable from the first sample (0.00 cm change between consecutive reads, which are about 1-2 s apart because of MCP latency). Persona final vs PIE final is **0.13-3.12 cm per tail**.\n- **Likely cause of the earlier 17-39 cm gap:** a reading in Shape Edit. There the paired preview ticks the tail at zero delta (`NineTailsTailPersonaPreview.cpp` Tick: `TickAnimation(bShapeEditPolicy ? 0 : DeltaTime)`), so KawaiiPhysics holds a stale, unsettled state.\n- **Proposed reading of A3:** a drafted shape plays back the same in Persona and PIE, both at the motion-node output (exact) and after the post-process once the rig has settled outside Shape Edit (within about 3 cm).\n- **Not covered:** the pelvis pose was not matched or measured; the Persona body is at montage time 0, PIE is in idle.\n- **Possible follow-up for the owner** (not done): Shape Edit could tick the tail with real delta so the drafting view shows the settled post-process pose.\n- Evidence: `Saved/NineTailsShapeDrafting/A3/a3-compare.json`, `a3-persona.json`, `a3-pie.json`.\n\n**Resolution:** <pending owner>\n"
+const FLUID_F8 = "## F-8 (2026-09-29, rev 5) | blocking: no | status: open (updated S15: new blockers found)\n\n**Found:** two review fixes are out of reach without C++, so the material-only phase delivers them only in part.\n- R1 terracing: `Snow/Dust Interaction Parallax Sample Scale` 2.0 reduces the stair steps in the print walls; they still show at grazing angles (`Saved/FluidBlocksWPM/snowsand/fixes/`, BEFORE_R1 vs AFTER1_R1). Real Nanite displacement needs a Nanite-built lab landscape:\n  - Setting `bEnableNanite` through ObjectTools does not build Nanite data.\n  - Setting `landscape.Nanite.LiveRebuildOnModification 1` and toggling Nanite crashed the Editor (assert `Proxies.Contains`, LandscapeSubsystem.cpp:1443). Nothing saved was lost.\n- Footprint-shaped prints: the brush texture is inside the vendor `DLWE_Trail_Brush`, which UDW creates itself. The print-shape knobs (scale 0.7, scatter 0.5, size scatter 0.1) give narrower, crisper ovals, not feet.\n\n**Options:**\n- A (recommended): in the next C++ build, add a lab tool that calls `ULandscapeSubsystem::BuildNanite` on the lab landscape, then capture R1 with `For Nanite Tessellation` on and parallax off. Treat the foot shape as part of the preset-class hook (a Sipher brush material that UDW is told to use), and show it in the lab before any production use.\n- B: accept parallax-only depth for landscapes and leave foot-shaped prints to the Fluid Blocks hero patches (D11, 20 cm).\n\n**Proposed amendment:** none; engineering order within A11/A13. The look choice between A and B is the director's once A's captures exist.\n**Update (S15, 2026-09-29):**\n- Nanite build: the new `SetLandscapeNanite` tool builds the lab landscape's Nanite mesh without the crash (1 proxy up to date, 5 s). It refuses while live rebuild is on and checks proxy registration first.\n- The new blocker: on the Nanite landscape the weather snow does not render at all, so the ground shows the bare Layer 01 grass. The Look FX does not render either. This holds with the plain R1 instance and with `For Nanite Tessellation` on, and after a forced Nanite rebuild with each material. Only a distant ring, beyond the Nanite range, shows snow.\n  - The cause is not found. One hypothesis: UDS 9.0's DLWE snow path does not survive the landscape's Nanite material path.\n  - Evidence: `Saved/FluidBlocksWPM/snowsand/diag/shadowless_reruns/NANITE_*` (those runs also lost dynamic shadows, see S15).\n  - So real Nanite displacement for R1 is not proven, and parallax stays the landscape route for now.\n- Foot-shaped prints: `USipherDLWEFootprintStamperComponent` stamps one oriented print per planted foot, drawn into UDW's trail target with a Sipher copy of the vendor brush. The vendor stamps are swapped off for the pawn.\n  - In the lab (FOOT_R1) this gives separate oval prints along the walk direction, 44 x 20 cm, without the continuous trench or its stair-stepped walls.\n  - The brush copy still draws the vendor's noisy circle, stretched to the quad. A heel and toe silhouette needs a shape change in `M_SipherDLWE_FootBrush`, which is not done.\n\n**Options now:**\n- A: keep parallax for landscapes and use the stamper where separate prints read better (crust, salt, dust), with R1's deep-powder trench kept as the vendor draws it. Nanite snow is left for a UDS upgrade or a DLWE-on-Nanite investigation.\n- B: investigate DLWE on Nanite landscapes now. This is open-ended and may need a vendor material change on a Sipher copy.\n\n**Recommendation:** A. The director's call is whether deep powder should keep its trench or show separate prints (see the S15 captures).\n**Resolution:**\n"
+
+describe('decide in place (0.2.0)', () => {
+  test('a stale unsettled Resolution never reopens a heading that says resolved; "opened …" is a settled answer', () => {
+    // sipher-so-montage-in-step F-21 on origin/main: the heading and the Resolution line verbatim, the body cut.
+    const f21 = '# Findings\n\n## F-21 (2026-09-29, rev 5) | blocking: no | status: resolved (Phase 7 approved, D11 / L-16; shipped in PR #32137, `0889ee954fcc`)\n\n**Found:** Actor I/O lets designers wire events per placed actor.\n**Resolution:** pending Director; recommended.\n'
+    expect(parseFindings(f21, '').map(one => one.id)).toEqual([])
+    const opened = '# Findings\n\n## F-2 (2026-10-01) | blocking: no | status: open\n\n**Found:** x.\n**Resolution:** opened follow-up #123 and closed here.\n'
+    expect(parseFindings(opened, '').map(one => one.id)).toEqual([])
+  })
+  test('a heading that says "not blocking" or "non-blocking" does not block; "blocking" alone does', () => {
+    const findings = '# Findings\n\n## F-4 (open, not blocking): low-severity notes\n\nNotes.\n\n## F-5 (open, non-blocking for this change): later\n\nLater.\n\n## F-6 (open, blocking): the build fails\n\nIt fails.\n'
+    expect(parseFindings(findings, '').map(one => [one.id, one.isBlocking])).toEqual([['F-4', false], ['F-5', false], ['F-6', true]])
+  })
+
+  test('A1: the list format: options, letters and the recommended one, labels a first clause', () => {
+    const options = parseOptions(FLUID_F10)
+    expect(options.map(one => [one.letter, one.label, one.isRecommended])).toEqual([
+      ['A', 'Prove both on a map where Fox Form and FoxScan run for real', true],
+      ['B', 'Add a lab rig that grants Fox Form', false],
+    ])
+    expect(options[0]?.text.startsWith('Prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps')).toBe(true)
+    expect(options[0]?.text.endsWith('(USipherStanceComponent::OnStanceEntered).')).toBe(true)
+  })
+
+  test('A1: the list format is read from the last options heading, a qualifier allowed ("**Options now:**")', () => {
+    const options = parseOptions(FLUID_F8)
+    expect(options.map(one => [one.letter, one.isRecommended])).toEqual([['A', true], ['B', false]])
+    expect(options[0]?.text.startsWith('Keep parallax for landscapes and use the stamper')).toBe(true)
+    expect(options[1]?.text.startsWith('Investigate DLWE on Nanite landscapes now')).toBe(true)
+  })
+
+  test('A1: the inline format: (a) (b) (c) across continuation lines, "Recommendation: (a)", nothing after it', () => {
+    const options = parseOptions(QUEST_F1)
+    expect(options.map(one => [one.letter, one.label, one.isRecommended])).toEqual([
+      ['A', 'Keep it as is', true],
+      ['B', 'Add a runtime hook that restores only the restarted…', false],
+      ['C', "After the import, re-run the other quests' current beat…", false],
+    ])
+    expect(options[1]?.text).toBe("Add a runtime hook that restores only the restarted quest's flow-owned actors, which touches S2 quest runtime code outside the debug tool and widens A8")
+    expect(options[2]?.text).toBe("After the import, re-run the other quests' current beat entry actions, which can repeat spawns, items and dialogue")
+    // "**Options:** (a) …" on one line, "**Recommendation:** (a)" on the next.
+    expect(parseOptions(SO_F63).map(one => [one.letter, one.isRecommended])).toEqual([['A', true], ['B', false]])
+    // "recommended" inside one option's words, when nothing else says.
+    expect(parseOptions('- Options: (a) keep this rule (no change; recommended); (b) drop it.').map(one => one.isRecommended)).toEqual([true, false])
+  })
+
+  test('A1: lettered text is options only next to the word Options or Recommendation', () => {
+    // ninetails-shape-drafting F-2: "(a) Before Kawaii" and "(b) After Kawaii" are evidence, not choices.
+    expect(parseOptions(TAILS_F2)).toEqual([])
+    expect(parseOptions('Found: **drops only** or full respawn? (a) no, drops only (recommended); (b) full respawn.')).toEqual([])
+    expect(parseOptions('Which way? (a) north; (b) south. Recommendation: (b).').map(one => [one.letter, one.isRecommended])).toEqual([['A', false], ['B', true]])
+  })
+
+  test('A1: a button label is the first clause, or the whole option cut when that clause only sets the scene or is too short', () => {
+    expect(parseOptions(FLUID_F8.replace(/\*\*Options now:\*\*[\s\S]*$/, '')).map(one => one.label)).toEqual(['In the next C++ build, add a lab tool that calls…', 'Accept parallax-only depth for landscapes and leave…'])
+    expect(optionLabel('leave it, nothing changes')).toBe('Leave it, nothing changes')
+    expect(optionLabel('no, drops only')).toBe('No, drops only')
+  })
+
+  test('A1: none when a finding writes no options, or only one', () => {
+    expect(parseOptions('Pool size is an engineering call.')).toEqual([])
+    expect(parseOptions('**Options:**\n- A: the only way.\n')).toEqual([])
+    expect(parseOptions('**Options:**\n- A: one\n- B: two\n')).toEqual([
+      { letter: 'A', label: 'One', text: 'One', isRecommended: false },
+      { letter: 'B', label: 'Two', text: 'Two', isRecommended: false },
+    ])
+  })
+
+  test('A2: a filled Resolution decides, whatever the heading says; one that starts open, pending, partly, not yet, tbd, <…> or - does not close', () => {
+    const ids = (/** @type {string} */ findings) => parseFindings(findings, '').map(one => one.id)
+    // Closed on origin/main: a Resolution that settles it.
+    expect(ids(QUEST_F1)).toEqual([])
+    expect(ids(UVS_F1)).toEqual([])
+    expect(ids(BOSS_F2)).toEqual([])
+    // Still open on origin/main, a Resolution line notwithstanding.
+    expect(ids(SO_F63)).toEqual(['F-63'])
+    expect(ids(WORLD_F2)).toEqual(['F-2'])
+    expect(ids(WORLD_F8)).toEqual(['F-8'])
+    expect(ids(TAILS_F2)).toEqual(['F-2'])
+    // An empty "**Resolution:**" leaves the heading to decide.
+    const open = parseFindings(`# Findings\n\n${QUEST_F1}\n${FLUID_F10}`, '')
+    expect(open.map(one => one.id)).toEqual(['F-10'])
+    expect(open[0]?.options.map(one => one.letter)).toEqual(['A', 'B'])
+    expect(open[0]?.source.startsWith('## F-10 (2026-09-29, rev 6)')).toBe(true)
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: open (director)\n\nWhich? (a) x; (b) y.\n\n**Resolution:** accepted (a).\n')).toEqual([])
+    // A heading that says closed stays closed against an unsettled Resolution (often stale): a reopen changes the heading.
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: accepted\n\n- Resolution: not yet; reopened by the owner.\n')).toEqual([])
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: open\n\n- Resolution: not yet; reopened by the owner.\n')).toEqual(['F-1'])
+    expect(ids('## F-1 (2026-10-01) | blocking: yes | status: open\n\n**Resolution:** - \n')).toEqual(['F-1'])
+  })
+
+  test('A4, A5: an option, Explain and a typed answer hand the session the exact words', () => {
+    const [f10] = parseFindings(FLUID_F10, '')
+    const answers = findingAnswers('fluid-snow-sand-look', /** @type {any} */ (f10))
+    expect(answers.options[0]?.prompt).toBe(
+      "Decide F-10 on fluid-snow-sand-look: A — Prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial. Before that, decide whether N5 should also listen to the stance-form route (USipherStanceComponent::OnStanceEntered). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.",
+    )
+    expect(answers.explain).toBe('Explain decision F-10 on fluid-snow-sand-look: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.')
+    expect(answers.typed('  try   the Winter map first ')).toBe(decidePrompt('fluid-snow-sand-look', 'F-10', '"try the Winter map first" (my own answer, in my words)'))
+    expect(answers.source?.startsWith('## F-10')).toBe(true)
+  })
+
+  test('A3: the decision drawn opened is the one pressed while it waits, else the first that waits; NONE_OPEN closes it', () => {
+    const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+    const waits = (/** @type {{ id: string }} */ one) => one.id !== 'a'
+    expect(openedDecision(items, '', waits)?.id).toBe('b')
+    expect(openedDecision(items, 'c', waits)?.id).toBe('c')
+    expect(openedDecision(items, 'a', waits)?.id).toBe('b')
+    expect(openedDecision(items, NONE_OPEN, waits)).toBe(undefined)
+  })
+
+  test('A3, A4: needsView lays out Needs you: blocks, each row decided, opened or a line, the folded answers and the focus', () => {
+    const answers = findingAnswers('q', { id: 'F-1', options: [] })
+    const call = (/** @type {string} */ slug, /** @type {string} */ id) => ({ id: callId(slug, id), kind: 'call', slug, answers })
+    const items = [call('q', 'F-1'), call('r', 'F-1'), call('r', 'F-2'), { id: 'editor', kind: 'editor' }, call('s', 'F-3')]
+    const [q1, r1, r2, editor, s3] = items
+    const now = 1_000_000
+    const none = new Set()
+    // The first answerable visible row opens; a two-decision intent is one folded block; the editor row only keeps its press.
+    let view = needsView(items, items, { ...FRESH_ANSWERS }, none, now, true)
+    expect(view.blocks.map(block => [block.slug, block.items.length])).toEqual([['q', 1], ['r', 2], ['', 1], ['s', 1]])
+    expect([view.shownId, view.states[q1?.id ?? ''], view.states[r1?.id ?? ''], view.opens.has('editor'), view.isFocusFree]).toEqual([q1?.id, 'opened', 'line', false, true])
+    // Answered just now: "decided" in place, and the next one opens; the typed field only for the opened row, where the surface has one.
+    const decided = [{ id: q1?.id ?? '', answer: 'A', at: now - 1000 }]
+    view = needsView(items, items.filter(one => one !== q1), { ...FRESH_ANSWERS, decided, typing: s3?.id ?? '' }, none, now, true)
+    expect([view.states[q1?.id ?? ''], view.shownId, view.typingId, view.isFocusFree]).toEqual(['decided', s3?.id, s3?.id, false])
+    expect(needsView(items, items.filter(one => one !== q1), { ...FRESH_ANSWERS, decided, typing: s3?.id ?? '' }, none, now, false).typingId).toBe('')
+    // Past DECIDED_SHOWN_MS it folds and leaves the blocks; an opened block's rows can be opened.
+    view = needsView(items, items.filter(one => one !== q1), { ...FRESH_ANSWERS, decided, opened: r2?.id ?? '' }, new Set(['r']), now + DECIDED_SHOWN_MS, true)
+    expect([view.folded.map(one => one.id), view.blocks.some(block => block.items.includes(/** @type {any} */ (q1))), view.shownId]).toEqual([[q1?.id], false, r2?.id])
+    expect(needsView(items, items, { ...FRESH_ANSWERS, opened: NONE_OPEN }, none, now, true).shownId).toBe('')
+    expect(editor?.kind).toBe('editor')
+  })
+
+  test('A4: an answer shows in place for 8 seconds, then folds, newest first; kept until the files read it resolved', () => {
+    const at = 1_000_000
+    let decided = withDecided([], { id: 'call:x:F-1', answer: 'A', at })
+    decided = withDecided(decided, { id: 'call:x:F-2', answer: 'try it', at: at + 1000 })
+    decided = withDecided(decided, { id: 'call:x:F-1', answer: 'B', at: at + 2000 })
+    expect(decided.map(one => `${one.id}=${one.answer}`)).toEqual(['call:x:F-1=B', 'call:x:F-2=try it'])
+    const items = [{ id: 'call:x:F-1' }, { id: 'call:x:F-2' }]
+    expect(decidedView(decided, items, at + 2000 + DECIDED_SHOWN_MS - 1).fresh.map(one => one.id)).toEqual(['call:x:F-1'])
+    const later = decidedView(decided, items, at + 2000 + DECIDED_SHOWN_MS)
+    expect([later.fresh.length, later.folded.map(one => one.id)]).toEqual([0, ['call:x:F-1', 'call:x:F-2']])
+    // Drawing reads only: an item not listed now (the away window's Home) hides its answer, the answer stays.
+    expect(decidedView(decided, [], at).fresh).toEqual([])
+    // Pruned only when the files are read again: kept while it waits, or for its 8 seconds.
+    expect(pruneDecided(decided, id => id === 'call:x:F-2', at + 60000).map(one => one.id)).toEqual(['call:x:F-2'])
+    expect(pruneDecided(decided, () => false, at + 2500).map(one => one.id)).toEqual(['call:x:F-1', 'call:x:F-2'])
+    expect(decidedText('A')).toBe('✓ Decided: A')
+  })
+
+  test('A8: "make it a rule?" answers in place: yes drafts and never commits, no closes it here; one wording for every rule request', () => {
+    const traps = [{ title: 'Live Coding blocks the build', count: 4, fix: 'Close the Editor first.' }]
+    const answers = ruleAnswers(traps, 'Tin')
+    expect(answers.options.map(one => [one.letter, one.label, one.prompt === ''])).toEqual([['A', 'Make it a rule', false], ['B', 'No, leave it', true]])
+    expect(answers.options[0]?.prompt).toContain('"Live Coding blocks the build", 4 sessions; its fix each time: Close the Editor first.')
+    const ending = 'draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diff for review by the owners (Tin); do not commit.'
+    expect([answers.options[0]?.prompt.endsWith(ending), answers.typed('later').endsWith(ending), rulePrompt(traps, 'Tin').endsWith(ending)]).toEqual([true, true, true])
+    expect(rulePrompt([...traps, { title: 'T2', count: 5, fix: 'F2.' }], 'Tin').endsWith(ending.replace('the diff', 'the diffs'))).toBe(true)
+    expect(ruleAnswers([{ title: 'T1', count: 3, fix: 'F1.' }, { title: 'T2', count: 5, fix: 'F2.' }], 'Tin').typed('only the first')).toContain('"only the first" (my own answer, in my words)')
+    // Home's items carry their answers: a decision its finding's, the rule its own and its walk-through.
+    const model = buildHome(/** @type {any} */ (base({ away: OFF, recurring: [{ id: 'x', title: 'Trap', fix: 'Fix.', count: 3 }] })))
+    const call = model.items.find(one => one.kind === 'call')
+    expect([call?.id, call?.answers?.explain]).toEqual(['call:spawner:F-1', 'Explain decision F-1 on spawner: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.'])
+    const rule = model.items.find(one => one.kind === 'rule')
+    expect([rule?.answers?.options.length, rule?.prompt]).toEqual([2, rulePrompt([{ title: 'Trap', fix: 'Fix.', count: 3 }], unreal.owners)])
   })
 })

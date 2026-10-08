@@ -2,6 +2,7 @@
 // the person picks something. Pure: no `$`.
 
 import { windowDecisions } from './away.mjs'
+import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
 import { issueLabel, issuePrompt } from './issues.mjs'
 import { STAGE_LABELS, clockText, currentStage, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, ownedIntents, pickCandidates, plural } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
@@ -72,7 +73,7 @@ export const batchPrompt = items => `Take me through these one at a time, with a
 /**
  * What waits on the person. Every item goes to the session with its prompt; `kind`
  * says what else changes once it has been delivered (see settleItem in state.mjs).
- * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string }} ItemText `detail`: the pane's second line under `label`
+ * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string, answers?: import('./decide.mjs').Answers }} ItemText `detail`: the pane's second line under `label`; `answers`: what answers it in place (0.2.0)
  * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
 
@@ -226,7 +227,7 @@ export const buildHome = input => {
   }
   for (const one of owned) {
     for (const finding of directorCalls(one)) {
-      items.push({ kind: 'call', slug: one.slug, id: `call:${one.slug}:${finding.id}`, label: `Decide ${finding.id} on ${one.slug}`, title: `${finding.id} · ${one.slug === pinned ? '' : `${one.slug} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.slug}: ${finding.title}`, prompt: callPrompt(one, finding) })
+      items.push({ kind: 'call', slug: one.slug, id: callId(one.slug, finding.id), label: `Decide ${finding.id} on ${one.slug}`, title: `${finding.id} · ${one.slug === pinned ? '' : `${one.slug} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.slug}: ${finding.title}`, prompt: callPrompt(one, finding), answers: findingAnswers(one.slug, finding) })
     }
   }
   if (intent && pack.lockRoles.includes(role) && (stage === 'build' || stage === 'prove') && lock.state === 'held' && !lock.isStale) {
@@ -244,8 +245,9 @@ export const buildHome = input => {
       label: 'Turn a repeated problem into a rule?',
       title: `Keeps coming back: ${one.title}`,
       detail: `"${one.title}" has come up in ${one.count} sessions.`,
+      answers: ruleAnswers([one], pack.owners),
       question: `"${one.title}" has come up in ${one.count} sessions`,
-      prompt: `The trap "${one.title}" has come up in ${one.count} separate sessions. Its fix each time: ${one.fix} Ask me with a question dialog whether to make it a rule. If yes, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diff for review by the owners (${pack.owners}); do not commit.`,
+      prompt: rulePrompt([one], pack.owners),
     })
   } else if (recurring.length > 1) {
     items.push({
@@ -255,8 +257,9 @@ export const buildHome = input => {
       label: 'Turn repeated problems into rules?',
       title: `${recurring.length} problems keep coming back: make them rules?`,
       detail: `${recurring.length} problems have each come up in 3 or more sessions.`,
+      answers: ruleAnswers(recurring, pack.owners),
       question: `${recurring.length} problems have each come up in 3 or more sessions`,
-      prompt: `These traps keep coming back, each in several separate sessions: ${recurring.map((one, index) => `(${index + 1}) "${one.title}", ${one.count} sessions; its fix each time: ${one.fix}`).join(' ')} Ask me in one question dialog (multiSelect, one option per trap, labels short enough to stand alone) which to make rules. For each I pick, draft the change that prevents it (the AGENTS.md line or skill step, at the closest authority AGENTS.md allows) and show me the diffs for review by the owners (${pack.owners}); do not commit.`,
+      prompt: rulePrompt(recurring, pack.owners),
     })
   }
   const open = items.filter(one => !input.sent.includes(one.id))

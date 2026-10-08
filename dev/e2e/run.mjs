@@ -97,6 +97,18 @@ const pressKey = (tree, key) => {
   return false
 }
 
+// The node with this key, anywhere in a tree.
+const nodeOf = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => nodeOf(child, key)).find(Boolean) ?? null)
+
+// Search as a surface with a text field does (0.2.0): Search… opens the field, Enter submits the words.
+// Returns the field, or null when none was drawn.
+const searchField = async (render, words) => {
+  nodeOf(await render(), 'pick-search')?.props.onPress()
+  const field = nodeOf(await render(), 'pick-search-field')
+  field?.props.onSubmit(words, {})
+  return field
+}
+
 const pressIn = (tree, label) => {
   const stack = [tree]
   while (stack.length > 0) {
@@ -600,12 +612,34 @@ const GH_ISSUES = [
   find(await pickTree(), 'pick-sort')?.props.onPress()
   find(await pickTree(), 'pick-sort')?.props.onPress()
   find(await pickTree(), 'pick-group')?.props.onPress()
-  engine.script.length = 0
-  engine.script.push(typed('dodge'))
+  engine.record.dialogs.length = 0
   find(await pickTree(), 'pick-search')?.props.onPress()
+  const fieldTree = await pickTree()
+  const fieldCheck = check(fieldTree, 72)
+  screens.push(['Terminal · Everything open, Search opened as a field (72 columns)', fieldCheck.lines.slice(0, 6).join('\n')])
+  const searchInput = find(fieldTree, 'pick-search-field')
+  expect('A7: Search opens a text field, focused, in place of the question dialog; the first row gives up its focus', searchInput?.type === 'Input' && searchInput.props.autoFocus === true && /^Search: \[title, issue number, area or owner\]/m.test(fieldCheck.lines.join('\n')) && fieldCheck.problems.length === 0, [searchInput?.props, fieldCheck.problems])
+  searchInput?.props.onSubmit('dodge', {})
   await engine.flush()
   const searched = await pickText()
-  expect('Search asks one question and the words typed under Other narrow the list (here to the Dodge issue)', /#28887/.test(searched) && !searched.includes(teammate) && /^1 of \d+$/m.test(searched) && /Search: dodge/.test(searched) && engine.record.dialogs.at(-1)?.header === 'Search', searched)
+  expect('A7: Enter in the field narrows the list (here to the Dodge issue), no dialog asked, and the field closes', /#28887/.test(searched) && !searched.includes(teammate) && /^1 of \d+$/m.test(searched) && /Search: dodge/.test(searched) && engine.record.dialogs.length === 0 && !find(await pickTree(), 'pick-search-field'), searched)
+  find(await pickTree(), 'pick-search-clear')?.props.onPress()
+  // Where the surface draws no field (the mobile app), Search is the question dialog as before.
+  engine.script.length = 0
+  engine.script.push(typed('dodge'))
+  find(await engine.render('Pane', { bodyColumns: 72 }, 'ather', 'mobile'), 'pick-search')?.props.onPress()
+  await engine.flush()
+  expect('A7: on a surface without a text field, Search asks one question and the words typed under Other narrow the list', engine.record.dialogs.at(-1)?.header === 'Search' && /Search: dodge/.test(await pickText()) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather', 'mobile'), 'pick-search-field'), engine.record.dialogs.at(-1))
+  find(await pickTree(), 'pick-search-clear')?.props.onPress()
+  // /ather find <words> is unchanged: the list searched in the pane, or the matches in a line without one.
+  engine.record.dialogs.length = 0
+  await run(engine, [], 'ather', 'find dodge')
+  expect('A7: /ather find <words> still opens Everything open searched, with no dialog', /Search: dodge/.test(await pickText()) && engine.record.dialogs.length === 0)
+  find(await pickTree(), 'pick-search-clear')?.props.onPress()
+  engine.setSurfaces([])
+  const foundLine = await run(engine, [], 'ather', 'find dodge')
+  engine.setSurfaces(['terminal'])
+  expect('A7: … and without a pane it answers in a line', /^1 match "dodge": #28887/.test(foundLine.out), foundLine.out)
   find(await pickTree(), 'pick-search-clear')?.props.onPress()
   expect('✕ Clear shows everything again', (await pickText()).includes(teammate) && !/Search: /.test(await pickText()))
   const owners = collect(await pickTree(), node => node.type === 'Text' && /^pick-intent:.*-owner-text$/.test(node.props.key ?? ''))
@@ -793,8 +827,10 @@ const hasFocus = tree => {
   await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Succeeded' })
   await engine.modelTool({ tool: 'Bash', command: 'Run-S2Automation -Filter Snow', __text: 'EXIT CODE: 0\n2 tests failed' })
   await engine.flush()
-  pressIn(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'Decide F-10')
-  await engine.flush()
+  // Handed over the walk-through way (/ather's question where nothing is drawn), not answered in place.
+  engine.setSurfaces([])
+  await run(engine, [question => question.options.find(option => /^(Decide F-10|Go through \d+ things)/.test(option.label))?.label ?? '__missing__'])
+  engine.setSurfaces(['terminal'])
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · tracked intent with proof and a sent decision (72 columns)', pane.lines.join('\n')])
   const text = pane.lines.join('\n')
@@ -834,12 +870,183 @@ const hasFocus = tree => {
   screens.push(['Terminal · All intents (72 columns)', all.lines.join('\n')])
   expect('All intents lists every open intent, cleanly, under one status line', all.problems.length === 0 && /Everything open\n\d+ open · yours first/.test(all.lines.join('\n')), all.problems)
   pressIn(await pane(110), 'Back')
-  const tree = await pane(110)
-  pressIn(tree, 'Decide F-')
+  // A decision's row opens it in place (0.2.0): nothing is sent and the pane stays (fixtures below check the answers).
+  const callKeys = []
+  const collectCalls = node => (!node || typeof node !== 'object' ? undefined : (node.type === 'Button' && /^item-call:/.test(node.props.key ?? '') && callKeys.push(node.props.key), (node.children ?? []).forEach(collectCalls)))
+  const before = await pane(110)
+  collectCalls(before)
+  const closesBefore = engine.record.closes.length
+  // One not opened yet; with a single decision (opened from the start), its press closes it and a second opens it again.
+  const lastCall = callKeys.find(key => !nodeOf(before, `explain-${key.slice('item-'.length)}`)) ?? callKeys[0] ?? ''
+  if (nodeOf(before, `explain-${lastCall.slice('item-'.length)}`)) pressKey(before, lastCall)
+  pressKey(await pane(110), lastCall)
   await engine.flush()
-  expect('pressing a Needs-you row hands it to the session and closes the pane', engine.record.submits.length === 1 && engine.record.closes.some(one => one.id === 'ather'), engine.record.submits)
+  expect('pressing a Needs-you decision opens its answers in place: nothing sent, the pane stays', lastCall !== '' && engine.record.submits.length === 0 && engine.record.closes.length === closesBefore && Boolean(nodeOf(await pane(110), `explain-${lastCall.slice('item-'.length)}`)), callKeys)
   await engine.close('ather')
   expect('no hook threw in the terminal', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+// ---------------------------------------------------------------- decide in place (0.2.0)
+
+{
+  // Two fixture intents of Tin's. zz-decide, tracked so it comes first: F-1 in the list format (A recommended)
+  // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended) and F-4 with no options,
+  // two decisions that wait as one block. A trap seen in three sessions waits too, and the Editor is held
+  // (a designer's Ask for the Editor: an item with nothing to answer).
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
+  const fixture = (slug, findings) => {
+    fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
+    fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: one\n- A2: two\n`)
+    fs.writeFileSync(path.join(root, 'docs/intent', slug, 'findings.md'), ['# Findings', '', ...findings, ''].join('\n'))
+  }
+  fixture('zz-decide', [
+    '## F-1 (2026-09-29, rev 6) | blocking: no | status: open (director)',
+    '',
+    '**Found:** in the snow/sand lab, neither Nine Tails hook can be driven by its production trigger, so both are proven by automation tests plus a lab force.',
+    '',
+    '**Options:**',
+    '- A (recommended): prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial.',
+    '- B: add a lab rig that grants Fox Form, which means driving the production ability with its resources set up.',
+    '',
+    '**Resolution:**',
+    '',
+    '## F-3 (open, not blocking): already settled',
+    '',
+    '- Options: (a) one way; (b) another way. Recommendation: (a).',
+    '- Resolution (orchestrator, 2026-10-05): accepted (a).',
+  ])
+  fixture('zz-group', [
+    '## F-2 (open, not blocking): restart one quest also restores every flow-owned actor',
+    '',
+    '- Options: (a) keep it as is, with the confirmation; (b) add a runtime hook that restores only the restarted quest; (c) re-run the',
+    "  other quests' entry actions. Recommendation: (b).",
+    '',
+    '## F-4 (2026-10-07) | blocking: yes | status: open (director)',
+    '',
+    'Which pool size should the spawner use?',
+  ])
+  fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'held by lane-7')
+  await run(engine, [], 'ather', 'intent zz-decide')
+  const pane = (cols = 72, surface = 'terminal') => engine.render('Pane', { bodyColumns: cols }, 'ather', surface)
+  const text = async (cols = 72) => check(await pane(cols), cols).lines.join('\n')
+  const id = n => `call:${n === 1 || n === 3 ? 'zz-decide' : 'zz-group'}:F-${n}`
+  const waiting = async () => Number(/N E E D S   Y O U   ·   (\d+)/.exec(await text(110))?.[1] ?? -1)
+
+  const first = await pane(72)
+  const first72 = check(first, 72)
+  screens.push(['Terminal · Needs you, the first decision opened with its answers (72 columns)', first72.lines.join('\n')])
+  const shown72 = first72.lines.join('\n')
+  expect(
+    'A3: the first decision is opened: its whole question, A (recommended, primary) and B as buttons, then Explain, Type an answer, Open findings',
+    /◆ \d: Decide F-1 on zz-decide\n {5}In the snow\/sand lab, neither Nine Tails hook can be driven/.test(shown72) &&
+      /\[ A: Prove both on a map where Fox Form and[^\]]*\(recommended\) \]/.test(shown72) &&
+      /\[ B: Add a lab rig that grants Fox Form \]/.test(shown72) &&
+      /x: Explain {3}t: Type an answer {3}Open findings ›/.test(shown72) &&
+      nodeOf(first, `option-${id(1)}-A`)?.props.variant === 'primary' &&
+      nodeOf(first, `option-${id(1)}-B`)?.props.variant === undefined,
+    first72.lines,
+  )
+  expect('A3: an intent with several decisions keeps its one folded row; a finding with a filled Resolution is not offered (A2)', /◆ \d: ▸ zz-group · 2 decisions\n/.test(shown72) && !nodeOf(first, `item-${id(2)}`) && !/F-3/.test(shown72), shown72)
+  pressKey(first, 'calls-zz-group')
+  const block = await text(72)
+  expect('A3: opened, the block shows its decisions one line each, the first decision still the one opened', /▾ zz-group · 2 decisions\n {2}· \d: F-2 · Restart one quest also restores every flow-owned actor\n(?: {3,}[^\n]*\n)*? {2}· \d: F-4 · Which pool size should the spawner use\?/.test(block) && Boolean(nodeOf(await pane(), `option-${id(1)}-A`)) && !nodeOf(await pane(), `option-${id(2)}-A`), block)
+  for (const cols of [72, 110]) {
+    const drawn = check(await pane(cols), cols)
+    expect(`A3: Needs you with a decision opened lays out cleanly at ${cols} columns, every hotkey unique`, drawn.problems.length === 0, drawn.problems)
+  }
+  const desk = await pane(110, 'desktop')
+  const deskDrawn = check(desk, 1000)
+  screens.push(['Desktop · Needs you, the first decision opened (tree drawn as text)', deskDrawn.lines.filter(line => /zz-decide|Decided|\[ [AB]:|Explain|snow\/sand/.test(line)).join('\n')])
+  expect('A3: on the desktop every answer is a visible button and no key is drawn', ['A', 'B'].every(letter => nodeOf(desk, `option-${id(1)}-${letter}`)?.type === 'Button') && nodeOf(desk, `explain-${id(1)}`)?.props.hotkey === undefined && nodeOf(desk, `type-${id(1)}`)?.props.hotkey === undefined && nodeOf(desk, `findings-${id(1)}`)?.type === 'Button' && deskDrawn.problems.length === 0, deskDrawn.problems)
+
+  // Another decision opens on its press, one at a time; a press on the opened one closes it.
+  pressKey(await pane(), `item-${id(2)}`)
+  const second = await pane()
+  expect('A3: pressing another decision opens it and closes the first (F-2: B recommended, from "Recommendation: (b)")', nodeOf(second, `option-${id(2)}-B`)?.props.variant === 'primary' && /^C: /.test(nodeOf(second, `option-${id(2)}-C`)?.props.label ?? '') && !nodeOf(second, `option-${id(1)}-A`), nodeOf(second, `option-${id(2)}-B`)?.props)
+  pressKey(await pane(), `item-${id(2)}`)
+  expect('… and pressing the opened one closes it', !nodeOf(await pane(), `option-${id(2)}-B`) && !nodeOf(await pane(), `option-${id(1)}-A`))
+  pressKey(await pane(), `item-${id(1)}`)
+
+  // Explain asks without deciding: the row stays open and still waits.
+  const waitingBefore = await waiting()
+  const closesBefore = engine.record.closes.length
+  pressKey(await pane(), `explain-${id(1)}`)
+  await engine.flush()
+  expect('A5: Explain hands the session the explain prompt; the row stays open and still counts as waiting; the pane stays', engine.record.submits.at(-1) === 'Explain decision F-1 on zz-decide: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.' && Boolean(nodeOf(await pane(), `option-${id(1)}-A`)) && (await waiting()) === waitingBefore && engine.record.closes.length === closesBefore, engine.record.submits.at(-1))
+
+  // An option decides: the session gets the D4 prompt, the row says so in place, then folds.
+  // Pressed twice before the pane redraws (a double click, a second Enter): one answer goes out.
+  const submitsBefore = engine.record.submits.length
+  const optionTree = await pane()
+  pressKey(optionTree, `option-${id(1)}-A`)
+  pressKey(optionTree, `option-${id(1)}-A`)
+  await engine.flush()
+  expect('A4: an option pressed twice before the redraw sends one prompt', engine.record.submits.length === submitsBefore + 1, engine.record.submits.slice(submitsBefore))
+  expect('A4: pressing an option hands the session "Decide F-1 on zz-decide: A — <full text>" and the record-it instruction; the pane stays', engine.record.submits.at(-1) === "Decide F-1 on zz-decide: A — Prove both on a map where Fox Form and FoxScan run for real, the Winter or Loc_03 test maps, at the first production trial. Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again." && engine.record.closes.length === closesBefore, engine.record.submits.at(-1))
+  const decided72 = check(await pane(72), 72)
+  screens.push(['Terminal · Needs you just after answering: "✓ Decided" in place (72 columns)', decided72.lines.join('\n')])
+  expect('A4: the row shows "✓ Decided: A" in place, Needs you counts one fewer, and the next decision opens', /✓ Decided: A · F-1 on zz-decide/.test(decided72.lines.join('\n')) && (await waiting()) === waitingBefore - 1 && Boolean(nodeOf(await pane(), `option-${id(2)}-B`)) && decided72.problems.length === 0, decided72.lines)
+  const realNow = Date.now
+  Date.now = () => realNow() + 9000
+  try {
+    const folded72 = check(await pane(72), 72)
+    pressKey(await pane(), 'decided-fold')
+    const unfolded = await text(72)
+    screens.push(['Terminal · Needs you 9 s later: folded into "▸ 1 decided", then unfolded (72 columns)', `${folded72.lines.join('\n')}\n\n— unfolded —\n${unfolded}`])
+    expect('A4: 8 seconds on, the row folds under "▸ 1 decided", which unfolds to the answer', !/✓ Decided: A/.test(folded72.lines.join('\n')) && /▸ 1 decided/.test(folded72.lines.join('\n')) && /▾ 1 decided\n {2}✓ F-1 on zz-decide: A/.test(unfolded) && folded72.problems.length === 0, folded72.lines)
+    pressKey(await pane(), 'decided-fold')
+  } finally {
+    Date.now = realNow
+  }
+
+  // Type an answer: a field under the row (the terminal has one); Enter sends the words as the choice.
+  pressKey(await pane(), `type-${id(2)}`)
+  const typing = await pane(72)
+  const typing72 = check(typing, 72)
+  const field = nodeOf(typing, `typed-${id(2)}`)
+  screens.push(['Terminal · Type an answer opens a field under the decision (72 columns)', typing72.lines.join('\n')])
+  expect('A6: Type an answer opens a focused field under the row, named for the decision; nothing else takes the focus', field?.type === 'Input' && field.props.autoFocus === true && field.props.placeholder === 'Your answer to F-2 on zz-group' && typing72.problems.length === 0, [field?.props, typing72.problems])
+  field?.props.onSubmit('keep it, but log which actors moved', {})
+  await engine.flush()
+  expect("A6: Enter hands the session the decision with the person's words as the choice", engine.record.submits.at(-1) === `Decide F-2 on zz-group: "keep it, but log which actors moved" (my own answer, in my words). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.` && /✓ Decided: keep it, but log which actors moved · F-2/.test(await text(110)), engine.record.submits.at(-1))
+
+  // A decision with no options: Explain, Type an answer and Open findings only.
+  const none = await pane()
+  expect('A1/D1: a finding without options opens with Explain, Type an answer and Open findings, and no option buttons', Boolean(nodeOf(none, `explain-${id(4)}`)) && !nodeOf(none, `option-${id(4)}-A`) && Boolean(nodeOf(none, `findings-${id(4)}`)), none)
+  // With its typed answer open, Open findings leaves the row: Back does not land in the field again.
+  pressKey(none, `type-${id(4)}`)
+  expect('A6: the typed field opens on F-4 before leaving it', Boolean(nodeOf(await pane(), `typed-${id(4)}`)))
+  pressKey(await pane(), `findings-${id(4)}`)
+  const finding = await text(72)
+  screens.push(['Terminal · Open findings › shows the finding as written (72 columns)', finding])
+  expect('D3: Open findings › shows the finding as written, with Back', /^F I N D I N G\nF-4 on zz-group$/m.test(finding) && /## F-4 \(2026-10-07\)/.test(finding) && /Which pool size should the spawner use\?/.test(finding) && /0: Back/.test(finding), finding)
+  pressKey(await pane(), 'finding-back')
+  expect('D3: back from the finding, the row is opened again with its typed field closed', Boolean(nodeOf(await pane(), `explain-${id(4)}`)) && !nodeOf(await pane(), `typed-${id(4)}`))
+
+  // Where the surface has no text field (mobile), Type an answer is the question dialog's Other.
+  engine.record.dialogs.length = 0
+  engine.script.length = 0
+  engine.script.push(typed('a pool of eight'))
+  const mobile = await pane(72, 'mobile')
+  pressKey(mobile, `type-${id(4)}`)
+  await engine.flush()
+  const asked = engine.record.dialogs.at(-1)
+  expect('A6: without a text field, Type an answer asks one question (2-4 answers) and the words typed under Other decide', asked?.header === 'Answer' && asked.options.length >= 2 && asked.options.length <= 4 && !nodeOf(await pane(72, 'mobile'), `typed-${id(4)}`) && engine.record.submits.at(-1) === `Decide F-4 on zz-group: "a pool of eight" (my own answer, in my words). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.`, [asked, engine.record.submits.at(-1)])
+
+  // D8: "make it a rule?" answers in place too.
+  pressKey(await pane(), 'item-rule:live-coding')
+  const rule = await pane(72)
+  expect('A8: the repeated-problem item opens with Make it a rule / No, leave it, Explain and Type an answer (no Open findings)', /^A: Make it a rule$/.test(nodeOf(rule, 'option-rule:live-coding-A')?.props.label ?? '') && /^B: No, leave it$/.test(nodeOf(rule, 'option-rule:live-coding-B')?.props.label ?? '') && Boolean(nodeOf(rule, 'explain-rule:live-coding')) && !nodeOf(rule, 'findings-rule:live-coding') && check(rule, 72).problems.length === 0, check(rule, 72).lines)
+  pressKey(rule, 'option-rule:live-coding-A')
+  await engine.flush()
+  expect('A8: Make it a rule hands the draft request (never a commit) and shows "✓ Decided: A" in place', /These traps keep coming back: "A running Editor blocks the build \(Live Coding\)", 3 sessions; its fix each time: Close the Editor\. Make it a rule: for each, draft the change that prevents it/.test(engine.record.submits.at(-1) ?? '') && /do not commit\.$/.test(engine.record.submits.at(-1) ?? '') && /✓ Decided: A · Turn a repeated problem into a rule\?/.test(await text(110)), engine.record.submits.at(-1))
+
+  // An item with nothing to answer keeps today's press: it goes to the session and the pane closes.
+  pressKey(await pane(), 'item-editor')
+  await engine.flush()
+  expect('D8: an item without options (Ask for the Editor) still hands over on its press and closes the pane', /^Find the session that holds the Editor owner lock/.test(engine.record.submits.at(-1) ?? '') && engine.record.closes.length > closesBefore, engine.record.submits.at(-1))
+  expect('no hook threw while deciding in place', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }
 
@@ -857,7 +1064,7 @@ const hasFocus = tree => {
   const issuesNow = await run(engine, [], 'ather', 'issues')
   expect('/ather issues reads them on the spot and says why when it cannot, or that there are none', /Could not read your GitHub issues|No open GitHub issues are assigned to you|N E X T|Pick/.test(issuesNow.out + issuesNow.dialogs.map(one => one.question).join(' ')) , issuesNow.out)
   expect('the desktop pane carries the Ather mark, is clicked (no hotkeys drawn) and lays out cleanly; the terminal draws no mark', find(desk, 'Svg')?.props.alt === 'Ather' && deskPane.problems.length === 0 && !/\b[a-z0-9]: /.test(deskPane.lines.join('\n')) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'Svg'), deskPane.problems)
-  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\nSix short steps/.test(pane.lines.join('\n')) && /T E A M M A T E S '   I N T E N T S   ·   \d( \d)*\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
+  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\n *Six short steps/.test(pane.lines.join('\n')) && /T E A M M A T E S '   I N T E N T S   ·   \d( \d)*\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
   done()
 }
 
@@ -973,8 +1180,8 @@ const hasFocus = tree => {
   const list = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
   const listed = check(list, 72)
   screens.push(['Terminal · Skills (72 columns)', listed.lines.join('\n')])
-  expect('Skills lists the present skills by group, each with the first sentence of its description', /R E V I E W   A N D   P R O O F\n1: thermo-nuclear-code-quality-review\nWhat thermo-nuclear-code-quality-review does\.\n2: editor-video-walkthrough/.test(listed.lines.join('\n')) && /A G E N T I C   T E S T I N G\n3: talab/.test(listed.lines.join('\n')) && !/Use it when/.test(listed.lines.join('\n')) && listed.problems.length === 0, listed.lines)
-  expect('a skill from the manual library is listed under Explain it to me', /E X P L A I N   I T   T O   M E\n\d: show-me\nHelp the user understand the topic visually\./.test(listed.lines.join('\n')), listed.lines)
+  expect('Skills lists the present skills by group, each with the first sentence of its description', /R E V I E W   A N D   P R O O F\n1: thermo-nuclear-code-quality-review\n *What thermo-nuclear-code-quality-review does\.\n2: editor-video-walkthrough/.test(listed.lines.join('\n')) && /A G E N T I C   T E S T I N G\n3: talab/.test(listed.lines.join('\n')) && !/Use it when/.test(listed.lines.join('\n')) && listed.problems.length === 0, listed.lines)
+  expect('a skill from the manual library is listed under Explain it to me', /E X P L A I N   I T   T O   M E\n\d: show-me\n *Help the user understand the topic visually\./.test(listed.lines.join('\n')), listed.lines)
   find(list, 'skill:talab')?.props.onPress({})
   await engine.flush()
   expect('a skill hands the session its run, for the tracked intent', engine.record.submits.some(text => /Run the talab skill \(\.agents\/skills\/talab\/SKILL\.md\) for intent fluid-snow-sand-look/.test(text)), engine.record.submits)
@@ -1500,9 +1707,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   const opened = await text()
   expect('round 2: unsearched, the teammate with nine intents starts folded and the Parked block too', /\n▸ Hai Huynh · 9\n/.test(opened) && /\n▾ Duy Tran · 1\n\d: ● small-one/.test(opened) && /\n▸ ‖ Parked · 1\n/.test(opened) && !/zeta-north|resting-quietly/.test(opened), opened)
   const search = async words => {
-    engine.script.length = 0
-    engine.script.push(typed(words))
-    findKey(await pane(), 'pick-search')?.props.onPress()
+    await searchField(pane, words)
     await engine.flush()
     return text()
   }
@@ -1665,9 +1870,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   expect('A7: on the desktop Group is a visible button with no key drawn', deskGroup?.type === 'Button' && deskGroup.props.label === 'Group: Person' && deskGroup.props.hotkey === undefined, deskGroup?.props)
   expect('A7: the Group key g is unique on the pick view, and Home has no Group button', check(await pane(72), 72).problems.length === 0 && (findKey(await pane(), 'pick-back')?.props.onPress(), !findKey(await pane(), 'pick-group')), check(await pane(72), 72).problems)
   findKey(await pane(), 'all')?.props.onPress()
-  engine.script.length = 0
-  engine.script.push(typed('teammate'))
-  findKey(await pane(), 'pick-search')?.props.onPress()
+  await searchField(pane, 'teammate')
   await engine.flush()
   const searchedGroups = await text(72)
   screens.push(['Terminal · Everything open searched, heads show x of y (72 columns)', searchedGroups])
