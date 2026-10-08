@@ -1,6 +1,6 @@
 # Ather Automata: several repositories
 
-- Rev: 2
+- Rev: 3
 - Status: active
 - Area: ather-automata
 - Owner: Hoàng Vũ
@@ -31,6 +31,7 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 - D8 Issues and PRs across: `gh issue list` runs in each workspace checkout, each list kept per repository (D1), merged in the pane with the short name when there is more than one; an issue's id is `issue:<short name>#<n>` outside the session's checkout. Starting an intent from an issue starts it in that issue's checkout (the prompt names the folder); Open on GitHub and Copy link use that checkout. `/ather issue <n>` prefers the session checkout's issue, then the first match. PR states are read with `gh pr view` in each intent's checkout and kept per repository.
 - D9 Sync across: each checkout's main is fetched with the same argv, env and 10-minute throttle, one fetch at a time overall; the header's sync line reports the least recently synced checkout; ↻ fetches every checkout that may fetch now.
 - D10 One checkout, no change: with a workspace of one checkout, every pane layout, prompt, store key and git/gh call is as on main, 0.2.0 (the e2e checks and layouts are the check).
+- D11 Unique names: a checkout's short name is unique among the checkouts the pane works with (the workspace's, and the tracked intent's checkout when it is outside the workspace). It is the repository id's last segment, as before. When two or more of those checkouts would share it (two clones or worktrees of one repository, or `a/web` beside `b/web`), each of them is named by its folder's name instead; folders that still share a name get `-2`, `-3`, … in workspace order. The names come from one pure function over the checkouts in workspace order, so every key (`<name>/<slug>`, `<name>#<n>`), row cell and `/ather intent|issue <name>…` lookup agrees. The session's own checkout keeps bare slugs and issue numbers. A repository's assigned issues are read and listed once however many of its checkouts the workspace has: under the session's own checkout when it is one of them, else the first in workspace order.
 
 ## Acceptance
 
@@ -43,6 +44,7 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 | A5 | One pane lists the intents of every workspace checkout with their short names; one checkout looks as before (D7, D9, D10). (S4) | e2e: a parent-folder session over two checkouts lists both checkouts' intents with names, the same slug in both shows as two rows, Work on this here on the other checkout's intent tracks it there; sync line and ↻ over both. Single-checkout e2e layouts unchanged (`--layouts` diff empty). |
 | A6 | Issues and PRs come from every workspace checkout (D8). (S5) | e2e with gh fixtures per checkout: both lists merged with names; Start an intent names the issue's checkout; PR states per checkout drive each intent's stage. |
 | A8 | Main's 0.1.8 to 0.2.0 features (desktop work rows, worker tree and calls in flight, Group, decide in place) hold over several checkouts. (S7) | Unit and `dev/e2e/repos.mjs`: the same slug in two checkouts as two rows and two decisions on both surfaces, a decision in another checkout answered in place, grouped lists with repository names, a waiting worker's lock read in its command's checkout. |
+| A9 | Two checkouts that would share a short name get different names, keys and rows; one repository's issues are listed once (D11). (S8) | Unit on the naming function (same repository twice, `a/web` beside `b/web`, same folder name twice, one checkout unchanged). e2e: a parent folder holding two clones of one origin with the same intent slug lists two rows with different keys on both surfaces, tracks the second in its own folder, keeps their decisions apart, and lists the repository's issue once. |
 | A7 | No regressions; Paseo copies synced; `claude plugin test ather-automata` passes. | `node dev/test-all.mjs` (unit + repos e2e; S2 e2e when S2_ROOT is set), `claude plugin test`. |
 
 ## Slices
@@ -57,3 +59,4 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 | S5 | D8: issues and PRs across. | S4 |
 | S6 | Whole-diff review, README and changelog, final e2e. | S5 |
 | S7 | After merging main (0.2.0): its 0.1.8 to 0.2.0 features over several checkouts. Ships as 0.2.1. | S6 |
+| S8 | D11: unique short names; one repository's issues once. | S7 |
