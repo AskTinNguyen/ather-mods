@@ -11,6 +11,8 @@ const DISMISSED = '[User dismissed — do not proceed, wait for next instruction
 // Elements are called as functions: Text({ ... }) returns a node.
 const element = type => (props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
 const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Markdown', 'Link', 'Code', 'Svg'].map(name => [name, element(name)]))
+// The mobile app's table: no Input or Select (the app draws no field yet), as claude-code.d.ts says.
+const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => name !== 'Input' && name !== 'Select'))
 
 export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => {
   const store = new Map()
@@ -148,7 +150,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
       surfaces: async () => surfaces.slice(),
     },
     ui: {
-      resolve: () => ELEMENTS,
+      resolve: e => (e?.surface === 'mobile' ? MOBILE : ELEMENTS),
       toast: text => record.toasts.push(text),
       copy: async ({ text }) => {
         record.copies.push(text)

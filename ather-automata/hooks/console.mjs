@@ -11,9 +11,9 @@
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
 import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
-import { issuePrompt, parseIssues } from './issues.mjs'
+import { issueLink, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { crewOf } from './crew.mjs'
@@ -24,9 +24,11 @@ import { endLoop } from './inflight.mjs'
 import { changeGlyph } from './changes.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from './team.mjs'
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
-import { AMBER, INK, LIME, QUIET, choiceRow, fit, homePreview, label, needsRows, section, statusLine, workGroups } from './rows.mjs'
+import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
+import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
+/** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
 /** @typedef {ReturnType<typeof buildHome>} Home */
 /** @typedef {import('./home.mjs').Item} Item */
 /** @typedef {import('./home.mjs').Next} Next */
@@ -47,7 +49,7 @@ let me = ''
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
 const sent = new Set()
-let paneMode = /** @type {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} */ ('home')
+let paneMode = /** @type {Mode} */ ('home')
 // Create groups opened past their first three.
 /** @type {Set<string>} */
 const createOpen = new Set()
@@ -72,6 +74,13 @@ const pickFolded = new Set()
 // Needs you's intents opened to show each of their decisions.
 /** @type {Set<string>} */
 const callsOpen = new Set()
+// Answering in place (0.2.0, decide.mjs AnswerState): kept in this session only; this session's answers
+// stay until the files read them resolved. Then two view fields: the finding Open findings shows, and
+// whether Search's field is open.
+/** @type {import('./decide.mjs').AnswerState} */
+let answerState = { ...FRESH_ANSWERS }
+let findingShown = ''
+let isSearchOpen = false
 // What the last read of the team's intents learned (team.mjs reads each part again only when it moved),
 // and where the background fetch stands. Both, and `intents`, change together, in readIntents.
 let teamCache = EMPTY_CACHE
@@ -239,7 +248,12 @@ export function register(on) {
   })
 
   on('ui.close', ($, e, next) => {
-    if (e.id === PANE_ID) paneMode = 'home'
+    if (e.id === PANE_ID) {
+      // Only the view resets: this session's answers stay.
+      paneMode = 'home'
+      isSearchOpen = false
+      answerState = { ...answerState, typing: '' }
+    }
     return next(e)
   })
 }
@@ -267,6 +281,9 @@ async function openConsole($, folder) {
   pickGroup = 'person'
   isGroupRead = false
   callsOpen.clear()
+  answerState = { ...FRESH_ANSWERS }
+  findingShown = ''
+  isSearchOpen = false
   teamCache = EMPTY_CACHE
   sync = NO_SYNC
   fetched = null
@@ -354,6 +371,10 @@ async function readIntents($) {
   if (ended) fetched = null
   teamCache = team.cache
   intents = read.sort((a, b) => b.updatedAt - a.updatedAt)
+  // This session's answers to decisions are kept until the files read them resolved; an answer to
+  // anything else (a rule) has no file to settle it, so it stays for the session.
+  const waiting = new Set(intents.flatMap(one => directorCalls(one).map(finding => callId(one.slug, finding.id))))
+  answerState = { ...answerState, decided: pruneDecided(answerState.decided, id => waiting.has(id) || !id.startsWith('call:'), Date.now()) }
   sync = { ...sync, ...ended?.sync, isRepo: team.isRepo, hasMain: team.cache.main !== null }
   // The listed skills that exist here, each with the first sentence of its own description.
   const found = []
@@ -566,6 +587,47 @@ async function actAll($, items) {
     for (const one of items) await state.settleItem(io($), one)
   })
   return `Sent ${items.length} things to the session; it takes you through them one at a time.`
+}
+
+// An answer given in place: the row shows "✓ Decided" for a while, then folds. The session gets
+// `prompt` ('' gives it nothing: the press only closes the item); the item settles after the row has shown.
+/** @param {Engine} $ @param {Item} one @param {string} answer @param {string} prompt */
+async function answerItem($, one, answer, prompt) {
+  // A double click or a second Enter before the redraw: one answer, one prompt, one timer.
+  if (sent.has(one.id)) return `already answered: ${answer}`
+  answerState = { ...answerState, opened: '', typing: '', decided: withDecided(answerState.decided, { id: one.id, answer, at: Date.now() }) }
+  $.clock.after(DECIDED_SHOWN_MS + 100, () => $.ui.invalidate('ui.render'))
+  const settle = () => new Promise(resolve => $.clock.after(DECIDED_SHOWN_MS, () => resolve(state.settleItem(io($), one))))
+  const unanswer = async () => void (answerState = { ...answerState, decided: answerState.decided.filter(each => each.id !== one.id) })
+  if (prompt) handOff($, [one.id], prompt, settle, unanswer)
+  else {
+    sent.add(one.id)
+    stale()
+    void settle()
+  }
+  $.ui.invalidate('ui.render')
+  return prompt ? `sent your answer to the session: ${answer}` : `closed: ${answer}`
+}
+
+// A typed answer, from the field or the dialog's Other: the person's words are the choice.
+/** @param {Engine} $ @param {Item} one @param {import('./decide.mjs').Answers} answers @param {string} words */
+async function answerTyped($, one, answers, words) {
+  const text = words.trim()
+  return text === '' ? 'Nothing answered.' : answerItem($, one, text, answers.typed(text))
+}
+
+// Type an answer: a field under the row where the surface has one, else the question dialog's Other.
+/** @param {Engine} $ @param {Item} one @param {import('./decide.mjs').Answers} answers @param {boolean} hasInput */
+async function typeAnswer($, one, answers, hasInput) {
+  if (hasInput) {
+    answerState = { ...answerState, typing: one.id }
+    $.ui.invalidate('ui.render')
+    return 'type your answer and press Enter.'
+  }
+  /** @type {Choice[]} */
+  const choices = answers.options.slice(0, 4).map(option => ({ label: cutWords(`${option.letter}: ${option.label}${option.isRecommended ? ' (Recommended)' : ''}`, 60), description: cutWords(option.text, 200), run: () => answerItem($, one, option.letter, option.prompt) }))
+  if (choices.length === 0) choices.push({ label: 'Explain it first', description: 'The session explains it; nothing is decided.', run: async () => (handOff($, [], answers.explain), 'asked the session to explain it.') })
+  return ask($, { header: 'Answer', question: `${one.question}. Pick one, or type your own answer under Other.`, choices, fallback: 'Nothing answered.', onTyped: words => answerTyped($, one, answers, words) })
 }
 
 /** @param {Engine} $ @param {Next} next */
@@ -824,11 +886,6 @@ async function ask($, spec) {
   return chosen ? chosen.run() : spec.onTyped(answer)
 }
 
-/** @param {string} text @param {number} max */
-function cut(text, max) {
-  return text.length <= max ? text : `${text.slice(0, max - 1).replace(/\s+\S*$/, '')}…`
-}
-
 // `/ather` without a drawing surface: where things stand is the question, the few things worth doing are the answers.
 /** @param {Engine} $ */
 async function menuQuestion($) {
@@ -839,7 +896,7 @@ async function menuQuestion($) {
   if (next?.isTour) {
     choices.push({ label: 'Take the tour (Recommended)', description: next.hint, run: () => doNext($, next) })
     const [mine] = model.work.filter(one => one.isMine)
-    if (mine) choices.push({ label: cut(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.slug}`, 40), description: mine.hint, run: () => startWork($, mine) })
+    if (mine) choices.push({ label: cutWords(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.slug}`, 40), description: mine.hint, run: () => startWork($, mine) })
     choices.push({ label: 'Skip the tour', description: 'You know your way around; Ather asks your role instead.', run: () => skipTour($) })
   }
   // What happened while the person was away is reviewed on its own, before anything else.
@@ -848,8 +905,8 @@ async function menuQuestion($) {
   const rest = model.open.filter(one => one !== review)
   const [only] = rest
   if (rest.length === 1 && only) choices.push({ label: only.label, description: only.question, run: () => act($, only) })
-  else if (rest.length > 1) choices.push({ label: `Go through ${rest.length} things`, description: cut(rest.map(one => one.question).join(' · '), 200), run: () => actAll($, rest) })
-  if (next && !next.isTour && !sent.has(next.id)) choices.push({ label: cut(next.work?.kind === 'intent' || next.action ? next.label : `Next: ${next.label}`, 40), description: next.hint, run: () => doNext($, next) })
+  else if (rest.length > 1) choices.push({ label: `Go through ${rest.length} things`, description: cutWords(rest.map(one => one.question).join(' · '), 200), run: () => actAll($, rest) })
+  if (next && !next.isTour && !sent.has(next.id)) choices.push({ label: cutWords(next.work?.kind === 'intent' || next.action ? next.label : `Next: ${next.label}`, 40), description: next.hint, run: () => doNext($, next) })
   if (model.offerAway) choices.push({ label: 'Heading off?', description: 'Hand over until done, for 8 or 4 hours.', run: () => presetQuestion($, '') })
   choices.push({ label: model.header.title === 'Ather' ? 'Pick something to work on' : 'Switch to other work', description: 'Your intents and GitHub issues first.', run: () => workQuestion($) })
   const { header } = model
@@ -879,7 +936,7 @@ async function workQuestion($) {
     header: 'Work',
     question: 'What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number.',
     // The question is the verb: a choice works on it at once, and says so (D5).
-    choices: work.map(one => ({ label: cut(one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
+    choices: work.map(one => ({ label: cutWords(one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
     fallback: 'Nothing chosen.',
     onTyped: text => typedWork($, text),
   })
@@ -912,7 +969,7 @@ async function typedWork($, text) {
       question: `${matches.length} intents match "${words}". Which one should this session work on?`,
       choices: matches.map(one => {
         const row = work.find(item => item.kind === 'intent' && item.slug === one.slug)
-        return { label: cut(one.slug, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackSlug($, one.slug) }
+        return { label: cutWords(one.slug, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackSlug($, one.slug) }
       }),
       fallback: await lookUp($, words),
       onTyped: more => typed($, more),
@@ -1018,7 +1075,7 @@ async function findText($) {
   return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(one => one.label).join(', ')}${found.length > 8 ? ', …' : ''}.`
 }
 
-// The pane has no text box: one question, and what is typed under Other is the search.
+// Where the surface draws no text field (and for /ather find without words): one question, and what is typed under Other is the search.
 /** @param {Engine} $ */
 async function searchQuestion($) {
   return ask($, {
@@ -1032,7 +1089,7 @@ async function searchQuestion($) {
 
 // ---------------------------------------------------------------- the pane (terminal)
 
-/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} mode */
+/** @param {Engine} $ @param {Mode} mode */
 async function openPane($, mode) {
   paneMode = mode
   await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
@@ -1073,7 +1130,7 @@ function refreshIssuesButton(el, $) {
   return el.Box({ key: 'issues-refresh-row', marginTop: 1, children: [el.Button({ key: 'issues-refresh', label: isIssuesRefreshing ? '↻ Refreshing…' : '↻ Refresh GitHub issues', hotkey: hotkeyFor('r'), plain: true, dimColor: true, onPress })] })
 }
 
-/** @param {Engine} $ @param {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create'} mode */
+/** @param {Engine} $ @param {Mode} mode */
 function show($, mode) {
   return () => {
     paneMode = mode
@@ -1088,9 +1145,6 @@ function show($, mode) {
 /** @type {Record<string, string>} */
 let peopleColours = {}
 
-// The Ather mark: the A, its lime I, and the 5 raised as a power.
-const MARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 100"><polygon points="6,98 40,14 60,14 94,98 76,98 50,36 24,98" fill="#C9CCCC"/><rect x="47.5" y="56" width="5" height="28" fill="#DDFF00"/><text x="86" y="40" font-family="Arial Black, Impact, sans-serif" font-weight="900" font-size="40" fill="#DDFF00">5</text></svg>'
-
 // On the desktop the pane is clicked, and its keys reach it only once it is clicked into (opened from
 // the band it never takes the keyboard): letters there promise what they cannot do, so none are drawn.
 let isClicked = false
@@ -1099,17 +1153,6 @@ const hotkeyFor = hotkey => (isClicked ? undefined : hotkey)
 
 /** @param {any} el @param {import('./rows.mjs').Choice} row */
 const choice = (el, row) => choiceRow(el, row, isClicked)
-
-// An issue's address, when it is one a Link may carry (https, printable ASCII); else none.
-/** @param {string} url */
-function linkOf(url) {
-  try {
-    const href = new URL(url).href
-    return href.startsWith('https://') && /^[\x21-\x7e]+$/.test(href) && href.length <= 2048 ? href : ''
-  } catch {
-    return ''
-  }
-}
 
 /** @param {Engine} $ @param {number} number @param {string} link */
 function openIssue($, number, link) {
@@ -1148,29 +1191,10 @@ function showIssue($, number, back) {
 // A choice with an issue's open and copy icons: beside it on the desktop, beneath it in the terminal.
 /** @param {any} el @param {Engine} $ @param {import('./issues.mjs').Issue | null} issue @param {any} row */
 function withIssueIcons(el, $, issue, row) {
-  const link = issue ? linkOf(issue.url) : ''
+  const link = issue ? issueLink(issue.url) : ''
   if (!link) return [row]
   const icons = el.Box({ key: 'next-icons', flexDirection: 'row', gap: 2, children: [el.Link({ key: 'next-open', href: link, label: '↗' }), el.Button({ key: 'next-copy', label: '⧉', plain: true, dimColor: true, onPress: copyLink($, link) })] })
   return isClicked ? [el.Box({ key: 'next-with-icons', flexDirection: 'row', width: '100%', children: [el.Box({ key: 'next-main', flexGrow: 1, children: [row] }), icons] })] : [row, el.Box({ key: 'next-icons-row', paddingLeft: 3, children: [el.Box({ key: 'next-icons-words', flexDirection: 'row', gap: 2, children: [openControl(el, $, /** @type {import('./issues.mjs').Issue} */ (issue), link, { key: 'next-open', label: '↗ Open on GitHub', hotkey: 'o', isQuiet: true }), el.Button({ key: 'next-copy', label: '⧉ Copy link', plain: true, hotkey: 'y', dimColor: true, onPress: copyLink($, link) })] })] })]
-}
-
-// Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○, lit up to where the work is.
-/** @param {any} el @param {Home['header']['stages']} stages */
-function stageRow(el, stages) {
-  return el.Box({
-    key: 'stages',
-    flexDirection: 'row',
-    children: stages.flatMap((one, index) => [
-      ...(index > 0 ? [el.Text({ key: `stage-gap-${index}`, color: QUIET, children: ' ─ ' })] : []),
-      el.Text({ key: `stage-${index}`, color: one.state === 'todo' ? QUIET : INK, bold: one.state === 'now', children: `${one.label} ${one.state === 'done' ? '✓' : one.state === 'now' ? '●' : '○'}` }),
-    ]),
-  })
-}
-
-/** @param {any} el @param {any[]} lines @param {string | undefined} surface */
-function masthead(el, lines, surface) {
-  const words = el.Box({ key: 'head-words', flexDirection: 'column', children: lines })
-  return surface === 'desktop' && el.Svg ? el.Box({ key: 'head', flexDirection: 'row', gap: 2, alignItems: 'center', children: [el.Svg({ source: MARK, alt: 'Ather', width: 48, height: 40 }), words] }) : words
 }
 
 /** @param {Work} one */
@@ -1248,65 +1272,25 @@ function askWorker($, one) {
   return press($, async () => { handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`); return `asked the session about ${one.title}` }, false)
 }
 
-// ---------------------------------------------------------------- the summary strip
-
-// Ten segments, lit in lime as far as the checklist is done.
-/** @param {any} el @param {string} key @param {number} done @param {number} total */
-function bar(el, key, done, total) {
-  const lit = total > 0 ? Math.round((done / total) * 10) : 0
-  return el.Box({ key, flexDirection: 'row', children: [el.Text({ color: INK, children: '━'.repeat(lit) }), el.Text({ color: '#3a3c36', children: '━'.repeat(10 - lit) })] })
-}
-
-// How it is going, before anything is read: the checklist, workers running, decisions waiting on you.
-/** @param {any} el @param {Home} model @param {Crew[]} crew @param {number} width */
-function summaryStrip(el, model, crew, width) {
-  const { header } = model
-  const running = crew.filter(one => one.state === 'running').length
-  // The same count as the Needs you section beneath: a rule to make waits on you as much as a decision.
-  const decisions = model.open.length
-  const first = header.total > 0 ? { key: 'Checklist', value: `${header.done}/${header.total}`, extra: bar(el, 'strip-bar', header.done, header.total) } : { key: 'Yours', value: String(model.work.filter(one => one.isMine).length), extra: el.Text({ color: QUIET, children: 'intents and issues' }) }
-  const cards = [
-    { ...first, isHot: false },
-    { key: 'Workers', value: String(running), extra: el.Text({ color: QUIET, children: 'running' }), isHot: false },
-    { key: 'Needs you', value: String(decisions), extra: el.Text({ color: decisions > 0 ? LIME : QUIET, children: decisions === 1 ? 'thing waiting' : 'things waiting' }), isHot: decisions > 0 },
-  ]
-  if (isClicked) {
-    return el.Box({
-      key: 'strip',
-      flexDirection: 'row',
-      gap: 1,
-      width: '100%',
-      marginTop: 1,
-      children: cards.map(card => el.Box({ key: `strip-${card.key}`, flexDirection: 'column', flexGrow: 1, borderStyle: 'round', borderColor: card.isHot ? LIME : '#3a3c36', paddingX: 1, children: [el.Text({ color: QUIET, children: card.key }), el.Text({ bold: true, color: card.isHot ? LIME : undefined, children: card.value }), card.extra] })),
-    })
+// How Needs you answers in place (rows.mjs Answering): this session's state, and each press as a closure.
+/** @param {Engine} $ @param {Home} model @param {boolean} hasInput @returns {import('./rows.mjs').Answering} */
+function answering($, model, hasInput) {
+  /** @param {Partial<import('./decide.mjs').AnswerState>} change */
+  const change = change => {
+    answerState = { ...answerState, ...change }
+    $.ui.invalidate('ui.render')
   }
-  // The terminal: one line.
-  return el.Box({
-    key: 'strip',
-    flexDirection: 'row',
-    marginTop: 1,
-    children: [
-      el.Text({ color: QUIET, children: `${first.key} ` }),
-      el.Text({ bold: true, children: first.value }),
-      ...(header.total > 0 ? [el.Text({ children: ' ' }), bar(el, 'strip-bar', header.done, header.total)] : []),
-      el.Text({ color: QUIET, children: ` · Workers ` }),
-      el.Text({ bold: true, children: String(running) }),
-      el.Text({ color: QUIET, children: ' · Needs you ' }),
-      el.Text({ bold: true, color: decisions > 0 ? LIME : undefined, children: String(decisions) }),
-    ],
-  })
-}
-
-// Role, proof, the Editor lock and this week's figures; each proof is green when it passed and red when it failed.
-/** @param {any} el @param {Home['header']} header */
-function metaRow(el, header) {
-  const parts = [
-    ...(header.role ? [el.Text({ color: QUIET, children: header.role })] : []),
-    ...(header.proof ? header.proof.split(' · ').map(piece => el.Text({ color: piece.endsWith('✗') ? '#ff5a45' : piece.endsWith('✓') ? '#3ccf7a' : QUIET, children: piece })) : []),
-    ...(header.lock ? [el.Text({ color: QUIET, children: header.lock })] : []),
-    ...(header.week ? [el.Text({ color: QUIET, children: header.week })] : []),
-  ]
-  return el.Box({ key: 'meta', flexDirection: 'row', flexWrap: 'wrap', children: parts.flatMap((part, index) => (index > 0 ? [el.Text({ color: QUIET, children: ' · ' }), part] : [part])) })
+  return {
+    view: needsView(model.items, model.open, answerState, callsOpen, Date.now(), hasInput),
+    onOpen: id => () => change({ opened: id, typing: '' }),
+    onAnswer: (one, option) => press($, () => answerItem($, one, option.letter, option.prompt), true),
+    onExplain: (_one, answers) => press($, async () => (handOff($, [], answers.explain), 'asked the session to explain it; nothing is decided.'), true),
+    onType: (one, answers) => press($, () => typeAnswer($, one, answers, hasInput), true),
+    onTyped: (one, answers) => words => press($, () => answerTyped($, one, answers, words), true)(),
+    // Leaving the row's view closes its typed answer: Back does not land in the field again.
+    onFindings: one => () => ((findingShown = one.id), (paneMode = 'finding'), change({ typing: '' })),
+    onFold: () => change({ isFoldOpen: !answerState.isFoldOpen }),
+  }
 }
 
 /** @param {any} el @param {Engine} $ @param {Home} model @param {number} columns @param {string} [surface] @param {Crew[]} [crew] */
@@ -1318,17 +1302,28 @@ function paneView(el, $, model, columns, surface, crew = []) {
   const { header } = model
   const rows = []
   const foot = isClicked ? [] : [section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Enter chooses · Esc closes' })])]
+  // The mobile app draws no text field: there a typed answer or a search is the question dialog's Other.
+  const hasInput = typeof el.Input === 'function'
+
+  if (paneMode === 'finding') {
+    const item = model.items.find(one => one.id === findingShown)
+    if (item) return Box({ flexDirection: 'column', children: [...findingRows(el, { item, width, isClicked, onBack: show($, 'home') }), ...foot] })
+    paneMode = 'home'
+  }
 
   if (paneMode === 'pick') {
     const shown = filterWork(model.work, pickQuery)
     rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
-    // The pane has no text box: Search asks one question and takes the words typed under Other. Sort cycles Recent, Ready to close, Oldest; Group cycles Person, Area, Stage, None.
-    const search = Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: press($, () => searchQuestion($), true) })
+    // Search opens a field (without one, a question whose Other is the words). Sort cycles Recent, Ready to close, Oldest; Group cycles Person, Area, Stage, None.
+    const field = isSearchOpen && hasInput
+    const search = field
+      ? el.Input({ key: 'pick-search-field', label: 'Search: ', placeholder: 'title, issue number, area or owner', value: pickQuery, submitLabel: 'search', autoFocus: true, onSubmit: (/** @type {string} */ words) => ((isSearchOpen = false), void setSearch($, words)) })
+      : Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: hasInput ? () => ((isSearchOpen = true), $.ui.invalidate('ui.render')) : press($, () => searchQuestion($), true) })
     const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
     const sort = Button({ key: 'pick-sort', label: `Sort: ${SORT_LABELS[pickSort]}`, hotkey: hotkeyFor('o'), plain: true, onPress: () => cycleSort($) })
     const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
     rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
-    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
+    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
     rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
@@ -1347,7 +1342,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     if (one?.kind === 'issue') {
       const { issue } = one
       rows.push(masthead(el, [label(el, 'brand', `Issue #${issue.number}`, width), Text({ key: 'title', bold: true, wrap: 'wrap', children: issue.name }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: one.hint })], surface))
-      const link = linkOf(issue.url)
+      const link = issueLink(issue.url)
       rows.push(
         section(el, 'issue-actions', [
           Box({
@@ -1504,7 +1499,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       surface,
     ),
   )
-  rows.push(summaryStrip(el, model, crew, width))
+  rows.push(summaryStrip(el, model, crew, isClicked))
   // Needs you and Needs attention share the digit keys.
   let digits = 0
   const digit = () => (digits < 9 ? String(++digits) : undefined)
@@ -1517,7 +1512,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     rows.push(
       section(el, 'needs', [
         label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width, LIME),
-        ...needsRows(el, isClicked, { items: model.items, open: model.open, opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), false), onToggle: slug => () => toggleIn($, callsOpen, slug) }),
+        ...needsRows(el, isClicked, { items: model.items, open: model.open, opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
       ]),
     )
   }
