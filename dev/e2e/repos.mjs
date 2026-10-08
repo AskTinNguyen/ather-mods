@@ -45,6 +45,16 @@ const makeCheckout = (parent, folder, { owner, name, files = {}, branch = 'main'
   return root
 }
 
+// Someone else pushes a commit to a checkout's origin: its origin/main is behind until it fetches. Resolves the new sha.
+const advanceOrigin = root => {
+  const origin = git(root, 'remote', 'get-url', 'origin')
+  const other = fs.mkdtempSync(path.join(BASE, 'other-'))
+  git(other, 'clone', '-q', origin, '.')
+  git(other, '-c', 'user.name=Lam Phung', '-c', 'user.email=lam@example.com', 'commit', '-q', '--allow-empty', '-m', 'teammate')
+  git(other, 'push', '-q', 'origin', 'main')
+  return git(other, 'rev-parse', 'HEAD')
+}
+
 // docs/intent with a file in it, so git keeps the folder.
 const INTENTS = { 'docs/intent/README.md': '# Intents\n' }
 const WEB_PROFILE = { version: 1, pack: 'web', gates: [{ id: 'test', command: 'npm test', proofs: ['tests'] }], mergePolicy: 'with-proof', required: ['tests'] }
@@ -240,6 +250,7 @@ const writeIntent = (root, slug, text = LOGIN) => {
   writeIntent(s2, 'login')
   writeIntent(web, 'login')
   writeIntent(web, 'search', LOGIN.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
+  const ahead = { s2: advanceOrigin(s2), web: advanceOrigin(web) }
   const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0006' })
   engine.setSurfaces(['terminal'])
   await engine.command('ather', 'pick')
@@ -256,6 +267,8 @@ const writeIntent = (root, slug, text = LOGIN) => {
   await engine.flush()
   const fetches = fetchRuns(engine).map(run => run.argv[2])
   expect('the first draw fetches both origins, one at a time, in workspace order', JSON.stringify(fetches) === JSON.stringify([s2, web]), fetches)
+  const mains = { s2: git(s2, 'rev-parse', 'origin/main'), web: git(web, 'rev-parse', 'origin/main') }
+  expect("after it, each checkout's origin/main is at what its origin holds", mains.s2 === ahead.s2 && mains.web === ahead.web, { mains, ahead })
   const synced = byKey(await pane(), 'sync')
   // ↻ fetches every checkout that may fetch now.
   synced?.props.onPress()
