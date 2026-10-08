@@ -145,7 +145,7 @@ export const miniBar = (done, total) => {
   return `${'▰'.repeat(lit)}${'▱'.repeat(BAR_CELLS - lit)}`
 }
 
-/** @typedef {{ glyph: string, title: string, warn: string, bar: string, count: string, age: string, owner: string }} RowCells */
+/** @typedef {{ glyph: string, title: string, warn: string, repo: string, bar: string, count: string, age: string, owner: string }} RowCells */
 
 // Each row's cells, and the widths of the right-hand columns shared by every row in the list,
 // so they line up: count, age and owner as wide as their widest (the owner at most `ownerMax`).
@@ -157,17 +157,18 @@ export const rowColumns = (rows, ownerMax) => ({
 })
 
 /**
- * @typedef {{ kind: 'intent' | 'issue', label: string, stage: ListStage | '', updatedAt: number, isMine: boolean, done?: number, total?: number, who?: string, warn?: string, source?: string, repoName?: string }} RowWork
+ * @typedef {{ kind: 'intent' | 'issue', label: string, stage: ListStage | '', updatedAt: number, isMine: boolean, done?: number, total?: number, who?: string, warn?: string, source?: string, repoName?: string, root?: string }} RowWork
  */
 
-// A work row's cells: an intent's stage glyph, its warning, `local` tag (when main was read, `isTagged`) and
-// repository's short name (when the pane lists several), its checklist, age and owner (blank for the
-// person's own); an issue's title and age.
-/** @param {RowWork} one @param {number} now @param {boolean} isTagged @returns {RowCells} */
+// A work row's cells: an intent's stage glyph, its warning and `local` tag (when its checkout's main was read,
+// `isTagged`), its repository's short name (when the pane lists several), its checklist, age and owner (blank
+// for the person's own); an issue's title and age.
+/** @param {RowWork} one @param {number} now @param {boolean | ((one: RowWork) => boolean)} isTagged @returns {RowCells} */
 export const rowCells = (one, now, isTagged) => ({
   glyph: one.stage ? STAGE_GLYPHS[one.stage] : '',
   title: one.label,
-  warn: [one.warn ? `⚠ ${one.warn}` : '', isTagged && one.source === 'local' ? 'local' : '', one.repoName ?? ''].filter(Boolean).join(' · '),
+  warn: [one.warn ? `⚠ ${one.warn}` : '', one.source === 'local' && (typeof isTagged === 'function' ? isTagged(one) : isTagged) ? 'local' : ''].filter(Boolean).join(' · '),
+  repo: one.repoName ?? '',
   bar: miniBar(one.done ?? 0, one.total ?? 0),
   count: one.total ? `${one.done ?? 0}/${one.total}` : '',
   age: ageText(one.updatedAt, now),
@@ -176,7 +177,7 @@ export const rowCells = (one, now, isTagged) => ({
 
 // The cells of every row a view shows, by id, and the right-hand column widths they share so the
 // columns line up; a narrow pane (under 90 columns) gives the owner at most 12.
-/** @template {RowWork & { id: string }} T @param {readonly T[]} list @param {number} now @param {boolean} isTagged @param {number} width */
+/** @template {RowWork & { id: string }} T @param {readonly T[]} list @param {number} now @param {boolean | ((one: RowWork) => boolean)} isTagged @param {number} width */
 export const listCells = (list, now, isTagged, width) => {
   const cells = new Map(list.map(one => [one.id, rowCells(one, now, isTagged)]))
   return { cells, cols: rowColumns([...cells.values()], width < 90 ? 12 : 22) }

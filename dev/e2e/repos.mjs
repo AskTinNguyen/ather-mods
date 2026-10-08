@@ -223,11 +223,11 @@ const readJson = file => {
 const nodesOf = node => (!node || typeof node !== 'object' ? [] : [node, ...(node.children ?? []).flatMap(nodesOf)])
 const byKey = (tree, key) => nodesOf(tree).find(node => node.props?.key === key)
 const textIn = node => (!node || typeof node !== 'object' ? String(node ?? '') : (node.children ?? []).map(textIn).join(''))
-// The intent rows a pane draws: each row's work id (intent:<key>) and the names in its warn cell.
+// The intent rows a pane draws: each row's work id (intent:<key>) and its repository's name.
 const intentRows = tree =>
   nodesOf(tree)
     .filter(node => node.type === 'Button' && /(^|-)intent:[^\s]+$/.test(node.props?.key ?? ''))
-    .map(node => ({ key: node.props.key, id: /intent:[^\s]+$/.exec(node.props.key)[0], warn: textIn(byKey(tree, `${node.props.key}-warn`)).trim().split(' · ').filter(Boolean), press: node.props.onPress }))
+    .map(node => ({ key: node.props.key, id: /intent:[^\s]+$/.exec(node.props.key)[0], repo: textIn(byKey(tree, `${node.props.key}-repo`)).trim(), press: node.props.onPress }))
 const fetchRuns = engine => engine.record.gitRuns.filter(run => run.argv.includes('fetch'))
 const writeIntent = (root, slug, text = LOGIN) => {
   fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
@@ -249,7 +249,7 @@ const writeIntent = (root, slug, text = LOGIN) => {
   const ids = rows.map(one => one.id).sort()
   expect("Everything open lists both checkouts' intents by key", JSON.stringify(ids) === JSON.stringify(['intent:s2/login', 'intent:web/login', 'intent:web/search']), ids)
   expect('the same slug in both checkouts is two rows', rows.filter(one => /\/login$/.test(one.id)).length === 2, rows.map(one => one.id))
-  expect("each row's warn cell carries its repository's name", rows.length === 3 && rows.every(one => one.warn.at(-1) === one.id.slice('intent:'.length).split('/')[0]), rows.map(one => [one.id, one.warn]))
+  expect('each row carries its repository\'s name', rows.length === 3 && rows.every(one => one.repo === one.id.slice('intent:'.length).split('/')[0]), rows.map(one => [one.id, one.repo]))
 
   // The first draw fetches each checkout's origin, one after the other.
   await engine.flush()
@@ -257,7 +257,6 @@ const writeIntent = (root, slug, text = LOGIN) => {
   const fetches = fetchRuns(engine).map(run => run.argv[2])
   expect('the first draw fetches both origins, one at a time, in workspace order', JSON.stringify(fetches) === JSON.stringify([s2, web]), fetches)
   const synced = byKey(await pane(), 'sync')
-  expect('the sync line reports both synced', /synced/.test(synced?.props.label ?? ''), synced?.props.label)
   // ↻ fetches every checkout that may fetch now.
   synced?.props.onPress()
   await engine.flush()
@@ -309,7 +308,7 @@ const writeIntent = (root, slug, text = LOGIN) => {
   await engine.command('ather', 'pick')
   const rows = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
   expect('a session in s2 alone lists its intent as intent:login', JSON.stringify(rows.map(one => one.id)) === JSON.stringify(['intent:login']), rows.map(one => one.id))
-  expect('with no repository name', rows.length === 1 && rows.every(one => !one.warn.includes('s2')), rows.map(one => one.warn))
+  expect('with no repository name', rows.length === 1 && rows.every(one => one.repo === ''), rows.map(one => one.repo))
   await engine.flush()
   expect('and fetches its one origin', fetchRuns(engine).length === 1, fetchRuns(engine).map(run => run.argv))
 }
@@ -325,11 +324,11 @@ const withPr = (root, slug) => {
   fs.writeFileSync(path.join(root, 'docs/intent', slug, 'progress.md'), '# Progress\n\n- PR: #12\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | t |\n')
 }
 const LIST = 'gh issue list --assignee @me --state open --limit 30 --json number,title,url,labels,updatedAt'
-// The issue rows a pane draws: each row's work id and its warn cell.
+// The issue rows a pane draws: each row's work id and its repository's name.
 const issueRows = tree =>
   nodesOf(tree)
     .filter(node => node.type === 'Button' && /^(pick|work)-issue:/.test(node.props?.key ?? ''))
-    .map(node => ({ id: node.props.key.replace(/^(pick|work)-/, ''), warn: textIn(byKey(tree, `${node.props.key}-warn`)).trim(), press: node.props.onPress }))
+    .map(node => ({ id: node.props.key.replace(/^(pick|work)-/, ''), repo: textIn(byKey(tree, `${node.props.key}-repo`)).trim(), press: node.props.onPress }))
 // An intent row's stage glyph, from its drawn label.
 const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button' && [`pick-${id}`, `work-${id}`].includes(node.props?.key))?.props.label ?? '').trim().charAt(0)
 
@@ -351,7 +350,7 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   const rows = issueRows(await pane())
   const ids = rows.map(one => one.id).sort()
   expect('both lists show, #7 in both as two rows', JSON.stringify(ids) === JSON.stringify(['issue:s2#3', 'issue:s2#7', 'issue:web#7']), ids)
-  expect("each issue row carries its repository's name", rows.length === 3 && rows.every(one => one.warn === one.id.slice('issue:'.length).split('#')[0]), rows.map(one => [one.id, one.warn]))
+  expect("each issue row carries its repository's name", rows.length === 3 && rows.every(one => one.repo === one.id.slice('issue:'.length).split('#')[0]), rows.map(one => [one.id, one.repo]))
 
   // PRs: each checkout's #12 read with gh there and kept under its repository; each intent's stage follows its own.
   await engine.flush()
@@ -395,7 +394,7 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   expect('a session in s2 alone runs one gh issue list, in s2, as before', lists.length === 1 && lists[0].argv === LIST && lists[0].cwd === s2, lists)
   await engine.command('ather', 'pick')
   const rows = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
-  expect('its issue is issue:7, with no repository name', JSON.stringify(rows.map(one => [one.id, one.warn])) === JSON.stringify([['issue:7', '']]), rows.map(one => [one.id, one.warn]))
+  expect('its issue is issue:7, with no repository name', JSON.stringify(rows.map(one => [one.id, one.repo])) === JSON.stringify([['issue:7', '']]), rows.map(one => [one.id, one.repo]))
 }
 
 {

@@ -1157,7 +1157,7 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect([miniBar(0, 0), miniBar(0, 4), miniBar(2, 4), miniBar(4, 4)]).toEqual(['     ', '▱▱▱▱▱', '▰▰▰▱▱', '▰▰▰▰▰'])
     expect([ageText(0, NOON), ageText(NOON - 5 * MIN, NOON), ageText(NOON - 3 * 60 * MIN, NOON), ageText(NOON - 12 * DAY, NOON)]).toEqual(['', '5m', '3h', '12d'])
     const theirs = rowCells({ kind: 'intent', label: 'lead-vfx', stage: 'parked', updatedAt: NOON - 2 * DAY, isMine: false, done: 1, total: 4, who: 'Tien Dang', warn: 'parked, no reason', source: 'local' }, NOON, true)
-    expect(theirs).toEqual({ glyph: '‖', title: 'lead-vfx', warn: '⚠ parked, no reason · local', bar: '▰▱▱▱▱', count: '1/4', age: '2d', owner: 'Tien Dang' })
+    expect(theirs).toEqual({ glyph: '‖', title: 'lead-vfx', warn: '⚠ parked, no reason · local', repo: '', bar: '▰▱▱▱▱', count: '1/4', age: '2d', owner: 'Tien Dang' })
     const own = rowCells({ kind: 'intent', label: 'x', stage: 'met', updatedAt: 0, isMine: true, done: 2, total: 2, who: 'Tin Nguyen', warn: '', source: 'local' }, NOON, false)
     expect([own.glyph, own.warn, own.owner, own.age]).toEqual(['✓', '', '', ''])
     const issueRow = rowCells({ kind: 'issue', label: '#28887 Dodge', stage: '', updatedAt: NOON - DAY, isMine: true }, NOON, true)
@@ -1462,10 +1462,13 @@ describe('one pane over the workspace', () => {
     const work = workList(intents, [], 'Tin Nguyen', '', NOON)
     expect(work.map(one => one.id)).toEqual(['intent:s2/login', 'intent:web/login', 'intent:web/search'])
     expect(work.filter(one => one.kind === 'intent' && one.slug === 'login')).toHaveLength(2)
-    const warn = work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn.split(' · '))
-    expect(warn.map(cell => cell.at(-1))).toEqual(['s2', 'web', 'web'])
-    // After `local` when main was read.
-    expect(warn[0]).toEqual(['local', 's2'])
+    const cells = work.map(one => rowCells(/** @type {any} */ (one), NOON, true))
+    expect(cells.map(cell => cell.repo)).toEqual(['s2', 'web', 'web'])
+    // Its own cell, not the warning's.
+    expect(cells[0]?.warn).toBe('local')
+    // `local` follows the row's own checkout: tagged only where that checkout's main was read.
+    const own = work.map(one => rowCells(/** @type {any} */ (one), NOON, row => row.root === '/ws/web').warn)
+    expect(own).toEqual(['', 'local', 'local'])
   })
 
   test("the session's own checkout and another: own keys stay slugs", () => {
@@ -1525,7 +1528,7 @@ describe('issues and PRs from every workspace checkout', () => {
   test('ids: issue:<n> in the session checkout, issue:<repoName>#<n> elsewhere; two #7s are two rows with names', () => {
     const work = workList([], [at('/ws/s2', 's2', true), at('/ws/web', 'web', false)], 'Tin Nguyen', '', NOON)
     expect(ids(work)).toEqual(['issue:7', 'issue:web#7'])
-    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn)).toEqual(['s2', 'web'])
+    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).repo)).toEqual(['s2', 'web'])
     expect(issueId(ISSUE)).toBe('issue:7')
     expect(issueOtherRoot(at('/ws/web', 'web', false))).toBe('/ws/web')
     expect(issueOtherRoot(at('/ws/s2', 's2', true))).toBe('')

@@ -1371,7 +1371,7 @@ const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug}
 // press that shows the intent (or the issue's card), never tracking it.
 /** @param {Engine} $ @param {number} width @param {'home' | 'pick'} back @returns {import('./rows.mjs').Look} */
 function lookOf($, width, back) {
-  return { isClicked, width, now: Date.now(), isTagged: checkouts.some(({ root }) => syncs.get(root)?.hasMain), ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.id, back) : viewIntent($, one.key, back)) }
+  return { isClicked, width, now: Date.now(), isTagged: one => (one.root ? syncs.get(one.root)?.hasMain : checkouts.some(({ root }) => syncs.get(root)?.hasMain)) === true, ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.id, back) : viewIntent($, one.key, back)) }
 }
 
 // The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
