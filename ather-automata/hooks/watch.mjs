@@ -329,12 +329,7 @@ async function scopeOf($) {
 // session's own checkout, or in no checkout at all; both use the session's lane.
 /** @param {Engine} $ @param {string | null} folder @returns {Promise<{ lane: import('./state.mjs').Checkout, isOwn: boolean }>} */
 async function checkoutLane($, folder) {
-  const session = await laneOf($)
-  if (folder === null) return { lane: session, isOwn: true }
-  const files = io($)
-  const root = await checkoutOf(files, /^([A-Za-z]:[\\/]|[\\/])/.test(folder) ? folder : `${session.root}/${folder}`)
-  if (root === null || root === (await checkoutOf(files, session.root))) return { lane: session, isOwn: true }
-  return { lane: await state.laneAt(files, root), isOwn: false }
+  return state.folderLane(io($), await laneOf($), folder)
 }
 
 // The other live sessions in a checkout: the session's own unless a lane is given.

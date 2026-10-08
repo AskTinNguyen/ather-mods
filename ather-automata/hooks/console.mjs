@@ -24,6 +24,7 @@ import { endLoop } from './inflight.mjs'
 import { changeGlyph } from './changes.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncSummary, syncText } from './team.mjs'
 import { checkoutOf, normalFolder } from './workspace.mjs'
+import { withFolders } from './shell.mjs'
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
@@ -214,6 +215,12 @@ async function laneFor($, root) {
   return checkouts.find(one => normalFolder(one.root) === normalFolder(root)) ?? (await laneOf($))
 }
 
+// The lane of the checkout a worker's shell command runs in: its last segment's, as its proof is read (watch.mjs afterShell).
+/** @param {Engine} $ @param {string} command */
+async function commandLane($, command) {
+  return (await state.folderLane(io($), await laneOf($), withFolders(command).at(-1)?.folder ?? null)).lane
+}
+
 // The lane whose pack gives the pane its words (Next, Create, Prove, the role): the tracked intent's
 // checkout, else the session's own when it has intents, else the first pane checkout.
 /** @param {Engine} $ */
@@ -335,7 +342,7 @@ export function register(on, options) {
     void syncMain($)
     if (paneMode === 'intent') await readIntentView($)
     if (paneMode === 'pick' && !isGroupRead) await readGroup($)
-    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack))
+    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
   })
 
   on('ui.close', ($, e, next) => {
@@ -1155,7 +1162,7 @@ async function workQuestion($) {
     header: 'Work',
     question: 'What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number.',
     // The question is the verb: a choice works on it at once, and says so (D5).
-    choices: work.map(one => ({ label: cutWords(one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
+    choices: work.map(one => ({ label: cutWords(one.kind === 'intent' ? one.key : one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
     fallback: 'Nothing chosen.',
     onTyped: text => typedWork($, text),
   })

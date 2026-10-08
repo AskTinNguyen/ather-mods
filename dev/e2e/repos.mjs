@@ -463,6 +463,98 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   expect('and no PR or intent read runs in web', !engine.record.ghAt.some(run => run.cwd === web && run.argv.startsWith('gh pr')), engine.record.ghAt)
 }
 
+// ---------------------------------------------------------------- deciding in place and grouping, over the workspace
+
+const DECISION = '# Findings\n\n## F-1 (2026-10-01, rev 1) | blocking: yes | status: open (director)\n\nOne page or two?\n\n**Options:**\n- A (recommended): one page\n- B: two pages\n'
+const writeFindings = (root, slug, text = DECISION) => fs.writeFileSync(path.join(root, 'docs/intent', slug, 'findings.md'), text)
+const lastSubmit = engine => {
+  const sent = engine.record.submits.at(-1) ?? ''
+  return typeof sent === 'string' ? sent : (sent.text ?? '')
+}
+
+{
+  // A parent-folder session over s2/ and web/: `login` is yours in both, each with an open decision; `board` is a teammate's in both.
+  const { parent, s2, web } = makeWorkspace()
+  for (const root of [s2, web]) {
+    writeIntent(root, 'login')
+    writeFindings(root, 'login')
+    writeIntent(root, 'board', LOGIN.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
+  }
+  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0013' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', '')
+  const pane = (surface = 'terminal') => engine.render('Pane', { bodyColumns: 110 }, 'ather', surface)
+  const keys = tree => nodesOf(tree).map(node => node.props?.key).filter(key => typeof key === 'string')
+  const WEB_CALL = 'call:web/login:F-1'
+  const S2_CALL = 'call:s2/login:F-1'
+  let home = await pane()
+  expect("Needs you lists both checkouts' decisions, each by its intent's key", [WEB_CALL, S2_CALL].every(id => keys(home).includes(`item-${id}`)), keys(home).filter(key => key.startsWith('item-')))
+  // Open web's decision if the other is the one opened, then answer A.
+  if (!byKey(home, `option-${WEB_CALL}-A`)) {
+    byKey(home, `item-${WEB_CALL}`)?.props.onPress()
+    home = await pane()
+  }
+  const before = engine.record.submits.length
+  byKey(home, `option-${WEB_CALL}-A`)?.props.onPress()
+  await engine.flush()
+  const answer = engine.record.submits.length > before ? lastSubmit(engine) : ''
+  expect("answering A on web's decision hands the session web/login and web's findings file", answer.includes('F-1 on web/login') && answer.includes(`${web}/docs/intent/login/findings.md`) && !answer.includes(s2), answer)
+  const answered = await pane()
+  expect("web's row reads decided; s2's same-slug decision still waits, with its answers", keys(answered).includes(`item-${WEB_CALL}-done`) && !keys(answered).includes(`item-${S2_CALL}-done`) && Boolean(byKey(answered, `option-${S2_CALL}-A`)), keys(answered).filter(key => /call:/.test(key)))
+  byKey(answered, `explain-${S2_CALL}`)?.props.onPress()
+  await engine.flush()
+  expect("Explain on s2's decision names s2/login and s2's findings file", lastSubmit(engine).includes('F-1 on s2/login') && lastSubmit(engine).includes(`${s2}/docs/intent/login/findings.md`), lastSubmit(engine))
+  byKey(answered, `findings-${S2_CALL}`)?.props.onPress()
+  const finding = await pane()
+  expect("Open findings on s2's decision shows that finding", textIn(byKey(finding, 'title')).includes('s2/login') && byKey(finding, 'finding-markdown')?.props.text.startsWith('## F-1'), textIn(byKey(finding, 'title')))
+  nodesOf(finding).find(node => node.type === 'Button' && node.props.key === 'finding-back')?.props.onPress()
+  // The session records the answer in web's findings: read again, web's decision is gone and s2's is still there.
+  writeFindings(web, 'login', `${DECISION}\n**Resolution:** accepted A.\n`)
+  await engine.turnEnd()
+  await engine.flush()
+  const settled = keys(await pane())
+  expect("once web's findings read resolved, its decision leaves Needs you and s2's stays", !settled.some(key => key.includes(WEB_CALL)) && settled.includes(`item-${S2_CALL}`), settled.filter(key => /call:/.test(key)))
+
+  // Everything open, grouped by Person (the default): both checkouts' rows, the teammate's two under one head, on either surface.
+  await engine.command('ather', 'pick')
+  for (const surface of ['terminal', 'desktop']) {
+    const pick = await pane(surface)
+    const rows = intentRows(pick)
+    const ids = rows.map(one => one.id).sort()
+    expect(`Everything open (${surface}) lists each checkout's rows once, the same slugs twice`, JSON.stringify(ids) === JSON.stringify(['intent:s2/board', 'intent:s2/login', 'intent:web/board', 'intent:web/login']), ids)
+    expect(`each row (${surface}) carries its repository's name`, rows.length === 4 && rows.every(one => one.repo === one.id.slice('intent:'.length).split('/')[0]), rows.map(one => [one.id, one.repo]))
+    const heads = nodesOf(pick).filter(node => /^sub-others-\d+-text$/.test(node.props?.key ?? '')).map(textIn)
+    expect(`grouped by Person (${surface}), the teammate's intents from both checkouts are one group of 2`, heads.length === 1 && / · 2$/.test(heads[0]), heads)
+    expect(`no element key is drawn twice (${surface})`, keys(pick).every((key, at, list) => list.indexOf(key) === at), keys(pick).filter((key, at, list) => list.indexOf(key) !== at))
+  }
+
+  // Without a pane, the Work question names each intent by its key: choosing the second works on that one.
+  engine.setSurfaces([])
+  engine.script.push(question => question.options[1].label)
+  await engine.command('ather', 'pick')
+  await engine.flush()
+  const asked = engine.record.dialogs.at(-1)
+  const labels = (asked?.options ?? []).map(option => option.label)
+  expect('the Work question lists the same slug in two checkouts as two different choices', labels.includes('s2/login') && labels.includes('web/login'), labels)
+  const chosen = { 's2/login': s2, 'web/login': web }[asked?.answer]
+  expect('choosing one of them tracks it in its own checkout', chosen !== undefined && JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: chosen }), [asked?.answer, engine.store.get(`pinned:${sid}`)])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+}
+
+{
+  // One checkout: a decision in s2 itself is call:<slug>:<finding>, and its answer names the plain slug, as before.
+  const { s2 } = makeWorkspace()
+  writeIntent(s2, 'login')
+  writeFindings(s2, 'login')
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0014' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', '')
+  const home = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  byKey(home, 'option-call:login:F-1-A')?.props.onPress()
+  await engine.flush()
+  expect('a session in s2 alone: the answer names the plain slug and no path', lastSubmit(engine).startsWith('Decide F-1 on login: A — One page.'), lastSubmit(engine))
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

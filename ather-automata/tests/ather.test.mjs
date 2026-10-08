@@ -13,7 +13,8 @@ import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, prop
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
 import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
-import { workGroups } from '../hooks/rows.mjs'
+import { needsRows, workGroups, workLine } from '../hooks/rows.mjs'
+import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
@@ -1554,6 +1555,120 @@ describe('one pane over the workspace', () => {
     expect(syncSummary([NO_SYNC, fresh])).toBe(fresh)
     expect(syncSummary([])).toBe(NO_SYNC)
   })
+
+  // The pane's elements, as plain nodes; every node of a drawn list that passes `test`.
+  const node = (/** @type {string} */ type) => (/** @type {any} */ props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
+  const el = Object.fromEntries(['Box', 'Text', 'Button', 'Svg', 'Input'].map(name => [name, node(name)]))
+  /** @param {any} tree @param {(one: any) => boolean} test @returns {any[]} */
+  const all = (tree, test) => (!tree || typeof tree !== 'object' ? [] : [...(test(tree) ? [tree] : []), ...(tree.children ?? []).flatMap((/** @type {any} */ child) => all(child, test))])
+  const keysOf = (/** @type {any} */ tree) => all({ children: tree }, one => typeof one.props?.key === 'string').map(one => one.props.key)
+  const repeated = (/** @type {string[]} */ keys) => keys.filter((key, at) => keys.indexOf(key) !== at)
+  const look = (/** @type {boolean} */ isClicked) => ({ isClicked, width: 100, now: NOON, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined })
+
+  test('a desktop row draws its repository after the title, as a terminal row does; without one it is drawn as before', () => {
+    const [named, plain] = workList([from('/ws/web', 'web', 'login', false, { Status: 'parked' }), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON).map(one => ({ ...one, repoName: one.key === 'board' ? '' : one.repoName }))
+    const cols = { count: 3, age: 2, owner: 0 }
+    const draw = (/** @type {any} */ one, /** @type {boolean} */ isClicked) => workLine(el, { key: `pick-${one.id}`, cells: rowCells(one, NOON, false), cols, width: 100, ownerColour: '#ffffff', onPress: () => undefined, isClicked })
+    const mainOf = (/** @type {any} */ row) => all(row, one => /-main$/.test(one.props?.key ?? ''))[0]
+    for (const isClicked of [false, true]) {
+      const main = mainOf(draw(named, isClicked))
+      // Inside the title's box, after the warning.
+      expect(main.children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:web/login', 'pick-intent:web/login-warn', 'pick-intent:web/login-repo'])
+      expect(main.children[2].children.join('').trim()).toBe('web')
+      expect(mainOf(draw(plain, isClicked)).children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:board'])
+    }
+  })
+
+  const CALLS = `# Findings\n\n## F-1 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nDrops only, or a full respawn?\n\n**Options:**\n- A (recommended): drops only\n- B: a full respawn\n\n## F-2 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nWhich pool size?\n`
+
+  test("a decision on another checkout's intent: its id and answers name the key and its findings file; the session's own as with one checkout", () => {
+    const own = from('/ws/s2', 's2', 'login', true, {}, { findings: CALLS, updatedAt: 2 })
+    const web = from('/ws/web', 'web', 'login', false, {}, { findings: CALLS, updatedAt: 1 })
+    const model = buildHome(/** @type {any} */ (base({ intents: [own, web], pinned: null, away: OFF })))
+    const calls = model.items.filter(one => one.kind === 'call')
+    expect(calls.map(one => one.id)).toEqual(['call:login:F-1', 'call:login:F-2', 'call:web/login:F-1', 'call:web/login:F-2'])
+    expect(calls.map(one => one.kind === 'call' && one.slug)).toEqual(['login', 'login', 'web/login', 'web/login'])
+    const [mine, , theirs] = calls
+    const [f1] = own.findings
+    // The session's own checkout: the words one checkout gets.
+    const alone = buildHome(/** @type {any} */ (base({ intents: [intent('login', {}, { findings: CALLS })], pinned: null, away: OFF }))).items[0]
+    expect([mine?.id, mine?.prompt, mine?.answers?.explain, mine?.answers?.options.map(one => one.prompt), mine?.answers?.typed('x')]).toEqual([alone?.id, alone?.prompt, alone?.answers?.explain, alone?.answers?.options.map(one => one.prompt), alone?.answers?.typed('x')])
+    expect(mine?.answers?.options[0]?.prompt).toBe(findingAnswers('login', /** @type {any} */ (f1)).options[0]?.prompt)
+    // Another checkout's: every answer names the key and the findings file there.
+    const said = [...(theirs?.answers?.options.map(one => one.prompt) ?? []), theirs?.answers?.explain ?? '', theirs?.answers?.typed('later') ?? '', theirs?.prompt ?? '']
+    expect(said).toHaveLength(5)
+    expect(said.every(text => text.includes('/ws/web/docs/intent/login/findings.md'))).toBe(true)
+    expect(said.slice(0, 4).every(text => text.includes('F-1 on web/login'))).toBe(true)
+    expect(theirs?.answers?.source?.startsWith('## F-1')).toBe(true)
+  })
+
+  test('the same slug in two checkouts: two blocks of decisions; answering one neither marks, folds nor prunes the other', () => {
+    const own = from('/ws/s2', 's2', 'login', true, {}, { findings: CALLS, updatedAt: 2 })
+    const web = from('/ws/web', 'web', 'login', false, {}, { findings: CALLS, updatedAt: 1 })
+    const model = buildHome(/** @type {any} */ (base({ intents: [own, web], pinned: null, away: OFF })))
+    const now = 1_000_000
+    const opened = new Set(['web/login'])
+    const view = needsView(model.items, model.open, { ...FRESH_ANSWERS }, opened, now, true)
+    expect(view.blocks.map(block => [block.slug, block.items.map(one => one.id)])).toEqual([['login', ['call:login:F-1', 'call:login:F-2']], ['web/login', ['call:web/login:F-1', 'call:web/login:F-2']]])
+    // Only web's block is open: its first decision is the one opened, the session's own stay behind their head.
+    expect([view.shownId, view.states['call:login:F-1']]).toEqual(['call:web/login:F-1', 'line'])
+    const decided = [{ id: 'call:web/login:F-1', answer: 'A', at: now }]
+    const after = needsView(model.items, model.open.filter(one => one.id !== 'call:web/login:F-1'), { ...FRESH_ANSWERS, decided }, new Set(['web/login', 'login']), now + 1000, true)
+    expect([after.states['call:web/login:F-1'], after.states['call:login:F-1'], after.shownId]).toEqual(['decided', 'opened', 'call:login:F-1'])
+    const folded = needsView(model.items, model.open, { ...FRESH_ANSWERS, decided }, opened, now + DECIDED_SHOWN_MS, true)
+    expect([folded.folded.map(one => one.id), folded.blocks.map(block => block.items.length)]).toEqual([['call:web/login:F-1'], [2, 1]])
+    // Read again with web's F-1 resolved: its answer goes, by its key; one given to the other login's F-1 stays.
+    const waiting = new Set(['call:login:F-1', 'call:login:F-2', 'call:web/login:F-2'])
+    expect(pruneDecided([...decided, { id: 'call:login:F-1', answer: 'B', at: now }], id => waiting.has(id), now + 60000).map(one => one.id)).toEqual(['call:login:F-1'])
+    // Drawn: both heads and every row, no element key twice.
+    const press = () => () => undefined
+    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined }
+    const keys = keysOf(needsRows(el, false, { items: model.items, open: model.open, opened: new Set(['web/login', 'login']), width: 100, key: () => undefined, onAct: press, onToggle: press, answer: /** @type {any} */ (answer) }))
+    expect(repeated(keys)).toEqual([])
+    expect(['calls-login', 'calls-web/login', 'item-call:login:F-1', 'item-call:web/login:F-1'].every(key => keys.includes(key))).toBe(true)
+  })
+
+  test("teammates' intents from two checkouts, grouped: every row once, the same slug twice, each with its repository", () => {
+    const theirs = (/** @type {string} */ root, /** @type {string} */ slug, /** @type {Record<string, string>} */ fields, /** @type {number} */ updatedAt) => from(`/ws/${root}`, root, slug, false, fields, { updatedAt })
+    const intents = [
+      theirs('s2', 'board', { Owner: 'TienPham', Area: 'Combat' }, 20),
+      theirs('web', 'board', { Owner: 'TienPham', Area: 'Web' }, 19),
+      theirs('web', 'search', { Owner: 'LamPhung', Area: 'Web', Status: 'parked (waiting on design)' }, 18),
+      ...Array.from({ length: 7 }, (_, n) => theirs(n % 2 ? 'web' : 's2', `big-${n >> 1}`, { Owner: 'DuyTran', Area: 'Tools' }, 10 - n)),
+    ]
+    const work = workList(intents, [], 'Tin Nguyen', '', NOON)
+    const ids = work.map(one => one.id).sort()
+    expect(ids).toHaveLength(10)
+    expect(ids.filter(id => /\/big-0$/.test(id))).toEqual(['intent:s2/big-0', 'intent:web/big-0'])
+    /** @param {boolean} isClicked @param {any} groupBy @param {string} query @param {Set<string>} [folded] */
+    const draw = (isClicked, groupBy, query, folded = new Set()) => workGroups(el, look(isClicked), { work, shown: filterWork(work, query), query, sort: 'recent', groupBy, areas: ['Combat', 'Tools'], folded, me: 'Tin Nguyen', onFold: key => () => void (folded.has(key) ? folded.delete(key) : folded.add(key)), issuesFoot: [] })
+    const rows = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Button' && /^pick-intent:/.test(one.props.key)).map(one => one.props.key.slice('pick-'.length))
+    const heads = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Text' && /^(sub|park)-/.test(one.props.key ?? '')).map(one => one.props.children)
+    const repos = (/** @type {any} */ tree) => rows(tree).map(id => [id.slice('intent:'.length).split('/')[0], all({ children: tree }, one => one.props?.key === `pick-${id}-repo`).map(one => one.children.join('').trim()).join('|')])
+    for (const isClicked of [false, true]) {
+      for (const groupBy of ['person', 'area', 'stage', 'none']) {
+        // A search that keeps everything: nothing starts folded, and every head counts "x of y".
+        const tree = draw(isClicked, groupBy, ' ')
+        expect(rows(tree).sort()).toEqual(ids)
+        expect(repos(tree).every(([name, drawn]) => name === drawn)).toBe(true)
+        expect(repeated(keysOf(tree))).toEqual([])
+        const counts = heads(tree).map((/** @type {string} */ head) => / · (\d+) of (\d+)$/.exec(head)?.slice(1).map(Number) ?? [])
+        expect(counts.every(([shown, total]) => shown === total)).toBe(true)
+        expect(counts.reduce((sum, [shown]) => sum + (shown ?? 0), 0)).toBe(groupBy === 'none' ? 1 : 10)
+      }
+      // No search, by person: the seven of one person (over two checkouts) and Parked start folded; a press opens them.
+      const folded = new Set()
+      const first = draw(isClicked, 'person', '', folded)
+      expect(heads(first)).toEqual(['Duy Tran · 7', 'Tien Pham · 2', '‖ Parked · 1'])
+      expect(rows(first)).toEqual(['intent:s2/board', 'intent:web/board'])
+      all({ children: first }, one => one.type === 'Button' && one.props.key === 'sub-others-0-fold')[0].props.onPress()
+      all({ children: first }, one => one.type === 'Button' && one.props.key === 'park-others-fold')[0].props.onPress()
+      expect(rows(draw(isClicked, 'person', '', folded)).sort()).toEqual(ids)
+      // A search: both boards, "2 of 2" of their person, and the repository still drawn.
+      const found = draw(isClicked, 'person', 'board')
+      expect([rows(found), heads(found), repos(found)]).toEqual([['intent:s2/board', 'intent:web/board'], ['Tien Pham · 2 of 2'], [['s2', 's2'], ['web', 'web']]])
+    }
+  })
 })
 
 describe('issues and PRs from every workspace checkout', () => {
@@ -1727,6 +1842,50 @@ describe('who waits on whom: calls in flight and the worker tree (0.1.9)', () =>
     // No resource is inferred: a command that does not name the lock file gets no lock line.
     expect(editorLockLine('Build.bat S2Editor', 'held by Lane B')).toBe('')
     expect(unreal.lockLine).toBe(editorLockLine)
+  })
+
+  test("several checkouts: a waiting line's lock is read in the checkout the command runs in, with that checkout's pack", async () => {
+    resetWorkers()
+    resetCalls()
+    const wait = 'cd ../s2-b && while ((Get-Content Saved/EDITOR_OWNER.txt) -notmatch "free") { Start-Sleep 30 }'
+    recordSpawn({ agentId: 'w', subagentType: 'general-purpose', prompt: 'Build it.', description: 'Waits for the Editor', model: 'opus', at: 0 })
+    recordTool('w', 'PowerShell', { command: wait }, 1000)
+    startCall({ loop: 'w', tool: 'PowerShell', input: { command: wait, description: 'Wait for the Editor lock' }, at: 1000 })
+    const agents = [{ id: 'w', description: 'Waits for the Editor', type: 'general-purpose', status: 'running' }]
+    const files = { '/ws/s2/Saved/EDITOR_OWNER.txt': 'Lane A holds the Editor', '/ws/s2-b/Saved/EDITOR_OWNER.txt': 'Lane B holds the Editor' }
+    const reads = []
+    const host = { ...fakeHost(agents, files), read: async (/** @type {string} */ path) => (reads.push(path), files[path] ?? null) }
+    /** @param {string} command */
+    const where = async command => (command.startsWith('cd ../s2-b') ? { root: '/ws/s2-b', pack: unreal } : { root: '/ws/web', pack: {} })
+    // A session in /ws/s2: the command waits in /ws/s2-b, so that checkout's lock is the one quoted.
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/s2', 's1', unreal, where)))[0]?.wait).toBe('⏳ Wait for the Editor lock · Lane B holds the Editor')
+    expect(reads).toEqual(['/ws/s2-b/Saved/EDITOR_OWNER.txt'])
+    // A session whose own pack reads no lock (a web checkout, a parent folder) still quotes it.
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/web', 's1', {}, where)))[0]?.wait).toBe('⏳ Wait for the Editor lock · Lane B holds the Editor')
+    // In a checkout whose pack reads none, nothing is quoted; with one checkout, the session's own, as before.
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/s2', 's1', unreal, async () => ({ root: '/ws/web', pack: {} }))))[0]?.wait).toBe('⏳ Wait for the Editor lock')
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/s2', 's1', unreal)))[0]?.wait).toBe('⏳ Wait for the Editor lock · Lane A holds the Editor')
+  })
+
+  test("several checkouts: each checkout's session records are read from its own folder, so a worker found later is still adopted", async () => {
+    resetWorkers()
+    resetCalls()
+    resetTranscripts()
+    const dirs = { '/home/u/.claude/projects': [{ name: '-ws-s2', kind: 'dir' }, { name: '-ws-web', kind: 'dir' }], '/home/u/.claude/projects/-ws-web': [{ name: 'aaaaaaaa-1.jsonl', kind: 'file' }] }
+    const record = '/home/u/.claude/projects/-ws-s2/s1/subagents/agent-old'
+    const host = /** @type {any} */ ({
+      ...fakeHost([{ id: 'old', description: 'Found later', type: 'general-purpose', status: 'running' }], { [`${record}.meta.json`]: '{"model":"claude-opus-5-5"}' }),
+      home: async () => '/home/u',
+      list: async (/** @type {keyof typeof dirs} */ path) => dirs[path] ?? [],
+      exists: async (/** @type {string} */ path) => path === `${record}.jsonl`,
+      run: async (/** @type {string[]} */ argv) => ({ exitCode: 0, stdout: argv.at(-1) === `${record}.jsonl` ? '"timestamp":"2026-10-03T05:00:00.000Z"' : '"customTitle":"Web login"' }),
+    })
+    // Another checkout's session is named first (an intent there, proved by it) …
+    expect(await sessionName(host, '/ws/web', 'aaaaaaaa')).toBe('Web login')
+    // … and this session's worker is still found under its own checkout's records.
+    const crew = await atTime(NOON + 60000, () => crewOf(host, '/ws/s2', 's1'))
+    expect([crew[0]?.origin, crew[0]?.elapsed]).toEqual(['adopted', 60000])
+    resetTranscripts()
   })
 
   test('A4: a worker found later with no call seen shows no in-flight line', async () => {

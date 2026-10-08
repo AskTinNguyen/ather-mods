@@ -12,7 +12,7 @@ import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
-import { normalFolder, readWorkspace } from './workspace.mjs'
+import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
 
 /**
@@ -149,6 +149,16 @@ export const lane = (io, cwd) => cachedLane(lanes, cwd, async () => readCheckout
 // Any checkout's lane, by its root: its own pack and repository.
 /** @param {Io} io @param {string} root */
 export const laneAt = (io, root) => cachedLane(rootLanes, root, () => readCheckout(io, root, root))
+
+// The checkout a command's folder is in (null: the session folder; a relative one is taken from the session's
+// root) and its lane. `isOwn`: it is the session's own checkout, or in no checkout at all; both use the session's lane.
+/** @param {Io} io @param {Checkout} session the session's lane @param {string | null} folder @returns {Promise<{ lane: Checkout, isOwn: boolean }>} */
+export const folderLane = async (io, session, folder) => {
+  if (folder === null) return { lane: session, isOwn: true }
+  const root = await checkoutOf(io, /^([A-Za-z]:[\\/]|[\\/])/.test(folder) ? folder : `${session.root}/${folder}`)
+  if (root === null || root === (await checkoutOf(io, session.root))) return { lane: session, isOwn: true }
+  return { lane: await laneAt(io, root), isOwn: false }
+}
 
 /** @type {Map<string, Promise<{ roots: string[], skipped: string[] }>>} */
 const workspaces = new Map()

@@ -68,7 +68,7 @@ export const choiceRow = (el, row, isClicked) => {
 // as the surface draws it (none on the desktop).
 // On the desktop (`isClicked`) the bar is drawn as an SVG, the count sits at its column's right
 // edge with room for the font's wider digits, and a long title is clipped in its own box, so
-// the right-hand columns stay where they are.
+// the right-hand columns stay where they are; its warning and repository's name are in that box too.
 /** @param {any} el @param {{ key: string, cells: RowCells, cols: Columns, width: number, ownerColour: string, hotkey?: string, autoFocus?: boolean, onPress: () => void, isClicked?: boolean }} row */
 export const workLine = (el, row) => {
   const { cells, cols } = row
@@ -113,7 +113,7 @@ const deskLine = (el, row) => {
     width: '100%',
     alignItems: 'center',
     children: [
-      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : [])] }),
+      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : []), ...(cells.repo ? [el.Text({ key: `${row.key}-repo`, color: QUIET, children: ` ${cells.repo}` })] : [])] }),
       el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, alignItems: 'center', children: columns }),
     ],
   })

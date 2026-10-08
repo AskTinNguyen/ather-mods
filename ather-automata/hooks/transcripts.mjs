@@ -19,8 +19,9 @@ import { sessionTitle } from './model.mjs'
 
 /** @type {string | null} */
 let home = null
-/** @type {string | null} */
-let project = null
+// Each checkout's records folder, by its root ('' when it has none).
+/** @type {Map<string, string>} */
+const projects = new Map()
 /** @type {Map<string, { name: string, at: number }>} */
 const names = new Map()
 /** @type {Map<string, { found: WorkerRecord | null, at: number }>} */
@@ -33,7 +34,7 @@ const MISS_RETRY_MS = 60 * 1000
 // A new session (or a reload) reads everything afresh.
 export const resetTranscripts = () => {
   home = null
-  project = null
+  projects.clear()
   names.clear()
   records.clear()
 }
@@ -49,14 +50,16 @@ export async function homeDir(host) {
 // E--s2- and E--S2- are one checkout, so an exact match wins and any case does otherwise.
 /** @param {Host} host @param {string} root */
 async function projectDir(host, root) {
-  if (project !== null) return project
+  const known = projects.get(root)
+  if (known !== undefined) return known
   const user = await homeDir(host)
   if (!user) return ''
   const config = ((await host.configDir().catch(() => '')) || `${user}/.claude`).replace(/\\/g, '/')
   const want = root.replace(/[^a-zA-Z0-9]/g, '-')
   const all = (await host.list(`${config}/projects`).catch(() => [])).filter(one => one.kind === 'dir')
   const entry = all.find(one => one.name === want) ?? all.find(one => one.name.toLowerCase() === want.toLowerCase())
-  project = entry ? `${config}/projects/${entry.name}` : ''
+  const project = entry ? `${config}/projects/${entry.name}` : ''
+  projects.set(root, project)
   return project
 }
 
