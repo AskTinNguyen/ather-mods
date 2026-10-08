@@ -3,7 +3,7 @@
 // arrives as a closure from console.mjs.
 
 import { WORK_GROUPS, workGroup } from './home.mjs'
-import { BAR_CELLS, LEGEND, callBlocks, listCells, sortWork, stageBlocks } from './worklist.mjs'
+import { BAR_CELLS, LEGEND, callBlocks, listCells, miniBarSvg, sortWork, stageBlocks } from './worklist.mjs'
 
 /** @typedef {import('./worklist.mjs').RowCells} RowCells */
 /** @typedef {ReturnType<typeof import('./worklist.mjs').rowColumns>} Columns */
@@ -62,9 +62,13 @@ export const choiceRow = (el, row, isClicked) => {
 // One row of work, the same in every list (D7): stage glyph and title (and its warning), then the
 // progress bar and count, age and owner, each in a column as wide as the list's widest. `hotkey`:
 // as the surface draws it (none on the desktop).
-/** @param {any} el @param {{ key: string, cells: RowCells, cols: Columns, width: number, ownerColour: string, hotkey?: string, autoFocus?: boolean, onPress: () => void }} row */
+// On the desktop (`isClicked`) the bar is drawn as an SVG, the count sits at its column's right
+// edge with room for the font's wider digits, and a long title is clipped in its own box, so
+// the right-hand columns stay where they are.
+/** @param {any} el @param {{ key: string, cells: RowCells, cols: Columns, width: number, ownerColour: string, hotkey?: string, autoFocus?: boolean, onPress: () => void, isClicked?: boolean }} row */
 export const workLine = (el, row) => {
   const { cells, cols } = row
+  if (row.isClicked) return deskLine(el, row)
   const columns = /** @type {[string, string, string | undefined, number][]} */ ([
     ['bar', cells.bar, INK, BAR_CELLS],
     ['count', cells.count.padStart(cols.count), undefined, cols.count],
@@ -82,6 +86,30 @@ export const workLine = (el, row) => {
     children: [
       el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, children: [el.Button({ key: row.key, label: title, hotkey: row.hotkey, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: warn })] : [])] }),
       el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, children: columns.map(([name, text, color, size]) => el.Box({ key: `${row.key}-${name}`, width: size, children: [el.Text({ key: `${row.key}-${name}-text`, color, children: text })] })) }),
+    ],
+  })
+}
+
+/** @param {any} el @param {{ key: string, cells: RowCells, cols: Columns, ownerColour: string, autoFocus?: boolean, onPress: () => void }} row */
+const deskLine = (el, row) => {
+  const { cells, cols } = row
+  /** @param {string} name @param {number} size @param {any} child @param {boolean} [isRight] */
+  const column = (name, size, child, isRight = false) => el.Box({ key: `${row.key}-${name}`, width: size, flexShrink: 0, justifyContent: isRight ? 'flex-end' : undefined, children: [child] })
+  const [done, total] = cells.count ? cells.count.split('/').map(Number) : [0, 0]
+  const columns = [
+    el.Box({ key: `${row.key}-bar`, flexShrink: 0, children: [el.Svg({ source: miniBarSvg(done, total, INK), alt: cells.count ? `${cells.count} done` : 'no checklist', width: BAR_CELLS * 10, height: 9 })] }),
+    ...(cols.count > 0 ? [column('count', cols.count + 1, el.Text({ key: `${row.key}-count-text`, children: cells.count }), true)] : []),
+    ...(cols.age > 0 ? [column('age', cols.age + 1, el.Text({ key: `${row.key}-age-text`, color: QUIET, children: cells.age }), true)] : []),
+    ...(cols.owner > 0 ? [column('owner', cols.owner, el.Text({ key: `${row.key}-owner-text`, color: row.ownerColour, wrap: 'truncate', children: cells.owner }))] : []),
+  ]
+  return el.Box({
+    key: `row-${row.key}`,
+    flexDirection: 'row',
+    width: '100%',
+    alignItems: 'center',
+    children: [
+      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : [])] }),
+      el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, alignItems: 'center', children: columns }),
     ],
   })
 }
@@ -109,7 +137,7 @@ export const statusLine = (el, { text, fresh, width, hotkey, onPress }) => {
 /** @param {any} el @param {Look} look @param {Work} one @param {Map<string, RowCells>} cells @param {Columns} cols @param {string} key @param {string | undefined} hotkey @param {boolean} [autoFocus] */
 const rowOf = (el, look, one, cells, cols, key, hotkey, autoFocus) => {
   const row = /** @type {RowCells} */ (cells.get(one.id))
-  return workLine(el, { key, cells: row, cols, width: look.width, ownerColour: look.ownerColour(row.owner), hotkey: look.isClicked ? undefined : hotkey, autoFocus, onPress: look.onRow(one) })
+  return workLine(el, { key, cells: row, cols, width: look.width, ownerColour: look.ownerColour(row.owner), hotkey: look.isClicked ? undefined : hotkey, autoFocus, onPress: look.onRow(one), isClicked: look.isClicked })
 }
 
 // Needs you's rows: one per thing, except an intent's several decisions, which wait as one row that

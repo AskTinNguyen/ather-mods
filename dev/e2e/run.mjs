@@ -1474,8 +1474,10 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   }
   // The desktop: the same columns as fixed-width boxes, no keys drawn, the sync line a press.
   const desk = await pane(110, 'desktop')
-  const colBoxes = slug => ['bar', 'count', 'age', 'owner'].map(name => findKey(desk, `pick-intent:${slug}-${name}`)?.props.width)
-  expect('on the desktop every row has the same column boxes (bar, count, age, owner) of the same widths, and no hotkeys (A8)', JSON.stringify(colBoxes('teammate-a')) === JSON.stringify(colBoxes('mine-met')) && colBoxes('teammate-a').every(width => width > 0) && !findKey(desk, 'pick-intent:teammate-a')?.props.hotkey, [colBoxes('teammate-a'), colBoxes('mine-met')])
+  // The bar is an SVG of fixed pixels (glyphs took the font's widths and spilled into the count); the other columns are boxes.
+  const barWidth = slug => findKey(desk, `pick-intent:${slug}-bar`)?.children.find(child => child?.type === 'Svg')?.props.width
+  const colBoxes = slug => [barWidth(slug), ...['count', 'age', 'owner'].map(name => findKey(desk, `pick-intent:${slug}-${name}`)?.props.width)]
+  expect('on the desktop every row has the same columns (an SVG bar, then count, age, owner boxes) of the same widths, and no hotkeys (A8)', JSON.stringify(colBoxes('teammate-a')) === JSON.stringify(colBoxes('mine-met')) && colBoxes('teammate-a').every(width => width > 0) && !findKey(desk, 'pick-intent:teammate-a')?.props.hotkey, [colBoxes('teammate-a'), colBoxes('mine-met')])
   const deskSync = findKey(desk, 'sync')
   expect('on the desktop the sync line is a press with no key drawn (A4)', /^synced just now ↻$/.test(deskSync?.props.label ?? '') && deskSync?.props.hotkey === undefined, deskSync?.props)
   // ↻ fetches now, one at a time; the timer fetches at most every ten minutes (A3, A4).
