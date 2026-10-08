@@ -365,6 +365,20 @@ describe('shared state: one owner, one change at a time', () => {
     expect([...store.keys()].sort()).toEqual(['away:sleeping', 'evidence:elsewhere', 'pinned:elsewhere', 'pinned:live', 'pinned:sleeping'])
   })
 
+  test("pruning takes a session's proof in another checkout with it, never an intent's proof", async () => {
+    const { io, store } = memoryIo('now')
+    store.set('evidence:gone', {})
+    store.set('evidence:gone|asktinnguyen/web', {})
+    store.set('evidence:asktinnguyen/web|spawner', {})
+    store.set('evidence:path:/work/web|spawner', {})
+    store.set('evidence:live|asktinnguyen/web', {})
+    /** @type {string[]} */
+    const asked = []
+    await state.prune(io, async sid => (asked.push(sid), sid === 'gone'))
+    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web|spawner', 'evidence:live|asktinnguyen/web', 'evidence:path:/work/web|spawner'])
+    expect(asked.sort()).toEqual(['gone', 'live'])
+  })
+
   test('tracking refuses an intent that does not exist', async () => {
     const { io } = memoryIo()
     expect(await state.track(io, 'R', 'no-such-intent')).toBe(false)
@@ -1182,6 +1196,20 @@ describe('several repositories on one machine', () => {
     return { ...memory, s2, web }
   }
   const ISSUE = { number: 7, title: 'Fix login', url: 'u', area: 'Unsorted', isUrgent: false, updatedAt: '' }
+
+  test("a command's proof is kept by the checkout it ran in", async () => {
+    const { s2, files } = twoRepos()
+    const own = { isOwn: true, repo: 'sipher/s2' }
+    const other = { isOwn: false, repo: 'asktinnguyen/web' }
+    // Nothing tracked: the session's own checkout keeps the session's scope.
+    expect(await state.checkoutScope(s2, own)).toBe('s1')
+    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web')
+    // A tracked intent: the session's checkout proves it; another checkout's proof stays this session's there.
+    files.set('R/docs/intent/spawner/prompt.md', '# S\n\n- Owner: Tin Nguyen\n')
+    await state.track(s2, 'R', 'spawner')
+    expect(await state.checkoutScope(s2, own)).toBe('sipher/s2|spawner')
+    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web')
+  })
 
   test('a repository is named by its origin, whatever the protocol; without one, by its folder', () => {
     expect(state.repoId('git@github.com:AskTinNguyen/han-viet.git', 'R')).toBe('asktinnguyen/han-viet')

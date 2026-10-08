@@ -213,6 +213,11 @@ export const evidenceScope = async io => {
   return pinned === undefined ? io.sessionId() : intentScope(io, pinned)
 }
 
+// Where a shell command's proof goes, by the checkout it ran in: the session's own checkout keeps
+// evidenceScope; another checkout's is this session's proof for that repository, `<sid>|<repo>`.
+/** @param {Io} io @param {{ isOwn: boolean, repo: string }} checkout */
+export const checkoutScope = async (io, checkout) => (checkout.isOwn ? evidenceScope(io) : `${await io.sessionId()}|${checkout.repo}`)
+
 // An intent's evidence scope: the intent in this repository, as evidenceScope names it.
 /** @param {Io} io @param {string} slug */
 export const intentScope = async (io, slug) => inRepo(await repoOf(io), slug)
@@ -578,10 +583,11 @@ export const closeAway = io => withAway(io, async away => (away.phase === 'off' 
 export const restoreAway = (io, saved) => withAway(io, async away => (isHolding(away) || !isHolding(saved) ? { result: false } : { away: saved, result: true }))
 
 // Records a held action; resolves the parked entry, or null when no running window holds this kind.
-/** @param {Io} io @param {string} kind @param {string} command @param {number} now */
-export const park = (io, kind, command, now) =>
+// `held`: the kinds held where the command runs, when another checkout holds more than the window's own.
+/** @param {Io} io @param {string} kind @param {string} command @param {number} now @param {readonly string[]} [held] */
+export const park = (io, kind, command, now, held) =>
   withAway(io, async away => {
-    if (!isHolding(away) || !away.held.includes(kind)) return { result: null }
+    if (!isHolding(away) || !(held ?? away.held).includes(kind)) return { result: null }
     const parked = { id: nextParkId(away.parked), kind, command: command.slice(0, 400), at: now }
     return { away: { ...away, parked: [...away.parked, parked] }, result: { parked, away } }
   })
@@ -633,8 +639,10 @@ export const prune = async (io, isGone) => {
   /** @type {Map<string, string[]>} */
   const bySession = new Map()
   for (const key of await io.keys()) {
-    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]
-    if (sid && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
+    // `<sid>|<repo>` is a session's proof in another checkout and goes with it; `<repo>|<slug>` is an intent's
+    // (a repository id has a / or a :) and belongs to no session.
+    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]?.split('|')[0]
+    if (sid && !/[/:]/.test(sid) && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
   }
   for (const [sid, keys] of bySession) {
     if (!(await isGone(sid))) continue

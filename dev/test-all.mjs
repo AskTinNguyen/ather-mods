@@ -1,4 +1,4 @@
-// Type-check, then run the unit tests and the end-to-end harness against ../ather-automata.
+// Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata.
 // The mod is plain .mjs: nothing to compile. Run from anywhere: `node dev/test-all.mjs`.
 // Type-checking needs the engine's API types: set CLAUDE_CODE_TYPES to a claude-code.d.ts
 // (the plugin-authoring skill writes one, and a loaded mod gets .claude-plugin/types/claude-code/index.d.ts);
@@ -66,10 +66,15 @@ const tests = fs.readdirSync(path.join(MOD, 'tests')).filter(f => f.endsWith('.t
 fs.writeFileSync(path.join(unit, 'main.mjs'), `${tests.map(f => `import './tests/${f}'`).join('\n')}\nimport { run } from 'file:///${shim.replace(/^\//, '')}'\nawait run()\n`)
 sh('node main.mjs', unit)
 
-console.log('== e2e')
 const e2e = path.join(HERE, 'e2e')
 fs.rmSync(path.join(e2e, 'out'), { recursive: true, force: true })
 copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
+
+// Several real git checkouts under the temp folder: needs no S2 checkout.
+console.log('== repos e2e')
+sh(`node repos.mjs "${path.join(WORK, 'repos-report.md')}"`, e2e)
+
+console.log('== e2e')
 // --layouts <dir> passes through: the e2e run writes every pane laid out at 72 and 110 columns there.
 const layouts = process.argv.includes('--layouts') ? path.resolve(process.argv[process.argv.indexOf('--layouts') + 1]) : null
 sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"${layouts ? ` --layouts "${layouts}"` : ''}`, e2e)

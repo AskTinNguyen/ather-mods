@@ -16,6 +16,7 @@ import { recordSpawn, recordTool, resetWorkers } from './workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { heldByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
+import { withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf } from './workspace.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
@@ -297,6 +298,18 @@ async function scopeOf($) {
   return state.evidenceScope(io($))
 }
 
+// The checkout a command's folder runs in (null: the session folder) and its lane. `isOwn`: it is the
+// session's own checkout, or in no checkout at all; both use the session's lane.
+/** @param {Engine} $ @param {string | null} folder @returns {Promise<{ lane: import('./state.mjs').Checkout, isOwn: boolean }>} */
+async function checkoutLane($, folder) {
+  const session = await laneOf($)
+  if (folder === null) return { lane: session, isOwn: true }
+  const files = io($)
+  const root = await checkoutOf(files, /^([A-Za-z]:[\\/]|[\\/])/.test(folder) ? folder : `${session.root}/${folder}`)
+  if (root === null || root === (await checkoutOf(files, session.root))) return { lane: session, isOwn: true }
+  return { lane: await state.laneAt(files, root), isOwn: false }
+}
+
 /** @param {Engine} $ */
 async function peers($) {
   const { root, pack } = await laneOf($)
@@ -377,10 +390,11 @@ async function detectTz($) {
 
 // ---------------------------------------------------------------- the model's tools
 
-// A held action, parked for the person's review; null when no window holds it.
-/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command */
-async function hold($, kind, command) {
-  const held = await state.park(io($), kind, command, Date.now())
+// A held action, parked for the person's review; null when no window holds it. `heldHere`: the kinds
+// held where it runs, when that is more than the window's own.
+/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command @param {readonly string[]} [heldHere] */
+async function hold($, kind, command, heldHere) {
+  const held = await state.park(io($), kind, command, Date.now(), heldHere)
   if (held === null) return null
   void state.bump(io($), 'heldParked').catch(() => undefined)
   $.ui.toast(`Ather: held ${HELD_NOUNS[kind]} until you review the away window (${held.parked.id}).`)
@@ -500,10 +514,9 @@ async function registerTools($, pack) {
 /** @param {Engine} $ @param {string} command @param {any} e @param {any} next */
 async function shell($, command, e, next) {
   const away = await state.readAway(io($)).catch(() => offAway())
-  const { pack } = isHolding(away) ? await laneOf($) : { pack: null }
-  const kind = pack ? heldShell(command, away.held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack) }) : null
-  if (kind) {
-    const denied = await hold($, kind, command).catch(() => null)
+  const found = isHolding(away) ? await heldIn($, command, away.held) : null
+  if (found) {
+    const denied = await hold($, found.kind, command, found.held).catch(() => null)
     if (denied) return { deny: denied }
   }
   const ran = await next(e)
@@ -515,11 +528,30 @@ async function shell($, command, e, next) {
   }
 }
 
-// With-proof merges (D2): every rung the profile requires passed in tool output in this session.
-/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack */
-async function isMergeProven($, pack) {
+// What the window holds in a command, each segment judged by the checkout it runs in. Another checkout
+// holds the window's kinds and its own pack's defaults, so a window never holds less there than that
+// repository would, and counts only proof this session saw in that checkout. Resolves the kind held,
+// with every kind held across the command's checkouts for parking it, or null.
+/** @param {Engine} $ @param {string} command @param {readonly string[]} held @returns {Promise<{ kind: string, held: string[] } | null>} */
+async function heldIn($, command, held) {
+  const { pack } = await laneOf($)
+  /** @type {Map<string | null, import('./packs/index.mjs').HeldAt | null>} */
+  const at = new Map()
+  for (const { folder } of withFolders(command)) {
+    if (at.has(folder)) continue
+    const { lane, isOwn } = await checkoutLane($, folder)
+    if (isOwn) at.set(folder, null)
+    else at.set(folder, { pack: lane.pack, held: [...new Set([...held, ...lane.pack.held.defaults])], isProven: await isMergeProven($, lane.pack, await state.checkoutScope(io($), { isOwn, repo: lane.repo })) })
+  }
+  const kind = heldShell(command, held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack, await scopeOf($)), at: folder => at.get(folder) ?? null })
+  return kind ? { kind, held: [...new Set([...held, ...[...at.values()].flatMap(one => one?.held ?? [])])] } : null
+}
+
+// With-proof merges (D2): every rung the profile requires passed in tool output in this session, in `scope`.
+/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack @param {string} scope */
+async function isMergeProven($, pack, scope) {
   if (pack.mergePolicy !== 'with-proof') return false
-  const evidence = await state.readEvidence(io($), await scopeOf($), pack)
+  const evidence = await state.readEvidence(io($), scope, pack)
   const rungs = pack.mergeRungs ?? []
   const seen = /** @type {Record<string, { state: string, at?: number }>} */ (evidence)
   return rungs.length > 0 && rungs.every(rung => seen[rung]?.state === 'pass' && (seen[rung]?.at ?? 0) >= sessionStartedAt)
@@ -529,17 +561,20 @@ async function isMergeProven($, pack) {
 async function afterShell($, command, ran) {
   const context = []
   const text = ran.text ?? ''
-  const { pack } = await laneOf($)
+  // The checkout the command ran in is its last segment's: its pack reads the output, and its proof is kept there.
+  const { lane, isOwn } = await checkoutLane($, withFolders(command).at(-1)?.folder ?? null)
+  const { pack } = lane
+  const scope = await state.checkoutScope(io($), { isOwn, repo: lane.repo })
   if (!isSearchCommand(command)) await noteTraps($, text, pack)
   const guard = explainGuard(command)
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
   const reading = pack.readShell(command, text, ran)
-  for (const one of reading.rungs) await state.setRung(io($), await scopeOf($), one.rung, one.value)
+  for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value)
   context.push(...reading.context)
   for (const toast of reading.toasts) $.ui.toast(toast.text, toast.timeoutMs === undefined ? undefined : { timeoutMs: toast.timeoutMs })
   for (const key of reading.bumps) void state.bump(io($), key).catch(() => undefined)
   if (isMergeCommand(command) && ran.deny === undefined && ran.isError !== true) {
-    const lost = await auditMerge($).catch(() => [])
+    const lost = await auditMerge($, lane.root, pack).catch(() => [])
     if (lost.length > 0) {
       await state.flagLost(io($), lost)
       void state.bump(io($), 'lostWorkFlags').catch(() => undefined)
@@ -570,9 +605,8 @@ async function noteMcp($, tool, input, ran) {
 }
 
 // After a merge: binary assets byte-identical to the merged-in side lost this branch's edits.
-/** @param {Engine} $ */
-async function auditMerge($) {
-  const { root, pack } = await laneOf($)
+/** @param {Engine} $ @param {string} root the checkout merged in @param {import('./packs/index.mjs').Pack} pack */
+async function auditMerge($, root, pack) {
   const binary = pack.binaryAssets
   if (!binary) return []
   const git = (/** @type {string[]} */ args) => $.process.run(['git', '-C', root, ...args], { env: GIT_ENV, timeoutMs: 30000 })
