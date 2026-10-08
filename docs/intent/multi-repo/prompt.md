@@ -1,6 +1,6 @@
 # Ather Automata: several repositories
 
-- Rev: 3
+- Rev: 4
 - Status: active
 - Area: ather-automata
 - Owner: Hoàng Vũ
@@ -32,6 +32,7 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 - D9 Sync across: each checkout's main is fetched with the same argv, env and 10-minute throttle, one fetch at a time overall; the header's sync line reports the least recently synced checkout; ↻ fetches every checkout that may fetch now.
 - D10 One checkout, no change: with a workspace of one checkout, every pane layout, prompt, store key and git/gh call is as on main, 0.2.0 (the e2e checks and layouts are the check).
 - D11 Unique names: a checkout's short name is unique among the checkouts the pane works with, and does not change during a session. It is the repository id's last segment, as before. When two or more of the workspace's checkouts would share it (two clones or worktrees of one repository, or `a/web` beside `b/web`), each of them is named by its folder's name instead; folders that still share a name get `-2`, `-3`, … in workspace order. The tracked intent's checkout, when it is outside the workspace, takes a name none of the workspace's uses (its short name, else its folder's, else numbered) and renames none of them. A name holds only letters, digits, `_`, `.` and `-` (any other character becomes `-`), so `/ather issue <name>#<n>` reads it. The names come from one pure function over the checkouts in workspace order, so every key (`<name>/<slug>`, `<name>#<n>`), row cell and `/ather intent|issue <name>…` lookup agrees. The session's own checkout keeps bare slugs and issue numbers. A repository's assigned issues are read and listed once however many of its checkouts the workspace has: under the session's own checkout when it is one of them, else the first in workspace order.
+- D12 Kept per checkout (amends D1 and D5): what belongs to a working tree is kept for the checkout, not for its repository, so two clones or worktrees of one repository no longer share it: an intent's proof, this session's proof in another checkout, today's changes and "Continue …". Their scope is the checkout's id: its repository's id and its folder, the folder normalised and lowercased the way `repoId` already does for a checkout without an origin (whose id stays `path:<folder>`). So the tracked intent's proof is `<checkout id>|<slug>` and the session's proof in another checkout `<sid>|<checkout id>`. Issue lists and PR states stay per repository (D1, D11): they are GitHub's. The keys from before 0.2.1, which name no repository, still read through for the session's own checkout until the scoped key is written; the per-repository proof, changes and Continue keys of this branch were never released and are not read. The Paseo version, whose Io names no repository, keeps its unscoped keys.
 
 ## Acceptance
 
@@ -45,6 +46,7 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 | A6 | Issues and PRs come from every workspace checkout (D8). (S5) | e2e with gh fixtures per checkout: both lists merged with names; Start an intent names the issue's checkout; PR states per checkout drive each intent's stage. |
 | A8 | Main's 0.1.8 to 0.2.0 features (desktop work rows, worker tree and calls in flight, Group, decide in place) hold over several checkouts. (S7) | Unit and `dev/e2e/repos.mjs`: the same slug in two checkouts as two rows and two decisions on both surfaces, a decision in another checkout answered in place, grouped lists with repository names, a waiting worker's lock read in its command's checkout. |
 | A9 | Two checkouts that would share a short name get different names, keys and rows; one repository's issues are listed once (D11). (S8) | Unit on the naming function (same repository twice, `a/web` beside `b/web`, same folder name twice, one checkout unchanged). e2e: a parent folder holding two clones of one origin with the same intent slug lists two rows with different keys on both surfaces, tracks the second in its own folder, keeps their decisions apart, and lists the repository's issue once. |
+| A10 | Two clones of one repository keep their own proof, changes and Continue; issue lists and PR states stay shared (D12). (S9) | Unit on state (scopes and keys for two checkouts of one origin; read-through of the unscoped keys; prune; Paseo's Io unchanged). e2e: in a parent folder with two clones of a with-proof repository and the same intent in both, proof recorded in one does not count for the other's intent or allow the other's merge, each clone's Continue is its own, an edit in one records no change in the other; the repository's issue is still listed once. |
 | A7 | No regressions; Paseo copies synced; `claude plugin test ather-automata` passes. | `node dev/test-all.mjs` (unit + repos e2e; S2 e2e when S2_ROOT is set), `claude plugin test`. |
 
 ## Slices
@@ -60,3 +62,4 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 | S6 | Whole-diff review, README and changelog, final e2e. | S5 |
 | S7 | After merging main (0.2.0): its 0.1.8 to 0.2.0 features over several checkouts. Ships as 0.2.1. | S6 |
 | S8 | D11: unique short names; one repository's issues once. | S7 |
+| S9 | D12: proof, changes and Continue per checkout. | S8 |
