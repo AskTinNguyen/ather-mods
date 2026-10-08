@@ -484,7 +484,8 @@ async function statusText($) {
         : null,
       evidence,
       ...(pack.lockFile ? { editorLock: pack.parseLock(await io($).read(`${root}/${pack.lockFile}`), localMinutes(Date.now(), tz)).raw } : {}),
-      ...(pack.id === 'unreal' ? {} : { pack: pack.id, gates: pack.gates.map(gate => `${gate.command}: ${gate.proofs.join(', ')}`), mergePolicy: pack.mergePolicy }),
+      // The tracked intent's checkout's gates and merge policy: what proves it.
+      ...(its.id === 'unreal' ? {} : { pack: its.id, gates: its.gates.map(gate => `${gate.command}: ${gate.proofs.join(', ')}`), mergePolicy: its.mergePolicy }),
       peers: (await peers($)).map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`),
       away: { phase: away.phase, until: away.phase === 'off' ? '' : windowEndText(away, tz), ledger: away.ledgerPath, parked: away.parked.map(one => `${one.id}: ${one.command}`) },
       recurringGotchas: (await state.readRecurring(io($), pack)).map(one => `${one.title} (${one.count} sessions)`),

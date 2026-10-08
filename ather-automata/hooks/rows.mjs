@@ -106,7 +106,7 @@ export const statusLine = (el, { text, fresh, width, hotkey, onPress }) => {
 /**
  * How a pane draws work rows: on which surface and how wide, whether rows carry a `local` tag, each
  * owner's colour, and what a press on a row does.
- * @typedef {{ isClicked: boolean, width: number, now: number, isTagged: boolean | ((one: Work) => boolean), ownerColour: (name: string) => string, onRow: (one: Work) => () => void }} Look
+ * @typedef {{ isClicked: boolean, width: number, now: number, isTagged: boolean | ((one: import('./worklist.mjs').RowWork) => boolean), ownerColour: (name: string) => string, onRow: (one: Work) => () => void }} Look
  */
 
 /** @param {any} el @param {Look} look @param {Work} one @param {Map<string, RowCells>} cells @param {Columns} cols @param {string} key @param {string | undefined} hotkey @param {boolean} [autoFocus] */

@@ -819,7 +819,8 @@ async function trackSlug($, slug, at) {
   // An intent read from origin/main that this checkout does not have yet cannot be worked on here.
   if (!(await state.track(io($), at ?? root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
-  return `Now tracking ${slug}.`
+  // Its key names the checkout when it is another's: "web/login".
+  return `Now tracking ${(await trackedKey($)) || slug}.`
 }
 
 // Tracks a listed intent by its key, in its own checkout.

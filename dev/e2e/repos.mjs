@@ -158,6 +158,7 @@ const readJson = file => {
 
   const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
   expect("the status tool names login with web's files", status.tracked?.slug === 'login' && status.tracked.checkout === web && status.tracked.checklist === '1/2', status.tracked)
+  expect("… and the gates that prove it are web's, though the session is in s2", status.pack === 'web' && status.mergePolicy === 'with-proof' && status.gates.some(gate => gate.startsWith('npm test')), [status.pack, status.gates, status.mergePolicy])
 
   // web is not in this session's workspace (s2 is a checkout, no repos option): its view still draws.
   engine.setSurfaces(['terminal'])
