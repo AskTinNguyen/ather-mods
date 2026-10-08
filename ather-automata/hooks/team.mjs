@@ -254,6 +254,15 @@ export const fetchMain = async repo => {
   return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false }
 }
 
+// One sync line for several checkouts: a failed fetch in any of them, else one running, else the least
+// recently synced (never synced counts as the least). One checkout's is its own.
+/** @param {readonly Sync[]} syncs @returns {Sync} */
+export const syncSummary = syncs => {
+  const repos = syncs.filter(one => one.isRepo)
+  const failed = repos.find(one => one.failedAt > one.fetchedAt && !one.isFetching)
+  return failed ?? repos.find(one => one.isFetching) ?? [...repos].sort((a, b) => a.fetchedAt - b.fetchedAt)[0] ?? syncs[0] ?? NO_SYNC
+}
+
 /** @param {number} ms */
 const agoText = ms => {
   const minutes = Math.floor(Math.max(0, ms) / 60000)

@@ -64,7 +64,7 @@ export const stageBlocks = list => {
 /** @param {{ status: string, statusNote: string }} intent */
 export const isParkedBare = intent => intent.status === 'parked' && !intent.statusNote
 
-/** @typedef {{ id: string, slug: string, kind: 'close' | 'reason', title: string, ask: string }} Attention */
+/** @typedef {{ id: string, slug: string, key: string, kind: 'close' | 'reason', title: string, ask: string }} Attention `key`: the intent's key in the pane */
 
 // The person's own open intents that want a press: every item met ("Close it?"), or parked with no reason given.
 /** @param {readonly Intent[]} intents @param {string} me @param {import('./model.mjs').PrStates} [prs] @returns {Attention[]} */
@@ -74,8 +74,8 @@ export const needsAttention = (intents, me, prs = {}) =>
     .flatMap(one => {
       /** @type {Attention[]} */
       const wants = isParkedBare(one)
-        ? [{ id: `attention:${one.slug}`, slug: one.slug, kind: 'reason', title: `${one.slug} · parked, no reason`, ask: 'Add one?' }]
-        : listStage(one, prs) === 'met' ? [{ id: `attention:${one.slug}`, slug: one.slug, kind: 'close', title: `${one.slug} · ready to close`, ask: 'Close it?' }] : []
+        ? [{ id: `attention:${one.key}`, slug: one.slug, key: one.key, kind: 'reason', title: `${one.key} · parked, no reason`, ask: 'Add one?' }]
+        : listStage(one, prs) === 'met' ? [{ id: `attention:${one.key}`, slug: one.slug, key: one.key, kind: 'close', title: `${one.key} · ready to close`, ask: 'Close it?' }] : []
       return wants
     })
 
@@ -157,16 +157,17 @@ export const rowColumns = (rows, ownerMax) => ({
 })
 
 /**
- * @typedef {{ kind: 'intent' | 'issue', label: string, stage: ListStage | '', updatedAt: number, isMine: boolean, done?: number, total?: number, who?: string, warn?: string, source?: string }} RowWork
+ * @typedef {{ kind: 'intent' | 'issue', label: string, stage: ListStage | '', updatedAt: number, isMine: boolean, done?: number, total?: number, who?: string, warn?: string, source?: string, repoName?: string }} RowWork
  */
 
-// A work row's cells: an intent's stage glyph, its warning and `local` tag (when main was read, `isTagged`),
-// its checklist, age and owner (blank for the person's own); an issue's title and age.
+// A work row's cells: an intent's stage glyph, its warning, `local` tag (when main was read, `isTagged`) and
+// repository's short name (when the pane lists several), its checklist, age and owner (blank for the
+// person's own); an issue's title and age.
 /** @param {RowWork} one @param {number} now @param {boolean} isTagged @returns {RowCells} */
 export const rowCells = (one, now, isTagged) => ({
   glyph: one.stage ? STAGE_GLYPHS[one.stage] : '',
   title: one.label,
-  warn: [one.warn ? `⚠ ${one.warn}` : '', isTagged && one.source === 'local' ? 'local' : ''].filter(Boolean).join(' · '),
+  warn: [one.warn ? `⚠ ${one.warn}` : '', isTagged && one.source === 'local' ? 'local' : '', one.repoName ?? ''].filter(Boolean).join(' · '),
   bar: miniBar(one.done ?? 0, one.total ?? 0),
   count: one.total ? `${one.done ?? 0}/${one.total}` : '',
   age: ageText(one.updatedAt, now),

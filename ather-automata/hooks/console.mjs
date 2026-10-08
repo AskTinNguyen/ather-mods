@@ -13,7 +13,7 @@ import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } 
 import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { crewOf } from './crew.mjs'
@@ -21,7 +21,8 @@ import { KINDS, PROP_WORDS, STATE_COLOURS, STATE_GLYPHS, avatarSvg, crewWords, p
 import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
 import { recordEnd } from './workers.mjs'
 import { changeGlyph } from './changes.mjs'
-import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from './team.mjs'
+import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncSummary, syncText } from './team.mjs'
+import { checkoutOf, normalFolder } from './workspace.mjs'
 import { SORT_LABELS, nextSort } from './worklist.mjs'
 import { AMBER, INK, LIME, QUIET, choiceRow, fit, homePreview, label, needsRows, section, statusLine, workGroups } from './rows.mjs'
 
@@ -55,7 +56,7 @@ let intentSeenAt = 0
 // The issue whose card is open (paneMode 'issue'), and the view to go back to.
 let issueShown = 0
 let issueBack = /** @type {'home' | 'pick'} */ ('home')
-// The intent whose view is open (paneMode 'intent'; '' is the tracked one), and the view to go back to.
+// The intent whose view is open (paneMode 'intent'; its key, '' for the tracked one), and the view to go back to.
 let intentShown = ''
 let intentBack = /** @type {'home' | 'pick'} */ ('home')
 // The "Everything open" list: the words searched, its sort, and the folded groups.
@@ -66,14 +67,24 @@ const pickFolded = new Set()
 // Needs you's intents opened to show each of their decisions.
 /** @type {Set<string>} */
 const callsOpen = new Set()
-// What the last read of the team's intents learned (team.mjs reads each part again only when it moved),
-// and where the background fetch stands. Both, and `intents`, change together, in readIntents.
-let teamCache = EMPTY_CACHE
-let sync = NO_SYNC
-// A fetch that ended (the `count`th), for the first read that began after it to apply with what it brought in.
-/** @type {{ count: number, sync: Partial<import('./team.mjs').Sync> } | null} */
-let fetched = null
+// Per checkout root: what the last read of its team's intents learned (team.mjs reads each part again
+// only when it moved), and where its background fetch stands. Both, and `intents`, change together, in readIntents.
+/** @type {Map<string, import('./team.mjs').TeamCache>} */
+const teamCaches = new Map()
+/** @type {Map<string, import('./team.mjs').Sync>} */
+const syncs = new Map()
+// Per checkout root, a fetch that ended (the `count`th), for the first read that began after it to apply with what it brought in.
+/** @type {Map<string, { count: number, sync: Partial<import('./team.mjs').Sync> }>} */
+const fetched = new Map()
 let fetchesEnded = 0
+// A fetch is running: one at a time over every checkout.
+let isSyncing = false
+// The pane's checkouts, as last read (paneLanes): the workspace checkouts that have intents.
+/** @type {import('./state.mjs').Checkout[]} */
+let checkouts = []
+// The workspace checkouts other than the session's own, read once per session.
+/** @type {Promise<string[]> | null} */
+let otherRoots = null
 // The read running now, and whether another was asked for while it ran.
 /** @type {Promise<void> | null} */
 let reading = null
@@ -97,7 +108,7 @@ let isAwake = null
 let repos = ''
 /** @type {{ version: number, at: number, model: Home | null }} */
 let view = { version: -1, at: 0, model: null }
-// The pack this checkout's lane chose (packs/index.mjs), for the drawing; set whenever the view is rebuilt.
+// The pack whose words the pane uses (packs/index.mjs, wordsLane); set whenever the view is rebuilt.
 /** @type {import('./packs/index.mjs').Pack} */
 let pack = unreal
 
@@ -161,6 +172,73 @@ function laneOf($) {
   return state.lane(io($), cwd)
 }
 
+// The pane's checkouts: the workspace checkouts that have intents, in workspace order, the session's own
+// (its lane) first. A session opened in a parent folder has none of its own.
+/** @param {Engine} $ @returns {Promise<import('./state.mjs').Checkout[]>} */
+async function paneLanes($) {
+  const session = await laneOf($)
+  if (!otherRoots) otherRoots = readOtherRoots($, session.root)
+  const others = []
+  for (const root of await otherRoots) {
+    const lane = await state.laneAt(io($), root)
+    if (lane.isS2) others.push(lane)
+  }
+  return session.isS2 ? [session, ...others] : others
+}
+
+/** @param {Engine} $ @param {string} root the session lane's root */
+async function readOtherRoots($, root) {
+  const files = io($)
+  const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
+  return (await state.workspace(files, cwd || root, repos, line => $.ui.log(line, { to: 'debug' }))).filter(one => !own.has(normalFolder(one)))
+}
+
+// The lane an intent's checkout has in the pane (the session's for its own).
+/** @param {Engine} $ @param {string} root */
+async function laneFor($, root) {
+  return checkouts.find(one => normalFolder(one.root) === normalFolder(root)) ?? (await laneOf($))
+}
+
+// The lane whose pack gives the pane its words (Next, Create, Prove, the role): the tracked intent's
+// checkout, else the session's own when it has intents, else the first pane checkout.
+/** @param {Engine} $ */
+async function wordsLane($) {
+  const tracked = await state.trackedLane(io($), cwd)
+  const session = await laneOf($)
+  return tracked ? tracked.lane : session.isS2 ? session : (checkouts[0] ?? session)
+}
+
+// Whether a pane checkout is the session's own (the session lane is read again until git's answers are sure,
+// so it is matched by root, not by object).
+/** @param {import('./state.mjs').Checkout} session @param {import('./state.mjs').Checkout} lane */
+function isOwnLane(session, lane) {
+  return session.isS2 && normalFolder(lane.root) === normalFolder(session.root)
+}
+
+// An intent's key in the pane: its slug in the session's own checkout, `<repository's short name>/<slug>` in another.
+/** @param {import('./state.mjs').Checkout} lane @param {boolean} isOwn @param {string} slug */
+function keyOf(lane, isOwn, slug) {
+  return isOwn ? slug : `${shortName(lane)}/${slug}`
+}
+
+// "han-viet": the last part of a repository's id, else its folder's name.
+/** @param {import('./state.mjs').Checkout} lane */
+function shortName(lane) {
+  return (lane.repo || normalFolder(lane.root)).split('/').pop() ?? ''
+}
+
+// The tracked intent's key, '' when nothing is tracked.
+/** @param {Engine} $ */
+async function trackedKey($) {
+  const tracked = await state.trackedLane(io($), cwd)
+  return tracked ? keyOf(tracked.lane, tracked.isOwn, tracked.slug) : ''
+}
+
+/** @param {Engine} $ */
+async function hasIntents($) {
+  return (await paneLanes($)).length > 0
+}
+
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} [options] */
 export function register(on, options) {
   repos = String(options?.repos ?? '')
@@ -184,7 +262,7 @@ export function register(on, options) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     // Read again in the background: the turn's end never waits on git.
-    if (!e.agentId && (await laneOf($)).isS2) void refresh($).catch(() => undefined)
+    if (!e.agentId && (await hasIntents($))) void refresh($).catch(() => undefined)
     // A worker's turn ended: it finished now, not when the pane is next drawn.
     if (e.agentId) recordEnd(e.agentId, Date.now())
     if (e.agentId) $.ui.invalidate('ui.render')
@@ -192,20 +270,20 @@ export function register(on, options) {
   })
 
   on('command.run', { command: 'ather' }, async ($, e) => {
-    if (!(await laneOf($)).isS2) return { text: (await laneOf($)).pack.notHere }
+    if (!(await hasIntents($))) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }
   })
 
   on('command.run', { command: 'away' }, async ($, e) => {
-    if (!(await laneOf($)).isS2) return { text: (await laneOf($)).pack.notHere }
+    if (!(await hasIntents($))) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     return { text: await awayCommand($, e.args.trim()) }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !(await laneOf($)).isS2) return next(e)
+    if (e.props.hasSurvey || !(await hasIntents($))) return next(e)
     void wake($)
     const model = await home($)
     const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
@@ -269,9 +347,12 @@ async function openConsole($, folder) {
   pickSort = 'recent'
   pickFolded.clear()
   callsOpen.clear()
-  teamCache = EMPTY_CACHE
-  sync = NO_SYNC
-  fetched = null
+  teamCaches.clear()
+  syncs.clear()
+  fetched.clear()
+  isSyncing = false
+  checkouts = []
+  otherRoots = null
   fetchesEnded = 0
   isDrawn = false
   createOpen.clear()
@@ -299,7 +380,7 @@ async function startConsoleWork($) {
   await state.workspace(io($), cwd || lane.root, repos, line => $.ui.log(line, { to: 'debug' }))
   if (lane.me !== '') me = lane.me
   pack = lane.pack
-  if (!lane.isS2) return
+  if (!(await hasIntents($))) return
   await refresh($)
   $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
   // A running worker's clock: redrawn every five seconds while one runs, never otherwise.
@@ -311,7 +392,7 @@ async function startConsoleWork($) {
   void refreshIssues($).catch(() => undefined)
   $.clock.every(ISSUES_EVERY_MS, () => void refreshIssues($).catch(() => undefined))
   if ((await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
-    $.ui.toast(lane.pack.prompts.tourToast, { timeoutMs: 12000 })
+    $.ui.toast(pack.prompts.tourToast, { timeoutMs: 12000 })
     await state.setProfile(io($), me, { isNudged: true })
   }
 }
@@ -344,22 +425,31 @@ function refresh($) {
 async function readIntents($) {
   // Only a fetch that ended before this read began is applied with what this read finds.
   const seen = fetchesEnded
-  const { root, me: who, pack: chosen } = await laneOf($)
-  if (who !== me) stale()
-  me = who
-  pack = chosen
+  const session = await laneOf($)
+  if (session.me !== me) stale()
+  me = session.me
   const files = io($)
-  // This checkout's intents: an intent tracked in another checkout is not one of them.
-  const tracked = await state.trackedLane(files, cwd)
-  const pinned = tracked?.isOwn ? tracked.slug : null
-  const team = await readTeam(repo($, root), root, { cache: teamCache, pinned })
+  const lanes = await paneLanes($)
+  const tracked = await state.readTracked(files)
   const read = []
-  for (const one of team.intents) read.push(parseIntent({ ...one, hasDebrief: one.slug === pinned && (await files.exists(`${root}/${chosen.debriefPath(one.slug)}`)) }, chosen))
-  const ended = fetched && fetched.count <= seen ? fetched : null
-  if (ended) fetched = null
-  teamCache = team.cache
+  for (const lane of lanes) {
+    const { root, pack: its } = lane
+    const isOwn = isOwnLane(session, lane)
+    // Its intents: one tracked in another checkout is not one of them.
+    const pinned = tracked && normalFolder(tracked.root) === normalFolder(root) ? tracked.slug : null
+    const team = await readTeam(repo($, root), root, { cache: teamCaches.get(root) ?? EMPTY_CACHE, pinned })
+    const tag = { root, repo: lane.repo, repoName: shortName(lane) }
+    for (const one of team.intents) read.push(parseIntent({ ...one, ...tag, key: keyOf(lane, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
+    const ended = fetched.get(root)
+    const isApplied = ended !== undefined && ended.count <= seen
+    if (isApplied) fetched.delete(root)
+    teamCaches.set(root, team.cache)
+    syncs.set(root, { ...(syncs.get(root) ?? NO_SYNC), ...(isApplied ? ended.sync : {}), isRepo: team.isRepo, hasMain: team.cache.main !== null })
+  }
+  checkouts = lanes
   intents = read.sort((a, b) => b.updatedAt - a.updatedAt)
-  sync = { ...sync, ...ended?.sync, isRepo: team.isRepo, hasMain: team.cache.main !== null }
+  const { root, pack: chosen } = await wordsLane($)
+  pack = chosen
   // The listed skills that exist here, each with the first sentence of its own description.
   const found = []
   for (const name of new Set([...chosen.skillGroups.flatMap(one => one.names), ...chosen.createGroups.flatMap(one => one.items.filter(item => !item.isGlobal).map(item => item.name))])) {
@@ -384,7 +474,8 @@ async function refreshPrs($) {
     const { root } = await laneOf($)
     /** @type {Record<string, import('./model.mjs').PrState>} */
     const read = {}
-    for (const number of prsToRead(intents, await state.readPrRecords(io($)), Date.now())) {
+    // The session's own checkout's intents: their PRs are its repository's.
+    for (const number of prsToRead(intents.filter(one => otherRoot(one) === ''), await state.readPrRecords(io($)), Date.now())) {
       const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
       read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
     }
@@ -394,25 +485,42 @@ async function refreshPrs($) {
   }
 }
 
-// Fetches origin's main in the background (D2): once the pane is drawn, then at most every ten minutes,
-// or at once from ↻ (after a git lock, only at the next due time); one at a time. The sync line says
-// synced once the read after the fetch has landed; a failure keeps the last list and says so.
+// Fetches each pane checkout's origin main in the background (D2): once the pane is drawn, then at most
+// every ten minutes, or at once from ↻ (after a git lock, only at the next due time); one fetch at a time
+// over every checkout. The sync line says synced once the read after the fetch has landed; a failure keeps
+// the last list and says so.
 /** @param {Engine} $ @param {boolean} [isAsked] */
 async function syncMain($, isAsked = false) {
-  if (!(isAsked ? canFetchNow : isFetchDue)(sync, Date.now())) return
-  sync = { ...sync, isFetching: true, triedAt: Date.now() }
-  $.ui.invalidate('ui.render')
-  const { error, lock, moved } = await fetchMain(repo($, (await laneOf($)).root))
-  $.ui.log(error ? `Ather: git fetch failed: ${error}` : `Ather: origin/main ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
-  fetchesEnded += 1
-  fetched = { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } }
-  await refresh($).catch(() => undefined)
-  // The reads failed: the fetch's outcome is still said.
-  if (fetched) {
-    sync = { ...sync, ...fetched.sync }
-    fetched = null
-    $.ui.invalidate('ui.render')
+  if (isSyncing) return
+  isSyncing = true
+  try {
+    for (const { root } of await paneLanes($)) {
+      const before = syncs.get(root) ?? NO_SYNC
+      if (!(isAsked ? canFetchNow : isFetchDue)(before, Date.now())) continue
+      syncs.set(root, { ...before, isFetching: true, triedAt: Date.now() })
+      $.ui.invalidate('ui.render')
+      const { error, lock, moved } = await fetchMain(repo($, root))
+      const where = checkouts.length > 1 ? ` (${root})` : ''
+      $.ui.log(error ? `Ather: git fetch failed${where}: ${error}` : `Ather: origin/main${where} ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
+      fetchesEnded += 1
+      fetched.set(root, { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } })
+      await refresh($).catch(() => undefined)
+      // The reads failed: the fetch's outcome is still said.
+      const ended = fetched.get(root)
+      if (ended) {
+        syncs.set(root, { ...(syncs.get(root) ?? NO_SYNC), ...ended.sync })
+        fetched.delete(root)
+        $.ui.invalidate('ui.render')
+      }
+    }
+  } finally {
+    isSyncing = false
   }
+}
+
+// Where the pane's checkouts' fetches stand, as one: the sync line's.
+function syncShown() {
+  return syncSummary(checkouts.map(({ root }) => syncs.get(root) ?? NO_SYNC))
 }
 
 function stale() {
@@ -448,7 +556,9 @@ async function home($) {
   const version = state.stateVersion()
   if (view.model && view.version === version && Date.now() - view.at < VIEW_TTL_MS) return view.model
   const files = io($)
-  const { root, me: who, pack: chosen } = await laneOf($)
+  const { me: who } = await laneOf($)
+  // The tracked intent's checkout gives the stage its pack, the role and the Editor lock.
+  const { root, pack: chosen } = await wordsLane($)
   pack = chosen
   if (who !== '') me = who
   else if (!isWhoWarned && (isWhoWarned = true)) $.ui.log('Ather: git user.name could not be read; the pane treats nobody as you until it is.', { to: 'debug' })
@@ -460,7 +570,7 @@ async function home($) {
   const userHome = await homeDir(host($))
   const model = buildHome({
     intents,
-    pinned: await state.readPinned(files),
+    pinned: (await trackedKey($)) || null,
     me,
     ...profile,
     evidence: await state.readEvidence(files, await state.evidenceScope(files), chosen),
@@ -472,7 +582,7 @@ async function home($) {
     issues: await state.readIssues(files, me),
     prs: await state.readPrStates(files),
     week: userHome ? parseWeek(await files.read(`${userHome}/.calendar/latest.json`), now) : null,
-    last: await state.readLast(files, me),
+    last: await lastKey($),
     sent: [...sent],
     skills,
     workers: (await $.agent.list().catch(() => [])).filter(agent => agent.status === 'running').length,
@@ -482,6 +592,20 @@ async function home($) {
   })
   view = { version, at: now, model }
   return model
+}
+
+// The intent the person last worked on, by key: the "Continue …" kept in each pane checkout's repository,
+// the session's own first. With one checkout, its slug as kept.
+/** @param {Engine} $ */
+async function lastKey($) {
+  const session = await laneOf($)
+  if (checkouts.length <= 1 && session.isS2) return state.readLast(io($), me)
+  for (const lane of checkouts) {
+    const isOwn = isOwnLane(session, lane)
+    const slug = await state.readLast(io($), me, isOwn ? undefined : lane.root)
+    if (slug && intents.some(one => one.slug === slug && normalFolder(one.root) === normalFolder(lane.root))) return keyOf(lane, isOwn, slug)
+  }
+  return null
 }
 
 // A held lock that names a Claude session shows that session's name, as its tab shows it.
@@ -594,7 +718,7 @@ async function startTour($) {
 
 /** @param {Engine} $ @param {Work} work */
 async function startWork($, work) {
-  if (work.kind === 'intent') return trackSlug($, work.slug)
+  if (work.kind === 'intent') return trackKey($, work.key)
   handOff($, [work.id], work.prompt)
   return `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`
 }
@@ -637,15 +761,25 @@ async function trackSlug($, slug, at) {
   return `Now tracking ${slug}.`
 }
 
-// /ather intent <name> and /ather pick <name>: an exact folder name tracks it; words show the one intent they match.
-// A name only another workspace checkout has is tracked there (this checkout first, then workspace order).
+// Tracks a listed intent by its key, in its own checkout.
+/** @param {Engine} $ @param {string} key */
+async function trackKey($, key) {
+  const intent = intents.find(one => one.key === key)
+  return intent ? trackSlug($, intent.slug, otherRoot(intent) || undefined) : trackSlug($, key)
+}
+
+// /ather intent <name> and /ather pick <name>: an exact key or folder name tracks it; words show the one intent
+// they match. A name only another workspace checkout has is tracked there (this checkout first, then workspace order).
 /** @param {Engine} $ @param {string} text */
 async function pickIntent($, text) {
   const { root } = await laneOf($)
-  if (intents.some(one => one.slug === text) || (await state.hasIntentFolder(io($), root, text))) return trackSlug($, text)
+  if (intents.some(one => one.key === text)) return trackKey($, text)
+  if (intents.some(one => one.slug === text && otherRoot(one) === '') || (await state.hasIntentFolder(io($), root, text))) return trackSlug($, text)
   for (const other of await state.workspace(io($), cwd || root, repos)) {
     if (await state.hasIntentFolder(io($), other, text)) return trackSlug($, text, other)
   }
+  // Only on origin/main: tracking says it is not here yet.
+  if (intents.some(one => one.slug === text)) return trackSlug($, text)
   return lookUp($, text)
 }
 
@@ -654,36 +788,36 @@ async function pickIntent($, text) {
 async function lookUp($, text) {
   const matches = searchIntents(intents, text)
   const [only] = matches
-  if (matches.length === 1 && only) return showIntent($, only.slug)
-  return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.slug).join(', ')}.` : `No open intent matches "${text}".`
+  if (matches.length === 1 && only) return showIntent($, only.key)
+  return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.key).join(', ')}.` : `No open intent matches "${text}".`
 }
 
 // Looking at an intent: its view in the pane, where Work on this here tracks it. Without a pane,
 // where it stands and the command that tracks it.
-/** @param {Engine} $ @param {string} slug */
-async function showIntent($, slug) {
+/** @param {Engine} $ @param {string} key */
+async function showIntent($, key) {
   if (await hasPane($)) {
-    intentShown = slug
+    intentShown = key
     intentBack = 'home'
     return openPane($, 'intent')
   }
-  return whereText($, slug)
+  return whereText($, key)
 }
 
 // Without a pane or a dialog: where an intent stands, and the command that works on it here.
-/** @param {Engine} $ @param {string} slug */
-async function whereText($, slug) {
-  const pinned = await state.readPinned(io($))
-  const one = (await home($)).work.find(work => work.kind === 'intent' && work.slug === slug)
-  const where = one ? one.hint : slug
-  return slug === pinned ? `${where}. This session tracks it.` : `${where}. To work on it in this session: /ather intent ${slug}`
+/** @param {Engine} $ @param {string} key */
+async function whereText($, key) {
+  const pinned = await trackedKey($)
+  const one = (await home($)).work.find(work => work.kind === 'intent' && work.key === key)
+  const where = one ? one.hint : key
+  return key === pinned ? `${where}. This session tracks it.` : `${where}. To work on it in this session: /ather intent ${key}`
 }
 
-// A row's press: the intent's view, never tracking it.
-/** @param {Engine} $ @param {string} slug @param {'home' | 'pick'} back */
-function viewIntent($, slug, back) {
+// A row's press: the intent's view (by key), never tracking it.
+/** @param {Engine} $ @param {string} key @param {'home' | 'pick'} back */
+function viewIntent($, key, back) {
   return () => {
-    intentShown = slug
+    intentShown = key
     intentBack = back
     paneMode = 'intent'
     $.ui.invalidate('ui.render')
@@ -851,7 +985,7 @@ async function menuQuestion($) {
   if (next?.isTour) {
     choices.push({ label: 'Take the tour (Recommended)', description: next.hint, run: () => doNext($, next) })
     const [mine] = model.work.filter(one => one.isMine)
-    if (mine) choices.push({ label: cut(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.slug}`, 40), description: mine.hint, run: () => startWork($, mine) })
+    if (mine) choices.push({ label: cut(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.key}`, 40), description: mine.hint, run: () => startWork($, mine) })
     choices.push({ label: 'Skip the tour', description: 'You know your way around; Ather asks your role instead.', run: () => skipTour($) })
   }
   // What happened while the person was away is reviewed on its own, before anything else.
@@ -914,17 +1048,19 @@ async function typedWork($, text) {
   const words = text.trim()
   // The tour and an issue number mean what they mean anywhere.
   if (/^tours?$/i.test(words) || /^#?\d+$/.test(words)) return typed($, text)
-  const matches = intents.some(one => one.slug === words) ? intents.filter(one => one.slug === words) : searchIntents(intents, words)
+  const exact = intents.filter(one => one.key === words)
+  const named = exact.length > 0 ? exact : intents.filter(one => one.slug === words)
+  const matches = named.length > 0 ? named : searchIntents(intents, words)
   const [only] = matches
-  if (matches.length === 1 && only) return intentQuestion($, only.slug)
+  if (matches.length === 1 && only) return intentQuestion($, only.key)
   if (matches.length > 1 && matches.length <= 4) {
     const work = (await home($)).work
     return ask($, {
       header: 'Work',
       question: `${matches.length} intents match "${words}". Which one should this session work on?`,
       choices: matches.map(one => {
-        const row = work.find(item => item.kind === 'intent' && item.slug === one.slug)
-        return { label: cut(one.slug, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackSlug($, one.slug) }
+        const row = work.find(item => item.kind === 'intent' && item.key === one.key)
+        return { label: cut(one.key, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackKey($, one.key) }
       }),
       fallback: await lookUp($, words),
       onTyped: more => typed($, more),
@@ -935,29 +1071,31 @@ async function typedWork($, text) {
 
 // One intent named in the Work question, without a pane: where it stands, what working on it here
 // means, and three ways on. Where no dialog can be asked, the reply says how to work on it instead.
-/** @param {Engine} $ @param {string} slug */
-async function intentQuestion($, slug) {
-  const intent = intents.find(one => one.slug === slug)
-  if (!intent) return lookUp($, slug)
+/** @param {Engine} $ @param {string} key */
+async function intentQuestion($, key) {
+  const intent = intents.find(one => one.key === key)
+  if (!intent) return lookUp($, key)
+  const { slug } = intent
   const files = io($)
-  const { root, pack: chosen } = await laneOf($)
+  // Read in its own checkout, with that checkout's pack and the person's role there.
+  const { root, pack: chosen } = await laneFor($, intent.root)
   const { role } = await state.readProfile(files, me, chosen)
-  const evidence = await state.readEvidence(files, await state.intentScope(files, slug), chosen)
+  const evidence = await state.readEvidence(files, await state.intentScope(files, slug, otherRoot(intent) || undefined), chosen)
   const prs = await state.readPrStates(files)
   const stands = intentStands(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, heldByLine(await state.readPeers(files, root, chosen.localDir), slug, Date.now()))
   const look = async () => {
     const step = nextStep(role, intent, evidence, 0, me, prs, chosen)
-    return `${stands}${step ? ` Its next step: ${step.label}.` : ''} Not tracked here; /ather intent ${slug} works on it in this session.`
+    return `${stands}${step ? ` Its next step: ${step.label}.` : ''} Not tracked here; /ather intent ${key} works on it in this session.`
   }
   return ask($, {
-    header: slug,
+    header: key,
     question: `${stands} Work on it here? ${trackConsequence(chosen)}`,
     choices: [
-      { label: 'Work on it here', description: 'Tracks it in this session now.', run: () => trackSlug($, slug) },
+      { label: 'Work on it here', description: 'Tracks it in this session now.', run: () => trackKey($, key) },
       { label: 'Just look', description: 'Says where it stands and its next step; tracks nothing.', run: look },
       { label: 'Pick something else', description: 'Back to what this session could work on.', run: () => workQuestion($) },
     ],
-    fallback: await whereText($, slug),
+    fallback: await whereText($, key),
     onTyped: more => typed($, more),
   })
 }
@@ -1176,13 +1314,13 @@ const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug}
 // press that shows the intent (or the issue's card), never tracking it.
 /** @param {Engine} $ @param {number} width @param {'home' | 'pick'} back @returns {import('./rows.mjs').Look} */
 function lookOf($, width, back) {
-  return { isClicked, width, now: Date.now(), isTagged: sync.hasMain, ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.issue.number, back) : viewIntent($, one.slug, back)) }
+  return { isClicked, width, now: Date.now(), isTagged: checkouts.some(({ root }) => syncs.get(root)?.hasMain), ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.issue.number, back) : viewIntent($, one.key, back)) }
 }
 
 // The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
 /** @param {any} el @param {Engine} $ @param {string} text @param {number} width */
 function headerLine(el, $, text, width) {
-  return statusLine(el, { text, fresh: syncText(sync, Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
+  return statusLine(el, { text, fresh: syncText(syncShown(), Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
 }
 
 // ---------------------------------------------------------------- what the intent recorded
@@ -1192,19 +1330,22 @@ let intentToday = []
 
 // What the Intent view shows beside the intent's files: whether this session tracks it, its proof
 // (each record another session wrote named by it), the other live sessions tracking it.
-/** @type {{ slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string }} */
-let intentView = { slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '' }
+/** @type {{ key: string, slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string }} */
+let intentView = { key: '', slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '' }
 
 // The shown intent (the tracked one unless a row or words chose another): its lines since the start
-// of the person's day, newest first, with their time; and the rest of what its view shows.
+// of the person's day, newest first, with their time; and the rest of what its view shows, read in
+// its own checkout.
 /** @param {Engine} $ */
 async function readIntentView($) {
   const files = io($)
   const tracked = await state.trackedLane(files, cwd)
-  const slug = intentShown || tracked?.slug || ''
-  // The tracked intent is read in its own checkout; a row the person chose is this checkout's.
-  const isTracked = tracked !== null && slug === tracked.slug && (intentShown === '' || tracked.isOwn)
-  const { root, pack: chosen } = isTracked ? tracked.lane : await laneOf($)
+  const pinned = await trackedKey($)
+  const key = intentShown || pinned
+  const shown = intents.find(one => one.key === key)
+  const isTracked = tracked !== null && key === pinned
+  const slug = isTracked ? tracked.slug : (shown?.slug ?? key)
+  const { root, pack: chosen } = isTracked ? tracked.lane : shown ? await laneFor($, shown.root) : await laneOf($)
   const tz = await state.readTz(files)
   const now = Date.now()
   const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000, root) : []
@@ -1213,9 +1354,9 @@ async function readIntentView($) {
   const evidence = await state.readEvidence(files, slug ? await state.intentScope(files, slug, root) : mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
-  // Working on it here needs its folder in this checkout; asking about it does not.
+  // Working on it here needs its folder in its checkout; asking about it does not.
   const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
-  intentView = { slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
+  intentView = { key, slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
@@ -1404,8 +1545,8 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'intent') {
-    const { slug, isHere } = intentView
-    const intent = intents.find(one => one.slug === slug)
+    const { key, slug, isHere } = intentView
+    const intent = intents.find(one => one.key === key)
     if (intent) {
       // Seeing the tracked intent's view settles the band's notice; another intent's view does not.
       if (isHere) intentSeenAt = Date.now()
@@ -1414,7 +1555,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
           el,
           [
             label(el, 'brand', 'Intent', width),
-            Text({ key: 'title', bold: true, children: fit(slug, width) }),
+            Text({ key: 'title', bold: true, children: fit(key, width) }),
             ...(intent.goal ? [Text({ key: 'goal', wrap: 'wrap', children: intent.goal })] : []),
             ...(intentView.proof ? [Text({ key: 'proof', color: QUIET, wrap: 'wrap', children: `Proof: ${intentView.proof}` })] : []),
             ...(intentView.heldBy ? [Text({ key: 'held-by', color: AMBER, wrap: 'wrap', children: intentView.heldBy })] : []),
@@ -1424,8 +1565,8 @@ function paneView(el, $, model, columns, surface, crew = []) {
       )
       // Looking never tracks: working on it here is its own press, and needs its folder in this
       // checkout. Asking about it never needs one: the session reads it from origin/main if it must.
-      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main')); return `asked the session about ${slug}` }, false) })
-      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] : []
+      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent))); return `asked the session about ${key}` }, false) })
+      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackKey($, key), true) })] : []
       if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
       if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: 'Not in this checkout yet: pull main to work on it here.' }))
       const today = intentToday.slice(0, 5)
@@ -1442,7 +1583,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
                   width: '100%',
                   children: [
                     Text({ color: one.kind === 'done' ? '#3ccf7a' : one.kind === 'yours' ? LIME : '#8fb8ff', children: changeGlyph(one.kind) }),
-                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => { handOff($, [], `In intent ${slug}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`); return 'asked the session about that change' }, false) })] }),
+                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => { handOff($, [], `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`); return 'asked the session about that change' }, false) })] }),
                     Text({ color: QUIET, children: one.time }),
                   ],
                 }),
@@ -1452,7 +1593,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       if (isHere && model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
       const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
       // Stop tracking keeps the view on this intent, which then offers Work on this here again.
-      const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = slug), untrackHere($)), true) })
+      const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = key), untrackHere($)), true) })
       rows.push(section(el, 'intent-back', isHere ? [Box({ key: 'intent-back-row', flexDirection: 'row', gap: 3, children: [stop, back] })] : [back]))
       rows.push(...foot)
       return Box({ flexDirection: 'column', children: rows })
@@ -1557,7 +1698,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
 
   if (model.attention.length > 0) {
     // The person's own intents that want a press; each opens its intent, nothing is done for them.
-    rows.push(section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.slug, 'home') }))]))
+    rows.push(section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.key, 'home') }))]))
   }
 
   const next = model.next

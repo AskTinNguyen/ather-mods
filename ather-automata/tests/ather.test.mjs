@@ -12,7 +12,7 @@ import { KINDS, avatarSvg, classifyWorker, crewWords, propForTool, trailWords, w
 import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { unreal } from '../hooks/packs/unreal.mjs'
-import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncText } from '../hooks/team.mjs'
+import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
 import { LEGEND, ageText, callBlocks, listStage, miniBar, needsAttention, nextSort, ownerName, rowCells, rowColumns, sortWork, stageBlocks, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
@@ -1420,3 +1420,67 @@ describe('the workspace', () => {
     expect((await state.lane(memory.io, 'cwd-workspace-test')).root).toBe('R')
   })
 })
+
+describe('one pane over the workspace', () => {
+  const MIN = 60000
+  // An intent read from a checkout: its key is its slug in the session's own checkout, `<repoName>/<slug>` in another.
+  const from = (root, repoName, slug, isOwn, fields = {}, extra = {}) => {
+    const one = intent(slug, fields, extra)
+    return { ...one, root, repoName, key: isOwn ? slug : `${repoName}/${slug}` }
+  }
+
+  test('two checkouts: ids are keys, the same slug in both is two rows, each row carries its repository', () => {
+    const intents = [from('/ws/s2', 's2', 'login', false, {}, { updatedAt: 3 }), from('/ws/web', 'web', 'login', false, {}, { updatedAt: 2 }), from('/ws/web', 'web', 'search', false, { Owner: 'TienPham' }, { updatedAt: 1 })]
+    const work = workList(intents, [], 'Tin Nguyen', '', NOON)
+    expect(work.map(one => one.id)).toEqual(['intent:s2/login', 'intent:web/login', 'intent:web/search'])
+    expect(work.filter(one => one.kind === 'intent' && one.slug === 'login')).toHaveLength(2)
+    const warn = work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn.split(' · '))
+    expect(warn.map(cell => cell.at(-1))).toEqual(['s2', 'web', 'web'])
+    // After `local` when main was read.
+    expect(warn[0]).toEqual(['local', 's2'])
+  })
+
+  test("the session's own checkout and another: own keys stay slugs", () => {
+    const work = workList([from('/ws/s2', 's2', 'login', true), from('/ws/web', 'web', 'login', false)], [], 'Tin Nguyen', '', NOON)
+    expect(work.map(one => one.id)).toEqual(['intent:login', 'intent:web/login'])
+  })
+
+  test('one checkout: no repository name, ids are intent:<slug>', () => {
+    const work = workList([from('/ws/s2', 's2', 'login', true), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON)
+    expect(work.map(one => one.id).sort()).toEqual(['intent:board', 'intent:login'])
+    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn)).toEqual(['local', 'local'])
+    expect(workList([intent('spawner')], [], 'Tin Nguyen', '', NOON).map(one => one.id)).toEqual(['intent:spawner'])
+  })
+
+  test('home tracks, continues and searches by key', () => {
+    const s2 = from('/ws/s2', 's2', 'login', true)
+    const web = from('/ws/web', 'web', 'login', false)
+    const model = buildHome(/** @type {any} */ (base({ intents: [s2, web], pinned: 'web/login', away: OFF })))
+    expect(model.header.title).toBe('web/login')
+    const untracked = buildHome(/** @type {any} */ (base({ intents: [s2, web], pinned: null, last: 'web/login', away: OFF })))
+    expect(untracked.next?.id).toBe('intent:web/login')
+    expect(searchIntents([s2, web], 'web login').map(one => one.key)).toEqual(['web/login'])
+    expect(filterWork(untracked.work, 'web/login').map(one => one.id)).toEqual(['intent:web/login'])
+  })
+
+  test('Ask about an intent in another checkout reads it there with git -C', () => {
+    expect(aboutIntentPrompt('login', true, '/ws/web')).toContain('git -C /ws/web show origin/main:docs/intent/login/<file>')
+    expect(aboutIntentPrompt('login', false, '/ws/web')).toContain('/ws/web/docs/intent/login/')
+    expect(aboutIntentPrompt('login', true)).toBe(aboutIntentPrompt('login', true, ''))
+  })
+
+  test('the sync line over several checkouts: an error wins, else the least recently synced', () => {
+    const at = { ...NO_SYNC, isRepo: true, hasMain: true }
+    const fresh = { ...at, fetchedAt: NOON - MIN }
+    const older = { ...at, fetchedAt: NOON - 8 * MIN }
+    const failed = { ...at, fetchedAt: NOON, failedAt: NOON + 1 }
+    expect(syncSummary([fresh])).toBe(fresh)
+    expect(syncSummary([fresh, older])).toBe(older)
+    expect(syncSummary([older, fresh])).toBe(older)
+    expect(syncSummary([fresh, { ...at }])).toEqual({ ...at })
+    expect(syncSummary([older, failed, fresh])).toBe(failed)
+    expect(syncSummary([NO_SYNC, fresh])).toBe(fresh)
+    expect(syncSummary([])).toBe(NO_SYNC)
+  })
+})
+

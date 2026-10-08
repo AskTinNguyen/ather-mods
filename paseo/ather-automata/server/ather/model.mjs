@@ -247,8 +247,11 @@ export const isReadyToClose = (intent, prs) => isAllMet(intent) && intent.prs.le
 export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number} ${prs[number] === 'UNREAD' ? 'could not be read' : (prs[number] ?? 'not read yet')}`)
 
 /**
- * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string }} IntentFiles
- * `updatedAt`: when it last changed (its last commit on main, or its files'); `source`: where it was read; `firstAuthor`: who first committed its folder
+ * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string,
+ *   key?: string, root?: string, repoName?: string }} IntentFiles
+ * `updatedAt`: when it last changed (its last commit on main, or its files'); `source`: where it was read; `firstAuthor`: who first committed its folder.
+ * Read from one of several checkouts: `key` names it in the pane (its slug in the session's own checkout,
+ * `<repoName>/<slug>` in another), `root` is the checkout holding it, `repoName` the short name of its repository.
  * @typedef {ReturnType<typeof parseIntent>} Intent
  */
 
@@ -278,8 +281,15 @@ export const parseIntent = (input, pack = unreal) => {
     updatedAt: input.updatedAt,
     source: input.source,
     firstAuthor: input.firstAuthor,
+    key: input.key ?? input.slug,
+    root: input.root ?? '',
+    repoName: input.repoName ?? '',
   }
 }
+
+// The checkout an intent lives in when it is not the session's own (its key is not its slug), else ''.
+/** @param {{ slug: string, key: string, root: string }} intent */
+export const otherRoot = intent => (intent.key === intent.slug ? '' : intent.root)
 
 /** @param {Intent | undefined} intent */
 export const directorCalls = intent => (intent && intent.status !== 'completed' ? intent.findings.filter(one => one.isDirectorCall || one.isBlocking) : [])
@@ -287,11 +297,11 @@ export const directorCalls = intent => (intent && intent.status !== 'completed' 
 /** @param {{ owner: string }} intent @param {string} me */
 export const isMine = (intent, me) => me !== '' && isSamePerson(intent.owner, me)
 
-// The open intents that are yours, the tracked one first.
+// The open intents that are yours, the tracked one (by key) first.
 /** @param {readonly Intent[]} intents @param {string} me @param {string | null} pinned */
 export const ownedIntents = (intents, me, pinned) => {
   const mine = intents.filter(one => one.status !== 'completed' && isMine(one, me))
-  return [...mine.filter(one => one.slug === pinned), ...mine.filter(one => one.slug !== pinned)]
+  return [...mine.filter(one => one.key === pinned), ...mine.filter(one => one.key !== pinned)]
 }
 
 // The Owner line of an intent's prompt.md.
@@ -309,7 +319,7 @@ export const pickCandidates = (intents, me, area) => {
 export const searchIntents = (intents, text) => {
   const words = text.toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length >= 3)
   return intents.filter(one => {
-    const hay = `${one.slug} ${one.title} ${one.area} ${one.owner}`.toLowerCase().split(/[^a-z0-9]+/)
+    const hay = `${one.key} ${one.title} ${one.area} ${one.owner}`.toLowerCase().split(/[^a-z0-9]+/)
     return one.status !== 'completed' && words.length > 0 && words.every(word => hay.some(part => part.startsWith(word)))
   })
 }
@@ -399,14 +409,16 @@ export const currentStage = (intent, evidence, role, prs = {}, pack = unreal) =>
 }
 
 // Asking the session what an intent is and where it stands, changing nothing. One that this checkout
-// does not have (or has as it is on main) is read from origin/main itself, read-only.
-/** @param {string} slug @param {boolean} fromMain */
-export const aboutIntentPrompt = (slug, fromMain) => {
+// does not have (or has as it is on main) is read from origin/main itself, read-only. `root`: the checkout
+// holding it, when that is not the session's own; git and the files are then read there.
+/** @param {string} slug @param {boolean} fromMain @param {string} [root] */
+export const aboutIntentPrompt = (slug, fromMain, root = '') => {
   const files = ['prompt.md', 'findings.md', 'progress.md', 'log.md']
+  const git = root ? `git -C ${root}` : 'git'
   const read = fromMain
-    ? `Read it from GitHub main, since this checkout may not have it or may be behind: use \`git show origin/main:docs/intent/${slug}/<file>\` for ${files.join(', ')} (those that exist) and \`git log -5 --format="%cs %an %s" origin/main -- docs/intent/${slug}\` for its recent history, with GIT_OPTIONAL_LOCKS=0. Do not fetch, pull, check out, track it or write anything.`
-    : `Read docs/intent/${slug}/ only; change nothing.`
-  return `Tell me about intent ${slug} in under ten lines: what it is for, who owns it, its status and stage (Plan, Build, Prove, Ship) and why, its checklist progress, which decisions are open and whose they are, and what the next step would be. ${read}`
+    ? `Read it from GitHub main, since this checkout may not have it or may be behind: use \`${git} show origin/main:docs/intent/${slug}/<file>\` for ${files.join(', ')} (those that exist) and \`${git} log -5 --format="%cs %an %s" origin/main -- docs/intent/${slug}\` for its recent history, with GIT_OPTIONAL_LOCKS=0. Do not fetch, pull, check out, track it or write anything.`
+    : `Read ${root ? `${root}/` : ''}docs/intent/${slug}/ only; change nothing.`
+  return `Tell me about intent ${slug}${root ? ` in the checkout at ${root}` : ''} in under ten lines: what it is for, who owns it, its status and stage (Plan, Build, Prove, Ship) and why, its checklist progress, which decisions are open and whose they are, and what the next step would be. ${read}`
 }
 
 /**
@@ -418,7 +430,7 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = u
   if (!intent) return { key: 'start', label: 'Start an intent', prompt: '/intent ', hint: 'Type what you want after /intent; the intent skill takes it from there.', isDraft: true }
   const slug = intent.slug
   if (!isMine(intent, me)) {
-    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: aboutIntentPrompt(slug, intent.source === 'main') }
+    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent)) }
   }
   const stage = currentStage(intent, evidence, role, prs, pack)
   if (stage === 'close') {

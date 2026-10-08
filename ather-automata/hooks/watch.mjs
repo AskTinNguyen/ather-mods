@@ -128,7 +128,8 @@ export function register(on, options) {
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e)
     try {
-      const text = (await laneOf($)).isS2 ? await laneText($) : ''
+      // A session whose folder has no intents is still told about an intent it tracks in a workspace checkout.
+      const text = (await laneOf($)).isS2 || (await state.readTracked(io($))) !== null ? await laneText($) : ''
       return text === '' ? result : { ...result, sections: [...result.sections, { id: 'ather-automata:lane', text, scope: /** @type {const} */ ('session') }] }
     } catch {
       return result
@@ -276,15 +277,17 @@ async function branchesFor($, command) {
   return (/** @type {string | null} */ folder) => branches.get(folder) ?? ''
 }
 
-// The heartbeat, in the session's checkout and in the tracked intent's when that is another.
+// The heartbeat, in the session's checkout and in the tracked intent's when that is another. A session
+// whose folder has no intents (a parent folder) writes only to the tracked intent's checkout, and to the
+// checkouts it wrote to before.
 /** @param {Engine} $ @param {boolean} hasEnded */
 async function heartbeat($, hasEnded) {
   const { root, isS2, pack } = await laneOf($)
-  if (!isS2) return
   const tracked = await state.trackedLane(io($), cwd)
   const other = tracked && !tracked.isOwn ? tracked.lane : null
+  if (!isS2 && !other && !state.hasHeartbeats()) return
   const also = other ? { root: other.root, localDir: other.pack.localDir, branch: await readBranch($, other.root).catch(() => '') } : null
-  await state.writeHeartbeat(io($), { root, localDir: pack.localDir, branch: await readBranch($), hasEnded, also })
+  await state.writeHeartbeat(io($), { root: isS2 ? root : '', localDir: pack.localDir, branch: isS2 ? await readBranch($) : '', hasEnded, also })
 }
 
 // A session this checkout can vouch has gone: its heartbeat is here and says ended, or is stale.

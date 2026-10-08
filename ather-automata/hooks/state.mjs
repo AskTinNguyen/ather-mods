@@ -323,8 +323,14 @@ export const readPrRecords = async io => /** @type {Record<string, import('./prs
 // PR number → its last read state, for the pure readers in model.mjs.
 /** @param {Io} io @returns {Promise<import('./model.mjs').PrStates>} */
 export const readPrStates = async io => Object.fromEntries(Object.entries(await readPrRecords(io)).map(([number, record]) => [number, record.state]))
-/** @param {Io} io @param {string} me @returns {Promise<string | null>} */
-export const readLast = async (io, me) => /** @type {string | null} */ ((await readScoped(io, KEY.last(me, await repoOf(io)), KEY.last(me, ''))) ?? null)
+// The person's "Continue …" in a repository: the session's, or with `root` the checkout holding that docs/intent.
+/** @param {Io} io @param {string} me @param {string} [root] @returns {Promise<string | null>} */
+export const readLast = async (io, me, root) => {
+  const scoped = KEY.last(me, await repoAt(io, root))
+  // Only the session's own repository reads through to the key from before 0.1.7.
+  const isOwn = root === undefined || (await isSessionRoot(io, root))
+  return /** @type {string | null} */ ((await readScoped(io, scoped, isOwn ? KEY.last(me, '') : scoped)) ?? null)
+}
 /** @param {Io} io */
 export const readScore = async io => /** @type {Record<string, number>} */ ((await io.get(KEY.score)) ?? {})
 
@@ -472,14 +478,15 @@ export const markActive = (at = Date.now()) => {
   activeAt = at
 }
 
-// The heartbeats last written: the session's checkout's first, then any other checkout's.
-/** @type {{ path: string, lane: Lane }[]} */
+// The heartbeats last written. `isHome`: the session's own checkout's, which always names the tracked intent.
+/** @type {{ path: string, lane: Lane, isHome?: boolean }[]} */
 let lastBeats = []
 
 // Writes this session's heartbeat; after any change in hand, so it never undoes one. `also`: the tracked
 // intent's checkout, when it is not the session's, so its sessions see this one. A checkout written to
 // earlier keeps a live heartbeat (naming no intent) until the session ends: one that went stale or said
-// ended there would let its sessions take this one for gone and prune its lane.
+// ended there would let its sessions take this one for gone and prune its lane. `root` '': the session
+// folder is no checkout with intents (a parent folder), so only `also` and earlier checkouts are written.
 /** @param {Io} io @param {{ root: string, localDir: string, branch: string, hasEnded: boolean, also?: { root: string, localDir: string, branch: string } | null }} at */
 export const writeHeartbeat = (io, at) =>
   serial(async () => {
@@ -487,7 +494,8 @@ export const writeHeartbeat = (io, at) =>
     const away = await readAway(io)
     /** @type {Lane} */
     const lane = { sessionId: sid, intent: await readPinned(io), branch: at.branch, updatedAt: Date.now(), lastActiveAt: activeAt, away: away.phase, hasEnded: at.hasEnded }
-    const beats = [{ path: `${at.root}/${at.localDir}/lanes/${sid}.json`, lane }]
+    /** @type {typeof lastBeats} */
+    const beats = at.root ? [{ path: `${at.root}/${at.localDir}/lanes/${sid}.json`, lane, isHome: true }] : []
     if (at.also) beats.push({ path: `${at.also.root}/${at.also.localDir}/lanes/${sid}.json`, lane: { ...lane, branch: at.also.branch } })
     for (const old of lastBeats) {
       if (old.lane.sessionId !== sid || beats.some(one => one.path === old.path) || !(await io.exists(old.path))) continue
@@ -497,18 +505,21 @@ export const writeHeartbeat = (io, at) =>
     lastBeats = beats
   })
 
+// Whether this session has written a heartbeat anywhere yet.
+export const hasHeartbeats = () => lastBeats.length > 0
+
 // The heartbeat again, at once, when what the session tracks changes: peers see it before the next tick.
 /** @param {Io} io */
 const beat = async io => {
   const sid = await io.sessionId()
   const intent = await readPinned(io)
-  lastBeats = await Promise.all(lastBeats.map(async (old, index) => {
+  lastBeats = await Promise.all(lastBeats.map(async old => {
     // Only over a heartbeat that is still there: never brings back one a cleanup removed. A checkout
     // other than the session's names the intent only while it is the tracked intent's (the next tick says).
     if (old.lane.sessionId !== sid || !(await io.exists(old.path))) return old
-    const lane = { ...old.lane, intent: index === 0 || old.lane.intent === intent ? intent : null, updatedAt: Date.now(), lastActiveAt: activeAt }
+    const lane = { ...old.lane, intent: old.isHome || old.lane.intent === intent ? intent : null, updatedAt: Date.now(), lastActiveAt: activeAt }
     await io.write(old.path, JSON.stringify(lane)).catch(() => undefined)
-    return { path: old.path, lane }
+    return { ...old, lane }
   }))
 }
 

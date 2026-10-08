@@ -11,7 +11,8 @@ const OUT = process.argv[2]
 const { register } = await import('./out/hooks/ather.mjs')
 
 // The person's own git settings (signing, hooks, default branch) stay out of these repositories and of the hooks' git calls.
-const BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-repos-'))
+// The folder's real path: git names a checkout by it (macOS's temporary folder is behind a link).
+const BASE = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ather-repos-')))
 fs.writeFileSync(path.join(BASE, 'gitconfig'), '')
 process.env.GIT_CONFIG_GLOBAL = path.join(BASE, 'gitconfig')
 process.env.GIT_CONFIG_NOSYSTEM = '1'
@@ -194,6 +195,102 @@ const readJson = file => {
   const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0005', options: { repos: '../web' } })
   await engine.command('ather', 'intent search')
   expect('/ather intent search tracks it in web, the workspace checkout that has it', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'search', root: web }), engine.store.get(`pinned:${sid}`))
+}
+
+// ---------------------------------------------------------------- one pane over the workspace
+
+// Every node of a drawn pane, depth first.
+const nodesOf = node => (!node || typeof node !== 'object' ? [] : [node, ...(node.children ?? []).flatMap(nodesOf)])
+const byKey = (tree, key) => nodesOf(tree).find(node => node.props?.key === key)
+const textIn = node => (!node || typeof node !== 'object' ? String(node ?? '') : (node.children ?? []).map(textIn).join(''))
+// The intent rows a pane draws: each row's work id (intent:<key>) and the names in its warn cell.
+const intentRows = tree =>
+  nodesOf(tree)
+    .filter(node => node.type === 'Button' && /(^|-)intent:[^\s]+$/.test(node.props?.key ?? ''))
+    .map(node => ({ key: node.props.key, id: /intent:[^\s]+$/.exec(node.props.key)[0], warn: textIn(byKey(tree, `${node.props.key}-warn`)).trim().split(' · ').filter(Boolean), press: node.props.onPress }))
+const fetchRuns = engine => engine.record.gitRuns.filter(run => run.argv.includes('fetch'))
+const writeIntent = (root, slug, text = LOGIN) => {
+  fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
+  fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), text)
+}
+
+{
+  // A session opened in the parent folder over s2/ and web/, both with intents, `login` in both.
+  const { parent, s2, web } = makeWorkspace()
+  writeIntent(s2, 'login')
+  writeIntent(web, 'login')
+  writeIntent(web, 'search', LOGIN.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
+  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0006' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'pick')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const pick = await pane()
+  const rows = intentRows(pick)
+  const ids = rows.map(one => one.id).sort()
+  expect("Everything open lists both checkouts' intents by key", JSON.stringify(ids) === JSON.stringify(['intent:s2/login', 'intent:web/login', 'intent:web/search']), ids)
+  expect('the same slug in both checkouts is two rows', rows.filter(one => /\/login$/.test(one.id)).length === 2, rows.map(one => one.id))
+  expect("each row's warn cell carries its repository's name", rows.length === 3 && rows.every(one => one.warn.at(-1) === one.id.slice('intent:'.length).split('/')[0]), rows.map(one => [one.id, one.warn]))
+
+  // The first draw fetches each checkout's origin, one after the other.
+  await engine.flush()
+  await engine.flush()
+  const fetches = fetchRuns(engine).map(run => run.argv[2])
+  expect('the first draw fetches both origins, one at a time, in workspace order', JSON.stringify(fetches) === JSON.stringify([s2, web]), fetches)
+  const synced = byKey(await pane(), 'sync')
+  expect('the sync line reports both synced', /synced/.test(synced?.props.label ?? ''), synced?.props.label)
+  // ↻ fetches every checkout that may fetch now.
+  synced?.props.onPress()
+  await engine.flush()
+  await engine.flush()
+  expect('↻ fetches both checkouts again', fetchRuns(engine).length === 4, fetchRuns(engine).map(run => run.argv[2]))
+
+  // Work on this here on web's login tracks it in web.
+  rows.find(one => one.id === 'intent:web/login')?.press()
+  const view = await pane()
+  byKey(view, 'intent-work')?.props.onPress()
+  await engine.flush()
+  expect("Work on this here on web/login tracks { slug: 'login', root: web }", JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: web }), engine.store.get(`pinned:${sid}`))
+
+  // A parent-folder session still writes its heartbeat (to web only) and tells the model about the intent.
+  await engine.timers()
+  const webBeat = readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))
+  expect("the heartbeat lands in web's lanes, naming login", webBeat?.intent === 'login', webBeat)
+  expect('and nowhere in the parent folder or s2', !fs.existsSync(path.join(parent, '.ather')) && !fs.existsSync(path.join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), fs.readdirSync(parent))
+  const composed = await engine.compose()
+  expect('the lane text reaches the model', composed.sections.some(one => one.id === 'ather-automata:lane'), composed.sections.map(one => one.id))
+
+  await engine.command('ather', 'untrack')
+  expect('/ather untrack clears it', !engine.store.has(`pinned:${sid}`), engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'intent web/login')
+  expect('/ather intent web/login tracks it in web', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: web }), engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'intent s2/login')
+  expect('/ather intent s2/login tracks the other one, in s2', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: s2 }), engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'intent web/login')
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+
+  // The next session in the parent folder offers to continue web's login, and Next tracks it there.
+  const next = await boot({ root: parent, sessionId: 'harness-session-0007' })
+  next.engine.setSurfaces(['terminal'])
+  await next.engine.command('ather', '')
+  const home = await next.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  byKey(home, 'next')?.props.onPress()
+  await next.engine.flush()
+  expect('Continue on Home tracks the intent in web', JSON.stringify(next.engine.store.get(`pinned:${next.sessionId}`)) === JSON.stringify({ slug: 'login', root: web }), next.engine.store.get(`pinned:${next.sessionId}`))
+}
+
+{
+  // A session in s2/ alone: no repository names, ids as before.
+  const { s2 } = makeWorkspace()
+  writeIntent(s2, 'login')
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0008' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'pick')
+  const rows = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
+  expect('a session in s2 alone lists its intent as intent:login', JSON.stringify(rows.map(one => one.id)) === JSON.stringify(['intent:login']), rows.map(one => one.id))
+  expect('with no repository name', rows.length === 1 && rows.every(one => !one.warn.includes('s2')), rows.map(one => one.warn))
+  await engine.flush()
+  expect('and fetches its one origin', fetchRuns(engine).length === 1, fetchRuns(engine).map(run => run.argv))
 }
 
 // ---------------------------------------------------------------- report
