@@ -1,7 +1,7 @@
 # Ather Automata avatar frame
 
 - Rev: 1
-- Status: active
+- Status: closed
 - Area: ather-automata
 - Owner: HaiHuynh
 - Skill: `plugin-authoring`
@@ -31,3 +31,4 @@ A worker's avatar in the pane is a round badge with nothing around it, in the li
 ## Changelog
 
 - rev 1 (2026-10-07): created from L-1.
+- closed (2026-10-08): A1–A4 met; Hai's review "yep" (no square in dark or light); merged as PR #9 at 0.1.7.
