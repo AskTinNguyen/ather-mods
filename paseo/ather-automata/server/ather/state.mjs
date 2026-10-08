@@ -17,10 +17,11 @@ import { normalFolder, readWorkspace } from './workspace.mjs'
  * @typedef {{
  *   get: (key: string) => Promise<unknown>, set: (key: string, value: unknown) => Promise<void>, remove: (key: string) => Promise<void>, keys: () => Promise<string[]>,
  *   read: (path: string) => Promise<string | null>, write: (path: string, text: string) => Promise<void>, exists: (path: string) => Promise<boolean>,
- *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: () => Promise<string>, redraw: () => void,
+ *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: (root?: string) => Promise<string>, redraw: () => void,
  *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
  *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>
- * }} Io `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
+ * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
+ *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository; without it the keys are unscoped
  *   (as before 0.1.7, and as the Paseo version still keeps them).
  * @typedef {import('./packs/index.mjs').Pack} Pack
@@ -113,13 +114,14 @@ export const repoId = (url, root) => {
 
 // Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
 // (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session);
-// `repo` which repository it is (repoId), when the Io can say.
-/** @param {Io} io @param {string} root */
-const readCheckout = async (io, root) => {
+// `repo` which repository it is (repoId), when the Io can say. `userRoot`: where git's user name is read,
+// none for the session's own lane, which reads it in the session folder as it always has.
+/** @param {Io} io @param {string} root @param {string} [userRoot] */
+const readCheckout = async (io, root, userRoot) => {
   const list = io.list ?? (async () => [])
   const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
   const origin = io.origin ? await io.origin(root).catch(() => null) : ''
-  const me = await io.gitUser().catch(() => '')
+  const me = await (userRoot === undefined ? io.gitUser() : io.gitUser(userRoot)).catch(() => '')
   return { root, repo: io.origin ? repoId(origin ?? '', root) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
 }
 
@@ -142,7 +144,7 @@ export const lane = (io, cwd) => cachedLane(lanes, cwd, async () => readCheckout
 
 // Any checkout's lane, by its root: its own pack and repository.
 /** @param {Io} io @param {string} root */
-export const laneAt = (io, root) => cachedLane(rootLanes, root, () => readCheckout(io, root))
+export const laneAt = (io, root) => cachedLane(rootLanes, root, () => readCheckout(io, root, root))
 
 /** @type {Map<string, Promise<{ roots: string[], skipped: string[] }>>} */
 const workspaces = new Map()

@@ -1396,11 +1396,15 @@ describe('the workspace', () => {
     files.set('/ws/game/docs/intent', '')
     files.set('/ws/web/package.json', '{"name":"web"}')
     const origins = /** @type {Record<string, string>} */ ({ '/ws/game': 'git@github.com:Sipher/S2.git', '/ws/web': 'https://github.com/AskTinNguyen/han-viet' })
-    const withOrigin = { ...io, origin: async (/** @type {string} */ root) => origins[root] ?? '' }
+    // The web repository sets its own user.name; the session folder's is Tin Nguyen.
+    const names = /** @type {Record<string, string>} */ ({ '/ws/web': 'tin-web', R: 'not the session folder' })
+    const withOrigin = { ...io, origin: async (/** @type {string} */ root) => origins[root] ?? '', gitUser: async (/** @type {string | undefined} */ root) => (root && names[root]) || 'Tin Nguyen' }
     const game = await state.laneAt(withOrigin, '/ws/game')
     const web = await state.laneAt(withOrigin, '/ws/web')
-    expect([game.root, game.repo, game.pack.id, game.isS2]).toEqual(['/ws/game', 'sipher/s2', 'unreal', true])
-    expect([web.root, web.repo, web.pack.id, web.isS2]).toEqual(['/ws/web', 'asktinnguyen/han-viet', 'web', false])
+    expect([game.root, game.repo, game.pack.id, game.isS2, game.me]).toEqual(['/ws/game', 'sipher/s2', 'unreal', true, 'Tin Nguyen'])
+    expect([web.root, web.repo, web.pack.id, web.isS2, web.me]).toEqual(['/ws/web', 'asktinnguyen/han-viet', 'web', false, 'tin-web'])
+    // The session's lane reads the name in the session folder, as it always has.
+    expect((await state.lane(withOrigin, 'cwd-own-user-test')).me).toBe('Tin Nguyen')
   })
 
   test('the workspace is read once per session folder and option, and the session lane is its root', async () => {
