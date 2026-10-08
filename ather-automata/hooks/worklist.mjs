@@ -139,6 +139,17 @@ export const BAR_CELLS = 5
 
 // "▰▰▱▱▱": how much of a checklist is met, in five cells; blank without a checklist.
 /** @param {number} done @param {number} total */
+// The same bar for the desktop as an SVG: five cells in exact pixels, where text glyphs take the
+// font's widths and spill into the next column. `colour` fills the lit cells and outlines the rest.
+/** @param {number} done @param {number} total @param {string} colour */
+export const miniBarSvg = (done, total, colour) => {
+  const lit = total > 0 ? Math.round((Math.min(done, total) / total) * BAR_CELLS) : 0
+  const cells = Array.from({ length: BAR_CELLS }, (_, index) =>
+    index < lit ? `<rect x="${index * 10 + 0.5}" y="0.5" width="8" height="8" rx="1.5" fill="${colour}"/>` : `<rect x="${index * 10 + 1}" y="1" width="7" height="7" rx="1.5" fill="none" stroke="${colour}" stroke-opacity="0.55"/>`,
+  )
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BAR_CELLS * 10} 9" width="${BAR_CELLS * 10}" height="9">${total > 0 ? cells.join('') : ''}</svg>`
+}
+
 export const miniBar = (done, total) => {
   if (total <= 0) return ' '.repeat(BAR_CELLS)
   const lit = Math.round((Math.min(done, total) / total) * BAR_CELLS)

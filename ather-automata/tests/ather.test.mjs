@@ -593,7 +593,7 @@ describe('avatar frame (0.1.7)', () => {
     const hooks = new URL('../hooks/', import.meta.url)
     const sources = fs.readdirSync(hooks, { recursive: true }).map(String).filter(name => /\.(m?js|tsx?)$/.test(name)).map(name => fs.readFileSync(new URL(name.replace(/\\/g, '/'), hooks), 'utf8'))
     const uses = sources.reduce((n, text) => n + [...text.matchAll(/\bSvg\(|<Svg\b|\bh\(\s*Svg\b/g)].length, 0)
-    expect(uses).toBe(3)
+    expect(uses).toBe(4)
     // Each `Svg({` call in the hooks, with its isInteractive expression ('' when it has none: a still image).
     const drawn = sources.flatMap(text => [...text.matchAll(/\bSvg\(\{([^\n]*?)\}\)/g)].map(([, props]) => ({ source: /source: ([^,]+)/.exec(props)?.[1] ?? '', framed: /isInteractive: ([^,}]+)/.exec(props)?.[1]?.trim() ?? '' })))
     expect(drawn).toEqual([
@@ -603,6 +603,8 @@ describe('avatar frame (0.1.7)', () => {
       { source: 'propSvg(prop)', framed: '' },
       // A worker's avatar: framed only while it runs (its bob); FRAME_SCHEME keeps that frame transparent.
       { source: 'avatarSvg(one.kind', framed: "one.state === 'running' ? true : undefined" },
+      // A work row's progress bar on the desktop: a still image (exact pixels, where glyphs spilled into the count).
+      { source: 'miniBarSvg(done', framed: '' },
     ])
     expect(propSvg('reading').startsWith('<svg')).toBe(true)
   })
