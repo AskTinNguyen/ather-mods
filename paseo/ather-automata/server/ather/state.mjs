@@ -23,17 +23,17 @@ import { groupByOf } from './worklist.mjs'
  *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
- *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository; without it the keys are unscoped
- *   (as before 0.2.1, and as the Paseo version still keeps them).
+ *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
+ *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.1, and as the Paseo version still keeps them).
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
  * @typedef {import('./model.mjs').Evidence} Evidence
  */
 
-// A key's id within one repository: the same slug, person or PR number in another repository is another key.
-// No repository (an Io without `repo`) keeps the unscoped key.
-/** @param {string} repo @param {string} id */
-const inRepo = (repo, id) => (repo ? `${repo}|${id}` : id)
+// A key's id within one repository, or one checkout of it (checkoutId): the same slug or person in another is
+// another key. No repository (an Io without `repo`) keeps the unscoped key.
+/** @param {string} scope @param {string} id */
+const inScope = (scope, id) => (scope ? `${scope}|${id}` : id)
 
 const KEY = {
   away: (/** @type {string} */ sid) => `away:${sid}`,
@@ -52,11 +52,12 @@ const KEY = {
   groupBy: (/** @type {string} */ me) => `groupBy:${personId(me)}`,
   // The sessions holding an away window for this person, so a new session finds them without a scan.
   windows: (/** @type {string} */ person) => `windows:${person}`,
-  // Kept per repository: gh reads a checkout's own issues and PRs, and two repositories may share a slug.
-  issues: (/** @type {string} */ me, /** @type {string} */ repo) => `issues:${inRepo(repo, personId(me))}`,
-  last: (/** @type {string} */ me, /** @type {string} */ repo) => `last:${inRepo(repo, personId(me))}`,
-  // What edits recorded in an intent, newest last: shared by every session on the machine.
-  changes: (/** @type {string} */ slug, /** @type {string} */ repo) => `changes:${inRepo(repo, slug)}`,
+  // Kept per repository: gh reads a repository's issues and PRs, whichever of its checkouts asks.
+  issues: (/** @type {string} */ me, /** @type {string} */ repo) => `issues:${inScope(repo, personId(me))}`,
+  // Kept per checkout: two clones of one repository each have their own "Continue …" and their own files.
+  last: (/** @type {string} */ me, /** @type {string} */ checkout) => `last:${inScope(checkout, personId(me))}`,
+  // What edits recorded in an intent, newest last: shared by every session on that checkout.
+  changes: (/** @type {string} */ slug, /** @type {string} */ checkout) => `changes:${inScope(checkout, slug)}`,
   // What gh last said about the PRs intents name: shared by every session on the machine.
   prs: (/** @type {string} */ repo) => (repo ? `prStates:${repo}` : 'prStates'),
   tz: 'tz',
@@ -99,6 +100,10 @@ const lanes = new Map()
 /** @type {Map<string, Promise<Checkout>>} */
 const rootLanes = new Map()
 
+// A folder as an id holds it: normalised and lowercased, so it reads the same from every session.
+/** @param {string} root */
+const folderId = root => root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+
 // A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
 // clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
 //   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → asktinnguyen/han-viet
@@ -112,8 +117,15 @@ export const repoId = (url, root) => {
     .replace(/\/+$/, '')
   const parts = path.split('/').filter(Boolean)
   if (parts.length >= 2) return parts.slice(-2).join('/').toLowerCase()
-  return `path:${root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()}`
+  return `path:${folderId(root)}`
 }
+
+// A checkout's id: its repository's and its folder, so two clones or worktrees of one repository keep their
+// own proof, changes and "Continue …". Without an origin the repository's id is the folder already; without
+// a repository (an Io without `repo`) there is none.
+//   sipher/s2 in D:\S2 → sipher/s2@d:/s2
+/** @param {string} repo from repoId @param {string} root the checkout's top folder */
+export const checkoutId = (repo, root) => (repo === '' || repo.startsWith('path:') ? repo : `${repo}@${folderId(root)}`)
 
 // Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
 // (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session);
@@ -184,9 +196,9 @@ const repoOf = io => (io.repo ? io.repo().catch(() => '') : Promise.resolve(''))
 /** @param {Io} io @param {string} root */
 const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(await io.root().catch(() => ''))
 
-// The repository a folder holding docs/intent is in: the session's for its own root, else that checkout's.
+// The checkout a folder holding docs/intent is, by its id: the session's own for its root, else that folder's.
 /** @param {Io} io @param {string} [root] */
-const repoAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? repoOf(io) : (await laneAt(io, normalFolder(root))).repo)
+const checkoutAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? checkoutId(await repoOf(io), await io.root().catch(() => '')) : checkoutId((await laneAt(io, normalFolder(root))).repo, root))
 
 // Before 0.2.1 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
 // per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
@@ -238,23 +250,23 @@ export const evidenceScope = async io => {
 
 // Where a shell command's proof goes, by the checkout it ran in (`root`, its top folder): the tracked
 // intent's checkout proves the intent; otherwise it is this session's proof there, `<sid>` in its own
-// checkout and `<sid>|<repo>` in another.
+// checkout and `<sid>|<checkout id>` in another.
 /** @param {Io} io @param {{ isOwn: boolean, repo: string, root?: string }} checkout */
 export const checkoutScope = async (io, checkout) => {
   const pin = await readPin(io)
   const isIntents = pin !== null && (checkout.isOwn ? pin.isOwn : !pin.isOwn && normalFolder(pin.root) === normalFolder(checkout.root ?? ''))
   if (isIntents) return evidenceScope(io)
-  return checkout.isOwn ? io.sessionId() : `${await io.sessionId()}|${checkout.repo}`
+  return checkout.isOwn ? io.sessionId() : `${await io.sessionId()}|${checkoutId(checkout.repo, checkout.root ?? '')}`
 }
 
-// An intent's evidence scope: the intent in its repository, as evidenceScope names it. `root`: the folder
+// An intent's evidence scope: the intent in its checkout, as evidenceScope names it. `root`: the folder
 // holding its docs/intent, when that is not the session's.
 /** @param {Io} io @param {string} slug @param {string} [root] */
-export const intentScope = async (io, slug, root) => inRepo(await repoAt(io, root), slug)
+export const intentScope = async (io, slug, root) => inScope(await checkoutAt(io, root), slug)
 
 // What is kept for a scope: an intent's from before 0.2.1 too, while its scoped record has none.
 /** @param {Io} io @param {string} scope */
-const storedEvidence = async (io, scope) => /** @type {Record<string, any>} */ ((await readScoped(io, KEY.evidence(scope), KEY.evidence(scope.replace(/^[^|]*\|/, '')))) ?? {})
+const storedEvidence = async (io, scope) => /** @type {Record<string, any>} */ ((await readScoped(io, KEY.evidence(scope), KEY.evidence(scope.replace(/^.*\|/, '')))) ?? {})
 
 // Proof older than this no longer counts: the code has likely moved on since.
 const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
@@ -336,11 +348,11 @@ export const readPrRecords = async (io, repo) => /** @type {Record<string, impor
 // PR number → its last read state, for the pure readers in model.mjs.
 /** @param {Io} io @param {string} [repo] @returns {Promise<import('./model.mjs').PrStates>} */
 export const readPrStates = async (io, repo) => Object.fromEntries(Object.entries(await readPrRecords(io, repo)).map(([number, record]) => [number, record.state]))
-// The person's "Continue …" in a repository: the session's, or with `root` the checkout holding that docs/intent.
+// The person's "Continue …" in a checkout: the session's, or with `root` the one holding that docs/intent.
 /** @param {Io} io @param {string} me @param {string} [root] @returns {Promise<string | null>} */
 export const readLast = async (io, me, root) => {
-  const scoped = KEY.last(me, await repoAt(io, root))
-  // Only the session's own repository reads through to the key from before 0.2.1.
+  const scoped = KEY.last(me, await checkoutAt(io, root))
+  // Only the session's own checkout reads through to the key from before 0.2.1.
   const isOwn = root === undefined || (await isSessionRoot(io, root))
   return /** @type {string | null} */ ((await readScoped(io, scoped, isOwn ? KEY.last(me, '') : scoped)) ?? null)
 }
@@ -381,15 +393,15 @@ const CHANGES_TTL_MS = 36 * 60 * 60 * 1000
 // The lines an intent gained, newest first, from `since` on (the start of the person's day).
 // `root`: the folder holding its docs/intent, when that is not the session's.
 /** @param {Io} io @param {string} slug @param {number} since @param {string} [root] @returns {Promise<Recorded[]>} */
-export const readChanges = async (io, slug, since, root) => (/** @type {Recorded[]} */ ((await io.get(KEY.changes(slug, await repoAt(io, root)))) ?? [])).filter(one => one.at >= since).reverse()
+export const readChanges = async (io, slug, since, root) => (/** @type {Recorded[]} */ ((await io.get(KEY.changes(slug, await checkoutAt(io, root)))) ?? [])).filter(one => one.at >= since).reverse()
 
-// An edit's lines join the intent's, in the repository of the checkout edited (`root`, as readChanges);
+// An edit's lines join the intent's, in the checkout edited (`root`, as readChanges);
 // the same line again (a re-tick, a rewrite) replaces the older one.
 /** @param {Io} io @param {string} slug @param {readonly import('./changes.mjs').Change[]} lines @param {number} at @param {string} [root] */
 export const noteChanges = (io, slug, lines, at, root) =>
   serial(async () => {
     if (lines.length === 0) return
-    const key = KEY.changes(slug, await repoAt(io, root))
+    const key = KEY.changes(slug, await checkoutAt(io, root))
     const kept = /** @type {Recorded[]} */ ((await io.get(key)) ?? []).filter(one => at - one.at < CHANGES_TTL_MS && !lines.some(line => line.kind === one.kind && line.id === one.id))
     await io.set(key, [...kept, ...lines.map(line => ({ ...line, at }))].slice(-CHANGES_KEPT))
     changed(io)
@@ -440,7 +452,7 @@ const readStops = async (io, sid) => /** @type {Stop[]} */ ((await io.get(KEY.un
 // Tracks an intent, if it exists. The one path for /ather, the profile tool and a write into an intent.
 // `root`: the folder holding its docs/intent, the session's own or another checkout's.
 // `isAuto`: a write into the intent, which never tracks one this session stopped tracking; tracking one
-// on purpose lifts that stop. `me`: the person's "Continue …" in its repository moves to it too.
+// on purpose lifts that stop. `me`: the person's "Continue …" in its checkout moves to it too.
 /** @param {Io} io @param {string} root @param {string} slug @param {{ onlyIfNone?: boolean, isAuto?: boolean, me?: string }} [options] */
 export const track = (io, root, slug, options = {}) =>
   serial(async () => {
@@ -454,7 +466,7 @@ export const track = (io, root, slug, options = {}) =>
     if (options.onlyIfNone && (await io.get(KEY.pinned(sid))) !== undefined) return false
     await io.set(KEY.pinned(sid), isOwn ? slug : { slug, root: at })
     if (options.me) {
-      const last = KEY.last(options.me, await repoAt(io, at))
+      const last = KEY.last(options.me, await checkoutAt(io, at))
       await io.set(last, slug)
       // Once a scoped "Continue …" is written, the unscoped one from before 0.2.1 must not read through again.
       if (last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
@@ -479,7 +491,7 @@ export const untrack = (io, me) =>
     if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
     await io.remove(KEY.pinned(sid))
     // The unscoped "Continue …" from before 0.2.1 goes too, or it would read through again.
-    for (const key of new Set([KEY.last(me, await repoAt(io, pin.isOwn ? undefined : pin.root)), ...(pin.isOwn ? [KEY.last(me, '')] : [])])) if ((await io.get(key)) === slug) await io.remove(key)
+    for (const key of new Set([KEY.last(me, await checkoutAt(io, pin.isOwn ? undefined : pin.root)), ...(pin.isOwn ? [KEY.last(me, '')] : [])])) if ((await io.get(key)) === slug) await io.remove(key)
     const stopped = (await readStops(io, sid)).filter(one => !isStopOf(one, slug, pin.isOwn ? null : pin.root))
     await setList(io, KEY.untracked(sid), [...stopped, pin.isOwn ? slug : { slug, root: pin.root }])
     await beat(io)
@@ -747,8 +759,8 @@ export const prune = async (io, isGone) => {
   /** @type {Map<string, string[]>} */
   const bySession = new Map()
   for (const key of await io.keys()) {
-    // `<sid>|<repo>` is a session's proof in another checkout and goes with it; `<repo>|<slug>` is an intent's
-    // (a repository id has a / or a :) and belongs to no session.
+    // `<sid>|<checkout id>` is a session's proof in another checkout and goes with it; `<checkout id>|<slug>` is
+    // an intent's (a checkout id has a / or a :) and belongs to no session.
     const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]?.split('|')[0]
     if (sid && !/[/:]/.test(sid) && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
   }

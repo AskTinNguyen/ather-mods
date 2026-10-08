@@ -712,7 +712,7 @@ async function home($) {
   return model
 }
 
-// The intent the person last worked on, by key: the "Continue …" kept in each pane checkout's repository,
+// The intent the person last worked on, by key: the "Continue …" kept for each pane checkout,
 // the session's own first. With one checkout, its slug as kept.
 /** @param {Engine} $ */
 async function lastKey($) {

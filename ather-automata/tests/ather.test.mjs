@@ -373,14 +373,15 @@ describe('shared state: one owner, one change at a time', () => {
   test("pruning takes a session's proof in another checkout with it, never an intent's proof", async () => {
     const { io, store } = memoryIo('now')
     store.set('evidence:gone', {})
-    store.set('evidence:gone|asktinnguyen/web', {})
-    store.set('evidence:asktinnguyen/web|spawner', {})
+    store.set('evidence:gone|asktinnguyen/web@/work/web', {})
+    store.set('evidence:gone|path:/work/local', {})
+    store.set('evidence:asktinnguyen/web@/work/web|spawner', {})
     store.set('evidence:path:/work/web|spawner', {})
-    store.set('evidence:live|asktinnguyen/web', {})
+    store.set('evidence:live|asktinnguyen/web@/work/web', {})
     /** @type {string[]} */
     const asked = []
     await state.prune(io, async sid => (asked.push(sid), sid === 'gone'))
-    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web|spawner', 'evidence:live|asktinnguyen/web', 'evidence:path:/work/web|spawner'])
+    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web@/work/web|spawner', 'evidence:live|asktinnguyen/web@/work/web', 'evidence:path:/work/web|spawner'])
     expect(asked.sort()).toEqual(['gone', 'live'])
   })
 
@@ -1242,33 +1243,33 @@ describe('several repositories on one machine', () => {
   test("a command's proof is kept by the checkout it ran in", async () => {
     const { s2, files } = twoRepos()
     const own = { isOwn: true, repo: 'sipher/s2' }
-    const other = { isOwn: false, repo: 'asktinnguyen/web' }
+    const other = { isOwn: false, repo: 'asktinnguyen/web', root: '/Work/web/' }
     // Nothing tracked: the session's own checkout keeps the session's scope.
     expect(await state.checkoutScope(s2, own)).toBe('s1')
-    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web')
+    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web@/work/web')
     // A tracked intent: the session's checkout proves it; another checkout's proof stays this session's there.
     files.set('R/docs/intent/spawner/prompt.md', '# S\n\n- Owner: Tin Nguyen\n')
     await state.track(s2, 'R', 'spawner')
-    expect(await state.checkoutScope(s2, own)).toBe('sipher/s2|spawner')
-    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web')
+    expect(await state.checkoutScope(s2, own)).toBe('sipher/s2@r|spawner')
+    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web@/work/web')
   })
 
-  test('an intent tracked in another checkout is kept as its slug and root, and scoped by that repository', async () => {
+  test('an intent tracked in another checkout is kept as its slug and root, and scoped by that checkout', async () => {
     const memory = memoryIo()
     const { store, files } = memory
     const origins = /** @type {Record<string, string>} */ ({ '/s3/web': 'https://github.com/AskTinNguyen/web' })
     const io = { ...memory.io, repo: async () => 'sipher/s2', origin: async (/** @type {string} */ root) => origins[root] ?? '' }
-    const asWeb = { ...io, repo: async () => 'asktinnguyen/web' }
+    const asWeb = { ...io, repo: async () => 'asktinnguyen/web', root: async () => '/s3/web' }
     files.set('/s3/web/docs/intent/login/prompt.md', '# Login\n\n- Owner: Tin Nguyen\n')
     expect(await state.track(io, '/s3/web/', 'login', { me: 'Tin Nguyen' })).toBe(true)
     expect(store.get('pinned:s1')).toEqual({ slug: 'login', root: '/s3/web' })
     expect(await state.readPinned(io)).toBe('login')
     expect(await state.readTracked(io)).toEqual({ slug: 'login', root: '/s3/web' })
-    expect(await state.evidenceScope(io)).toBe('asktinnguyen/web|login')
+    expect(await state.evidenceScope(io)).toBe('asktinnguyen/web@/s3/web|login')
     // A command in the intent's checkout proves it; the session's own checkout and a third keep the session's.
-    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('asktinnguyen/web|login')
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('asktinnguyen/web@/s3/web|login')
     expect(await state.checkoutScope(io, { isOwn: true, repo: 'sipher/s2' })).toBe('s1')
-    expect(await state.checkoutScope(io, { isOwn: false, repo: 'sipher/tools', root: '/s3/tools' })).toBe('s1|sipher/tools')
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'sipher/tools', root: '/s3/tools' })).toBe('s1|sipher/tools@/s3/tools')
     // "Continue …" and the changes an edit records are web's.
     expect(await state.readLast(asWeb, 'Tin Nguyen')).toBe('login')
     expect(await state.readLast(io, 'Tin Nguyen')).toBe(null)
@@ -1306,13 +1307,13 @@ describe('several repositories on one machine', () => {
     expect(memory.store.get('untracked:s1')).toEqual(['login'])
   })
 
-  test("prune takes a gone session's foreign pin and its proof in that repository, never the intent's proof", async () => {
+  test("prune takes a gone session's foreign pin and its proof in that checkout, never the intent's proof", async () => {
     const { io, store } = memoryIo('live')
     store.set('pinned:gone', { slug: 'login', root: '/s3prune/web' })
-    store.set('evidence:gone|asktinnguyen/web', { tests: { state: 'pass', detail: '', at: Date.now() } })
-    store.set('evidence:asktinnguyen/web|login', { tests: { state: 'pass', detail: '', at: Date.now() } })
+    store.set('evidence:gone|asktinnguyen/web@/s3prune/web', { tests: { state: 'pass', detail: '', at: Date.now() } })
+    store.set('evidence:asktinnguyen/web@/s3prune/web|login', { tests: { state: 'pass', detail: '', at: Date.now() } })
     await state.prune(io, async sid => sid === 'gone')
-    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web|login'])
+    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web@/s3prune/web|login'])
   })
 
   test("an intent in the session's own checkout is kept as a plain slug, as before", async () => {
@@ -1323,8 +1324,8 @@ describe('several repositories on one machine', () => {
     memory.files.set('R/docs/intent/login/prompt.md', '# Login\n')
     await state.track(io, 'R', 'login')
     expect(memory.store.get('pinned:s1')).toBe('login')
-    expect(await state.checkoutScope(io, { isOwn: true, repo: 'sipher/s2' })).toBe('sipher/s2|login')
-    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('s1|asktinnguyen/web')
+    expect(await state.checkoutScope(io, { isOwn: true, repo: 'sipher/s2' })).toBe('sipher/s2@r|login')
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('s1|asktinnguyen/web@/s3/web')
   })
 
   test('a repository is named by its origin, whatever the protocol; without one, by its folder', () => {
@@ -1334,12 +1335,83 @@ describe('several repositories on one machine', () => {
     expect(state.repoId('', 'C:\\Work\\S2\\')).toBe('path:c:/work/s2')
   })
 
+  test('a checkout is named by its repository and its folder; without an origin by its folder, without a repository not at all', () => {
+    expect(state.checkoutId('sipher/s2', 'C:\\Work\\S2\\')).toBe('sipher/s2@c:/work/s2')
+    expect(state.checkoutId('sipher/s2', '/Work/s2-b')).toBe('sipher/s2@/work/s2-b')
+    expect(state.checkoutId('path:c:/work/s2', 'C:\\Work\\S2')).toBe('path:c:/work/s2')
+    expect(state.checkoutId('', '/Work/s2')).toBe('')
+  })
+
+  // Two clones of one origin, /work/s2 and /work/s2-b, over one store: `own` is a session in the first,
+  // `inSecond` one in the second, and `own` reaches the second by its root.
+  const twoClones = () => {
+    const memory = memoryIo()
+    const origin = async () => 'git@github.com:Sipher/S2.git'
+    const own = { ...memory.io, repo: async () => 'sipher/s2', root: async () => '/work/s2', origin }
+    const inSecond = { ...own, root: async () => '/work/s2-b' }
+    for (const root of ['/work/s2', '/work/s2-b']) memory.files.set(`${root}/docs/intent/login/prompt.md`, '# Login\n')
+    return { ...memory, own, inSecond, second: '/work/s2-b' }
+  }
+
+  test("two checkouts of one repository keep their own intent proof and session proof", async () => {
+    const { own, inSecond, second, store } = twoClones()
+    expect(await state.intentScope(own, 'login')).toBe('sipher/s2@/work/s2|login')
+    expect(await state.intentScope(own, 'login', second)).toBe('sipher/s2@/work/s2-b|login')
+    // A session in the second clone names its intent as the first clone's session does from outside.
+    expect(await state.intentScope(inSecond, 'login')).toBe('sipher/s2@/work/s2-b|login')
+    await state.track(own, second, 'login')
+    const scope = await state.evidenceScope(own)
+    await state.setRung(own, scope, 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login', second))).build.state).toBe('pass')
+    expect((await state.readEvidence(inSecond, await state.intentScope(inSecond, 'login'))).build.state).toBe('pass')
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login'))).build.state).toBe('none')
+    expect([...store.keys()].filter(key => key.startsWith('evidence:'))).toEqual(['evidence:sipher/s2@/work/s2-b|login'])
+    // Nothing tracked: this session's proof in the other clone is that clone's, not the repository's.
+    await state.untrack(own, 'Tin Nguyen')
+    expect(await state.checkoutScope(own, { isOwn: false, repo: 'sipher/s2', root: second })).toBe('s1|sipher/s2@/work/s2-b')
+    expect(await state.checkoutScope(own, { isOwn: false, repo: 'sipher/s2', root: '/work/s2-c' })).toBe('s1|sipher/s2@/work/s2-c')
+    expect(await state.checkoutScope(own, { isOwn: true, repo: 'sipher/s2' })).toBe('s1')
+  })
+
+  test('two checkouts of one repository keep their own changes and Continue', async () => {
+    const { own, inSecond, second, store } = twoClones()
+    await state.noteChanges(own, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now(), second)
+    expect(await state.readChanges(own, 'login', 0, second)).toHaveLength(1)
+    expect(await state.readChanges(inSecond, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(own, 'login', 0)).toHaveLength(0)
+    await state.track(own, second, 'login', { me: 'Tin Nguyen' })
+    expect(await state.readLast(own, 'Tin Nguyen', second)).toBe('login')
+    expect(await state.readLast(inSecond, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe(null)
+    await state.track(own, '/work/s2', 'login', { me: 'Tin Nguyen' })
+    expect(store.get('last:sipher/s2@/work/s2|tinnguyen')).toBe('login')
+    expect(store.get('last:sipher/s2@/work/s2-b|tinnguyen')).toBe('login')
+    // Untracking the first clone's leaves the second clone's Continue.
+    await state.untrack(own, 'Tin Nguyen')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe(null)
+    expect(await state.readLast(own, 'Tin Nguyen', second)).toBe('login')
+    // Issues and PR states stay the repository's.
+    await state.setPrStates(own, { 12: 'MERGED' }, Date.now())
+    expect(await state.readPrStates(inSecond)).toEqual({ 12: 'MERGED' })
+    expect(store.has('prStates:sipher/s2')).toBe(true)
+  })
+
+  test("the per-repository keys of before are not read", async () => {
+    const { own, store } = twoClones()
+    store.set('evidence:sipher/s2|login', { build: { state: 'pass', detail: '', at: Date.now() } })
+    store.set('changes:sipher/s2|login', [{ kind: 'done', id: 'A1', text: 'ticked A1', at: Date.now() }])
+    store.set('last:sipher/s2|tinnguyen', 'login')
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login'))).build.state).toBe('none')
+    expect(await state.readChanges(own, 'login', 0)).toHaveLength(0)
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe(null)
+  })
+
   test('the same slug in two repositories keeps its own proof and changes', async () => {
     const { s2, web, files } = twoRepos()
     files.set('R/docs/intent/login/prompt.md', '# Login\n')
     await state.track(s2, 'R', 'login')
     const scope = await state.evidenceScope(s2)
-    expect(scope).toBe('sipher/s2|login')
+    expect(scope).toBe('sipher/s2@r|login')
     await state.setRung(s2, scope, 'build', { state: 'pass', detail: 'Result: Succeeded' })
     await state.noteChanges(s2, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now())
     expect((await state.readEvidence(s2, await state.intentScope(s2, 'login'))).build.state).toBe('pass')
@@ -1363,11 +1435,20 @@ describe('several repositories on one machine', () => {
   })
 
   test('without a repository (the Paseo version) the keys are as before', async () => {
-    const { io, store } = memoryIo()
+    const { io, store, files } = memoryIo()
     await state.setIssues(io, 'Tin Nguyen', [ISSUE])
     await state.setPrStates(io, { 12: 'OPEN' }, Date.now())
     expect(store.has('issues:tinnguyen')).toBe(true)
     expect(store.has('prStates')).toBe(true)
+    // Proof, changes and Continue too: no repository, so no checkout in the key.
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(io, 'R', 'login', { me: 'Tin Nguyen' })
+    expect(await state.evidenceScope(io)).toBe('login')
+    await state.setRung(io, 'login', 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    await state.noteChanges(io, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now())
+    expect(store.get('last:tinnguyen')).toBe('login')
+    expect(store.has('evidence:login')).toBe(true)
+    expect(store.has('changes:login')).toBe(true)
   })
 
   test("proof and Continue from before the upgrade read through until the scoped key is written; untracking clears both", async () => {

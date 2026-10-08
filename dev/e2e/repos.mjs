@@ -87,12 +87,15 @@ const bash = (engine, command, text) => engine.modelTool({ tool: 'Bash', command
 const startAway = engine => engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'start', hours: 2, goal: 'nap' })
 const parked = (engine, sid) => engine.store.get(`away:${sid}`)?.parked ?? []
 
+// A checkout's id as the store keys hold it: its repository's id and its folder, lowercased.
+const checkoutId = (repo, root) => `${repo}@${root.toLowerCase()}`
+
 const NODE_TEST_PASS = fs.readFileSync(new URL('../../ather-automata/tests/fixtures/web/node-test-pass.txt', import.meta.url), 'utf8')
 
 // ---------------------------------------------------------------- commands and proof by checkout
 
 {
-  const { s2 } = makeWorkspace()
+  const { s2, web } = makeWorkspace()
   const { engine, sessionId: sid } = await boot({ root: s2 })
   await startAway(engine)
   expect('the away window runs', engine.store.get(`away:${sid}`)?.phase === 'running', engine.store.get(`away:${sid}`))
@@ -113,8 +116,8 @@ const NODE_TEST_PASS = fs.readFileSync(new URL('../../ather-automata/tests/fixtu
   expect("a with-proof merge in ../web is held before web's proof", before.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'merge', parked(engine, sid).at(-1))
 
   await bash(engine, 'cd ../web && npm test', NODE_TEST_PASS)
-  const webScope = engine.store.get(`evidence:${sid}|asktinnguyen/web`)
-  expect('a passing npm test in ../web records tests under <sid>|asktinnguyen/web', webScope?.tests?.state === 'pass', webScope)
+  const webScope = engine.store.get(`evidence:${sid}|${checkoutId('asktinnguyen/web', web)}`)
+  expect("a passing npm test in ../web records tests under <sid>|<web's checkout id>", webScope?.tests?.state === 'pass', webScope)
   expect("nothing lands in the session's own scope", engine.store.get(`evidence:${sid}`) === undefined, engine.store.get(`evidence:${sid}`))
 
   const after = await bash(engine, 'cd ../web && gh pr merge 3')
@@ -135,7 +138,7 @@ const NODE_TEST_PASS = fs.readFileSync(new URL('../../ather-automata/tests/fixtu
   const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0002' })
   await bash(engine, 'npm test', NODE_TEST_PASS)
   expect("a session in web/ itself: npm test lands in the session's scope", engine.store.get(`evidence:${sid}`)?.tests?.state === 'pass', engine.store.get(`evidence:${sid}`))
-  expect('and in no per-repository scope', !engine.store.has(`evidence:${sid}|asktinnguyen/web`), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+  expect('and in no other scope', JSON.stringify([...engine.store.keys()].filter(key => key.startsWith('evidence:'))) === JSON.stringify([`evidence:${sid}`]), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
 }
 
 // ---------------------------------------------------------------- an intent tracked in another checkout
@@ -173,10 +176,11 @@ const readJson = file => {
   expect("the tracked intent's view draws from web's files, though web is not one of the pane's checkouts", title && /web\/login/.test(title.children.join('')) && view.some(node => node.props?.key === 'intent-untrack'), title?.children)
 
   await bash(engine, 'cd ../web && npm test', NODE_TEST_PASS)
-  expect("npm test passing in web proves the intent: evidence:asktinnguyen/web|login", engine.store.get('evidence:asktinnguyen/web|login')?.tests?.state === 'pass', engine.store.get('evidence:asktinnguyen/web|login'))
-  expect("and not the session's proof in web", !engine.store.has(`evidence:${sid}|asktinnguyen/web`), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+  const loginProof = `evidence:${checkoutId('asktinnguyen/web', web)}|login`
+  expect("npm test passing in web proves the intent: evidence:<web's checkout id>|login", engine.store.get(loginProof)?.tests?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+  expect("and not the session's proof in web", ![...engine.store.keys()].some(key => key.startsWith(`evidence:${sid}|`)), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
   await bash(engine, 'Build.bat S2Editor Win64 Development', 'Result: Succeeded')
-  expect("a build in s2 itself lands in the session's scope, not the intent's", engine.store.get(`evidence:${sid}`)?.build?.state === 'pass' && engine.store.get('evidence:asktinnguyen/web|login')?.build?.state !== 'pass', engine.store.get(`evidence:${sid}`))
+  expect("a build in s2 itself lands in the session's scope, not the intent's", engine.store.get(`evidence:${sid}`)?.build?.state === 'pass' && engine.store.get(loginProof)?.build?.state !== 'pass', engine.store.get(`evidence:${sid}`))
 
   await startAway(engine)
   const ledger = engine.store.get(`away:${sid}`)?.ledgerPath
@@ -191,7 +195,7 @@ const readJson = file => {
 
   await engine.command('ather', 'untrack')
   expect('/ather untrack clears it', !engine.store.has(`pinned:${sid}`), engine.store.get(`pinned:${sid}`))
-  expect("and web's Continue", engine.store.get('last:asktinnguyen/web|tinnguyen') === undefined, [...engine.store.keys()].filter(key => key.startsWith('last:')))
+  expect("and web's Continue", ![...engine.store.keys()].some(key => key.startsWith('last:')), [...engine.store.keys()].filter(key => key.startsWith('last:')))
 
   // The stop is web's: a write into web's login does not track it again, a new login in s2 does.
   await engine.modelTool({ tool: 'Write', file_path: '../web/docs/intent/login/log.md', content: '# Log\n' })
@@ -215,7 +219,7 @@ const readJson = file => {
   await engine.flush()
   expect('an intent written in s2 itself is tracked as its plain slug', engine.store.get(`pinned:${sid}`) === 'own', engine.store.get(`pinned:${sid}`))
   await bash(engine, 'Build.bat S2Editor Win64 Development', 'Result: Succeeded')
-  expect("and a build there proves it, as before", engine.store.get('evidence:sipher/s2|own')?.build?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+  expect("and a build there proves it, as before", engine.store.get(`evidence:${checkoutId('sipher/s2', s2)}|own`)?.build?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
 }
 
 {
@@ -654,6 +658,87 @@ const lastSubmit = engine => {
   const pick = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
   expect("the session's own login keeps its bare slug; the clone's is s2-b/login", JSON.stringify(intentRows(pick).map(one => one.id).sort()) === JSON.stringify(['intent:login', 'intent:s2-b/login']), intentRows(pick).map(one => one.id))
   expect("the issue is listed once, under the session's own checkout, by its bare number", JSON.stringify(issueRows(pick).map(one => one.id)) === JSON.stringify(['issue:7']), issueRows(pick).map(one => one.id))
+}
+
+// ---------------------------------------------------------------- proof, changes and Continue per checkout
+
+{
+  // A parent folder holding two clones of one with-proof repository, web/ and web-b/, `login` yours in both.
+  const parent = fs.mkdtempSync(path.join(BASE, 'work-'))
+  const web = makeCheckout(parent, 'web', {
+    owner: 'AskTinNguyen',
+    name: 'web',
+    files: { ...INTENTS, 'package.json': `${JSON.stringify({ name: 'web', scripts: { test: 'node --test' } }, null, 2)}\n`, '.ather/profile.json': `${JSON.stringify(WEB_PROFILE, null, 2)}\n` },
+  })
+  const webB = path.join(parent, 'web-b')
+  git(parent, 'clone', '-q', git(web, 'remote', 'get-url', 'origin'), webB)
+  git(webB, 'config', 'user.name', 'Tin Nguyen')
+  git(webB, 'config', 'user.email', 'tin@example.com')
+  for (const root of [web, webB]) writeIntent(root, 'login')
+  const ids = { web: checkoutId('asktinnguyen/web', web), webB: checkoutId('asktinnguyen/web', webB) }
+  const kept = (engine, prefix) => [...engine.store.keys()].filter(key => key.startsWith(prefix))
+  const ghAt = { [web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] }, [webB]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] } }
+  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0017', writable: [parent], ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, { [web]: {} })
+  await engine.flush()
+
+  // Nothing tracked: this session's proof in one clone is not its proof in the other.
+  await startAway(engine)
+  expect('the away window runs in the parent folder', engine.store.get(`away:${sid}`)?.phase === 'running', engine.store.get(`away:${sid}`))
+  await bash(engine, 'cd web && npm test', NODE_TEST_PASS)
+  expect("a passing npm test in web/ is this session's proof in web/ only", engine.store.get(`evidence:${sid}|${ids.web}`)?.tests?.state === 'pass' && kept(engine, 'evidence:').length === 1, kept(engine, 'evidence:'))
+  const otherMerge = await bash(engine, 'cd web-b && gh pr merge 3')
+  expect("web/'s proof does not allow a with-proof merge in web-b/", otherMerge.deny !== undefined && parked(engine, sid).at(-1)?.command === 'cd web-b && gh pr merge 3', { deny: otherMerge.deny, parked: parked(engine, sid) })
+  const sameMerge = await bash(engine, 'cd web && gh pr merge 3')
+  expect('it allows the merge in web/ itself', sameMerge.deny === undefined, sameMerge.deny)
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+
+  // web/login tracked and proved, then edited: neither its proof nor its changes are web-b/login's.
+  await engine.command('ather', 'intent web/login')
+  expect('/ather intent web/login tracks it in web/', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: web }), engine.store.get(`pinned:${sid}`))
+  await bash(engine, 'cd web && npm test', NODE_TEST_PASS)
+  expect("npm test in web/ proves web/'s login", engine.store.get(`evidence:${ids.web}|login`)?.tests?.state === 'pass', kept(engine, 'evidence:'))
+  expect("and records nothing for web-b/'s login", !engine.store.has(`evidence:${ids.webB}|login`), kept(engine, 'evidence:'))
+  await engine.modelTool({ tool: 'Edit', file_path: 'web/docs/intent/login/prompt.md', old_string: '- [ ] A2', new_string: '- [x] A2' })
+  await engine.flush()
+  expect("an edit to web/'s login records its change for web/ only", engine.store.get(`changes:${ids.web}|login`)?.length === 1 && kept(engine, 'changes:').length === 1, kept(engine, 'changes:'))
+
+  // The other clone's login tracked: its own Continue, and the first clone's proof does not count for it.
+  await engine.command('ather', 'intent web-b/login')
+  expect('/ather intent web-b/login tracks it in web-b/', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: webB }), engine.store.get(`pinned:${sid}`))
+  expect('each clone keeps its own Continue', engine.store.get(`last:${ids.web}|tinnguyen`) === 'login' && engine.store.get(`last:${ids.webB}|tinnguyen`) === 'login' && kept(engine, 'last:').length === 2, kept(engine, 'last:'))
+  const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
+  expect("web-b/'s login has no proof from web/'s test run", status.tracked?.checkout === webB && status.evidence?.tests?.state !== 'pass', [status.tracked, status.evidence])
+  await startAway(engine)
+  const intentMerge = await bash(engine, 'cd web-b && gh pr merge 3')
+  expect("web/login's proof does not allow web-b/login's merge", intentMerge.deny !== undefined, intentMerge.deny)
+  await bash(engine, 'cd web-b && npm test', NODE_TEST_PASS)
+  const proved = await bash(engine, 'cd web-b && gh pr merge 3')
+  expect("web-b/'s own passing test run does", proved.deny === undefined && engine.store.get(`evidence:${ids.webB}|login`)?.tests?.state === 'pass', [proved.deny, kept(engine, 'evidence:')])
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
+  await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+
+  // The repository's issue is GitHub's: read once, listed once.
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect('gh issue list still runs once for the repository', JSON.stringify(lists) === JSON.stringify([web]), engine.record.ghAt)
+  expect('and its list is kept under the repository', kept(engine, 'issues:').length === 1 && engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 1, kept(engine, 'issues:'))
+  await engine.command('ather', 'pick')
+  const issues = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
+  expect("the repository's assigned issue is listed once", JSON.stringify(issues.map(one => one.id)) === JSON.stringify(['issue:web#7']), issues.map(one => one.id))
+
+  // Untracking web-b/login takes web-b/'s Continue only: the next session continues web/'s.
+  await engine.command('ather', 'untrack')
+  expect("untracking web-b/login leaves web/'s Continue", engine.store.get(`last:${ids.web}|tinnguyen`) === 'login' && kept(engine, 'last:').length === 1, kept(engine, 'last:'))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+  const next = await boot({ root: parent, sessionId: 'harness-session-0018' })
+  next.engine.setSurfaces(['terminal'])
+  await next.engine.command('ather', '')
+  byKey(await next.engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')?.props.onPress()
+  await next.engine.flush()
+  expect("Continue on Home tracks web/'s login, not web-b/'s", JSON.stringify(next.engine.store.get(`pinned:${next.sessionId}`)) === JSON.stringify({ slug: 'login', root: web }), next.engine.store.get(`pinned:${next.sessionId}`))
 }
 
 // ---------------------------------------------------------------- report
