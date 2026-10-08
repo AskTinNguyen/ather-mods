@@ -264,9 +264,14 @@ export const checkoutScope = async (io, checkout) => {
 /** @param {Io} io @param {string} slug @param {string} [root] */
 export const intentScope = async (io, slug, root) => inScope(await checkoutAt(io, root), slug)
 
-// What is kept for a scope: an intent's from before 0.2.1 too, while its scoped record has none.
+// What is kept for a scope: an intent's from before 0.2.1 too, while its scoped record has none. Only an
+// intent in the session's own checkout: that proof was never another checkout's.
 /** @param {Io} io @param {string} scope */
-const storedEvidence = async (io, scope) => /** @type {Record<string, any>} */ ((await readScoped(io, KEY.evidence(scope), KEY.evidence(scope.replace(/^.*\|/, '')))) ?? {})
+const storedEvidence = async (io, scope) => {
+  const own = await checkoutAt(io)
+  const legacy = own && scope.startsWith(`${own}|`) ? scope.slice(own.length + 1) : scope
+  return /** @type {Record<string, any>} */ ((await readScoped(io, KEY.evidence(scope), KEY.evidence(legacy))) ?? {})
+}
 
 // Proof older than this no longer counts: the code has likely moved on since.
 const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
@@ -468,8 +473,9 @@ export const track = (io, root, slug, options = {}) =>
     if (options.me) {
       const last = KEY.last(options.me, await checkoutAt(io, at))
       await io.set(last, slug)
-      // Once a scoped "Continue …" is written, the unscoped one from before 0.2.1 must not read through again.
-      if (last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
+      // Once the own checkout's scoped "Continue …" is written, the unscoped one from before 0.2.1 must not
+      // read through again. Tracking in another checkout leaves it: it is still the own checkout's.
+      if (isOwn && last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
     }
     if (!options.isAuto && isStopped) await setList(io, KEY.untracked(sid), stopped.filter(one => !isStopOf(one, slug, isOwn ? null : at)))
     await beat(io)

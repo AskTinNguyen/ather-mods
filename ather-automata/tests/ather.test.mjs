@@ -1396,6 +1396,37 @@ describe('several repositories on one machine', () => {
     expect(store.has('prStates:sipher/s2')).toBe(true)
   })
 
+  test("proof from before the upgrade reads through for the session's own checkout only", async () => {
+    const { own, second, store } = twoClones()
+    store.set('evidence:login', { build: { state: 'pass', detail: 'Result: Succeeded', at: Date.now() } })
+    const there = await state.intentScope(own, 'login', second)
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login'))).build.state).toBe('pass')
+    expect((await state.readEvidence(own, there)).build.state).toBe('none')
+    // A rung written in the other checkout does not take the old proof with it.
+    await state.setRung(own, there, 'pie', { state: 'pass', detail: 'ran' })
+    expect(Object.keys(store.get(`evidence:${there}`))).toEqual(['pie'])
+    expect((await state.readEvidence(own, there)).build.state).toBe('none')
+    // Nor does this session's proof there.
+    const mine = await state.checkoutScope(own, { isOwn: false, repo: 'sipher/s2', root: second })
+    store.set('evidence:sipher/s2@/work/s2-b', { build: { state: 'pass', detail: '', at: Date.now() } })
+    expect((await state.readEvidence(own, mine)).build.state).toBe('none')
+  })
+
+  test('tracking an intent in another checkout leaves the Continue from before the upgrade to the own checkout', async () => {
+    const { own, second, store } = twoClones()
+    store.set('last:tinnguyen', 'login')
+    await state.track(own, second, 'login', { me: 'Tin Nguyen' })
+    expect(store.get('last:tinnguyen')).toBe('login')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe('login')
+    await state.untrack(own, 'Tin Nguyen')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(own, 'Tin Nguyen', second)).toBe(null)
+    // Tracking one in the own checkout writes its scoped key, and the old one goes.
+    await state.track(own, '/work/s2', 'login', { me: 'Tin Nguyen' })
+    expect(store.has('last:tinnguyen')).toBe(false)
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe('login')
+  })
+
   test("the per-repository keys of before are not read", async () => {
     const { own, store } = twoClones()
     store.set('evidence:sipher/s2|login', { build: { state: 'pass', detail: '', at: Date.now() } })
