@@ -329,7 +329,7 @@ const writeIntent = (root, slug, text = LOGIN) => {
 // ---------------------------------------------------------------- issues and PRs from every checkout
 
 // `gh issue list --json …` rows.
-const issue = (number, title) => ({ number, title, url: `https://github.com/x/y/issues/${number}`, labels: [], updatedAt: '2026-10-01T00:00:00Z' })
+const issue = (number, title, repo = 'x/y') => ({ number, title, url: `https://github.com/${repo}/issues/${number}`, labels: [], updatedAt: '2026-10-01T00:00:00Z' })
 // An intent whose every item is met, naming PR #12: its stage waits on that PR.
 const SHIPPED = '# Pay\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: it pays.\n'
 const withPr = (root, slug) => {
@@ -337,6 +337,11 @@ const withPr = (root, slug) => {
   fs.writeFileSync(path.join(root, 'docs/intent', slug, 'progress.md'), '# Progress\n\n- PR: #12\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | t |\n')
 }
 const LIST = 'gh issue list --assignee @me --state open --limit 30 --json number,title,url,labels,updatedAt'
+// The issue lists are read in the background, one checkout at a time: wait until each checkout's is kept.
+const issuesRead = async (engine, ghAt) => {
+  const kept = () => [...engine.store.keys()].filter(key => key.startsWith('issues:')).length
+  for (let tries = 0; tries < 100 && kept() < Object.keys(ghAt).length; tries += 1) await engine.flush()
+}
 // The issue rows a pane draws: each row's work id and its repository's name.
 const issueRows = tree =>
   nodesOf(tree)
@@ -350,10 +355,10 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   const { parent, s2, web } = makeWorkspace()
   withPr(s2, 'pay')
   withPr(web, 'pay')
-  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield'), issue(3, 'Rain')], prs: { 12: 'OPEN' } }, [web]: { issues: [issue(7, 'Login form')], prs: { 12: 'MERGED' } } }
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield'), issue(3, 'Rain')], prs: { 12: 'OPEN' } }, [web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')], prs: { 12: 'MERGED' } } }
   const { engine } = await boot({ root: parent, sessionId: 'harness-session-0009', ghAt })
   engine.setSurfaces(['terminal'])
-  await engine.flush()
+  await issuesRead(engine, ghAt)
   const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
   expect('gh issue list runs once in each checkout, with the same argv', JSON.stringify(lists) === JSON.stringify([s2, web]), engine.record.ghAt)
   expect('each list is kept under its repository', engine.store.get('issues:sipher/s2|tinnguyen')?.list?.length === 2 && engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 1, [...engine.store.keys()].filter(key => key.startsWith('issues')))
@@ -376,6 +381,14 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   // Start an intent on web#7: the session is told to create it under web's docs/intent.
   rows.find(one => one.id === 'issue:web#7')?.press()
   const card = await pane()
+  // Open on GitHub runs gh in web; Copy link copies web#7's address.
+  byKey(card, 'issue-open')?.props.onPress()
+  await engine.flush()
+  const opened = engine.record.ghAt.filter(run => run.argv === 'gh issue view 7 --web')
+  expect("Open on GitHub on web#7 runs gh issue view 7 --web in web's root", opened.length === 1 && opened[0].cwd === web, opened)
+  byKey(card, 'issue-copy')?.props.onPress({})
+  await engine.flush()
+  expect("Copy link on web#7 copies web's issue URL", engine.record.copies.at(-1) === 'https://github.com/AskTinNguyen/web/issues/7', engine.record.copies)
   byKey(card, 'issue-start')?.props.onPress()
   await engine.flush()
   const sent = engine.record.submits.at(-1) ?? ''
@@ -400,9 +413,10 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   // One checkout: a session in s2/ alone runs the one gh issue list and keeps issue:<n> ids.
   const { s2 } = makeWorkspace()
   writeIntent(s2, 'login')
-  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0010', ghAt: { [s2]: { issues: [issue(7, 'Boss shield')] } } })
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] } }
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0010', ghAt })
   engine.setSurfaces(['terminal'])
-  await engine.flush()
+  await issuesRead(engine, ghAt)
   const lists = engine.record.ghAt.filter(run => run.argv.startsWith('gh issue list'))
   expect('a session in s2 alone runs one gh issue list, in s2, as before', lists.length === 1 && lists[0].argv === LIST && lists[0].cwd === s2, lists)
   await engine.command('ather', 'pick')
@@ -417,7 +431,7 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   writeIntent(web, 'search')
   const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(7, 'Login form')] } }
   const { engine } = await boot({ root: s2, sessionId: 'harness-session-0011', options: { repos: '../web' }, ghAt })
-  await engine.flush()
+  await issuesRead(engine, ghAt)
   await engine.command('ather', 'issue 7')
   await engine.flush()
   const own = String(engine.record.submits.at(-1) ?? '')
@@ -429,6 +443,23 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   await engine.flush()
   const other = String(engine.record.submits.at(-1) ?? '')
   expect('/ather issue web#7 is web\'s', other.includes('Login form') && other.includes(`${web}/docs/intent`), other)
+}
+
+{
+  // A session in s2/ with web/ (repos) that has no docs/intent yet: web's issues are still read and listed.
+  const { s2, web } = makeWorkspace()
+  writeIntent(s2, 'login')
+  fs.rmSync(path.join(web, 'docs'), { recursive: true, force: true })
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(5, 'Login form', 'AskTinNguyen/web')] } }
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0012', options: { repos: '../web' }, ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, ghAt)
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect('gh issue list runs in s2 and in web, which has no intents', JSON.stringify(lists) === JSON.stringify([s2, web]), engine.record.ghAt)
+  await engine.command('ather', 'pick')
+  const rows = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
+  expect("web's issue is listed with its name, s2's as issue:7", JSON.stringify(rows.map(one => [one.id, one.repo]).sort()) === JSON.stringify([['issue:7', 's2'], ['issue:web#5', 'web']]), rows.map(one => [one.id, one.repo]))
+  expect('and no PR or intent read runs in web', !engine.record.ghAt.some(run => run.cwd === web && run.argv.startsWith('gh pr')), engine.record.ghAt)
 }
 
 // ---------------------------------------------------------------- report

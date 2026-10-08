@@ -472,7 +472,7 @@ async function refreshPrs($) {
   isPrsReading = true
   try {
     // Each checkout's intents: their PRs are its repository's, read with gh there.
-    for (const { root, repo: scope } of await issueLanes($)) {
+    for (const { root, repo: scope } of await paneLanes($)) {
       const its = intents.filter(one => normalFolder(one.root) === normalFolder(root))
       /** @type {Record<string, import('./model.mjs').PrState>} */
       const read = {}
@@ -531,7 +531,7 @@ function stale() {
 
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
-// Each pane checkout is read in turn and its list kept under its repository.
+// Each workspace checkout is read in turn and its list kept under its repository.
 /** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
 async function refreshIssues($) {
   const lanes = await issueLanes($)
@@ -562,14 +562,19 @@ async function refreshIssues($) {
   return failures.join('; ')
 }
 
-// The checkouts whose issues and PRs are read: the pane's, else the session's own.
+// The checkouts whose issues are read: every workspace checkout, intents or not, the session's own first.
+// A session folder in no checkout (a parent folder) has no issues of its own, unless it is all there is.
 /** @param {Engine} $ */
 async function issueLanes($) {
-  const lanes = await paneLanes($)
-  return lanes.length > 0 ? lanes : [await laneOf($)]
+  const session = await laneOf($)
+  if (!otherRoots) otherRoots = readOtherRoots($, session.root)
+  const others = []
+  for (const root of await otherRoots) others.push(await state.laneAt(io($), root))
+  const isCheckout = session.isS2 || (await checkoutOf(io($), session.root)) !== null
+  return isCheckout || others.length === 0 ? [session, ...others] : others
 }
 
-// The assigned issues of every pane checkout, in workspace order, each tagged with its checkout: its key is
+// The assigned issues of every workspace checkout, in workspace order, each tagged with its checkout: its key is
 // its number in the session's own checkout and `<short name>#<number>` in another.
 /** @param {Engine} $ @returns {Promise<import('./issues.mjs').Issue[]>} */
 async function paneIssues($) {
@@ -589,7 +594,7 @@ async function panePrs($) {
   const session = await laneOf($)
   /** @type {Record<string, import('./model.mjs').PrState>} */
   const all = {}
-  for (const lane of await issueLanes($)) {
+  for (const lane of await paneLanes($)) {
     const isOwn = normalFolder(lane.root) === normalFolder(session.root)
     for (const [number, value] of Object.entries(await state.readPrStates(io($), lane.repo))) all[isOwn ? number : `${lane.root}#${number}`] = value
   }

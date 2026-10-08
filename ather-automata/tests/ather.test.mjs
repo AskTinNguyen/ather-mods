@@ -1552,7 +1552,8 @@ describe('issues and PRs from every workspace checkout', () => {
 
   test("an issue in another checkout names that checkout's docs/intent", () => {
     expect(issuePrompt(at('/ws/web', 'web', false), 'Tin Nguyen')).toContain('/ws/web/docs/intent')
-    expect(issuePrompt(at('/ws/s2', 's2', true), 'Tin Nguyen')).toBe(issuePrompt(ISSUE, 'Tin Nguyen'))
+    // The session's own checkout keeps the relative skill paths: no checkout folder is named.
+    expect(issuePrompt(at('/ws/s2', 's2', true), 'Tin Nguyen')).not.toContain('/ws/s2')
   })
 
   test("an intent's PRs are read under its own checkout's key", () => {
