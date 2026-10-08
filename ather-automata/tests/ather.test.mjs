@@ -8,7 +8,7 @@ import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePr
 import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
-import { checkoutOf, parseRepos, readWorkspace } from '../hooks/workspace.mjs'
+import { checkoutNames, checkoutOf, parseRepos, readWorkspace } from '../hooks/workspace.mjs'
 import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
@@ -1488,6 +1488,26 @@ describe('the workspace', () => {
     expect(first).toEqual(['/ws2/a', '/ws2/web'])
     expect(lines).toHaveLength(2)
     expect((await state.lane(memory.io, 'cwd-workspace-test')).root).toBe('R')
+  })
+  test('each checkout is named by its repository, and only those that would share a name by their folder', () => {
+    const at = (/** @type {string} */ root, /** @type {string} */ repo) => ({ root, repo })
+    // One checkout, and names that already differ: as before.
+    expect(checkoutNames([at('/w/s2', 'sipher/s2')])).toEqual(['s2'])
+    expect(checkoutNames([at('/w/game', 'sipher/s2'), at('/w/site', 'asktinnguyen/web')])).toEqual(['s2', 'web'])
+    // Two clones of one repository.
+    expect(checkoutNames([at('/w/s2', 'sipher/s2'), at('/w/s2-b', 'sipher/s2')])).toEqual(['s2', 's2-b'])
+    // a/web beside b/web.
+    expect(checkoutNames([at('/w/front', 'a/web'), at('/w/back', 'b/web')])).toEqual(['front', 'back'])
+    // The same folder name twice, and three times: numbered in order.
+    expect(checkoutNames([at('/a/web', 'a/web'), at('/b/web', 'b/web')])).toEqual(['web', 'web-2'])
+    expect(checkoutNames([at('/a/s2', 'sipher/s2'), at('/b/s2', 'sipher/s2'), at('/c/s2', 'sipher/s2')])).toEqual(['s2', 's2-2', 's2-3'])
+    // A mix: only the clashing ones change.
+    expect(checkoutNames([at('/w/game', 'sipher/s2'), at('/w/site', 'asktinnguyen/web'), at('/w/game-b', 'sipher/s2'), at('/w/docs', 'sipher/handbook')])).toEqual(['game', 'web', 'game-b', 'handbook'])
+    // Without an origin a checkout is its folder; a folder name another checkout already has is numbered.
+    expect(checkoutNames([at('/w/web', 'path:/w/web'), at('/w/x', 'a/tool'), at('/w/web-2', 'b/tool'), at('C:\\Work\\web\\', 'path:c:/work/web')])).toEqual(['web', 'x', 'web-2', 'web-3'])
+    const names = checkoutNames([at('/a/web', 'a/web'), at('/b/web', 'b/web'), at('/c/web-2', 'c/web-2')])
+    expect(new Set(names).size).toBe(3)
+    expect(checkoutNames([])).toEqual([])
   })
 })
 

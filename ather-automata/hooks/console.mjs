@@ -23,7 +23,7 @@ import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
 import { changeGlyph } from './changes.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncSummary, syncText } from './team.mjs'
-import { checkoutOf, normalFolder } from './workspace.mjs'
+import { checkoutNames, checkoutOf, normalFolder } from './workspace.mjs'
 import { withFolders } from './shell.mjs'
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
@@ -237,23 +237,37 @@ function isOwnLane(session, lane) {
   return session.isS2 && normalFolder(lane.root) === normalFolder(session.root)
 }
 
-// An intent's key in the pane: its slug in the session's own checkout, `<repository's short name>/<slug>` in another.
-/** @param {import('./state.mjs').Checkout} lane @param {boolean} isOwn @param {string} slug */
-function keyOf(lane, isOwn, slug) {
-  return isOwn ? slug : `${shortName(lane)}/${slug}`
+// An intent's key in the pane: its slug in the session's own checkout, `<its checkout's short name>/<slug>` in another.
+/** @param {string} name @param {boolean} isOwn @param {string} slug */
+function keyOf(name, isOwn, slug) {
+  return isOwn ? slug : `${name}/${slug}`
 }
 
-// "han-viet": the last part of a repository's id, else its folder's name.
-/** @param {import('./state.mjs').Checkout} lane */
-function shortName(lane) {
-  return (lane.repo || normalFolder(lane.root)).split('/').pop() ?? ''
+// The short name of each checkout the pane works with, by its folder: the workspace's checkouts in order, then
+// the tracked intent's when it is outside them. Each is different (checkoutNames), so keys and lookups by name agree.
+/** @param {Engine} $ @returns {Promise<Map<string, string>>} */
+async function laneNames($) {
+  const session = await laneOf($)
+  const listed = await issueLanes($)
+  // A session folder with intents that is no checkout is in the pane, though no issues are read there.
+  const lanes = session.isS2 && !listed.some(one => normalFolder(one.root) === normalFolder(session.root)) ? [session, ...listed] : [...listed]
+  const tracked = await state.trackedLane(io($), cwd)
+  if (tracked && !lanes.some(one => normalFolder(one.root) === normalFolder(tracked.lane.root))) lanes.push(tracked.lane)
+  const names = checkoutNames(lanes)
+  return new Map(lanes.map((lane, at) => [normalFolder(lane.root), names[at] ?? '']))
+}
+
+/** @param {Engine} $ @param {import('./state.mjs').Checkout} lane */
+async function shortName($, lane) {
+  return (await laneNames($)).get(normalFolder(lane.root)) ?? ''
 }
 
 // The tracked intent's key, '' when nothing is tracked.
 /** @param {Engine} $ */
 async function trackedKey($) {
   const tracked = await state.trackedLane(io($), cwd)
-  return tracked ? keyOf(tracked.lane, tracked.isOwn, tracked.slug) : ''
+  if (!tracked) return ''
+  return tracked.isOwn ? tracked.slug : keyOf(await shortName($, tracked.lane), false, tracked.slug)
 }
 
 /** @param {Engine} $ */
@@ -466,15 +480,17 @@ async function readIntents($) {
   const files = io($)
   const lanes = await paneLanes($)
   const tracked = await state.readTracked(files)
+  const names = await laneNames($)
   const read = []
   for (const lane of lanes) {
     const { root, pack: its } = lane
     const isOwn = isOwnLane(session, lane)
+    const name = names.get(normalFolder(root)) ?? ''
     // Its intents: one tracked in another checkout is not one of them.
     const pinned = tracked && normalFolder(tracked.root) === normalFolder(root) ? tracked.slug : null
     const team = await readTeam(repo($, root), root, { cache: teamCaches.get(root) ?? EMPTY_CACHE, pinned })
-    const tag = { root, repo: lane.repo, repoName: shortName(lane) }
-    for (const one of team.intents) read.push(parseIntent({ ...one, ...tag, key: keyOf(lane, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
+    const tag = { root, repo: lane.repo, repoName: name }
+    for (const one of team.intents) read.push(parseIntent({ ...one, ...tag, key: keyOf(name, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
     const ended = fetched.get(root)
     const isApplied = ended !== undefined && ended.count <= seen
     if (isApplied) fetched.delete(root)
@@ -570,10 +586,10 @@ function stale() {
 
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
-// Each workspace checkout is read in turn and its list kept under its repository.
+// Each workspace repository is read in turn, in its first checkout, and its list kept under it.
 /** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
 async function refreshIssues($) {
-  const lanes = await issueLanes($)
+  const lanes = oncePerRepo(await issueLanes($))
   const failures = []
   for (const { root, repo: scope } of lanes) {
     const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
@@ -613,16 +629,28 @@ async function issueLanes($) {
   return isCheckout || others.length === 0 ? [session, ...others] : others
 }
 
-// The assigned issues of every workspace checkout, in workspace order, each tagged with its checkout: its key is
-// its number in the session's own checkout and `<short name>#<number>` in another.
+// One checkout for each repository: the first in order, so the session's own when it is one of them. A
+// repository's issues are the same in every checkout of it.
+/** @param {import('./state.mjs').Checkout[]} lanes */
+function oncePerRepo(lanes) {
+  return lanes.filter((lane, at) => lanes.findIndex(one => one.repo === lane.repo) === at)
+}
+
+// An issue as a checkout lists it: its key is its number in the session's own checkout and `<short name>#<number>` in another.
+/** @param {import('./issues.mjs').Issue} issue @param {import('./state.mjs').Checkout} lane @param {string} name @param {boolean} isOwn @returns {import('./issues.mjs').Issue} */
+function issueAt(issue, lane, name, isOwn) {
+  return { ...issue, root: lane.root, repo: lane.repo, repoName: name, key: isOwn ? String(issue.number) : `${name}#${issue.number}` }
+}
+
+// The assigned issues of every workspace repository, in workspace order, each tagged with the checkout that lists it.
 /** @param {Engine} $ @returns {Promise<import('./issues.mjs').Issue[]>} */
 async function paneIssues($) {
   const session = await laneOf($)
+  const names = await laneNames($)
   const read = []
-  for (const lane of await issueLanes($)) {
+  for (const lane of oncePerRepo(await issueLanes($))) {
     const isOwn = normalFolder(lane.root) === normalFolder(session.root)
-    const tag = { root: lane.root, repo: lane.repo, repoName: shortName(lane) }
-    for (const issue of await state.readIssues(io($), me, lane.repo)) read.push({ ...issue, ...tag, key: isOwn ? String(issue.number) : `${tag.repoName}#${issue.number}` })
+    for (const issue of await state.readIssues(io($), me, lane.repo)) read.push(issueAt(issue, lane, names.get(normalFolder(lane.root)) ?? '', isOwn))
   }
   return read
 }
@@ -692,7 +720,7 @@ async function lastKey($) {
   for (const lane of checkouts) {
     const isOwn = isOwnLane(session, lane)
     const slug = await state.readLast(io($), me, isOwn ? undefined : lane.root)
-    if (slug && intents.some(one => one.slug === slug && normalFolder(one.root) === normalFolder(lane.root))) return keyOf(lane, isOwn, slug)
+    if (slug && intents.some(one => one.slug === slug && normalFolder(one.root) === normalFolder(lane.root))) return keyOf(await shortName($, lane), isOwn, slug)
   }
   return null
 }
@@ -854,25 +882,27 @@ async function startWork($, work) {
 }
 
 // An issue by number, from the assigned list or not: `7` or `#7` the session checkout's issue 7, else the first
-// pane checkout's; `web#7` web's.
+// pane checkout's; `web#7` the one in the checkout named web, which starts it there even when another checkout
+// of its repository lists it.
 /** @param {Engine} $ @param {string} ref @param {boolean} [isInQuestion] */
 async function startIssue($, ref, isInQuestion = false) {
   const [, name, digits] = /^(?:([\w.-]+)#|#)?(\d+)$/.exec(ref.trim()) ?? []
   const number = Number(digits)
+  const session = await laneOf($)
+  const names = await laneNames($)
+  const lane = name ? (await issueLanes($)).find(one => names.get(normalFolder(one.root)) === name) : undefined
+  if (name && !lane) return `No checkout here is named ${name}.`
+  const isOwn = lane !== undefined && normalFolder(lane.root) === normalFolder(session.root)
   const listed = (await paneIssues($)).filter(one => one.number === number)
-  const assigned = name ? listed.find(one => one.repoName === name) : (listed.find(one => one.key === String(number)) ?? listed[0])
+  const found = lane ? listed.find(one => one.repo === lane.repo) : (listed.find(one => one.key === String(number)) ?? listed[0])
+  const assigned = found && lane ? issueAt(found, lane, name ?? '', isOwn) : found
   if (assigned) {
     handOff($, [issueId(assigned)], issuePrompt(assigned, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
   }
   /** @type {import('./issues.mjs').Issue} */
   let issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
-  if (name) {
-    const lane = (await issueLanes($)).find(one => shortName(one) === name)
-    if (!lane) return `No checkout here is named ${name}.`
-    const session = await laneOf($)
-    if (normalFolder(lane.root) !== normalFolder(session.root)) issue = { ...issue, key: `${name}#${number}`, root: lane.root, repo: lane.repo, repoName: name }
-  }
+  if (lane && !isOwn) issue = issueAt(issue, lane, name ?? '', false)
   const go = async () => {
     handOff($, [issueId(issue)], issuePrompt(issue, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
@@ -1496,7 +1526,7 @@ async function readTrackedIntent($, { slug, lane }, key) {
     slug,
     key,
     root: lane.root,
-    repoName: shortName(lane),
+    repoName: await shortName($, lane),
     prompt,
     findings: (await files.read(`${dir}/findings.md`)) ?? '',
     progress: (await files.read(`${dir}/progress.md`)) ?? '',

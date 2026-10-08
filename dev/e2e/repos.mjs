@@ -558,6 +558,100 @@ const lastSubmit = engine => {
   expect('a session in s2 alone: the answer names the plain slug and no path', lastSubmit(engine).includes('F-1 on login:') && !lastSubmit(engine).includes('findings.md'), lastSubmit(engine))
 }
 
+// ---------------------------------------------------------------- two checkouts of one repository
+
+{
+  // A parent folder holding two clones of one origin, s2/ and s2-b/: `login` is yours in both, each with an open decision.
+  const { parent, s2 } = makeWorkspace()
+  fs.rmSync(path.join(parent, 'web'), { recursive: true, force: true })
+  const second = path.join(parent, 's2-b')
+  git(parent, 'clone', '-q', git(s2, 'remote', 'get-url', 'origin'), second)
+  git(second, 'config', 'user.name', 'Tin Nguyen')
+  git(second, 'config', 'user.email', 'tin@example.com')
+  for (const root of [s2, second]) {
+    writeIntent(root, 'login')
+    writeFindings(root, 'login')
+  }
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [second]: { issues: [issue(7, 'Boss shield')] } }
+  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0015', ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, { [s2]: {} })
+  await engine.flush()
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect("gh issue list runs once for the repository, in its first checkout", JSON.stringify(lists) === JSON.stringify([s2]), engine.record.ghAt)
+
+  const pane = (surface = 'terminal') => engine.render('Pane', { bodyColumns: 110 }, 'ather', surface)
+  const keys = tree => nodesOf(tree).map(node => node.props?.key).filter(key => typeof key === 'string')
+  const twice = tree => keys(tree).filter((key, at, list) => list.indexOf(key) !== at)
+  await engine.command('ather', 'pick')
+  for (const surface of ['terminal', 'desktop']) {
+    const pick = await pane(surface)
+    const rows = intentRows(pick)
+    expect(`two clones of one repository (${surface}): login is two rows with different keys`, JSON.stringify(rows.map(one => one.id).sort()) === JSON.stringify(['intent:s2-b/login', 'intent:s2/login']), rows.map(one => one.id))
+    expect(`each row (${surface}) carries its own checkout's name`, JSON.stringify(rows.map(one => one.repo).sort()) === JSON.stringify(['s2', 's2-b']), rows.map(one => [one.id, one.repo]))
+    expect(`no element key is drawn twice (${surface})`, twice(pick).length === 0, twice(pick))
+    const issues = issueRows(pick)
+    expect(`the repository's assigned issue is listed once (${surface}), under its first checkout`, JSON.stringify(issues.map(one => [one.id, one.repo])) === JSON.stringify([['issue:s2#7', 's2']]), issues.map(one => [one.id, one.repo]))
+  }
+
+  await engine.command('ather', 'intent s2-b/login')
+  expect('/ather intent s2-b/login tracks it in its own folder', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: second }), engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'intent s2/login')
+  expect('/ather intent s2/login tracks the first clone', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: s2 }), engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'untrack')
+
+  // Both decisions wait, each under its own key; answering one leaves the other waiting.
+  await engine.command('ather', '')
+  const FIRST_CALL = 'call:s2/login:F-1'
+  const SECOND_CALL = 'call:s2-b/login:F-1'
+  let home = await pane()
+  expect("Needs you lists both clones' decisions, each by its own key", [FIRST_CALL, SECOND_CALL].every(id => keys(home).includes(`item-${id}`)), keys(home).filter(key => key.startsWith('item-')))
+  const desk = await pane('desktop')
+  expect('on the desktop too: both decisions, and no element key drawn twice', [FIRST_CALL, SECOND_CALL].every(id => keys(desk).includes(`item-${id}`)) && twice(desk).length === 0, twice(desk))
+  home = await pane()
+  if (!byKey(home, `option-${SECOND_CALL}-A`)) {
+    byKey(home, `item-${SECOND_CALL}`)?.props.onPress()
+    home = await pane()
+  }
+  const before = engine.record.submits.length
+  byKey(home, `option-${SECOND_CALL}-A`)?.props.onPress()
+  await engine.flush()
+  const answer = engine.record.submits.length > before ? lastSubmit(engine) : ''
+  expect("answering the second clone's decision hands the session its findings file, not the first's", answer.includes(`${second}/docs/intent/login/findings.md`) && !answer.includes(`${s2}/docs`), answer)
+  const answered = await pane()
+  expect("the second clone's row reads decided; the first's still waits, with its answers", keys(answered).includes(`item-${SECOND_CALL}-done`) && !keys(answered).includes(`item-${FIRST_CALL}-done`) && Boolean(byKey(answered, `option-${FIRST_CALL}-A`)), keys(answered).filter(key => /call:/.test(key)))
+  writeFindings(second, 'login', `${DECISION}\n**Resolution:** accepted A.\n`)
+  await engine.turnEnd()
+  await engine.flush()
+  const settled = keys(await pane())
+  expect("once the second clone's findings read resolved, its decision leaves and the first's stays", !settled.some(key => key.includes(SECOND_CALL)) && settled.includes(`item-${FIRST_CALL}`), settled.filter(key => /call:/.test(key)))
+
+  // /ather issue s2-b#7: the repository's issue, started in the checkout named.
+  await engine.command('ather', 'issue s2-b#7')
+  await engine.flush()
+  expect('/ather issue s2-b#7 starts the assigned issue in the second clone', lastSubmit(engine).includes('Boss shield') && lastSubmit(engine).includes(`${second}/docs/intent`), lastSubmit(engine))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+}
+
+{
+  // A session in s2/ with a second clone named by the repos option: its own rows stay bare, the clone's carry its folder's name.
+  const { parent, s2 } = makeWorkspace()
+  const second = path.join(parent, 's2-b')
+  git(parent, 'clone', '-q', git(s2, 'remote', 'get-url', 'origin'), second)
+  writeIntent(s2, 'login')
+  writeIntent(second, 'login')
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [second]: { issues: [issue(7, 'Boss shield')] } }
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0016', options: { repos: '../s2-b' }, ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, { [s2]: {} })
+  await engine.flush()
+  expect("gh issue list runs once, in the session's own checkout", JSON.stringify(engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)) === JSON.stringify([s2]), engine.record.ghAt)
+  await engine.command('ather', 'pick')
+  const pick = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  expect("the session's own login keeps its bare slug; the clone's is s2-b/login", JSON.stringify(intentRows(pick).map(one => one.id).sort()) === JSON.stringify(['intent:login', 'intent:s2-b/login']), intentRows(pick).map(one => one.id))
+  expect("the issue is listed once, under the session's own checkout, by its bare number", JSON.stringify(issueRows(pick).map(one => one.id)) === JSON.stringify(['issue:7']), issueRows(pick).map(one => one.id))
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

@@ -88,3 +88,23 @@ export const readWorkspace = async (files, sessionFolder, option) => {
   }
   return { roots: roots.slice(0, MAX_CHECKOUTS), skipped }
 }
+
+/**
+ * Each checkout's short name, in the order given and each different: the last part of its repository's id
+ * ("han-viet"), else of its folder. Those that would share one (two clones of one repository, `a/web` beside
+ * `b/web`) are named by their folders instead, and a name already taken gets `-2`, `-3`, … in order.
+ * @param {{ root: string, repo: string }[]} checkouts @returns {string[]}
+ */
+export const checkoutNames = checkouts => {
+  const folders = checkouts.map(one => normalFolder(one.root).split('/').pop() ?? '')
+  const short = checkouts.map((one, at) => (one.repo ? (one.repo.split('/').pop() ?? '') : (folders[at] ?? '')))
+  /** @type {Set<string>} */
+  const taken = new Set()
+  return short.map((name, at) => {
+    const base = short.indexOf(name) === short.lastIndexOf(name) ? name : (folders[at] ?? '')
+    let unique = base
+    for (let count = 2; taken.has(unique); count += 1) unique = `${base}-${count}`
+    taken.add(unique)
+    return unique
+  })
+}
