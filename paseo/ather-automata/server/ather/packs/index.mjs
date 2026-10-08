@@ -41,6 +41,7 @@ import { makeWebPack } from './web.mjs'
  *   prompts: { brief: (role: string, slug: string) => string, prove: (role: string, slug: string) => string, ship: (role: string, slug: string) => string, shipHint: (role: string) => string, briefHint: string, tour: string, tourToast: string, ask: (question: string) => string },
  *   mandate: { flags: string, allowed: string, merge: string, away: string, pane: string },
  *   statusWhat: string, notHere: string, gates: readonly Gate[], production: Production | null, scripts?: Record<string, string>,
+ *   teams?: Readonly<Record<string, string>>, names?: import('../worklist.mjs').NameRules,
  *   [key: string]: unknown
  * }} Pack
  */

@@ -3,14 +3,16 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, weekText, workList } from '../hooks/home.mjs'
+import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, parseEditorLock, parseFindings, parseIntent, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import * as state from '../hooks/state.mjs'
 import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { unreal } from '../hooks/packs/unreal.mjs'
+import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncText } from '../hooks/team.mjs'
+import { LEGEND, ageText, callBlocks, listStage, miniBar, needsAttention, nextSort, ownerName, rowCells, rowColumns, sortWork, stageBlocks, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
 const EVENING = Date.UTC(2026, 9, 3, 14, 0) // 21:00 at UTC+7
@@ -34,10 +36,10 @@ Pool size is an engineering call.
 `
 
 const intent = (slug, fields = {}, extra = {}) =>
-  parseIntent({ slug, prompt: prompt({ Status: 'active', Area: 'Combat', Owner: 'Tin Nguyen', ...fields }, extra.acceptance), findings: extra.findings ?? '', progress: '', files: [], hasDebrief: false, mtimeMs: extra.mtimeMs ?? 1 })
+  parseIntent({ slug, prompt: prompt({ Status: 'active', Area: 'Combat', Owner: 'Tin Nguyen', ...fields }, extra.acceptance), findings: extra.findings ?? '', progress: '', files: [], hasDebrief: false, updatedAt: extra.updatedAt ?? 1, source: 'local', firstAuthor: '' })
 
-const SPAWNER = intent('spawner', {}, { findings: FINDINGS, mtimeMs: 5 })
-const THEIRS = intent('pause-ai', { Owner: 'TienPham', Area: 'AI' }, { mtimeMs: 9 })
+const SPAWNER = intent('spawner', {}, { findings: FINDINGS, updatedAt: 5 })
+const THEIRS = intent('pause-ai', { Owner: 'TienPham', Area: 'AI' }, { updatedAt: 9 })
 
 const base = (over = {}) => ({
   intents: [SPAWNER, THEIRS],
@@ -454,7 +456,7 @@ describe('home', () => {
     const model = home({ pinned: null, role: '', tourDone: false })
     expect(model.isNewcomer).toBe(false)
     expect(model.next?.label).toBe('Pick up spawner')
-    expect(model.picks.map(one => one.slug)).toEqual(['pause-ai'])
+    expect([model.teamPreview.rows.map(one => one.slug), model.teamPreview.total]).toEqual([['pause-ai'], 1])
     expect(home({ pinned: null, now: EVENING }).offerAway).toBe(true)
   })
 
@@ -513,7 +515,7 @@ describe('what the intent recorded', () => {
   })
 
   test('a ready intent heads the pane as Ready to close, every stage ticked, with Close as Next', () => {
-    const ready = parseIntent({ slug: 'board', prompt: prompt({ Status: 'active', Area: 'Tools', Owner: 'Tin Nguyen' }, '- B1: One.'), findings: '', progress: '# P\n\n- PR: #7\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| B1 | met | t |\n', files: [], hasDebrief: false, mtimeMs: 1 })
+    const ready = parseIntent({ slug: 'board', prompt: prompt({ Status: 'active', Area: 'Tools', Owner: 'Tin Nguyen' }, '- B1: One.'), findings: '', progress: '# P\n\n- PR: #7\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| B1 | met | t |\n', files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' })
     const model = buildHome(base({ intents: [ready], pinned: 'board', away: OFF, prs: { 7: 'MERGED' } }))
     expect([model.header.stage, model.header.progress, model.header.track]).toEqual(['Ready to close', '1 of 1 done', 'Plan ✓  Build ✓  Prove ✓  Ship ✓'])
     expect(model.next?.id).toBe('next:board:close')
@@ -571,7 +573,7 @@ describe('the worker squad', () => {
   })
 })
 
-describe('avatar frame (0.1.3)', () => {
+describe('avatar frame (0.1.7)', () => {
   test("every avatar sets its frame page's root to light dark, first thing in the svg, so the frame is transparent in either theme", () => {
     for (const state of /** @type {const} */ (['running', 'waiting', 'done', 'failed'])) {
       for (const prop of /** @type {const} */ ([null, 'building', 'idle'])) {
@@ -693,7 +695,7 @@ describe('GitHub issues as work', () => {
     expect(model.next?.label).toBe('Start issue #28887')
     expect(model.next?.hint).toBe('Dodge cancels the wrong montage · high priority · Combat · 2 months ago')
     expect(model.next?.prompt).toContain('issue-preflight')
-    expect(model.picks[0]?.id).toBe('issue:31360')
+    expect(model.own[0]?.id).toBe('issue:31360')
     // Once started, it leaves Next for the rest of the session.
     const started = buildHome(/** @type {any} */ (base({ away: OFF, me: 'Lan Vo', role: 'engineer', pinned: null, issues, sent: ['issue:28887'] })))
     expect(started.next?.label).toBe('Start issue #31360')
@@ -905,5 +907,302 @@ describe('worker clocks and kinds (0.1.1)', () => {
     expect(crewWords({ ...base, origin: 'unknown', elapsed: null })).toEqual({ doing: 'working', line: 'running · start unknown' })
     expect(crewWords({ ...base, state: 'done', origin: 'seen', elapsed: 1280000, tools: 1 })).toEqual({ doing: 'finished', line: 'took 21:20 · 1 tool call' })
     expect(crewWords({ ...base, state: 'done', origin: 'adopted', elapsed: null })).toEqual({ doing: 'finished', line: '' })
+  })
+})
+
+describe('the work list: sources, search, sort and people', () => {
+  const DAY = 86400000
+  /** @param {string} slug @param {Record<string, unknown>} [over] */
+  const work = (slug, over = {}) => /** @type {any} */ ({ id: `intent:${slug}`, kind: 'intent', slug, label: slug, hint: `${slug} · Tools · 2/4`, isMine: false, area: 'Tools', owner: 'Hai Huynh', updatedAt: NOON - DAY, ...over })
+  const issue = (/** @type {number} */ number, /** @type {string} */ title, over = {}) => /** @type {any} */ ({ id: `issue:${number}`, kind: 'issue', label: `#${number} ${title}`, hint: 'Combat · 5 days ago', isMine: true, area: 'Combat', updatedAt: NOON - 5 * DAY, issue: { number, title: `Task_${title}`, updatedAt: NOON - 5 * DAY }, ...over })
+
+  test('where each item comes from: your intents, your issues, a teammate\'s intents', () => {
+    expect(workGroup(work('a', { isMine: true }))).toBe('mine')
+    expect(workGroup(issue(1, 'x'))).toBe('issues')
+    expect(workGroup(work('b'))).toBe('others')
+    expect(WORK_GROUPS.map(group => group.key)).toEqual(['mine', 'issues', 'others'])
+  })
+
+  test('every word must match: title, detail, an issue\'s own title, or an intent\'s owner', () => {
+    const all = [work('quest-debug-panel', { owner: 'Tin Nguyen' }), work('lead-vfx', { owner: 'TienDang-VFX' }), issue(28459, 'SmartObject_ContextPreview')]
+    const ids = (/** @type {string} */ query) => filterWork(all, query).map(one => one.id)
+    expect(ids('')).toHaveLength(3)
+    expect(ids('quest panel')).toEqual(['intent:quest-debug-panel'])
+    expect(ids('tin')).toEqual(['intent:quest-debug-panel'])
+    expect(ids('#28459')).toEqual(['issue:28459'])
+    expect(ids('smartobject preview')).toEqual(['issue:28459'])
+    expect(ids('QUEST nothing')).toEqual([])
+  })
+
+  test('the age chips are gone: Sort cycles Recent, Ready to close, Oldest; an undated item sorts as the oldest (A5)', () => {
+    const all = [work('month', { updatedAt: NOON - 20 * DAY, stage: 'build' }), work('fresh', { updatedAt: NOON - 2 * DAY, stage: 'prove' }), work('undated', { updatedAt: 0, stage: 'met' }), work('old', { updatedAt: NOON - 60 * DAY, stage: 'met' })]
+    const order = (/** @type {any} */ sort) => sortWork(all, sort).map(one => one.slug)
+    expect(order('recent')).toEqual(['fresh', 'month', 'old', 'undated'])
+    expect(order('oldest')).toEqual(['undated', 'old', 'month', 'fresh'])
+    expect(order('close')).toEqual(['old', 'undated', 'fresh', 'month'])
+    expect([nextSort('recent'), nextSort('close'), nextSort('oldest')]).toEqual(['close', 'oldest', 'recent'])
+    // A search by an owner's tidied name finds them too.
+    expect(filterWork([work('lead-vfx', { owner: 'TienDang-VFX', who: 'Tien Dang' })], 'tien dang').map(one => one.slug)).toEqual(['lead-vfx'])
+  })
+
+  test('work carries when it last changed: an intent\'s files, an issue\'s update', () => {
+    const list = workList([intent('mine', { Owner: 'Tin Nguyen' }, { updatedAt: 1234 })], [{ number: 7, title: 'x', name: 'X', url: '', labels: [], updatedAt: 5678, area: 'Unsorted', isUrgent: false }], 'Tin Nguyen', '', NOON)
+    expect(list.map(one => one.updatedAt)).toEqual([1234, 5678])
+  })
+
+  test('each person gets one colour, never shared on screen, the same however the list is ordered', () => {
+    const names = ['Tin Nguyen', 'TienDang-VFX', 'HaiHuynhTA', 'TienDang', 'ThangtrinhGEatherlabs', 'Duy Tran', 'quest-bot']
+    const colours = personColours(names)
+    expect(Object.keys(colours).sort()).toEqual([...names].sort())
+    expect(new Set(Object.values(colours)).size).toBe(names.length)
+    expect(personColours([...names].reverse())).toEqual(colours)
+    expect(personColours(['Tin Nguyen', 'Tin Nguyen'])['Tin Nguyen']).toMatch(/^#[0-9a-f]{6}$/)
+    expect(PEOPLE_COLOURS).toHaveLength(8)
+  })
+
+  test('a colour dimmed by 30% moves 30% of the way to the page it sits on', () => {
+    expect(dimColour('#ffffff', 0.3, '#000000')).toBe('#b3b3b3')
+    expect(dimColour('#000000', 0.3, '#ffffff')).toBe('#4d4d4d')
+    expect(dimColour('#7aa2ff', 0, '#1a1b1e')).toBe('#7aa2ff')
+    expect(dimColour('#7aa2ff', 1, '#1a1b1e')).toBe('#1a1b1e')
+  })
+})
+
+describe("the team's real state: origin/main, commit dates, sort, attention, names (0.1.5)", () => {
+  const MIN = 60000
+  const DAY = 86400000
+
+  test('a batched git log dates every folder by its last commit and names its first author (A2, A7)', () => {
+    // `git log --format=%x00%ct%x09%an --name-only -- docs/intent`, newest first; two folders share a pull time but not a commit.
+    const log = [
+      '\u00001759800000\tLamPhung-Art\n\ndocs/intent/worn-edges/progress.md\ndocs/intent/worn-edges/log.md\n',
+      '\u00001759700000\tCinematic\n\ndocs/intent/lead-vfx/prompt.md\ndocs/intent/worn-edges/prompt.md\n',
+      '\u00001759600000\tTienDang-VFX\n\ndocs/intent/lead-vfx/prompt.md\ndocs/intent/README.md\n',
+    ].join('')
+    const dates = parseLog(log)
+    expect(dates.get('worn-edges')).toEqual({ at: 1759800000000, firstAuthor: 'Cinematic' })
+    expect(dates.get('lead-vfx')).toEqual({ at: 1759700000000, firstAuthor: 'TienDang-VFX' })
+    expect([...dates.keys()].sort()).toEqual(['lead-vfx', 'worn-edges'])
+    expect(parseLog('')).toEqual(new Map())
+  })
+
+  test('the tree, the blobs and the status are read without per-intent calls', () => {
+    expect(parseTree('docs/intent/a/prompt.md\ndocs/intent/a/reviews/plan-review.md\ndocs/intent/b/prompt.md\ndocs/intent/README.md\n')).toEqual(new Map([['a', ['prompt.md', 'reviews/plan-review.md']], ['b', ['prompt.md']]]))
+    // cat-file sizes count bytes: a multi-byte character must not shift the next object.
+    const one = '# Ather · ✓\n', two = 'plain\n'
+    const bytes = (/** @type {string} */ text) => new TextEncoder().encode(text).length
+    const batch = `aaa blob ${bytes(one)}\n${one}\nsha:docs/intent/x/findings.md missing\nbbb blob ${bytes(two)}\n${two}\n`
+    expect(parseBatch(batch, 3)).toEqual([one, null, two])
+    expect(parseBatch('', 2)).toEqual([null, null])
+    expect([...parseStatus(' M docs/intent/a/prompt.md\0?? docs/intent/new-one/prompt.md\0R  docs/intent/b/x.md\0docs/intent/c/x.md\0 M Source/A.cpp\0')].sort()).toEqual(['a', 'b', 'c', 'new-one'])
+  })
+
+  /** A checkout whose origin/main has intents its working tree lacks: git answers from a script. */
+  const fakeRepo = (/** @type {{ local?: Record<string, string>, dirty?: string, ahead?: string, main?: boolean, top?: string, fetch?: import('../hooks/team.mjs').Ran, after?: string }} */ setup) => {
+    const calls = /** @type {string[][]} */ ([])
+    let fetched = false
+    const MAIN = {
+      'docs/intent/main-only/prompt.md': '# Main only\n\n- Status: active\n- Owner: trucnguyen\n\n## Acceptance\n\n- A1: one\n',
+      'docs/intent/main-only/progress.md': '# P\n\n## Acceptance\n\n| Item | Verdict |\n| --- | --- |\n| A1 | met |\n',
+      'docs/intent/both/prompt.md': '# Both\n\n- Status: active\n- Owner: Tin Nguyen\n',
+      'docs/intent/done/prompt.md': '# Done\n\n- Status: completed\n',
+      'docs/intent/ownerless/prompt.md': '# Ownerless\n\n- Status: active\n',
+    }
+    const local = setup.local ?? {}
+    const blob = (/** @type {string} */ path) => (MAIN[path] === undefined ? `${path} missing\n` : `x blob ${new TextEncoder().encode(MAIN[path]).length}\n${MAIN[path]}\n`)
+    /** @type {import('../hooks/team.mjs').Repo} */
+    const repo = {
+      git: async (args, { stdin } = {}) => {
+        calls.push([...args])
+        const [verb] = args
+        if (args.includes('fetch')) {
+          fetched = true
+          return setup.fetch ?? { exitCode: 0, stdout: '' }
+        }
+        if (verb === 'rev-parse' && args[1] === '--show-toplevel') return { exitCode: 0, stdout: `${setup.top ?? 'R'}\n` }
+        if (verb === 'rev-parse') return setup.main === false ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `${fetched && setup.after ? setup.after : 'cafe'}\n` }
+        if (verb === 'ls-tree') return { exitCode: 0, stdout: `${Object.keys(MAIN).join('\n')}\n` }
+        if (verb === 'log' && args[1] === 'cafe') return { exitCode: 0, stdout: '\u00002000\tTinNguyen\n\ndocs/intent/both/prompt.md\n\u00001500\tLamPhung-Art\n\ndocs/intent/main-only/prompt.md\ndocs/intent/ownerless/prompt.md\n\u00001000\tHaiHuynhTA\n\ndocs/intent/done/prompt.md\ndocs/intent/main-only/prompt.md\n' }
+        if (verb === 'log') return { exitCode: 0, stdout: setup.ahead ?? '' }
+        if (verb === 'status') return { exitCode: 0, stdout: setup.dirty ?? '' }
+        if (verb === 'cat-file') return { exitCode: 0, stdout: (stdin ?? '').split('\n').filter(Boolean).map(line => blob(line.slice('cafe:'.length))).join('') }
+        return { exitCode: 1, stdout: '' }
+      },
+      read: async path => local[path.slice(2)] ?? null,
+      list: async path => [...new Set(Object.keys(local).filter(file => file.startsWith(`${path.slice(2)}/`)).map(file => file.slice(path.length - 1).split('/')[0]))].map(name => ({ name, kind: 'dir' })),
+      mtime: async () => 777,
+    }
+    return { repo, calls }
+  }
+
+  test("origin/main's intents are listed with their commit dates, plus the checkout's own, each with its source (A1, A2, D1)", async () => {
+    const { repo, calls } = fakeRepo({ local: { 'docs/intent/mine-local/prompt.md': '# Mine\n\n- Status: active\n', 'docs/intent/both/prompt.md': '# Both\n\n- Status: active\n- Owner: Tin Nguyen\n' } })
+    const team = await readTeam(repo, 'R', { cache: EMPTY_CACHE, pinned: null })
+    const by = Object.fromEntries(team.intents.map(one => [one.slug, one]))
+    expect(team.isRepo).toBe(true)
+    expect(Object.keys(by).sort()).toEqual(['both', 'done', 'main-only', 'mine-local', 'ownerless'])
+    expect([by['main-only']?.source, by['main-only']?.updatedAt, by['main-only']?.firstAuthor]).toEqual(['main', 1500000, 'HaiHuynhTA'])
+    expect([by['mine-local']?.source, by['mine-local']?.updatedAt]).toEqual(['local', 777])
+    // The same text on both: main's copy, dated by its commit.
+    expect([by.both?.source, by.both?.updatedAt]).toEqual(['main', 2000000])
+    // Open intents' progress comes along; a completed one's does not.
+    expect(by['main-only']?.progress).toMatch(/A1 \| met/)
+    // One log for all of docs/intent, two batched blob reads: never a call per intent.
+    expect(calls.filter(args => args[0] === 'log' && args[1] === 'cafe')).toHaveLength(1)
+    expect(calls.filter(args => args[0] === 'cat-file')).toHaveLength(2)
+    expect(calls.every(args => !['checkout', 'reset', 'stash', 'add', 'update-index'].includes(args[0] ?? ''))).toBe(true)
+    // Read again while origin/main, HEAD and the intent files have not moved: neither main nor the
+    // index-loading status and log are asked again.
+    const again = fakeRepo({ local: { 'docs/intent/mine-local/prompt.md': '# Mine\n\n- Status: active\n', 'docs/intent/both/prompt.md': '# Both\n\n- Status: active\n- Owner: Tin Nguyen\n' } })
+    await readTeam(again.repo, 'R', { cache: team.cache, pinned: null })
+    expect(again.calls.filter(args => ['ls-tree', 'cat-file', 'status', 'log'].includes(args[0] ?? ''))).toEqual([])
+    expect(calls.filter(args => args[0] === 'status' || (args[0] === 'log' && args[1] === 'cafe..HEAD'))).toHaveLength(2)
+  })
+
+  test('a local copy wins only when it differs and is newer: uncommitted, or committed on this branch since main (D1)', async () => {
+    const edited = { 'docs/intent/both/prompt.md': '# Both, edited here\n\n- Status: active\n- Owner: Tin Nguyen\n' }
+    const behind = await readTeam(fakeRepo({ local: edited }).repo, 'R', { cache: EMPTY_CACHE, pinned: null })
+    expect(behind.intents.find(one => one.slug === 'both')?.source).toBe('main')
+    const dirty = await readTeam(fakeRepo({ local: edited, dirty: ' M docs/intent/both/prompt.md\0' }).repo, 'R', { cache: EMPTY_CACHE, pinned: null })
+    const mine = dirty.intents.find(one => one.slug === 'both')
+    expect([mine?.source, mine?.updatedAt, mine?.prompt]).toEqual(['local', 777, edited['docs/intent/both/prompt.md']])
+    const ahead = await readTeam(fakeRepo({ local: edited, ahead: '\u00003000\tTin Nguyen\n\ndocs/intent/both/prompt.md\n' }).repo, 'R', { cache: EMPTY_CACHE, pinned: null })
+    expect(ahead.intents.find(one => one.slug === 'both')?.source).toBe('local')
+    // Line endings the checkout converted are not a difference.
+    const crlf = await readTeam(fakeRepo({ local: { 'docs/intent/both/prompt.md': '# Both\r\n\r\n- Status: active\r\n- Owner: Tin Nguyen\r\n' }, dirty: ' M docs/intent/both/prompt.md\0' }).repo, 'R', { cache: EMPTY_CACHE, pinned: null })
+    expect(crlf.intents.find(one => one.slug === 'both')?.source).toBe('main')
+    // The tracked intent is read from the checkout, where its session writes, even when main has the same.
+    const tracked = await readTeam(fakeRepo({ local: { 'docs/intent/both/prompt.md': '# Both\n\n- Status: active\n- Owner: Tin Nguyen\n' } }).repo, 'R', { cache: EMPTY_CACHE, pinned: 'both' })
+    expect(tracked.intents.find(one => one.slug === 'both')?.source).toBe('local')
+    const onMain = { files: [], at: 1, firstAuthor: '', prompt: 'a', progress: '', findings: '' }
+    expect([localWins({ prompt: 'b', progress: '', findings: '' }, onMain, true), localWins({ prompt: 'b', progress: '', findings: '' }, onMain, false), localWins({ prompt: 'a', progress: 'x', findings: '' }, onMain, true)]).toEqual([true, false, false])
+  })
+
+  test('without origin/main, or outside a checkout of its own, the folders are read as before', async () => {
+    const noMain = await readTeam(fakeRepo({ main: false, local: { 'docs/intent/a/prompt.md': '# A\n\n- Status: active\n' } }).repo, 'R', { cache: EMPTY_CACHE, pinned: null })
+    expect([noMain.isRepo, noMain.cache.main, noMain.intents.map(one => one.slug)]).toEqual([true, null, ['a']])
+    const elsewhere = fakeRepo({ top: 'C:/Users', local: { 'docs/intent/a/prompt.md': '# A\n\n- Status: active\n' } })
+    const outside = await readTeam(elsewhere.repo, 'R', { cache: EMPTY_CACHE, pinned: null })
+    expect([outside.isRepo, outside.intents.map(one => one.slug)]).toEqual([false, ['a']])
+    expect(elsewhere.calls.map(args => args[0])).toEqual(['rev-parse'])
+  })
+
+  test('the fetch: narrow refspec, no tags; due when the pane is first drawn, then at most every ten minutes, one at a time (A3)', () => {
+    expect(FETCH_ARGS).toEqual(['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', '+refs/heads/main:refs/remotes/origin/main'])
+    expect(GIT_ENV).toEqual({ GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' })
+    expect(FETCH_EVERY_MS).toBe(10 * MIN)
+    const repoSync = { ...NO_SYNC, isRepo: true, hasMain: true }
+    expect(isFetchDue(NO_SYNC, NOON)).toBe(false)
+    expect(isFetchDue(repoSync, NOON)).toBe(true)
+    expect(isFetchDue({ ...repoSync, triedAt: NOON - 9 * MIN }, NOON)).toBe(false)
+    expect(isFetchDue({ ...repoSync, triedAt: NOON - 10 * MIN }, NOON)).toBe(true)
+    expect(isFetchDue({ ...repoSync, isFetching: true }, NOON)).toBe(false)
+  })
+
+  test('the sync line: "synced N min ago ↻", and a failure says so and keeps the last good time (A3, A4)', () => {
+    const at = { ...NO_SYNC, isRepo: true, hasMain: true }
+    expect(syncText(NO_SYNC, NOON)).toBe('')
+    expect(syncText(at, NOON)).toBe('not synced yet ↻')
+    expect(syncText({ ...at, isFetching: true }, NOON)).toBe('syncing…')
+    expect(syncText({ ...at, fetchedAt: NOON - 20000 }, NOON)).toBe('synced just now ↻')
+    expect(syncText({ ...at, fetchedAt: NOON - 4 * MIN }, NOON)).toBe('synced 4 min ago ↻')
+    expect(syncText({ ...at, fetchedAt: NOON - 4 * MIN, failedAt: NOON - MIN }, NOON)).toBe('sync failed · synced 4 min ago ↻')
+    expect(syncText({ ...at, failedAt: NOON }, NOON)).toBe('sync failed ↻')
+    expect(syncText({ ...at, hasMain: false }, NOON)).toBe('no origin/main ↻')
+    expect(syncText({ ...at, fetchedAt: NOON - 4 * MIN, failedAt: NOON, lock: 'refs/remotes/origin/main.lock' }, NOON)).toBe('sync waits on refs/remotes/origin/main.lock · synced 4 min ago ↻')
+  })
+
+  test('a fetch is synced when git says so and origin/main resolves; one that ran into a git lock names it and waits for its next due time (A3)', async () => {
+    const moved = fakeRepo({ after: 'beef' })
+    expect(await fetchMain(moved.repo)).toEqual({ error: '', lock: '', moved: true })
+    expect(moved.calls.find(args => args.includes('fetch'))).toEqual(FETCH_ARGS)
+    expect(await fetchMain(fakeRepo({}).repo)).toEqual({ error: '', lock: '', moved: false })
+    const stderr = String.raw`error: cannot lock ref 'refs/remotes/origin/main': Unable to create 'E:\S2_\.git\refs\remotes\origin\main.lock': File exists.`
+    expect(await fetchMain(fakeRepo({ fetch: { exitCode: 1, stdout: '', stderr } }).repo)).toEqual({ error: stderr, lock: 'refs/remotes/origin/main.lock', moved: false })
+    expect(lockOf(String.raw`fatal: Unable to create 'E:\S2_\.git\index.lock': File exists.`)).toBe('index.lock')
+    expect(lockOf('Error: timed out after 600000 ms')).toBe('')
+    const locked = { ...NO_SYNC, isRepo: true, hasMain: true, triedAt: NOON - MIN, failedAt: NOON - MIN, lock: 'index.lock' }
+    expect([canFetchNow(locked, NOON), canFetchNow({ ...locked, lock: '' }, NOON), canFetchNow(locked, NOON + 10 * MIN), canFetchNow({ ...locked, isFetching: true, lock: '' }, NOON)]).toEqual([false, true, true, false])
+  })
+
+  test('Ready to close groups the list in stage blocks: all met, proving, building, parked (A5)', () => {
+    // The tracked header's stages without a session's proof: a partly done intent is building, not proving.
+    const at = (/** @type {any} */ fields) => /** @type {any} */ ({ status: 'active', acceptanceDone: 3, acceptanceTotal: 3, prs: [], ...fields })
+    expect([
+      listStage(at({ status: 'parked' })),
+      listStage(at({})),
+      listStage(at({ prs: [7] }), { 7: 'MERGED' }),
+      listStage(at({ prs: [7] }), { 7: 'OPEN' }),
+      listStage(at({ prs: [7] })),
+      listStage(at({ acceptanceDone: 1 })),
+      listStage(at({ acceptanceDone: 0, acceptanceTotal: 0 })),
+    ]).toEqual(['parked', 'met', 'met', 'prove', 'prove', 'build', 'build'])
+    const list = [{ id: 'a', stage: 'build', updatedAt: 5 }, { id: 'b', stage: 'met', updatedAt: 1 }, { id: 'c', stage: 'parked', updatedAt: 9 }, { id: 'd', stage: 'met', updatedAt: 7 }, { id: 'e', stage: '', updatedAt: 8 }]
+    expect(stageBlocks(/** @type {any} */ (list)).map(block => [block.title, block.items.map(one => one.id).join('')])).toEqual([['Ready to close', 'db'], ['Building', 'a'], ['Parked', 'c'], ['', 'e']])
+    expect(LEGEND).toBe('● Building  ◐ Items met, PR not merged  ✓ Ready to close  ‖ Parked')
+  })
+
+  test("Needs attention: the person's own all-met intents and parked ones with no reason, never a teammate's (A6)", () => {
+    const met = intent('all-met', {}, { acceptance: '- [x] one\n- [x] two' })
+    const parked = intent('parked-bare', { Status: 'parked' })
+    const reasoned = intent('parked-why', { Status: 'parked: waiting on art' })
+    const theirs = intent('their-met', { Owner: 'TienPham' }, { acceptance: '- [x] one' })
+    const done = intent('closed', { Status: 'completed' }, { acceptance: '- [x] one' })
+    expect(needsAttention([met, parked, reasoned, theirs, done, SPAWNER], 'Tin Nguyen').map(one => [one.slug, one.kind, one.ask])).toEqual([['all-met', 'close', 'Close it?'], ['parked-bare', 'reason', 'Add one?']])
+    expect(needsAttention([met], '')).toEqual([])
+    const home = buildHome(base({ intents: [met, parked, SPAWNER], away: OFF }))
+    expect(home.attention.map(one => one.id)).toEqual(['attention:all-met', 'attention:parked-bare'])
+  })
+
+  test('owner names from main, tidied for display; a team shows with its lead; no Owner falls back to the first committer (A7)', () => {
+    const table = {
+      'LamPhung-Art': 'Lam Phung', trucnguyen: 'Truc Nguyen', DuyTranSipher: 'Duy Tran', HaiHuynhTA: 'Hai Huynh', 'HaiHuynh-TA': 'Hai Huynh',
+      ThangtrinhGEatherlabs: 'Thang Trinh', 'ThangTrinh-GE': 'Thang Trinh', 'TienDang-VFX': 'Tien Dang', TienDang: 'Tien Dang', TienPhamProducerAther: 'Tien Pham',
+      HuyLuongDucGameDesignAther: 'Huy Luong Duc', 'KhoaLe (Game Engineer)': 'Khoa Le', 'TrucNguyen-GD (Felix Nguyen)': 'Truc Nguyen', 'Trung-TechArt': 'Trung',
+      haothansipher: 'Hao Than', TinNguyen: 'Tin Nguyen', 'Tin Nguyen': 'Tin Nguyen', 'Luong Duc Huy': 'Luong Duc Huy', 'Khoa Le Hoang Dang': 'Khoa Le Hoang Dang', 'Trung Hoang Nguyen': 'Trung Hoang Nguyen',
+    }
+    expect(Object.fromEntries(Object.keys(table).map(name => [name, tidyName(name, unreal.names)]))).toEqual(table)
+    expect(ownerName('Cinematic', 'TienDang-VFX', unreal)).toBe('Tien Dang · Cinematic')
+    expect(ownerName('', 'LamPhung-Art', unreal)).toBe('Lam Phung')
+    expect(ownerName('', '', unreal)).toBe('')
+    // The studio's rules belong to its pack: without them a name is only split and capitalised.
+    expect([tidyName('trucnguyen'), tidyName('LamPhung-Art'), tidyName('DuyTranSipher'), ownerName('Cinematic', '')]).toEqual(['Trucnguyen', 'Lam Phung Art', 'Duy Tran Sipher', 'Cinematic'])
+    // People are still matched on the Owner line as written.
+    expect(isSamePerson('LamPhung-Art', 'Lam Phung')).toBe(true)
+    const work = workList([intent('lead-vfx', { Owner: 'Cinematic' })], [], 'Tin Nguyen', '', NOON, 'set', {}, unreal)
+    expect(work[0]?.kind === 'intent' ? [work[0].owner, work[0].who] : []).toEqual(['Cinematic', 'Tien Dang · Cinematic'])
+  })
+
+  test('one row anatomy: glyph, title, warning, mini bar and count, age, owner; columns as wide as the widest (A8)', () => {
+    expect([miniBar(0, 0), miniBar(0, 4), miniBar(2, 4), miniBar(4, 4)]).toEqual(['     ', '▱▱▱▱▱', '▰▰▰▱▱', '▰▰▰▰▰'])
+    expect([ageText(0, NOON), ageText(NOON - 5 * MIN, NOON), ageText(NOON - 3 * 60 * MIN, NOON), ageText(NOON - 12 * DAY, NOON)]).toEqual(['', '5m', '3h', '12d'])
+    const theirs = rowCells({ kind: 'intent', label: 'lead-vfx', stage: 'parked', updatedAt: NOON - 2 * DAY, isMine: false, done: 1, total: 4, who: 'Tien Dang', warn: 'parked, no reason', source: 'local' }, NOON, true)
+    expect(theirs).toEqual({ glyph: '‖', title: 'lead-vfx', warn: '⚠ parked, no reason · local', bar: '▰▱▱▱▱', count: '1/4', age: '2d', owner: 'Tien Dang' })
+    const own = rowCells({ kind: 'intent', label: 'x', stage: 'met', updatedAt: 0, isMine: true, done: 2, total: 2, who: 'Tin Nguyen', warn: '', source: 'local' }, NOON, false)
+    expect([own.glyph, own.warn, own.owner, own.age]).toEqual(['✓', '', '', ''])
+    const issueRow = rowCells({ kind: 'issue', label: '#28887 Dodge', stage: '', updatedAt: NOON - DAY, isMine: true }, NOON, true)
+    expect([issueRow.glyph, issueRow.bar, issueRow.count]).toEqual(['', '     ', ''])
+    expect(rowColumns([theirs, { ...theirs, count: '12/17', owner: 'Tien Dang · Cinematic' }], 12)).toEqual({ count: 5, age: 2, owner: 12 })
+  })
+
+  test('decisions wait in one block per intent, in the order they came (A9)', () => {
+    const items = [{ kind: 'call', slug: 'q', id: 'q1' }, { kind: 'lost', id: 'lost' }, { kind: 'call', slug: 'q', id: 'q2' }, { kind: 'call', slug: 'r', id: 'r1' }, { kind: 'call', slug: 'q', id: 'q3' }]
+    expect(callBlocks(items).map(block => [block.slug, block.items.map(one => one.id).join(',')])).toEqual([['q', 'q1,q2,q3'], ['', 'lost'], ['r', 'r1']])
+    const four = intent('quest-debug-panel', {}, { findings: [1, 2, 3, 4].map(n => `## F-${n} (2026-10-07) | blocking: yes | status: open (director)\n\nCall ${n}.\n`).join('\n') })
+    const home = buildHome(base({ intents: [four], pinned: null, away: OFF }))
+    expect(callBlocks(home.items).map(block => [block.slug, block.items.length])).toEqual([['quest-debug-panel', 4]])
+  })
+})
+
+describe('asking about an intent (0.1.6)', () => {
+  test('one this checkout has is read from its folder; one only on main is read from origin/main, read-only', () => {
+    const local = aboutIntentPrompt('worn-edges', false)
+    expect(local).toContain('Read docs/intent/worn-edges/ only; change nothing.')
+    expect(local.includes('git show')).toBe(false)
+    const main = aboutIntentPrompt('worn-edges', true)
+    expect(main).toContain('git show origin/main:docs/intent/worn-edges/<file>')
+    expect(main).toContain('origin/main -- docs/intent/worn-edges')
+    expect(main).toContain('Do not fetch, pull, check out, track it or write anything.')
+    expect(main).toContain('who owns it, its status and stage')
   })
 })

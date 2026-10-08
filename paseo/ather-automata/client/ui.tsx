@@ -9,6 +9,42 @@ import { AccessibilityInfo, Animated, Easing, Platform, Pressable, Text, View, t
 
 export type Theme = PluginSurfaceProps["theme"];
 
+// Each person gets one colour for good (a hash of their name), so Tin is always the same colour. Two sets of
+// the same hues: lighter on dark pages, deeper on light ones, so a name holds its contrast in either.
+const PEOPLE_DARK = ["#7aa2ff", "#ff8f6b", "#4fd1a5", "#d68cff", "#ffd166", "#5fd0e8", "#ff7eb6", "#a3d977"];
+const PEOPLE_LIGHT = ["#2f5fd0", "#c4501f", "#14866a", "#8a3fc4", "#a3720a", "#0f7f99", "#c2306f", "#4a8a14"];
+// A colour for each of these people. Each starts at its hash, and steps on to the next free colour when
+// someone on screen already has it, so no two of them share one (up to the palette's eight).
+export function personColours(names: readonly string[], light: boolean): Record<string, string> {
+  const palette = light ? PEOPLE_LIGHT : PEOPLE_DARK;
+  const taken = new Set<number>();
+  const out: Record<string, string> = {};
+  for (const name of [...new Set(names)].sort()) {
+    let hash = 0;
+    for (const char of name.trim().toLowerCase()) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+    let at = hash % palette.length;
+    for (let tries = 0; tries < palette.length && taken.has(at); tries += 1) at = (at + 1) % palette.length;
+    taken.add(at);
+    out[name] = palette[at] ?? "#7aa2ff";
+  }
+  return out;
+}
+
+// A person's name in their colour, bold, for the end of a title's line; pressing it can filter to them.
+export function PersonName({ name, colour, onPress }: { name: string; colour: string; onPress?: () => void }) {
+  const text = (
+    <Text numberOfLines={1} style={{ color: colour, fontSize: 13, fontWeight: "400", maxWidth: 190, opacity: 0.7 }}>
+      {name}
+    </Text>
+  );
+  if (!onPress) return text;
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`Show only ${name}'s work`} hitSlop={6} onPress={onPress} style={({ pressed }) => (pressed ? { opacity: 0.6 } : null)}>
+      {text}
+    </Pressable>
+  );
+}
+
 export function useKit(theme: Theme, compact: boolean) {
   return useMemo(() => {
     const c = theme.colors;
@@ -28,9 +64,11 @@ export function useKit(theme: Theme, compact: boolean) {
         section: { marginTop: compact ? 20 : 28, gap: compact ? 2 : 4 },
         sectionHead: { flexDirection: "row" as const, alignItems: "center" as const, gap: 6, marginBottom: 6 },
         label: { color: c.accent, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1.5 },
+        subLabelPlain: { color: c.foregroundMuted, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1 },
         subLabel: { color: c.foregroundMuted, fontSize: 11, fontWeight: "700" as const, letterSpacing: 1, marginTop: 8, marginBottom: 2 },
         row: { flexDirection: "row" as const, gap: 10, alignItems: "flex-start" as const, paddingVertical: compact ? 10 : 8, paddingHorizontal: 8, borderRadius: 8, minHeight: compact ? 40 : 36 },
-        rowPressed: { backgroundColor: c.surface1 },
+        rowHover: { backgroundColor: c.surface1 },
+        rowPressed: { backgroundColor: c.surface2 },
         rowIcon: { marginTop: 4 },
         rowBody: { flex: 1, gap: 2 },
         card: { backgroundColor: c.surface1, borderColor: c.border, borderWidth: 1, borderRadius: 10, padding: 12, gap: 8 },
@@ -79,6 +117,7 @@ export function Button({
   onPress: () => void;
 }) {
   const { c, compact } = kit;
+  const [hovered, setHovered] = useState(false);
   const fg = variant === "primary" ? c.accentForeground : danger ? c.statusDanger : variant === "ghost" ? c.foregroundMuted : c.foreground;
   return (
     <Pressable
@@ -88,6 +127,8 @@ export function Button({
       disabled={disabled}
       hitSlop={label ? undefined : 8}
       onPress={onPress}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
       style={({ pressed }) => [
         {
           flexDirection: "row" as const,
@@ -102,6 +143,10 @@ export function Button({
         full ? { flexBasis: "100%" as const, flexGrow: 1 } : null,
         variant === "primary" ? { backgroundColor: c.accent } : null,
         variant === "secondary" ? { backgroundColor: c.surface2, borderColor: c.border, borderWidth: 1 } : null,
+        // Under the pointer: a primary grows a little, a secondary takes the accent edge, a ghost a surface.
+        hovered && !pressed && !disabled && variant === "primary" ? { transform: [{ scale: 1.04 }] } : null,
+        hovered && !pressed && !disabled && variant === "secondary" ? { borderColor: c.accent, backgroundColor: c.surface1 } : null,
+        hovered && !pressed && !disabled && variant === "ghost" ? { backgroundColor: c.surface1 } : null,
         pressed && variant === "primary" ? { opacity: 0.85, transform: [{ scale: 0.97 }] } : null,
         pressed && variant !== "primary" ? { backgroundColor: c.surface1, transform: [{ scale: 0.97 }] } : null,
         disabled ? { opacity: 0.5 } : null,
@@ -131,6 +176,7 @@ export function Row({
   accessibilityLabel,
   index,
   pulse = false,
+  aside,
   onPress,
 }: {
   kit: Kit;
@@ -147,24 +193,30 @@ export function Row({
   index?: number;
   // The icon breathes while the row waits on the person.
   pulse?: boolean;
+  // Something at the end of the title's line (a teammate's name).
+  aside?: ReactNode;
   onPress?: () => void;
 }) {
   const { s, c } = kit;
+  const [hovered, setHovered] = useState(false);
   const body = (
     <>
       {icon ? (
         <View style={s.rowIcon}>
-          {pulse ? (
-            <Pulse>
-              <Icon name={icon} size={12} color={iconColor ?? c.accent} />
-            </Pulse>
-          ) : (
+          <Beacon active={pulse} size={12} color={iconColor ?? c.accent} stroke={1.5} maxScale={2.6} duration={4000}>
             <Icon name={icon} size={12} color={iconColor ?? c.accent} />
-          )}
+          </Beacon>
         </View>
       ) : null}
       <View style={s.rowBody}>
-        <Text style={quiet ? [s.rowTitle, { color: c.foregroundMuted, fontWeight: "400" as const }] : s.rowTitle}>{title}</Text>
+        {aside ? (
+          <View style={{ flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", columnGap: 10 }}>
+            <Text style={[quiet ? [s.rowTitle, { color: c.foregroundMuted, fontWeight: "400" as const }] : s.rowTitle]}>{title}</Text>
+            {aside}
+          </View>
+        ) : (
+          <Text style={quiet ? [s.rowTitle, { color: c.foregroundMuted, fontWeight: "400" as const }] : s.rowTitle}>{title}</Text>
+        )}
         {hint && hint !== title ? <Text style={s.hint}>{hint}</Text> : null}
         {detail ? <Text style={s.hint}>{detail}</Text> : null}
       </View>
@@ -180,10 +232,28 @@ export function Row({
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [s.row, pressed ? s.rowPressed : null, disabled ? { opacity: 0.5 } : null]}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
+      style={({ pressed }) => [s.row, hovered && !disabled ? s.rowHover : null, pressed ? s.rowPressed : null, disabled ? { opacity: 0.5 } : null]}
     >
       {body}
     </Pressable>,
+  );
+}
+
+// A card that answers the pointer: it lifts a little and its edge takes the accent colour. It stays
+// still on touch screens (nothing hovers there) and when the system asks for reduced motion.
+export function HoverCard({ kit, children, style }: { kit: Kit; children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  const reduced = useReducedMotion();
+  const level = useRef(new Animated.Value(0)).current;
+  const hover = (on: boolean) => Animated.timing(level, { toValue: on ? 1 : 0, duration: reduced ? 0 : 170, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE }).start();
+  return (
+    <Pressable accessible={false} focusable={false} onHoverIn={() => hover(true)} onHoverOut={() => hover(false)}>
+      <Animated.View style={[kit.s.card, style, { transform: [{ translateY: level.interpolate({ inputRange: [0, 1], outputRange: [0, reduced ? 0 : -3] }) }] }]}>
+        <Animated.View pointerEvents="none" style={{ position: "absolute", top: -1, left: -1, right: -1, bottom: -1, borderRadius: 10, borderWidth: 1.5, borderColor: kit.c.accent, opacity: level }} />
+        {children}
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -219,12 +289,12 @@ export function FadeIn({ children, delay = 0, style }: { children: ReactNode; de
       progress.setValue(1);
       return;
     }
-    const animation = Animated.timing(progress, { toValue: 1, duration: 220, delay, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE });
+    const animation = Animated.timing(progress, { toValue: 1, duration: 360, delay, easing: Easing.out(Easing.cubic), useNativeDriver: NATIVE });
     animation.start();
     return () => animation.stop();
   }, [progress, delay, reduced]);
   return (
-    <Animated.View style={[style, { opacity: progress, transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [6, 0] }) }] }]}>{children}</Animated.View>
+    <Animated.View style={[style, { opacity: progress, transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }] }]}>{children}</Animated.View>
   );
 }
 
@@ -247,9 +317,75 @@ export function Pulse({ children }: { children: ReactNode }) {
     return () => loop.stop();
   }, [value, reduced]);
   return (
-    <Animated.View style={{ opacity: value.interpolate({ inputRange: [0, 1], outputRange: [1, 0.55] }), transform: [{ scale: value.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] }) }] }}>
+    <Animated.View style={{ opacity: value.interpolate({ inputRange: [0, 1], outputRange: [1, 0.35] }), transform: [{ scale: value.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }) }] }}>
       {children}
     </Animated.View>
+  );
+}
+
+// Rings that expand from `children` and fade out, like a sonar: `count` rings a period apart, so
+// there is always one on its way. `size` is the child's box; the rings start at its edge. Still when inactive
+// or when the system asks for reduced motion.
+export function Beacon({
+  children,
+  size,
+  color,
+  active = true,
+  count = 1,
+  duration = 4800,
+  maxScale = 2.8,
+  stroke = 2,
+}: {
+  children: ReactNode;
+  size: number;
+  color: string;
+  active?: boolean;
+  count?: number;
+  duration?: number;
+  maxScale?: number;
+  stroke?: number;
+}) {
+  const reduced = useReducedMotion();
+  const phase = useRef(new Animated.Value(0)).current;
+  const on = active && !reduced;
+  useEffect(() => {
+    if (!on) {
+      phase.stopAnimation();
+      phase.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(Animated.timing(phase, { toValue: 1, duration, easing: Easing.linear, useNativeDriver: NATIVE }));
+    loop.start();
+    return () => loop.stop();
+  }, [phase, duration, on]);
+  return (
+    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
+      {on
+        ? Array.from({ length: count }, (_, ring) => {
+            // Each ring is a step behind the last: the same sweep, shifted by a fraction of the period.
+            const progress = Animated.modulo(Animated.add(phase, ring / count), 1);
+            return (
+              <Animated.View
+                key={ring}
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: size,
+                  height: size,
+                  borderRadius: size / 2,
+                  borderWidth: stroke,
+                  borderColor: color,
+                  opacity: progress.interpolate({ inputRange: [0, 0.08, 1], outputRange: [0, 0.85, 0] }),
+                  transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [1, maxScale] }) }],
+                }}
+              />
+            );
+          })
+        : null}
+      {children}
+    </View>
   );
 }
 

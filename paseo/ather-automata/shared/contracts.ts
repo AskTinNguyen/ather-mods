@@ -39,7 +39,9 @@ export const homeView = z.object({
   }),
   items: z.array(row),
   next: row.nullable(),
-  work: z.array(row),
+  // What to work on, with where each row comes from (mine: your intents, issues: your assigned GitHub
+  // issues with no intent yet, others: teammates' intents) and when it last changed (ms; 0 unknown).
+  work: z.array(row.extend({ group: z.enum(["mine", "issues", "others"]), updatedAt: z.number(), owner: z.string() })),
   actions: z.array(row),
   skills: z.array(row.extend({ group: z.string() })),
   create: z.array(z.object({ group: z.string(), items: z.array(row) })),
@@ -87,6 +89,21 @@ export const homeView = z.object({
       today: z.array(z.object({ kind: z.enum(["done", "yours", "changed"]), time: z.string(), text: z.string() })),
     })
     .nullable(),
+  // An assigned issue opened to look at (pressing an issue row only opens it), or null.
+  issueView: z
+    .object({
+      number: z.number(),
+      title: z.string(),
+      name: z.string(),
+      url: z.string(),
+      labels: z.array(z.string()),
+      area: z.string(),
+      isUrgent: z.boolean(),
+      updatedAt: z.number(),
+      // Already handed to the agent in this session.
+      sent: z.boolean(),
+    })
+    .nullable(),
   // The last reply to a command or action, so the panel can show it.
   message: z.string(),
 });
@@ -105,7 +122,7 @@ export const atherAct = defineRpc({
     cwd: z.string(),
     // item: something that needs you; next; work: an intent or issue; action/skill/create: quick actions;
     // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send.
-    kind: z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack"]),
+    kind: z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start"]),
     id: z.string(),
     text: z.string().optional(),
   }),

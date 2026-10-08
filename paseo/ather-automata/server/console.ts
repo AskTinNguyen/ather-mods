@@ -34,6 +34,8 @@ const messages = new Map<string, { text: string; at: number }>();
 const MESSAGE_MS = 2 * 60 * 1000;
 // The intent whose view is open on each agent's pane ('' or none: the home view). Looking never tracks (0.1.2).
 const viewing = new Map<string, string>();
+// The assigned issue whose card is open on each agent's pane (0: none). Looking never starts anything.
+const viewingIssue = new Map<string, number>();
 // When each person's GitHub issues were last read.
 const issuesAt = new Map<string, number>();
 let prsReading = false;
@@ -67,13 +69,15 @@ async function readIntents(root: string, pinned: string | null, pack: Pack) {
           progress: isOpen || isPinned ? ((await readText(`${dir}/progress.md`)) ?? "") : "",
           files: isPinned ? (await list(dir).catch(() => [])).map((one) => one.name) : [],
           hasDebrief: isPinned && (await readText(`${root}/${pack.debriefPath(entry.name)}`)) !== null,
-          mtimeMs: Math.max(...stats),
+          updatedAt: Math.max(...stats),
+          source: "local",
+          firstAuthor: "",
         },
         pack,
       ),
     );
   }
-  return read.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return read.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 async function readSkills(root: string, pack: Pack) {
@@ -224,7 +228,8 @@ async function model(ctx: Ctx, force = false) {
 const workTitle = (one: Any) => (one.kind === "intent" ? one.slug : one.label);
 const workDetail = (one: Any) => {
   const detail = one.kind === "intent" ? String(one.hint).replace(`${one.slug} · `, "") : one.hint;
-  return one.kind === "intent" && !one.isMine && one.owner ? `${detail.replace(` · ${one.owner}`, "")} · ${one.owner}` : detail;
+  // A teammate's intent names its owner at the end of the line; the owner is sent on its own (drawn as a name chip).
+  return one.kind === "intent" && !one.isMine && one.owner ? String(detail).replace(` · ${one.owner}`, "") : detail;
 };
 
 export async function homeView(agentId: string, cwd: string, force = false): Promise<HomeView> {
@@ -259,6 +264,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     githubLogin: "",
     crew: [],
     intentView: null,
+    issueView: null,
     message: Date.now() - (messages.get(agentId)?.at ?? 0) < MESSAGE_MS ? (messages.get(agentId)?.text ?? "") : "",
   };
   const lane = (await governedRoot(cwd)) ? await laneOf(ctx) : null;
@@ -271,6 +277,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
   const now = Date.now();
   const changes = slug ? ((await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[]) : [];
   const next = built.next;
+  const intentsBySlug = new Map<string, Any>(((await refreshRoot(ctx)).intents as Any[]).map((one) => [one.slug, one]));
   const ledger = away.ledgerPath && away.ledgerPath.startsWith(lane.root) ? away.ledgerPath.slice(lane.root.length + 1) : away.ledgerPath;
   return {
     ...empty,
@@ -293,7 +300,18 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
       ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isTour ? "tour" : next.work ? "work" : next.action ?? "step" }
       : null,
     // Other work: never the intent already tracked, nor the one Next already offers.
-    work: built.work.filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug)).slice(0, 12).map((one: Any) => ({ id: one.id, label: workTitle(one), hint: workDetail(one), kind: one.kind })),
+    work: built.work
+      .filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug))
+      .slice(0, 300)
+      .map((one: Any) => ({
+        id: one.id,
+        label: workTitle(one),
+        hint: workDetail(one),
+        kind: one.kind,
+        group: one.kind === "issue" ? ("issues" as const) : one.isMine ? ("mine" as const) : ("others" as const),
+        owner: one.kind === "intent" && !one.isMine ? String(one.owner ?? "") : "",
+        updatedAt: one.kind === "issue" ? Number(one.issue.updatedAt) || 0 : Number(intentsBySlug.get(one.slug)?.updatedAt) || 0,
+      })),
     actions: built.actions.filter((one: Any) => one.prompt).map((one: Any) => ({ id: one.id, label: one.label })),
     skills: built.skills.map((one: Any) => ({ id: one.id, label: one.name, hint: one.description, group: one.group })),
     create: built.create.map((group: Any) => ({ group: group.group, items: group.items.map((item: Any) => ({ id: item.id, label: item.verb, hint: item.description || item.name })) })),
@@ -304,6 +322,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     githubLogin: await githubLogin().catch(() => ""),
     crew: await crewOf(agentId).catch(() => []),
     intentView: await intentViewOf(ctx, built, slug),
+    issueView: await issueViewOf(ctx),
   };
 }
 
@@ -430,9 +449,42 @@ async function startIssue(ctx: Ctx, number: number, confirm: boolean) {
 
 // Opens an intent's view on the pane; never tracks it.
 function view(ctx: Ctx, slug: string) {
+  viewingIssue.delete(ctx.agent.id);
   viewing.set(ctx.agent.id, slug);
   stale(ctx.agent.id);
   return `${slug} is open in the Ather panel: Work on this here tracks it.`;
+}
+
+// The open issue's card: what the panel needs to draw it. The issue comes from the list gh gave, never from a
+// new request; null when none is open or it has left the list.
+async function issueViewOf(ctx: Ctx): Promise<HomeView["issueView"]> {
+  const number = viewingIssue.get(ctx.agent.id);
+  if (!number) return null;
+  const { me } = await laneOf(ctx);
+  const issue = ((await state.readIssues(ctx.io as never, me)) as Any[]).find((one) => one.number === number);
+  if (!issue) {
+    viewingIssue.delete(ctx.agent.id);
+    return null;
+  }
+  return {
+    number: Number(issue.number),
+    title: String(issue.title ?? ""),
+    name: String(issue.name ?? ""),
+    url: String(issue.url ?? ""),
+    labels: (issue.labels as unknown[]).map(String),
+    area: String(issue.area ?? "Unsorted"),
+    isUrgent: issue.isUrgent === true,
+    updatedAt: Number(issue.updatedAt) || 0,
+    sent: sentOf(ctx.agent.id).has(`issue:${number}`),
+  };
+}
+
+// Opens an issue's card on the pane; sends nothing to the agent.
+function viewIssue(ctx: Ctx, number: number) {
+  viewing.delete(ctx.agent.id);
+  viewingIssue.set(ctx.agent.id, number);
+  stale(ctx.agent.id);
+  return `Issue #${number} is open in the Ather panel: Start an intent sends it to the agent.`;
 }
 
 // Words that match one intent show it and never track it; several are listed; none is said.
@@ -597,11 +649,17 @@ export async function act(agentId: string, cwd: string, kind: string, id: string
   } else if (kind === "work") {
     const one = built.work.find((item: Any) => item.id === id);
     if (!one) throw new Error("That work is no longer listed.");
-    message = one.kind === "intent" ? view(ctx, one.slug) : await startWork(ctx, one);
+    message = one.kind === "intent" ? view(ctx, one.slug) : viewIssue(ctx, one.issue.number);
+  } else if (kind === "start") {
+    // The one press that hands an issue to the agent: from the issue's card.
+    const one = built.work.find((item: Any) => item.id === id);
+    if (!one || one.kind !== "issue") throw new Error("That issue is no longer listed.");
+    message = await startWork(ctx, one);
   } else if (kind === "view") {
     message = view(ctx, id);
   } else if (kind === "back") {
     viewing.delete(ctx.agent.id);
+    viewingIssue.delete(ctx.agent.id);
     stale(ctx.agent.id);
   } else if (kind === "track") {
     message = await track(ctx, id);

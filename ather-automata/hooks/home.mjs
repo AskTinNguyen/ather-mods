@@ -6,6 +6,7 @@ import { windowDecisions } from './away.mjs'
 import { issueLabel, issuePrompt } from './issues.mjs'
 import { STAGE_LABELS, clockText, currentStage, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, ownedIntents, pickCandidates, plural } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
+import { isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
 
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
 
@@ -35,6 +36,8 @@ export const NEW_INTENT_PROMPT =
   'Start a new intent with the intent skill (.agents/skills/intent/SKILL.md). Interview me first, one question at a time and at most three: what I want to make or change, how I will know it is done, and what it must not break. Then start it with my area and my name as Owner, and show me its prompt.md before anything is built.'
 
 export const CREATE_SHOWN = 3
+// Home's preview of teammates' intents: four rows, then "+N more ›" (D7).
+export const TEAM_SHOWN = 4
 
 /** @param {string} name */
 export const skillFolder = name => (name.includes('/') ? name : `.agents/skills/${name}`)
@@ -71,14 +74,17 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * What waits on the person. Every item goes to the session with its prompt; `kind`
  * says what else changes once it has been delivered (see settleItem in state.mjs).
  * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string }} ItemText `detail`: the pane's second line under `label`
- * @typedef {ItemText & ({ kind: 'call' } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
+ * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
 
 /**
  * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked' }} Next
  * Something to work on: an open intent to track, or an assigned GitHub issue to start an intent from.
- * @typedef {{ id: string, kind: 'intent', slug: string, label: string, hint: string, isMine: boolean, area: string, owner: string }
- *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, label: string, hint: string, prompt: string, isMine: true, area: string }} Work
+ * An intent's `owner` is its Owner line as written (people are matched on it), `who` the name shown,
+ * `stage` where it stands in the list, `source` where it was read (origin/main, or only this checkout).
+ * @typedef {{ id: string, kind: 'intent', slug: string, label: string, hint: string, isMine: boolean, area: string, owner: string, who: string, updatedAt: number,
+ *   stage: import('./worklist.mjs').ListStage, done: number, total: number, source: 'main' | 'local', warn: string }
+ *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, label: string, hint: string, prompt: string, isMine: true, area: string, updatedAt: number, stage: '' }} Work
  * @typedef {{
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
@@ -120,12 +126,67 @@ export const workList = (intents, issues, me, area, now, role = 'set', prs = {},
   const linked = new Set(intents.map(one => one.issue).filter(Boolean))
   const ranked = pickCandidates(intents, me, area)
   /** @param {Intent} one @returns {Work} */
-  const toIntent = one => ({ id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area, owner: one.owner })
+  const toIntent = one => ({
+    id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area,
+    owner: one.owner, who: ownerName(one.owner, one.firstAuthor, pack), updatedAt: one.updatedAt, stage: listStage(one, prs), done: one.acceptanceDone, total: one.acceptanceTotal, source: one.source,
+    warn: isParkedBare(one) ? 'parked, no reason' : '',
+  })
   return [
     ...ranked.filter(one => isMine(one, me)).map(toIntent),
-    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area }))),
+    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area, updatedAt: issue.updatedAt, stage: '' }))),
     ...ranked.filter(one => !isMine(one, me)).map(toIntent),
   ]
+}
+
+// ---------------------------------------------------------------- the work list: sources, search, people
+
+// Where each piece of work comes from, in the order the list shows them. `key` is workGroup's answer.
+export const WORK_GROUPS = /** @type {const} */ ([
+  { key: 'mine', title: 'Your intents' },
+  { key: 'issues', title: 'Assigned issues' },
+  { key: 'others', title: "Teammates' intents" },
+])
+
+/** @param {Work} one @returns {'mine' | 'issues' | 'others'} */
+export const workGroup = one => (one.kind === 'issue' ? 'issues' : one.isMine ? 'mine' : 'others')
+
+// The work that matches every word of `query`: in its title, area, an issue's own title, or an intent's
+// owner as written or as shown.
+/** @param {readonly Work[]} work @param {string} query */
+export const filterWork = (work, query) => {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return work.filter(one => {
+    const text = `${one.label} ${one.area} ${one.kind === 'issue' ? one.issue.title : `${one.owner} ${one.who}`}`.toLowerCase()
+    return words.every(word => text.includes(word))
+  })
+}
+
+// Eight colours that read on the pane's dark page: one per person, so a name is always the same colour.
+export const PEOPLE_COLOURS = ['#7aa2ff', '#ff8f6b', '#4fd1a5', '#d68cff', '#ffd166', '#5fd0e8', '#ff7eb6', '#a3d977']
+
+// A colour for each of these people: it starts at the hash of the name and steps on to the next free
+// colour when someone in the list already has it, so no two of them share one (up to eight).
+/** @param {readonly string[]} names @returns {Record<string, string>} */
+export const personColours = names => {
+  const taken = new Set()
+  /** @type {Record<string, string>} */
+  const out = {}
+  for (const name of [...new Set(names)].sort()) {
+    let hash = 0
+    for (const char of name.trim().toLowerCase()) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+    let at = hash % PEOPLE_COLOURS.length
+    for (let tries = 0; tries < PEOPLE_COLOURS.length && taken.has(at); tries += 1) at = (at + 1) % PEOPLE_COLOURS.length
+    taken.add(at)
+    out[name] = PEOPLE_COLOURS[at] ?? '#7aa2ff'
+  }
+  return out
+}
+
+// A colour dimmed by `amount` (0.3: 30%), blended toward the page it sits on: a terminal has no opacity.
+/** @param {string} hex '#rrggbb' @param {number} amount @param {string} [backdrop] */
+export const dimColour = (hex, amount, backdrop = '#1a1b1e') => {
+  const part = (/** @type {string} */ colour, /** @type {number} */ at) => parseInt(colour.slice(1 + at * 2, 3 + at * 2), 16)
+  return `#${[0, 1, 2].map(at => Math.round(part(hex, at) * (1 - amount) + part(backdrop, at) * amount).toString(16).padStart(2, '0')).join('')}`
 }
 
 /** @param {HomeInput} input */
@@ -150,7 +211,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week) }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), picks: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week) }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), own: [], teamPreview: { rows: [], total: 0 }, attention: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -166,7 +227,7 @@ export const buildHome = input => {
   }
   for (const one of owned) {
     for (const finding of directorCalls(one)) {
-      items.push({ kind: 'call', id: `call:${one.slug}:${finding.id}`, label: `Decide ${finding.id} on ${one.slug}`, title: `${finding.id} · ${one.slug === pinned ? '' : `${one.slug} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.slug}: ${finding.title}`, prompt: callPrompt(one, finding) })
+      items.push({ kind: 'call', slug: one.slug, id: `call:${one.slug}:${finding.id}`, label: `Decide ${finding.id} on ${one.slug}`, title: `${finding.id} · ${one.slug === pinned ? '' : `${one.slug} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.slug}: ${finding.title}`, prompt: callPrompt(one, finding) })
     }
   }
   if (intent && pack.lockRoles.includes(role) && (stage === 'build' || stage === 'prove') && lock.state === 'held' && !lock.isStale) {
@@ -219,6 +280,8 @@ export const buildHome = input => {
   else if (!intent && work[0]?.kind === 'issue') next = { id: work[0].id, label: `Start issue #${work[0].issue.number}`, hint: `${work[0].issue.name} · ${work[0].hint}`, prompt: work[0].prompt, work: work[0] }
   else if (step) next = { id: 'next:start', ...step }
   // The quick actions under the header: start something new, or pick a skill from the short list.
+  const rest = work.filter(one => one !== next?.work)
+  const team = rest.filter(one => !one.isMine)
   const present = new Map((input.skills ?? []).map(one => [one.name, one.description]))
   const skills = pack.skillGroups.flatMap(({ group, names }) =>
     names.filter(name => present.has(name)).map(name => ({ id: `skill:${name.split('/').pop()}`, group, name: name.split('/').pop() ?? name, description: present.get(name) ?? '', prompt: skillPrompt(name, intent ? `for intent ${intent.slug}` : '') })),
@@ -258,8 +321,11 @@ export const buildHome = input => {
     open,
     next,
     work,
-    // With nothing tracked: the rest of the list after Next, for the pane.
-    picks: intent ? [] : work.filter(one => one !== next?.work).slice(0, 5),
+    // With nothing tracked, the person's own other work after Next; for everyone, the team's first rows and how many (D7).
+    own: intent ? [] : rest.filter(one => one.isMine).slice(0, 5),
+    teamPreview: { rows: team.slice(0, TEAM_SHOWN), total: team.length },
+    // The person's own intents that want a press: every item met, or parked with no reason (D5).
+    attention: needsAttention(intents, me, prs).filter(one => !input.sent.includes(one.id)),
     isNewcomer,
     offerAway: !isNewcomer && away.phase === 'off' && (isEvening(now, tz) || (input.workers > 0 && open.length === 0)),
   }
