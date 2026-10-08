@@ -1317,6 +1317,16 @@ describe('several repositories on one machine', () => {
     expect(store.has('last:tinnguyen')).toBe(false)
   })
 
+  test('an old "Continue" naming another intent does not come back after tracking and untracking one', async () => {
+    const { s2, store, files } = twoRepos()
+    store.set('last:tinnguyen', 'old-one')
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login', { me: 'Tin Nguyen' })
+    await state.untrack(s2, 'Tin Nguyen')
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe(null)
+    expect(store.has('last:tinnguyen')).toBe(false)
+  })
+
   test('the lane names its repository when the Io can read the origin, and asks again when git could not say', async () => {
     const { io } = memoryIo()
     let origin = /** @type {string | null} */ (null)

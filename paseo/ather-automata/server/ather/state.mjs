@@ -411,7 +411,12 @@ export const track = (io, root, slug, options = {}) =>
     if (options.isAuto && stopped.includes(slug)) return false
     if (options.onlyIfNone && (await io.get(KEY.pinned(sid))) !== undefined) return false
     await io.set(KEY.pinned(sid), isOwn ? slug : { slug, root: at })
-    if (options.me) await io.set(KEY.last(options.me, await repoAt(io, at)), slug)
+    if (options.me) {
+      const last = KEY.last(options.me, await repoAt(io, at))
+      await io.set(last, slug)
+      // Once a scoped "Continue …" is written, the unscoped one from before 0.1.7 must not read through again.
+      if (last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
+    }
     if (!options.isAuto && stopped.includes(slug)) await setList(io, KEY.untracked(sid), stopped.filter(one => one !== slug))
     await beat(io)
     changed(io)

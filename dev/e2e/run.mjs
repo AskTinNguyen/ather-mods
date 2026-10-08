@@ -6,6 +6,7 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import { AFK, createEngine } from './engine.mjs'
 import { check, draw, layouts } from './screen.mjs'
+import { repoId } from './out/hooks/state.mjs'
 
 const OUT = process.argv[2]
 // --layouts <dir>: write every pane and band laid out at 72 and 110 columns, to diff two runs.
@@ -63,10 +64,14 @@ const dialogText = dialogs =>
 
 const pick = label => question => question.options.find(option => option.label === label || option.label.startsWith(label))?.label ?? `__missing:${label}__ among ${question.options.map(o => o.label).join(' | ')}`
 const typed = text => () => text
+// What the mod keeps per repository (an intent's proof, a person's "Continue …") is under `<prefix>:<repo>|<id>`;
+// the sandboxes have no origin, so their repository is their folder.
+const scopedKey = (engine, prefix, id) => [...engine.store.keys()].find(key => key === `${prefix}:${id}` || (key.startsWith(`${prefix}:`) && key.endsWith(`|${id}`)))
+const scoped = (engine, prefix, id) => engine.store.get(scopedKey(engine, prefix, id) ?? '')
 // Where a session's evidence is: its tracked intent (no commit in the sandbox, which has no refs), or the session.
 const evidenceOf = (engine, sid = 'harness-session-0001') => {
   const pinned = engine.store.get(`pinned:${sid}`)
-  return engine.store.get(`evidence:${pinned ?? sid}`)
+  return pinned === undefined ? engine.store.get(`evidence:${sid}`) : scoped(engine, 'evidence', pinned)
 }
 const dismiss = () => null
 
@@ -177,7 +182,7 @@ const pressIn = (tree, label) => {
   const [, workQ, follow] = work.dialogs
   expect("each Work-question choice says what it does: an intent's works on it here, with the consequence", workQ?.header === 'Work' && (workQ?.options ?? []).length > 0 && workQ.options.every(o => o.description.endsWith(consequence) || o.description.endsWith('Drafts an intent with you first.')), workQ?.options)
   expect('a name typed in the Work question opens one follow-up: the slug, where it stands, what working on it here means, three choices', follow?.header === 'fluid-snow-s' && new RegExp(`^fluid-snow-sand-look: [A-Z][a-z ]+, \\d+/\\d+ done, [^.]+\\. Work on it here\\? ${consequence.replace(/[.?/()]/g, '\\$&')}$`).test(follow?.question ?? '') && (follow?.options ?? []).map(o => o.label).join('|') === 'Work on it here|Just look|Pick something else', follow)
-  expect('… Work on it here tracks it and moves "Continue …" to it', pinnedNow() === 'fluid-snow-sand-look' && engine.store.get('last:tinnguyen') === 'fluid-snow-sand-look' && work.out === 'Now tracking fluid-snow-sand-look.' && work.sent.length === 0, work.out)
+  expect('… Work on it here tracks it and moves "Continue …" to it', pinnedNow() === 'fluid-snow-sand-look' && scoped(engine, 'last', 'tinnguyen') === 'fluid-snow-sand-look' && work.out === 'Now tracking fluid-snow-sand-look.' && work.sent.length === 0, work.out)
   await run(engine, [], 'ather', 'untrack')
   const look = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Just look')])
   expect('… Just look says where it stands and its next step, and tracks nothing', pinnedNow() === undefined && /^fluid-snow-sand-look: .+ Its next step: .+\. Not tracked here; \/ather intent fluid-snow-sand-look works on it in this session\.$/.test(look.out) && look.sent.length === 0, look.out)
@@ -690,7 +695,7 @@ const GH_ISSUES = [
   engine.setSessionId('harness-session-tomorrow')
   await engine.start()
   await run(engine, [], 'ather', 'intent box-scale-tool')
-  const evidence = engine.store.get('evidence:box-scale-tool')
+  const evidence = scoped(engine, 'evidence', 'box-scale-tool')
   expect("yesterday's build and tests still count today", evidence?.build?.state === 'pass' && evidence?.automation?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
   done()
 }
@@ -747,7 +752,7 @@ const hasFocus = tree => {
   expect('"I checked it in the Editor" is never focused by default in the pane', nextButton && /I checked it in the Editor/.test(nextButton.props.label) && !nextButton.props.autoFocus, nextButton?.props)
   engine.setSurfaces?.([])
   const menu = await run(engine, [pick('I checked it in the Editor')])
-  expect("a tech artist's last proof is offered as one press, and recorded", (menu.dialogs[0]?.options ?? []).some(o => o.label === 'I checked it in the Editor') && engine.store.get('evidence:snow-trail-lod-pop')?.editor?.state === 'pass', menu.dialogs[0]?.options.map(o => o.label))
+  expect("a tech artist's last proof is offered as one press, and recorded", (menu.dialogs[0]?.options ?? []).some(o => o.label === 'I checked it in the Editor') && scoped(engine, 'evidence', 'snow-trail-lod-pop')?.editor?.state === 'pass', menu.dialogs[0]?.options.map(o => o.label))
   // The next session offers to continue it.
   await engine.end('exit')
   engine.setSessionId('harness-session-hana-2')
@@ -1070,7 +1075,7 @@ const hasFocus = tree => {
   await run(engine, [], 'away', 'end')
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
   const untracked = await run(engine, [], 'ather', 'untrack')
-  expect('/ather untrack stops tracking: the pin and "Continue …" go, the heartbeat says so at once, the proof stays with the intent', untracked.out === 'Stopped tracking box-scale-tool. Its proof so far stays with the intent.' && pinned() === undefined && engine.store.get('last:tinnguyen') === undefined && lane().intent === null && engine.store.get('evidence:box-scale-tool')?.build?.state === 'pass', [untracked.out, pinned(), lane().intent])
+  expect('/ather untrack stops tracking: the pin and "Continue …" go, the heartbeat says so at once, the proof stays with the intent', untracked.out === 'Stopped tracking box-scale-tool. Its proof so far stays with the intent.' && pinned() === undefined && scoped(engine, 'last', 'tinnguyen') === undefined && lane().intent === null && scoped(engine, 'evidence', 'box-scale-tool')?.build?.state === 'pass', [untracked.out, pinned(), lane().intent])
   expect('untracking leaves running workers and Needs you as they were', (await engine.$.agent.list()).some(one => one.id === 'w-guard' && one.status === 'running') && before !== '' && (await waiting()) === before, before)
   const nothing = await run(engine, [], 'ather', 'untrack')
   expect('/ather untrack with nothing tracked says so', nothing.out === 'Nothing is tracked in this session.', nothing.out)
@@ -1139,11 +1144,11 @@ const hasFocus = tree => {
   findKey(viewTree, 'intent-work')?.props.onPress({})
   await engine.flush()
   const trackedTree = await pane()
-  expect('Work on this here tracks it and moves "Continue …" to it; the view then offers Stop tracking', pinned() === slug && engine.store.get('last:tinnguyen') === slug && Boolean(findKey(trackedTree, 'intent-untrack')) && !findKey(trackedTree, 'intent-work') && engine.record.toasts.includes(`Ather: Now tracking ${slug}.`), [pinned(), engine.record.toasts.slice(-2)])
+  expect('Work on this here tracks it and moves "Continue …" to it; the view then offers Stop tracking', pinned() === slug && scoped(engine, 'last', 'tinnguyen') === slug && Boolean(findKey(trackedTree, 'intent-untrack')) && !findKey(trackedTree, 'intent-work') && engine.record.toasts.includes(`Ather: Now tracking ${slug}.`), [pinned(), engine.record.toasts.slice(-2)])
   findKey(trackedTree, 'intent-untrack')?.props.onPress({})
   await engine.flush()
   const stoppedTree = await pane()
-  expect('Stop tracking in the Intent view stops tracking, says the proof stays, and keeps the view on the intent with Work on this here', pinned() === undefined && engine.store.get('last:tinnguyen') === undefined && Boolean(findKey(stoppedTree, 'intent-work')) && new RegExp(`^I N T E N T\\n${slug}$`, 'm').test(check(stoppedTree, 72).lines.join('\n')) && engine.record.toasts.includes(`Ather: Stopped tracking ${slug}. Its proof so far stays with the intent.`), engine.record.toasts.slice(-2))
+  expect('Stop tracking in the Intent view stops tracking, says the proof stays, and keeps the view on the intent with Work on this here', pinned() === undefined && scoped(engine, 'last', 'tinnguyen') === undefined && Boolean(findKey(stoppedTree, 'intent-work')) && new RegExp(`^I N T E N T\\n${slug}$`, 'm').test(check(stoppedTree, 72).lines.join('\n')) && engine.record.toasts.includes(`Ather: Stopped tracking ${slug}. Its proof so far stays with the intent.`), engine.record.toasts.slice(-2))
   pressIn(stoppedTree, 'Back')
   // Every home row, under Also yours and under Follow a teammate alike.
   const homeTree = await pane()
@@ -1178,7 +1183,7 @@ const hasFocus = tree => {
   const now = Date.now()
   fs.writeFileSync(path.join(lanes, '1a2b3c4d-0000-4000-8000-000000000000.json'), JSON.stringify({ sessionId: '1a2b3c4d-0000-4000-8000-000000000000', intent: 'fluid-snow-sand-look', branch: 'main', updatedAt: now, lastActiveAt: now - 3 * 60000, away: 'off', hasEnded: false }))
   fs.writeFileSync(path.join(lanes, '5e6f7a8b-0000-4000-8000-000000000000.json'), JSON.stringify({ sessionId: '5e6f7a8b-0000-4000-8000-000000000000', intent: 'fluid-snow-sand-look', branch: 'main', updatedAt: now, lastActiveAt: now, away: 'off', hasEnded: true }))
-  engine.store.set('evidence:fluid-snow-sand-look', { build: { state: 'pass', detail: 'Result: Succeeded', at: now, by: '1a2b3c4d' } })
+  engine.store.set(`evidence:${repoId('', root)}|fluid-snow-sand-look`, { build: { state: 'pass', detail: 'Result: Succeeded', at: now, by: '1a2b3c4d' } })
   const peerView = check(await pane(), 72)
   screens.push(['Terminal · the Intent view with another session on it and its proof (72 columns)', peerView.lines.join('\n')])
   expect('the Intent view says how many other live sessions track the intent, and when the latest was active; an ended one does not count', /^Also tracked in 1 other session · active 3m ago$/m.test(peerView.lines.join('\n')) && peerView.problems.length === 0, peerView.lines.slice(0, 8))
@@ -1302,8 +1307,9 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   const merge = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
   expect('while away, a production deploy is held and a merge with every gate proven goes through (with-proof)', typeof deploy.deny === 'string' && /Production deploys/.test(deploy.deny) && merge.deny === undefined, [deploy.deny, merge.deny])
   // Proof from before this session (an hour old, still within the day evidence is kept) does not let a merge through.
-  const stored = engine.store.get('evidence:zz-web-lens')
-  engine.store.set('evidence:zz-web-lens', Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...value, at: Date.now() - 3600000 }])))
+  const lensKey = scopedKey(engine, 'evidence', 'zz-web-lens') ?? ''
+  const stored = engine.store.get(lensKey)
+  engine.store.set(lensKey, Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...value, at: Date.now() - 3600000 }])))
   const stale = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
   expect("a merge on proof from before this session is held (D2: passed in this session's tool output)", typeof stale.deny === 'string' && /Merges/.test(stale.deny), stale.deny)
   expect('no hook threw in the web scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
