@@ -102,6 +102,9 @@ let checkouts = []
 // The workspace checkouts other than the session's own, read once per session.
 /** @type {Promise<string[]> | null} */
 let otherRoots = null
+// Which clone each workspace checkout is of, by its folder, read with them: a checkout and its worktrees share one.
+/** @type {Map<string, string>} */
+let clones = new Map()
 // The read running now, and whether another was asked for while it ran.
 /** @type {Promise<void> | null} */
 let reading = null
@@ -150,6 +153,7 @@ function io($) {
     origin: root => readOrigin($, root),
     repo: async () => (await laneOf($)).repo,
     real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
+    worktrees: root => readWorktrees($, root),
   }
 }
 
@@ -159,6 +163,13 @@ async function readOrigin($, root) {
   const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
   // Exit 1: no such key.
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
+}
+
+// What `git worktree list --porcelain` prints in the checkout at `root`, '' when git could not say.
+/** @param {Engine} $ @param {string} root */
+async function readWorktrees($, root) {
+  const run = await $.process.run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  return run?.exitCode === 0 ? (run.stdout ?? '') : ''
 }
 
 // Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV.
@@ -211,7 +222,18 @@ async function readOtherRoots($, root) {
   const files = io($)
   const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
   // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
-  return (await state.workspace(files, root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))).filter(one => !own.has(normalFolder(one)))
+  const roots = await state.workspace(files, root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))
+  const found = await state.workspaceClones(files, root || cwd, repos)
+  // The session's lane is its folder's, which may be inside its checkout.
+  for (const one of own) if (found.has(one)) found.set(normalFolder(root), found.get(one) ?? one)
+  clones = found
+  return roots.filter(one => !own.has(normalFolder(one)))
+}
+
+// The clone a checkout is of: its own folder when it has no other worktree in the workspace.
+/** @param {string} root */
+function cloneOf(root) {
+  return clones.get(normalFolder(root)) ?? normalFolder(root)
 }
 
 // The lane an intent's checkout has in the pane (the session's for its own).
@@ -259,7 +281,7 @@ async function laneNames($) {
   const lanes = session.isS2 && !listed.some(one => normalFolder(one.root) === normalFolder(session.root)) ? [session, ...listed] : [...listed]
   const tracked = await state.trackedLane(io($), cwd)
   const outside = tracked && !lanes.some(one => normalFolder(one.root) === normalFolder(tracked.lane.root)) ? [tracked.lane] : []
-  const names = checkoutNames(lanes, outside)
+  const names = checkoutNames(lanes.map(lane => ({ root: lane.root, repo: lane.repo, clone: cloneOf(lane.root) })), outside)
   return new Map([...lanes, ...outside].map((lane, at) => [normalFolder(lane.root), names[at] ?? '']))
 }
 
@@ -432,6 +454,7 @@ async function openConsole($, folder) {
   isSyncing = false
   checkouts = []
   otherRoots = null
+  clones = new Map()
   fetchesEnded = 0
   isDrawn = false
   createOpen.clear()
@@ -512,15 +535,22 @@ async function readIntents($) {
   const tracked = await state.readTracked(files)
   const names = await laneNames($)
   const read = []
+  // What each clone's first pane checkout read of origin/main: its other worktrees share it, and list only their own.
+  /** @type {Map<string, import('./team.mjs').MainSnapshot | null>} */
+  const mains = new Map()
   for (const lane of lanes) {
     const { root, pack: its } = lane
     const isOwn = isOwnLane(session, lane)
     const name = names.get(normalFolder(root)) ?? ''
     // Its intents: one tracked in another checkout is not one of them.
     const pinned = tracked && normalFolder(tracked.root) === normalFolder(root) ? tracked.slug : null
-    const team = await readTeam(repo($, root), root, { cache: teamCaches.get(root) ?? EMPTY_CACHE, pinned })
+    const clone = cloneOf(root)
+    const isFirst = !mains.has(clone)
+    const kept = teamCaches.get(root) ?? EMPTY_CACHE
+    const team = await readTeam(repo($, root), root, { cache: isFirst ? kept : { ...kept, main: mains.get(clone) ?? kept.main }, pinned })
+    if (isFirst) mains.set(clone, team.cache.main)
     const tag = { root, repo: lane.repo, repoName: name }
-    for (const one of team.intents) read.push(parseIntent({ ...one, ...tag, key: keyOf(name, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
+    for (const one of isFirst ? team.intents : team.intents.filter(listed => listed.source === 'local')) read.push(parseIntent({ ...one, ...tag, key: keyOf(name, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
     const ended = fetched.get(root)
     const isApplied = ended !== undefined && ended.count <= seen
     if (isApplied) fetched.delete(root)
@@ -572,7 +602,7 @@ async function refreshPrs($) {
   }
 }
 
-// Fetches each pane checkout's origin main in the background (D2): once the pane is drawn, then at most
+// Fetches each pane clone's origin main in the background (D2): once the pane is drawn, then at most
 // every ten minutes, or at once from ↻ (after a git lock, only at the next due time); one fetch at a time
 // over every checkout. The sync line says synced once the read after the fetch has landed; a failure keeps
 // the last list and says so.
@@ -581,23 +611,28 @@ async function syncMain($, isAsked = false) {
   if (isSyncing) return
   isSyncing = true
   try {
-    for (const { root } of await paneLanes($)) {
+    const lanes = await paneLanes($)
+    for (const { root } of lanes) {
+      // A clone is fetched once, in its first pane checkout: the outcome is that of every one of them.
+      const roots = lanes.map(one => one.root).filter(one => cloneOf(one) === cloneOf(root))
+      if (roots[0] !== root) continue
       const before = syncs.get(root) ?? NO_SYNC
       if (!(isAsked ? canFetchNow : isFetchDue)(before, Date.now())) continue
-      syncs.set(root, { ...before, isFetching: true, triedAt: Date.now() })
+      for (const one of roots) syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), isFetching: true, triedAt: Date.now() })
       stale()
       $.ui.invalidate('ui.render')
       const { error, lock, moved } = await fetchMain(repo($, root))
       const where = checkouts.length > 1 ? ` (${root})` : ''
       $.ui.log(error ? `Ather: git fetch failed${where}: ${error}` : `Ather: origin/main${where} ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
       fetchesEnded += 1
-      fetched.set(root, { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } })
+      for (const one of roots) fetched.set(one, { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } })
       await refresh($).catch(() => undefined)
       // The reads failed: the fetch's outcome is still said.
-      const ended = fetched.get(root)
-      if (ended) {
-        syncs.set(root, { ...(syncs.get(root) ?? NO_SYNC), ...ended.sync })
-        fetched.delete(root)
+      for (const one of roots) {
+        const ended = fetched.get(one)
+        if (!ended) continue
+        syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), ...ended.sync })
+        fetched.delete(one)
         stale()
         $.ui.invalidate('ui.render')
       }
@@ -626,8 +661,9 @@ const NOT_ON_GITHUB = /none of the git remotes configured for this repository po
 /** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
 async function refreshIssues($) {
   const checkouts = await issueLanes($)
-  // Several checkouts, though gh is asked once for each repository: two clones of one are still a workspace.
-  const isSeveral = checkouts.length > 1
+  // Several checkouts, though gh is asked once for each repository: two clones of one are still a workspace,
+  // a clone and its worktrees are one checkout.
+  const isSeveral = new Set(checkouts.map(one => cloneOf(one.root))).size > 1
   const lanes = oncePerRepo(checkouts)
   const names = isSeveral ? await laneNames($) : new Map()
   const failures = []

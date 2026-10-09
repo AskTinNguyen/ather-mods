@@ -933,6 +933,109 @@ const refresh = async engine => {
   await none.engine.end('other')
 }
 
+// ---------------------------------------------------------------- a clone's worktrees
+
+{
+  // A web checkout whose origin/main holds `login` and `pay`, alone in its parent folder; with `tree`, a worktree of it beside it.
+  const makeClone = tree => {
+    const parent = fs.mkdtempSync(join(BASE, 'clone-'))
+    const web = makeCheckout(parent, 'web', {
+      owner: 'AskTinNguyen',
+      name: 'web',
+      files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(WEB_PROFILE, null, 2)}\n`, 'docs/intent/login/prompt.md': LOGIN, 'docs/intent/pay/prompt.md': LOGIN.replace('# Login', '# Pay') },
+    })
+    if (tree) git(web, 'worktree', 'add', '-q', '-b', 'feat/x', join(parent, tree))
+    return { web, tree: tree ? join(parent, tree) : '' }
+  }
+  const keysOf = tree => nodesOf(tree).map(node => node.props?.key).filter(key => typeof key === 'string')
+  // The pick pane of a session in `web`, once its issues are read and its first fetch has ended.
+  const drawn = async (web, sessionId, ghAt) => {
+    const { engine } = await boot({ root: web, sessionId, writable: [path.dirname(web)], ghAt })
+    engine.setSurfaces(['terminal'])
+    await issuesRead(engine, { [web]: {} })
+    await engine.command('ather', 'pick')
+    const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+    await pane()
+    await engine.flush()
+    await engine.flush()
+    return { engine, pane, pick: await pane() }
+  }
+
+  const alone = makeClone('')
+  const before = await drawn(alone.web, 'harness-session-0030', { [alone.web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] } })
+  await before.engine.end('other')
+
+  // The same checkout with a worktree that has nothing of its own.
+  const { web, tree } = makeClone('web-x')
+  const ghAt = { [web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] }, [tree]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] } }
+  const { engine, pane, pick } = await drawn(web, 'harness-session-0031', ghAt)
+  const sid = 'harness-session-0031'
+  const rows = intentRows(pick)
+  expect("a worktree with nothing of its own: the pane lists main's intents once, by their bare keys", JSON.stringify(rows.map(one => one.id).sort()) === JSON.stringify(['intent:login', 'intent:pay']), rows.map(one => one.id))
+  expect('its rows and keys are those of the checkout without the worktree', JSON.stringify(keysOf(pick)) === JSON.stringify(keysOf(before.pick)), [keysOf(pick), keysOf(before.pick)])
+  expect('no row carries a repository name', rows.length === 2 && rows.every(one => one.repo === '') && issueRows(pick).every(one => one.repo === ''), [rows.map(one => one.repo), issueRows(pick)])
+  expect("one pass runs one fetch, in the session's checkout", JSON.stringify(fetchRuns(engine).map(run => run.argv[2])) === JSON.stringify([web]), fetchRuns(engine).map(run => run.argv))
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect('gh issue list runs once for the clone, whatever its worktrees', JSON.stringify(lists) === JSON.stringify([web]), engine.record.ghAt)
+
+  // The worktree gets an intent of its own, committed on its branch, and an uncommitted changed copy of main's login.
+  writeIntent(tree, 'draft', LOGIN.replace('# Login', '# Draft'))
+  git(tree, 'add', 'docs/intent/draft')
+  git(tree, 'commit', '-q', '-m', 'draft')
+  writeIntent(tree, 'login', LOGIN.replace('- [ ] A2', '- [x] A2'))
+  byKey(await pane(), 'sync')?.props.onPress()
+  await engine.flush()
+  await engine.flush()
+  const more = intentRows(await pane())
+  const ids = more.map(one => one.id).sort()
+  expect("the worktree's own intent and its changed copy are listed under its folder's name, main's still once", JSON.stringify(ids) === JSON.stringify(['intent:login', 'intent:pay', 'intent:web-x/draft', 'intent:web-x/login']), ids)
+  expect("each of the worktree's rows carries its folder's name", more.filter(one => one.id.startsWith('intent:web-x/')).every(one => one.repo === 'web-x'), more.map(one => [one.id, one.repo]))
+  expect('and the pass still runs one fetch', JSON.stringify(fetchRuns(engine).map(run => run.argv[2])) === JSON.stringify([web, web]), fetchRuns(engine).map(run => run.argv[2]))
+
+  more.find(one => one.id === 'intent:web-x/draft')?.press()
+  byKey(await pane(), 'intent-work')?.props.onPress()
+  await engine.flush()
+  expect("Work on this here on the worktree's draft tracks { slug: 'draft', root: the worktree }", JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'draft', root: tree }), engine.store.get(`pinned:${sid}`))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // web/ beside s2/, which has a worktree nested inside it with an intent of its own.
+  const nested = () => {
+    const { parent, s2, web } = makeWorkspace()
+    const x = join(s2, '.claude/worktrees/x')
+    git(s2, 'worktree', 'add', '-q', '-b', 'x', x)
+    writeIntent(web, 'login')
+    writeIntent(x, 'draft')
+    return { parent, s2, web, x }
+  }
+  const idsOf = async engine => {
+    engine.setSurfaces(['terminal'])
+    await engine.command('ather', 'pick')
+    const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id).sort()
+    await engine.flush()
+    await engine.flush()
+    return ids
+  }
+
+  const above = nested()
+  const first = await boot({ root: above.parent, sessionId: 'harness-session-0032' })
+  const ids = await idsOf(first.engine)
+  expect("a parent-folder session finds the worktree nested in one of its checkouts", JSON.stringify(ids) === JSON.stringify(['intent:web/login', 'intent:x/draft']), ids)
+  expect('and fetches twice in a pass, once for each clone', JSON.stringify(fetchRuns(first.engine).map(run => run.argv[2])) === JSON.stringify([above.s2, above.web]), fetchRuns(first.engine).map(run => run.argv[2]))
+  expect('no hook threw', first.engine.record.hookErrors.length === 0, first.engine.record.hookErrors)
+  await first.engine.end('other')
+
+  const named = nested()
+  const second = await boot({ root: named.web, sessionId: 'harness-session-0033', options: { repos: '../s2' } })
+  const found = await idsOf(second.engine)
+  expect("a session in web whose repos option names the clone finds its worktree", JSON.stringify(found) === JSON.stringify(['intent:login', 'intent:x/draft']), found)
+  expect('and fetches twice in a pass, once for each clone', JSON.stringify(fetchRuns(second.engine).map(run => run.argv[2])) === JSON.stringify([named.web, named.s2]), fetchRuns(second.engine).map(run => run.argv[2]))
+  expect('no hook threw', second.engine.record.hookErrors.length === 0, second.engine.record.hookErrors)
+  await second.engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

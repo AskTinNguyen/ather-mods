@@ -21,12 +21,15 @@ import { groupByOf } from './worklist.mjs'
  *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: (root?: string) => Promise<string>, redraw: () => void,
  *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
  *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>,
- *   real?: (folder: string) => Promise<string>
+ *   real?: (folder: string) => Promise<string>,
+ *   worktrees?: (root: string) => Promise<string>
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
  *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.3, and as the Paseo version still keeps them).
  *   `real`: the folder a path really lands in, behind any symbolic link; without it an id holds the folder as given.
+ *   `worktrees`: what `git worktree list --porcelain` prints in the checkout at `root`, '' when git could not say;
+ *   without it the workspace holds no worktree that is not named.
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
  * @typedef {import('./model.mjs').Evidence} Evidence
@@ -229,24 +232,36 @@ export const folderLane = async (io, session, folder) => {
   return { lane: await laneAt(io, root), isOwn: false }
 }
 
-/** @type {Map<string, Promise<{ roots: string[], skipped: string[] }>>} */
+/** @type {Map<string, Promise<{ roots: string[], skipped: string[], clones: string[], left: string[] }>>} */
 const workspaces = new Map()
 
-// The checkouts this session works with (workspace.mjs), read once per session folder and `repos` option
-// and shared by both halves. `log` hears the option folders that are in no checkout, once per read.
-/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} [log] */
-export const workspace = (io, folder, option, log = () => undefined) => {
+// The session's workspace (workspace.mjs), read once per session folder and `repos` option.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} log */
+const readWorkspaceOnce = (io, folder, option, log) => {
   const key = `${normalFolder(folder)}\n${option}`
   const cached = workspaces.get(key)
-  if (cached) return cached.then(found => found.roots)
-  const reading = readWorkspace({ read: io.read, exists: io.exists, list: io.list }, folder, option).catch(() => ({ roots: [], skipped: [] }))
+  if (cached) return cached
+  const { real, worktrees } = io
+  const files = { read: io.read, exists: io.exists, list: io.list, ...(worktrees ? { worktrees } : {}), ...(real ? { real: (/** @type {string} */ one) => realFolder(io, one) } : {}) }
+  const reading = readWorkspace(files, folder, option).catch(() => ({ roots: [], skipped: [], clones: [], left: [] }))
   workspaces.set(key, reading)
-  return reading.then(found => {
+  void reading.then(found => {
     for (const skipped of found.skipped) log(`Ather: ${skipped} (repos) is not in a git checkout; skipped.`)
     log(`Ather: workspace ${found.roots.join(', ') || '(no checkout)'}`)
-    return found.roots
+    if (found.left.length > 0) log(`Ather: workspace is full; left out ${found.left.join(', ')}`)
   })
+  return reading
 }
+
+// The checkouts this session works with, their clones' worktrees after them, shared by both halves. `log`
+// hears the option folders that are in no checkout and what the limits left out, once per read.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} [log] */
+export const workspace = (io, folder, option, log = () => undefined) => readWorkspaceOnce(io, folder, option, log).then(found => found.roots)
+
+// Which clone each workspace checkout is of, by its folder (normalFolder): a checkout and its worktrees share one.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @returns {Promise<Map<string, string>>} */
+export const workspaceClones = (io, folder, option) =>
+  readWorkspaceOnce(io, folder, option, () => undefined).then(found => new Map(found.roots.map((root, at) => [normalFolder(root), found.clones[at] ?? root])))
 
 /** @param {Io} io */
 const repoOf = io => (io.repo ? io.repo().catch(() => '') : Promise.resolve(''))
