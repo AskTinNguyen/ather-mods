@@ -17,3 +17,10 @@
 - S10 (D13): one id through a symbolic link; a checkout not on GitHub is quiet among several. The second look on the desktop found the workspace shrinking to one checkout when the plugin started again after the model had run `cd web`: the workspace was read from `session.start`'s `cwd`; it is now read from the session's project root (2095c57).
 - Unit 222/222, `dev/e2e/repos.mjs` 163/163, S2 e2e 301/334 on a sparse clone of S2's `docs/intent` with the same 33 failing checks as origin/main.
 - Open before merge: a run of `dev/test-all.mjs` on a real S2 checkout on Windows, a look at the pane in a real S2 session, and the director's answers to F-1 to F-3 in findings.md.
+
+## 2026-10-09, merging main again
+
+- origin/main had moved to 0.2.2 (0.2.1: every question through `$.ui.ask`; 0.2.2: `/ather setup`). Merged by hand in 6217aef (eight files: the two manifests, the README, `console.mjs`, `state.mjs` and its Paseo copy, `watch.mjs`, the stand-in engine). Version 0.2.3; the comments on the unscoped keys say "before 0.2.3".
+- What the join needed: setting up is detected in the session's own lane only, around the per-checkout read, and a reading of the same root kept by `laneAt` is dropped with it. `/ather` asks the setup question only when no workspace checkout has intents; `/ather setup` works on the session's own root. The console's work begins again after a setup only where it was skipped at the start: where another checkout's intents had begun it, a second start would have doubled its timers.
+- The questions this branch added (the Work question by key, a decision on another checkout's intent) go through main's `ask` as they are: their labels differ.
+- Unit 249/249, `dev/e2e/repos.mjs` 168/168 (five new rows: a workspace where only the other checkout has intents, and a parent folder with none), S2 e2e 319/352 on the sparse clone with the same 33 failing checks as before the merge. `claude plugin test ather-automata` 3/3.
