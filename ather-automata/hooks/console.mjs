@@ -31,7 +31,7 @@ import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withD
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
-/** @typedef {ReturnType<typeof buildHome>} Home */
+/** @typedef {ReturnType<typeof buildHome> & { sync: import('./team.mjs').Sync }} Home */
 /** @typedef {import('./home.mjs').Item} Item */
 /** @typedef {import('./home.mjs').Next} Next */
 /** @typedef {import('./home.mjs').Work} Work */
@@ -124,6 +124,8 @@ let isAwake = null
 let repos = ''
 /** @type {{ version: number, at: number, model: Home | null }} */
 let view = { version: -1, at: 0, model: null }
+// How many times the view was marked stale: one built while that happened is not kept as fresh.
+let staled = 0
 // The pack whose words the pane uses (packs/index.mjs, wordsLane); set whenever the view is rebuilt.
 /** @type {import('./packs/index.mjs').Pack} */
 let pack = unreal
@@ -558,6 +560,7 @@ async function syncMain($, isAsked = false) {
       const before = syncs.get(root) ?? NO_SYNC
       if (!(isAsked ? canFetchNow : isFetchDue)(before, Date.now())) continue
       syncs.set(root, { ...before, isFetching: true, triedAt: Date.now() })
+      stale()
       $.ui.invalidate('ui.render')
       const { error, lock, moved } = await fetchMain(repo($, root))
       const where = checkouts.length > 1 ? ` (${root})` : ''
@@ -570,6 +573,7 @@ async function syncMain($, isAsked = false) {
       if (ended) {
         syncs.set(root, { ...(syncs.get(root) ?? NO_SYNC), ...ended.sync })
         fetched.delete(root)
+        stale()
         $.ui.invalidate('ui.render')
       }
     }
@@ -584,6 +588,7 @@ function syncShown() {
 }
 
 function stale() {
+  staled += 1
   view = { ...view, version: -1 }
 }
 
@@ -700,7 +705,11 @@ async function home($) {
   const profile = await state.readProfile(files, me, chosen)
   // The week-calendar plugin keeps this week's figures in ~/.calendar/latest.json.
   const userHome = await homeDir(host($))
-  const model = buildHome({
+  // The list and its sync line are taken together: a read that lands while the rest is awaited marks
+  // the view stale, so this one is drawn once and not kept.
+  const seen = staled
+  const sync = syncShown()
+  const built = buildHome({
     intents,
     pinned: (await trackedKey($)) || null,
     me,
@@ -722,7 +731,8 @@ async function home($) {
     tz,
     pack: chosen,
   })
-  view = { version, at: now, model }
+  const model = { ...built, sync }
+  view = { version: seen === staled ? version : -1, at: now, model }
   return model
 }
 
@@ -1492,9 +1502,9 @@ function lookOf($, width, back) {
 }
 
 // The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
-/** @param {any} el @param {Engine} $ @param {string} text @param {number} width */
-function headerLine(el, $, text, width) {
-  return statusLine(el, { text, fresh: syncText(syncShown(), Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
+/** @param {any} el @param {Engine} $ @param {import('./team.mjs').Sync} sync @param {string} text @param {number} width */
+function headerLine(el, $, sync, text, width) {
+  return statusLine(el, { text, fresh: syncText(sync, Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
 }
 
 // ---------------------------------------------------------------- what the intent recorded
@@ -1625,7 +1635,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
 
   if (paneMode === 'pick') {
     const shown = filterWork(model.work, pickQuery)
-    rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
+    rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, model.sync, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
     // Search opens a field (without one, a question whose Other is the words). Sort cycles Recent, Ready to close, Oldest; Group cycles Person, Area, Stage, None.
     const field = isSearchOpen && hasInput
     const search = field
@@ -1804,7 +1814,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       [
         // The pane's title bar names Ather: no brand line repeats it (D7).
         isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') }),
-        headerLine(el, $, status, width),
+        headerLine(el, $, model.sync, status, width),
         ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
         ...(meta ? [metaRow(el, header)] : []),
       ].filter(Boolean),
