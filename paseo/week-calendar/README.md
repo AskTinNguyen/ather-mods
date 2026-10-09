@@ -20,7 +20,7 @@ When the plugin starts, and whenever its settings change, it writes `~/.calendar
 
 - **Sidebar → Week calendar**: Build this week (PRs merged with their authors, productive time, agent-busy and waiting hours, projects, no-commit and excluded sessions), Publish (dry run), Publish… (asks first), and Schedule weekly job (Task Scheduler, Mondays 06:00, `weekly.mjs`; removing it asks first).
 - **`/weekly` in an agent** stands for "what did I do this week": the agent titles untitled sessions, rebuilds the calendar, writes the three-line report, asks the weekly survey, saves it and publishes.
-- **Settings → Plugins → week-calendar**: machine name, operator, available hours, reports repo, GitHub login, ignored folders, extra git emails, and the calendar style (theme, accent, colour by, week start).
+- **Settings → Plugins → week-calendar**: machine name, operator, available hours, reports repo, GitHub login, ignored folders, extra git emails, and the calendar style (theme, colour by, week start; the accent is always Ather's lime).
 
 ## Differences
 

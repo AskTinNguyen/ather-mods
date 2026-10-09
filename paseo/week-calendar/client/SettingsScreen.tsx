@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Text } from "react-native";
 import { calendarSettings, type CalendarSettings } from "../shared/settings";
 
-type TextField = "machineName" | "operator" | "availableHoursPerWeek" | "reportsRepoUrl" | "githubLogin" | "ignoreFolders" | "gitEmails" | "accent";
+type TextField = "machineName" | "operator" | "availableHoursPerWeek" | "reportsRepoUrl" | "githubLogin" | "ignoreFolders" | "gitEmails";
 
 const FIELDS: { key: TextField; label: string; hint: string }[] = [
   { key: "machineName", label: "Machine name", hint: "This PC's name in team reports. Empty: the computer name." },
@@ -14,7 +14,6 @@ const FIELDS: { key: TextField; label: string; hint: string }[] = [
   { key: "githubLogin", label: "GitHub login", hint: "Tells your merged PRs from teammates' PRs you committed to. Empty: the account gh is signed in as." },
   { key: "ignoreFolders", label: "Ignored folders", hint: "Comma-separated folder fragments whose sessions are left out." },
   { key: "gitEmails", label: "Extra git emails", hint: "Comma-separated commit emails that count as this PC's (e.g. the AI agent account)." },
-  { key: "accent", label: "Accent colour", hint: "Hex colour for the calendar, e.g. #7c5cff." },
 ];
 
 export function SettingsScreen({ theme }: PluginSurfaceProps) {
@@ -37,7 +36,7 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
   const save = (patch: Partial<CalendarSettings>) => settings.save({ ...values, ...patch }, settings.revision);
   const saveDraft = () => {
     const hours = Number(draft.availableHoursPerWeek);
-    void save({ ...draft, availableHoursPerWeek: hours > 0 ? hours : 168, accent: /^#?[0-9a-f]{6}$/i.test(draft.accent) ? `#${draft.accent.replace("#", "")}` : values.accent });
+    void save({ ...draft, availableHoursPerWeek: hours > 0 ? hours : 168 });
   };
   return (
     <>

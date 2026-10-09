@@ -46,7 +46,7 @@ function agentPrompt(scripts: string, home: string) {
 - The only data that leaves this PC is the weekly report the publish script pushes to the team's private agent-reports repo.
 
 ## Scripts
-${build} --theme <dark|light> --accent <#rrggbb> --color-by <project|task> --week-start <monday|sunday> --export
+${build} --theme <dark|light> --color-by <project|task> --week-start <monday|sunday> --export
 - --list-untitled prints the sessions that have no title (sessionId + first typed message), without building.
 - --week-offset -1 builds last week instead of this one.
 - It reads ~/.claude/projects/**/*.jsonl (subagent logs too), converts times to local time, names projects by their git remote,
@@ -63,26 +63,26 @@ ${publish} [--week-offset -1]
   to publish, or after saving a survey.
 
 ## Preferences (memory)
-Your preferences live in your agent memory directory as \`preferences.md\` with exactly these four lines:
+Your preferences live in your agent memory directory as \`preferences.md\` with these three lines:
 theme: dark|light
-accent: #rrggbb
 color-by: project|task
 week-start: monday|sunday
+The calendar's accent is always Ather's lime: an \`accent:\` line left from before is ignored, so never ask for one.
 
 Every run, first read preferences.md from your memory directory.
 - If it is missing or incomplete AND the request does not contain the answers, do nothing else and reply with exactly:
   NEEDS_PREFERENCES
   1. Style: dark or light?
-  2. One accent color (name or hex)?
-  3. Color blocks by project or by task type?
-  4. Week starts on Monday or Sunday?
-- If the request contains the answers, convert the color to a hex value, write preferences.md (and add a one-line pointer to it in MEMORY.md
+  2. Color blocks by project or by task type?
+  3. Week starts on Monday or Sunday?
+- If the request contains the answers, write preferences.md (and add a one-line pointer to it in MEMORY.md
   in your memory directory if that file exists or your memory instructions ask for one), then continue.
 - Always follow the saved preferences; only change them when the request explicitly gives new ones.
 
 ## Excluding or including sessions
 When the request asks to exclude (or include, count, put back) a session, find it in ${home}/.calendar/latest.json "sessions"
-by title, first message, project or time. If more than one could match, list them and do nothing. Then edit
+by title, first message, project or time (a request copied from the calendar page names the sessionId in brackets: use it).
+If more than one could match, list them and do nothing. Then edit
 ${home}/.calendar/excluded.json, { "exclude": [sessionIds], "include": [sessionIds] }: to exclude, add the id to exclude and drop it
 from include; to include, the reverse (include also overrides the automatic outlier rule). Create the file if missing. Then rebuild.
 
@@ -92,6 +92,8 @@ When the request gives survey answers, write ${home}/.calendar/survey/<isoWeek>.
   "noCommitReasons": { "<sessionId>": "blocked" | "exploratory" | "abandoned" | "parked" }, "note": "..." or null,
   "answeredAt": "<ISO time now>" }
 Keep fields already in the file that the request does not change. Then rebuild with --export and run the publish script.
+A request that gives only no-commit reasons (copied from the calendar page) is not the survey: merge them into "noCommitReasons",
+leave "answeredAt" as it is (absent stays absent), rebuild with --export, and publish only if the request asks to.
 
 ## Each run
 1. Read preferences (above).
@@ -145,7 +147,7 @@ export const register: Register = (on, options) => {
         "Builds the weekly calendar and effectiveness report of the user's Claude Code sessions (local HTML in ~/.calendar/; PRs merged, " +
         'productive agent time). Use it to (re)generate the calendar, before any weekly report, to exclude or include sessions ' +
         '(outliers such as automated polling sessions), to save weekly survey answers, and to publish the weekly report to the team repo. ' +
-        'If it answers NEEDS_PREFERENCES, ask the user those four questions with AskUserQuestion, then run it again with the answers in the prompt.',
+        'If it answers NEEDS_PREFERENCES, ask the user those three questions with AskUserQuestion, then run it again with the answers in the prompt.',
       prompt: agentPrompt(`${root}/scripts`, home),
       tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob'],
       memory: 'user',
@@ -183,7 +185,7 @@ export const register: Register = (on, options) => {
     const rule = [
       'Weekly report rule (week-calendar plugin):',
       `1. First regenerate the calendar: call the Agent tool with subagent_type "${AGENT_TYPE}" and prompt "Regenerate this week's calendar."`,
-      '   If it answers NEEDS_PREFERENCES, ask the user its four questions with AskUserQuestion (style dark/light, one accent color,',
+      '   If it answers NEEDS_PREFERENCES, ask the user its three questions with AskUserQuestion (style dark/light,',
       '   color by project or task type, week starts Monday or Sunday), then call it again with the answers in the prompt.',
       `2. Read ${home}/.calendar/latest.json (sessions, totals, metrics, machineHours, prsMerged, noCommitSessions, survey).`,
       '3. Reply with exactly 3 lines, then the calendar path on a 4th line:',
