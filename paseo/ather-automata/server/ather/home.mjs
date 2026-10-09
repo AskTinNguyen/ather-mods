@@ -241,7 +241,9 @@ export const buildHome = input => {
     const named = `${(paths[0] ?? '').split('/').pop()?.replace(/\.(uasset|umap)$/i, '') ?? ''}${paths.length > 1 ? ` and ${plural(paths.length - 1, 'more')}` : ''}`
     items.push({ kind: 'lost', id: 'lost', label: 'See what a merge lost', title: `A merge dropped your edits to ${named}`, question: `A merge dropped your edits to ${named}`, prompt: `The last merge kept the other side of these binary assets, so this branch's edits to them are gone: ${paths.join(', ')}. List them for me, itemised, each marked as a lost optimisation or a broken feature, and propose how to re-apply each.` })
   }
-  for (const one of owned) {
+  // A session that tracks an intent answers for that intent only: pressing another intent's call here would put it
+  // in this session's chat. With nothing tracked, every call of yours is offered, each named by its intent.
+  for (const one of intent ? owned.filter(each => each.key === pinned) : owned) {
     for (const finding of directorCalls(one)) {
       items.push({ kind: 'call', slug: one.key, id: callId(one.key, finding.id), label: `Decide ${finding.id} on ${one.key}`, title: `${finding.id} · ${one.key === pinned ? '' : `${one.key} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.key}: ${finding.title}`, prompt: callPrompt(one, finding), answers: findingAnswers(callName(one), finding) })
     }

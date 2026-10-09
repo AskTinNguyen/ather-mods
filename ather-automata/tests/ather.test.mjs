@@ -457,6 +457,18 @@ describe('home', () => {
     expect(home({ sent: ['call:spawner:F-1'] }).open).toHaveLength(0)
   })
 
+  test('a session answers for its tracked intent only; the calls of my other intents are not offered here', () => {
+    const other = intent('fanout', {}, { findings: FINDINGS.replace(/F-1/g, 'F-9'), mtimeMs: 7 })
+    const tracked = home({ intents: [SPAWNER, other, THEIRS] })
+    expect(tracked.items.map(one => one.id)).toEqual(['call:spawner:F-1'])
+    // Tracking the other intent shows its call instead.
+    expect(home({ intents: [SPAWNER, other, THEIRS], pinned: 'fanout' }).items.map(one => one.id)).toEqual(['call:fanout:F-9'])
+    // Nothing tracked: every call of mine is offered, each named by its intent.
+    const none = home({ intents: [SPAWNER, other, THEIRS], pinned: null })
+    expect(none.items.map(one => one.id).sort()).toEqual(['call:fanout:F-9', 'call:spawner:F-1'])
+    expect(none.items.every(one => one.title.includes(' · ' + one.id.split(':')[1]))).toBe(true)
+  })
+
   test('a newcomer gets the tour as Next and no hand-over offer, even in the evening', () => {
     const model = home({ me: 'Minh Tran', role: '', pinned: null, tourDone: false, now: EVENING })
     expect(model.isNewcomer).toBe(true)
@@ -1832,6 +1844,14 @@ describe('one pane over the workspace', () => {
     const keys = keysOf(needsRows(el, false, { items: model.items, open: model.open, opened: new Set(['web/login', 'login']), width: 100, key: () => undefined, onAct: press, onToggle: press, answer: /** @type {any} */ (answer) }))
     expect(repeated(keys)).toEqual([])
     expect(['calls-login', 'calls-web/login', 'item-call:login:F-1', 'item-call:web/login:F-1'].every(key => keys.includes(key))).toBe(true)
+  })
+
+  test("the same slug in two checkouts: a session tracking one is offered that one's decisions, not the other's", () => {
+    const own = from('/ws/s2', 's2', 'login', true, {}, { findings: FINDINGS, updatedAt: 2 })
+    const web = from('/ws/web', 'web', 'login', false, {}, { findings: FINDINGS, updatedAt: 1 })
+    const calls = (/** @type {string} */ pinned) => buildHome(/** @type {any} */ (base({ intents: [own, web], pinned, away: OFF }))).items.filter(one => one.kind === 'call').map(one => one.id)
+    expect(calls('web/login')).toEqual(['call:web/login:F-1'])
+    expect(calls('login')).toEqual(['call:login:F-1'])
   })
 
   test("teammates' intents from two checkouts, grouped: every row once, the same slug twice, each with its repository", () => {
