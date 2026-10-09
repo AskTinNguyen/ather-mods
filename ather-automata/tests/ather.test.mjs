@@ -440,6 +440,18 @@ describe('home', () => {
     expect(home({ sent: ['call:spawner:F-1'] }).open).toHaveLength(0)
   })
 
+  test('a session answers for its tracked intent only; the calls of my other intents are not offered here', () => {
+    const other = intent('fanout', {}, { findings: FINDINGS.replace(/F-1/g, 'F-9'), mtimeMs: 7 })
+    const tracked = home({ intents: [SPAWNER, other, THEIRS] })
+    expect(tracked.items.map(one => one.id)).toEqual(['call:spawner:F-1'])
+    // Tracking the other intent shows its call instead.
+    expect(home({ intents: [SPAWNER, other, THEIRS], pinned: 'fanout' }).items.map(one => one.id)).toEqual(['call:fanout:F-9'])
+    // Nothing tracked: every call of mine is offered, each named by its intent.
+    const none = home({ intents: [SPAWNER, other, THEIRS], pinned: null })
+    expect(none.items.map(one => one.id).sort()).toEqual(['call:fanout:F-9', 'call:spawner:F-1'])
+    expect(none.items.every(one => one.title.includes(' · ' + one.id.split(':')[1]))).toBe(true)
+  })
+
   test('a newcomer gets the tour as Next and no hand-over offer, even in the evening', () => {
     const model = home({ me: 'Minh Tran', role: '', pinned: null, tourDone: false, now: EVENING })
     expect(model.isNewcomer).toBe(true)
