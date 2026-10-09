@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { LIME } from './render.mjs'
 
 const gitUserName = () => {
   try { return execFileSync('git', ['config', '--global', 'user.name'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { return '' }
@@ -41,7 +42,6 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env) {
   try { file = { ...file, ...JSON.parse(fs.readFileSync(args.config || path.join(outDir, 'config.json'), 'utf8')) } } catch {}
   const pick = (flag, key, dflt) => args[flag] ?? file[key] ?? dflt
 
-  const accent = String(pick('accent', 'accent', '#7c5cff'))
   const cfg = {
     args,
     home,
@@ -50,7 +50,8 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env) {
     now: args.now ? new Date(args.now) : new Date(),
     prefs: {
       theme: pick('theme', 'theme', 'dark') === 'light' ? 'light' : 'dark',
-      accent: /^#?[0-9a-f]{6}$/i.test(accent) ? '#' + accent.replace('#', '') : '#7c5cff',
+      // Ather's lime on every calendar; an --accent flag or a saved accent from before is ignored.
+      accent: LIME,
       colorBy: pick('color-by', 'colorBy', 'project') === 'task' ? 'task' : 'project',
       weekStart: pick('week-start', 'weekStart', 'monday') === 'sunday' ? 'sunday' : 'monday',
     },
