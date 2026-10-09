@@ -432,7 +432,7 @@ export const makeWebPack = (profile, packageJson) => {
       pane: 'The session keeps working; production deploys, migrations and secret changes wait for your review.',
     },
     statusWhat: 'this web repository session',
-    notHere: 'Ather Automata works in repositories with intents (a docs/intent folder); none here.',
+    notHere: 'Ather Automata works in repositories with intents (a docs/intent folder); none here. /ather setup adds the structure.',
     gates,
     production,
     scripts,

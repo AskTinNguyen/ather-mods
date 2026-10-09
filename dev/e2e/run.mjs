@@ -1525,6 +1525,81 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   expect('HANVIET_ROOT names a han-viet checkout with .ather/profile.json', false, HANVIET_ROOT)
 }
 
+// ---------------------------------------------------------------- setting a repository up for intents
+//
+// A repository with a package.json and no docs/intent: /ather offers the setup, /ather setup hands the
+// session one prompt naming the bundle's zip and the pieces to add. The test then writes the pieces,
+// standing in for the session. Nothing here is laid out: the layouts stay those of the blocks above.
+
+{
+  const { SETUP_PIECES } = await import('./out/hooks/setup.mjs')
+  const paths = SETUP_PIECES.map(one => one.path)
+  const start = async root => {
+    fs.mkdirSync(path.join(root, '.git'), { recursive: true })
+    fs.writeFileSync(path.join(root, '.git/HEAD'), 'ref: refs/heads/main\n')
+    const engine = createEngine({ root, surfaces: ['terminal'], user: 'Tin Nguyen' })
+    engine.store.set('tz', tzFor(12))
+    register(engine.on, { briefGate: 'warn' })
+    await engine.start()
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    engine.store.set('tz', tzFor(12))
+    return engine
+  }
+  const put = (root, name, text) => {
+    fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true })
+    fs.writeFileSync(path.join(root, name), text)
+  }
+  // The one prompt: it names the zip, and which of the five target paths.
+  const names = (sent, wanted) => sent.length === 1 && /intent-setup\.zip/.test(sent[0]) && paths.every(one => sent[0].includes(one) === wanted.includes(one))
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-setup-'))
+  put(root, 'package.json', '{ "name": "new-here", "scripts": { "test": "node --test" } }\n')
+  const engine = await start(root)
+  const away = await run(engine, [], 'away', 'tonight')
+  expect('setup: /away in a repository without intents asks nothing, sends nothing and says there are none here', away.dialogs.length === 0 && away.sent.length === 0 && /none here/.test(away.out), away)
+  const later = await run(engine, [pick('Not now')])
+  expect('setup: /ather in a repository without intents asks one question, Set up intents here or Not now', later.dialogs.length === 1 && later.left === 0 && later.dialogs[0].options.map(option => option.label).join('|') === 'Set up intents here|Not now', dialogText(later.dialogs))
+  expect('setup: "Not now" sends nothing and answers as /away does', later.sent.length === 0 && later.filled.length === 0 && later.out === away.out && engine.record.opens.length === 0, later)
+  const dismissed = await run(engine, [dismiss])
+  expect('setup: the question dismissed sends nothing', dismissed.dialogs.length === 1 && dismissed.sent.length === 0 && dismissed.out === away.out, dismissed)
+  const chosen = await run(engine, [pick('Set up intents here')])
+  expect('setup: "Set up intents here" submits exactly one prompt, naming the zip and the five target paths', chosen.dialogs.length === 1 && names(chosen.sent, paths), chosen)
+  for (const word of ['setup', 'init']) {
+    const typedOut = await run(engine, [], 'ather', word)
+    expect(`setup: /ather ${word} asks nothing and submits exactly one prompt, naming the zip and the five target paths`, typedOut.dialogs.length === 0 && names(typedOut.sent, paths) && paths.every(one => typedOut.out.includes(one)), typedOut)
+  }
+  expect('setup: the prompt names the web pack beside a package.json', / web\b/.test(chosen.sent[0] ?? '') && !/unreal/.test(chosen.sent[0] ?? ''), chosen.sent)
+
+  // The session's writing, done here: the five pieces, with a profile whose gate no default names.
+  put(root, '.agents/skills/intent/SKILL.md', '---\nname: intent\ndescription: Run a feature as an intent.\n---\n')
+  put(root, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n- `api`: the server.\n')
+  put(root, '.ather/profile.json', JSON.stringify({ version: 1, pack: 'web', gates: [{ id: 'tests', command: 'npm run zz-proof', proofs: ['tests'], proves: 'the unit tests' }], mergePolicy: 'hold', areas: ['app', 'api'] }))
+  put(root, '.gitignore', 'node_modules/\n.ather/local/\n')
+  put(root, 'AGENTS.md', 'Features run as intents: read `.agents/skills/intent/SKILL.md`.\n')
+  const opened = await run(engine, [])
+  expect('setup: with the five pieces written, /ather in the same session opens Home and asks no setup question', opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather'), [opened, engine.record.opens])
+  const tree = JSON.stringify(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), (key, value) => (typeof value === 'function' ? undefined : value))
+  expect('setup: Home is drawn for the repository, with the tour as the next step', /tour/i.test(tree), tree.slice(0, 600))
+  const role = await run(engine, [], 'ather', 'skip')
+  expect("setup: the same session reads the new profile (the role question names the profile's gate)", role.dialogs.some(dialog => dialog.options.some(option => /npm run zz-proof/.test(option.description))), dialogText(role.dialogs))
+  const again = await run(engine, [], 'ather', 'setup')
+  expect('setup: with nothing missing, /ather setup submits nothing and reads the profile back (web, 1 gate, 2 areas)', again.sent.length === 0 && again.dialogs.length === 0 && /\bweb\b/.test(again.out) && /\b1 gate\b/.test(again.out) && /\b2 areas\b/.test(again.out), again)
+  expect('no hook threw in the setup scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  fs.rmSync(root, { recursive: true, force: true })
+
+  // A repository that already runs intents, with its readme and no profile: only what is missing is named.
+  const partial = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-setup-'))
+  put(partial, 'package.json', '{ "name": "runs-intents" }\n')
+  put(partial, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n')
+  const second = await start(partial)
+  const some = await run(second, [], 'ather', 'setup')
+  expect('setup: where docs/intent/README.md is there and the profile is not, the prompt names .ather/profile.json and not the readme', names(some.sent, paths.filter(one => one !== 'docs/intent/README.md')) && some.dialogs.length === 0, some)
+  const home = await run(second, [])
+  expect('setup: a repository that runs intents with pieces missing still opens Home on /ather, with no setup question', home.dialogs.length === 0 && home.sent.length === 0 && second.record.opens.some(pane => pane.id === 'ather'), [home, second.record.opens])
+  expect('no hook threw in the partial setup scenario', second.record.hookErrors.length === 0, second.record.hookErrors)
+  fs.rmSync(partial, { recursive: true, force: true })
+}
+
 {
   // Every worker Claude Code lists is shown, those another worker started included; clocks are true.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-home-'))

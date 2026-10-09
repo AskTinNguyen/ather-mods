@@ -26,6 +26,7 @@ import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, read
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
+import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from './setup.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
@@ -164,6 +165,17 @@ function laneOf($) {
   return state.lane(io($), cwd)
 }
 
+// For /ather: a checkout without intents is read again, since /ather setup may have added them in this
+// session. When it has them now, the console's work, skipped at the start, begins with the next wake.
+/** @param {Engine} $ */
+async function laneNow($) {
+  const before = await laneOf($)
+  if (before.isS2) return before
+  const lane = await state.laneAgain(io($), cwd)
+  if (lane.isS2) isAwake = null
+  return lane
+}
+
 /** @param {import('claude-code').On} on */
 export function register(on) {
   // The desktop app runs sessions the way the SDK does: not interactive at start, no surface yet.
@@ -196,7 +208,9 @@ export function register(on) {
   })
 
   on('command.run', { command: 'ather' }, async ($, e) => {
-    if (!(await laneOf($)).isS2) return { text: (await laneOf($)).pack.notHere }
+    // Setting up is for a repository without intents too, so it is answered before the check below.
+    if (/^(setup|init)$/i.test(e.args.trim())) return { text: await setupCommand($) }
+    if (!(await laneNow($)).isS2) return { text: await setupQuestion($) }
     await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }
@@ -292,7 +306,7 @@ async function openConsole($, folder) {
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | setup]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -791,8 +805,40 @@ async function skipTour($) {
   })
 }
 
+// ---------------------------------------------------------------- setting a repository up
+
+// /ather setup (setup.mjs): the session is handed the bundle and what is missing here, and does the
+// writing itself. With nothing missing it answers with what the profile reads as, and sends nothing.
+/** @param {Engine} $ */
+async function setupCommand($) {
+  const { root } = await laneOf($)
+  const setup = await readSetup(io($), root)
+  if (setup.isComplete) return setupSummary(setup)
+  // The bundle ships in the plugin, beside hooks/.
+  const zip = `${$.plugin.root.replace(/\\/g, '/')}/templates/intent-setup.zip`
+  const pack = suggestPack(await $.fs.list(root).catch(() => []))
+  void deliver($, setupPrompt({ zip, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
+  return `Asked the session to set up intents here. To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
+}
+
+// /ather where there are no intents: one question, never the setup itself.
+/** @param {Engine} $ */
+async function setupQuestion($) {
+  const { notHere } = (await laneOf($)).pack
+  return ask($, {
+    header: 'Intents',
+    question: 'This repository has no intents yet (no docs/intent folder). Set them up?',
+    choices: [
+      { label: 'Set up intents here', description: 'This session reads the repository, proposes areas and gates, and asks you before it writes.', run: () => setupCommand($) },
+      { label: 'Not now', description: 'Nothing changes. /ather setup does it later.', run: async () => notHere },
+    ],
+    fallback: notHere,
+    onTyped: async () => notHere,
+  })
+}
+
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'setup', 'init']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {

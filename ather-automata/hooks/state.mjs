@@ -10,7 +10,7 @@
 import { isHolding, isRecordingQuestions, ledgerWithWindow, newWindow, nextLedgerId, nextParkId, offAway, pendingEntry } from './away.mjs'
 import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
-import { packFor } from './packs/index.mjs'
+import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { groupByOf } from './worklist.mjs'
 
@@ -102,6 +102,18 @@ export const lane = (io, cwd) => {
     if (found.me === '' && lanes.get(cwd) === read) lanes.delete(cwd)
   })
   return read
+}
+
+// For /ather where there were no intents: /ather setup may have added them in this session. Once the
+// folder is there the checkout is read again, its pack too (the profile is new). A lane that runs
+// intents is kept as read.
+/** @param {Io} io @param {string} cwd */
+export const laneAgain = async (io, cwd) => {
+  const found = await lane(io, cwd)
+  if (found.isS2 || !(await io.exists(`${found.root}/docs/intent`))) return found
+  await forgetPack({ sessionId: io.sessionId }, found.root)
+  lanes.delete(cwd)
+  return lane(io, cwd)
 }
 
 /** @param {Io} io */

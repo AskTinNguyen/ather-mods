@@ -341,7 +341,7 @@ export const unreal = {
     pane: 'The session keeps working; merges and pushes to main wait for your review.',
   },
   statusWhat: 'this S2 session',
-  notHere: 'Ather Automata works in S2 checkouts (a docs/intent folder); none here.',
+  notHere: 'Ather Automata works in S2 checkouts (a docs/intent folder); none here. /ather setup adds the structure.',
   gates: [],
   production: null,
 }
