@@ -129,8 +129,9 @@ test('lease end and overrun: the holder is told before the end and at the end, e
 
 test('a stale lease is freed only when its holder is gone and no Editor runs', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
-  w.put(LOCK, heldBy('bbbbbbbb', T(14, 30)))
-  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: NOW - 10 * MIN, holding: { since: T(14, 0), end: T(14, 30), extended: 0 } }))
+  // A54 (rev 20): the lease ends 14:35, inside the 10 min after which a lapsed lease is released anyway: this is the gone-holder path.
+  w.put(LOCK, heldBy('bbbbbbbb', T(14, 35)))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: NOW - 10 * MIN, holding: { since: T(14, 0), end: T(14, 35), extended: 0 } }))
   await $.session.start(START)
   const ran = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))
   expect(ran).toContain('the lease of session bbbbbbbb was stale')

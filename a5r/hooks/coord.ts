@@ -94,7 +94,16 @@ export type SessionFile = {
   prBaseline?: string[]
   /** A52: the after-the-fact scorer that wrote `prsKnown` (absent: before 0.12.3, which scored the checkout). */
   prScorer?: number
+  /** A55: when this session's main loop last ran (a prompt, a tool call, a turn's end); absent before 0.12.4. */
+  lastTurnAt?: number
+  /** A54/A55: written into the holder's file by the session that released its lease: why and when, so the holder's
+   * own A5R tells it (a coordination notice) at its next minute. */
+  released?: Released
 }
+
+/** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, no Editor running) or an unseen
+ * grant passed on (no turn since it, 10 min). */
+export type Released = { kind: 'lapsed' | 'unseen'; at: number; by: string; since: number; end: number }
 
 export const blankSession = (session: string, lane: string, title: string, now: number): SessionFile => ({
   v: 1,
@@ -113,7 +122,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(v.released && typeof v.released === 'object' && typeof v.released.since === 'number' ? { released: v.released } : {}) }
   } catch {
     return null
   }
@@ -236,6 +245,57 @@ export const heldLine = (h: Held): string => {
 /** D2: the standard's FREE line, then the words every older reader takes for free. */
 export const freeLine = (f: { since: number; by: string; note: string; background: 'none' | 'unknown' }): string =>
   `FREE since=${stampOf(f.since)} by=${safeWord(f.by)} note=${safeNote(f.note)} background=${f.background} · free since ${hhmm(f.since)}`
+
+// ---------- A54 / A55: a lapsed lease and an unseen grant, released by any session's A5R ----------
+/** A54: how long past its end a lease with no Editor running is kept before it is released. */
+export const LAPSE_MS = 10 * 60_000
+/** A55: how long a grant its session never saw (no turn since) is kept while another session waits. */
+export const UNSEEN_MS = 10 * 60_000
+
+/** The grant and end moments of a standard HELD line: `since=HH:MM YYYY-MM-DD` dates it, `end=HH:MM` is the first such
+ * time after it (a lease past midnight ends the next day). A line without a dated since reads its end nearest now. */
+export const lockTimes = (lock: LockLine, now: number): { since: number; end: number } | null => {
+  const m = /^(\d{1,2}):(\d{2}) (\d{4})-(\d{2})-(\d{2})$/.exec(lock.since)
+  const e = /^(\d{1,2}):(\d{2})$/.exec(lock.end)
+  if (!e) return null
+  if (!m) {
+    const end = atNearest(lock.end, now)
+    return end === null ? null : { since: end, end }
+  }
+  const since = new Date(Number(m[3]), Number(m[4]) - 1, Number(m[5]), Number(m[1]), Number(m[2])).getTime()
+  const d = new Date(since)
+  d.setHours(Number(e[1]), Number(e[2]), 0, 0)
+  const end = d.getTime() < since ? d.getTime() + 24 * 3_600_000 : d.getTime()
+  return { since, end }
+}
+
+/** Every Unreal Editor process the probe saw (UnrealEditor and UnrealEditor-Cmd). */
+export const unrealPids = (probe: Probe | null): number[] => (probe?.procs ?? []).filter(p => isName(p, 'UnrealEditor') || isName(p, 'UnrealEditor-Cmd')).map(p => p.pid)
+
+/** A54 / A55: whether the lock's lease may be released by any session now, and why. Never while any Unreal Editor
+ * process runs (the overrun notice stays) or while the lock's own pid still runs; never without a probe reading.
+ * Lapsed: 10 min past its end. Unseen: 10 min after the grant its session ran no turn (its a5r writes `lastTurnAt`;
+ * an older a5r that writes none is never judged), Ather's lane shows no activity since, and another session waits. */
+export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; probe: Probe | null; waiting: readonly SessionFile[] }): Released | null => {
+  const { lock, now } = x
+  if (lock.kind !== 'held' || !lock.isStandard || !lock.id8 || !x.probe) return null
+  const t = lockTimes(lock, now)
+  if (!t) return null
+  if (unrealPids(x.probe).length > 0) return null
+  if (lock.pid !== null && x.probe.procs.some(p => p.pid === lock.pid)) return null
+  if (now >= t.end + LAPSE_MS) return { kind: 'lapsed', at: now, by: '', since: t.since, end: t.end }
+  const holder = x.files.find(f => f.id8 === lock.id8)
+  const lane = x.lanes.find(l => l.sessionId.toLowerCase().startsWith(lock.id8))
+  const isUnseen = typeof holder?.lastTurnAt === 'number' && holder.lastTurnAt < t.since && (lane?.lastActiveAt ?? 0) < t.since
+  if (isUnseen && now - t.since >= UNSEEN_MS && x.waiting.some(f => f.id8 !== lock.id8)) return { kind: 'unseen', at: now, by: '', since: t.since, end: t.end }
+  return null
+}
+
+/** A54 / A55: the FREE line's note: whose lease, why it was released. */
+export const releasedNote = (r: Released, lock: LockLine): string =>
+  r.kind === 'lapsed'
+    ? `lapsed lease of ${lock.lane || 'a lane'} (session-${lock.id8}): it ended ${hhmm(r.end)}, ${Math.round((r.at - r.end) / 60_000)} min ago, pid ${lock.pid ?? 'none'}, no Unreal Editor process running`
+    : `unseen grant of ${lock.lane || 'a lane'} (session-${lock.id8}): granted ${hhmm(r.since)}, no turn of that session since and no Editor launched; passed to the next in the queue`
 
 // ---------- the queue and the grant ----------
 export type Gates = { pieGb: number; nopieGb: number }
@@ -705,6 +765,8 @@ export const NOTICES = {
   idle: (min: number): string => noticeText('Editor lease', `this session holds the Editor but has not used it for ${min} min`, 'release it with the editor tool (the Editor may stay open: say so in the note)'),
   yield: (lane: string, minutes: number): string => noticeText('Editor yield', `${lane} asks for the Editor for ~${minutes} min, no build`, 'at your next safe point (≤ 10 min): stop PIE, save only your own assets, release with the editor tool; if you cannot pause, keep it and finish by your end time'),
   recovered: (holder: string): string => noticeText('Editor', `the lease of session ${holder} was stale (its lane is gone, no UnrealEditor runs) and was freed`, 'nothing to do: the queue goes on'),
+  lapsed: (r: Released): string => noticeText('Editor lease', `your lease (${hhmm(r.since)}–${hhmm(r.end)}) lapsed: ${Math.round((r.at - r.end) / 60_000)} min past its end with no Editor running, so ${r.by || 'another session'} released it at ${hhmm(r.at)} and the queue went on`, 'nothing of yours was closed; request the Editor again with the editor tool if you still need it'),
+  passedOn: (r: Released): string => noticeText('Editor', `the Editor was granted to this session at ${hhmm(r.since)}, but this session ran no turn in the next ${Math.round((r.at - r.since) / 60_000)} min and launched no Editor, so ${r.by || 'another session'} passed it to the next in the queue at ${hhmm(r.at)}`, 'request it again with the editor tool when you are ready to use it'),
   goneEditor: (who: string, pid: number): string => noticeText('Editor', `${who} is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; tell Hai and wait (AGENTS.md: force-kill only a hung Editor whose holder is confirmed gone)'),
   pieAbort: (free: number): string => noticeText('RAM', `free RAM is ${free} GB, under the ${PIE_ABORT_GB} GB abort line, while this session's PIE runs`, 'stop PIE now, then free memory before starting it again'),
   disk: (drive: string, free: number): string => noticeText('Disk', `${drive} has ${free} GB free, under ${DISK_MIN_GB} GB (the DDC refuses writes under 10 GB)`, 'tell Hai; move old Saved/_restore_backup or _train_residue copies to another drive, never delete them'),
@@ -757,6 +819,7 @@ export const noticeIds = {
   idle: (since: number) => `editor:idle:${since}`,
   yield: (asker: string, at: number) => `editor:yield:${asker}:${at}`,
   recovered: (holder: string, at: number) => `editor:recovered:${holder}:${Math.floor(at / 60_000)}`,
+  released: (r: Released) => `editor:released:${r.kind}:${r.since}`,
   goneEditor: (holder: string, pid: number) => `editor:gone:${holder}:${pid}`,
   pieAbort: (n: number) => `ram:pie-abort:${n}`,
   disk: (day: string) => `disk:${day}`,

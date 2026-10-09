@@ -8,6 +8,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
+  lapseOf, releasedNote, type Released,
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
@@ -390,6 +391,9 @@ async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
   const file = parseSessionFile(await $.fs.read(`${dir}/editor/${id8}.json`).catch(() => null))
   const title = file?.title || (await sessionTitle($).catch(() => ''))
   me = file ?? blankSession(id, safeWord(bareTitle(title) || `session-${id8}`), bareTitle(title), await $.clock.now())
+  // A55: no turn time yet (a new session, or a file from before 0.12.4): this start counts as one, so a lease it may
+  // already hold (granted before it started) is never judged unseen.
+  if (me.lastTurnAt === undefined) me = { ...me, lastTurnAt: await $.clock.now() }
   for (const d of me.delivered) delivered.add(d)
   for (const n of me.prsKnown ?? []) prsKnown.add(n)
   for (const slug of me.prBaseline ?? []) prBaseline.add(slug)
@@ -703,6 +707,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await readWorld($, opts)
   gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
   await refreshClients($, opts, now)
+  await lapseStep($, opts, now)
   await editorStep($, opts, now)
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
@@ -779,6 +784,47 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
     push({ id: noticeIds.goneEditor(lock.id8, pid), text: NOTICES.goneEditor(`${lock.lane || 'the holder'} (session ${lock.id8})`, pid), isActionable: true })
   }
   decision = holdsLock() ? { kind: 'mine' } : d
+}
+
+/** A54 / A55: this session's own lease released by another session's A5R (its file says why): one coordination notice,
+ * and the lease and request it held are dropped (it requests again). Then any session releases a lapsed lease or passes
+ * on an unseen grant: a fresh probe confirms no Unreal Editor runs, one session claims the release (the alert-file
+ * claim), writes the standard FREE line (read-compare-write) and the holder's file; the head of the queue is granted
+ * at its own next minute (this one's, when it is the head). Nothing is ever closed or killed. */
+async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
+  if (!me) return
+  const own = parseSessionFile(await readJson($, `${hfDir(opts)}/editor/${me8}.json`))
+  if (own?.released && !delivered.has(noticeIds.released(own.released))) {
+    push({ id: noticeIds.released(own.released), text: own.released.kind === 'lapsed' ? NOTICES.lapsed(own.released) : NOTICES.passedOn(own.released), isActionable: true })
+    if (me.released) me = { ...me, released: undefined }
+    if (me.holding?.since === undefined || Math.abs(me.holding.since - own.released.since) < 60_000) me = { ...me, holding: null, want: null }
+  }
+  const all = [me, ...peers]
+  const waiting = queueOf(all, lanes, now, syncFile)
+  const input = { lock, files: all, lanes, now, waiting }
+  if (!lapseOf({ ...input, probe })) return
+  const fresh = await freshProbe($, opts)
+  const r = lapseOf({ ...input, probe: fresh })
+  if (!r || !fresh) return
+  probe = fresh
+  const held = lock
+  if (!(await claimAlert($, opts, `lease-${r.kind}-${held.id8}-${r.since}`))) return
+  const line = freeLine({ since: now, by: me.lane, note: releasedNote(r, held), background: 'none' })
+  if (!(await writeLock($, opts, line))) return
+  const released: Released = { ...r, by: me.lane }
+  if (held.id8 === me8) {
+    me = { ...me, holding: null, want: null, released }
+    return
+  }
+  const path = `${hfDir(opts)}/editor/${held.id8}.json`
+  const holder = parseSessionFile(await readJson($, path))
+  if (holder) await $.fs.write(path, JSON.stringify({ ...holder, holding: null, want: null, released })).catch(err => $.ui.log(`a5r: holder file not written: ${String(err)}`, { to: 'debug' }))
+  peers = peers.map(p => (p.id8 === held.id8 ? { ...p, holding: null, want: null, released } : p))
+}
+
+/** A55: when this session's main loop last ran (written with its file at the next save). */
+async function markTurn($: Engine): Promise<void> {
+  if (me) me = { ...me, lastTurnAt: await $.clock.now() }
 }
 
 async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number | null }, now: number): Promise<void> {
@@ -2286,6 +2332,7 @@ export const register: Register = (on, options) => {
     // plugin, not the engine): it marks the session busy, and its result may carry queued notices to the model.
     const isMain = e.agentId === undefined && next.origin.plugin === 'engine'
     if (isMain) isBusy = true
+    if (isMain) await markTurn($) // A55: the main loop runs
     if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
     if (tool === SYNC_TOOL) {
       const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
@@ -2391,6 +2438,7 @@ export const register: Register = (on, options) => {
         if (m) await applyMarker($, opts, m, isInFindings).catch(err => $.ui.log(`marker: ${String(err)}`))
       }
       // The session is idle now: a notice that needs action and arrived after the last tool result is one prompt.
+      await markTurn($) // A55: the turn saw everything its tool results carried, a grant made in it included
       isBusy = false
       if (a5rOn) await deliverIdle($, opts)
     }
@@ -2399,6 +2447,8 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     isBusy = true
+    // A55: a turn starts (a prompt a plugin queued, this mod's notice prompt included, counts once the turn runs a tool or ends)
+    if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') await markTurn($)
     // Hai typed: the marker has been seen, so the title goes back.
     if (markedFrom !== null && (e.origin.kind === 'composer' || e.origin.kind === 'bridge')) {
       const was = markedFrom
