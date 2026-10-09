@@ -117,7 +117,13 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   // The session's agents: the sync worker once one was spawned (the harness drops a spawn's agentId).
   on('agent.list', async () => value((calls['agent.spawn'] ?? []).length > 0 ? [{ id: 'w-sync', description: 'Sync main', type: 'a5r:sync', status: 'running', spawnedBy: 'a5r' }] : []))
   // A prompt the plugin submits enters as it was sent (an event: it answers { text }).
+  // A59: `failSubmit(n)` makes the next n prompt submissions fail (a refused wake); they are not recorded.
+  let submitFails = 0
   on('prompt.submit', async (_$: unknown, e: { text: string; context?: string[] }) => {
+    if (submitFails > 0) {
+      submitFails -= 1
+      throw new Error('wake refused')
+    }
     ;(calls['prompt.submit'] ??= []).push(e)
     return { text: e.text, ...(e.context ? { context: e.context } : {}) }
   })
@@ -146,6 +152,9 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return { result: { stdout: t, stderr: '', interrupted: false }, text: t }
   })
   return {
+    failSubmit: (n: number) => {
+      submitFails = n
+    },
     say: (label: string | undefined) => {
       answer = label
     },

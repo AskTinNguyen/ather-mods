@@ -8,7 +8,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  lapseOf, releasedNote, type Released,
+  lapseOf, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
@@ -116,6 +116,13 @@ const touched = new Set<string>() // repo-relative paths this session and its wo
 let pending: Notice[] = []
 const delivered = new Set<string>()
 let isBusy = false // a main-loop turn runs: notices ride its next tool result instead of a prompt
+// A59: the last wake prompt this session queued, and the last sign that a turn ran (a prompt, a main-loop tool call,
+// a turn's end): a wake whose turn never starts frees the busy flag after WAKE_WAIT_MS.
+let wakeAt = 0
+let turnSignalAt = 0
+const WAKE_WAIT_MS = 30_000
+let mergeHead = false // A61: .git/MERGE_HEAD exists in the shared checkout (read every minute)
+let agentsNow: number | null = null // A62: this session's running background agents at the last minute
 let tickChain: Promise<void> = Promise.resolve()
 let lastEditorUseAt = 0
 let isPieRunning = false // this session started PIE and no stop was seen
@@ -453,7 +460,7 @@ function followClear($: Engine, opts: Opts, oldSid: string, tries: number): void
 async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
-  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -521,6 +528,7 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
   syncFile = parseSyncFile(syncText)
   touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
   probe = shared
+  mergeHead = await $.fs.exists(`${root}/.git/MERGE_HEAD`).catch(() => false) // A61
 }
 
 // A26: session titles from Claude Code's records, looked up off the render, at most every 10 min per session.
@@ -591,10 +599,30 @@ function drain(): string[] {
 /** An idle session with a notice that needs action gets one prompt for all it has queued (D6). */
 async function deliverIdle($: Engine, opts: Opts): Promise<void> {
   if (isBusy || !pending.some(n => n.isActionable)) return
+  const batch = [...pending]
   const texts = drain()
   isBusy = true
+  const at = await $.clock.now()
+  wakeAt = at
   await saveMe($, opts)
-  await $.prompt.submit({ text: texts.join('\n\n') }).catch(err => $.ui.log(`a5r: notice prompt not queued: ${String(err)}`, { to: 'debug' }))
+  try {
+    await $.prompt.submit({ text: texts.join('\n\n') })
+  } catch (err) {
+    // A59: a refused wake frees the busy flag and puts its notices back, so the next minute (or the next notice) tries again.
+    $.ui.log(`a5r: notice prompt not queued: ${String(err)}`, { to: 'debug' })
+    for (const n of batch) delivered.delete(n.id)
+    pending = [...batch, ...pending.filter(p => !batch.some(b => b.id === p.id))]
+    isBusy = false
+    await saveMe($, opts)
+    return
+  }
+  // A59: a wake whose turn never starts (no prompt, tool call or turn end seen) does not keep the session muted.
+  $.clock.after(WAKE_WAIT_MS, () => {
+    if (wakeAt === at && isBusy && turnSignalAt < at) {
+      isBusy = false
+      $.ui.log('a5r: the notice prompt started no turn within 30 s; the next notice will wake the session again', { to: 'debug' })
+    }
+  })
 }
 
 /** The model tools, registered the first time A5R is seen on in this session (D1: none while it is off). */
@@ -712,6 +740,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
   ramStep(opts, now)
+  agentsNow = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running').length // A62
   await saveMe($, opts, now)
   showMachine($, now)
   await deliverIdle($, opts)
@@ -719,7 +748,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   $.ui.invalidate('ui.render')
 }
 
-const grantInput = (now: number): GrantInput => ({ me8, lock, files: me ? [me, ...peers] : peers, lanes, now, sync: syncFile, probe, gates })
+const grantInput = (now: number): GrantInput => ({ me8, lock, files: me ? [me, ...peers] : peers, lanes, now, sync: syncFile, probe, gates, mergeHead })
 const holdsLock = (): boolean => lock.id8 === me8 && me8 !== '' && (lock.kind === 'held' || lock.kind === 'handed')
 
 /** The lock written by read-compare-write: only if it still reads as when this session decided, then read back
@@ -786,19 +815,78 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
   decision = holdsLock() ? { kind: 'mine' } : d
 }
 
-/** A54 / A55: this session's own lease released by another session's A5R (its file says why): one coordination notice,
- * and the lease and request it held are dropped (it requests again). Then any session releases a lapsed lease or passes
- * on an unseen grant: a fresh probe confirms no Unreal Editor runs, one session claims the release (the alert-file
- * claim), writes the standard FREE line (read-compare-write) and the holder's file; the head of the queue is granted
- * at its own next minute (this one's, when it is the head). Nothing is ever closed or killed. */
+/** A60: Saved/A5R/released/<id8>.json: the releases other sessions made of this holder's lease (A54, A55). Its
+ * writers are the releasing sessions only; the holder reads it and acknowledges each release by its notice id (kept
+ * in its own file's delivered list), so the holder's own saves can never erase one. */
+const releasedPath = (opts: Opts, id8: string): string => `${hfDir(opts)}/released/${id8}.json`
+const readReleases = async ($: Engine, opts: Opts, id8: string): Promise<Released[]> => {
+  try {
+    const v = JSON.parse((await readJson($, releasedPath(opts, id8))) ?? '') as { releases?: unknown }
+    return Array.isArray(v.releases) ? (v.releases as Released[]).filter(r => r && typeof r.since === 'number' && (r.kind === 'lapsed' || r.kind === 'unseen')) : []
+  } catch {
+    return []
+  }
+}
+
+/** A62: one line in Saved/A5R/orchestrate.log (rotated past about 1 MB into orchestrate.log.1). */
+async function orchestrateLog($: Engine, opts: Opts, e: OrchestrateEvent): Promise<void> {
+  const path = `${hfDir(opts)}/orchestrate.log`
+  const cur = (await $.fs.read(path).catch(() => '')) ?? ''
+  const line = `${orchestrateLine(e)}\n`
+  if (cur.length + line.length > ORCHESTRATE_MAX_BYTES) {
+    await $.fs.write(`${path}.1`, cur).catch(() => undefined)
+    await $.fs.write(path, line).catch(() => undefined)
+  } else await $.fs.write(path, cur + line).catch(() => undefined)
+}
+
+/** A62: the facts a log line carries about the lock's holder. */
+function holderFacts(held: LockLine, now: number, p: Probe | null): Omit<OrchestrateEvent, 'at' | 'rule' | 'acted'> {
+  const all = me ? [me, ...peers] : peers
+  const f = all.find(x => x.id8 === held.id8)
+  return { lane: held.lane, id8: held.id8, procs: (p?.procs ?? []).map(x => x.name), liveness: livenessOf(held.id8, all, lanes, now), lastTurnAt: f?.lastTurnAt ?? null, agents: f?.id8 === me8 ? agentsNow : (f?.agents ?? null), build: isBuildLease(held, f) }
+}
+
+/** A62: the candidate rules (Tier 1, not acted on yet), each logged once per lease by the first session to claim it:
+ * a lease held with no Editor or build running; its holder gone; its holder idle for 10 min with a red mark in its
+ * title or an open PENDING.md line. */
+async function logCandidates($: Engine, opts: Opts, now: number): Promise<void> {
+  const held = lock
+  if (held.kind !== 'held' || !held.isStandard || !held.id8 || !probe) return
+  const t = lockTimes(held, now)
+  if (!t) return
+  const facts = holderFacts(held, now, probe)
+  const once = async (rule: OrchestrateEvent['rule'], note: string) => {
+    if (await claimAlert($, opts, `log-${rule}-${held.id8}-${t.since}`)) await orchestrateLog($, opts, { ...facts, at: now, rule, acted: false, note })
+  }
+  if (unrealPids(probe).length === 0 && buildProcs(probe).length === 0) await once('no-editor', `lease ${clockOf(t.since)}-${clockOf(t.end)} held with no Unreal Editor or build process running`)
+  if (facts.liveness === 'gone') await once('holder-gone', `the holder's session is gone; lease ${clockOf(t.since)}-${clockOf(t.end)}`)
+  if (facts.lastTurnAt !== null && now - facts.lastTurnAt >= 10 * 60_000) {
+    const f = (me ? [me, ...peers] : peers).find(x => x.id8 === held.id8)
+    const title = sessionNames.get(held.id8) ?? f?.title ?? ''
+    const file = opts.pendingFile || `${(places.USERPROFILE ?? '').replace(/\\/g, '/')}/.claude/PENDING.md`
+    const open = (await $.fs.read(file).catch(() => '')).split(/\r?\n/).filter(l => l.startsWith('- [ ]') && [bareTitle(title), held.id8, held.lane].filter(Boolean).some(w => l.includes(` · ${w} · `)))
+    if (hasMark(title) || open.length > 0) await once('holder-idle-red', `idle ${Math.round((now - facts.lastTurnAt) / 60_000)} min${hasMark(title) ? ', red mark in its title' : ''}${open.length ? `, ${open.length} open PENDING line${open.length === 1 ? '' : 's'}` : ''}`)
+  }
+}
+
+/** A54 / A55: this session's own lease released by another session's A5R (A60: its released file says why): one
+ * coordination notice each, and the lease and request it held are dropped (it requests again). Then any session
+ * releases a lapsed lease (A58: its holder gone, no Editor and no build running, not a build lease) or passes on an
+ * unseen grant: a fresh probe confirms, one session claims the release (the alert-file claim), writes the standard
+ * FREE line (read-compare-write) and the holder's released file; the head of the queue is granted at its own next
+ * minute (this one's, when it is the head). Every release and every candidate rule is logged (A62). Nothing is ever
+ * closed or killed. */
 async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (!me) return
-  const own = parseSessionFile(await readJson($, `${hfDir(opts)}/editor/${me8}.json`))
-  if (own?.released && !delivered.has(noticeIds.released(own.released))) {
-    push({ id: noticeIds.released(own.released), text: own.released.kind === 'lapsed' ? NOTICES.lapsed(own.released) : NOTICES.passedOn(own.released), isActionable: true })
-    if (me.released) me = { ...me, released: undefined }
-    if (me.holding?.since === undefined || Math.abs(me.holding.since - own.released.since) < 60_000) me = { ...me, holding: null, want: null }
+  for (const r of await readReleases($, opts, me8)) {
+    const id = noticeIds.released(r)
+    if (delivered.has(id) || pending.some(n => n.id === id)) continue
+    push({ id, text: r.kind === 'lapsed' ? NOTICES.lapsed(r) : NOTICES.passedOn(r), isActionable: true })
+    // The lease (or, once it is dropped, the request it served) is the released one: drop both; a newer request stays.
+    const isThat = me.holding ? Math.abs(me.holding.since - r.since) < 60_000 : (me.want?.requestedAt ?? 0) <= r.since
+    if (!holdsLock() && isThat) me = { ...me, holding: null, want: null }
   }
+  await logCandidates($, opts, now).catch(err => $.ui.log(`a5r: orchestrate log: ${String(err)}`, { to: 'debug' }))
   const all = [me, ...peers]
   const waiting = queueOf(all, lanes, now, syncFile)
   const input = { lock, files: all, lanes, now, waiting }
@@ -812,14 +900,10 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   const line = freeLine({ since: now, by: me.lane, note: releasedNote(r, held), background: 'none' })
   if (!(await writeLock($, opts, line))) return
   const released: Released = { ...r, by: me.lane }
-  if (held.id8 === me8) {
-    me = { ...me, holding: null, want: null, released }
-    return
-  }
-  const path = `${hfDir(opts)}/editor/${held.id8}.json`
-  const holder = parseSessionFile(await readJson($, path))
-  if (holder) await $.fs.write(path, JSON.stringify({ ...holder, holding: null, want: null, released })).catch(err => $.ui.log(`a5r: holder file not written: ${String(err)}`, { to: 'debug' }))
-  peers = peers.map(p => (p.id8 === held.id8 ? { ...p, holding: null, want: null, released } : p))
+  await orchestrateLog($, opts, { ...holderFacts(held, now, fresh), at: now, rule: r.kind === 'lapsed' ? 'A54-lapsed' : 'A55-unseen', acted: true, note: releasedNote(r, held) }).catch(() => undefined)
+  const list = await readReleases($, opts, held.id8)
+  await $.fs.write(releasedPath(opts, held.id8), JSON.stringify({ v: 1, releases: [...list, released].slice(-10) })).catch(err => $.ui.log(`a5r: released file not written: ${String(err)}`, { to: 'debug' }))
+  if (held.id8 === me8) me = { ...me, holding: null, want: null }
 }
 
 /** A55: when this session's main loop last ran (written with its file at the next save). */
@@ -1928,7 +2012,7 @@ async function refreshSync($: Engine, opts: Opts): Promise<void> {
 const placeShort = (d: GrantDecision | null): string => {
   if (!d || d.kind === 'none' || d.kind === 'mine') return ''
   if (d.kind !== 'wait') return 'you: being granted'
-  const why = d.code === 'ram' ? ' · waiting on RAM' : d.code === 'sync' ? ' · after the sync' : d.code === 'gone-editor' ? ' · holder gone, Editor open' : d.code === 'missing' ? ' · lock missing' : ''
+  const why = d.code === 'ram' ? ' · waiting on RAM' : d.code === 'sync' ? ' · after the sync' : d.code === 'gone-editor' ? ' · holder gone, Editor open' : d.code === 'missing' ? ' · lock missing' : d.code === 'merge' ? ' · merge in progress' : ''
   return `you: ${d.place > 1 ? `${ordinal(d.place)} in the queue` : 'next'}${why}`
 }
 
@@ -2393,6 +2477,7 @@ export const register: Register = (on, options) => {
     const isMain = e.agentId === undefined && next.origin.plugin === 'engine'
     if (isMain) isBusy = true
     if (isMain) await markTurn($) // A55: the main loop runs
+    if (isMain) turnSignalAt = await $.clock.now() // A59
     if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
     if (tool === SYNC_TOOL) {
       const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
@@ -2499,6 +2584,7 @@ export const register: Register = (on, options) => {
       }
       // The session is idle now: a notice that needs action and arrived after the last tool result is one prompt.
       await markTurn($) // A55: the turn saw everything its tool results carried, a grant made in it included
+      turnSignalAt = await $.clock.now() // A59
       isBusy = false
       if (a5rOn) await deliverIdle($, opts)
     }
@@ -2507,6 +2593,9 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     isBusy = true
+    // A59: a prompt Hai sends starts a turn; a plugin's queued prompt (this mod's wake included) only counts once its turn
+    // runs a tool or ends, so a wake that never runs cannot pass for a turn.
+    if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') turnSignalAt = await $.clock.now()
     // A55: a turn starts (a prompt a plugin queued, this mod's notice prompt included, counts once the turn runs a tool or ends)
     if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') await markTurn($)
     // Hai typed: the marker has been seen, so the title goes back.

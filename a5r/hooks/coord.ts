@@ -96,15 +96,14 @@ export type SessionFile = {
   prScorer?: number
   /** A55: when this session's main loop last ran (a prompt, a tool call, a turn's end); absent before 0.12.4. */
   lastTurnAt?: number
-  /** A54/A55: written into the holder's file by the session that released its lease: why and when, so the holder's
-   * own A5R tells it (a coordination notice) at its next minute. */
-  released?: Released
   /** A57: passes Hai gave with `/a5r pass` (an intent slug, or `#<PR>`), each used once by the next gated call. */
   passes?: string[]
+  /** A62: how many background agents this session ran at its last save (for orchestrate.log). */
+  agents?: number
 }
 
-/** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, no Editor running) or an unseen
- * grant passed on (no turn since it, 10 min). */
+/** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
+ * running, A58) or an unseen grant passed on (no turn since it, 10 min); A60: kept in Saved/A5R/released/<id8>.json. */
 export type Released = { kind: 'lapsed' | 'unseen'; at: number; by: string; since: number; end: number }
 
 export const blankSession = (session: string, lane: string, title: string, now: number): SessionFile => ({
@@ -124,7 +123,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(v.released && typeof v.released === 'object' && typeof v.released.since === 'number' ? { released: v.released } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}) }
   } catch {
     return null
   }
@@ -135,11 +134,14 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
 export type LaneBeat = { sessionId: string; hasEnded: boolean; mtimeMs: number; intent?: string; branch?: string; lastActiveAt?: number }
 export type Liveness = 'alive' | 'gone' | 'unknown'
 
-/** Whether the session named by its first 8 hex is alive, from files only: Ather's lane says ended or is older
- * than 10 min, or its session file is older than 3 min while no fresh lane vouches for it, means gone. With
- * neither file it is unknown, which is never treated as gone. */
+/** Whether the session named by its first 8 hex is alive, from files only. A58: its own a5r's fresh heartbeat (its
+ * session file written within 3 min) means alive, whatever Ather's lane says (a lane can end or go stale while the
+ * session runs on); else Ather's lane ended or older than 10 min, or a session file older than 3 min with no fresh
+ * lane, means gone. With neither file it is unknown, which is never treated as gone. */
 export const livenessOf = (id8: string, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): Liveness => {
   if (!id8) return 'unknown'
+  const mine = files.find(f => f.id8 === id8)
+  if (mine && now - mine.heartbeatAt <= HEARTBEAT_STALE_MS) return 'alive'
   const lane = lanes.find(l => l.sessionId.toLowerCase().startsWith(id8))
   if (lane && (lane.hasEnded || now - lane.mtimeMs > LANE_STALE_MS)) return 'gone'
   const file = files.find(f => f.id8 === id8)
@@ -274,6 +276,13 @@ export const lockTimes = (lock: LockLine, now: number): { since: number; end: nu
 /** Every Unreal Editor process the probe saw (UnrealEditor and UnrealEditor-Cmd). */
 export const unrealPids = (probe: Probe | null): number[] => (probe?.procs ?? []).filter(p => isName(p, 'UnrealEditor') || isName(p, 'UnrealEditor-Cmd')).map(p => p.pid)
 
+/** A58: the processes of a build or a game run (the probe lists them): while any runs, no lease is lapsed or passed on. */
+export const BUILD_NAMES = ['dotnet', 'UnrealBuildTool', 'cl', 'link', 'MSBuild', 'UnrealGame', 'S2'] as const
+export const buildProcs = (probe: Probe | null): Proc[] => (probe?.procs ?? []).filter(p => BUILD_NAMES.some(n => isName(p, n)))
+
+/** A58: whether the lease is a build: the holder asked with build, or its lock line's note says so. */
+export const isBuildLease = (lock: LockLine, holder: SessionFile | undefined): boolean => Boolean(holder?.want?.build) || /\(build\)/i.test(lock.note)
+
 /** A54 / A55: whether the lock's lease may be released by any session now, and why. Never while any Unreal Editor
  * process runs (the overrun notice stays) or while the lock's own pid still runs; never without a probe reading.
  * Lapsed: 10 min past its end. Unseen: 10 min after the grant its session ran no turn (its a5r writes `lastTurnAt`;
@@ -285,8 +294,12 @@ export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lane
   if (!t) return null
   if (unrealPids(x.probe).length > 0) return null
   if (lock.pid !== null && x.probe.procs.some(p => p.pid === lock.pid)) return null
-  if (now >= t.end + LAPSE_MS) return { kind: 'lapsed', at: now, by: '', since: t.since, end: t.end }
+  // A58: never while a build or a game runs, nor for a build lease.
   const holder = x.files.find(f => f.id8 === lock.id8)
+  if (buildProcs(x.probe).length > 0 || isBuildLease(lock, holder)) return null
+  // A58: lapsed only as the S2 standard (section 2) allows: the holder is gone (and no Editor runs, above); a live
+  // holder past its end keeps its lease and the overrun notice.
+  if (now >= t.end + LAPSE_MS) return livenessOf(lock.id8, x.files, x.lanes, now) === 'gone' ? { kind: 'lapsed', at: now, by: '', since: t.since, end: t.end } : null
   const lane = x.lanes.find(l => l.sessionId.toLowerCase().startsWith(lock.id8))
   const isUnseen = typeof holder?.lastTurnAt === 'number' && holder.lastTurnAt < t.since && (lane?.lastActiveAt ?? 0) < t.since
   if (isUnseen && now - t.since >= UNSEEN_MS && x.waiting.some(f => f.id8 !== lock.id8)) return { kind: 'unseen', at: now, by: '', since: t.since, end: t.end }
@@ -296,8 +309,43 @@ export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lane
 /** A54 / A55: the FREE line's note: whose lease, why it was released. */
 export const releasedNote = (r: Released, lock: LockLine): string =>
   r.kind === 'lapsed'
-    ? `lapsed lease of ${lock.lane || 'a lane'} (session-${lock.id8}): it ended ${hhmm(r.end)}, ${Math.round((r.at - r.end) / 60_000)} min ago, pid ${lock.pid ?? 'none'}, no Unreal Editor process running`
+    ? `lapsed lease of ${lock.lane || 'a lane'} (session-${lock.id8}): ended ${hhmm(r.end)}, ${Math.round((r.at - r.end) / 60_000)} min ago; session gone, pid ${lock.pid ?? 'none'}, no Editor or build running`
     : `unseen grant of ${lock.lane || 'a lane'} (session-${lock.id8}): granted ${hhmm(r.since)}, no turn of that session since and no Editor launched; passed to the next in the queue`
+
+// ---------- A62: Saved/A5R/orchestrate.log, one line per event a rule would act on ----------
+/** A62: the log rotates past this size (the old one kept as orchestrate.log.1). */
+export const ORCHESTRATE_MAX_BYTES = 1_000_000
+export type OrchestrateEvent = {
+  at: number
+  /** A54 / A55 (they act), or a candidate rule that only logs: no-editor (a lease held with no Editor or build
+   * running), holder-gone, holder-idle-red (holder idle > 10 min with a red mark or an open PENDING line). */
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'holder-idle-red'
+  lane: string
+  id8: string
+  procs: readonly string[]
+  liveness: Liveness
+  lastTurnAt: number | null
+  agents: number | null
+  build: boolean
+  acted: boolean
+  note?: string
+}
+/** A62: one log line: time, rule, lane, every process the probe saw, the holder's liveness, its last turn, its running
+ * agents, whether the lease is a build, and whether a5r acted or only logged. */
+export const orchestrateLine = (e: OrchestrateEvent): string =>
+  [
+    stampOf(e.at),
+    `rule=${e.rule}`,
+    `lane=${safeWord(e.lane || 'unknown')}`,
+    `session=${e.id8 || 'unknown'}`,
+    `procs=${e.procs.length ? [...e.procs].sort().join(',') : 'none'}`,
+    `holder=${e.liveness}`,
+    `lastTurn=${e.lastTurnAt ? stampOf(e.lastTurnAt) : 'unknown'}`,
+    `agents=${e.agents ?? 'unknown'}`,
+    `build=${e.build ? 'yes' : 'no'}`,
+    e.acted ? 'acted' : 'logged-only',
+    ...(e.note ? [`note=${safeNote(e.note, 160)}`] : []),
+  ].join(' | ')
 
 // ---------- the queue and the grant ----------
 export type Gates = { pieGb: number; nopieGb: number }
@@ -362,7 +410,7 @@ export const ramProbe = (drive: string): string[] => [
     `$d = Get-PSDrive -Name '${drive.replace(/[^A-Za-z]/g, '').slice(0, 1) || 'E'}' -ErrorAction SilentlyContinue`,
     '$disk = if ($d) { [math]::Round($d.Free / 1GB, 1) } else { -1 }',
     '$alive = @{}; Get-Process | ForEach-Object { $alive[[int]$_.Id] = 1 }',
-    "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe')",
+    "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe','dotnet.exe','UnrealBuildTool.exe','cl.exe','link.exe','MSBuild.exe','UnrealGame.exe','S2.exe')",
     "$procs = @(Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId) } })",
     '[pscustomobject]@{ freeGb = $free; diskGb = $disk; procs = $procs } | ConvertTo-Json -Compress -Depth 3',
   ].join('; '),
@@ -413,7 +461,7 @@ export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[
     .sort((a, b) => rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
 }
 
-export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe'
+export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe' | 'merge'
 export type Decision =
   | { kind: 'none' }
   | { kind: 'mine' }
@@ -430,6 +478,8 @@ export type GrantInput = {
   sync: SyncFile | null
   probe: Probe | null
   gates: Gates
+  /** A61: `.git/MERGE_HEAD` exists in the shared checkout (a merge in progress or left behind). */
+  mergeHead?: boolean
 }
 
 /** Whether this session may take the Editor now, and if not why and what next. Only the head of the queue takes
@@ -449,11 +499,13 @@ export const decide = (x: GrantInput): Decision => {
     const who = lock.lane || 'another lane'
     const until = lock.end ? ` until ${lock.end}` : ''
     const live = livenessOf(lock.id8, x.files, x.lanes, now)
-    if (live === 'gone' && pid === null && queue[0]?.id8 === me8) return { kind: 'recover', holder: lock.id8 }
+    if (live === 'gone' && unrealPids(x.probe).length === 0 && buildProcs(x.probe).length === 0 && queue[0]?.id8 === me8) return { kind: 'recover', holder: lock.id8 }
     if (live === 'gone' && pid !== null) return wait('gone-editor', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; ask Hai what to do with that Editor')
     return wait('held', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}`, place > 1 ? `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile` : 'you are next; do work that needs no Editor meanwhile')
   }
   if (queue[0]?.id8 !== me8) return wait('queue', `the Editor is free but ${queue[0]?.lane ?? 'another session'} asked first`, `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile`)
+  // A61: no grant over a merge in progress (or left behind), whatever the sync's state says.
+  if (x.mergeHead) return wait('merge', 'a merge is in progress in the shared checkout (.git/MERGE_HEAD)', 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
   const want = mine.want
   const end = now + want.minutes * 60_000
   const phase = syncPhase(sync, now, isSyncHolderGone(sync, x.files, x.lanes, now))
