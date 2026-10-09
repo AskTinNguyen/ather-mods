@@ -938,17 +938,21 @@ function incidentOf(now: number): { kind: 'editor' | 'sync'; id8: string; lane: 
     const t = lockTimes(lock, now)
     const f = all.find(x => x.id8 === lock.id8)
     if (t) {
-      const silent = typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS && (f.agents ?? 0) === 0 // A67
+      // A70: silence counts from the later of the grant and the last turn (a grant just made is not 40 min of silence).
+      const quietFrom = typeof f?.lastTurnAt === 'number' ? Math.max(t.since, f.lastTurnAt) : null
+      const silent = quietFrom !== null && now - quietFrom >= JUDGE_IDLE_MS && (f?.agents ?? 0) === 0 // A67
       if (now > t.end || silent)
-        return { kind: 'editor', id8: lock.id8, lane: lock.lane, session: f?.session ?? '', since: t.since, end: t.end, why: now > t.end ? `the Editor lease ended ${clockOf(t.end)} and is still held` : `the Editor holder has run no turn for ${Math.round((now - (f?.lastTurnAt ?? now)) / 60_000)} min while holding` }
+        return { kind: 'editor', id8: lock.id8, lane: lock.lane, session: f?.session ?? '', since: t.since, end: t.end, why: now > t.end ? `the Editor lease ended ${clockOf(t.end)} and is still held` : `the Editor holder has run no turn for ${Math.round((now - (quietFrom ?? now)) / 60_000)} min while holding (granted ${clockOf(t.since)})` }
     }
   }
   const s = syncFile
   const phase = phaseOf(s, now)
   if (s && (phase === 'cutoff' || phase === 'frozen') && s.holder.id8 !== me8) {
     const f = all.find(x => x.id8 === s.holder.id8)
-    if (typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS && (f.agents ?? 0) === 0) // A67
-      return { kind: 'sync', id8: s.holder.id8, lane: s.holder.lane, session: s.holder.session || f.session, since: s.at, end: s.hardEnd, why: `the sync holder has run no turn for ${Math.round((now - f.lastTurnAt) / 60_000)} min in the ${phase}` }
+    // A70: silence counts from the later of the sync's cutoff (when it began to hold) and the last turn.
+    const quietFrom = typeof f?.lastTurnAt === 'number' ? Math.max(s.at - CUTOFF_MS, f.lastTurnAt) : null
+    if (f && quietFrom !== null && now - quietFrom >= JUDGE_IDLE_MS && (f.agents ?? 0) === 0) // A67
+      return { kind: 'sync', id8: s.holder.id8, lane: s.holder.lane, session: s.holder.session || f.session, since: s.at, end: s.hardEnd, why: `the sync holder has run no turn for ${Math.round((now - quietFrom) / 60_000)} min in the ${phase}` }
   }
   return null
 }
@@ -967,7 +971,7 @@ async function judgeStep($: Engine, opts: Opts, now: number): Promise<void> {
   const events = parseTail(await transcriptTail($, transcript))
   const facts: JudgeFacts = { now, ...inc, liveness: livenessOf(inc.id8, all, lanes, now), lastTurnAt: f?.lastTurnAt ?? null, agents: f?.agents ?? null, procs: (fresh?.procs ?? []).map(p => p.name), hasEditor: unrealPids(fresh).length > 0, hasBuild: buildProcs(fresh).length > 0, transcript, agentKinds: f?.agentKinds ?? [], ...(inc.kind === 'editor' ? { lockPid: lock.pid, lockPidRunning: lock.pid !== null && Boolean(fresh?.procs.some(p => p.pid === lock.pid)) } : {}) }
   const hint = hintOf(facts, events)
-  const ran = await $.agent.spawn({ subagentType: JUDGE_AGENT, description: `Judge ${inc.lane || inc.id8}`, prompt: judgePrompt(facts, hint, digestOf(events)) }).catch(err => ({ deny: String(err) }))
+  const ran = await $.agent.spawn({ subagentType: JUDGE_AGENT, description: `Judge ${inc.lane || inc.id8}`, prompt: judgePrompt(facts, hint, digestOf(events, 40, now)) }).catch(err => ({ deny: String(err) }))
   // The spawn names its agent; where it does not, the session's agent list does (the newest judge this mod started).
   const id = ran.deny !== undefined ? undefined : (ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === JUDGE_AGENT && a.spawnedBy === 'a5r').pop()?.id)
   if (!id) {

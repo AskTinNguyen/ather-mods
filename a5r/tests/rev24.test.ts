@@ -98,7 +98,7 @@ for (const agents of [1, 0])
     w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: NOW, holding: { since: T(14, 25), end: T(15, 25), extended: 0 }, lastTurnAt: T(14, 20), agents, agentKinds: agents ? ['general-purpose'] : [] }))
     await $.session.start(START)
     expect([judges(w).length, parseLockLine(w.read(LOCK)).id8]).toEqual([agents ? 0 : 1, 'bbbbbbbb'])
-    if (!agents) expect(String(judges(w)[0]?.prompt)).toContain('the Editor holder has run no turn for 20 min while holding')
+    if (!agents) expect(String(judges(w)[0]?.prompt)).toContain('the Editor holder has run no turn for 15 min while holding (granted 14:25)')
   })
 
 // ---------- A68 ----------

@@ -97,7 +97,7 @@ for (const inc of INCIDENTS) {
     procsKnown: inc.procsKnown,
   }
   const hint = hintOf(facts, events)
-  const task = judgePrompt(facts, hint, digestOf(events))
+  const task = judgePrompt(facts, hint, digestOf(events, 40, inc.now))
   const file = `${OUT}/judge-${inc.lane}.txt`
   writeFileSync(
     file,

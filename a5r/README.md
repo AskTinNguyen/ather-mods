@@ -1,4 +1,4 @@
-# A5R 0.14.1
+# A5R 0.14.2
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
 
@@ -106,7 +106,7 @@ Mọi lần a5r từ chối đều cùng một dạng: `A5R · <cổng> — <vì
 - `Saved/A5R/released/<id8>.json` (0.13.1): các lần session khác thả lease của session `<id8>` (quá hạn, hay lượt cấp không ai thấy); chỉ session thả ghi, holder đọc và báo cho mình, nên lần lưu file của holder không xoá được nó.
 - `Saved/A5R/orchestrate.log` (0.13.1): mỗi sự kiện mà một luật sẽ hành động là một dòng (giờ, luật, lane, mọi tiến trình đo được, holder còn sống không, lượt cuối, số agent nền, có build không, đã làm hay chỉ ghi): A54/A55 (đã làm), các luật ứng viên chỉ ghi (lease giữ mà không Editor/build nào chạy, holder đã mất) và kết luận của trọng tài (0.14.0; không còn luật nào đọc 🟥 hay PENDING).
 - `Saved/A5R/verdicts.json` (0.14.0): 10 kết luận gần nhất của trọng tài, cho thẻ ORCHESTRATE.
-- Từ 0.14.1: holder ghi pid của Editor thật vào dòng HELD khi nó mở Editor hay gọi Editor qua MCP lần đầu (chỉ holder, đọc-so-ghi), nên trọng tài phân biệt được "Editor của holder đã tắt" với "chưa có Editor". Mỗi session ghi số agent nền đang chạy và loại của chúng vào file của mình mỗi phút; "không chạy lượt nào 10 phút" (A55 và trọng tài) chỉ tính khi không có agent nào chạy. Lease đã quá giờ vẫn gia hạn được khi không ai chờ (có người chờ thì vẫn bị từ chối). `node --experimental-strip-types a5r/tests/replay-judge.mjs` dựng lại đúng đầu vào của trọng tài cho ba sự cố cũ (không chạy model). Quá ~1 MB thì chuyển sang `orchestrate.log.1`. Để Hai đọc một tuần trước khi bật Tier 1.
+- Từ 0.14.1: holder ghi pid của Editor thật vào dòng HELD khi nó mở Editor hay gọi Editor qua MCP lần đầu (chỉ holder, đọc-so-ghi), nên trọng tài phân biệt được "Editor của holder đã tắt" với "chưa có Editor". Mỗi session ghi số agent nền đang chạy và loại của chúng vào file của mình mỗi phút; "không chạy lượt nào 10 phút" (A55 và trọng tài) chỉ tính khi không có agent nào chạy. Lease đã quá giờ vẫn gia hạn được khi không ai chờ (có người chờ thì vẫn bị từ chối). `node --experimental-strip-types a5r/tests/replay-judge.mjs` dựng lại đúng đầu vào của trọng tài cho ba sự cố cũ (không chạy model). Từ 0.14.2: sự im lặng của holder tính từ lúc muộn hơn giữa lúc được cấp và lượt cuối (vừa được cấp thì chưa bị gọi trọng tài), và mọi giờ trong đầu vào của trọng tài là giờ máy (HH:MM, kèm ngày nếu khác hôm nay), không bao giờ UTC. Quá ~1 MB thì chuyển sang `orchestrate.log.1`. Để Hai đọc một tuần trước khi bật Tier 1.
 - `Saved/A5R/touch/<id8>.json`: đường dẫn session đã sửa trong checkout chung.
 - `Saved/A5R/probe.json`: lần đo máy gần nhất (RAM, ổ đĩa, tiến trình nặng), ai đo thì người đó ghi.
 - Đọc thêm: `Saved/EDITOR_OWNER.txt` (lock), `Saved/AtherAutomata/lanes/*.json` (heartbeat của Ather: session còn sống không).

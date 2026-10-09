@@ -42,13 +42,28 @@ export const parseTail = (text: string, max = 200): TranscriptEvent[] => {
   return out
 }
 
-/** The events as short lines for the judge's prompt: time, who, the first words, the tools called. */
-export const digestOf = (events: readonly TranscriptEvent[], max = 40): string =>
+const pad = (n: number): string => String(n).padStart(2, '0')
+/** A71: a moment as machine-local `HH:MM`, with its date (`YYYY-MM-DD HH:MM`) when it is not the day of `now`. */
+export const localTime = (ms: number, now: number = ms): string => {
+  const d = new Date(ms)
+  const n = new Date(now)
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate() ? hm : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
+}
+/** A71: the machine's offset from UTC, as `UTC+07:00`. */
+export const utcOffset = (at: number): string => {
+  const m = -new Date(at).getTimezoneOffset()
+  return `UTC${m >= 0 ? '+' : '-'}${pad(Math.floor(Math.abs(m) / 60))}:${pad(Math.abs(m) % 60)}`
+}
+
+/** The events as short lines for the judge's prompt: time (A71: machine-local, with the date when not the day of
+ * `now`), who, the first words, the tools called. */
+export const digestOf = (events: readonly TranscriptEvent[], max = 40, now?: number): string =>
   events
     .filter(e => e.role !== 'other' && (e.text || e.tools.length || e.results.length))
     .slice(-max)
     .map(e => {
-      const t = e.at ? new Date(e.at).toISOString().slice(11, 16) : '--:--'
+      const t = e.at ? localTime(e.at, now ?? e.at) : '--:--'
       const what = e.results.length && !e.text ? `[tool result ×${e.results.length}]` : e.text.slice(0, 200)
       return `${t} ${e.role}: ${what}${e.tools.length ? ` [calls: ${e.tools.map(x => x.name).join(', ')}]` : ''}`
     })
@@ -114,6 +129,7 @@ export const JUDGE_SYSTEM = [
   'You are the A5R advisory judge for Hai\'s shared Unreal checkout. One session holds a coordination lease (the Editor or the sync) and looks stalled.',
   'Decide what that session is doing from the facts and its transcript. You change nothing: no edits, no messages to the session, no lock or file writes. Read only.',
   'You may Read or Grep the transcript file named in the facts for more context (its end matters most).',
+  'All times in the facts and the digest are local (machine time). The transcript file\'s own timestamps end in Z (UTC): convert them to local time with the offset given before you quote any time; never quote a UTC time.',
   'Verdicts: working (a build, a test, an Editor or a tool making progress), done (its work finished and it said so: it closed the Editor, wrote the FREE line or reported the release; the lease or lock line is stale), waiting-on-Hai (its last message asks Hai something, or a question is open), stuck-or-crashed (no progress and nothing running, or the session is gone, without having finished), unsure.',
   'Answer in exactly this form and nothing else:',
   'VERDICT: <working | done | waiting-on-Hai | stuck-or-crashed | unsure>',
@@ -125,9 +141,10 @@ export const JUDGE_SYSTEM = [
 /** A65: the judge's task: the incident's facts, the rule's first reading, and the transcript digest. */
 export const judgePrompt = (f: JudgeFacts, hint: { verdict: Verdict; evidence: string[] }, digest: string): string =>
   [
+    `All times are local (machine time, ${utcOffset(f.now)}); it is now ${localTime(f.now, f.now)} on ${localTime(f.now, f.now + 86_400_000).slice(0, 10)}.`,
     `Incident: ${f.why}.`,
-    `Holder: ${f.lane || 'unknown lane'} (session ${f.session || f.id8}), holding the ${f.kind === 'editor' ? 'Editor' : 'sync'} since ${new Date(f.since).toISOString()}${f.end ? `, lease end ${new Date(f.end).toISOString()}` : ''}.`,
-    `Its session: ${f.liveness}; last turn ${minAgo(f.now, f.lastTurnAt)}; background agents running: ${f.agents ?? 'unknown'}${f.agentKinds?.length ? ` (${f.agentKinds.join(', ')})` : ''}.`,
+    `Holder: ${f.lane || 'unknown lane'} (session ${f.session || f.id8}), holding the ${f.kind === 'editor' ? 'Editor' : 'sync'} since ${localTime(f.since, f.now)}${f.end ? `, lease end ${localTime(f.end, f.now)}` : ''}.`,
+    `Its session: ${f.liveness}; last turn ${f.lastTurnAt === null ? 'unknown' : `${localTime(f.lastTurnAt, f.now)} (${minAgo(f.now, f.lastTurnAt)})`}; background agents running: ${f.agents ?? 'unknown'}${f.agentKinds?.length ? ` (${f.agentKinds.join(', ')})` : ''}.`,
     f.procsKnown === false
       ? 'Processes on the machine then: unknown (not reconstructible).'
       : `Processes on the machine now: ${f.procs.length ? [...f.procs].sort().join(', ') : 'none of the watched ones'} (Unreal Editor running: ${f.hasEditor ? 'yes' : 'no'}; build or game running: ${f.hasBuild ? 'yes' : 'no'}).`,
@@ -135,7 +152,7 @@ export const judgePrompt = (f: JudgeFacts, hint: { verdict: Verdict; evidence: s
     `Transcript file: ${f.transcript || 'not found'}.`,
     `A rule's first reading: ${hint.verdict} (${hint.evidence.join('; ')}). Confirm or correct it.`,
     '',
-    'The transcript\'s last events (time UTC, who, first words, tools called):',
+    'The transcript\'s last events (local time, who, first words, tools called):',
     digest || '(no readable events)',
   ].join('\n')
 
