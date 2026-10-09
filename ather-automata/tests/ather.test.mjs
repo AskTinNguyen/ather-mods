@@ -1332,6 +1332,7 @@ describe('several repositories on one machine', () => {
     expect(state.repoId('git@github.com:AskTinNguyen/han-viet.git', 'R')).toBe('asktinnguyen/han-viet')
     expect(state.repoId('https://github.com/AskTinNguyen/han-viet', 'R')).toBe('asktinnguyen/han-viet')
     expect(state.repoId('ssh://git@github.com:22/Sipher/S2.git/', 'R')).toBe('sipher/s2')
+    expect(state.repoId('D:\\Mirrors\\Sipher\\S2.git', 'R')).toBe('sipher/s2')
     expect(state.repoId('', 'C:\\Work\\S2\\')).toBe('path:c:/work/s2')
   })
 

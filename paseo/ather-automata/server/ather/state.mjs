@@ -133,10 +133,12 @@ const realFolder = (io, folder) => {
 // A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
 // clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
 //   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → asktinnguyen/han-viet
+//   D:\Mirrors\Sipher\S2.git (a local origin, as Windows writes it) → sipher/s2
 /** @param {string} url @param {string} root */
 export const repoId = (url, root) => {
   const path = url
     .trim()
+    .replace(/\\/g, '/')
     .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\//i, '')
     .replace(/^[^@/\s]+@[^:/\s]+:/, '')
     .replace(/\.git\/?$/i, '')
