@@ -36,3 +36,10 @@
 - Seen live on the base commit too, so not from this slice: the first `git fetch` after the pane is drawn is rejected the same way ("git fetch failed: … aborted") and the sync line waits for the next due time or ↻.
 - Open: a session opened in a worktree names itself by the repository and the main checkout `<name>-2` when that has rows of its own; the workspace is read once per session, so a worktree made during it is seen by the next one.
 
+## 2026-10-09, the traced folders from the pane (S12) and the first fetch (S13)
+
+- S12, asked for by the owner: a place in the pane to set the folders to trace, kept for the PC. D15 (Rev 7): one machine key in the store, read after the `repos` setting's folders; a Repositories view opened from Home (first built at the foot of Everything open, moved on the owner's word), `/ather repos`, `add` and `remove`; a change applies in the session that made it at once. Built in 5770422, 7f73bce and 0b12f56; Codex found that Remove matched a folder's spelling only.
+- S13, found by the live runs of S11 and S12 and present on the branch before them: the pane's first draw starts the first fetch, Claude Code stops what an abandoned draw started, and the rejection was kept as a failed sync for ten minutes. Read from the plugin-authoring reference ("Work that outlives a dispatch") and tried live: a timer started inside the draw is rejected too; a pressed sync and the console's own timers are not. D16 (Rev 8), fd735af: such a fetch is no try, and the console's five-second timer asks for what is due while the pane is drawn.
+- Unit 265/265, `dev/e2e/repos.mjs` 225/225, S2 e2e 317/354 on a sparse clone with the same 37 failing checks as the branch before these slices.
+- Open: the first `git config user.name` and `git worktree list` of a session are rejected the same way and are asked again (the pane treats nobody as you for a moment); typing into a pane field could not be tried in tmux; a real S2 checkout, Windows and Claude desktop were not run.
+
