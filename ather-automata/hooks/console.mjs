@@ -711,10 +711,11 @@ async function issueLanes($) {
 }
 
 // One checkout for each repository: the first in order, so the session's own when it is one of them. A
-// repository's issues are the same in every checkout of it.
+// repository's issues are the same in every checkout of it. A clone without an origin is a repository for
+// each of its worktrees (its folder), and is still asked once.
 /** @param {import('./state.mjs').Checkout[]} lanes */
 function oncePerRepo(lanes) {
-  return lanes.filter((lane, at) => lanes.findIndex(one => one.repo === lane.repo) === at)
+  return lanes.filter((lane, at) => lanes.findIndex(one => one.repo === lane.repo || cloneOf(one.root) === cloneOf(lane.root)) === at)
 }
 
 // An issue as a checkout lists it: its key is its number in the session's own checkout and `<short name>#<number>` in another.

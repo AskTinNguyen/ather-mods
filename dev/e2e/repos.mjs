@@ -1036,6 +1036,30 @@ const refresh = async engine => {
   await second.engine.end('other')
 }
 
+{
+  // A checkout with no origin (its repository is its folder), where gh is not signed in; with `tree`, a worktree beside it.
+  const refreshed = async (tree, sessionId) => {
+    const parent = fs.mkdtempSync(join(BASE, 'local-'))
+    const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(WEB_PROFILE, null, 2)}\n` } })
+    git(web, 'remote', 'remove', 'origin')
+    if (tree) git(web, 'worktree', 'add', '-q', '-b', 'feat/x', join(parent, tree))
+    const { engine } = await boot({ root: web, sessionId, ghAt: {} })
+    engine.setSurfaces(['terminal'])
+    await issuesRead(engine, { [web]: {} })
+    await engine.flush()
+    const { said } = await refresh(engine)
+    const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+    const errors = engine.record.hookErrors
+    await engine.end('other')
+    return { web, said, lists, errors }
+  }
+  const alone = await refreshed('', 'harness-session-0034')
+  const withTree = await refreshed('web-x', 'harness-session-0035')
+  expect('a checkout with no origin and a worktree: gh issue list runs once a read, in the checkout', JSON.stringify(withTree.lists) === JSON.stringify(alone.lists.map(() => withTree.web)) && alone.lists.length === 2, [alone.lists, withTree.lists])
+  expect('and Refresh reports what it reports without the worktree', withTree.said !== '' && withTree.said === alone.said, [alone.said, withTree.said])
+  expect('no hook threw', alone.errors.length === 0 && withTree.errors.length === 0, [...alone.errors, ...withTree.errors])
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

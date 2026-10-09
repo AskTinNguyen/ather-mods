@@ -88,7 +88,8 @@ export const parseWorktrees = text => {
  * The session's checkouts, in order and each once: the one holding the session folder, those the `repos`
  * option names, then, only when the session folder is in none, its child folders that are checkouts, by name
  * (at most 8). After them, the worktrees git names in each (parseWorktrees) that are still checkouts, each
- * once by the folder its path really lands in: git names real paths, the session folder may be a link.
+ * once. A checkout is the same one by the folder its path really lands in, under its first name: git names
+ * real paths, the session folder may be a link.
  * `skipped`: option folders in no checkout. `clones`: for each root, its clone's main folder, the same for a
  * checkout and its worktrees. `left`: the checkouts the two limits left out.
  * @param {Files} files @param {string} sessionFolder @param {string} option
@@ -99,52 +100,56 @@ export const readWorkspace = async (files, sessionFolder, option) => {
   const found = []
   /** @type {string[]} */
   const skipped = []
+  // A folder as two names for it compare: where it really lands, whatever the case.
+  /** @param {string} folder */
+  const landing = async folder => normalFolder(files.real ? await files.real(folder).catch(() => folder) : folder).toLowerCase()
+  /** @type {Map<string, string>} each checkout as first named → where it lands */
+  const lands = new Map()
   /** @param {string | null} root */
-  const add = root => {
-    if (root !== null && !found.includes(root)) found.push(root)
+  const add = async root => {
+    if (root === null || lands.has(root)) return
+    const at = await landing(root)
+    if ([...lands.values()].includes(at)) return
+    lands.set(root, at)
+    found.push(root)
   }
   const own = await checkoutOf(files, sessionFolder)
-  add(own)
+  await add(own)
   for (const folder of parseRepos(option, sessionFolder)) {
     const root = await checkoutOf(files, folder)
     if (root === null) skipped.push(folder)
-    add(root)
+    await add(root)
   }
   if (own === null && files.list) {
     const top = normalFolder(sessionFolder)
     const children = (await files.list(top).catch(() => [])).filter(entry => entry.kind === 'dir').map(entry => entry.name).sort()
     for (const name of children) {
       const child = normalFolder(`${top}/${name}`)
-      if (await gitDirOf(files, child)) add(child)
+      if (await gitDirOf(files, child)) await add(child)
     }
   }
   const roots = found.slice(0, MAX_CHECKOUTS)
   const left = found.slice(MAX_CHECKOUTS)
-  // A folder as two names for it compare: where it really lands, whatever the case.
-  /** @param {string} folder */
-  const landing = async folder => normalFolder(files.real ? await files.real(folder).catch(() => folder) : folder).toLowerCase()
-  /** @type {Map<string, string>} each folder's landing → its clone */
+  /** @type {Map<string, string>} where a folder lands → its clone */
   const cloneOf = new Map()
-  const landings = await Promise.all(roots.map(landing))
-  const seen = new Set(landings)
   if (files.worktrees) {
-    for (const [at, root] of [...roots].entries()) {
+    for (const root of [...roots]) {
       const { main, folders } = parseWorktrees(await files.worktrees(root).catch(() => ''))
       if (main === '') continue
       const clone = normalFolder(main)
-      cloneOf.set(landings[at] ?? '', clone)
+      cloneOf.set(lands.get(root) ?? '', clone)
       for (const listed of folders) {
         const folder = normalFolder(listed)
-        const lands = await landing(folder)
-        cloneOf.set(lands, clone)
-        if (seen.has(lands) || !(await gitDirOf(files, folder))) continue
-        seen.add(lands)
+        const at = await landing(folder)
+        cloneOf.set(at, clone)
+        if ([...lands.values()].includes(at) || !(await gitDirOf(files, folder))) continue
+        lands.set(folder, at)
         if (roots.length < MAX_WITH_WORKTREES) roots.push(folder)
         else left.push(folder)
       }
     }
   }
-  const clones = await Promise.all(roots.map(async (root, at) => cloneOf.get(landings[at] ?? (await landing(root))) ?? root))
+  const clones = roots.map(root => cloneOf.get(lands.get(root) ?? '') ?? root)
   return { roots, skipped, clones, left }
 }
 

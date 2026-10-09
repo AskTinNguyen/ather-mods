@@ -1684,6 +1684,15 @@ describe('the workspace', () => {
     expect(found.clones).toEqual(['/private/tmp/s2', '/private/tmp/s2'])
   })
 
+  test('a session folder that is a link and the same checkout named by its real path in the repos option are one checkout', async () => {
+    const paths = { '/tmp/s2/.git/HEAD': HEAD, '/private/tmp/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD }
+    const real = async (/** @type {string} */ folder) => folder.replace(/^\/tmp\//, '/private/tmp/')
+    // The first spelling of a folder is kept: the session's own as it was given.
+    expect((await readWorkspace({ ...disk(paths), real }, '/tmp/s2', '/private/tmp/s2;/w/web')).roots).toEqual(['/tmp/s2', '/w/web'])
+    // An Io that cannot say where a folder lands compares the folders as given.
+    expect((await readWorkspace(disk(paths), '/tmp/s2', '/private/tmp/s2;/w/web')).roots).toEqual(['/tmp/s2', '/private/tmp/s2', '/w/web'])
+  })
+
   test('worktrees fill the workspace to 24 and never cut one of the 8 checkouts', async () => {
     /** @type {Record<string, string>} */
     const paths = { '/w/notes/a.md': '' }
