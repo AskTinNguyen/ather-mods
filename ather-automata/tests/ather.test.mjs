@@ -1356,6 +1356,20 @@ describe('several repositories on one machine', () => {
     expect(state.checkoutId('', '/Work/s2')).toBe('')
   })
 
+  test('a folder too long for a store key is kept as a digest and its end: one id per folder, and a key on it stays within 256 characters', () => {
+    const deep = `C:\\Users\\someone\\AppData\\${'a-long-folder-name\\'.repeat(9)}look`
+    const id = state.checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods`)
+    expect(/^asktinnguyen\/ather-mods@~[0-9a-z]+~.*look\/ather-mods$/.test(id)).toBe(true)
+    expect(id.length).toBe('asktinnguyen/ather-mods@'.length + 120)
+    expect(`evidence:${'0'.repeat(36)}|${id}`.length <= 256).toBe(true)
+    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep}/Ather-Mods/`)).toBe(id)
+    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods-b`) === id).toBe(false)
+    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep.replace('someone', 'another')}\\ather-mods`) === id).toBe(false)
+    expect(state.repoId('', `${deep}\\ather-mods`).startsWith('path:~')).toBe(true)
+    // A folder of 120 characters is kept as it is.
+    expect(state.checkoutId('sipher/s2', `C:\\${'x'.repeat(117)}`)).toBe(`sipher/s2@c:/${'x'.repeat(117)}`)
+  })
+
   // Two clones of one origin, /work/s2 and /work/s2-b, over one store: `own` is a session in the first,
   // `inSecond` one in the second, and `own` reaches the second by its root.
   const twoClones = () => {
