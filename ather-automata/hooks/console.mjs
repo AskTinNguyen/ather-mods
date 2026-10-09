@@ -181,12 +181,13 @@ async function readWorktrees($, root) {
   return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '') : ''
 }
 
-// Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV.
+// Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV. A run the app took back (the hook
+// call that started it was abandoned) is marked: the engine rejects it with a message ending in "aborted".
 /** @param {Engine} $ @param {string} root @returns {import('./team.mjs').Repo} */
 function repo($, root) {
   return {
     git: (args, { stdin, timeoutMs = 120000 } = {}) =>
-      $.process.run(['git', '-C', root, ...args], { cwd: root, env: GIT_ENV, timeoutMs, ...(stdin === undefined ? {} : { stdin }) }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error) })),
+      $.process.run(['git', '-C', root, ...args], { cwd: root, env: GIT_ENV, timeoutMs, ...(stdin === undefined ? {} : { stdin }) }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error), isAborted: /aborted$/.test(String(error)) })),
     read: path => $.fs.read(path).then(text => (typeof text === 'string' ? text : null), () => null),
     list: path => $.fs.list(path),
     mtime: path => $.fs.stat(path).then(stat => stat.mtimeMs, () => 0),
@@ -502,8 +503,10 @@ async function startConsoleWork($) {
   isWorking = true
   await refresh($)
   $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
-  // A running worker's clock: redrawn every five seconds while one runs, never otherwise.
+  // A running worker's clock: redrawn every five seconds while one runs, never otherwise. And the fetches
+  // still due while the pane is drawn: one the app took back with the draw that started it is asked again here.
   $.clock.every(5000, () => {
+    if (isDrawn) void syncMain($).catch(() => undefined)
     void $.agent.list().then(agents => agents.some(agent => agent.status === 'running') && $.ui.invalidate('ui.render')).catch(() => undefined)
   })
   // watch.mjs may pick up last night's window just after this; show it.
@@ -622,7 +625,7 @@ async function refreshPrs($) {
 // Fetches each pane clone's origin main in the background (D2): once the pane is drawn, then at most
 // every ten minutes, or at once from ↻ (after a git lock, only at the next due time); one fetch at a time
 // over every checkout. The sync line says synced once the read after the fetch has landed; a failure keeps
-// the last list and says so.
+// the last list and says so. A fetch the app took back is no try: the sync stands as it stood and stays due.
 /** @param {Engine} $ @param {boolean} [isAsked] */
 async function syncMain($, isAsked = false) {
   if (isSyncing) return
@@ -638,8 +641,15 @@ async function syncMain($, isAsked = false) {
       for (const one of roots) syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), isFetching: true, triedAt: Date.now() })
       stale()
       $.ui.invalidate('ui.render')
-      const { error, lock, moved } = await fetchMain(repo($, root))
+      const { error, lock, moved, isAborted } = await fetchMain(repo($, root))
       const where = checkouts.length > 1 ? ` (${root})` : ''
+      if (isAborted) {
+        // No redraw here: a draw starts a fetch, and a newer draw is what takes one back.
+        for (const one of roots) syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), isFetching: false, triedAt: before.triedAt })
+        stale()
+        $.ui.log(`Ather: the app took the git fetch back${where}; it stays due.`, { to: 'debug' })
+        continue
+      }
       $.ui.log(error ? `Ather: git fetch failed${where}: ${error}` : `Ather: origin/main${where} ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
       fetchesEnded += 1
       for (const one of roots) fetched.set(one, { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } })

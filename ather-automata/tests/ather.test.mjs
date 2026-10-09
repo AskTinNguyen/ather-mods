@@ -1161,6 +1161,15 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect([canFetchNow(locked, NOON), canFetchNow({ ...locked, lock: '' }, NOON), canFetchNow(locked, NOON + 10 * MIN), canFetchNow({ ...locked, isFetching: true, lock: '' }, NOON)]).toEqual([false, true, true, false])
   })
 
+  test('a fetch the app took back says so; one git failed and one out of time are failures as before (A14)', async () => {
+    const taken = await fetchMain(fakeRepo({ fetch: { exitCode: -1, stdout: '', stderr: 'HooksError: ather-automata: $.process.run(git) aborted', isAborted: true } }).repo)
+    expect(taken.isAborted).toBe(true)
+    const refused = await fetchMain(fakeRepo({ fetch: { exitCode: 128, stdout: '', stderr: "fatal: 'origin' does not appear to be a git repository\n" } }).repo)
+    expect([refused.isAborted === true, refused.error, refused.lock]).toEqual([false, "fatal: 'origin' does not appear to be a git repository", ''])
+    const late = await fetchMain(fakeRepo({ fetch: { exitCode: -1, stdout: '', stderr: 'Error: timed out after 600000 ms' } }).repo)
+    expect([late.isAborted === true, late.error, late.lock]).toEqual([false, 'Error: timed out after 600000 ms', ''])
+  })
+
   test('Ready to close groups the list in stage blocks: all met, proving, building, parked (A5)', () => {
     // The tracked header's stages without a session's proof: a partly done intent is building, not proving.
     const at = (/** @type {any} */ fields) => /** @type {any} */ ({ status: 'active', acceptanceDone: 3, acceptanceTotal: 3, prs: [], ...fields })

@@ -1022,6 +1022,55 @@ const refresh = async engine => {
 }
 
 {
+  // The app takes back the fetches the pane's draws start, as it does when a newer draw replaces one.
+  const { s2 } = makeWorkspace()
+  writeIntent(s2, 'login')
+  const ahead = advanceOrigin(s2)
+  Object.assign(aborts, { argv: `git -C ${s2} -c gc.auto=0`, times: 2 })
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0037' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'pick')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  await pane()
+  await engine.flush()
+  await engine.flush()
+  const line = String(byKey(await pane(), 'sync')?.props.label)
+  await engine.flush()
+  await engine.flush()
+  expect('the first fetch of a session is rejected, and the sync line does not say the sync failed', aborts.times === 0 && fetchRuns(engine).length === 0 && !/failed/.test(line), [aborts.times, fetchRuns(engine).length, line])
+  // No draw from here: the console's timer asks for the fetch that is still due.
+  await engine.timers()
+  await engine.flush()
+  await engine.flush()
+  expect("without another draw the console's timer fetches again: one fetch ended", fetchRuns(engine).length === 1 && git(s2, 'rev-parse', 'origin/main') === ahead, [fetchRuns(engine).map(run => run.argv[2]), git(s2, 'rev-parse', 'origin/main'), ahead])
+  const after = String(byKey(await pane(), 'sync')?.props.label)
+  await engine.timers()
+  await engine.flush()
+  expect('and the list is then synced, with no fetch after it', /^synced/.test(after) && fetchRuns(engine).length === 1, [after, fetchRuns(engine).length])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+
+  // A fetch git itself fails (a bad origin) is a failed sync, and waits its ten minutes.
+  const bad = makeWorkspace()
+  writeIntent(bad.s2, 'login')
+  git(bad.s2, 'remote', 'set-url', 'origin', join(BASE, 'no-such-origin.git'))
+  const failing = await boot({ root: bad.s2, sessionId: 'harness-session-0038' })
+  failing.engine.setSurfaces(['terminal'])
+  await failing.engine.command('ather', 'pick')
+  const badPane = () => failing.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  await badPane()
+  await failing.engine.flush()
+  await failing.engine.flush()
+  await failing.engine.timers()
+  await failing.engine.flush()
+  const failed = String(byKey(await badPane(), 'sync')?.props.label)
+  await failing.engine.flush()
+  expect('a fetch git fails still says the sync failed, and is not tried again before its ten minutes', /failed/.test(failed) && fetchRuns(failing.engine).length === 1, [failed, fetchRuns(failing.engine).length])
+  expect('no hook threw', failing.engine.record.hookErrors.length === 0, failing.engine.record.hookErrors)
+  await failing.engine.end('other')
+}
+
+{
   // web/ beside s2/, which has a worktree nested inside it with an intent of its own.
   const nested = () => {
     const { parent, s2, web } = makeWorkspace()
