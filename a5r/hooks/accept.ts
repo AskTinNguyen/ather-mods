@@ -98,10 +98,32 @@ export const progressRows = (progress: string): Map<string, { verdict: string; e
 
 const isDoc = (f: string) => /\.(md|txt|rst)$/i.test(f) || lower(f).startsWith('docs/')
 
-/** The five rules over the branch: each passes, fails with its issues, or does not apply. */
+/** A56: whether an intent's checklist is complete: it has acceptance rows and every one is met or waived in
+ * progress.md (Ather's done words count too: pass, done, ✓). */
+export const checklistComplete = (prompt: string, progress: string): boolean => {
+  const ids = acceptanceIds(prompt)
+  const rows = progressRows(progress)
+  return ids.length > 0 && ids.every(id => /^(met|waived|pass|passed|done|✓|✔|✅)(?![\p{L}\p{N}])/iu.test(rows.get(id)?.verdict ?? ''))
+}
+
+/** A56: Ather's `checklist` ("done/total") says complete. */
+export const checklistFull = (checklist: string | undefined): boolean => {
+  const m = /^(\d+)\/(\d+)$/.exec((checklist ?? '').trim())
+  return Boolean(m) && Number(m?.[2]) > 0 && m?.[1] === m?.[2]
+}
+
+/** A57: what `/a5r pass` names: a PR (`#123`, `123`, a pull URL) as `#123`, or an intent slug; null when neither. */
+export const passKey = (arg: string): string | null => {
+  const t = arg.trim()
+  const pr = /^#?(\d+)$/.exec(t) ?? /\/pull\/(\d+)/.exec(t)
+  if (pr) return `#${pr[1]}`
+  return /^[\w.-]+$/.test(t) && !/^\d/.test(t) ? t.toLowerCase() : null
+}
+
 /** Every rule – with why the diff could not be read (nothing scored). */
 export const unscored = (why: string): RuleScore[] => RULES5.map(([rule]) => ({ rule, state: 'na' as const, line: unreadLine(why), issues: [] }))
 
+/** The five rules over the branch: each passes, fails with its issues, or does not apply. */
 export const score = (x: AcceptInput): RuleScore[] => {
   if (x.diffProblem) return unscored(x.diffProblem)
   const scores: RuleScore[] = []
@@ -126,6 +148,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
     for (const id of acceptanceIds(x.prompt)) {
       const row = rows.get(id)
       if (!row) r2.push({ file: `docs/intent/${x.slug}/progress.md`, what: `${id} has no row`, todo: 'add the row with its verdict and evidence' })
+      else if (row.verdict === 'waived' || row.verdict.startsWith('waived ')) continue // A56: a row Hai waived is done
       else if (row.verdict !== 'met') r2.push({ file: `docs/intent/${x.slug}/progress.md`, what: `${id} is ${row.verdict || 'empty'}`, todo: 'prove it, or record in findings.md why this PR ships without it' })
       else if (!row.evidence) r2.push({ file: `docs/intent/${x.slug}/progress.md`, what: `${id} is met without evidence`, todo: 'add the command and its result line' })
     }
@@ -186,7 +209,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
 /** An unread branch diff is no pass: the card line and the gate text. */
 export const unreadLine = (why: string): string => `could not read the whole branch diff (${why})`
 export const unreadText = (why: string): string =>
-  `A5R · Acceptance — ${unreadLine(why)} → open the PR from a slice branch cut from origin/main, or Hai lets this one through`
+  `A5R · Acceptance — ${unreadLine(why)} → open the PR from a slice branch cut from origin/main and call again (nothing waits on an answer; Hai lets one through with /a5r pass)`
 
 export const failed = (scores: readonly RuleScore[]): RuleScore[] => scores.filter(s => s.state === 'fail')
 
@@ -242,7 +265,7 @@ export const cappedItems = (issues: readonly Issue[], max = MAX_ITEMS): ItemLine
 /** The refusal (or the ask) that lists what to fix: rule, file, what to do; A53: each rule capped as on the card. */
 export const acceptText = (scores: readonly RuleScore[], what: string): string => {
   const bad = failed(scores)
-  return `A5R · Acceptance — ${bad.length} of 5 rules not met before ${what} → fix these, or ask Hai to let this one through:\n${bad
+  return `A5R · Acceptance — ${bad.length} of 5 rules not met before ${what} → fix these and call again (nothing waits on an answer; Hai lets one through with /a5r pass):\n${bad
     .flatMap(s => cappedItems(s.issues).map(i => `- ${s.rule} ${ruleName(s.rule)}: ${i.text}${i.todo ? ` → ${i.todo}` : ''}`))
     .join('\n')}`
 }

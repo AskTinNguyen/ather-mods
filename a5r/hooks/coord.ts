@@ -99,6 +99,8 @@ export type SessionFile = {
   /** A54/A55: written into the holder's file by the session that released its lease: why and when, so the holder's
    * own A5R tells it (a coordination notice) at its next minute. */
   released?: Released
+  /** A57: passes Hai gave with `/a5r pass` (an intent slug, or `#<PR>`), each used once by the next gated call. */
+  passes?: string[]
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, no Editor running) or an unseen
@@ -122,7 +124,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(v.released && typeof v.released === 'object' && typeof v.released.since === 'number' ? { released: v.released } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(v.released && typeof v.released === 'object' && typeof v.released.since === 'number' ? { released: v.released } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}) }
   } catch {
     return null
   }

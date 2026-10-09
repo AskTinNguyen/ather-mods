@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { PROJ, opts, refused, world, type Rec } from './world.ts'
+import { A5RPANE, PROJ, find, opts, refused, world, type Rec } from './world.ts'
 
 // A18 through the engine: the PR-opening call is scored over the branch; a failing score refuses it with the
 // list, Hai may let one PR through, a worker is refused; an intent's close is scored the same way.
@@ -26,10 +26,9 @@ const ran = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'Bash
 
 test('A18: a PR whose branch fails the score is refused with the list (rule, file, what to do); the gh call never runs', opts(), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status({ pie: { state: 'pass' }, editor: { state: 'none' } }) }, git: branch('Source/S2/Tail/Glow.cpp\nSource/S2/Combat/Hit.cpp\n', `${DIFF}+++ b/Source/S2/Combat/Hit.cpp\n+int x = 2; // A5TMP\n`) })
-  setup(w, MET.replace('| A2 | met | PIE: fade 0.4 s |', '| A2 | open | |'))
+  setup(w) // A56 (rev 21): every row met, so the PR enters acceptance (with an open row it would run unscored)
   const why = refused(await $.tool.call({ tool: 'Bash', command: PR }))
-  expect(why?.split('\n')[0]).toBe('A5R · Acceptance — 4 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
-  expect(why).toContain('- 2 Study well, work well: docs/intent/tail-vfx/progress.md: A2 is open → prove it, or record in findings.md why this PR ships without it')
+  expect(why?.split('\n')[0]).toBe('A5R · Acceptance — 4 of 5 rules not met before this PR → fix these and call again (nothing waits on an answer; Hai lets one through with /a5r pass):')
   expect(why).toContain("- 2 Study well, work well: Ather's proof is incomplete for the role techart: still needs Editor check")
   expect(why).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
   expect(why).toContain('- 4 Keep it clean: Source/S2/Combat/Hit.cpp: a debug leftover')
@@ -47,12 +46,36 @@ test('A18: a clean branch passes and the PR opens; the score is never a per-turn
   expect(w.runs.some(r => /\bstatus\b(?! --porcelain --untracked-files=all --)/.test(r) && r.startsWith('git'))).toBe(false) // never a whole-tree status
 })
 
-test('A18: Hai can let one PR through in the dialog; the next PR is scored and asked again', opts('ask'), async ($, on) => {
+test('A57: a failing PR is refused with its list and no dialog, even in ask mode; after /a5r pass <slug> the next PR call of that intent runs, once', opts('ask'), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Let this PR through' })
   setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp: outside the paths the intent names')
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 0])
+  expect(String((await $.command.run({ command: 'a5r', args: 'pass tail-vfx' } as never)).text)).toContain('the next PR call or close of intent tail-vfx goes through once')
+  expect(JSON.parse(w.read('E:/s2/Saved/A5R/editor/ab12cd34.json')).passes).toEqual(['tail-vfx']) // in the session's saved state
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toContain('A5R · Acceptance — 1 of 5 rules not met') // once
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 1])
+})
+
+test('A56: a PR while a row is still open runs unscored: no refusal, no dialog, no card; the same PR at the checklist end is scored', opts('ask'), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Let this PR through' })
+  setup(w, MET.replace('| A2 | met | PIE: fade 0.4 s |', '| A2 | open | |'))
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
-  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([2, 2])
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 1])
+  expect(find(await $.ui.render(A5RPANE as never), 'hai-accept')).toBeUndefined() // no card
+  expect(w.read('C:/Users/hai.huynh/.claude/PENDING.md')).toBe('') // no red mark
+  // A waived row counts as done: the checklist ends, and the PR is scored (and refused while it fails).
+  setup(w, MET.replace('| A2 | met | PIE: fade 0.4 s |', '| A2 | waived | Hai 2026-10-09 |'))
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp')
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 1])
+})
+
+test('A56: a session with no tracked intent opens its PR unscored', opts('ask'), async ($, on) => {
+  const w = world(on, { out: { [STATUS_TOOL]: JSON.stringify({ me: 'hai', role: 'techart', tracked: null, evidence: {} }) }, git: branch('Source/S2/Combat/Hit.cpp\n'), ask: 'Let this PR through' })
+  setup(w)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
+  expect([(w.calls.ask ?? []).length, ran(w), w.runs.some(r => r.includes('diff --name-only'))]).toEqual([0, 1, false])
 })
 
 test('A18: a worker opening a failing PR is refused at once, never asked', opts('ask'), async ($, on) => {
@@ -81,7 +104,7 @@ test('A18: closing an intent is scored the same way; /a5r accept shows the score
 const OWN = 'Source/S2/Tail/Glow.cpp\ndocs/intent/tail-vfx/progress.md\n'
 const STALE = `${OWN}Source/S2/Combat/Hit.cpp\nContent/S2/Maps/L_TALab.umap\nConfig/DefaultGame.ini\n` // what main merged since local main
 const UNREAD = 'could not read the whole branch diff'
-const NEXT = '→ open the PR from a slice branch cut from origin/main, or Hai lets this one through'
+const NEXT = '→ open the PR from a slice branch cut from origin/main and call again (nothing waits on an answer; Hai lets one through with /a5r pass)'
 
 test('review: the branch is diffed against origin/main, not a stale local main; main only when origin/main is missing', opts(), async ($, on) => {
   const git = { 'diff --name-only origin/main...HEAD': { stdout: OWN }, 'diff --name-only main...HEAD': { stdout: STALE }, 'diff -U0': { stdout: DIFF }, 'worktree list': { stdout: '' }, 'rev-parse --abbrev-ref HEAD': { stdout: 'HaiHuynh/tail-vfx\n' } }
@@ -111,12 +134,14 @@ test('review: a name-only diff that times out is no pass: refused with why, noth
   expect(shown.slice(1).every(l => l.startsWith('– ') && l.endsWith(`${UNREAD} (git diff --name-only timed out or did not start)`))).toBe(true)
 })
 
-test('review: a -U0 diff cut at 4 MiB is no pass (a worker is refused at once); Hai can still let it through', opts('ask'), async ($, on) => {
+test('review: a -U0 diff cut at 4 MiB is no pass (a worker is refused at once); Hai can still let it through with /a5r pass', opts('ask'), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: { ...branch(OWN), 'diff -U0': { stdout: DIFF, truncated: true } }, ask: 'Let this PR through' })
   setup(w)
   const why = refused(await $.tool.call({ tool: 'Bash', command: PR, agentId: 'worker-1' } as never))
   expect(why?.split('\n')[0]).toBe(`A5R · Acceptance — ${UNREAD} (git diff -U0 output passed 4 MiB) ${NEXT}`)
   expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 0])
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))?.split('\n')[0]).toBe(`A5R · Acceptance — ${UNREAD} (git diff -U0 output passed 4 MiB) ${NEXT}`)
+  await $.command.run({ command: 'a5r', args: 'pass tail-vfx' } as never)
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
-  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([1, 1])
+  expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 1])
 })

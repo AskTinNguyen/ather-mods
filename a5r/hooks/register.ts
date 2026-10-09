@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5R, gitTargets, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
-import { acceptText, cappedItems, closesIntent, failed, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
+import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
@@ -233,7 +233,7 @@ async function sharedTest($: Engine, a5r: A5R, command: string, cwd: string): Pr
   return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? true
 }
 
-type AtherStatus = { role?: string; tracked?: { slug?: string; stage?: string; directorCalls?: string[]; prs?: string[] } | null; evidence?: Proof['evidence'] }
+type AtherStatus = { role?: string; tracked?: { slug?: string; stage?: string; checklist?: string; directorCalls?: string[]; prs?: string[] } | null; evidence?: Proof['evidence'] }
 
 /** Ather's live state (its read-only `status` tool), or null without Ather. */
 async function atherStatus($: Engine): Promise<AtherStatus | null> {
@@ -1164,7 +1164,42 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
 }
 
 // ---------- A5R acceptance (nghiệm thu, A18): the five rules over the branch, before a PR and when an intent closes ----------
-const PASS_ONCE = 'Let this PR through'
+/** A56: the tracked intent when its checklist is complete (every acceptance row met or waived in its progress.md, read
+ * in `root` and else in the session's own checkout, or Ather's checklist full), else null: before that, and with no
+ * tracked intent, A5R acceptance stays out of a PR (no score, no refusal, no dialog, no 🟥, no card). */
+async function checklistEnd($: Engine, a5r: A5R, root: string, status: AtherStatus | null): Promise<string | null> {
+  const slug = status?.tracked?.slug
+  if (!slug) return null
+  if (checklistFull(status?.tracked?.checklist)) return slug
+  const sessionRoot = (await locate($, a5r, `${await $.session.cwd()}/_`)).root
+  for (const r of [root, ...(sessionRoot && !sameRoot(sessionRoot, root) ? [sessionRoot] : [])]) {
+    const [prompt, progress] = await Promise.all([$.fs.read(`${r}/docs/intent/${slug}/prompt.md`).catch(() => ''), $.fs.read(`${r}/docs/intent/${slug}/progress.md`).catch(() => '')])
+    if (prompt) return checklistComplete(prompt, progress) ? slug : null
+  }
+  return null
+}
+
+/** A57: uses one of Hai's passes (`/a5r pass`) that names one of `keys`, if any: removed from the saved state. */
+async function takePass($: Engine, opts: Opts, keys: readonly (string | null | undefined)[]): Promise<string | null> {
+  const wanted = keys.filter((k): k is string => Boolean(k)).map(k => k.toLowerCase())
+  const hit = me?.passes?.find(p => wanted.includes(p)) ?? null
+  if (hit && me) {
+    me = { ...me, passes: (me.passes ?? []).filter(p => p !== hit) }
+    await saveMe($, opts)
+  }
+  return hit
+}
+
+/** A57: `/a5r pass <PR or slug>`: Hai lets the next gated call of that intent (or PR's after-the-fact score) through once. */
+async function passCommand($: Engine, opts: Opts, arg: string): Promise<string> {
+  const key = passKey(arg)
+  if (!key) return 'A5R pass: /a5r pass <intent slug | PR number> lets the next PR call (or intent close) of that intent, or the after-the-fact score of that PR, through once even if A5R acceptance fails.'
+  await restoreMe($, opts)
+  if (!me) return 'A5R pass: this session has no A5R state yet.'
+  me = { ...me, passes: [...(me.passes ?? []).filter(p => p !== key), key] }
+  await saveMe($, opts)
+  return `A5R pass: the next ${key.startsWith('#') ? `after-the-fact score of PR ${key}` : `PR call or close of intent ${key}`} goes through once, even with rules not met (it is still scored and shown on the card).`
+}
 
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
 type PrRefs = { repo?: string; head?: string; base?: string; problem?: string } // A46: problem: the call's refs cannot be read
@@ -1405,25 +1440,27 @@ async function acceptGate($: Engine, opts: Opts, a5r: A5R, tool: string, input: 
     }
   }
   if (!root) return null
+  // A56: a PR enters A5R acceptance only at the end of a checklist (before Ship): the session tracks an intent, and the
+  // intent the PR's diff is for (the tracked one unless the diff names another) has every acceptance row met or waived
+  // (or Ather counts it full). Before that, or with no tracked intent, the PR runs: no score shown, no refusal, no card.
+  // An intent's close always enters.
+  const status = slug === null ? await atherStatus($) : null
+  const tracked = status?.tracked?.slug ?? null
+  if (slug === null && !tracked) return null
   const x = await gatherAccept($, opts, a5r, root, slug, body, agentId, refs)
+  if (slug === null && !(x.slug !== null && (checklistComplete(x.prompt, x.progress) || (x.slug === tracked && checklistFull(status?.tracked?.checklist))))) return null
+  const endSlug = x.slug ?? slug
   const scores = score(x)
   lastAccept = { at: await $.clock.now(), slug: x.slug, scores, what } // the intent the score read (tracked or from the diff)
   $.ui.invalidate('ui.render')
   const bad = failed(scores)
   // An unread branch diff is no pass: refused with why, like a failing score.
   if (bad.length === 0 && !x.diffProblem) return null
+  // A57: never a dialog: Hai's pass (given beforehand with /a5r pass) lets this one through, else it is refused.
+  if (await takePass($, opts, [x.slug, endSlug])) return null
   const text = x.diffProblem ? unreadText(x.diffProblem) : acceptText(scores, what)
   if (agentId !== undefined) return `${text}\n(a worker does not ask Hai: leave it undone, stop and report it to the session that briefed you)`
-  if (opts.a5rWhenPresent === 'deny') return text
-  try {
-    const question = x.diffProblem
-      ? `A5R acceptance: ${unreadLine(x.diffProblem)} before ${what}, so nothing was scored. Let it through this once?`
-      : `A5R acceptance: ${bad.length} of 5 rules not met before ${what} (${bad.map(s => `${s.rule} ${ruleName(s.rule)}`).join('; ')}). Let it through this once?`
-    const answer = await $.ui.ask(question, { options: [PASS_ONCE, 'No'], header: 'A5R acceptance' })
-    return answer === PASS_ONCE ? null : `${text}\n(Hai said no)`
-  } catch {
-    return `${text}\n(nobody could approve it now)`
-  }
+  return text
 }
 
 /** A19: the card's score, off the render: the tracked intent's stage (Ship or Ready to close shows the card), then
@@ -1559,6 +1596,13 @@ async function postHoc($: Engine, opts: Opts, a5r: A5R, root: string, status: At
     await saveMe($, opts)
     return false
   }
+  // A56: after the fact too, only at the end of the checklist: a PR listed before that is recorded and never scored.
+  if (!(await checklistEnd($, a5r, root, status))) {
+    const before = prsKnown.size
+    for (const n of listed) prsKnown.add(n)
+    if (prsKnown.size !== before) await saveMe($, opts)
+    return false
+  }
   const again = new Set<number>()
   for (const n of listed) if (prsKnown.has(n) && (await oldAlert($, opts, n))) again.add(n)
   const fresh = listed.filter(n => !prsKnown.has(n) || again.has(n))
@@ -1576,6 +1620,7 @@ async function postHoc($: Engine, opts: Opts, a5r: A5R, root: string, status: At
     if (r.transient) continue
     const bad = failed(r.scores)
     if (bad.length === 0 && !r.problem) continue
+    if (await takePass($, opts, [`#${r.n}`])) continue // A57: Hai passed this PR
     if (!(await claimAlert($, opts, `pr2-${r.n}`, { scorer: POSTHOC_SCORER }))) continue
     const isMerged = r.state === 'MERGED'
     const verdict = r.problem ? `could not be scored: ${unreadLine(r.problem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`
@@ -1615,6 +1660,19 @@ async function shipScore($: Engine, opts: Opts, slug: string): Promise<string | 
   $.ui.invalidate('ui.render')
   return shipText(scores, slug, x.branch, x.diffProblem)
 }
+
+/** A57: `/a5r help`. */
+const A5R_HELP = [
+  'A5R commands:',
+  '/a5r · opens the A5R pane',
+  '/a5r on | off · the five rules and the Editor, RAM and Sync main coordination, for every session',
+  '/a5r status · the state as text',
+  '/a5r accept · A5R acceptance now, for this session\'s repository (the full list)',
+  '/a5r pass <intent slug | PR number> · lets the next PR call or close of that intent (or that PR\'s after-the-fact score) through once, even if acceptance fails; acceptance never asks',
+  '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
+  '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
+  'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
+].join('\n')
 
 /** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */
 async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
@@ -2268,8 +2326,8 @@ export const register: Register = (on, options) => {
     await readTheme($) // A40
     await $.command.register({
       name: 'a5r',
-      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance before a PR; Editor holder, RAM and Sync main)',
-      argumentHint: 'on | off | status | accept | gate <pie> <nopie> | sync HH:MM',
+      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r pass <PR or slug> (let one through once) · /a5r help · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance at the end of the checklist; Editor holder, RAM and Sync main)',
+      argumentHint: 'on | off | status | accept | pass <PR or slug> | gate <pie> <nopie> | sync HH:MM | help',
     })
     await readA5R($)
     a5rFlipAt = 0 // a session that starts with A5R already on does not stamp the seal
@@ -2299,6 +2357,8 @@ export const register: Register = (on, options) => {
     if (/^sync\b/i.test(e.args.trim())) return { text: await syncCommand($, opts, e.args.trim().slice(4)) }
     if (/^accept\b/i.test(e.args.trim())) return { text: await acceptCommand($, opts) }
     if (/^gate\b/i.test(e.args.trim())) return { text: await gateCommand($, opts, e.args.trim().slice(4)) }
+    if (/^pass\b/i.test(e.args.trim())) return { text: await passCommand($, opts, e.args.trim().slice(4)) }
+    if (/^help\b/i.test(e.args.trim())) return { text: A5R_HELP }
     // A29: `/a5r` with no words opens the A5R pane; `/a5r status` keeps the text reply below.
     if (e.args.trim() === '') return { text: await openA5Pane($) }
     const arg = e.args.trim().toLowerCase()
@@ -2312,7 +2372,7 @@ export const register: Register = (on, options) => {
       $.ui.invalidate('ui.render')
       return {
         text: a5rOn
-          ? '★ A5R on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; A5R acceptance before a PR or an intent close); Ather\'s pane takes the red seal and the gold accent.'
+          ? '★ A5R on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; A5R acceptance at the end of an intent checklist, at Ship and at its close); Ather\'s pane takes the red seal and the gold accent.'
           : 'A5R off: the rules, A5R acceptance, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
       }
     }

@@ -26,16 +26,18 @@ test('A47 (a): several intents touched, none tracked: the one whose prompt names
   expect(await cardHead($)).toContain('beta · on demand')
 })
 
-test('A47 (a): a tie is not scored and names the candidates', opts(), async ($, on) => {
+test('A47 (a): a tie is not scored and names the candidates (on demand; a PR with no tracked intent runs unscored, A56)', opts(), async ($, on) => {
   const w = world(on, { git: git('src/a/x.ts\nsrc/b/y.ts\ndocs/intent/alpha/progress.md\ndocs/intent/beta/progress.md\n') })
   intents(w, ['src/a/'], ['src/b/'])
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: `${G} --fill` }))).toBe('A5R · Acceptance — could not read the whole branch diff (the diff touches the intents alpha, beta equally (1 of its paths named by each): open one PR per intent) → open the PR from a slice branch cut from origin/main, or Hai lets this one through')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: `${G} --fill` }))).toBeUndefined() // A56: no tracked intent
+  expect(String((await $.command.run({ command: 'a5r', args: 'accept' } as never)).text)).toContain('could not read the whole branch diff (the diff touches the intents alpha, beta equally (1 of its paths named by each): open one PR per intent)')
 })
 
 test('A47 (b): a fork PR is scored against the fork branch and the upstream remote\'s base, not refused as another repository', opts(), async ($, on) => {
   const remotes = 'origin\thttps://github.com/me/ather-mods.git (fetch)\norigin\thttps://github.com/me/ather-mods.git (push)\nupstream\tgit@github.com:AskTinNguyen/ather-mods.git (fetch)\nupstream\tgit@github.com:AskTinNguyen/ather-mods.git (push)\n'
-  const w = world(on, { git: { ...git('src/a/x.ts\ndocs/intent/alpha/progress.md\n'), 'remote -v': { stdout: remotes }, 'worktree list': { stdout: `worktree ${PROJ}\nbranch refs/heads/intent/x\n` } } })
+  // A56 (rev 21): the session tracks alpha, whose checklist is complete, so the PR enters acceptance.
+  const w = world(on, { out: { 'mcp__ather-automata__status': JSON.stringify({ role: 'techart', tracked: { slug: 'alpha' }, evidence: { pie: { state: 'pass' }, editor: { state: 'pass' } } }) }, git: { ...git('src/a/x.ts\ndocs/intent/alpha/progress.md\n'), 'remote -v': { stdout: remotes }, 'worktree list': { stdout: `worktree ${PROJ}\nbranch refs/heads/intent/x\n` } } })
   intents(w, ['src/a/'], ['src/b/'])
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   expect(refused(await $.tool.call({ tool: 'Bash', command: `${G} -R AskTinNguyen/ather-mods --head me:intent/x --base main --fill` }))).toBeUndefined()

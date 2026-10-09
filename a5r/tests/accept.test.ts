@@ -85,7 +85,7 @@ test('A18 rule 5: a PR body claiming what Ather has not read, a met row whose ev
 
 test('A18: the refusal lists rule, file and what to do; PR commands and intent closes are recognised', () => {
   const text = acceptText(score(base({ files: ['Source/S2/Combat/Hit.cpp'], untrackedLeft: ['x.cpp'] })), 'this PR')
-  expect(text.split('\n')[0]).toBe('A5R · Acceptance — 2 of 5 rules not met before this PR → fix these, or ask Hai to let this one through:')
+  expect(text.split('\n')[0]).toBe('A5R · Acceptance — 2 of 5 rules not met before this PR → fix these and call again (nothing waits on an answer; Hai lets one through with /a5r pass):')
   expect(text).toContain('- 3 Unity and discipline: Source/S2/Combat/Hit.cpp: outside the paths the intent names → explain it in progress.md or findings.md, or move it to its own PR')
   expect(text).toContain('- 4 Keep it clean: x.cpp: left untracked in the shared checkout')
   for (const c of ['gh pr create --title x --body y', 'cd E:/wt/x && gh pr create -B main -F body.md', 'gh api repos/sipherxyz/s2/pulls -f title=x -f head=b -f base=main', 'gh api -X POST repos/o/r/pulls --input pr.json'])

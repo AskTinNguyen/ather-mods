@@ -95,7 +95,8 @@ test('A46: here-documents end at their exact terminator (tabs only for <<-), and
 })
 
 test("A45: through the gate: PowerShell's `if ($?) { … }` chain and an env prefix are scored like any PR (refused while the branch fails)", opts(), async ($, on) => {
-  const w = world(on, { git: { 'diff --name-only': { stdout: 'Source/x.cpp\n' }, 'diff -U0': { stdout: `+++ b/Source/x.cpp\n+int x = 2; // ${['A5R', 'TMP'].join('')}\n` }, 'worktree list': { stdout: '' } } })
+  // A56 (rev 21): the session tracks an intent whose checklist is complete, so the PR enters acceptance.
+  const w = world(on, { out: { 'mcp__ather-automata__status': JSON.stringify({ tracked: { slug: 'x', checklist: '1/1' } }) }, git: { 'diff --name-only': { stdout: 'Source/x.cpp\n' }, 'diff -U0': { stdout: `+++ b/Source/x.cpp\n+int x = 2; // ${['A5R', 'TMP'].join('')}\n` }, 'worktree list': { stdout: '' } } })
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   for (const command of [`git push; if ($?) { ${G} --fill }`, `GH_TOKEN=x ${G} --fill`, `& ${G} --fill`, `bash -c "${G} --fill"`])
     expect([command, (refused(await $.tool.call({ tool: 'Bash', command })) ?? '').split('\n')[0]?.startsWith('A5R · Acceptance —')]).toEqual([command, true])
