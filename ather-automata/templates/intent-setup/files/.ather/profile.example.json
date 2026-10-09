@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "pack": "web",
+  "gates": [
+    { "id": "tests", "command": "npm test", "proofs": ["tests"], "proves": "the unit tests" }
+  ],
+  "mergePolicy": "hold",
+  "areas": [
+    "app",
+    "api",
+    "docs"
+  ]
+}
