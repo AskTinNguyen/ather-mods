@@ -157,3 +157,7 @@ With a screenshot of the A5R pane in the filler-enemies-tech-support session: "A
 > Ok all
 
 After the orchestrator listed the rows waiting on Hai's look (A33, A43, A44, A49, A53, A47(e)).
+
+## L-23 (2026-10-09 09:55) | class: intent | -> rev 20
+
+Relayed: Hai's answer in the mc-loco-stop-triage session's dialog (09:5x), reported by that session: "Giải phóng + duyệt tự hết hạn" (release the lapsed lease, and approve automatic expiry), on the orchestrator's proposal: a lease 10 min past its end with no Editor process recorded and no Unreal process running is released and the queue advances (default yes). The lapsed lease itself was released by its holder at 09:54. The holder (FluidNinja V2 session) reported the second cause: the 20:44 grant reached it only as context on its next tool call while its worker was stopped (A55).
