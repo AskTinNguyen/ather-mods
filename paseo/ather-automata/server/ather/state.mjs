@@ -282,7 +282,7 @@ const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(aw
 /** @param {Io} io @param {string} [root] */
 const checkoutAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? checkoutId(await repoOf(io), await realFolder(io, await io.root().catch(() => ''))) : checkoutId((await laneAt(io, normalFolder(root))).repo, await realFolder(io, root)))
 
-// Before 0.2.4 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
+// Before 0.2.5 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
 // per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
 /** @param {Io} io @param {string} scoped @param {string} legacy */
 const readScoped = async (io, scoped, legacy) => {
