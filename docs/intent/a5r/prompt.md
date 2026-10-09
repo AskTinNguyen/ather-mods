@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 20
+- Rev: 21
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -102,6 +102,8 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A53 (rev 18): The acceptance card and the refusal list stay readable however long the list: per rule at most three lines, the rest grouped by folder with a count (`tools/TALab/scenarios/ · 38 files: named by intent mc-loco-stop-triage`) and "and N more"; the full list stays in the `/a5r accept` reply. The rule's name sits on its own line above its items, never wrapped word by word in a narrow column (Hai's screenshot: "1 Love / the / project, / love / your / fellow / sessions"). Proof: gate: pane tests with a 60-path list at narrow and wide widths; review on the pane.
 - A54 (rev 20): A lapsed Editor lease is released by A5R itself: when a lease is 10 minutes past its end, its lock line names no Editor process (`pid=none`, or a pid that no longer runs) and no UnrealEditor or UnrealEditor-Cmd process is running, any session's A5R writes the standard FREE line (naming the lapsed lane and why), clears the holder's lease, tells the old holder with a coordination notice, and the queue advances in request order. A lease with a running Editor is never released this way (it keeps the overrun notice). MEASURED 2026-10-08/09: lane fluidninja-live2-upgrade's lease 20:44–21:14 (`pid=none`, no Unreal process) blocked three queued lanes until 09:54 the next morning. Proof: gate: engine tests (lapsed + no Editor → released and the next grant made; lapsed with a live Editor pid → kept; inside the 10 minutes → kept; two sessions racing → one FREE line).
 - A55 (rev 20): A grant reaches a holder that is not working: the grant is given to a session as its turn's context only when that session runs a tool, so an idle session never saw its grant (the 20:44 grant above sat ~12 h unseen). A grant not taken up within 10 minutes (the holder's session ran no turn since the grant and no Editor was launched) passes to the next in the queue, with a coordination notice to the skipped session that it must request again. Proof: gate: engine tests (an unseen grant passes on after 10 min; a seen one stays to its end).
+- A56 (rev 21): Nghiệm thu A5R steps in only at the end of the checklist, before Ship: when the tracked intent's checklist is complete (every acceptance row met or waived, per Ather's status), at Ather's Ship prompt, and when the intent closes. A PR opened before that (a draft, a slice, any PR during Build or Prove) is not scored, not refused, raises no dialog, no 🟥 and no card; a PR with no tracked intent likewise. Scoring after the fact (A23, A52) follows the same rule. Hai, 2026-10-09: tasks stopped overnight waiting on A5R's questions; "chỉ can thiệp khi đã ở cuối của checklist, trước Ship — không phải nhảy vào đòi trả lời ở every PR". Proof: gate: engine tests (a PR with open rows runs unscored and unasked; the same PR with the checklist complete is scored; after-the-fact scoring skips an intent with open rows).
+- A57 (rev 21): When nghiệm thu does step in, it never waits on an answer: a failing score refuses the call with its list (the agent fixes and opens the PR again, or stops and reports); the "Let this PR through" dialog is gone, and Hai lets one PR through with a command instead (`/a5r pass <PR or slug>`, valid for the next PR call of that intent), so nothing sits overnight on a question. Proof: gate: engine tests (a failing score refuses with no dialog; after `/a5r pass` the next PR call of that intent runs once).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -115,6 +117,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 21 (2026-10-09): L-24: A56 nghiệm thu only at the checklist end (before Ship), never at every PR; A57 it never waits on an answer (pass by command).
 - rev 20 (2026-10-09): L-23: reopened; A54 a lapsed Editor lease with no Editor running is released by A5R and the queue advances, A55 a grant an idle session never saw passes on after 10 min.
 - closed (2026-10-08): L-22: Hai reviewed every open row ("Ok all"): 53 met, A37 waived. Live at A5R 0.12.3 on `intent/a5r` (branch only, no PR, by Hai's choice).
 - rev 19 (2026-10-08): L-21: A37 waived by Hai (entrance not visible on the desktop pane, accepted); A51 reviewed.

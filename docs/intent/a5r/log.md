@@ -161,3 +161,8 @@ After the orchestrator listed the rows waiting on Hai's look (A33, A43, A44, A49
 ## L-23 (2026-10-09 09:55) | class: intent | -> rev 20
 
 Relayed: Hai's answer in the mc-loco-stop-triage session's dialog (09:5x), reported by that session: "Giải phóng + duyệt tự hết hạn" (release the lapsed lease, and approve automatic expiry), on the orchestrator's proposal: a lease 10 min past its end with no Editor process recorded and no Unreal process running is released and the queue advances (default yes). The lapsed lease itself was released by its holder at 09:54. The holder (FluidNinja V2 session) reported the second cause: the 20:44 grant reached it only as context on its next tool call while its worker was stopped (A55).
+
+## L-24 (2026-10-09 10:10) | class: intent | -> rev 21
+
+> Btw, tôi có vài task bị dừng qua đêm vì chờ câu hỏi và trả lời của A5R, rất phiền. Lưu ý chỉ can thiệp khi đã ở cuối của checklist, trước Ship
+> KHông phải nhảy vào đòi trả lời ở every PR
