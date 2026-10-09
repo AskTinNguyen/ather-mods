@@ -1206,6 +1206,13 @@ const refresh = async engine => {
   await run('repos add ../s2')
   await run('repos remove ../s2')
   expect('/ather repos remove ../s2, its folder, takes it out too', kept(typed.engine).length === 0, kept(typed.engine))
+  // Kept through a link to s2/, removed by its real path: one folder under two spellings.
+  const link = join(BASE, 'link-s2')
+  fs.symlinkSync(s2, link)
+  await run(`repos add ${link}`)
+  const through = kept(typed.engine)
+  await run('repos remove ../s2')
+  expect('a folder kept through a link is removed by its real path', JSON.stringify(through) === JSON.stringify([link]) && kept(typed.engine).length === 0, [through, kept(typed.engine)])
   const unknown = await run('repos remove ../app')
   expect('/ather repos remove of a folder that was not added says so and changes nothing', unknown !== removedBy && kept(typed.engine).length === 0, [unknown, kept(typed.engine)])
   expect('no hook threw', threw(typed.engine).length === 0, threw(typed.engine))

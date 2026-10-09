@@ -1552,7 +1552,7 @@ function sourceText(one) {
 async function addFolder($, text) {
   const files = io($)
   const folder = await typedFolder($, text)
-  if (folder === '') return 'No folder named: /ather repos add <folder>.'
+  if (folder === '') return 'Name a folder: /ather repos add <folder>.'
   const root = await checkoutOf(files, folder)
   if (root === null) return `Not added: ${folder} is not in a git checkout.`
   const { roots, named } = await state.workspaceClones(files, (await laneOf($)).root || cwd, repos)
@@ -1561,18 +1561,23 @@ async function addFolder($, text) {
   if (named >= MAX_CHECKOUTS) return `Not added: ${MAX_CHECKOUTS} checkouts are listed already, the most one session works with.`
   await state.addTraced(files, root)
   await applyFolders($)
-  return `Added ${root}. Every session on this PC lists it from its next start.`
+  return `Added ${root}. It is listed here now, and in every session on this PC from its next start.`
 }
 
-// Takes a kept folder out, named by its folder or by its checkout's name in the pane. Nothing on disk or kept for it changes.
+// Takes a kept folder out, named by its folder (any spelling that lands where it does, or a folder inside its
+// checkout) or by its checkout's name in the pane. Nothing on disk or kept for it changes.
 /** @param {Engine} $ @param {string} text */
 async function removeFolder($, text) {
   const files = io($)
   const folder = await typedFolder($, text)
-  if (folder === '') return 'No folder named: /ather repos remove <folder>.'
+  if (folder === '') return 'Name a folder: /ather repos remove <folder>.'
   const root = await checkoutOf(files, folder)
   const names = await laneNames($)
-  const found = (await state.readTraced(files)).find(one => normalFolder(one) === folder || normalFolder(one) === root || names.get(normalFolder(one)) === text.trim())
+  const meant = new Set([await landing($, folder), ...(root === null ? [] : [await landing($, root)])])
+  let found
+  for (const one of await state.readTraced(files)) {
+    if (found === undefined && (meant.has(await landing($, one)) || names.get(normalFolder(one)) === text.trim())) found = one
+  }
   if (found === undefined) return `Not removed: ${text.trim()} is not a folder added here.`
   await state.removeTraced(files, found)
   await applyFolders($)
