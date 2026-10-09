@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 24
+- Rev: 25
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -116,6 +116,8 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A67 (rev 24): A holder working through a background agent is not idle: each session records its running agents (count and kinds) in its session file every minute, and "no turn for 10 minutes" (A55, the judge's trigger) also requires no running agent. Proof: gate: engine tests (a holder whose worker builds is neither passed over nor judged idle).
 - A68 (rev 24): A live holder past its end can extend while nobody waits (today an extension is refused once the lease has ended, so it can only release and ask again); with someone waiting, the extension is refused as before. Proof: gate: engine tests.
 - A69 (rev 24): The judge's verdicts are checked against cases whose truth is known before Hai relies on them: the judge's own input built by A5R's code for past incidents (lane fluidninja-live2-upgrade 2026-10-08 20:44–21:14, the holder's worker stopped; lane mc-dash-sprint-carry 2026-10-07 15:49–17:15, an Editor-closed build; lane 1007-filler-section3 2026-10-07 15:17–16:30, a PIE proof), run through the same model and prompt, each verdict compared with what happened. Proof: review: the orchestrator's replay report to Hai.
+- A70 (rev 25): The judge's silence is counted from the later of the grant and the holder's last turn: a holder granted the Editor minutes ago is not judged idle because its last turn was before the grant. MEASURED 2026-10-09 17:25: lane 1009-loco-ab2 was granted at 17:25 and judged at 17:25 ("unsure … re-check in about 5 minutes") because its last turn was 16:42. Proof: gate: engine test (granted now, last turn 40 min ago → no judge until 10 min after the grant).
+- A71 (rev 25): Every time the judge sees and writes is the machine's local time: the transcript digest's UTC stamps are converted, the facts and the verdict card use local `HH:MM`, and the prompt says so. MEASURED 2026-10-09: verdicts read "a user-side message at 10:25 granting the Editor" (17:25 local), "the 12:55 versus 19:55 end time" and "lease end (12:01Z)". Proof: gate: unit test on the digest and the facts (no `Z`, no UTC hour).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -129,6 +131,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 25 (2026-10-09): L-28: A70 the judge counts silence from the grant, A71 local time everywhere the judge reads and writes.
 - rev 24 (2026-10-09): L-27: Step 2 without S2 §3: A66 the lock names the running Editor, A67 a holder with a running agent is not idle, A68 extend past the end while nobody waits, A69 the judge replayed on known past incidents.
 - rev 23 (2026-10-09): L-26: A63 title marks clear after a reload, A64 no rule reads the title mark or PENDING.md, A65 an advisory judge reads the holder's transcript and reports to Hai.
 - rev 22 (2026-10-09): L-25: adversary review of the Orchestrate proposal: A58 lapse only as S2 §2 allows and never during a build, A59 a failed wake never mutes a session, A60 releases in a file of their own, A61 no Editor grant over MERGE_HEAD, A62 orchestrate.log before any Tier 1 rule acts.

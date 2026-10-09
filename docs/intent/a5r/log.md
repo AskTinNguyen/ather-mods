@@ -189,3 +189,9 @@ With a screenshot of the sidebar: 🟥 on pinned, working and completed sessions
 ## L-27 (2026-10-09) | class: intent | -> rev 24
 
 > Có gì block em không? Có làm tới cùng được không?
+
+## L-28 (2026-10-09 17:40) | class: intent | -> rev 25
+
+> Đã thấy orchestrate, nhưng đây là ở session mở mới hoàn toàn, vậy các session đang chạy có bị conflict bản cũ bản mới không?
+
+With a screenshot of the A5R pane: Orchestrate card with "17:25 · 1009-loco-ab2 · unsure" (judged at its own grant time; UTC and local times mixed) and "16:37 · mc-jump-fall-triage+dash-sprint · working".
