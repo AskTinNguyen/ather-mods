@@ -106,9 +106,33 @@ const rootLanes = new Map()
 /** @type {Map<string, Promise<string>>} */
 const realFolders = new Map()
 
+// A store key holds 256 characters at most (the engine's limit), and a folder is one part of it, beside a
+// session's id, a repository and an intent's name. A longer folder is kept as a digest of the whole and
+// its last characters: still one id per folder, and still told apart by eye.
+const FOLDER_MAX = 120
+// A 53-bit digest of a text (cyrb53), in base 36: the same on every machine and in every engine.
+/** @param {string} text */
+const digest = text => {
+  let high = 0xdeadbeef
+  let low = 0x41c6ce57
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at)
+    high = Math.imul(high ^ code, 2654435761)
+    low = Math.imul(low ^ code, 1597334677)
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909)
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909)
+  return (4294967296 * (2097151 & low) + (high >>> 0)).toString(36)
+}
+
 // A folder as an id holds it: normalised and lowercased, so it reads the same from every session.
 /** @param {string} root */
-const folderId = root => root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+const folderId = root => {
+  const folder = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  if (folder.length <= FOLDER_MAX) return folder
+  const mark = `~${digest(folder)}~`
+  return mark + folder.slice(mark.length - FOLDER_MAX)
+}
 
 // The folder an id is made from: where the path really lands, so a checkout reached through a symbolic link
 // (macOS's /tmp, a linked projects folder) has the id it has by its real path. Only for ids: files are read
