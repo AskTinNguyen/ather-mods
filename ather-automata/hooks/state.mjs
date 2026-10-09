@@ -27,7 +27,7 @@ import { groupByOf } from './worklist.mjs'
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
- *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.3, and as the Paseo version still keeps them).
+ *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.4, and as the Paseo version still keeps them).
  *   `real`: the folder a path really lands in, behind any symbolic link; without it an id holds the folder as given.
  *   `worktrees`: what `git worktree list --porcelain` prints in the checkout at `root`, '' when git refused, null when
  *   git could not say (the workspace is then read again); without it the workspace holds no worktree that is not named.
@@ -109,9 +109,33 @@ const rootLanes = new Map()
 /** @type {Map<string, Promise<string>>} */
 const realFolders = new Map()
 
+// A store key holds 256 characters at most (the engine's limit), and a folder is one part of it, beside a
+// session's id, a repository and an intent's name. A longer folder is kept as a digest of the whole and
+// its last characters: still one id per folder, and still told apart by eye.
+const FOLDER_MAX = 120
+// A 53-bit digest of a text (cyrb53), in base 36: the same on every machine and in every engine.
+/** @param {string} text */
+const digest = text => {
+  let high = 0xdeadbeef
+  let low = 0x41c6ce57
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at)
+    high = Math.imul(high ^ code, 2654435761)
+    low = Math.imul(low ^ code, 1597334677)
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909)
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909)
+  return (4294967296 * (2097151 & low) + (high >>> 0)).toString(36)
+}
+
 // A folder as an id holds it: normalised and lowercased, so it reads the same from every session.
 /** @param {string} root */
-const folderId = root => root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+const folderId = root => {
+  const folder = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  if (folder.length <= FOLDER_MAX) return folder
+  const mark = `~${digest(folder)}~`
+  return mark + folder.slice(mark.length - FOLDER_MAX)
+}
 
 // The folder an id is made from: where the path really lands, so a checkout reached through a symbolic link
 // (macOS's /tmp, a linked projects folder) has the id it has by its real path. Only for ids: files are read
@@ -283,7 +307,7 @@ const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(aw
 /** @param {Io} io @param {string} [root] */
 const checkoutAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? checkoutId(await repoOf(io), await realFolder(io, await io.root().catch(() => ''))) : checkoutId((await laneAt(io, normalFolder(root))).repo, await realFolder(io, root)))
 
-// Before 0.2.3 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
+// Before 0.2.4 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
 // per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
 /** @param {Io} io @param {string} scoped @param {string} legacy */
 const readScoped = async (io, scoped, legacy) => {
@@ -359,7 +383,7 @@ export const checkoutScope = async (io, checkout) => {
 /** @param {Io} io @param {string} slug @param {string} [root] */
 export const intentScope = async (io, slug, root) => inScope(await checkoutAt(io, root), slug)
 
-// What is kept for a scope: an intent's from before 0.2.3 too, while its scoped record has none. Only an
+// What is kept for a scope: an intent's from before 0.2.4 too, while its scoped record has none. Only an
 // intent in the session's own checkout: that proof was never another checkout's.
 /** @param {Io} io @param {string} scope */
 const storedEvidence = async (io, scope) => {
@@ -452,7 +476,7 @@ export const readPrStates = async (io, repo) => Object.fromEntries(Object.entrie
 /** @param {Io} io @param {string} me @param {string} [root] @returns {Promise<string | null>} */
 export const readLast = async (io, me, root) => {
   const scoped = KEY.last(me, await checkoutAt(io, root))
-  // Only the session's own checkout reads through to the key from before 0.2.3.
+  // Only the session's own checkout reads through to the key from before 0.2.4.
   const isOwn = root === undefined || (await isSessionRoot(io, root))
   return /** @type {string | null} */ ((await readScoped(io, scoped, isOwn ? KEY.last(me, '') : scoped)) ?? null)
 }
@@ -568,7 +592,7 @@ export const track = (io, root, slug, options = {}) =>
     if (options.me) {
       const last = KEY.last(options.me, await checkoutAt(io, at))
       await io.set(last, slug)
-      // Once the own checkout's scoped "Continue …" is written, the unscoped one from before 0.2.3 must not
+      // Once the own checkout's scoped "Continue …" is written, the unscoped one from before 0.2.4 must not
       // read through again. Tracking in another checkout leaves it: it is still the own checkout's.
       if (isOwn && last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
     }
@@ -591,7 +615,7 @@ export const untrack = (io, me) =>
     const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
     if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
     await io.remove(KEY.pinned(sid))
-    // The unscoped "Continue …" from before 0.2.3 goes too, or it would read through again.
+    // The unscoped "Continue …" from before 0.2.4 goes too, or it would read through again.
     for (const key of new Set([KEY.last(me, await checkoutAt(io, pin.isOwn ? undefined : pin.root)), ...(pin.isOwn ? [KEY.last(me, '')] : [])])) if ((await io.get(key)) === slug) await io.remove(key)
     const stopped = (await readStops(io, sid)).filter(one => !isStopOf(one, slug, pin.isOwn ? null : pin.root))
     await setList(io, KEY.untracked(sid), [...stopped, pin.isOwn ? slug : { slug, root: pin.root }])

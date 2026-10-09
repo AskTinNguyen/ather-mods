@@ -743,7 +743,9 @@ const GH_ISSUES = [
 
 {
   // While a merge's losses are unreviewed, Next waits; the pane shows what needs you first.
-  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer', 'lost:harness-session-0001': { paths: ['Content/S2/BP_Sash.uasset'], isDisclosed: false } } })
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer', 'lost:harness-session-0001': { paths: ['Content/S2/BP_Sash.uasset'], isDisclosed: false } } })
+  // The tracked intent has a decision of its own waiting: the loss comes before it.
+  fs.appendFileSync(path.join(root, 'docs/intent/box-scale-tool/findings.md'), '\n## F-9 (2026-10-07) | blocking: no | status: open (director)\n\nWhich handle should scale from the centre?\n')
   await run(engine, [], 'ather', 'intent box-scale-tool')
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · a merge lost an edit (72 columns)', pane.lines.join('\n')])
@@ -897,10 +899,10 @@ const hasFocus = tree => {
 // ---------------------------------------------------------------- decide in place (0.2.0)
 
 {
-  // Two fixture intents of Tin's. zz-decide, tracked so it comes first: F-1 in the list format (A recommended)
+  // Two fixture intents of Tin's. zz-decide, the newer so it comes first: F-1 in the list format (A recommended)
   // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended) and F-4 with no options,
   // two decisions that wait as one block. A trap seen in three sessions waits too, and the Editor is held
-  // (a designer's Ask for the Editor: an item with nothing to answer).
+  // (a designer's Ask for the Editor: an item with nothing to answer, offered while an intent is tracked).
   const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
   const fixture = (slug, findings) => {
     fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
@@ -934,13 +936,21 @@ const hasFocus = tree => {
     'Which pool size should the spawner use?',
   ])
   fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'held by lane-7')
+  // With nothing tracked the intents come newest first: zz-group is a second older, and still newer than the copied ones.
+  const earlier = new Date(Date.now() - 1000)
+  for (const file of fs.readdirSync(path.join(root, 'docs/intent/zz-group'))) fs.utimesSync(path.join(root, 'docs/intent/zz-group', file), earlier, earlier)
   await run(engine, [], 'ather', 'intent zz-decide')
   const pane = (cols = 72, surface = 'terminal') => engine.render('Pane', { bodyColumns: cols }, 'ather', surface)
   const text = async (cols = 72) => check(await pane(cols), cols).lines.join('\n')
   const id = n => `call:${n === 1 || n === 3 ? 'zz-decide' : 'zz-group'}:F-${n}`
   const waiting = async () => Number(/N E E D S   Y O U   ·   (\d+)/.exec(await text(110))?.[1] ?? -1)
 
+  // A session answers for the intent it tracks: another intent's decisions wait for a session that tracks it, or none.
+  const tracked = await pane(72)
+  expect("tracking zz-decide, Needs you offers its decision and not zz-group's; the repeated problem and Ask for the Editor stay", Boolean(nodeOf(tracked, `item-${id(1)}`)) && !nodeOf(tracked, 'calls-zz-group') && !nodeOf(tracked, `item-${id(2)}`) && !nodeOf(tracked, `item-${id(4)}`) && Boolean(nodeOf(tracked, 'item-rule:live-coding')) && Boolean(nodeOf(tracked, 'item-editor')) && (await waiting()) === 3, check(tracked, 72).lines)
+  await run(engine, [], 'ather', 'untrack')
   const first = await pane(72)
+  expect("after /ather untrack, zz-group's decisions are offered again, beside zz-decide's", Boolean(nodeOf(first, `item-${id(1)}`)) && Boolean(nodeOf(first, 'calls-zz-group')), check(first, 72).lines)
   const first72 = check(first, 72)
   screens.push(['Terminal · Needs you, the first decision opened with its answers (72 columns)', first72.lines.join('\n')])
   const shown72 = first72.lines.join('\n')
@@ -1050,9 +1060,12 @@ const hasFocus = tree => {
   expect('A8: Make it a rule hands the draft request (never a commit) and shows "✓ Decided: A" in place', /These traps keep coming back: "A running Editor blocks the build \(Live Coding\)", 3 sessions; its fix each time: Close the Editor\. Make it a rule: for each, draft the change that prevents it/.test(engine.record.submits.at(-1) ?? '') && /do not commit\.$/.test(engine.record.submits.at(-1) ?? '') && /✓ Decided: A · Turn a repeated problem into a rule\?/.test(await text(110)), engine.record.submits.at(-1))
 
   // An item with nothing to answer keeps today's press: it goes to the session and the pane closes.
+  // Ask for the Editor is for the tracked intent's next step.
+  await run(engine, [], 'ather', 'intent zz-decide')
+  const closesTracked = engine.record.closes.length
   pressKey(await pane(), 'item-editor')
   await engine.flush()
-  expect('D8: an item without options (Ask for the Editor) still hands over on its press and closes the pane', /^Find the session that holds the Editor owner lock/.test(engine.record.submits.at(-1) ?? '') && engine.record.closes.length > closesBefore, engine.record.submits.at(-1))
+  expect('D8: an item without options (Ask for the Editor) still hands over on its press and closes the pane', /^Find the session that holds the Editor owner lock/.test(engine.record.submits.at(-1) ?? '') && engine.record.closes.length > closesTracked, engine.record.submits.at(-1))
   expect('no hook threw while deciding in place', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }
@@ -1278,11 +1291,12 @@ const hasFocus = tree => {
   const laneFile = path.join(root, 'Saved/AtherAutomata/lanes/harness-session-0001.json')
   const lane = () => JSON.parse(fs.readFileSync(laneFile, 'utf8'))
   await engine.timers()
+  // What waits with nothing tracked: a session that tracks an intent is offered that intent's decisions only.
+  const waiting = async () => /Waiting on you: [^.]*\./.exec((await run(engine, [dismiss])).dialogs[0]?.question ?? '')?.[0] ?? ''
+  const before = await waiting()
   await run(engine, [], 'ather', 'intent box-scale-tool')
   expect('tracking writes the lane heartbeat at once, with the last activity', lane().intent === 'box-scale-tool' && typeof lane().lastActiveAt === 'number', lane())
   await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Succeeded' })
-  const waiting = async () => /Waiting on you: [^.]*\./.exec((await run(engine, [dismiss])).dialogs[0]?.question ?? '')?.[0] ?? ''
-  const before = await waiting()
   await engine.spawn({ agentId: 'w-guard', description: 'A2 worker', prompt: 'Implement A2.' })
   await run(engine, [], 'away', '4h')
   const refused = await run(engine, [], 'ather', 'untrack')
