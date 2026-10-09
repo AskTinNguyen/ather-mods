@@ -17,7 +17,7 @@ test('/away answers the same way, and changes nothing', async $ => {
   expect(ran.text ?? '').not.toMatch(/\/ather setup/)
 })
 
-test('/ather setup hands the session one prompt that names the bundle shipped beside hooks/', async ($, on) => {
+test('/ather setup hands the session one prompt that names the steps shipped beside hooks/ and the public repository', async ($, on) => {
   const clock = mock.clock(on)
   const sent: string[] = []
   on('prompt.submit', async (_$, e) => {
@@ -27,5 +27,7 @@ test('/ather setup hands the session one prompt that names the bundle shipped be
   await $.command.run({ command: 'ather', args: 'setup' })
   await clock.advance(1000)
   expect(sent.length).toBe(1)
-  expect(sent[0]).toMatch(/[\\/]ather-automata[\\/]templates[\\/]intent-setup\.zip/)
+  expect(sent[0]).toMatch(/[\\/]ather-automata[\\/]templates[\\/]intent-setup[\\/]SETUP\.md/)
+  expect(sent[0]).toContain('https://github.com/AskTinNguyen/intent')
+  expect(sent[0]).not.toContain('.zip')
 })
