@@ -185,3 +185,7 @@ The review (Fable, read-only) found live defects in 0.13.0 (A54 can free a build
 > Nên rule không nên phụ thuộc vào dấu này
 
 With a screenshot of the sidebar: 🟥 on pinned, working and completed sessions. The advisory judge (A65) follows the orchestrator's proposal, its default taken (Hai did not object).
+
+## L-27 (2026-10-09) | class: intent | -> rev 24
+
+> Có gì block em không? Có làm tới cùng được không?

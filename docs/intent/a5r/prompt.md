@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 23
+- Rev: 24
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -112,6 +112,10 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A63 (rev 23): A title mark (🟥 / ⏯️) set by A5R is taken off when Hai types in that session even after a reload or an app restart: the original title is the current one without its mark, never a value held only in memory. MEASURED 2026-10-09: `markedFrom` (register.ts) lives only in memory, so every release (hot reload) and restart left marks that never cleared; Hai's sidebar showed 🟥 on working and completed sessions. Proof: gate: engine test (marked, module reloaded, Hai types → title restored).
 - A64 (rev 23): No A5R rule reads the title mark or PENDING.md to judge a session: the A62 candidate "holder waiting on Hai" drops both; whether a session waits on Hai is read from its own transcript (A65). Hai, 2026-10-09: "rule không nên phụ thuộc vào dấu này". Proof: gate: unit test (a 🟥 title or an open PENDING line alone triggers nothing).
 - A65 (rev 23): An advisory judge for a holder that holds too long: when a lease is past its end, or its holder has run no turn for 10 minutes while holding the Editor or the sync, one judging agent (one per incident, claimed like the alerts) is spawned in the session that saw it. It reads the facts (lease, processes, the holder's workers) and the tail of the holder's own transcript (its record file under the Claude projects folder, by its full session id; tail only), and concludes one of: working (a build/test/Editor making progress), waiting on Hai (its last message asks him something, or a question is open), stuck or crashed, unsure. It acts on nothing: it sends Hai one message with the session, what it is doing, the evidence and its recommendation, and appends the verdict to `orchestrate.log`. Proof: gate: engine tests (trigger once per incident; a working holder, a waiting one and a gone one each get the right verdict from fixture transcripts; nothing is released); review: Hai reads its first verdicts.
+- A66 (rev 24): The lock line names the Editor that actually runs: when the holder launches the Editor (or its first Editor MCP call finds one running), A5R writes that process id into the HELD line (read-compare-write, the holder only), so the probe and the judge can tell "the holder's Editor died" from "no Editor yet". MEASURED 2026-10-09: the lock said `pid=none` while the holder's UnrealEditor 45392 ran. Proof: gate: engine tests (launch → pid written; the process gone → the judge's facts say so).
+- A67 (rev 24): A holder working through a background agent is not idle: each session records its running agents (count and kinds) in its session file every minute, and "no turn for 10 minutes" (A55, the judge's trigger) also requires no running agent. Proof: gate: engine tests (a holder whose worker builds is neither passed over nor judged idle).
+- A68 (rev 24): A live holder past its end can extend while nobody waits (today an extension is refused once the lease has ended, so it can only release and ask again); with someone waiting, the extension is refused as before. Proof: gate: engine tests.
+- A69 (rev 24): The judge's verdicts are checked against cases whose truth is known before Hai relies on them: the judge's own input built by A5R's code for past incidents (lane fluidninja-live2-upgrade 2026-10-08 20:44–21:14, the holder's worker stopped; lane mc-dash-sprint-carry 2026-10-07 15:49–17:15, an Editor-closed build; lane 1007-filler-section3 2026-10-07 15:17–16:30, a PIE proof), run through the same model and prompt, each verdict compared with what happened. Proof: review: the orchestrator's replay report to Hai.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -125,6 +129,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 24 (2026-10-09): L-27: Step 2 without S2 §3: A66 the lock names the running Editor, A67 a holder with a running agent is not idle, A68 extend past the end while nobody waits, A69 the judge replayed on known past incidents.
 - rev 23 (2026-10-09): L-26: A63 title marks clear after a reload, A64 no rule reads the title mark or PENDING.md, A65 an advisory judge reads the holder's transcript and reports to Hai.
 - rev 22 (2026-10-09): L-25: adversary review of the Orchestrate proposal: A58 lapse only as S2 §2 allows and never during a build, A59 a failed wake never mutes a session, A60 releases in a file of their own, A61 no Editor grant over MERGE_HEAD, A62 orchestrate.log before any Tier 1 rule acts.
 - rev 21 (2026-10-09): L-24: A56 nghiệm thu only at the checklist end (before Ship), never at every PR; A57 it never waits on an answer (pass by command).
