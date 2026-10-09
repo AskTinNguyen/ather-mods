@@ -1896,7 +1896,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
     rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
     rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
-    rows.push(section(el, 'back', [Button({ key: 'pick-repos', label: 'Repositories ›', hotkey: hotkeyFor('p'), plain: true, dimColor: true, onPress: show($, 'repos') }), Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+    rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
 
@@ -1906,15 +1906,19 @@ function paneView(el, $, model, columns, surface, crew = []) {
       section(
         el,
         'repos-list',
+        // Two lines each, so a narrow pane still reads: the name a person knows the folder by, then its whole path and what it brings.
         sources.map((one, index) => {
-          const detail = sourceText(one)
+          const name = one.folder.split('/').pop() || one.folder
           const remove = one.from === 'kept' ? [Button({ key: `repos-remove-${index}`, label: 'Remove', plain: true, dimColor: true, onPress: press($, () => removeFolder($, one.folder), true) })] : []
           return Box({
             key: `repos-row-${index}`,
-            flexDirection: 'row',
-            gap: 2,
+            flexDirection: 'column',
             width: '100%',
-            children: [Box({ key: `repos-row-${index}-words`, flexGrow: 1, children: [Text({ key: `repos-folder-${index}`, children: fit(one.folder, Math.max(8, width - detail.length - (remove.length > 0 ? 12 : 2))) })] }), Text({ key: `repos-from-${index}`, color: one.isCheckout ? QUIET : AMBER, children: detail }), ...remove],
+            marginTop: index === 0 ? 0 : 1,
+            children: [
+              Box({ key: `repos-row-${index}-head`, flexDirection: 'row', gap: 2, width: '100%', children: [Box({ key: `repos-row-${index}-words`, flexGrow: 1, children: [Text({ key: `repos-folder-${index}`, bold: true, children: fit(name, Math.max(8, width - (remove.length > 0 ? 10 : 0))) })] }), ...remove] }),
+              Text({ key: `repos-path-${index}`, color: one.isCheckout ? QUIET : AMBER, wrap: 'wrap', children: `${one.folder} · ${sourceText(one)}` }),
+            ],
           })
         }),
       ),
@@ -1925,7 +1929,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       ? el.Input({ key: 'repos-add-field', label: 'Folder: ', placeholder: 'a path: absolute, ~/… or from the session folder', value: '', submitLabel: 'add', autoFocus: true, onSubmit: (/** @type {string} */ words) => ((isFolderOpen = false), press($, () => addFolder($, words), true)()) })
       : Button({ key: 'repos-add', label: '＋ Add a folder', hotkey: hotkeyFor('a'), autoFocus: true, onPress: hasInput ? () => ((isFolderOpen = true), $.ui.invalidate('ui.render')) : press($, () => folderQuestion($), true) })
     rows.push(section(el, 'repos-add-row', [add]))
-    rows.push(section(el, 'repos-back', [Button({ key: 'repos-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: () => ((isFolderOpen = false), show($, 'pick')()) })]))
+    rows.push(section(el, 'repos-back', [Button({ key: 'repos-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: () => ((isFolderOpen = false), show($, 'home')()) })]))
     rows.push(...foot)
     return Box({ flexDirection: 'column', children: rows })
   }
@@ -2147,6 +2151,9 @@ function paneView(el, $, model, columns, surface, crew = []) {
     const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: isClicked ? undefined : true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
     rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
   }
+
+  // The folders Ather lists, and adding one: a quiet way in at the foot.
+  rows.push(section(el, 'home-repos-row', [Button({ key: 'home-repos', label: 'Repositories ›', hotkey: hotkeyFor('r'), plain: true, dimColor: true, onPress: show($, 'repos') })]))
 
   rows.push(...foot)
   return Box({ flexDirection: 'column', children: rows })

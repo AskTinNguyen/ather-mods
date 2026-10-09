@@ -1092,14 +1092,14 @@ const refresh = async engine => {
     await engine.command('ather', 'pick')
     return intentRows(await pane(engine)).map(one => one.id).sort()
   }
-  // The Repositories view, opened from its row in Everything open.
+  // The Repositories view, opened from its row at the foot of Home.
   const reposView = async engine => {
-    await engine.command('ather', 'pick')
-    byKey(await pane(engine), 'pick-repos')?.props.onPress()
+    await engine.command('ather', '')
+    byKey(await pane(engine), 'home-repos')?.props.onPress()
     return pane(engine)
   }
-  // The folders the view lists, in order, and whether each has Remove.
-  const sources = tree => nodesOf(tree).filter(node => /^repos-folder-\d+$/.test(node.props?.key ?? '')).map(node => ({ folder: textIn(node).trim(), hasRemove: Boolean(byKey(tree, node.props.key.replace('folder', 'remove'))) }))
+  // The folders the view lists, in order (each row's second line begins with the whole path), and whether each has Remove.
+  const sources = tree => nodesOf(tree).filter(node => /^repos-path-\d+$/.test(node.props?.key ?? '')).map(node => ({ folder: textIn(node).split(' · ')[0].trim(), hasRemove: Boolean(byKey(tree, node.props.key.replace('path', 'remove'))) }))
   // A press there, until the pane says what came of it; the issues are then read in the background.
   const said = async (engine, press) => {
     const before = engine.record.toasts.length
@@ -1130,6 +1130,11 @@ const refresh = async engine => {
   await issuesRead(engine, { [web]: {} })
   const lists = () => engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
   expect("a session in web lists web's intents alone, and its view its own checkout, without Remove", JSON.stringify(await idsOf(engine)) === JSON.stringify(['intent:login']) && JSON.stringify(sources(await reposView(engine))) === JSON.stringify([{ folder: web, hasRemove: false }]) && !lists().includes(s2), [await idsOf(engine), sources(await reposView(engine)), lists()])
+
+  expect('Everything open has no Repositories row', (await engine.command('ather', 'pick'), !nodesOf(await pane(engine)).some(node => /repos/.test(node.props?.key ?? ''))), nodesOf(await pane(engine)).map(node => node.props?.key).filter(key => /repos/.test(key ?? '')))
+  nodesOf(await reposView(engine)).find(node => node.type === 'Button' && node.props?.key === 'repos-back')?.props.onPress()
+  expect('Back in the view returns to Home', Boolean(byKey(await pane(engine), 'home-repos')) && !byKey(await pane(engine), 'repos-add'), nodesOf(await pane(engine)).map(node => node.props?.key).filter(Boolean))
+  expect('on the desktop Home draws the row too', Boolean(byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather', 'desktop'), 'home-repos')))
 
   const added = await add(engine, '../s2')
   expect("Add a folder with ../s2 keeps s2's folder for the machine", added !== '' && JSON.stringify(kept(engine)) === JSON.stringify([s2]), [added, kept(engine)])
@@ -1205,6 +1210,18 @@ const refresh = async engine => {
   expect('/ather repos remove of a folder that was not added says so and changes nothing', unknown !== removedBy && kept(typed.engine).length === 0, [unknown, kept(typed.engine)])
   expect('no hook threw', threw(typed.engine).length === 0, threw(typed.engine))
   await typed.engine.end('other')
+
+  // A session in a repository with no docs/intent adds the folder that has intents.
+  const plain = makeCheckout(parent, 'plain', { owner: 'AskTinNguyen', name: 'plain', files: { 'package.json': '{ "name": "plain" }\n' } })
+  const none = await boot({ root: plain, sessionId: 'harness-session-0044', ghAt })
+  none.engine.setSurfaces(['terminal'])
+  const dialogs = none.engine.record.dialogs.length
+  const first = (await none.engine.command('ather', 'repos add ../s2')).text
+  await none.engine.flush()
+  const found = await idsOf(none.engine)
+  expect("in a repository with no intents, /ather repos add ../s2 asks no setup question and the pane then lists s2's intents", first !== '' && none.engine.record.dialogs.length === dialogs && JSON.stringify(kept(none.engine)) === JSON.stringify([s2]) && JSON.stringify(found) === JSON.stringify(['intent:s2-x/draft', 'intent:s2/boss']), [first, none.engine.record.dialogs.slice(dialogs), kept(none.engine), found])
+  expect('no hook threw', threw(none.engine).length === 0, threw(none.engine))
+  await none.engine.end('other')
 }
 
 // ---------------------------------------------------------------- report
