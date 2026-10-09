@@ -208,6 +208,19 @@ export function register(on) {
     return { text: await awayCommand($, e.args.trim()) }
   })
 
+  // Ather's own questions reach the dialog as labels ($.ui.ask): each choice gets back what it does before it is
+  // drawn, and a dialog that closed by itself is noted, since its result alone says so.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    if (next.origin.plugin !== $.plugin.name) return next(e)
+    const ran = await next({ ...e, questions: e.questions.map(question => ({ ...question, options: question.options.map(option => ({ ...option, description: option.description || describe(question.question, option.label) })) })) })
+    const result = /** @type {{ afkTimeoutMs?: unknown } | undefined} */ (ran.result)
+    for (const question of result?.afkTimeoutMs === undefined ? [] : e.questions) {
+      const open = asking.get(question.question)
+      if (open) open.isIdle = true
+    }
+    return ran
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await laneOf($)).isS2) return next(e)
     void wake($)
@@ -854,7 +867,7 @@ async function awayCommand($, args) {
 
 /** @typedef {{ label: string, description: string, run: () => Promise<string> }} Choice */
 
-// The dialog reports a dismissal or an unanswered question as bracketed text, not as an error.
+// $.ui.ask rejects on a dismissal. A surface that answers one with bracketed text instead, and Ather's own Close, count as one too.
 const DISMISSED = /^\[.*\]$|^(not now|close|skip|cancel|dismiss(ed)?|no preference)[.!]?$/i
 
 /** @param {unknown} value */
@@ -864,23 +877,32 @@ function asAnswer(value) {
   return text === '' || DISMISSED.test(text) ? null : text
 }
 
+// Offered beside a single choice: the engine would pad it with "Yes", and a way out reads better.
+const CLOSE = { label: 'Close', description: 'Close this without choosing.' }
+
+// Each question now open, by its text: its choices, and whether its dialog closed by itself.
+/** @type {Map<string, { choices: readonly Choice[], isIdle: boolean }>} */
+const asking = new Map()
+
+// What a choice of an open question does: $.ui.ask takes labels alone, so the tool.call hook in register puts this back.
+/** @param {string} question @param {string} label */
+function describe(question, label) {
+  return [...(asking.get(question)?.choices ?? []), CLOSE].find(choice => choice.label === label)?.description ?? ''
+}
+
 // One question; runs the chosen answer, hands typed text to onTyped, or returns the fallback when dismissed.
 /** @param {Engine} $ @param {{ header: string, question: string, choices: readonly Choice[], fallback: string, onTyped: (text: string) => Promise<string> }} spec */
 async function ask($, spec) {
-  const options = spec.choices.slice(0, 4).map(choice => ({ label: choice.label, description: choice.description }))
-  if (options.length === 1) options.push({ label: 'Close', description: 'Close this without choosing.' })
-  /** @type {import('claude-code').ToolCallResult | undefined} */
-  let ran
-  try {
-    ran = await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: spec.question, header: spec.header.slice(0, 12), options, multiSelect: false }] })
-  } catch {
-    return spec.fallback
-  }
-  if (ran.deny !== undefined || ran.isError === true) return spec.fallback
-  const result = /** @type {{ answers?: Record<string, unknown>, response?: unknown, afkTimeoutMs?: unknown } | undefined} */ (ran.result)
+  const choices = spec.choices.slice(0, 4)
+  const labels = choices.map(choice => choice.label)
+  if (labels.length === 1) labels.push(CLOSE.label)
+  const open = { choices, isIdle: false }
+  asking.set(spec.question, open)
+  // Rejects when dismissed, and where nobody can be asked (a -p run).
+  const answer = await $.ui.ask(spec.question, { options: labels, header: spec.header.slice(0, 12) }).then(asAnswer, () => null)
+  asking.delete(spec.question)
   // Resolved by itself while the person was away from the keyboard: nobody chose anything.
-  const answer = result?.afkTimeoutMs !== undefined ? null : (asAnswer(result?.answers?.[spec.question]) ?? asAnswer(result?.response))
-  if (answer === null) return spec.fallback
+  if (answer === null || open.isIdle) return spec.fallback
   const picked = /^\d$/.test(answer) ? spec.choices[Number(answer) - 1] : undefined
   const chosen = picked ?? spec.choices.find(choice => choice.label === answer || choice.label.replace(/ \(Recommended\)$/, '') === answer)
   return chosen ? chosen.run() : spec.onTyped(answer)
