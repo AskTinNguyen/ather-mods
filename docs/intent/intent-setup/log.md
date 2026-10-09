@@ -22,7 +22,7 @@ The bundle ships as a zip with no pointer to the private reference (D4); a PR is
 
 ## L-4 (2026-10-09 10:15) | class: decision | -> rev unchanged
 
-> (the user pressed Create PR in the app while slice 2 was being built)
+> (the user pressed Create PR in the app while the command was being built)
 
 The branch was pushed and the PR opened ready for review, before the build was done; later commits go to the same PR.
 

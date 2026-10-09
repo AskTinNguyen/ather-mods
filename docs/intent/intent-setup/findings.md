@@ -16,6 +16,6 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 **Options:**
 - A (recommended): fix `ask` in its own change. `$.ui.ask` takes option labels without descriptions, so every dialog's wording and the stand-in engine change with it.
 - B: fix it inside this intent.
-**Proposed amendment:** none to this prompt; A4 stands as written (the question is asked where the engine lets the mod ask, and the fallback names the command).
+**Proposed amendment:** none to this prompt; A4 stays open until the question opens in the real host.
 **Resolution:** accepted A (orchestrator, 2026-10-09): out of this intent's scope, raised as a separate task; rev unchanged.
 
