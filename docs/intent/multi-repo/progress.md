@@ -2,6 +2,7 @@
 
 - Worker: Claude Code coordinator with Claude Opus 5.5 builders and a Codex (gpt-6.1-sol) reviewer per slice, 2026-10-08; main (0.2.0) merged and S7 to S10 built the same way, 2026-10-09
 - PR: https://github.com/AskTinNguyen/ather-mods/pull/19 (branch `claude/automata-multi-repo-support-bbfecb`, opened 2026-10-09)
+- Waiting on the director: F-1 (blocking), F-2 and F-3 in findings.md. Before merge: `dev/test-all.mjs` on a real S2 checkout on Windows, and a look at the pane in a real S2 session.
 
 ## Acceptance
 
