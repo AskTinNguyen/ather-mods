@@ -15,7 +15,6 @@ export const calendarSettings = defineSettings({
     githubLogin: z.string().default(""),
     gitEmails: z.string().default(""),
     theme: z.enum(["dark", "light"]).default("dark"),
-    accent: z.string().default("#7c5cff"),
     colorBy: z.enum(["project", "task"]).default("project"),
     weekStart: z.enum(["monday", "sunday"]).default("monday"),
   }),
@@ -30,7 +29,6 @@ export type CalendarSettings = {
   githubLogin: string;
   gitEmails: string;
   theme: "dark" | "light";
-  accent: string;
   colorBy: "project" | "task";
   weekStart: "monday" | "sunday";
 };

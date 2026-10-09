@@ -1,6 +1,6 @@
 {
   "name": "week-calendar",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Weekly calendar and agent-effectiveness report of Claude Code sessions: PRs merged and productive agent time per machine, published to a team repo",
   "author": { "name": "Tin Nguyen" },
   "repository": "https://github.com/AskTinNguyen/ather-mods",

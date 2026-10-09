@@ -43,3 +43,10 @@
 - Unit 265/265, `dev/e2e/repos.mjs` 225/225, S2 e2e 317/354 on a sparse clone with the same 37 failing checks as the branch before these slices.
 - Open: the first `git config user.name` and `git worktree list` of a session are rejected the same way and are asked again (the pane treats nobody as you for a moment); typing into a pane field could not be tried in tmux; a real S2 checkout, Windows and Claude desktop were not run.
 
+## 2026-10-10, merging main a fourth time
+
+- main moved to 76a24e7 and took 0.2.4 for its own change: `/ather setup` hands the session `templates/intent-setup/SETUP.md` and, for the skill or the readme, the public repository AskTinNguyen/intent, instead of a zip (it also brought week-calendar 0.4.0). Merged in cc5ac8a with five conflicts: `setup.mjs`, `console.mjs`, the setup tests, the README and Paseo's copy of `setup.mjs`.
+- The join: main's prompt with this branch's repository folder named first, so `setupPrompt` takes `root` and `steps`. The row of `dev/e2e/repos.mjs` for `/ather setup` in a workspace looked for the zip's name in the prompt; it looks for `SETUP.md` now.
+- This release is 0.2.5: both manifests, the changelog entry (on top, above main's 0.2.4), and the comments on the unscoped keys, which say "before 0.2.5".
+- The type-check of `dev/test-all.mjs` had never passed with the engine's types written on a Mac: `hooks/watch.mjs` registers its shell hook for the tool `PowerShell`, which those types do not list (TS2322, then TS2589). The hook is typed as Bash, whose `command` it shares; the matcher's value is unchanged (bcc3b10).
+- With `CLAUDE_CODE_TYPES` set: type-check clean (the mod's hooks, and `paseo/ather-automata` after `npm ci`), unit 254/254, `dev/e2e/repos.mjs` 168/168, S2 e2e 317/354 on a fresh sparse clone of S2's `docs/intent`, the same 37 failing checks as the branch before the merge (bc47469) on that clone. `claude plugin validate ather-automata` passed, `claude plugin test ather-automata` 3/3.

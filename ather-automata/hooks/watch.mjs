@@ -151,7 +151,9 @@ export function register(on, options) {
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => shell($, e.command, e, next))
-  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => shell($, e.command, e, next))
+  // PowerShell is a tool on Windows only, so the engine's types written on another machine do not list
+  // it. It takes `command` as Bash does, and is typed as Bash here.
+  on('tool.call', { tool: /** @type {'Bash'} */ (/** @type {string} */ ('PowerShell')) }, async ($, e, next) => shell($, e.command, e, next))
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const issues = briefGate === 'off' ? [] : briefIssues(e.prompt, e.subagent_type, (await laneOf($).catch(() => null))?.pack)

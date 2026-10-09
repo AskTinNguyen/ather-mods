@@ -33,3 +33,15 @@ The branch was pushed and the PR opened ready for review, before the build was d
 > push theo cách 0.2.2 đi
 
 The question fix (PR #24, release 0.2.1) is merged into this branch, and this intent's release moves to 0.2.2 (D8); PR #24 can still merge to `main` on its own first.
+
+## L-6 (2026-10-09 20:55) | class: intent | -> rev 3
+
+> /coordinate-build refactor cài /ather setup ko dùng zip nữa mà cài từ repo public này https://github.com/AskTinNguyen/intent
+
+`/ather setup` no longer hands the session a zip: the skill and the contract are installed from the public repository (D9). The coordinator read the rest from it: Ather's own steps and the example profile stay in the plugin as plain files (D10), the profile repeats the contract (D11), and the public skill's own pointer line counts (D12).
+
+## L-7 (2026-10-09 21:05) | class: decision | -> rev 3
+
+> tạo pr và merge sau khi hoàn thành và đủ điều kiện merge
+
+The coordinator opens the PR and merges it once the work is done and the PR can merge (D13).
