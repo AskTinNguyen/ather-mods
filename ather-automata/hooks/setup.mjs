@@ -1,22 +1,27 @@
 // @ts-check
 // Ather Automata: setting a repository up for intents. Which of the five pieces it has, and
-// what the session is handed to add the missing ones from the bundle in templates/intent-setup.zip.
+// what the session is handed to add the missing ones: the skill and the project contract from the
+// public repository, the rest by the steps in templates/intent-setup/SETUP.md.
 // The session does the writing; nothing here writes a file. Pure: no `$`.
 
 /**
  * A piece of the structure. `path`: where it lives in the repository, as the prompt names it;
- * `source`: the bundle file it comes from; `what`: the few words the prompt says about it.
+ * `from`: where it comes from, the public repository or the plugin's own files; `what`: the few
+ * words the prompt says about it.
  * @typedef {'skill' | 'readme' | 'profile' | 'ignore' | 'pointer'} PieceId
- * @typedef {{ id: PieceId, path: string, source: string, what: string }} Piece
+ * @typedef {{ id: PieceId, path: string, from: 'repo' | 'plugin', what: string }} Piece
  */
+
+// The public repository the intent skill and the project contract come from.
+export const INTENT_REPOSITORY = 'https://github.com/AskTinNguyen/intent'
 
 /** @type {readonly Piece[]} */
 export const SETUP_PIECES = [
-  { id: 'skill', path: '.agents/skills/intent/', source: 'files/.agents/skills/intent/SKILL.md', what: 'the intent skill, copied unchanged' },
-  { id: 'readme', path: 'docs/intent/README.md', source: 'files/docs/intent/README.md', what: 'the folder rules and the area list' },
-  { id: 'profile', path: '.ather/profile.json', source: 'files/.ather/profile.example.json', what: 'the pack, the gates and the areas' },
-  { id: 'ignore', path: '.gitignore', source: 'SETUP.md', what: 'the line that ignores local state' },
-  { id: 'pointer', path: 'AGENTS.md', source: 'files/AGENTS.intent.md', what: "the paragraph that names the skill, or CLAUDE.md when that is this repository's instruction file" },
+  { id: 'skill', path: '.agents/skills/intent/', from: 'repo', what: 'the intent skill: skills/intent/ of the public repository, copied unchanged' },
+  { id: 'readme', path: 'docs/intent/README.md', from: 'repo', what: "the project contract (areas, proofs, merge authority), drafted the way the skill's references/setup.md says" },
+  { id: 'profile', path: '.ather/profile.json', from: 'plugin', what: 'the pack, the gates and the areas' },
+  { id: 'ignore', path: '.gitignore', from: 'plugin', what: 'the line that ignores local state' },
+  { id: 'pointer', path: 'AGENTS.md', from: 'plugin', what: "the paragraph that names the skill and the contract, or CLAUDE.md when that is this repository's instruction file" },
 ]
 
 /**
@@ -64,7 +69,8 @@ export const readSetup = async (io, root) => {
     readme: /^##\s+Areas\b/m.test(readme ?? ''),
     profile: profile !== null,
     ignore: (ignore ?? '').split(/\r?\n/).some(line => /^\.ather\/(local\/?)?$/.test(line.trim())),
-    pointer: [agents, claude].some(text => (text ?? '').includes('skills/intent')),
+    // The skill by its folder, or the contract: the line the skill's own setup offers.
+    pointer: [agents, claude].some(text => /skills\/intent|docs\/intent\/README\.md/.test(text ?? '')),
   }
   const missing = SETUP_PIECES.map(one => one.id).filter(id => !pieces[id])
   return { pieces, missing, isComplete: missing.length === 0, profile: profile && { pack: profile.pack, gates: countOf(profile.gates), areas: countOf(profile.areas) } }
@@ -77,16 +83,18 @@ export const suggestPack = entries => (entries.some(entry => entry.kind === 'fil
 // ---------------------------------------------------------------- what the session is handed
 
 /**
- * The one prompt. It names the zip and the missing pieces by target path, and repeats the rules that
- * must hold even if the session never reads the bundle.
- * @param {{ root: string, zip: string, missing: readonly PieceId[], pack: string }} input `root`: the repository's folder, with forward slashes as `zip` is.
+ * The one prompt. It names the repository's folder, the steps (`steps`: the path of SETUP.md in the
+ * plugin's folder) and the missing pieces by target path, the public repository only when a piece
+ * comes from it, and repeats the rules that must hold even if the session never reads the steps.
+ * @param {{ root: string, steps: string, missing: readonly PieceId[], pack: string }} input `root`: the repository's folder, with forward slashes as `steps` is.
  */
-export const setupPrompt = ({ root, zip, missing, pack }) => {
+export const setupPrompt = ({ root, steps, missing, pack }) => {
   const wanted = SETUP_PIECES.filter(one => missing.includes(one.id))
   // Areas and gates go into the readme and the profile; the other pieces need no proposal.
   const asks = missing.includes('readme') || missing.includes('profile') ? 'ask me to confirm the areas and the gates in one question' : 'tell me what you will add and wait for my yes'
   return [
-    `Set up the intent structure in the repository at ${root}; the paths below are from that folder. The files and the steps are in ${zip}: extract it to a temporary folder outside the repository (unzip, tar -xf, or Expand-Archive on Windows) and follow its SETUP.md.`,
+    `Set up the intent structure in the repository at ${root}; the paths below are from that folder. The steps are in ${steps}: read it and follow it.`,
+    ...(wanted.some(one => one.from === 'repo') ? [`The intent skill and the project contract come from the public repository ${INTENT_REPOSITORY}: clone it (git clone --depth 1) to a temporary folder outside the repository you are setting up.`] : []),
     `Add ${wanted.length < SETUP_PIECES.length ? 'only what is missing here' : 'these'}: ${wanted.map(one => `${one.path} (${one.what})`).join('; ')}.${wanted.length < SETUP_PIECES.length ? ' Every other piece is already here: leave it as it is.' : ''}`,
     ...(missing.includes('profile') ? [`The pack for the profile: ${pack}.`] : []),
     `Read the repository first, then ${asks} before you write anything. Never overwrite a file that exists, do not touch an existing intent, and do not commit until I say so.`,

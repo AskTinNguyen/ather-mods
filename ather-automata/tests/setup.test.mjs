@@ -1,19 +1,18 @@
 // @ts-check
 // Setting a repository up for intents: which of the five pieces it has, what the session is handed
-// for the missing ones, and the bundle under templates/intent-setup read from disk as it ships.
+// for the missing ones, and the plugin's own files under templates/intent-setup read from disk as they ship.
 import { describe, expect, test } from 'claude-code/testing'
 import fs from 'fs'
 
-import { parseIntent } from '../hooks/model.mjs'
 import { makeWebPack } from '../hooks/packs/index.mjs'
 import * as state from '../hooks/state.mjs'
-import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from '../hooks/setup.mjs'
+import { INTENT_REPOSITORY, SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from '../hooks/setup.mjs'
 
-const BUNDLE = new URL('../templates/intent-setup/', import.meta.url)
+const SHIPPED = new URL('../templates/intent-setup/', import.meta.url)
 /** @param {string} name */
-const bundled = name => fs.readFileSync(new URL(name, BUNDLE), 'utf8')
+const shipped = name => fs.readFileSync(new URL(name, SHIPPED), 'utf8')
 
-const ZIP = '/plugins/ather-automata/templates/intent-setup.zip'
+const STEPS = '/plugins/ather-automata/templates/intent-setup/SETUP.md'
 const ROOT = '/work/app'
 const IDS = ['skill', 'readme', 'profile', 'ignore', 'pointer']
 
@@ -87,8 +86,9 @@ describe('which pieces a repository has', () => {
       expect((await reading({ ...FULL, '.gitignore': text })).pieces.ignore).toBe(false)
     }
   })
-  test('the pointer may live in CLAUDE.md instead; an instruction file that does not name the skill is no pointer', async () => {
+  test('the pointer may live in CLAUDE.md instead, and may name the readme instead of the skill; an instruction file that names neither is no pointer', async () => {
     expect((await reading({ ...without('pointer'), 'CLAUDE.md': 'Intents: see .claude/skills/intent.\n' })).missing).toEqual([])
+    expect((await reading({ ...FULL, 'AGENTS.md': 'Features run as intents: see `docs/intent/README.md`.\n' })).missing).toEqual([])
     expect((await reading({ ...FULL, 'AGENTS.md': '# Agents\n\nRun the tests.\n' })).missing).toEqual(['pointer'])
   })
 })
@@ -103,36 +103,49 @@ describe('the suggested pack', () => {
 })
 
 describe('what the session is handed', () => {
-  test('a repository with nothing: its folder, the zip and every target path', () => {
-    const prompt = setupPrompt({ root: ROOT, zip: ZIP, missing: IDS, pack: 'web' })
+  test('a repository with nothing: its folder, the steps file, the public repository and every target path', () => {
+    const prompt = setupPrompt({ root: ROOT, steps: STEPS, missing: IDS, pack: 'web' })
     expect(prompt).toContain(`the repository at ${ROOT};`)
-    expect(prompt).toContain(ZIP)
-    expect(prompt).toContain('SETUP.md')
+    expect(prompt).toContain(STEPS)
+    expect(prompt).toContain(INTENT_REPOSITORY)
     for (const piece of SETUP_PIECES) expect(prompt).toContain(piece.path)
+  })
+  test('the repository is named when the skill or the readme is missing, and not for the profile, the ignore line or the pointer', () => {
+    expect(INTENT_REPOSITORY).toBe('https://github.com/AskTinNguyen/intent')
+    for (const missing of [['skill'], ['readme'], ['skill', 'readme'], ['readme', 'profile']]) {
+      const prompt = setupPrompt({ root: ROOT, steps: STEPS, missing, pack: 'web' })
+      expect(prompt).toContain(STEPS)
+      expect(prompt).toContain(INTENT_REPOSITORY)
+    }
+    for (const missing of [['profile'], ['ignore'], ['pointer'], ['profile', 'ignore', 'pointer']]) {
+      const prompt = setupPrompt({ root: ROOT, steps: STEPS, missing, pack: 'web' })
+      expect(prompt).toContain(STEPS)
+      expect(prompt).not.toContain('github.com')
+    }
   })
   test('a partial repository: only the missing pieces are named, by target path', () => {
     for (const id of IDS) {
-      const prompt = setupPrompt({ root: ROOT, zip: ZIP, missing: [id], pack: 'web' })
-      expect(prompt).toContain(ZIP)
+      const prompt = setupPrompt({ root: ROOT, steps: STEPS, missing: [id], pack: 'web' })
+      expect(prompt).toContain(STEPS)
       for (const piece of SETUP_PIECES) {
         if (piece.id === id) expect(prompt).toContain(piece.path)
         else expect(prompt).not.toContain(piece.path)
       }
     }
-    const two = setupPrompt({ root: ROOT, zip: ZIP, missing: ['profile', 'ignore'], pack: 'web' })
+    const two = setupPrompt({ root: ROOT, steps: STEPS, missing: ['profile', 'ignore'], pack: 'web' })
     for (const id of IDS) {
       if (id === 'profile' || id === 'ignore') expect(two).toContain(targetOf(id))
       else expect(two).not.toContain(targetOf(id))
     }
   })
   test('the pack is suggested with the profile, and only then', () => {
-    expect(setupPrompt({ root: ROOT, zip: ZIP, missing: ['profile'], pack: 'unreal' })).toMatch(/\bunreal\b/)
-    expect(setupPrompt({ root: ROOT, zip: ZIP, missing: ['profile'], pack: 'web' })).toMatch(/\bweb\b/)
-    expect(setupPrompt({ root: ROOT, zip: ZIP, missing: ['skill'], pack: 'unreal' })).not.toMatch(/\bunreal\b/)
+    expect(setupPrompt({ root: ROOT, steps: STEPS, missing: ['profile'], pack: 'unreal' })).toMatch(/\bunreal\b/)
+    expect(setupPrompt({ root: ROOT, steps: STEPS, missing: ['profile'], pack: 'web' })).toMatch(/\bweb\b/)
+    expect(setupPrompt({ root: ROOT, steps: STEPS, missing: ['skill'], pack: 'unreal' })).not.toMatch(/\bunreal\b/)
   })
   test('areas and gates are asked about only when the readme or the profile is to be written', () => {
-    for (const id of ['readme', 'profile']) expect(setupPrompt({ root: ROOT, zip: ZIP, missing: [id], pack: 'web' })).toMatch(/\bgates\b/)
-    for (const id of ['skill', 'ignore', 'pointer']) expect(setupPrompt({ root: ROOT, zip: ZIP, missing: [id], pack: 'web' })).not.toMatch(/\bgates\b/)
+    for (const id of ['readme', 'profile']) expect(setupPrompt({ root: ROOT, steps: STEPS, missing: [id], pack: 'web' })).toMatch(/\bgates\b/)
+    for (const id of ['skill', 'ignore', 'pointer']) expect(setupPrompt({ root: ROOT, steps: STEPS, missing: [id], pack: 'web' })).not.toMatch(/\bgates\b/)
   })
   test('the complete case reads back the pack and the counts in one line', async () => {
     const line = setupSummary(await reading(FULL))
@@ -144,53 +157,38 @@ describe('what the session is handed', () => {
   })
 })
 
-describe('the bundle as it ships', () => {
-  const TEMPLATES = 'files/.agents/skills/intent/assets/templates/'
-  test('the four templates parse as a new intent: active, one acceptance item, none met', () => {
-    expect(fs.readdirSync(new URL(TEMPLATES, BUNDLE)).sort()).toEqual(['findings.md', 'log.md', 'progress.md', 'prompt.md'])
-    const prompt = bundled(`${TEMPLATES}prompt.md`)
-    const progress = bundled(`${TEMPLATES}progress.md`)
-    const intent = parseIntent({ slug: 'new', prompt, findings: bundled(`${TEMPLATES}findings.md`), progress, files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' })
-    expect(intent.status).toBe('active')
-    expect(prompt).toMatch(/^- Rev: 1$/m)
-    expect(progress).toMatch(/^- Working under rev: 1$/m)
-    expect(intent.acceptanceTotal).toBe(1)
-    expect(intent.acceptanceDone).toBe(0)
-    expect(intent.findings).toEqual([])
-    expect(intent.prs).toEqual([])
-    expect(intent.hasWorker).toBe(true)
+describe("the plugin's files as they ship", () => {
+  test('the folder holds the steps and the example profile, and nothing else', () => {
+    expect(fs.readdirSync(SHIPPED).sort()).toEqual(['SETUP.md', 'profile.example.json'])
   })
   test('the example profile is a web profile with its own areas and one gate', () => {
-    const profile = JSON.parse(bundled('files/.ather/profile.example.json'))
+    const profile = JSON.parse(shipped('profile.example.json'))
     const pack = makeWebPack(profile, null)
     expect(pack.areas).toEqual(profile.areas)
     expect(profile.areas.length > 0).toBe(true)
     expect(pack.gates).toHaveLength(1)
     expect(pack.mergePolicy).toBe('hold')
   })
-  test('a repository made of the bundled files reads as set up', async () => {
+  test('SETUP.md names every target path, the ignore line, the repository and the places in it that it sends the session to', () => {
+    const steps = shipped('SETUP.md')
+    for (const piece of SETUP_PIECES) expect(steps).toContain(piece.path)
+    for (const name of ['.ather/local/', INTENT_REPOSITORY, 'skills/intent/', 'references/setup.md', 'assets/contract.md', 'profile.example.json']) expect(steps).toContain(name)
+  })
+  test('a repository made of the pieces as the page describes them reads as set up', async () => {
+    // The pointer paragraph is written out in the page, in a block of its own.
+    const pointer = [...shipped('SETUP.md').matchAll(/```\w*\n([\s\S]*?)```/g)].map(match => match[1]).find(block => block.includes('.agents/skills/intent/SKILL.md')) ?? ''
+    expect(pointer).toContain('docs/intent/README.md')
     const setup = await reading({
-      '.agents/skills/intent/SKILL.md': bundled('files/.agents/skills/intent/SKILL.md'),
-      'docs/intent/README.md': bundled('files/docs/intent/README.md'),
-      '.ather/profile.json': bundled('files/.ather/profile.example.json'),
+      '.agents/skills/intent/SKILL.md': '# Intent',
+      'docs/intent/README.md': '# Intents\n\n## Areas\n\n| Area | Covers |\n| --- | --- |\n| Platform | Build |\n',
+      '.ather/profile.json': shipped('profile.example.json'),
       '.gitignore': '.ather/local/\n',
-      'AGENTS.md': bundled('files/AGENTS.intent.md'),
+      'AGENTS.md': pointer,
     })
     expect(setup.missing).toEqual([])
   })
-  test('every piece has its source in the bundle, and SETUP.md names every target path', () => {
-    const steps = bundled('SETUP.md')
-    for (const piece of SETUP_PIECES) {
-      expect(fs.existsSync(new URL(piece.source, BUNDLE))).toBe(true)
-      expect(steps).toContain(piece.path)
-    }
-    expect(steps).toContain('.ather/local/')
-    for (const name of ['SKILL.md', 'agents/openai.yaml', 'assets/worker-brief.md']) expect(fs.existsSync(new URL(`files/.agents/skills/intent/${name}`, BUNDLE))).toBe(true)
-  })
-  test('the bundle has no Unreal words: it serves any kind of repository', () => {
-    /** @param {URL} dir @returns {string[]} */
-    const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => (entry.isDirectory() ? walk(new URL(`${entry.name}/`, dir)) : [fs.readFileSync(new URL(entry.name, dir), 'utf8')]))
-    for (const text of walk(BUNDLE)) expect(text).not.toMatch(/\bPIE\b|Editor|\bS2\b/)
+  test('the files have no Unreal words: they serve any kind of repository', () => {
+    for (const name of fs.readdirSync(SHIPPED)) expect(shipped(name)).not.toMatch(/\bPIE\b|Editor|\bS2\b/)
   })
 })
 

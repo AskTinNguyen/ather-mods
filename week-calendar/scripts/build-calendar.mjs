@@ -5,7 +5,7 @@
 // Reads ~/.claude/projects/**/*.jsonl (subagent logs included), runs git read commands and
 // read-only `gh api` calls, and writes only under ~/.calendar/.
 //
-// node build-calendar.mjs [--theme dark|light] [--accent #hex] [--color-by project|task]
+// node build-calendar.mjs [--theme dark|light] [--color-by project|task]
 //                         [--week-start monday|sunday] [--week-offset 0|-1|...]
 //                         [--list-untitled] [--export] [--no-github] [--no-auto-exclude]
 //                         [--machine NAME] [--available-hours 168] [--ignore a,b] [--git-emails a,b]
@@ -29,7 +29,7 @@ import { readSessions } from './lib/logs.mjs'
 import { createGit } from './lib/git.mjs'
 import { createGitHub } from './lib/github.mjs'
 import { analyze } from './lib/analyze.mjs'
-import { buildColors, renderHtml } from './lib/render.mjs'
+import { buildColors, dailySeries, renderHtml } from './lib/render.mjs'
 import { buildReport, readSurvey, snapshotCommits, writeSnapshot } from './lib/report.mjs'
 import { weekRange, isoWeekLabel, DAY } from './lib/util.mjs'
 
@@ -84,6 +84,12 @@ const data = {
   noCommitSessions: shown.sessions.filter(s => s.noCommit && !s.excluded).sort((a, b) => b.end - a.end),
   excludedSessions: shown.sessions.filter(s => s.excluded).sort((a, b) => b.minutes - a.minutes),
 }
+data.daily = dailySeries(data)
+// The week before, from its saved calendar (the Monday job builds it), for the chart's comparison.
+const before = readJson(path.join(cfg.outDir, `week-${weekRange(cfg.now, cfg.prefs.weekStart, cfg.weekOffset - 1).startDate}.json`), null)
+if (before?.week && Array.isArray(before.blocks)) {
+  data.prev = { isoWeek: before.week.isoWeek || isoWeekLabel(before.week.startMs), start: before.week.start, daily: before.daily || dailySeries(before) }
+}
 
 fs.mkdirSync(cfg.outDir, { recursive: true })
 const base = `week-${data.week.start}`
@@ -98,8 +104,8 @@ if (cfg.weekOffset === 0) {
   fs.writeFileSync(path.join(cfg.outDir, 'latest.json'), JSON.stringify(data, null, 2))
 }
 // Remember the style given as flags, so unattended builds draw the same calendar.
-if (['theme', 'accent', 'color-by', 'week-start'].some(k => cfg.args[k] !== undefined)) {
-  fs.writeFileSync(path.join(cfg.outDir, 'prefs.json'), JSON.stringify({ theme: cfg.prefs.theme, accent: cfg.prefs.accent, colorBy: cfg.prefs.colorBy, weekStart: cfg.prefs.weekStart }, null, 2) + '\n')
+if (['theme', 'color-by', 'week-start'].some(k => cfg.args[k] !== undefined)) {
+  fs.writeFileSync(path.join(cfg.outDir, 'prefs.json'), JSON.stringify({ theme: cfg.prefs.theme, colorBy: cfg.prefs.colorBy, weekStart: cfg.prefs.weekStart }, null, 2) + '\n')
 }
 
 // ---------- machine-week report (always the Monday-start ISO week) ----------
