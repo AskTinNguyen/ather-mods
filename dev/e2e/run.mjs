@@ -257,6 +257,7 @@ const pressIn = (tree, label) => {
   screens.push(['Desktop · /away', `${dialogText(away.dialogs)}\n  → output: ${away.out}\n  → sent: ${away.sent[0] ?? ''}`])
   const state = engine.store.get('away:harness-session-0001')
   expect('/away offers the three presets', away.dialogs[0]?.options.map(o => o.label).join('|') === 'Until done (Recommended)|8 hours|4 hours', away.dialogs[0]?.options.map(o => o.label))
+  expect('… and each says when it ends: a question asked through $.ui.ask (labels only) keeps what each choice does', (away.dialogs[0]?.options ?? []).length === 3 && away.dialogs[0]?.options.every(o => /^(Ends when|until )/.test(o.description ?? '')), away.dialogs[0]?.options.map(o => o.description))
   expect('"Until done" starts a window with no clock and the default holds', state?.phase === 'running' && state?.untilDone === true && state?.held?.join(',') === 'merge,push-main', state)
   expect('the hand-over goes to the session at once, with the ledger path relative to the repo', /^I am away until done/.test(away.sent[0] ?? '') && /record every decision you take for me in (docs|Saved)\//.test(away.sent[0] ?? ''), away.sent)
   expect('the ledger gets the window header', /## Autonomy window from /.test(fs.readFileSync(state.ledgerPath, 'utf8')))
