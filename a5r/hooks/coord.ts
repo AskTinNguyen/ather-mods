@@ -317,9 +317,9 @@ export const releasedNote = (r: Released, lock: LockLine): string =>
 export const ORCHESTRATE_MAX_BYTES = 1_000_000
 export type OrchestrateEvent = {
   at: number
-  /** A54 / A55 (they act), or a candidate rule that only logs: no-editor (a lease held with no Editor or build
-   * running), holder-gone, holder-idle-red (holder idle > 10 min with a red mark or an open PENDING line). */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'holder-idle-red'
+  /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
+   * running), holder-gone; or A65-judge (a verdict, advisory). A64: no rule reads a title mark or PENDING.md. */
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge'
   lane: string
   id8: string
   procs: readonly string[]

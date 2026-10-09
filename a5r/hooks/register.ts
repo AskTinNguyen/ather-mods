@@ -12,6 +12,7 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
+import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
@@ -62,7 +63,6 @@ const approved = new Set<string>()
 const rootOf = new Map<string, string | null>()
 const isLinked = new Map<string, boolean>() // git root -> a linked worktree (one session's own), not the shared checkout
 let wroteDirectorCall = false // this turn added an open director call to an intent's findings.md
-let markedFrom: string | null = null // the title before this session marked it, put back when Hai answers
 let a5rOn = false
 let a5rFlipAt = 0
 let hits: RuleHits = noHits()
@@ -98,6 +98,7 @@ let chain: string[] | null = null // the plugins beneath this one on a tool call
 const EDITOR_TOOL = 'mcp__a5r__editor'
 const SYNC_TOOL = 'mcp__a5r__sync'
 const SYNC_AGENT = 'a5r:sync' // D7: the sync worker's agent type
+const JUDGE_AGENT = 'a5r:judge' // A65: the advisory judge's agent type
 const CLEANUP_EVERY_MS = 5 * 60_000 // while a slot waits on RAM, the safe cleanup runs at most this often
 const PIE_STOP = /StopPIE|EndPIE|StopPlayInEditor|EndPlayMap|RequestEndPlayMap/i
 const EDITOR_WORK = /Build\.(bat|sh|cmd)\b|UnrealEditor|RunUAT/i
@@ -351,7 +352,6 @@ async function applyMarker($: Engine, opts: Opts, m: NonNullable<Marker>, isInFi
   }
   const sign = m.kind === 'decision' ? '🟥' : '⏯️'
   if (now && !now.startsWith(sign)) {
-    markedFrom ??= bareTitle(now)
     await retitle($, markedTitle(now, sign)).catch(() => '')
   }
 }
@@ -529,6 +529,7 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
   touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
   probe = shared
   mergeHead = await $.fs.exists(`${root}/.git/MERGE_HEAD`).catch(() => false) // A61
+  verdicts = await readVerdicts($, opts) // A65
 }
 
 // A26: session titles from Claude Code's records, looked up off the render, at most every 10 min per session.
@@ -678,6 +679,8 @@ async function ensureTools($: Engine): Promise<void> {
   }).catch(err => $.ui.log(`a5r: sync tool not registered: ${String(err)}`, { to: 'debug' }))
   // D7: the sync worker's agent type, spawned by this mod at the sync time and hidden from the model (agent.offer).
   await $.agent.register({ name: 'sync', description: 'a5r sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by a5r only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`a5r: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
+  // A65: the advisory judge, read-only (Read and Grep only), a small model, a few turns, no CLAUDE.md; started by a5r only.
+  await $.agent.register({ name: 'judge', description: 'a5r advisory judge: reads a stalled lease holder\'s facts and transcript tail and gives one verdict. Started by a5r only.', prompt: JUDGE_SYSTEM, tools: ['Read', 'Grep'], model: 'haiku', maxTurns: 6, omitClaudeMd: true, background: true }).catch(err => $.ui.log(`a5r: judge type not registered: ${String(err)}`, { to: 'debug' }))
 }
 
 /** D7: at T the holder's a5r starts the sync worker, once per sync (sync.json records it before the spawn,
@@ -736,6 +739,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
   await refreshClients($, opts, now)
   await lapseStep($, opts, now)
+  await judgeStep($, opts, now).catch(err => $.ui.log(`a5r: judge: ${String(err)}`, { to: 'debug' }))
   await editorStep($, opts, now)
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
@@ -847,8 +851,8 @@ function holderFacts(held: LockLine, now: number, p: Probe | null): Omit<Orchest
 }
 
 /** A62: the candidate rules (Tier 1, not acted on yet), each logged once per lease by the first session to claim it:
- * a lease held with no Editor or build running; its holder gone; its holder idle for 10 min with a red mark in its
- * title or an open PENDING.md line. */
+ * a lease held with no Editor or build running; its holder gone. A64: no rule reads a title mark or PENDING.md;
+ * whether a holder waits on Hai is read from its own transcript by the judge (A65). */
 async function logCandidates($: Engine, opts: Opts, now: number): Promise<void> {
   const held = lock
   if (held.kind !== 'held' || !held.isStandard || !held.id8 || !probe) return
@@ -860,13 +864,6 @@ async function logCandidates($: Engine, opts: Opts, now: number): Promise<void> 
   }
   if (unrealPids(probe).length === 0 && buildProcs(probe).length === 0) await once('no-editor', `lease ${clockOf(t.since)}-${clockOf(t.end)} held with no Unreal Editor or build process running`)
   if (facts.liveness === 'gone') await once('holder-gone', `the holder's session is gone; lease ${clockOf(t.since)}-${clockOf(t.end)}`)
-  if (facts.lastTurnAt !== null && now - facts.lastTurnAt >= 10 * 60_000) {
-    const f = (me ? [me, ...peers] : peers).find(x => x.id8 === held.id8)
-    const title = sessionNames.get(held.id8) ?? f?.title ?? ''
-    const file = opts.pendingFile || `${(places.USERPROFILE ?? '').replace(/\\/g, '/')}/.claude/PENDING.md`
-    const open = (await $.fs.read(file).catch(() => '')).split(/\r?\n/).filter(l => l.startsWith('- [ ]') && [bareTitle(title), held.id8, held.lane].filter(Boolean).some(w => l.includes(` · ${w} · `)))
-    if (hasMark(title) || open.length > 0) await once('holder-idle-red', `idle ${Math.round((now - facts.lastTurnAt) / 60_000)} min${hasMark(title) ? ', red mark in its title' : ''}${open.length ? `, ${open.length} open PENDING line${open.length === 1 ? '' : 's'}` : ''}`)
-  }
 }
 
 /** A54 / A55: this session's own lease released by another session's A5R (A60: its released file says why): one
@@ -904,6 +901,119 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   const list = await readReleases($, opts, held.id8)
   await $.fs.write(releasedPath(opts, held.id8), JSON.stringify({ v: 1, releases: [...list, released].slice(-10) })).catch(err => $.ui.log(`a5r: released file not written: ${String(err)}`, { to: 'debug' }))
   if (held.id8 === me8) me = { ...me, holding: null, want: null }
+}
+
+// ---------- A65: the advisory judge ----------
+let verdicts: VerdictRow[] = [] // Saved/A5R/verdicts.json, the latest first
+const judges = new Map<string, { facts: JudgeFacts; hint: { verdict: VerdictRow['verdict']; evidence: string[] } }>() // agentId → incident
+const JUDGE_IDLE_MS = 10 * 60_000
+const verdictsPath = (opts: Opts): string => `${hfDir(opts)}/verdicts.json`
+async function readVerdicts($: Engine, opts: Opts): Promise<VerdictRow[]> {
+  try {
+    const v = JSON.parse((await readJson($, verdictsPath(opts))) ?? '') as { verdicts?: unknown }
+    return Array.isArray(v.verdicts) ? (v.verdicts as VerdictRow[]).filter(r => r && typeof r.at === 'number' && typeof r.verdict === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/** A65: the last `max` lines of the holder's transcript: read whole when it is small enough, else its tail by PowerShell. */
+async function transcriptTail($: Engine, path: string, max = 200): Promise<string> {
+  if (!path) return ''
+  const whole = await $.fs.read(path).catch(() => null)
+  if (whole !== null) return whole.split(/\r?\n/).slice(-max).join('\n')
+  const ps = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Content -LiteralPath '${path.replace(/'/g, "''")}' -Tail ${max} -Encoding UTF8`], { timeoutMs: 20_000 }).catch(() => null)
+  return ps?.exitCode === 0 ? ps.stdout : ''
+}
+
+/** A65: one incident to judge, if any: the Editor lease past its end or its holder silent 10 min while holding; the
+ * sync holder silent 10 min in its cutoff or freeze. Never this session's own holding. */
+function incidentOf(now: number): { kind: 'editor' | 'sync'; id8: string; lane: string; session: string; since: number; end: number | null; why: string } | null {
+  const all = me ? [me, ...peers] : peers
+  if (lock.kind === 'held' && lock.isStandard && lock.id8 && lock.id8 !== me8) {
+    const t = lockTimes(lock, now)
+    const f = all.find(x => x.id8 === lock.id8)
+    if (t) {
+      const silent = typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS
+      if (now > t.end || silent)
+        return { kind: 'editor', id8: lock.id8, lane: lock.lane, session: f?.session ?? '', since: t.since, end: t.end, why: now > t.end ? `the Editor lease ended ${clockOf(t.end)} and is still held` : `the Editor holder has run no turn for ${Math.round((now - (f?.lastTurnAt ?? now)) / 60_000)} min while holding` }
+    }
+  }
+  const s = syncFile
+  const phase = phaseOf(s, now)
+  if (s && (phase === 'cutoff' || phase === 'frozen') && s.holder.id8 !== me8) {
+    const f = all.find(x => x.id8 === s.holder.id8)
+    if (typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS)
+      return { kind: 'sync', id8: s.holder.id8, lane: s.holder.lane, session: s.holder.session || f.session, since: s.at, end: s.hardEnd, why: `the sync holder has run no turn for ${Math.round((now - f.lastTurnAt) / 60_000)} min in the ${phase}` }
+  }
+  return null
+}
+
+/** A65: on an incident, once (the alert-file claim `judge-<id8>-<since>`), spawn the judge with the facts, a fresh probe
+ * and the tail of the holder's transcript. It acts on nothing; its verdict is logged, kept for the Orchestrate card
+ * and shown here as a toast. When no judge can start, the rule's own reading stands in (marked as such). */
+async function judgeStep($: Engine, opts: Opts, now: number): Promise<void> {
+  const inc = incidentOf(now)
+  if (!inc || !(await claimAlert($, opts, `judge-${inc.kind}-${inc.id8}-${inc.since}`))) return
+  const fresh = (await freshProbe($, opts)) ?? probe
+  const all = me ? [me, ...peers] : peers
+  const f = all.find(x => x.id8 === inc.id8)
+  const dir = await recordsDir($, opts)
+  const transcript = dir && inc.session ? `${dir}/${inc.session}.jsonl` : ''
+  const events = parseTail(await transcriptTail($, transcript))
+  const facts: JudgeFacts = { now, ...inc, liveness: livenessOf(inc.id8, all, lanes, now), lastTurnAt: f?.lastTurnAt ?? null, agents: f?.agents ?? null, procs: (fresh?.procs ?? []).map(p => p.name), hasEditor: unrealPids(fresh).length > 0, hasBuild: buildProcs(fresh).length > 0, transcript }
+  const hint = hintOf(facts, events)
+  const ran = await $.agent.spawn({ subagentType: JUDGE_AGENT, description: `Judge ${inc.lane || inc.id8}`, prompt: judgePrompt(facts, hint, digestOf(events)) }).catch(err => ({ deny: String(err) }))
+  // The spawn names its agent; where it does not, the session's agent list does (the newest judge this mod started).
+  const id = ran.deny !== undefined ? undefined : (ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === JUDGE_AGENT && a.spawnedBy === 'a5r').pop()?.id)
+  if (!id) {
+    await recordVerdict($, opts, facts, { verdict: hint.verdict, evidence: hint.evidence, recommendation: defaultRecommendation(hint.verdict) }, 'rule')
+    return
+  }
+  judges.set(id, { facts, hint })
+}
+
+/** A65: a judge's run ended: its verdict (or, unreadable, the rule's reading) is recorded. */
+async function judgeEnded($: Engine, opts: Opts, agentId: string, answer: string): Promise<void> {
+  const j = judges.get(agentId)
+  if (!j) return
+  judges.delete(agentId)
+  const v = parseVerdict(answer)
+  await recordVerdict($, opts, j.facts, v ? { ...v, recommendation: v.recommendation || defaultRecommendation(v.verdict) } : { verdict: j.hint.verdict, evidence: j.hint.evidence, recommendation: defaultRecommendation(j.hint.verdict) }, v ? 'judge' : 'rule')
+}
+
+/** A65: a verdict in orchestrate.log, in Saved/A5R/verdicts.json (the card) and as a toast here. Nothing else. */
+async function recordVerdict($: Engine, opts: Opts, f: JudgeFacts, v: { verdict: VerdictRow['verdict']; evidence: string[]; recommendation: string }, source: VerdictRow['source']): Promise<void> {
+  const now = await $.clock.now()
+  const row: VerdictRow = { at: now, id8: f.id8, lane: f.lane, kind: f.kind, verdict: v.verdict, evidence: v.evidence[0] ?? '', recommendation: v.recommendation, by: me8, source }
+  await orchestrateLog($, opts, { at: now, rule: 'A65-judge', lane: f.lane, id8: f.id8, procs: f.procs, liveness: f.liveness, lastTurnAt: f.lastTurnAt, agents: f.agents, build: f.hasBuild, acted: false, note: `verdict ${v.verdict} (${source}): ${v.evidence.join('; ')}; recommend: ${v.recommendation}` }).catch(() => undefined)
+  verdicts = [row, ...(await readVerdicts($, opts))].slice(0, 10)
+  await $.fs.write(verdictsPath(opts), JSON.stringify({ v: 1, verdicts })).catch(err => $.ui.log(`a5r: verdicts not written: ${String(err)}`, { to: 'debug' }))
+  $.ui.toast(`Orchestrate · ${f.lane || f.id8}: ${v.verdict} — ${v.recommendation}`, { timeoutMs: 12_000 })
+  $.ui.invalidate('ui.render')
+}
+
+/** A65: the Orchestrate card: the latest verdicts, one row each (time, session, verdict), a quiet line of evidence and
+ * the recommendation under it. */
+function orchestrateCard(el: { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }, rows: readonly VerdictRow[]): unknown {
+  const tone = (v: VerdictRow['verdict']) => (v === 'working' ? STATUS.ok : v === 'stuck-or-crashed' ? STATUS.bad : STATUS.warn)
+  return el.Box({
+    key: 'hai-orchestrate',
+    flexDirection: 'column',
+    children: [
+      el.Box({ key: 'hai-orchestrate-head', children: [el.Text({ color: V2.label, children: 'ORCHESTRATE' })] }),
+      ...rows.slice(0, 3).map((r, i) =>
+        el.Box({
+          key: `hai-orchestrate-${i}`,
+          flexDirection: 'column',
+          children: [
+            el.Text({ wrap: 'wrap', children: [`${clockOf(r.at)} · ${r.lane || r.id8} (${r.id8}) · `, el.Text({ color: tone(r.verdict), bold: true, children: r.verdict }), r.source === 'rule' ? ' (rule)' : ''] }),
+            el.Text({ color: ATHER.quiet, wrap: 'wrap', children: `${r.evidence ? `${r.evidence} → ` : ''}${r.recommendation}` }),
+          ],
+        }),
+      ),
+    ],
+  })
 }
 
 /** A55: when this session's main loop last ran (written with its file at the next save). */
@@ -2387,6 +2497,8 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
       }
     }
   if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
+  // A65: the Orchestrate card, the judges' latest verdicts, last before the rules (the rules stay the foot, A27).
+  if (isS2 && verdicts.length > 0) kids.push(orchestrateCard(el as never, verdicts))
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
   if (paneEnterAt === 0) paneEnterAt = now
@@ -2426,6 +2538,7 @@ export const register: Register = (on, options) => {
 
   // D7: the sync worker is this mod's to start, never the model's.
   on('agent.offer', { agent: SYNC_AGENT }, async () => ({ isOffered: false }))
+  on('agent.offer', { agent: JUDGE_AGENT }, async () => ({ isOffered: false })) // A65: a5r's alone
 
   // A /clear goes on under a new session id: this session's lease, request and sync follow it (A10).
   on('session.end', async ($, e, next) => {
@@ -2571,6 +2684,7 @@ export const register: Register = (on, options) => {
     // A12: the sync worker's run ended; without done or abort the sync is aborted for it.
     if (e.agentId !== undefined && isS2 && (await readA5R($))) {
       await workerEnded($, opts, e.agentId, 'answer' in e && typeof e.answer === 'string' ? e.answer : '').catch(err => $.ui.log(`a5r: worker end: ${String(err)}`, { to: 'debug' }))
+      await judgeEnded($, opts, e.agentId, 'answer' in e && typeof e.answer === 'string' ? e.answer : '').catch(err => $.ui.log(`a5r: judge end: ${String(err)}`, { to: 'debug' }))
       if (!isBusy) await deliverIdle($, opts)
     }
     if (e.agentId === undefined) {
@@ -2598,11 +2712,12 @@ export const register: Register = (on, options) => {
     if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') turnSignalAt = await $.clock.now()
     // A55: a turn starts (a prompt a plugin queued, this mod's notice prompt included, counts once the turn runs a tool or ends)
     if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') await markTurn($)
-    // Hai typed: the marker has been seen, so the title goes back.
-    if (markedFrom !== null && (e.origin.kind === 'composer' || e.origin.kind === 'bridge')) {
-      const was = markedFrom
-      markedFrom = null
-      if (hasMark(await sessionTitle($))) await retitle($, was).catch(() => '')
+    // Hai typed: the marker has been seen, so the title goes back. A63: the title without its mark, read now (never a
+    // value kept in memory, which a reload or a restart loses).
+    const typed = (e.origin as { kind?: string } | undefined)?.kind
+    if (typed === 'composer' || typed === 'bridge') {
+      const title = await sessionTitle($)
+      if (hasMark(title) && bareTitle(title)) await retitle($, bareTitle(title)).catch(() => '')
     }
     // A21: Ather's Ship hand-off is scored at once and the score rides the prompt (never refused: the PR call stays
     // the gate). The origin is what the sender says: it only adds context here, it never opens a gate.

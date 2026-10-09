@@ -130,7 +130,9 @@ test('A62: A54 acting is logged as acted; a lease held by a live holder with no 
   expect(logLines(w).filter(l => l.includes('rule=holder-gone') && l.includes('logged-only')).length).toBe(1)
 })
 
-test('A62: candidates only log, once per lease: no Editor running (live holder), and a holder idle 10 min with an open PENDING line', opts(), async ($, on) => {
+// Rev 23 (A64), by design: the "holder idle with a red mark or a PENDING line" candidate is gone; a holder silent 10 min
+// is judged from its own transcript instead (A65: one judge spawned; its verdict line comes with the judge's answer).
+test('A62: candidates only log, once per lease: no Editor running (live holder); a silent holder is judged, not logged by its mark', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
   w.put(LOCK, held('bbbbbbbb', T(14, 0), T(15, 0)))
   const beat = () => w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: w.clock.now(), title: 'Walker', holding: { since: T(14, 0), end: T(15, 0), extended: 0 }, lastTurnAt: T(14, 5) }), w.clock.now())
@@ -142,7 +144,8 @@ test('A62: candidates only log, once per lease: no Editor running (live holder),
     await w.clock.advance(MIN)
   }
   expect(parseLockLine(w.read(LOCK)).id8).toBe('bbbbbbbb') // nothing acted
-  expect(logLines(w).map(l => /rule=([\w-]+)/.exec(l)?.[1]).sort()).toEqual(['holder-idle-red', 'no-editor'])
+  expect(logLines(w).map(l => /rule=([\w-]+)/.exec(l)?.[1]).sort()).toEqual(['no-editor'])
+  expect(((w.calls['agent.spawn'] ?? []) as Rec[]).filter(s => (s.subagent_type ?? s.subagentType) === 'a5r:judge').length).toBe(1)
   expect(logLines(w).every(l => l.includes('logged-only') && l.includes('holder=alive'))).toBe(true)
 })
 

@@ -115,7 +115,12 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return { model: 'claude-test', agentId: 'w-sync' }
   })
   // The session's agents: the sync worker once one was spawned (the harness drops a spawn's agentId).
-  on('agent.list', async () => value((calls['agent.spawn'] ?? []).length > 0 ? [{ id: 'w-sync', description: 'Sync main', type: 'a5r:sync', status: 'running', spawnedBy: 'a5r' }] : []))
+  // A65: a judge spawned is listed as `w-judge-<n>` (n from 1), of its own type.
+  on('agent.list', async () => {
+    const spawns = (calls['agent.spawn'] ?? []) as Rec[]
+    const judges = spawns.filter(s => (s.subagent_type ?? s.subagentType) === 'a5r:judge').map((s, n) => ({ id: `w-judge-${n + 1}`, description: String(s.description ?? ''), type: 'a5r:judge', status: 'running', spawnedBy: 'a5r' }))
+    return value([...(spawns.some(s => (s.subagent_type ?? s.subagentType) !== 'a5r:judge') ? [{ id: 'w-sync', description: 'Sync main', type: 'a5r:sync', status: 'running', spawnedBy: 'a5r' }] : []), ...judges])
+  })
   // A prompt the plugin submits enters as it was sent (an event: it answers { text }).
   // A59: `failSubmit(n)` makes the next n prompt submissions fail (a refused wake); they are not recorded.
   let submitFails = 0
