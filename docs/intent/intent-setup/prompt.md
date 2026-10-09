@@ -1,6 +1,6 @@
 # Ather Automata: set up intents in a repository
 
-- Rev: 1
+- Rev: 2
 - Status: active
 - Area: ather-automata
 - Owner: Hoàng Vũ
@@ -28,6 +28,7 @@ Ather Automata works only in a repository that has the intent structure, and unt
 - D5 (rev 1): `.agents/skills/intent/` is the skill's home; setup also makes it loadable by Claude Code under `.claude/skills/intent`. Source: L-3 (accepted as proposed).
 - D6 (rev 1): `pack` is `unreal` with a `*.uproject` at the root, else `web`; `mergePolicy` is `hold`. Source: L-3.
 - D7 (rev 1): setup is safe to run again: nothing existing is overwritten, and with nothing missing `/ather setup` only reports. Source: L-3.
+- D8 (rev 2): the question fix of F-1, built as its own change (PR #24, release 0.2.1), is merged into this branch; this intent releases as 0.2.2. Source: L-5.
 
 ## Acceptance
 
@@ -39,7 +40,7 @@ Ather Automata works only in a repository that has the intent structure, and unt
 - A5: Once the pieces are there, `/ather` opens Home in the same session, and `/ather setup` reports and sends nothing. Proof: e2e rows.
 - A6: Nothing changes in a repository that already runs intents, except that `/ather setup` works there. Proof: `node dev/test-all.mjs` has no FAIL line that the base commit does not have, and the layouts match base.
 - A7: Live in Claude Code: in a scratch repository the session asks before writing, then the five pieces exist and nothing is committed; in a copy of this repository only the missing pieces are written and the existing intent folders are byte-identical. Proof: the live run's notes and screenshots.
-- A8: Release 0.2.1: both manifests, a Changes line, "Setting up a repository" in the README, Paseo's shared copies in step. Proof: `claude plugin validate ather-automata`; `claude plugin test ather-automata`; the sync check in `dev/test-all.mjs`.
+- A8: Release 0.2.2: both manifests, a Changes line, "Setting up a repository" in the README, Paseo's shared copies in step. Proof: `claude plugin validate ather-automata`; `claude plugin test ather-automata`; the sync check in `dev/test-all.mjs`.
 
 ## Constraints
 
@@ -50,3 +51,4 @@ Ather Automata works only in a repository that has the intent structure, and unt
 ## Changelog
 
 - rev 1 (2026-10-09): created from L-1, L-2, L-3.
+- rev 2 (2026-10-09): the release is 0.2.2, on top of the question fix merged from PR #24 (D8, A8), from L-5.

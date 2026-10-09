@@ -26,3 +26,10 @@ The bundle ships as a zip with no pointer to the private reference (D4); a PR is
 
 The branch was pushed and the PR opened ready for review, before the build was done; later commits go to the same PR.
 
+## L-5 (2026-10-09 13:30) | class: decision | -> rev 2
+
+> merge 24 vào 20 dc ko ?
+
+> push theo cách 0.2.2 đi
+
+The question fix (PR #24, release 0.2.1) is merged into this branch, and this intent's release moves to 0.2.2 (D8); PR #24 can still merge to `main` on its own first.
