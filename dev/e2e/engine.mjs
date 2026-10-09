@@ -64,7 +64,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   }
 
   const toolBottom = input => {
-    const file = typeof input.file_path === 'string' && writable && !path.isAbsolute(input.file_path) ? path.resolve(root, input.file_path) : input.file_path
+    const file = typeof input.file_path === 'string' && writable && !path.isAbsolute(input.file_path) ? path.resolve(root, input.file_path).split(path.sep).join('/') : input.file_path
     if ((input.tool === 'Write' || input.tool === 'Edit') && typeof file === 'string' && [root, ...(writable ?? [])].some(dir => file.startsWith(dir))) {
       // Write makes the folder it writes into, as the real tool does.
       if (input.tool === 'Write') fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, input.content ?? '')
