@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, heldLine, parseLockLine, type SessionFile, type Want } from '../hooks/coord.ts'
-import { LOCK, ME, NOW, PROJ, opts, world, type Rec } from './world.ts'
+import { JUDGE_SYSTEM, hintOf, parseTail, parseVerdict, type JudgeFacts } from '../hooks/judge.ts'
+import { A5RPANE, LOCK, ME, NOW, PROJ, find, opts, text, world, type Rec } from './world.ts'
 
 // Rev 24: A66 the lock line names the Editor that runs (the holder writes its pid); A67 a holder working through a
 // background agent is not idle (A55 and the judge's trigger); A68 a lease past its end may be extended while nobody waits.
@@ -118,4 +119,38 @@ test('A68: past its end, with someone waiting, the extension is refused as befor
   await $.session.start(START)
   expect(out(await $.tool.call({ tool: EDITOR, action: 'extend', minutes: 15 } as never))).toContain('the lease ended at 14:30 and 1 session waits')
   expect(parseLockLine(w.read(LOCK)).end).toBe('14:30')
+})
+
+// ---------- A69 (after the replay): the verdict `done` ----------
+const iso = (ms: number) => new Date(ms).toISOString()
+const line = (o: Rec) => JSON.stringify(o)
+// mc-dash-like: built and proved, then closed the Editor and wrote FREE itself; idle since.
+const DONE_T = [
+  line({ type: 'assistant', timestamp: iso(T(13, 50)), message: { role: 'assistant', content: [{ type: 'tool_use', id: 'f1', name: 'Bash', input: { command: "printf 'FREE since=13:50 2026-10-06 by=lane-bbbbbbbb note=Editor closed by its holder background=none' > Saved/EDITOR_OWNER.txt" } }] } }),
+  line({ type: 'user', timestamp: iso(T(13, 50)), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'f1', content: 'ok' }] } }),
+  line({ type: 'assistant', timestamp: iso(T(13, 51)), message: { role: 'assistant', content: [{ type: 'text', text: 'The fix works in PIE. The Editor is closed and the lock was released at 13:50.' }] } }),
+].join('\n')
+const JFACTS = (o: Partial<JudgeFacts> = {}): JudgeFacts => ({ now: NOW, kind: 'editor', lane: 'lane-bbbbbbbb', id8: 'bbbbbbbb', session: SID('bbbbbbbb'), since: T(13, 0), end: T(14, 0), why: 'past its end', liveness: 'alive', lastTurnAt: T(13, 51), agents: 0, procs: [], hasEditor: false, hasBuild: false, transcript: '', ...o })
+
+test('A69: unit: a holder that closed the Editor and wrote FREE reads done (a stale lease), not stuck; the judge may answer done', () => {
+  const h = hintOf(JFACTS(), parseTail(DONE_T))
+  expect([h.verdict, h.evidence[0]]).toEqual(['done', 'it said: "The Editor is closed and the lock was released at 13:50"'])
+  expect(hintOf(JFACTS(), parseTail(DONE_T.split('\n').slice(0, 2).join('\n'))).verdict).toBe('done') // the FREE line alone
+  expect(hintOf(JFACTS({ hasBuild: true }), parseTail(DONE_T)).verdict).toBe('working') // something still runs
+  expect(parseVerdict('VERDICT: done\nEVIDENCE:\n- closed the Editor at 16:15\nRECOMMENDATION: free the stale lease')?.verdict).toBe('done')
+  expect(JUDGE_SYSTEM).toContain('VERDICT: <working | done | waiting-on-Hai | stuck-or-crashed | unsure>')
+})
+
+test('A69: a judge answering done shows on the Orchestrate card as done (calm colour), nothing released', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  on('turn.complete', async () => ({ text: '' }))
+  w.put(LOCK, held('bbbbbbbb', T(13, 30), T(14, 0)))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: NOW, holding: { since: T(13, 30), end: T(14, 0), extended: 0 }, lastTurnAt: T(13, 51), agents: 0 }))
+  w.put(`C:/Users/hai.huynh/.claude/projects/E--s2/${SID('bbbbbbbb')}.jsonl`, DONE_T)
+  await $.session.start(START)
+  expect(String(judges(w)[0]?.prompt)).toContain("A rule's first reading: done")
+  await $.turn.complete({ agentId: 'w-judge-1', answer: 'VERDICT: done\nEVIDENCE:\n- it closed the Editor and wrote FREE at 13:50\nRECOMMENDATION: nothing from Hai; free the stale lease', durationMs: 1, isAborted: false, turnId: 'tj', reason: 'answer' } as never)
+  const tree = await $.ui.render(A5RPANE as never)
+  expect(text(find(tree, 'hai-orchestrate-0'))).toContain('lane-bbbbbbbb (bbbbbbbb) · done')
+  expect(parseLockLine(w.read(LOCK)).id8).toBe('bbbbbbbb')
 })

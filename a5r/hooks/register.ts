@@ -1000,7 +1000,7 @@ async function recordVerdict($: Engine, opts: Opts, f: JudgeFacts, v: { verdict:
 /** A65: the Orchestrate card: the latest verdicts, one row each (time, session, verdict), a quiet line of evidence and
  * the recommendation under it. */
 function orchestrateCard(el: { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }, rows: readonly VerdictRow[]): unknown {
-  const tone = (v: VerdictRow['verdict']) => (v === 'working' ? STATUS.ok : v === 'stuck-or-crashed' ? STATUS.bad : STATUS.warn)
+  const tone = (v: VerdictRow['verdict']) => (v === 'working' || v === 'done' ? STATUS.ok : v === 'stuck-or-crashed' ? STATUS.bad : STATUS.warn)
   return el.Box({
     key: 'hai-orchestrate',
     flexDirection: 'column',

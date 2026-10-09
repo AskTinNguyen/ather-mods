@@ -3,14 +3,18 @@
 // transcript and says what the holder is doing. It acts on nothing. Pure: no `$`; register.ts gathers the facts,
 // spawns the agent and shows the verdict.
 
-export type Verdict = 'working' | 'waiting-on-Hai' | 'stuck-or-crashed' | 'unsure'
-export const VERDICTS: readonly Verdict[] = ['working', 'waiting-on-Hai', 'stuck-or-crashed', 'unsure']
+export type Verdict = 'working' | 'done' | 'waiting-on-Hai' | 'stuck-or-crashed' | 'unsure'
+export const VERDICTS: readonly Verdict[] = ['working', 'done', 'waiting-on-Hai', 'stuck-or-crashed', 'unsure']
 
 /** One event of a transcript record (Claude Code's `<session id>.jsonl`): who, when, its text, the tools it called,
  * and the tool results it carries. */
-export type TranscriptEvent = { at: number | null; role: 'user' | 'assistant' | 'other'; text: string; tools: { id: string; name: string }[]; results: string[] }
+export type TranscriptEvent = { at: number | null; role: 'user' | 'assistant' | 'other'; text: string; tools: { id: string; name: string; input?: string }[]; results: string[] }
 
-type Part = { type?: string; text?: string; id?: string; name?: string; tool_use_id?: string; content?: unknown }
+type Part = { type?: string; text?: string; id?: string; name?: string; tool_use_id?: string; content?: unknown; input?: unknown }
+
+/** A69: what a holder writes or says when its Editor work is over: a FREE line, the editor tool's release, "closed the
+ * Editor", "the lock was released". */
+const FINISHED = /FREE since=|\\?"action\\?"\s*:\s*\\?"release|released the (Editor|lock)|(lock|Editor|lease) (was|is|has been) released|closed the Editor|Editor (is|was) (now )?closed|Editor closed/i
 
 /** The last `max` events of a transcript's text (lines that are not JSON are skipped). */
 export const parseTail = (text: string, max = 200): TranscriptEvent[] => {
@@ -31,7 +35,7 @@ export const parseTail = (text: string, max = 200): TranscriptEvent[] => {
       at: Number.isFinite(at) ? at : null,
       role,
       text: parts.filter(p => p.type === 'text' && typeof p.text === 'string').map(p => p.text ?? '').join(' ').replace(/\s+/g, ' ').trim(),
-      tools: parts.filter(p => p.type === 'tool_use').map(p => ({ id: String(p.id ?? ''), name: String(p.name ?? '') })),
+      tools: parts.filter(p => p.type === 'tool_use').map(p => ({ id: String(p.id ?? ''), name: String(p.name ?? ''), input: JSON.stringify((p as { input?: unknown }).input ?? {}).slice(0, 400) })),
       results: parts.filter(p => p.type === 'tool_result').map(p => String(p.tool_use_id ?? '')),
     })
   }
@@ -80,7 +84,8 @@ const minAgo = (now: number, at: number | null): string => (at === null ? 'unkno
 
 /** A first reading of the facts and the transcript, by rule: the judge confirms or corrects it, and it stands in when
  * no judge could run. Gone with nothing running → stuck or crashed; an open question → waiting on Hai; a running
- * Editor, build or tool, or recent activity → working; long silent → stuck; else unsure. */
+ * Editor, build or tool, or recent activity → working; A69: it said or wrote that its Editor work is over (a FREE
+ * line, a release, "closed the Editor") and nothing runs → done (the lease is stale); long silent → stuck; else unsure. */
 export const hintOf = (f: JudgeFacts, events: readonly TranscriptEvent[]): { verdict: Verdict; evidence: string[] } => {
   const last = [...events].reverse().find(e => e.role !== 'other' && (e.text || e.tools.length || e.results.length))
   const lastAt = [...events].reverse().find(e => e.at !== null)?.at ?? null
@@ -97,6 +102,9 @@ export const hintOf = (f: JudgeFacts, events: readonly TranscriptEvent[]): { ver
   const isFresh = lastAt !== null && f.now - lastAt < 30 * 60_000
   if (f.hasEditor || f.hasBuild || (running.length > 0 && isFresh) || (lastAt !== null && f.now - lastAt < 10 * 60_000))
     return { verdict: 'working', evidence: [f.hasBuild ? 'a build process runs' : f.hasEditor ? 'an Unreal Editor runs' : running.length ? `a tool is still running: ${running.map(t => t.name).join(', ')}` : `transcript active ${minAgo(f.now, lastAt)}`, `last transcript event ${minAgo(f.now, lastAt)}`] }
+  // A69: the tail's last word on its Editor work says it is over.
+  const said = [...events].reverse().slice(0, 40).find(e => (e.role === 'assistant' && FINISHED.test(e.text)) || e.tools.some(t => FINISHED.test(t.input ?? '')))
+  if (said) return { verdict: 'done', evidence: [said.text && FINISHED.test(said.text) ? `it said: "${(said.text.match(new RegExp(`[^.]*(${FINISHED.source})[^.]*`, 'i'))?.[0] ?? said.text).trim().slice(0, 140)}"` : `it ran: ${said.tools.find(t => FINISHED.test(t.input ?? ''))?.name ?? 'a release'} (${(said.tools.find(t => FINISHED.test(t.input ?? ''))?.input ?? '').slice(0, 100)})`, `${said.at ? `${minAgo(f.now, said.at)}; ` : ''}nothing runs since: the lease or lock line is stale`] }
   if (lastAt !== null && f.now - lastAt >= 30 * 60_000) return { verdict: 'stuck-or-crashed', evidence: [`no transcript event for ${minAgo(f.now, lastAt).replace(' ago', '')}`, ...died, 'nothing runs and no question is open'] }
   return { verdict: 'unsure', evidence: [lastAt === null ? 'no readable transcript' : `last transcript event ${minAgo(f.now, lastAt)}`] }
 }
@@ -106,9 +114,9 @@ export const JUDGE_SYSTEM = [
   'You are the A5R advisory judge for Hai\'s shared Unreal checkout. One session holds a coordination lease (the Editor or the sync) and looks stalled.',
   'Decide what that session is doing from the facts and its transcript. You change nothing: no edits, no messages to the session, no lock or file writes. Read only.',
   'You may Read or Grep the transcript file named in the facts for more context (its end matters most).',
-  'Verdicts: working (a build, a test, an Editor or a tool making progress), waiting-on-Hai (its last message asks Hai something, or a question is open), stuck-or-crashed (no progress and nothing running, or the session is gone), unsure.',
+  'Verdicts: working (a build, a test, an Editor or a tool making progress), done (its work finished and it said so: it closed the Editor, wrote the FREE line or reported the release; the lease or lock line is stale), waiting-on-Hai (its last message asks Hai something, or a question is open), stuck-or-crashed (no progress and nothing running, or the session is gone, without having finished), unsure.',
   'Answer in exactly this form and nothing else:',
-  'VERDICT: <working | waiting-on-Hai | stuck-or-crashed | unsure>',
+  'VERDICT: <working | done | waiting-on-Hai | stuck-or-crashed | unsure>',
   'EVIDENCE:',
   '- <one line each, at most three, quoting the transcript or the facts>',
   'RECOMMENDATION: <one line for Hai: what he could do, or that nothing is needed>',
@@ -133,7 +141,7 @@ export const judgePrompt = (f: JudgeFacts, hint: { verdict: Verdict; evidence: s
 
 /** A65: the judge's answer read back, or null when it is not in the form. */
 export const parseVerdict = (answer: string): { verdict: Verdict; evidence: string[]; recommendation: string } | null => {
-  const v = /VERDICT:\s*(working|waiting-on-Hai|stuck-or-crashed|unsure)/i.exec(answer)
+  const v = /VERDICT:\s*(working|done|waiting-on-Hai|stuck-or-crashed|unsure)/i.exec(answer)
   if (!v) return null
   const verdict = VERDICTS.find(x => x.toLowerCase() === (v[1] ?? '').toLowerCase()) ?? 'unsure'
   const ev = /EVIDENCE:\s*([\s\S]*?)(?:RECOMMENDATION:|$)/i.exec(answer)?.[1] ?? ''
@@ -144,7 +152,7 @@ export const parseVerdict = (answer: string): { verdict: Verdict; evidence: stri
 
 /** A65: what each verdict recommends when the judge gave none (or did not run). */
 export const defaultRecommendation = (v: Verdict): string =>
-  v === 'working' ? 'nothing: let it finish' : v === 'waiting-on-Hai' ? 'answer it in that session' : v === 'stuck-or-crashed' ? 'look at that session; release its lease if it is really gone' : 'look at that session when you can'
+  v === 'working' ? 'nothing: let it finish' : v === 'done' ? 'nothing from Hai: the lease is stale; it can be freed' : v === 'waiting-on-Hai' ? 'answer it in that session' : v === 'stuck-or-crashed' ? 'look at that session; release its lease if it is really gone' : 'look at that session when you can'
 
 /** A65: one verdict as kept in Saved/A5R/verdicts.json and shown on the Orchestrate card. */
 export type VerdictRow = { at: number; id8: string; lane: string; kind: 'editor' | 'sync'; verdict: Verdict; evidence: string; recommendation: string; by: string; source: 'judge' | 'rule' }
