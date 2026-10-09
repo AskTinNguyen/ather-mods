@@ -15,13 +15,14 @@ const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select',
 const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => name !== 'Input' && name !== 'Select'))
 
 // `writable`: more folders the model's Write and Edit may change (a sibling checkout); with it, a relative path is taken from `root`.
-export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable }) => {
-  const store = new Map()
+// `kept`: what the store already holds (an earlier session's on this machine).
+export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable, kept }) => {
+  const store = new Map(kept)
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
+  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -92,6 +93,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
         return { cancel: () => undefined }
       },
       after: (ms, fn) => {
+        record.afters.push(ms)
         const timer = setTimeout(fn, ms)
         // A long timer (a retry a minute out) must not keep the run alive after the checks.
         if (ms >= 10000) timer.unref?.()
@@ -114,9 +116,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
           return { name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false }
         }),
       exists: async file => fs.existsSync(file),
-      stat: async file => {
+      // `resolve`: with the path the file really is at, behind any symbolic link.
+      stat: async (file, { resolve = false } = {}) => {
         const stat = fs.statSync(file)
-        return { kind: stat.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false }
+        return { kind: stat.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false, ...(resolve ? { realPath: fs.realpathSync(file) } : {}) }
       },
     },
     store: {
@@ -133,8 +136,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
         if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
         if (argv[0] === 'gh') record.ghAt.push({ argv: argv.join(' '), cwd: init.cwd ?? root })
-        // `ghAt` ({ [folder]: { issues, prs } }): each checkout's own fixtures, by the folder gh runs in.
-        const { issues: ghIssuesHere, prs: ghPrsHere } = ghAt ? (ghAt[init.cwd ?? root] ?? {}) : { issues: ghIssues, prs: ghPrs }
+        // `ghAt` ({ [folder]: { issues, prs, fails } }): each checkout's own fixtures, by the folder gh runs in.
+        // `fails`: what gh says on stderr as it exits 1 there, whatever it was asked.
+        const { issues: ghIssuesHere, prs: ghPrsHere, fails } = ghAt ? (ghAt[init.cwd ?? root] ?? {}) : { issues: ghIssues, prs: ghPrs }
+        if (argv[0] === 'gh' && fails !== undefined) return { exitCode: 1, stdout: '', stderr: fails }
         // Every git call, with the variables it was given: the checks read its argv and env.
         if (argv[0] === 'git') record.gitRuns.push({ argv: [...argv], env: { ...(init.env ?? {}) } })
         // `gh pr view <n>`: the PR states are a fixture too ({ [n]: 'MERGED' | 'OPEN' }); an unknown PR is not found.

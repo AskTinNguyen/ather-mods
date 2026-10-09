@@ -27,7 +27,8 @@ const tzFor = hour => {
 }
 
 const sandbox = () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-e2e-'))
+  // The folder's real path: a checkout's id is made from it (macOS's temporary folder is behind a link).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ather-e2e-')))
   fs.cpSync(path.join(S2_ROOT, 'docs/intent'), path.join(root, 'docs/intent'), { recursive: true })
   // The skills the quick actions may name.
   fs.mkdirSync(path.join(root, '.agents/skill-library/visuals/show-me'), { recursive: true })

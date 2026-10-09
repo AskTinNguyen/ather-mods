@@ -56,6 +56,7 @@ function io($) {
     list: path => $.fs.list(path),
     origin: root => readOrigin($, root),
     repo: async () => (await laneOf($)).repo,
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
   }
 }
 

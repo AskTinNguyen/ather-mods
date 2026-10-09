@@ -1396,6 +1396,56 @@ describe('several repositories on one machine', () => {
     expect(store.has('prStates:sipher/s2')).toBe(true)
   })
 
+  // One checkout at /private/tmp/one/s2, also reached as /tmp/one/s2 through a link, beside web/ (on GitHub)
+  // and local/ (no origin). `byLink` and `byReal` are sessions over one store; `real` resolves the link.
+  const linked = (/** @type {{ canResolve?: boolean }} */ { canResolve = true } = {}) => {
+    const memory = memoryIo()
+    const origin = async root => (root.endsWith('/local') ? '' : root.endsWith('/web') ? 'git@github.com:AskTinNguyen/web.git' : 'git@github.com:Sipher/S2.git')
+    const real = async folder => folder.replace(/^\/tmp\//, '/private/tmp/')
+    const dir = canResolve ? 'one' : 'two'
+    const byLink = { ...memory.io, repo: async () => 'sipher/s2', root: async () => `/tmp/${dir}/s2`, origin, ...(canResolve ? { real } : {}) }
+    const byReal = { ...byLink, root: async () => `/private/tmp/${dir}/s2` }
+    for (const base of [`/tmp/${dir}`, `/private/tmp/${dir}`]) for (const name of ['s2', 'web']) memory.files.set(`${base}/${name}/docs/intent/login/prompt.md`, '# Login\n')
+    return { ...memory, byLink, byReal, link: `/tmp/${dir}`, at: `/private/tmp/${dir}` }
+  }
+
+  test('a checkout reached through a link has the id it has by its real path', async () => {
+    const { byLink, byReal, link, at, store } = linked()
+    expect(await state.intentScope(byLink, 'login')).toBe(`sipher/s2@${at}/s2|login`)
+    expect(await state.intentScope(byLink, 'login')).toBe(await state.intentScope(byReal, 'login'))
+    // Another checkout, named by the link in one session and by its real path in the other.
+    expect(await state.intentScope(byLink, 'login', `${link}/web`)).toBe(`asktinnguyen/web@${at}/web|login`)
+    expect(await state.intentScope(byLink, 'login', `${link}/web`)).toBe(await state.intentScope(byReal, 'login', `${at}/web`))
+    expect(await state.checkoutScope(byLink, { isOwn: false, repo: 'asktinnguyen/web', root: `${link}/web` })).toBe(`s1|asktinnguyen/web@${at}/web`)
+    expect(await state.checkoutScope(byLink, { isOwn: false, repo: 'asktinnguyen/web', root: `${link}/web` })).toBe(await state.checkoutScope(byReal, { isOwn: false, repo: 'asktinnguyen/web', root: `${at}/web` }))
+    // A checkout without an origin is named by where its folder lands too.
+    expect((await state.laneAt(byLink, `${link}/local`)).repo).toBe(`path:${at}/local`)
+    expect((await state.laneAt(byLink, `${link}/local`)).repo).toBe((await state.laneAt(byReal, `${at}/local`)).repo)
+    // Changes and Continue written through the link are read by the real path, in the own checkout and in another.
+    await state.noteChanges(byLink, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now())
+    await state.noteChanges(byLink, 'login', [{ kind: 'done', id: 'A2', text: 'ticked A2' }], Date.now(), `${link}/web`)
+    expect(await state.readChanges(byReal, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(byReal, 'login', 0, `${at}/web`)).toHaveLength(1)
+    await state.track(byLink, `${link}/web`, 'login', { me: 'Tin Nguyen' })
+    expect(await state.readLast(byReal, 'Tin Nguyen', `${at}/web`)).toBe('login')
+    await state.track(byLink, `${link}/s2`, 'login', { me: 'Tin Nguyen' })
+    expect(await state.readLast(byReal, 'Tin Nguyen')).toBe('login')
+    expect([...store.keys()].filter(key => /^(last|changes):/.test(key)).sort()).toEqual([`changes:asktinnguyen/web@${at}/web|login`, `changes:sipher/s2@${at}/s2|login`, `last:asktinnguyen/web@${at}/web|tinnguyen`, `last:sipher/s2@${at}/s2|tinnguyen`])
+    // The folder a path is read in stays as given: the intent is tracked where the session named it.
+    expect(store.get('pinned:s1')).toBe('login')
+  })
+
+  test('an Io that cannot resolve a folder keeps it as given', async () => {
+    const { byLink, byReal, link, at } = linked({ canResolve: false })
+    expect(await state.intentScope(byLink, 'login')).toBe(`sipher/s2@${link}/s2|login`)
+    expect(await state.intentScope(byReal, 'login')).toBe(`sipher/s2@${at}/s2|login`)
+    expect(await state.checkoutScope(byLink, { isOwn: false, repo: 'asktinnguyen/web', root: `${link}/web` })).toBe(`s1|asktinnguyen/web@${link}/web`)
+    expect((await state.laneAt(byLink, `${link}/local`)).repo).toBe(`path:${link}/local`)
+    // A resolve that fails keeps the folder as given too.
+    const failing = { ...byLink, real: async () => Promise.reject(new Error('ENOENT')) }
+    expect(await state.intentScope(failing, 'login', `${link}/web`)).toBe(`asktinnguyen/web@${link}/web|login`)
+  })
+
   test("proof from before the upgrade reads through for the session's own checkout only", async () => {
     const { own, second, store } = twoClones()
     store.set('evidence:login', { build: { state: 'pass', detail: 'Result: Succeeded', at: Date.now() } })

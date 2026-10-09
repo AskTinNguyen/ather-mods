@@ -146,6 +146,7 @@ function io($) {
     list: path => $.fs.list(path),
     origin: root => readOrigin($, root),
     repo: async () => (await laneOf($)).repo,
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
   }
 }
 
@@ -585,12 +586,16 @@ function stale() {
   view = { ...view, version: -1 }
 }
 
+// What gh says in a checkout whose remotes are not on GitHub, or that has none.
+const NOT_ON_GITHUB = /none of the git remotes configured for this repository point to a known GitHub host|no git remotes found/i
+
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
 // Each workspace repository is read in turn, in its first checkout, and its list kept under it.
 /** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
 async function refreshIssues($) {
   const lanes = oncePerRepo(await issueLanes($))
+  const names = lanes.length > 1 ? await laneNames($) : new Map()
   const failures = []
   for (const { root, repo: scope } of lanes) {
     const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
@@ -598,12 +603,17 @@ async function refreshIssues($) {
       await state.setIssues(io($), me, parseIssues(run.stdout), scope)
       continue
     }
+    // Among several checkouts, one whose remotes are not on GitHub has no GitHub issues: no failure, and not tried again.
+    if (lanes.length > 1 && NOT_ON_GITHUB.test(run?.stderr ?? '')) {
+      await state.setIssues(io($), me, [], scope)
+      continue
+    }
     // Signed out: the last list may be stale, so none is shown.
     if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [], scope)
     if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
     isIssuesWarned = true
     const failure = (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
-    failures.push(lanes.length > 1 ? `${root}: ${failure}` : failure)
+    failures.push(lanes.length > 1 ? `${names.get(normalFolder(root)) || root}: ${failure}` : failure)
   }
   if (failures.length === 0) {
     issueRetries = 0

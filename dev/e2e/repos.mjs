@@ -72,8 +72,8 @@ const makeWorkspace = () => {
 }
 
 // A session opened in `root`, started as the app starts it.
-const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable, ghAt }) => {
-  const engine = createEngine({ root, surfaces: [], user, writable, ghAt })
+const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable, ghAt, kept }) => {
+  const engine = createEngine({ root, surfaces: [], user, writable, ghAt, kept })
   engine.setSessionId(sessionId)
   register(engine.on, { briefGate: 'warn', ...options })
   await engine.start()
@@ -739,6 +739,106 @@ const lastSubmit = engine => {
   byKey(await next.engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')?.props.onPress()
   await next.engine.flush()
   expect("Continue on Home tracks web/'s login, not web-b/'s", JSON.stringify(next.engine.store.get(`pinned:${next.sessionId}`)) === JSON.stringify({ slug: 'login', root: web }), next.engine.store.get(`pinned:${next.sessionId}`))
+}
+
+// ---------------------------------------------------------------- one id through a symbolic link
+
+{
+  // web/ reached through a link to it, then by its real path: `login` and `pay` yours, `login` tracked and proved through the link.
+  const { parent, web } = makeWorkspace()
+  for (const slug of ['login', 'pay']) writeIntent(web, slug)
+  const link = path.join(BASE, 'link-web')
+  fs.symlinkSync(web, link)
+  const id = checkoutId('asktinnguyen/web', web)
+  const kept = (engine, prefix) => [...engine.store.keys()].filter(key => key.startsWith(prefix))
+  const { engine, sessionId: sid } = await boot({ root: link, sessionId: 'harness-session-0019', writable: [link] })
+  await engine.command('ather', 'intent login')
+  expect('a session opened through a link tracks login in its own checkout', engine.store.get(`pinned:${sid}`) === 'login', engine.store.get(`pinned:${sid}`))
+  await bash(engine, 'npm test', NODE_TEST_PASS)
+  await engine.modelTool({ tool: 'Edit', file_path: path.join(link, 'docs/intent/login/prompt.md'), old_string: '- [ ] A2', new_string: '- [x] A2' })
+  await engine.flush()
+  expect("its proof is kept under the checkout's real folder", engine.store.get(`evidence:${id}|login`)?.tests?.state === 'pass' && kept(engine, 'evidence:').length === 1, kept(engine, 'evidence:'))
+  expect('and its Continue', engine.store.get(`last:${id}|tinnguyen`) === 'login' && kept(engine, 'last:').length === 1, kept(engine, 'last:'))
+  expect('and its changes', engine.store.get(`changes:${id}|login`)?.length === 1 && kept(engine, 'changes:').length === 1, kept(engine, 'changes:'))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+
+  // The next session, opened by the real path over the same store, continues login and counts its proof.
+  const next = await boot({ root: web, sessionId: 'harness-session-0020', kept: engine.store })
+  next.engine.setSurfaces(['terminal'])
+  await next.engine.command('ather', '')
+  byKey(await next.engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')?.props.onPress()
+  await next.engine.flush()
+  expect('a session opened by the real path continues the intent tracked through the link', next.engine.store.get(`pinned:${next.sessionId}`) === 'login', next.engine.store.get(`pinned:${next.sessionId}`))
+  const status = JSON.parse((await next.engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
+  expect('and reads the proof recorded through the link', status.evidence?.tests?.state === 'pass', status.evidence)
+  expect('it keeps one Continue and one proof record', kept(next.engine, 'last:').length === 1 && kept(next.engine, 'evidence:').length === 1, [...kept(next.engine, 'last:'), ...kept(next.engine, 'evidence:')])
+  await next.engine.end('other')
+
+  // The parent folder through a link: web/ is another checkout there, with the same id.
+  const linkParent = path.join(BASE, 'link-work')
+  fs.symlinkSync(parent, linkParent)
+  const above = await boot({ root: linkParent, sessionId: 'harness-session-0021', kept: engine.store })
+  await bash(above.engine, 'cd web && npm test', NODE_TEST_PASS)
+  expect("a session in the linked parent folder keeps its proof in web/ under web's real folder", above.engine.store.get(`evidence:${above.sessionId}|${id}`)?.tests?.state === 'pass', kept(above.engine, 'evidence:'))
+  await above.engine.command('ather', 'intent web/pay')
+  expect('and tracking web/pay moves the one Continue', JSON.stringify(above.engine.store.get(`pinned:${above.sessionId}`)) === JSON.stringify({ slug: 'pay', root: `${linkParent}/web` }) && above.engine.store.get(`last:${id}|tinnguyen`) === 'pay' && kept(above.engine, 'last:').length === 1, [above.engine.store.get(`pinned:${above.sessionId}`), ...kept(above.engine, 'last:')])
+  expect('no hook threw', next.engine.record.hookErrors.length === 0 && above.engine.record.hookErrors.length === 0, [...next.engine.record.hookErrors, ...above.engine.record.hookErrors])
+  await above.engine.end('other')
+}
+
+// ---------------------------------------------------------------- a checkout that is not on GitHub
+
+const NOT_ON_GITHUB = 'none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`'
+// Presses "Refresh GitHub issues" in the pane and resolves what it said, and the retries it started.
+const refresh = async engine => {
+  const before = { toasts: engine.record.toasts.length, retries: engine.record.afters.filter(ms => ms === 60000).length }
+  await engine.command('ather', 'pick')
+  byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'issues-refresh')?.props.onPress()
+  for (let tries = 0; tries < 100 && engine.record.toasts.length === before.toasts; tries += 1) await engine.flush()
+  return { said: engine.record.toasts.slice(before.toasts).join('\n'), retries: engine.record.afters.filter(ms => ms === 60000).length - before.retries }
+}
+
+{
+  // A parent folder over s2/ (on GitHub, one issue) and web/ (its remotes are not on GitHub).
+  const { parent, s2, web } = makeWorkspace()
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { fails: NOT_ON_GITHUB } }
+  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0022', ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, ghAt)
+  await engine.flush()
+  expect('reading issues at the start schedules no retry for the checkout that is not on GitHub', !engine.record.afters.includes(60000), engine.record.afters)
+  const quiet = await refresh(engine)
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect('gh issue list ran in both checkouts', lists.includes(s2) && lists.includes(web), lists)
+  expect('a refresh reports no failure for the checkout that is not on GitHub', quiet.said !== '' && !quiet.said.includes('none of the git remotes') && !quiet.said.includes(web), quiet.said)
+  expect('and schedules no retry', quiet.retries === 0, quiet)
+  expect("the GitHub checkout's issue is kept, and an empty list for the other", engine.store.get('issues:sipher/s2|tinnguyen')?.list?.length === 1 && engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 0, [...engine.store.keys()].filter(key => key.startsWith('issues')))
+  const rows = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
+  expect("the GitHub checkout's issue is listed", JSON.stringify(rows.map(one => one.id)) === JSON.stringify(['issue:s2#7']), rows.map(one => one.id))
+
+  // A real failure in s2/ is one: named by the checkout's short name, and tried again.
+  ghAt[s2] = { fails: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' }
+  const failed = await refresh(engine)
+  expect("a real failure is reported with its checkout's short name, not its folder", failed.said.includes('s2') && failed.said.includes('HTTP 502') && !failed.said.includes(s2) && !failed.said.includes(parent), failed.said)
+  expect('and says nothing of the checkout that is not on GitHub', !failed.said.includes('none of the git remotes') && !failed.said.includes('web'), failed.said)
+  expect('and is tried again', failed.retries === 1, failed)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // One checkout whose remotes are not on GitHub: a failure, as before.
+  const { web } = makeWorkspace()
+  const ghAt = { [web]: { fails: NOT_ON_GITHUB } }
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0023', ghAt })
+  engine.setSurfaces(['terminal'])
+  await engine.flush()
+  const alone = await refresh(engine)
+  const reply = await engine.command('ather', 'issues')
+  expect('alone, a checkout that is not on GitHub still fails the refresh', alone.said.includes(NOT_ON_GITHUB) && JSON.stringify(reply ?? '').includes('none of the git remotes'), [alone, reply])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
 }
 
 // ---------------------------------------------------------------- report

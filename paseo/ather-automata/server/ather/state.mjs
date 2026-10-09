@@ -20,11 +20,13 @@ import { groupByOf } from './worklist.mjs'
  *   read: (path: string) => Promise<string | null>, write: (path: string, text: string) => Promise<void>, exists: (path: string) => Promise<boolean>,
  *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: (root?: string) => Promise<string>, redraw: () => void,
  *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
- *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>
+ *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>,
+ *   real?: (folder: string) => Promise<string>
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
  *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.1, and as the Paseo version still keeps them).
+ *   `real`: the folder a path really lands in, behind any symbolic link; without it an id holds the folder as given.
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
  * @typedef {import('./model.mjs').Evidence} Evidence
@@ -99,10 +101,34 @@ const changed = io => {
 const lanes = new Map()
 /** @type {Map<string, Promise<Checkout>>} */
 const rootLanes = new Map()
+// Where each folder really lands, asked once per folder.
+/** @type {Map<string, Promise<string>>} */
+const realFolders = new Map()
 
 // A folder as an id holds it: normalised and lowercased, so it reads the same from every session.
 /** @param {string} root */
 const folderId = root => root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+
+// The folder an id is made from: where the path really lands, so a checkout reached through a symbolic link
+// (macOS's /tmp, a linked projects folder) has the id it has by its real path. Only for ids: files are read
+// and git is run in the folder as given. An Io that cannot say, or a folder it could not resolve, keeps it as given.
+/** @param {Io} io @param {string} folder */
+const realFolder = (io, folder) => {
+  const { real } = io
+  if (!real || folder === '') return Promise.resolve(folder)
+  const cached = realFolders.get(folder)
+  if (cached) return cached
+  const reading = real(folder).then(
+    found => found || folder,
+    () => {
+      // Asked again next time, never kept.
+      realFolders.delete(folder)
+      return folder
+    },
+  )
+  realFolders.set(folder, reading)
+  return reading
+}
 
 // A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
 // clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
@@ -137,7 +163,7 @@ const readCheckout = async (io, root, userRoot) => {
   const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
   const origin = io.origin ? await io.origin(root).catch(() => null) : ''
   const me = await (userRoot === undefined ? io.gitUser() : io.gitUser(userRoot)).catch(() => '')
-  return { root, repo: io.origin ? repoId(origin ?? '', root) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
+  return { root, repo: io.origin ? repoId(origin ?? '', await realFolder(io, root)) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
 }
 
 /** @param {typeof lanes} cache @param {string} key @param {() => Promise<Checkout>} read */
@@ -198,7 +224,7 @@ const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(aw
 
 // The checkout a folder holding docs/intent is, by its id: the session's own for its root, else that folder's.
 /** @param {Io} io @param {string} [root] */
-const checkoutAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? checkoutId(await repoOf(io), await io.root().catch(() => '')) : checkoutId((await laneAt(io, normalFolder(root))).repo, root))
+const checkoutAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? checkoutId(await repoOf(io), await realFolder(io, await io.root().catch(() => ''))) : checkoutId((await laneAt(io, normalFolder(root))).repo, await realFolder(io, root)))
 
 // Before 0.2.1 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
 // per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
@@ -256,7 +282,7 @@ export const checkoutScope = async (io, checkout) => {
   const pin = await readPin(io)
   const isIntents = pin !== null && (checkout.isOwn ? pin.isOwn : !pin.isOwn && normalFolder(pin.root) === normalFolder(checkout.root ?? ''))
   if (isIntents) return evidenceScope(io)
-  return checkout.isOwn ? io.sessionId() : `${await io.sessionId()}|${checkoutId(checkout.repo, checkout.root ?? '')}`
+  return checkout.isOwn ? io.sessionId() : `${await io.sessionId()}|${checkoutId(checkout.repo, await realFolder(io, checkout.root ?? ''))}`
 }
 
 // An intent's evidence scope: the intent in its checkout, as evidenceScope names it. `root`: the folder
