@@ -11,10 +11,12 @@ const OUT = process.argv[2]
 const { register } = await import('./out/hooks/ather.mjs')
 
 // The person's own git settings (signing, hooks, default branch) stay out of these repositories and of the hooks' git calls.
+// Folders with forward slashes, as the hooks name a checkout: on Windows path.join and the temporary folder give backslashes.
+const join = (...parts) => path.join(...parts).split(path.sep).join('/')
 // The folder's real path: git names a checkout by it (macOS's temporary folder is behind a link).
-const BASE = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ather-repos-')))
-fs.writeFileSync(path.join(BASE, 'gitconfig'), '')
-process.env.GIT_CONFIG_GLOBAL = path.join(BASE, 'gitconfig')
+const BASE = join(fs.realpathSync(fs.mkdtempSync(join(os.tmpdir(), 'ather-repos-'))))
+fs.writeFileSync(join(BASE, 'gitconfig'), '')
+process.env.GIT_CONFIG_GLOBAL = join(BASE, 'gitconfig')
 process.env.GIT_CONFIG_NOSYSTEM = '1'
 
 const results = []
@@ -25,7 +27,8 @@ const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8',
 // One checkout at <parent>/<folder>: `git init`, the files given, one commit on main pushed to a bare
 // origin at <parent>-origins/<owner>/<name>.git (so the repository is named owner/name), then `branch` checked out.
 const makeCheckout = (parent, folder, { owner, name, files = {}, branch = 'main' }) => {
-  const root = path.join(parent, folder)
+  const root = join(parent, folder)
+  // The origin as the system writes a folder (backslashes on Windows): the repository is named owner/name either way.
   const origin = path.join(`${parent}-origins`, owner, `${name}.git`)
   fs.mkdirSync(origin, { recursive: true })
   git(origin, 'init', '--bare', '-q', '-b', 'main')
@@ -34,8 +37,8 @@ const makeCheckout = (parent, folder, { owner, name, files = {}, branch = 'main'
   git(root, 'config', 'user.name', 'Tin Nguyen')
   git(root, 'config', 'user.email', 'tin@example.com')
   for (const [file, text] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
-    fs.writeFileSync(path.join(root, file), text)
+    fs.mkdirSync(path.dirname(join(root, file)), { recursive: true })
+    fs.writeFileSync(join(root, file), text)
   }
   git(root, 'add', '-A')
   git(root, 'commit', '-q', '-m', 'start')
@@ -48,7 +51,7 @@ const makeCheckout = (parent, folder, { owner, name, files = {}, branch = 'main'
 // Someone else pushes a commit to a checkout's origin: its origin/main is behind until it fetches. Resolves the new sha.
 const advanceOrigin = root => {
   const origin = git(root, 'remote', 'get-url', 'origin')
-  const other = fs.mkdtempSync(path.join(BASE, 'other-'))
+  const other = fs.mkdtempSync(join(BASE, 'other-'))
   git(other, 'clone', '-q', origin, '.')
   git(other, '-c', 'user.name=Lam Phung', '-c', 'user.email=lam@example.com', 'commit', '-q', '--allow-empty', '-m', 'teammate')
   git(other, 'push', '-q', 'origin', 'main')
@@ -61,7 +64,7 @@ const WEB_PROFILE = { version: 1, pack: 'web', gates: [{ id: 'test', command: 'n
 
 // A parent folder with s2/ (Unreal, on a feature branch) and web/ (web profile, on main).
 const makeWorkspace = () => {
-  const parent = fs.mkdtempSync(path.join(BASE, 'work-'))
+  const parent = fs.mkdtempSync(join(BASE, 'work-'))
   const s2 = makeCheckout(parent, 's2', { owner: 'sipher', name: 's2', branch: 'feat/x', files: { ...INTENTS, 'S2.uproject': '{}\n' } })
   const web = makeCheckout(parent, 'web', {
     owner: 'AskTinNguyen',
@@ -189,8 +192,8 @@ const readJson = file => {
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
 
   await engine.timers()
-  const ownBeat = readJson(path.join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`))
-  const webBeat = readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))
+  const ownBeat = readJson(join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`))
+  const webBeat = readJson(join(web, '.ather/local/lanes', `${sid}.json`))
   expect("the heartbeat is in s2's lanes and in web's, naming login", ownBeat?.intent === 'login' && webBeat?.intent === 'login' && webBeat.branch === 'main' && ownBeat.branch === 'feat/x', { ownBeat, webBeat })
 
   await engine.command('ather', 'untrack')
@@ -206,7 +209,7 @@ const readJson = file => {
   expect("a new login in s2 is tracked: web's stop does not stop it", engine.store.get(`pinned:${sid}`) === 'login', [engine.store.get(`pinned:${sid}`), engine.store.get(`untracked:${sid}`)])
 
   await engine.end('other')
-  const ended = [readJson(path.join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))]
+  const ended = [readJson(join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), readJson(join(web, '.ather/local/lanes', `${sid}.json`))]
   expect('on session end both heartbeats say ended', ended.every(one => one?.hasEnded === true), ended)
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
 }
@@ -225,8 +228,8 @@ const readJson = file => {
 {
   // /ather intent <name>: a name only another workspace checkout has is tracked there.
   const { s2, web } = makeWorkspace()
-  fs.mkdirSync(path.join(web, 'docs/intent/search'), { recursive: true })
-  fs.writeFileSync(path.join(web, 'docs/intent/search/prompt.md'), LOGIN)
+  fs.mkdirSync(join(web, 'docs/intent/search'), { recursive: true })
+  fs.writeFileSync(join(web, 'docs/intent/search/prompt.md'), LOGIN)
   const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0005', options: { repos: '../web' } })
   await engine.command('ather', 'intent search')
   expect('/ather intent search tracks it in web, the workspace checkout that has it', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'search', root: web }), engine.store.get(`pinned:${sid}`))
@@ -245,8 +248,8 @@ const intentRows = tree =>
     .map(node => ({ key: node.props.key, id: /intent:[^\s]+$/.exec(node.props.key)[0], repo: textIn(byKey(tree, `${node.props.key}-repo`)).trim(), press: node.props.onPress }))
 const fetchRuns = engine => engine.record.gitRuns.filter(run => run.argv.includes('fetch'))
 const writeIntent = (root, slug, text = LOGIN) => {
-  fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
-  fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), text)
+  fs.mkdirSync(join(root, 'docs/intent', slug), { recursive: true })
+  fs.writeFileSync(join(root, 'docs/intent', slug, 'prompt.md'), text)
 }
 
 {
@@ -254,6 +257,10 @@ const writeIntent = (root, slug, text = LOGIN) => {
   const { parent, s2, web } = makeWorkspace()
   writeIntent(s2, 'login')
   writeIntent(web, 'login')
+  // web's login is the later of the two by a clear second: Home offers the newer one to the next session,
+  // and two files written within one tick of the clock carry one time on Windows.
+  const earlier = new Date(Date.now() - 1000)
+  fs.utimesSync(join(s2, 'docs/intent/login/prompt.md'), earlier, earlier)
   writeIntent(web, 'search', LOGIN.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
   const ahead = { s2: advanceOrigin(s2), web: advanceOrigin(web) }
   const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0006' })
@@ -290,9 +297,9 @@ const writeIntent = (root, slug, text = LOGIN) => {
 
   // A parent-folder session still writes its heartbeat (to web only) and tells the model about the intent.
   await engine.timers()
-  const webBeat = readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))
+  const webBeat = readJson(join(web, '.ather/local/lanes', `${sid}.json`))
   expect("the heartbeat lands in web's lanes, naming login", webBeat?.intent === 'login', webBeat)
-  expect('and nowhere in the parent folder or s2', !fs.existsSync(path.join(parent, '.ather')) && !fs.existsSync(path.join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), fs.readdirSync(parent))
+  expect('and nowhere in the parent folder or s2', !fs.existsSync(join(parent, '.ather')) && !fs.existsSync(join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), fs.readdirSync(parent))
   const composed = await engine.compose()
   expect('the lane text reaches the model', composed.sections.some(one => one.id === 'ather-automata:lane'), composed.sections.map(one => one.id))
 
@@ -305,7 +312,7 @@ const writeIntent = (root, slug, text = LOGIN) => {
   await engine.command('ather', 'intent web/login')
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
-  expect("on session end the parent-folder session's heartbeat in web says ended", readJson(path.join(web, '.ather/local/lanes', `${sid}.json`))?.hasEnded === true, readJson(path.join(web, '.ather/local/lanes', `${sid}.json`)))
+  expect("on session end the parent-folder session's heartbeat in web says ended", readJson(join(web, '.ather/local/lanes', `${sid}.json`))?.hasEnded === true, readJson(join(web, '.ather/local/lanes', `${sid}.json`)))
 
   // The next session in the parent folder offers to continue web's login, and Next tracks it there.
   const next = await boot({ root: parent, sessionId: 'harness-session-0007' })
@@ -339,7 +346,7 @@ const issue = (number, title, repo = 'x/y') => ({ number, title, url: `https://g
 const SHIPPED = '# Pay\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: it pays.\n'
 const withPr = (root, slug) => {
   writeIntent(root, slug, SHIPPED)
-  fs.writeFileSync(path.join(root, 'docs/intent', slug, 'progress.md'), '# Progress\n\n- PR: #12\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | t |\n')
+  fs.writeFileSync(join(root, 'docs/intent', slug, 'progress.md'), '# Progress\n\n- PR: #12\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | t |\n')
 }
 const LIST = 'gh issue list --assignee @me --state open --limit 30 --json number,title,url,labels,updatedAt'
 // The issue lists are read in the background, one checkout at a time: wait until each checkout's is kept.
@@ -454,7 +461,7 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   // A session in s2/ with web/ (repos) that has no docs/intent yet: web's issues are still read and listed.
   const { s2, web } = makeWorkspace()
   writeIntent(s2, 'login')
-  fs.rmSync(path.join(web, 'docs'), { recursive: true, force: true })
+  fs.rmSync(join(web, 'docs'), { recursive: true, force: true })
   const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(5, 'Login form', 'AskTinNguyen/web')] } }
   const { engine } = await boot({ root: s2, sessionId: 'harness-session-0012', options: { repos: '../web' }, ghAt })
   engine.setSurfaces(['terminal'])
@@ -470,7 +477,7 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
 // ---------------------------------------------------------------- deciding in place and grouping, over the workspace
 
 const DECISION = '# Findings\n\n## F-1 (2026-10-01, rev 1) | blocking: yes | status: open (director)\n\nOne page or two?\n\n**Options:**\n- A (recommended): one page\n- B: two pages\n'
-const writeFindings = (root, slug, text = DECISION) => fs.writeFileSync(path.join(root, 'docs/intent', slug, 'findings.md'), text)
+const writeFindings = (root, slug, text = DECISION) => fs.writeFileSync(join(root, 'docs/intent', slug, 'findings.md'), text)
 const lastSubmit = engine => {
   const sent = engine.record.submits.at(-1) ?? ''
   return typeof sent === 'string' ? sent : (sent.text ?? '')
@@ -567,8 +574,8 @@ const lastSubmit = engine => {
 {
   // A parent folder holding two clones of one origin, s2/ and s2-b/: `login` is yours in both, each with an open decision.
   const { parent, s2 } = makeWorkspace()
-  fs.rmSync(path.join(parent, 'web'), { recursive: true, force: true })
-  const second = path.join(parent, 's2-b')
+  fs.rmSync(join(parent, 'web'), { recursive: true, force: true })
+  const second = join(parent, 's2-b')
   git(parent, 'clone', '-q', git(s2, 'remote', 'get-url', 'origin'), second)
   git(second, 'config', 'user.name', 'Tin Nguyen')
   git(second, 'config', 'user.email', 'tin@example.com')
@@ -644,7 +651,7 @@ const lastSubmit = engine => {
 {
   // A session in s2/ with a second clone named by the repos option: its own rows stay bare, the clone's carry its folder's name.
   const { parent, s2 } = makeWorkspace()
-  const second = path.join(parent, 's2-b')
+  const second = join(parent, 's2-b')
   git(parent, 'clone', '-q', git(s2, 'remote', 'get-url', 'origin'), second)
   writeIntent(s2, 'login')
   writeIntent(second, 'login')
@@ -664,13 +671,13 @@ const lastSubmit = engine => {
 
 {
   // A parent folder holding two clones of one with-proof repository, web/ and web-b/, `login` yours in both.
-  const parent = fs.mkdtempSync(path.join(BASE, 'work-'))
+  const parent = fs.mkdtempSync(join(BASE, 'work-'))
   const web = makeCheckout(parent, 'web', {
     owner: 'AskTinNguyen',
     name: 'web',
     files: { ...INTENTS, 'package.json': `${JSON.stringify({ name: 'web', scripts: { test: 'node --test' } }, null, 2)}\n`, '.ather/profile.json': `${JSON.stringify(WEB_PROFILE, null, 2)}\n` },
   })
-  const webB = path.join(parent, 'web-b')
+  const webB = join(parent, 'web-b')
   git(parent, 'clone', '-q', git(web, 'remote', 'get-url', 'origin'), webB)
   git(webB, 'config', 'user.name', 'Tin Nguyen')
   git(webB, 'config', 'user.email', 'tin@example.com')
@@ -747,7 +754,7 @@ const lastSubmit = engine => {
   // web/ reached through a link to it, then by its real path: `login` and `pay` yours, `login` tracked and proved through the link.
   const { parent, web } = makeWorkspace()
   for (const slug of ['login', 'pay']) writeIntent(web, slug)
-  const link = path.join(BASE, 'link-web')
+  const link = join(BASE, 'link-web')
   fs.symlinkSync(web, link)
   const id = checkoutId('asktinnguyen/web', web)
   const kept = (engine, prefix) => [...engine.store.keys()].filter(key => key.startsWith(prefix))
@@ -755,7 +762,7 @@ const lastSubmit = engine => {
   await engine.command('ather', 'intent login')
   expect('a session opened through a link tracks login in its own checkout', engine.store.get(`pinned:${sid}`) === 'login', engine.store.get(`pinned:${sid}`))
   await bash(engine, 'npm test', NODE_TEST_PASS)
-  await engine.modelTool({ tool: 'Edit', file_path: path.join(link, 'docs/intent/login/prompt.md'), old_string: '- [ ] A2', new_string: '- [x] A2' })
+  await engine.modelTool({ tool: 'Edit', file_path: join(link, 'docs/intent/login/prompt.md'), old_string: '- [ ] A2', new_string: '- [x] A2' })
   await engine.flush()
   expect("its proof is kept under the checkout's real folder", engine.store.get(`evidence:${id}|login`)?.tests?.state === 'pass' && kept(engine, 'evidence:').length === 1, kept(engine, 'evidence:'))
   expect('and its Continue', engine.store.get(`last:${id}|tinnguyen`) === 'login' && kept(engine, 'last:').length === 1, kept(engine, 'last:'))
@@ -776,7 +783,7 @@ const lastSubmit = engine => {
   await next.engine.end('other')
 
   // The parent folder through a link: web/ is another checkout there, with the same id.
-  const linkParent = path.join(BASE, 'link-work')
+  const linkParent = join(BASE, 'link-work')
   fs.symlinkSync(parent, linkParent)
   const above = await boot({ root: linkParent, sessionId: 'harness-session-0021', kept: engine.store })
   await bash(above.engine, 'cd web && npm test', NODE_TEST_PASS)
@@ -845,9 +852,9 @@ const refresh = async engine => {
 
 {
   // Two clones of one repository whose remotes are not on GitHub: several checkouts, one gh call.
-  const parent = fs.mkdtempSync(path.join(BASE, 'work-'))
+  const parent = fs.mkdtempSync(join(BASE, 'work-'))
   const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: INTENTS })
-  const webB = path.join(parent, 'web-b')
+  const webB = join(parent, 'web-b')
   git(parent, 'clone', '-q', git(web, 'remote', 'get-url', 'origin'), webB)
   const ghAt = { [web]: { fails: NOT_ON_GITHUB }, [webB]: { fails: NOT_ON_GITHUB } }
   const { engine } = await boot({ root: parent, sessionId: 'harness-session-0024', ghAt })
