@@ -60,13 +60,21 @@ async function projectDir(host, root) {
   return project
 }
 
+// The PowerShell search used where there is no grep. Windows PowerShell 5 writes its stdout in the
+// console's OEM code page, so emoji and dashes in a session's title came back as "?"; it writes and
+// reads UTF-8 instead.
+/** @param {string} path @param {string} pattern @param {{ first?: boolean }} [options] @returns {string[]} */
+export function selectStringPs(path, pattern, { first = false } = {}) {
+  const select = `Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${pattern}' -Encoding UTF8 ${first ? '-List' : '-AllMatches'} | ForEach-Object { $_.Matches.Value }`
+  return ['powershell', '-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding = [Text.Encoding]::UTF8; ${select}`]
+}
+
 // The lines of a file matching a pattern (only the first with `first`): grep, or PowerShell where there is none.
 /** @param {Host} host @param {string} path @param {string} pattern @param {{ first?: boolean }} [options] */
 async function grepFile(host, path, pattern, { first = false } = {}) {
   const grep = await host.run(['grep', ...(first ? ['-m1'] : []), '-oE', pattern, path], 15000)
   if (grep && (grep.exitCode === 0 || grep.exitCode === 1)) return grep.stdout
-  const select = `Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${pattern}' ${first ? '-List' : '-AllMatches'} | ForEach-Object { $_.Matches.Value }`
-  const ps = await host.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', select], 20000)
+  const ps = await host.run(selectStringPs(path, pattern, { first }), 20000)
   return ps?.exitCode === 0 ? ps.stdout : ''
 }
 
