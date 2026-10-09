@@ -66,6 +66,8 @@ const KEY = {
   // What gh last said about the PRs intents name: shared by every session on the machine.
   prs: (/** @type {string} */ repo) => (repo ? `prStates:${repo}` : 'prStates'),
   tz: 'tz',
+  // The folders the person added from the pane, for every session on the machine.
+  traced: 'tracedFolders',
   hits: 'gotchaHits',
   ruled: 'gotchaRuled',
   score: 'score',
@@ -256,15 +258,23 @@ export const folderLane = async (io, session, folder) => {
   return { lane: await laneAt(io, root), isOwn: false }
 }
 
-/** @typedef {{ roots: string[], skipped: string[], clones: string[], left: string[], isSure: boolean }} Workspace */
+/** @typedef {{ roots: string[], skipped: string[], named: number, clones: string[], left: string[], isSure: boolean }} Workspace */
 /** @type {Map<string, Promise<Workspace>>} */
 const workspaces = new Map()
 // What the debug log last heard of each workspace: a read that finds the same is not said again.
 /** @type {Map<string, string>} */
 const workspacesSaid = new Map()
 
-// The session's workspace (workspace.mjs), read once per session folder and `repos` option. A read git could
-// not answer in full (not sure) is shared by the callers waiting on it and then forgotten: the next call reads again.
+// The folders kept for the machine (the pane's Repositories), in the order they were added.
+/** @param {Io} io @returns {Promise<string[]>} */
+export const readTraced = async io => {
+  const kept = await io.get(KEY.traced)
+  return Array.isArray(kept) ? kept.filter(one => typeof one === 'string') : []
+}
+
+// The session's workspace (workspace.mjs), read once per session folder and `repos` option, with the folders
+// kept then; this session changing those (addTraced, removeTraced) forgets every read. A read git could not
+// answer in full (not sure) is shared by the callers waiting on it and then forgotten: the next call reads again.
 /** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} log */
 const readWorkspaceOnce = (io, folder, option, log) => {
   const key = `${normalFolder(folder)}\n${option}`
@@ -272,11 +282,13 @@ const readWorkspaceOnce = (io, folder, option, log) => {
   if (cached) return cached
   const { real, worktrees } = io
   const files = { read: io.read, exists: io.exists, list: io.list, ...(worktrees ? { worktrees } : {}), ...(real ? { real: (/** @type {string} */ one) => realFolder(io, one) } : {}) }
-  const reading = readWorkspace(files, folder, option)
-    .catch(() => /** @type {Workspace} */ ({ roots: [], skipped: [], clones: [], left: [], isSure: true }))
+  const reading = readTraced(io)
+    .catch(() => [])
+    .then(kept => readWorkspace(files, folder, option, kept))
+    .catch(() => /** @type {Workspace} */ ({ roots: [], skipped: [], named: 0, clones: [], left: [], isSure: true }))
     .then(found => {
       if (!found.isSure && workspaces.get(key) === reading) workspaces.delete(key)
-      const lines = [...found.skipped.map(skipped => `Ather: ${skipped} (repos) is not in a git checkout; skipped.`), `Ather: workspace ${found.roots.join(', ') || '(no checkout)'}`, ...(found.left.length > 0 ? [`Ather: workspace is full; left out ${found.left.join(', ')}`] : [])]
+      const lines = [...found.skipped.map(skipped => `Ather: ${skipped} (repos or a kept folder) is not in a git checkout; skipped.`), `Ather: workspace ${found.roots.join(', ') || '(no checkout)'}`, ...(found.left.length > 0 ? [`Ather: workspace is full; left out ${found.left.join(', ')}`] : [])]
       if (workspacesSaid.get(key) !== lines.join('\n')) for (const line of lines) log(line)
       workspacesSaid.set(key, lines.join('\n'))
       return found
@@ -291,10 +303,11 @@ const readWorkspaceOnce = (io, folder, option, log) => {
 export const workspace = (io, folder, option, log = () => undefined) => readWorkspaceOnce(io, folder, option, log).then(found => found.roots)
 
 // The same read with which clone each checkout is of, by its folder (normalFolder): a checkout and its worktrees
-// share one. `isSure` false: git could not list every checkout's worktrees, and the next call reads again.
-/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} [log] @returns {Promise<{ roots: string[], clones: Map<string, string>, isSure: boolean }>} */
+// share one. `named`: how many of `roots` came before the worktrees. `isSure` false: git could not list every
+// checkout's worktrees, and the next call reads again.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} [log] @returns {Promise<{ roots: string[], named: number, clones: Map<string, string>, isSure: boolean }>} */
 export const workspaceClones = (io, folder, option, log = () => undefined) =>
-  readWorkspaceOnce(io, folder, option, log).then(found => ({ roots: found.roots, clones: new Map(found.roots.map((root, at) => [normalFolder(root), found.clones[at] ?? root])), isSure: found.isSure }))
+  readWorkspaceOnce(io, folder, option, log).then(found => ({ roots: found.roots, named: found.named, clones: new Map(found.roots.map((root, at) => [normalFolder(root), found.clones[at] ?? root])), isSure: found.isSure }))
 
 /** @param {Io} io */
 const repoOf = io => (io.repo ? io.repo().catch(() => '') : Promise.resolve(''))
@@ -532,6 +545,28 @@ export const noteChanges = (io, slug, lines, at, root) =>
 
 /** @param {Io} io @param {number} offset */
 export const setTz = (io, offset) => serial(() => io.set(KEY.tz, offset))
+
+// Keeps a folder for the machine, once, after those already kept.
+/** @param {Io} io @param {string} folder */
+export const addTraced = (io, folder) =>
+  serial(async () => {
+    const kept = await readTraced(io)
+    if (kept.includes(normalFolder(folder))) return
+    await io.set(KEY.traced, [...kept, normalFolder(folder)])
+    workspaces.clear()
+    changed(io)
+  })
+
+// Takes a folder out of the kept ones. Nothing kept for its checkout is touched.
+/** @param {Io} io @param {string} folder */
+export const removeTraced = (io, folder) =>
+  serial(async () => {
+    const kept = await readTraced(io)
+    if (!kept.includes(normalFolder(folder))) return
+    await io.set(KEY.traced, kept.filter(one => one !== normalFolder(folder)))
+    workspaces.clear()
+    changed(io)
+  })
 
 // Before 0.9 the role was kept per machine under "coach"; it becomes this person's.
 /** @param {Io} io @param {string} me */

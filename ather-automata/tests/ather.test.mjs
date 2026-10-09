@@ -1787,6 +1787,56 @@ describe('the workspace', () => {
     expect(lines).toHaveLength(2)
     expect((await state.lane(memory.io, 'cwd-workspace-test')).root).toBe('R')
   })
+
+  test('the kept folders are read, added to and removed from under one key for the machine, each once', async () => {
+    const { io, store } = memoryIo()
+    expect(await state.readTraced(io)).toEqual([])
+    await state.addTraced(io, '/w/web')
+    await state.addTraced(io, '/w/s2/')
+    await state.addTraced(io, '/w/web')
+    expect(await state.readTraced(io)).toEqual(['/w/web', '/w/s2'])
+    // One key, with no repository, person or session in it.
+    expect([...store.keys()]).toEqual(['tracedFolders'])
+    await state.removeTraced(io, '/w/web')
+    expect(await state.readTraced(io)).toEqual(['/w/s2'])
+    expect([...store.keys()]).toEqual(['tracedFolders'])
+  })
+
+  test("the workspace takes the kept folders after the setting's, before any worktree, inside the limit of 8", async () => {
+    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/kept/.git/HEAD': HEAD, '/w/kept-x/.git': LINK, '/w/s2-x/.git': LINK }
+    /** @type {Record<string, string>} */
+    const lists = { '/w/s2': listed(tree('/w/s2'), tree('/w/s2-x')), '/w/kept': listed(tree('/w/kept'), tree('/w/kept-x')) }
+    const files = { ...disk(paths), worktrees: async (/** @type {string} */ root) => lists[root] ?? '' }
+    // A kept folder the setting names too is in once, at the setting's place.
+    const found = await readWorkspace(files, '/w/s2', '../web', ['/w/kept', '/w/web'])
+    expect(found.roots).toEqual(['/w/s2', '/w/web', '/w/kept', '/w/s2-x', '/w/kept-x'])
+    expect(found.named).toBe(3)
+    // Nine checkouts: the session's, four of the setting's and four kept; the last kept one is left out.
+    /** @type {Record<string, string>} */
+    const many = { '/m/own/.git/HEAD': HEAD }
+    for (const name of ['a', 'b', 'c', 'd', 'k1', 'k2', 'k3', 'k4']) many[`/m/${name}/.git/HEAD`] = HEAD
+    const full = await readWorkspace(disk(many), '/m/own', '../a;../b;../c;/m/d', ['/m/k1', '/m/k2', '/m/k3', '/m/k4'])
+    expect(full.roots).toEqual(['/m/own', '/m/a', '/m/b', '/m/c', '/m/d', '/m/k1', '/m/k2', '/m/k3'])
+    expect(full.left).toEqual(['/m/k4'])
+    expect(full.named).toBe(8)
+  })
+
+  test('a kept folder that is no checkout is skipped by the workspace and stays in the list; a changed list is read again', async () => {
+    const memory = memoryIo()
+    memory.files.set('/ws4/a/.git/HEAD', HEAD)
+    memory.files.set('/ws4/web/.git/HEAD', HEAD)
+    await state.addTraced(memory.io, '/ws4/gone')
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a'])
+    expect(await state.readTraced(memory.io)).toEqual(['/ws4/gone'])
+    // The same list is the same read, whatever the disk now holds.
+    memory.files.set('/ws4/gone/.git/HEAD', HEAD)
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a'])
+    await state.addTraced(memory.io, '/ws4/web')
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a', '/ws4/gone', '/ws4/web'])
+    await state.removeTraced(memory.io, '/ws4/gone')
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a', '/ws4/web'])
+  })
+
   test('each checkout is named by its repository, and only those that would share a name by their folder', () => {
     const at = (/** @type {string} */ root, /** @type {string} */ repo) => ({ root, repo })
     // One checkout, and names that already differ: as before.

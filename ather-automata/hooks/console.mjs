@@ -23,7 +23,7 @@ import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
 import { changeGlyph } from './changes.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncSummary, syncText } from './team.mjs'
-import { checkoutNames, checkoutOf, normalFolder } from './workspace.mjs'
+import { MAX_CHECKOUTS, checkoutNames, checkoutOf, normalFolder, parseRepos } from './workspace.mjs'
 import { withFolders } from './shell.mjs'
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
@@ -31,7 +31,7 @@ import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withD
 import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from './setup.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
-/** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
+/** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding' | 'repos'} Mode */
 /** @typedef {ReturnType<typeof buildHome> & { sync: import('./team.mjs').Sync }} Home */
 /** @typedef {import('./home.mjs').Item} Item */
 /** @typedef {import('./home.mjs').Next} Next */
@@ -84,6 +84,11 @@ const callsOpen = new Set()
 let answerState = { ...FRESH_ANSWERS }
 let findingShown = ''
 let isSearchOpen = false
+// The Repositories view: the workspace's source folders as last read (readSources), and whether its field is open.
+/** @typedef {{ folder: string, from: 'session' | 'setting' | 'kept', count: number, isCheckout: boolean }} Source */
+/** @type {Source[]} */
+let sources = []
+let isFolderOpen = false
 // Per checkout root: what the last read of its team's intents learned (team.mjs reads each part again
 // only when it moved), and where its background fetch stands. Both, and `intents`, change together, in readIntents.
 /** @type {Map<string, import('./team.mjs').TeamCache>} */
@@ -125,6 +130,8 @@ let isPrsReading = false
 let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
 let isAwake = null
+// The console's timers run: its work began in a session that had intents to show.
+let isWorking = false
 // The `repos` option: more checkouts this session works with.
 let repos = ''
 /** @type {{ version: number, at: number, model: Home | null }} */
@@ -346,6 +353,8 @@ export function register(on, options) {
   on('command.run', { command: 'ather' }, async ($, e) => {
     // Setting up is for a repository without intents too, so it is answered before the check below.
     if (/^(setup|init)$/i.test(e.args.trim())) return { text: await setupCommand($) }
+    // So are the folders to list: one of them may be where the intents are.
+    if (/^repos(\s|$)/i.test(e.args.trim())) return { text: await reposCommand($, e.args.trim().slice('repos'.length).trim()) }
     // A checkout without intents is read again: /ather setup may have added them in this session. The
     // question is for a pane that would have nothing: another workspace checkout's intents open it.
     await state.laneAgain(io($), cwd)
@@ -409,6 +418,7 @@ export function register(on, options) {
     isDrawn = true
     void syncMain($)
     if (paneMode === 'intent') await readIntentView($)
+    if (paneMode === 'repos') sources = await readSources($)
     if (paneMode === 'pick' && !isGroupRead) await readGroup($)
     return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
   })
@@ -418,6 +428,7 @@ export function register(on, options) {
       // Only the view resets: this session's answers stay.
       paneMode = 'home'
       isSearchOpen = false
+      isFolderOpen = false
       answerState = { ...answerState, typing: '' }
     }
     return next(e)
@@ -436,6 +447,7 @@ async function openConsole($, folder) {
   issueRetries = 0
   resetTranscripts()
   isAwake = null
+  isWorking = false
   view = { version: -1, at: 0, model: null }
   closedHint = null
   intentSeenAt = Date.now()
@@ -450,6 +462,8 @@ async function openConsole($, folder) {
   answerState = { ...FRESH_ANSWERS }
   findingShown = ''
   isSearchOpen = false
+  sources = []
+  isFolderOpen = false
   teamCaches.clear()
   syncs.clear()
   fetched.clear()
@@ -462,7 +476,7 @@ async function openConsole($, folder) {
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | setup]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | repos [add | remove <folder>] | setup]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -485,6 +499,7 @@ async function startConsoleWork($) {
   if (lane.me !== '') me = lane.me
   pack = lane.pack
   if (!(await hasIntents($))) return
+  isWorking = true
   await refresh($)
   $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
   // A running worker's clock: redrawn every five seconds while one runs, never otherwise.
@@ -1170,7 +1185,7 @@ async function setupQuestion($) {
 }
 
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'setup', 'init']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'repos', 'setup', 'init']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -1484,6 +1499,135 @@ async function searchQuestion($) {
   })
 }
 
+// ---------------------------------------------------------------- the folders listed (Repositories)
+
+// The folder a person typed: absolute, `~/…` from the home folder, or from the session folder.
+/** @param {Engine} $ @param {string} text */
+async function typedFolder($, text) {
+  const typed = text.trim()
+  const userHome = /^~([\\/]|$)/.test(typed) ? await host($).home() : ''
+  return parseRepos(userHome ? `${userHome}${typed.slice(1)}` : typed, (await laneOf($)).root || cwd)[0] ?? ''
+}
+
+// Where a folder really lands, as two names for one checkout compare (workspace.mjs).
+/** @param {Engine} $ @param {string} folder */
+async function landing($, folder) {
+  return normalFolder(await io($).real?.(folder).catch(() => folder) ?? folder).toLowerCase()
+}
+
+// The workspace's source folders in order: the session's own checkout (its folder, when it is in none), the
+// `repos` setting's, then those kept for the machine. `count`: the workspace checkouts each brings, itself and
+// its clone's worktrees.
+/** @param {Engine} $ @returns {Promise<Source[]>} */
+async function readSources($) {
+  const files = io($)
+  const base = (await laneOf($)).root || cwd
+  const lanes = await issueLanes($)
+  const own = await checkoutOf(files, base)
+  const named = [...parseRepos(repos, base).map(folder => ({ folder, from: /** @type {const} */ ('setting') })), ...(await state.readTraced(files)).map(folder => ({ folder, from: /** @type {const} */ ('kept') }))]
+  /** @type {Source[]} */
+  const read = []
+  /** @type {Set<string>} */
+  const brought = new Set()
+  for (const { folder, from } of [{ folder: own ?? normalFolder(base), from: /** @type {const} */ ('session') }, ...named]) {
+    const root = folder === own ? own : await checkoutOf(files, folder)
+    // A session folder in no checkout brings the checkouts directly inside it: those no other folder brings.
+    const isParent = from === 'session' && own === null
+    if (root !== null) brought.add(cloneOf(root))
+    read.push({ folder, from, isCheckout: root !== null || isParent, count: root === null ? 0 : lanes.filter(one => cloneOf(one.root) === cloneOf(root)).length })
+  }
+  const [first] = read
+  if (first && own === null) first.count = lanes.filter(one => !brought.has(cloneOf(one.root)) && normalFolder(one.root) !== normalFolder(base)).length
+  return read
+}
+
+/** @param {Source} one */
+function sourceText(one) {
+  const from = one.from === 'session' ? 'this session' : one.from === 'setting' ? 'the repos setting' : 'added here'
+  return `${from} · ${one.isCheckout ? `${one.count} checkout${one.count === 1 ? '' : 's'}` : 'not a git checkout'}`
+}
+
+// Keeps a folder's checkout for the machine and lists it at once; else says in a line why not.
+/** @param {Engine} $ @param {string} text */
+async function addFolder($, text) {
+  const files = io($)
+  const folder = await typedFolder($, text)
+  if (folder === '') return 'No folder named: /ather repos add <folder>.'
+  const root = await checkoutOf(files, folder)
+  if (root === null) return `Not added: ${folder} is not in a git checkout.`
+  const { roots, named } = await state.workspaceClones(files, (await laneOf($)).root || cwd, repos)
+  const at = await landing($, root)
+  for (const one of roots) if ((await landing($, one)) === at) return `Not added: ${root} is already listed.`
+  if (named >= MAX_CHECKOUTS) return `Not added: ${MAX_CHECKOUTS} checkouts are listed already, the most one session works with.`
+  await state.addTraced(files, root)
+  await applyFolders($)
+  return `Added ${root}. Every session on this PC lists it from its next start.`
+}
+
+// Takes a kept folder out, named by its folder or by its checkout's name in the pane. Nothing on disk or kept for it changes.
+/** @param {Engine} $ @param {string} text */
+async function removeFolder($, text) {
+  const files = io($)
+  const folder = await typedFolder($, text)
+  if (folder === '') return 'No folder named: /ather repos remove <folder>.'
+  const root = await checkoutOf(files, folder)
+  const names = await laneNames($)
+  const found = (await state.readTraced(files)).find(one => normalFolder(one) === folder || normalFolder(one) === root || names.get(normalFolder(one)) === text.trim())
+  if (found === undefined) return `Not removed: ${text.trim()} is not a folder added here.`
+  await state.removeTraced(files, found)
+  await applyFolders($)
+  return `Removed ${found} from the list. Nothing on disk changed.`
+}
+
+// The kept folders changed: the workspace is read again, with what the console kept of it forgotten, and the
+// pane drawn with the checkouts it has now. Names may have changed, so what was open by a key goes back to the list.
+/** @param {Engine} $ */
+async function applyFolders($) {
+  otherRoots = null
+  clones = new Map()
+  const now = new Set((await issueLanes($)).map(one => normalFolder(one.root)))
+  for (const kept of [teamCaches, syncs, fetched]) for (const root of [...kept.keys()]) if (!now.has(normalFolder(root))) kept.delete(root)
+  if (paneMode === 'intent' || paneMode === 'issue' || paneMode === 'finding') paneMode = 'home'
+  intentShown = ''
+  issueShown = ''
+  findingShown = ''
+  callsOpen.clear()
+  answerState = { ...answerState, opened: '', typing: '' }
+  // A session that had no intents to show starts its work now, as after /ather setup: that reads them too.
+  if (!isWorking) {
+    isAwake = null
+    await wake($)
+  } else {
+    await refresh($).catch(() => undefined)
+    void refreshIssues($).catch(() => undefined)
+  }
+  stale()
+  $.ui.invalidate('ui.render')
+}
+
+/** @param {Engine} $ @param {string} rest what follows `/ather repos` */
+async function reposCommand($, rest) {
+  const verb = rest.split(/\s+/)[0]?.toLowerCase() ?? ''
+  const folder = rest.slice(verb.length).trim()
+  await wake($)
+  if (verb === 'add') return addFolder($, folder)
+  if (verb === 'remove') return removeFolder($, folder)
+  if (await hasPane($)) return openPane($, 'repos')
+  return ['Folders Ather lists:', ...(await readSources($)).map(one => `- ${one.folder} (${sourceText(one)})`), 'Add one with /ather repos add <folder>; it is kept for this PC.'].join('\n')
+}
+
+// Where the surface draws no text field: one question, and what is typed under Other is the folder.
+/** @param {Engine} $ */
+async function folderQuestion($) {
+  return ask($, {
+    header: 'Repositories',
+    question: 'Add a folder to list its intents, issues and PRs here. Type its path under Other: absolute, ~/…, or from the session folder.',
+    choices: [{ label: 'Keep the list', description: 'Add nothing.', run: async () => 'Nothing added.' }],
+    fallback: 'Nothing added.',
+    onTyped: text => addFolder($, text),
+  })
+}
+
 // ---------------------------------------------------------------- the pane (terminal)
 
 /** @param {Engine} $ @param {Mode} mode */
@@ -1491,7 +1635,7 @@ async function openPane($, mode) {
   paneMode = mode
   await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
   $.ui.invalidate('ui.render')
-  return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
+  return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : mode === 'repos' ? 'Repositories: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
 }
 
 /** @param {Engine} $ @param {() => Promise<string>} run @param {boolean} keepOpen */
@@ -1752,7 +1896,37 @@ function paneView(el, $, model, columns, surface, crew = []) {
     const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
     rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
     rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
-    rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+    rows.push(section(el, 'back', [Button({ key: 'pick-repos', label: 'Repositories ›', hotkey: hotkeyFor('p'), plain: true, dimColor: true, onPress: show($, 'repos') }), Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
+    return Box({ flexDirection: 'column', children: rows })
+  }
+
+  if (paneMode === 'repos') {
+    rows.push(masthead(el, [label(el, 'brand', 'Repositories', width), Text({ key: 'title', bold: true, children: 'Folders Ather lists' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: 'A folder you add is kept for this PC and listed at once, here and in every new session.' })], surface))
+    rows.push(
+      section(
+        el,
+        'repos-list',
+        sources.map((one, index) => {
+          const detail = sourceText(one)
+          const remove = one.from === 'kept' ? [Button({ key: `repos-remove-${index}`, label: 'Remove', plain: true, dimColor: true, onPress: press($, () => removeFolder($, one.folder), true) })] : []
+          return Box({
+            key: `repos-row-${index}`,
+            flexDirection: 'row',
+            gap: 2,
+            width: '100%',
+            children: [Box({ key: `repos-row-${index}-words`, flexGrow: 1, children: [Text({ key: `repos-folder-${index}`, children: fit(one.folder, Math.max(8, width - detail.length - (remove.length > 0 ? 12 : 2))) })] }), Text({ key: `repos-from-${index}`, color: one.isCheckout ? QUIET : AMBER, children: detail }), ...remove],
+          })
+        }),
+      ),
+    )
+    // Add a folder opens a field (without one, a question whose Other is the path).
+    const field = isFolderOpen && hasInput
+    const add = field
+      ? el.Input({ key: 'repos-add-field', label: 'Folder: ', placeholder: 'a path: absolute, ~/… or from the session folder', value: '', submitLabel: 'add', autoFocus: true, onSubmit: (/** @type {string} */ words) => ((isFolderOpen = false), press($, () => addFolder($, words), true)()) })
+      : Button({ key: 'repos-add', label: '＋ Add a folder', hotkey: hotkeyFor('a'), autoFocus: true, onPress: hasInput ? () => ((isFolderOpen = true), $.ui.invalidate('ui.render')) : press($, () => folderQuestion($), true) })
+    rows.push(section(el, 'repos-add-row', [add]))
+    rows.push(section(el, 'repos-back', [Button({ key: 'repos-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: () => ((isFolderOpen = false), show($, 'pick')()) })]))
+    rows.push(...foot)
     return Box({ flexDirection: 'column', children: rows })
   }
 

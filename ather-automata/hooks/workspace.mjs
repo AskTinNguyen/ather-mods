@@ -1,7 +1,8 @@
 // @ts-check
 // Ather Automata: the checkouts a session works with. The checkout holding the
-// session folder, the folders the `repos` option names, and, for a session opened
-// in a parent folder, its child checkouts; then the worktrees of each one's clone.
+// session folder, the folders the `repos` option names, those kept for the machine,
+// and, for a session opened in a parent folder, its child checkouts; then the
+// worktrees of each one's clone.
 // Pure apart from the files it is given.
 
 /**
@@ -17,7 +18,7 @@
 // How far up a folder is walked to find its checkout, how many checkouts one session works with, and how
 // many with their clones' worktrees.
 const MAX_DEPTH = 12
-const MAX_CHECKOUTS = 8
+export const MAX_CHECKOUTS = 8
 const MAX_WITH_WORKTREES = 24
 
 // A folder as compared and joined: forward slashes, no trailing slash, `.` and `..` folded away
@@ -87,17 +88,18 @@ export const parseWorktrees = text => {
 
 /**
  * The session's checkouts, in order and each once: the one holding the session folder, those the `repos`
- * option names, then, only when the session folder is in none, its child folders that are checkouts, by name
- * (at most 8). After them, the worktrees git names in each (parseWorktrees) that are still checkouts, each
+ * option names, those of the folders kept for the machine (`kept`, state.mjs readTraced), then, only when the
+ * session folder is in none, its child folders that are checkouts, by name (at most 8). After them, the worktrees git names in each (parseWorktrees) that are still checkouts, each
  * once. A checkout is the same one by the folder its path really lands in, under its first name: git names
  * real paths, the session folder may be a link.
- * `skipped`: option folders in no checkout. `clones`: for each root, its clone's main folder, the same for a
+ * `skipped`: option and kept folders in no checkout. `named`: how many of `roots` were found before the
+ * worktrees. `clones`: for each root, its clone's main folder, the same for a
  * checkout and its worktrees. `left`: the checkouts the two limits left out. `isSure` false: git could not
  * say for one of them (`worktrees` gave null), so worktrees may be missing: worth reading again.
- * @param {Files} files @param {string} sessionFolder @param {string} option
- * @returns {Promise<{ roots: string[], skipped: string[], clones: string[], left: string[], isSure: boolean }>}
+ * @param {Files} files @param {string} sessionFolder @param {string} option @param {string[]} [kept]
+ * @returns {Promise<{ roots: string[], skipped: string[], named: number, clones: string[], left: string[], isSure: boolean }>}
  */
-export const readWorkspace = async (files, sessionFolder, option) => {
+export const readWorkspace = async (files, sessionFolder, option, kept = []) => {
   /** @type {string[]} */
   const found = []
   /** @type {string[]} */
@@ -117,7 +119,7 @@ export const readWorkspace = async (files, sessionFolder, option) => {
   }
   const own = await checkoutOf(files, sessionFolder)
   await add(own)
-  for (const folder of parseRepos(option, sessionFolder)) {
+  for (const folder of [...parseRepos(option, sessionFolder), ...kept.map(normalFolder)]) {
     const root = await checkoutOf(files, folder)
     if (root === null) skipped.push(folder)
     await add(root)
@@ -131,6 +133,7 @@ export const readWorkspace = async (files, sessionFolder, option) => {
     }
   }
   const roots = found.slice(0, MAX_CHECKOUTS)
+  const named = roots.length
   const left = found.slice(MAX_CHECKOUTS)
   /** @type {Map<string, string>} where a folder lands → its clone */
   const cloneOf = new Map()
@@ -155,7 +158,7 @@ export const readWorkspace = async (files, sessionFolder, option) => {
     }
   }
   const clones = roots.map(root => cloneOf.get(lands.get(root) ?? '') ?? root)
-  return { roots, skipped, clones, left, isSure }
+  return { roots, skipped, named, clones, left, isSure }
 }
 
 /**
