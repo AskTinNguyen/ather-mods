@@ -3,7 +3,7 @@
 - Working under rev: 3
 - Worker: `Claude Opus 5.5 builders, one per step; Codex gpt-6.1-sol reviews each step; the coordinator commits`
 - Current step: none
-- Next step: none; the coordinator merges PR #30 once it can merge (D13)
+- Next step: none; PR #30 is merged (merge commit c06fc0a)
 - PR: #20, #30
 
 ## Acceptance
@@ -36,6 +36,7 @@
 - S8 (rev 3, 2026-10-09): the prompt names `SETUP.md` in the plugin's folder and, for the skill or the readme, the public repository; `SETUP.md` rewritten around that repository; `profile.example.json` moved beside it; the zip, the plugin's copies of the skill, the readme and the pointer, `dev/pack-templates.mjs` and the templates step removed; a pointer at `docs/intent/README.md` counts; Paseo's copy synced. Evidence: commit 3572c94; review found 2, 1 accepted (step 2 of `SETUP.md` named the clone where none is made; fixed), 1 rejected, approved; unit 203/203, e2e 300/352, FAIL set equals base; validate passed; plugin test 3 pass, 0 fail. Acceptance: A1, A2, A3, A4, A5, A6.
 - S9 (rev 3, 2026-10-09): the live run on Claude Code 2.1.295, on a scratch repository with nothing and on one that already had the skill and the contract. Evidence: the A7 row. Acceptance: A7.
 - S10 (rev 3, 2026-10-09): release 0.2.4: both manifests, the Changes line, the three READMEs. Evidence: commit 94b8857; review found 2, 1 accepted (the README said such a repository gets only the profile and the ignore line; the pointer can be missing too), 1 rejected (release notes keep naming what they shipped), approved; gates as in the A8 row. Acceptance: A8.
+- S11 (rev 3, 2026-10-09): PR #30 merged by the coordinator once it could merge (D13): mergeable and clean, no checks or rulesets configured, `main` unchanged since the base. Then the two type-checks the gates had skipped, on the merged code. Evidence: merge commit c06fc0a; `main` at version 0.2.4 with no zip tracked. The mod's hooks under `tsc` 5.6 against the engine's types (from a session that loaded the mod on Claude Code 2.1.295): two errors, both in `hooks/watch.mjs` line 126 (TS2322 and TS2589), the same two the base commit 108ad08 gives; none in `setup.mjs`. `paseo/ather-automata` after `npm ci`: `tsc --noEmit` → exit 0. Acceptance: none (all met).
 
 ## Reconciliations
 
