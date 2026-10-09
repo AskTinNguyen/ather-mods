@@ -816,10 +816,11 @@ async function setupCommand($) {
   return `Asked the session to set up intents here. To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
 }
 
-// /ather where there are no intents: one question, never the setup itself.
+// /ather where there are no intents: one question, never the setup itself. Unanswered, it says where
+// Ather works and names the way in.
 /** @param {Engine} $ */
 async function setupQuestion($) {
-  const { notHere } = (await laneOf($)).pack
+  const notHere = `${(await laneOf($)).pack.notHere} /ather setup adds the structure.`
   return ask($, {
     header: 'Intents',
     question: 'This repository has no intents yet (no docs/intent folder). Set them up?',

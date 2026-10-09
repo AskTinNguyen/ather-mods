@@ -94,7 +94,7 @@ export const core = {
     pane: 'The session keeps working; merges and pushes to main wait for your review.',
   },
   statusWhat: 'this session',
-  notHere: 'Ather Automata works in repositories with intents (a docs/intent folder); none here. /ather setup adds the structure.',
+  notHere: 'Ather Automata works in repositories with intents (a docs/intent folder); none here.',
   gates: [],
   production: null,
 }
