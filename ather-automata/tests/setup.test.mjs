@@ -6,6 +6,7 @@ import fs from 'fs'
 
 import { parseIntent } from '../hooks/model.mjs'
 import { makeWebPack } from '../hooks/packs/index.mjs'
+import * as state from '../hooks/state.mjs'
 import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from '../hooks/setup.mjs'
 
 const BUNDLE = new URL('../templates/intent-setup/', import.meta.url)
@@ -188,5 +189,60 @@ describe('the bundle as it ships', () => {
     /** @param {URL} dir @returns {string[]} */
     const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => (entry.isDirectory() ? walk(new URL(`${entry.name}/`, dir)) : [fs.readFileSync(new URL(entry.name, dir), 'utf8')]))
     for (const text of walk(BUNDLE)) expect(text).not.toMatch(/\bPIE\b|Editor|\bS2\b/)
+  })
+})
+
+describe('a repository set up while the session runs', () => {
+  const PROFILE = '{"version":1,"pack":"web","gates":[{"id":"tests","command":"npm run zz-proof","proofs":["tests"]}],"areas":["app","api"]}'
+  /** The checkout as state.mjs reads it: `files` by path under the root, a folder there when a file is under it. @param {string} root @param {Record<string, string>} files @param {string} user */
+  const checkout = (root, files, user) =>
+    /** @type {any} */ ({
+      read: async (/** @type {string} */ path) => files[path.slice(root.length + 1)] ?? null,
+      exists: async (/** @type {string} */ path) => Object.keys(files).some(name => name === path.slice(root.length + 1) || name.startsWith(`${path.slice(root.length + 1)}/`)),
+      list: async () => Object.keys(files).filter(name => !name.includes('/')).map(name => ({ name, kind: 'file' })),
+      sessionId: async () => 'setup-session',
+      root: async () => root,
+      gitUser: async () => user,
+    })
+  /** @param {Record<string, string>} files */
+  const setUp = files => Object.assign(files, { 'docs/intent/README.md': '# Intents\n\n## Areas\n', '.ather/profile.json': PROFILE })
+  /** @param {{ pack: import('../hooks/packs/index.mjs').Pack }} lane */
+  const gates = lane => lane.pack.gates.map(gate => gate.command)
+
+  test('with no git user name the checkout is read again each time: after the setup its pack is the profile\'s, and whoever asked is told once', async () => {
+    /** @type {Record<string, string>} */
+    const files = { 'package.json': '{}' }
+    const io = checkout('/setup/nameless', files, '')
+    /** @type {string[][]} */
+    const told = []
+    state.onSetUp('test', pack => void told.push([...pack.areas]))
+    const before = await state.lane(io, '/setup/nameless')
+    expect([before.isS2, gates(before)]).toEqual([false, []])
+    setUp(files)
+    const after = await state.lane(io, '/setup/nameless')
+    expect([after.isS2, gates(after), [...after.pack.areas]]).toEqual([true, ['npm run zz-proof'], ['app', 'api']])
+    await state.lane(io, '/setup/nameless')
+    expect(told).toEqual([['app', 'api']])
+  })
+  test('a kept reading without intents is read again by laneAgain once the folder is there, and whoever asked is told the new pack once', async () => {
+    /** @type {Record<string, string>} */
+    const files = { 'package.json': '{}' }
+    const io = checkout('/setup/named', files, 'Tin Nguyen')
+    /** @type {string[][]} */
+    const told = []
+    state.onSetUp('test', pack => void told.push(pack.gates.map(gate => gate.command)))
+    expect((await state.laneAgain(io, '/setup/named')).isS2).toBe(false)
+    setUp(files)
+    expect(gates(await state.lane(io, '/setup/named'))).toEqual([])
+    expect(gates(await state.laneAgain(io, '/setup/named'))).toEqual(['npm run zz-proof'])
+    await state.laneAgain(io, '/setup/named')
+    expect(told).toEqual([['npm run zz-proof']])
+  })
+  test('a repository that runs intents from the start is read once, and nobody is told', async () => {
+    const io = checkout('/setup/runs', setUp({ 'package.json': '{}' }), 'Tin Nguyen')
+    let told = 0
+    state.onSetUp('test', () => void (told += 1))
+    const first = await state.lane(io, '/setup/runs')
+    expect([first.isS2, gates(first), await state.laneAgain(io, '/setup/runs') === first, told]).toEqual([true, ['npm run zz-proof'], true, 0])
   })
 })

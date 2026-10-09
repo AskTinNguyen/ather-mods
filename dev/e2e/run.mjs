@@ -1571,13 +1571,20 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   expect('setup: the prompt names the web pack beside a package.json', / web\b/.test(chosen.sent[0] ?? '') && !/unreal/.test(chosen.sent[0] ?? ''), chosen.sent)
 
   // The session's writing, done here: the five pieces, with a profile whose gate no default names.
-  put(root, '.agents/skills/intent/SKILL.md', '---\nname: intent\ndescription: Run a feature as an intent.\n---\n')
-  put(root, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n- `api`: the server.\n')
-  put(root, '.ather/profile.json', JSON.stringify({ version: 1, pack: 'web', gates: [{ id: 'tests', command: 'npm run zz-proof', proofs: ['tests'], proves: 'the unit tests' }], mergePolicy: 'hold', areas: ['app', 'api'] }))
-  put(root, '.gitignore', 'node_modules/\n.ather/local/\n')
-  put(root, 'AGENTS.md', 'Features run as intents: read `.agents/skills/intent/SKILL.md`.\n')
+  const write = folder => {
+    put(folder, '.agents/skills/intent/SKILL.md', '---\nname: intent\ndescription: Run a feature as an intent.\n---\n')
+    put(folder, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n- `api`: the server.\n')
+    put(folder, '.ather/profile.json', JSON.stringify({ version: 1, pack: 'web', gates: [{ id: 'tests', command: 'npm run zz-proof', proofs: ['tests'], proves: 'the unit tests' }], mergePolicy: 'hold', areas: ['app', 'api'] }))
+    put(folder, '.gitignore', 'node_modules/\n.ather/local/\n')
+    put(folder, 'AGENTS.md', 'Features run as intents: read `.agents/skills/intent/SKILL.md`.\n')
+  }
+  // The areas the registered profile tool lets the model record.
+  const toolAreas = one => one.record.toolSpecs.get('profile')?.inputSchema?.properties?.area?.enum ?? []
+  const areasBefore = toolAreas(engine)
+  write(root)
   const opened = await run(engine, [])
   expect('setup: with the five pieces written, /ather in the same session opens Home and asks no setup question', opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather'), [opened, engine.record.opens])
+  expect("setup: the profile tool is registered again with the new profile's areas (app, api), which it did not list before", toolAreas(engine).join(',') === 'app,api' && areasBefore.join(',') !== 'app,api' && engine.record.registeredTools.join(',') === 'status,away,profile,status,away,profile', [areasBefore, toolAreas(engine), engine.record.registeredTools])
   const tree = JSON.stringify(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), (key, value) => (typeof value === 'function' ? undefined : value))
   expect('setup: Home is drawn for the repository, with the tour as the next step', /tour/i.test(tree), tree.slice(0, 600))
   const role = await run(engine, [], 'ather', 'skip')

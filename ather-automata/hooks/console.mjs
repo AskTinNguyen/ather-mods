@@ -165,19 +165,13 @@ function laneOf($) {
   return state.lane(io($), cwd)
 }
 
-// For /ather: a checkout without intents is read again, since /ather setup may have added them in this
-// session. When it has them now, the console's work, skipped at the start, begins with the next wake.
-/** @param {Engine} $ */
-async function laneNow($) {
-  const before = await laneOf($)
-  if (before.isS2) return before
-  const lane = await state.laneAgain(io($), cwd)
-  if (lane.isS2) isAwake = null
-  return lane
-}
-
 /** @param {import('claude-code').On} on */
 export function register(on) {
+  // A repository set up in this session: the console's work, skipped at the start, begins with the next wake.
+  state.onSetUp('console', () => {
+    isAwake = null
+  })
+
   // The desktop app runs sessions the way the SDK does: not interactive at start, no surface yet.
   // So the commands are registered in every session, and the work behind the console (reading
   // intents and issues on timers) starts the first time someone draws or uses it, never in a
@@ -210,7 +204,8 @@ export function register(on) {
   on('command.run', { command: 'ather' }, async ($, e) => {
     // Setting up is for a repository without intents too, so it is answered before the check below.
     if (/^(setup|init)$/i.test(e.args.trim())) return { text: await setupCommand($) }
-    if (!(await laneNow($)).isS2) return { text: await setupQuestion($) }
+    // A checkout without intents is read again: /ather setup may have added them in this session.
+    if (!(await state.laneAgain(io($), cwd)).isS2) return { text: await setupQuestion($) }
     await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }

@@ -75,6 +75,9 @@ export function register(on, options) {
     try {
       const { me, root, isS2, pack } = await laneOf($)
       await registerTools($, pack)
+      // A repository set up in this session has a new pack: the tools are registered again under the
+      // same names, which replaces them, so they carry its areas, roles and held kinds.
+      state.onSetUp('watch', setUp => registerTools($, setUp))
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
