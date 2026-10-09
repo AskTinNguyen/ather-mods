@@ -1712,6 +1712,8 @@ describe('one pane over the workspace', () => {
   const el = Object.fromEntries(['Box', 'Text', 'Button', 'Svg', 'Input'].map(name => [name, node(name)]))
   /** @param {any} tree @param {(one: any) => boolean} test @returns {any[]} */
   const all = (tree, test) => (!tree || typeof tree !== 'object' ? [] : [...(test(tree) ? [tree] : []), ...(tree.children ?? []).flatMap((/** @type {any} */ child) => all(child, test))])
+  /** @param {any} node @returns {string} */
+  const textOf = node => (typeof node === 'string' ? node : (node?.children ?? []).map(textOf).join(''))
   const keysOf = (/** @type {any} */ tree) => all({ children: tree }, one => typeof one.props?.key === 'string').map(one => one.props.key)
   const repeated = (/** @type {string[]} */ keys) => keys.filter((key, at) => keys.indexOf(key) !== at)
   const look = (/** @type {boolean} */ isClicked) => ({ isClicked, width: 100, now: NOON, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined })
@@ -1721,13 +1723,15 @@ describe('one pane over the workspace', () => {
     const cols = { count: 3, age: 2, owner: 0 }
     const draw = (/** @type {any} */ one, /** @type {boolean} */ isClicked) => workLine(el, { key: `pick-${one.id}`, cells: rowCells(one, NOON, false), cols, width: 100, ownerColour: '#ffffff', onPress: () => undefined, isClicked })
     const mainOf = (/** @type {any} */ row) => all(row, one => /-main$/.test(one.props?.key ?? ''))[0]
-    for (const isClicked of [false, true]) {
-      const main = mainOf(draw(named, isClicked))
-      // Inside the title's box, after the warning.
-      expect(main.children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:web/login', 'pick-intent:web/login-warn', 'pick-intent:web/login-repo'])
-      expect(main.children[2].children.join('').trim()).toBe('web')
-      expect(mainOf(draw(plain, isClicked)).children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:board'])
-    }
+    // The terminal: inside the title's box, after the warning.
+    const main = mainOf(draw(named, false))
+    expect(main.children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:web/login', 'pick-intent:web/login-warn', 'pick-intent:web/login-repo'])
+    expect(main.children[2].children.join('').trim()).toBe('web')
+    // The desktop: the title and its warning give way in a box that shrinks and clips; the name's box does not shrink.
+    const [title, repo] = mainOf(draw(named, true)).children
+    expect([title.props.flexShrink, title.props.overflow, title.children.map((/** @type {any} */ child) => child.props.key)]).toEqual([1, 'hidden', ['pick-intent:web/login', 'pick-intent:web/login-warn']])
+    expect([repo.props.key, repo.props.flexShrink, textOf(repo).trim()]).toEqual(['pick-intent:web/login-repo', 0, 'web'])
+    for (const isClicked of [false, true]) expect(mainOf(draw(plain, isClicked)).children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:board'])
   })
 
   const CALLS = `# Findings\n\n## F-1 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nDrops only, or a full respawn?\n\n**Options:**\n- A (recommended): drops only\n- B: a full respawn\n\n## F-2 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nWhich pool size?\n`
@@ -1795,7 +1799,7 @@ describe('one pane over the workspace', () => {
     const draw = (isClicked, groupBy, query, folded = new Set()) => workGroups(el, look(isClicked), { work, shown: filterWork(work, query), query, sort: 'recent', groupBy, areas: ['Combat', 'Tools'], folded, me: 'Tin Nguyen', onFold: key => () => void (folded.has(key) ? folded.delete(key) : folded.add(key)), issuesFoot: [] })
     const rows = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Button' && /^pick-intent:/.test(one.props.key)).map(one => one.props.key.slice('pick-'.length))
     const heads = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Text' && /^(sub|park)-/.test(one.props.key ?? '')).map(one => one.props.children)
-    const repos = (/** @type {any} */ tree) => rows(tree).map(id => [id.slice('intent:'.length).split('/')[0], all({ children: tree }, one => one.props?.key === `pick-${id}-repo`).map(one => one.children.join('').trim()).join('|')])
+    const repos = (/** @type {any} */ tree) => rows(tree).map(id => [id.slice('intent:'.length).split('/')[0], all({ children: tree }, one => one.props?.key === `pick-${id}-repo`).map(one => textOf(one).trim()).join('|')])
     for (const isClicked of [false, true]) {
       for (const groupBy of ['person', 'area', 'stage', 'none']) {
         // A search that keeps everything: nothing starts folded, and every head counts "x of y".

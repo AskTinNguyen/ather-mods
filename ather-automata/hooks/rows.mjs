@@ -108,13 +108,18 @@ const deskLine = (el, row) => {
     ...(cols.age > 0 ? [column('age', cols.age + 1, el.Text({ key: `${row.key}-age-text`, color: QUIET, children: cells.age }), true)] : []),
     ...(cols.owner > 0 ? [column('owner', cols.owner, el.Text({ key: `${row.key}-owner-text`, color: row.ownerColour, wrap: 'truncate', children: cells.owner }))] : []),
   ]
+  const title = [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : [])]
+  // With a repository's name the title alone gives way in a narrow pane: the name is what tells two checkouts' rows of one intent apart.
+  const main = cells.repo
+    ? [el.Box({ key: `${row.key}-title`, flexDirection: 'row', flexShrink: 1, overflow: 'hidden', children: title }), el.Box({ key: `${row.key}-repo`, flexShrink: 0, paddingRight: 1, children: [el.Text({ key: `${row.key}-repo-text`, color: QUIET, children: ` ${cells.repo}` })] })]
+    : title
   return el.Box({
     key: `row-${row.key}`,
     flexDirection: 'row',
     width: '100%',
     alignItems: 'center',
     children: [
-      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : []), ...(cells.repo ? [el.Text({ key: `${row.key}-repo`, color: QUIET, children: ` ${cells.repo}` })] : [])] }),
+      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: main }),
       el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, alignItems: 'center', children: columns }),
     ],
   })
