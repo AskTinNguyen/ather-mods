@@ -67,6 +67,13 @@ export type JudgeFacts = {
   hasEditor: boolean
   hasBuild: boolean
   transcript: string
+  /** A66: the Editor pid the lock line names (null: none written yet), and whether it still runs. */
+  lockPid?: number | null
+  lockPidRunning?: boolean
+  /** A67: the kinds of the holder's running agents. */
+  agentKinds?: readonly string[]
+  /** A69: false when the processes then cannot be reconstructed (a replay of a past incident). */
+  procsKnown?: boolean
 }
 
 const minAgo = (now: number, at: number | null): string => (at === null ? 'unknown' : `${Math.max(0, Math.round((now - at) / 60_000))} min ago`)
@@ -80,13 +87,17 @@ export const hintOf = (f: JudgeFacts, events: readonly TranscriptEvent[]): { ver
   const answered = new Set(events.flatMap(e => e.results))
   const open = events.flatMap(e => e.tools).filter(t => t.id && !answered.has(t.id))
   if (f.liveness === 'gone' && !f.hasEditor && !f.hasBuild) return { verdict: 'stuck-or-crashed', evidence: [`the session is gone (no a5r heartbeat, no live Ather lane); last transcript event ${minAgo(f.now, lastAt)}`, 'no Unreal Editor or build process runs'] }
+  const died = typeof f.lockPid === 'number' && f.lockPidRunning === false ? [`the holder's Editor (pid ${f.lockPid}) is no longer running`] : []
   const ask = open.find(t => t.name === 'AskUserQuestion')
   if (ask) return { verdict: 'waiting-on-Hai', evidence: ['an AskUserQuestion is open (no answer in the transcript)', `last transcript event ${minAgo(f.now, lastAt)}`] }
   if (last && last.role === 'assistant' && !last.tools.length && /\?\s*$/.test(last.text)) return { verdict: 'waiting-on-Hai', evidence: [`its last message asks: "${last.text.slice(-140)}"`, `${minAgo(f.now, lastAt)}`] }
   const running = open.filter(t => t.name !== 'AskUserQuestion')
-  if (f.hasEditor || f.hasBuild || running.length > 0 || (lastAt !== null && f.now - lastAt < 10 * 60_000))
+  // A69: a tool call left open counts as work only while the transcript moved in the last 30 min (a call open for hours
+  // with nothing running is a stopped turn, not a long one).
+  const isFresh = lastAt !== null && f.now - lastAt < 30 * 60_000
+  if (f.hasEditor || f.hasBuild || (running.length > 0 && isFresh) || (lastAt !== null && f.now - lastAt < 10 * 60_000))
     return { verdict: 'working', evidence: [f.hasBuild ? 'a build process runs' : f.hasEditor ? 'an Unreal Editor runs' : running.length ? `a tool is still running: ${running.map(t => t.name).join(', ')}` : `transcript active ${minAgo(f.now, lastAt)}`, `last transcript event ${minAgo(f.now, lastAt)}`] }
-  if (lastAt !== null && f.now - lastAt >= 30 * 60_000) return { verdict: 'stuck-or-crashed', evidence: [`no transcript event for ${minAgo(f.now, lastAt).replace(' ago', '')}`, 'nothing runs and no question is open'] }
+  if (lastAt !== null && f.now - lastAt >= 30 * 60_000) return { verdict: 'stuck-or-crashed', evidence: [`no transcript event for ${minAgo(f.now, lastAt).replace(' ago', '')}`, ...died, 'nothing runs and no question is open'] }
   return { verdict: 'unsure', evidence: [lastAt === null ? 'no readable transcript' : `last transcript event ${minAgo(f.now, lastAt)}`] }
 }
 
@@ -108,8 +119,11 @@ export const judgePrompt = (f: JudgeFacts, hint: { verdict: Verdict; evidence: s
   [
     `Incident: ${f.why}.`,
     `Holder: ${f.lane || 'unknown lane'} (session ${f.session || f.id8}), holding the ${f.kind === 'editor' ? 'Editor' : 'sync'} since ${new Date(f.since).toISOString()}${f.end ? `, lease end ${new Date(f.end).toISOString()}` : ''}.`,
-    `Its session: ${f.liveness}; last turn ${minAgo(f.now, f.lastTurnAt)}; background agents running: ${f.agents ?? 'unknown'}.`,
-    `Processes on the machine now: ${f.procs.length ? [...f.procs].sort().join(', ') : 'none of the watched ones'} (Unreal Editor running: ${f.hasEditor ? 'yes' : 'no'}; build or game running: ${f.hasBuild ? 'yes' : 'no'}).`,
+    `Its session: ${f.liveness}; last turn ${minAgo(f.now, f.lastTurnAt)}; background agents running: ${f.agents ?? 'unknown'}${f.agentKinds?.length ? ` (${f.agentKinds.join(', ')})` : ''}.`,
+    f.procsKnown === false
+      ? 'Processes on the machine then: unknown (not reconstructible).'
+      : `Processes on the machine now: ${f.procs.length ? [...f.procs].sort().join(', ') : 'none of the watched ones'} (Unreal Editor running: ${f.hasEditor ? 'yes' : 'no'}; build or game running: ${f.hasBuild ? 'yes' : 'no'}).`,
+    `Editor pid in the lock line: ${typeof f.lockPid === 'number' ? `${f.lockPid} (${f.lockPidRunning === undefined ? 'unknown whether it runs' : f.lockPidRunning ? 'still running' : "no longer running: the holder's Editor died or was closed"})` : f.lockPid === null ? 'none (no Editor recorded for this lease yet)' : 'unknown'}.`,
     `Transcript file: ${f.transcript || 'not found'}.`,
     `A rule's first reading: ${hint.verdict} (${hint.evidence.join('; ')}). Confirm or correct it.`,
     '',

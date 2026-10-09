@@ -98,8 +98,11 @@ export type SessionFile = {
   lastTurnAt?: number
   /** A57: passes Hai gave with `/a5r pass` (an intent slug, or `#<PR>`), each used once by the next gated call. */
   passes?: string[]
-  /** A62: how many background agents this session ran at its last save (for orchestrate.log). */
+  /** A62: how many background agents this session ran at its last save (for orchestrate.log). A67: written every
+   * minute; a holder with a running agent is not idle. */
   agents?: number
+  /** A67: the kinds of those running agents (their agent types). */
+  agentKinds?: string[]
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
@@ -123,7 +126,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}) }
   } catch {
     return null
   }
@@ -301,7 +304,8 @@ export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lane
   // holder past its end keeps its lease and the overrun notice.
   if (now >= t.end + LAPSE_MS) return livenessOf(lock.id8, x.files, x.lanes, now) === 'gone' ? { kind: 'lapsed', at: now, by: '', since: t.since, end: t.end } : null
   const lane = x.lanes.find(l => l.sessionId.toLowerCase().startsWith(lock.id8))
-  const isUnseen = typeof holder?.lastTurnAt === 'number' && holder.lastTurnAt < t.since && (lane?.lastActiveAt ?? 0) < t.since
+  // A67: a holder working through a background agent is not idle.
+  const isUnseen = typeof holder?.lastTurnAt === 'number' && holder.lastTurnAt < t.since && (lane?.lastActiveAt ?? 0) < t.since && (holder.agents ?? 0) === 0
   if (isUnseen && now - t.since >= UNSEEN_MS && x.waiting.some(f => f.id8 !== lock.id8)) return { kind: 'unseen', at: now, by: '', since: t.since, end: t.end }
   return null
 }

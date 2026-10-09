@@ -124,6 +124,7 @@ let turnSignalAt = 0
 const WAKE_WAIT_MS = 30_000
 let mergeHead = false // A61: .git/MERGE_HEAD exists in the shared checkout (read every minute)
 let agentsNow: number | null = null // A62: this session's running background agents at the last minute
+let agentKindsNow: string[] = [] // A67: their kinds
 let tickChain: Promise<void> = Promise.resolve()
 let lastEditorUseAt = 0
 let isPieRunning = false // this session started PIE and no stop was seen
@@ -460,7 +461,7 @@ function followClear($: Engine, opts: Opts, oldSid: string, tries: number): void
 async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
-  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -744,7 +745,9 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
   ramStep(opts, now)
-  agentsNow = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running').length // A62
+  const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running') // A62, A67
+  agentsNow = running.length
+  agentKindsNow = running.map(a => a.type || 'agent')
   await saveMe($, opts, now)
   showMachine($, now)
   await deliverIdle($, opts)
@@ -784,6 +787,7 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
     for (const f of peers)
       for (const a of f.yieldAsks)
         if (a.holder === me8 && a.via === 'file' && a.at >= h.since - 60_000 && now - a.at < YIELD_EVERY_MS) push({ id: noticeIds.yield(f.id8, a.at), text: NOTICES.yield(f.lane, a.minutes), isActionable: true })
+    await notePid($, opts, false)
     decision = { kind: 'mine' }
     return
   }
@@ -934,7 +938,7 @@ function incidentOf(now: number): { kind: 'editor' | 'sync'; id8: string; lane: 
     const t = lockTimes(lock, now)
     const f = all.find(x => x.id8 === lock.id8)
     if (t) {
-      const silent = typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS
+      const silent = typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS && (f.agents ?? 0) === 0 // A67
       if (now > t.end || silent)
         return { kind: 'editor', id8: lock.id8, lane: lock.lane, session: f?.session ?? '', since: t.since, end: t.end, why: now > t.end ? `the Editor lease ended ${clockOf(t.end)} and is still held` : `the Editor holder has run no turn for ${Math.round((now - (f?.lastTurnAt ?? now)) / 60_000)} min while holding` }
     }
@@ -943,7 +947,7 @@ function incidentOf(now: number): { kind: 'editor' | 'sync'; id8: string; lane: 
   const phase = phaseOf(s, now)
   if (s && (phase === 'cutoff' || phase === 'frozen') && s.holder.id8 !== me8) {
     const f = all.find(x => x.id8 === s.holder.id8)
-    if (typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS)
+    if (typeof f?.lastTurnAt === 'number' && now - f.lastTurnAt >= JUDGE_IDLE_MS && (f.agents ?? 0) === 0) // A67
       return { kind: 'sync', id8: s.holder.id8, lane: s.holder.lane, session: s.holder.session || f.session, since: s.at, end: s.hardEnd, why: `the sync holder has run no turn for ${Math.round((now - f.lastTurnAt) / 60_000)} min in the ${phase}` }
   }
   return null
@@ -961,7 +965,7 @@ async function judgeStep($: Engine, opts: Opts, now: number): Promise<void> {
   const dir = await recordsDir($, opts)
   const transcript = dir && inc.session ? `${dir}/${inc.session}.jsonl` : ''
   const events = parseTail(await transcriptTail($, transcript))
-  const facts: JudgeFacts = { now, ...inc, liveness: livenessOf(inc.id8, all, lanes, now), lastTurnAt: f?.lastTurnAt ?? null, agents: f?.agents ?? null, procs: (fresh?.procs ?? []).map(p => p.name), hasEditor: unrealPids(fresh).length > 0, hasBuild: buildProcs(fresh).length > 0, transcript }
+  const facts: JudgeFacts = { now, ...inc, liveness: livenessOf(inc.id8, all, lanes, now), lastTurnAt: f?.lastTurnAt ?? null, agents: f?.agents ?? null, procs: (fresh?.procs ?? []).map(p => p.name), hasEditor: unrealPids(fresh).length > 0, hasBuild: buildProcs(fresh).length > 0, transcript, agentKinds: f?.agentKinds ?? [], ...(inc.kind === 'editor' ? { lockPid: lock.pid, lockPidRunning: lock.pid !== null && Boolean(fresh?.procs.some(p => p.pid === lock.pid)) } : {}) }
   const hint = hintOf(facts, events)
   const ran = await $.agent.spawn({ subagentType: JUDGE_AGENT, description: `Judge ${inc.lane || inc.id8}`, prompt: judgePrompt(facts, hint, digestOf(events)) }).catch(err => ({ deny: String(err) }))
   // The spawn names its agent; where it does not, the session's agent list does (the newest judge this mod started).
@@ -1019,6 +1023,22 @@ function orchestrateCard(el: { Box: (p: Record<string, unknown>) => unknown; Tex
 /** A55: when this session's main loop last ran (written with its file at the next save). */
 async function markTurn($: Engine): Promise<void> {
   if (me) me = { ...me, lastTurnAt: await $.clock.now() }
+}
+
+/** A66: the holder writes the Editor that actually runs into its HELD line (read-compare-write; the holder only): at
+ * its minute when the shared reading shows an UnrealEditor the line does not name, and right after it launches the
+ * Editor or makes an Editor MCP call (`fresh`: a reading of its own). A line whose pid still runs is left alone. */
+async function notePid($: Engine, opts: Opts, fresh: boolean): Promise<void> {
+  if (!me || !holdsLock() || !me.holding) return
+  const reading = fresh ? ((await freshProbe($, opts)) ?? probe) : probe
+  if (!reading) return
+  if (lock.pid !== null && reading.procs.some(p => p.pid === lock.pid)) return
+  const pid = editorPid(reading)
+  if (pid === null || pid === lock.pid) return
+  const w = me.want
+  const h = me.holding
+  const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid, end: h.end, mode: w?.mode ?? (lock.mode === 'unattended' ? 'unattended' : 'interactive'), pausable: w?.pausable ?? lock.pausable, nextSafe: w?.nextSafe ?? 'after save', note: lock.note || w?.what || 'Editor work' })
+  await writeLock($, opts, line)
 }
 
 async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number | null }, now: number): Promise<void> {
@@ -2049,9 +2069,11 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     await readWorld($, opts) // the lock and who waits, as they are now
     if (!holdsLock() || !me) return blocked('Editor', 'the lock does not name this session', 'ask for a slot with action request')
     const h = me.holding ?? { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? now, extended: 0 }
-    if (now >= h.end) return blocked('Editor', `the lease ended at ${clockOf(h.end)}; an extension is asked before the end`, 'release now and ask again for the rest')
+    // A68: past its end a lease may still be extended while nobody waits; with someone waiting it may not.
+    const queued = queueOf([me, ...peers], lanes, now, syncFile).length
+    if (now >= h.end && queued > 0) return blocked('Editor', `the lease ended at ${clockOf(h.end)} and ${queued} session${queued === 1 ? '' : 's'} wait${queued === 1 ? 's' : ''}`, 'release now and ask again for the rest')
     const add = Math.max(5, Math.min(120, Math.round(Number(e.minutes) || 15)))
-    const end = h.end + add * 60_000
+    const end = Math.max(h.end, now) + add * 60_000
     const phase = phaseOf(syncFile, now)
     if (syncFile && phase === 'planned' && end > syncFile.at - 30 * 60_000) return blocked('Editor', `the lease would end at ${clockOf(end)}, past the sync cutoff ${clockOf(syncFile.at - 30 * 60_000)}`, 'finish by the cutoff, or ask after the sync is done')
     if (syncFile && (phase === 'cutoff' || phase === 'frozen') && syncFile.holder.id8 !== me8) return blocked('Editor', `the sync at ${clockOf(syncFile.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, `release by ${clockOf(syncFile.at - 10 * 60_000)}`)
@@ -2664,6 +2686,8 @@ export const register: Register = (on, options) => {
       // What the coordination needs from the call: Editor use (the idle lease), PIE running, the paths edited.
       const text = isUnrealMcp(tool) ? JSON.stringify(input).slice(0, 4000) : ''
       if (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && EDITOR_WORK.test(what))) lastEditorUseAt = await $.clock.now()
+      // A66: the holder launched the Editor or reached it over MCP: name its pid in the lock line if it does not yet.
+      if (isS2 && (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && isEditorStartStop(what))) && holdsLock() && lock.pid === null) await notePid($, opts, true).catch(() => undefined)
       if (text && mcpKind(text) === 'pie') isPieRunning = true
       if (text && PIE_STOP.test(text)) isPieRunning = false
       if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, opts, locs)
