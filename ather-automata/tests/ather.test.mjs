@@ -16,6 +16,7 @@ import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
 import { needsRows, workGroups, workLine } from '../hooks/rows.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
+import { selectStringPs } from '../hooks/transcripts.mjs'
 import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
@@ -2515,5 +2516,18 @@ describe('decide in place (0.2.0)', () => {
     expect([call?.id, call?.answers?.explain]).toEqual(['call:spawner:F-1', 'Explain decision F-1 on spawner: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.'])
     const rule = model.items.find(one => one.kind === 'rule')
     expect([rule?.answers?.options.length, rule?.prompt]).toEqual([2, rulePrompt([{ title: 'Trap', fix: 'Fix.', count: 3 }], unreal.owners)])
+  })
+})
+
+describe('titles keep their characters (0.2.3)', () => {
+  test('the PowerShell search used where there is no grep writes and reads UTF-8, and quotes the path', () => {
+    const argv = selectStringPs("C:/x/it's here/a.jsonl", '"(customTitle|aiTitle)":"[^"]*"')
+    expect(argv.slice(0, 4)).toEqual(['powershell', '-NoProfile', '-NonInteractive', '-Command'])
+    const command = argv[4] ?? ''
+    // PowerShell 5 writes in the console's OEM code page unless told otherwise: "5️⃣📤 … — …" came back as "5???? … - …".
+    expect(command.startsWith('[Console]::OutputEncoding = [Text.Encoding]::UTF8; ')).toBe(true)
+    expect(command).toContain("Select-String -LiteralPath 'C:/x/it''s here/a.jsonl' -Pattern '\"(customTitle|aiTitle)\":\"[^\"]*\"' -Encoding UTF8 -AllMatches")
+    expect(command.endsWith('| ForEach-Object { $_.Matches.Value }')).toBe(true)
+    expect(selectStringPs('C:/a.jsonl', '"timestamp":"[^"]*"', { first: true })[4]).toContain('-Encoding UTF8 -List |')
   })
 })
