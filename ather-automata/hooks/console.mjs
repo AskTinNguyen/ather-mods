@@ -1109,7 +1109,7 @@ async function setupCommand($) {
   // The bundle ships in the plugin, beside hooks/.
   const zip = `${$.plugin.root.replace(/\\/g, '/')}/templates/intent-setup.zip`
   const pack = suggestPack(await $.fs.list(root).catch(() => []))
-  void deliver($, setupPrompt({ zip, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
+  void deliver($, setupPrompt({ root: root.replace(/\\/g, '/'), zip, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
   return `Asked the session to set up intents here. To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
 }
 

@@ -79,14 +79,14 @@ export const suggestPack = entries => (entries.some(entry => entry.kind === 'fil
 /**
  * The one prompt. It names the zip and the missing pieces by target path, and repeats the rules that
  * must hold even if the session never reads the bundle.
- * @param {{ zip: string, missing: readonly PieceId[], pack: string }} input
+ * @param {{ root: string, zip: string, missing: readonly PieceId[], pack: string }} input `root`: the repository's folder, with forward slashes as `zip` is.
  */
-export const setupPrompt = ({ zip, missing, pack }) => {
+export const setupPrompt = ({ root, zip, missing, pack }) => {
   const wanted = SETUP_PIECES.filter(one => missing.includes(one.id))
   // Areas and gates go into the readme and the profile; the other pieces need no proposal.
   const asks = missing.includes('readme') || missing.includes('profile') ? 'ask me to confirm the areas and the gates in one question' : 'tell me what you will add and wait for my yes'
   return [
-    `Set up the intent structure in this repository. The files and the steps are in ${zip}: extract it to a temporary folder outside the repository (unzip, tar -xf, or Expand-Archive on Windows) and follow its SETUP.md.`,
+    `Set up the intent structure in the repository at ${root}; the paths below are from that folder. The files and the steps are in ${zip}: extract it to a temporary folder outside the repository (unzip, tar -xf, or Expand-Archive on Windows) and follow its SETUP.md.`,
     `Add ${wanted.length < SETUP_PIECES.length ? 'only what is missing here' : 'these'}: ${wanted.map(one => `${one.path} (${one.what})`).join('; ')}.${wanted.length < SETUP_PIECES.length ? ' Every other piece is already here: leave it as it is.' : ''}`,
     ...(missing.includes('profile') ? [`The pack for the profile: ${pack}.`] : []),
     `Read the repository first, then ${asks} before you write anything. Never overwrite a file that exists, do not touch an existing intent, and do not commit until I say so.`,

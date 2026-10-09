@@ -917,7 +917,7 @@ const refresh = async engine => {
   const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id)
   expect("a session whose own checkout has no intents opens the pane on the other checkout's, and is asked no setup question", opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather') && JSON.stringify(ids) === JSON.stringify(['intent:web/login']), [opened, ids])
   const setup = await run(engine, 'setup')
-  expect("/ather setup there submits the one setup prompt, for the session's own checkout: all five pieces", setup.dialogs.length === 0 && setup.sent.length === 1 && /intent-setup\.zip/.test(setup.sent[0]) && paths.every(one => setup.sent[0].includes(one)), setup)
+  expect("/ather setup there submits the one setup prompt, for the session's own checkout: all five pieces, its folder named and not web's", setup.dialogs.length === 0 && setup.sent.length === 1 && /intent-setup\.zip/.test(setup.sent[0]) && paths.every(one => setup.sent[0].includes(one)) && setup.sent[0].includes(`the repository at ${app};`) && !setup.sent[0].includes(web), setup)
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 

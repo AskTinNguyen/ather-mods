@@ -14,6 +14,7 @@ const BUNDLE = new URL('../templates/intent-setup/', import.meta.url)
 const bundled = name => fs.readFileSync(new URL(name, BUNDLE), 'utf8')
 
 const ZIP = '/plugins/ather-automata/templates/intent-setup.zip'
+const ROOT = '/work/app'
 const IDS = ['skill', 'readme', 'profile', 'ignore', 'pointer']
 
 /** A repository with every piece. @type {Record<string, string>} */
@@ -102,35 +103,36 @@ describe('the suggested pack', () => {
 })
 
 describe('what the session is handed', () => {
-  test('a repository with nothing: the zip and every target path', () => {
-    const prompt = setupPrompt({ zip: ZIP, missing: IDS, pack: 'web' })
+  test('a repository with nothing: its folder, the zip and every target path', () => {
+    const prompt = setupPrompt({ root: ROOT, zip: ZIP, missing: IDS, pack: 'web' })
+    expect(prompt).toContain(`the repository at ${ROOT};`)
     expect(prompt).toContain(ZIP)
     expect(prompt).toContain('SETUP.md')
     for (const piece of SETUP_PIECES) expect(prompt).toContain(piece.path)
   })
   test('a partial repository: only the missing pieces are named, by target path', () => {
     for (const id of IDS) {
-      const prompt = setupPrompt({ zip: ZIP, missing: [id], pack: 'web' })
+      const prompt = setupPrompt({ root: ROOT, zip: ZIP, missing: [id], pack: 'web' })
       expect(prompt).toContain(ZIP)
       for (const piece of SETUP_PIECES) {
         if (piece.id === id) expect(prompt).toContain(piece.path)
         else expect(prompt).not.toContain(piece.path)
       }
     }
-    const two = setupPrompt({ zip: ZIP, missing: ['profile', 'ignore'], pack: 'web' })
+    const two = setupPrompt({ root: ROOT, zip: ZIP, missing: ['profile', 'ignore'], pack: 'web' })
     for (const id of IDS) {
       if (id === 'profile' || id === 'ignore') expect(two).toContain(targetOf(id))
       else expect(two).not.toContain(targetOf(id))
     }
   })
   test('the pack is suggested with the profile, and only then', () => {
-    expect(setupPrompt({ zip: ZIP, missing: ['profile'], pack: 'unreal' })).toMatch(/\bunreal\b/)
-    expect(setupPrompt({ zip: ZIP, missing: ['profile'], pack: 'web' })).toMatch(/\bweb\b/)
-    expect(setupPrompt({ zip: ZIP, missing: ['skill'], pack: 'unreal' })).not.toMatch(/\bunreal\b/)
+    expect(setupPrompt({ root: ROOT, zip: ZIP, missing: ['profile'], pack: 'unreal' })).toMatch(/\bunreal\b/)
+    expect(setupPrompt({ root: ROOT, zip: ZIP, missing: ['profile'], pack: 'web' })).toMatch(/\bweb\b/)
+    expect(setupPrompt({ root: ROOT, zip: ZIP, missing: ['skill'], pack: 'unreal' })).not.toMatch(/\bunreal\b/)
   })
   test('areas and gates are asked about only when the readme or the profile is to be written', () => {
-    for (const id of ['readme', 'profile']) expect(setupPrompt({ zip: ZIP, missing: [id], pack: 'web' })).toMatch(/\bgates\b/)
-    for (const id of ['skill', 'ignore', 'pointer']) expect(setupPrompt({ zip: ZIP, missing: [id], pack: 'web' })).not.toMatch(/\bgates\b/)
+    for (const id of ['readme', 'profile']) expect(setupPrompt({ root: ROOT, zip: ZIP, missing: [id], pack: 'web' })).toMatch(/\bgates\b/)
+    for (const id of ['skill', 'ignore', 'pointer']) expect(setupPrompt({ root: ROOT, zip: ZIP, missing: [id], pack: 'web' })).not.toMatch(/\bgates\b/)
   })
   test('the complete case reads back the pack and the counts in one line', async () => {
     const line = setupSummary(await reading(FULL))
@@ -245,13 +247,17 @@ describe('a repository set up while the session runs', () => {
     /** @type {string[][]} */
     const told = []
     state.onSetUp('test', pack => void told.push(pack.gates.map(gate => gate.command)))
-    expect([(await state.lane(io, '/setup/shared')).isS2, (await state.laneAt(io, '/setup/shared')).isS2]).toEqual([false, false])
+    // The same folder as Windows may spell it: one more kept reading, and one more kept pack.
+    const spelled = '\\setup\\shared'
+    expect([(await state.lane(io, '/setup/shared')).isS2, (await state.laneAt(io, '/setup/shared')).isS2, (await state.laneAt(io, spelled)).isS2]).toEqual([false, false, false])
     setUp(files)
     expect([(await state.laneAt(io, '/setup/shared')).isS2, told]).toEqual([false, []])
     const after = await state.laneAgain(io, '/setup/shared')
     expect([after.isS2, gates(after)]).toEqual([true, ['npm run zz-proof']])
     const byRoot = await state.laneAt(io, '/setup/shared')
     expect([byRoot.isS2, gates(byRoot)]).toEqual([true, ['npm run zz-proof']])
+    const bySpelling = await state.laneAt(io, spelled)
+    expect([bySpelling.isS2, gates(bySpelling)]).toEqual([true, ['npm run zz-proof']])
     await state.laneAgain(io, '/setup/shared')
     await state.lane(io, '/setup/shared')
     expect(told).toEqual([['npm run zz-proof']])

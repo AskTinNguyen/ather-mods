@@ -204,7 +204,11 @@ export const lane = (io, cwd) =>
     if (isSetUp) {
       await forgetPack({ sessionId: io.sessionId }, root)
       // The same folder read as a workspace checkout (laneAt) was kept without intents, with the old pack.
-      for (const kept of rootLanes.keys()) if (normalFolder(kept) === normalFolder(root)) rootLanes.delete(kept)
+      for (const kept of [...rootLanes.keys()]) {
+        if (normalFolder(kept) !== normalFolder(root)) continue
+        rootLanes.delete(kept)
+        await forgetPack({ sessionId: io.sessionId }, kept)
+      }
     }
     const found = { ...(await readCheckout(io, root)), isS2 }
     // A handler that fails must not cost the reading.
