@@ -207,7 +207,8 @@ async function paneLanes($) {
 async function readOtherRoots($, root) {
   const files = io($)
   const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
-  return (await state.workspace(files, cwd || root, repos, line => $.ui.log(line, { to: 'debug' }))).filter(one => !own.has(normalFolder(one)))
+  // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
+  return (await state.workspace(files, root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))).filter(one => !own.has(normalFolder(one)))
 }
 
 // The lane an intent's checkout has in the pane (the session's for its own).
@@ -428,7 +429,7 @@ function wake($) {
 /** @param {Engine} $ */
 async function startConsoleWork($) {
   const lane = await laneOf($)
-  await state.workspace(io($), cwd || lane.root, repos, line => $.ui.log(line, { to: 'debug' }))
+  await state.workspace(io($), lane.root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))
   if (lane.me !== '') me = lane.me
   pack = lane.pack
   if (!(await hasIntents($))) return
@@ -594,8 +595,11 @@ const NOT_ON_GITHUB = /none of the git remotes configured for this repository po
 // Each workspace repository is read in turn, in its first checkout, and its list kept under it.
 /** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
 async function refreshIssues($) {
-  const lanes = oncePerRepo(await issueLanes($))
-  const names = lanes.length > 1 ? await laneNames($) : new Map()
+  const checkouts = await issueLanes($)
+  // Several checkouts, though gh is asked once for each repository: two clones of one are still a workspace.
+  const isSeveral = checkouts.length > 1
+  const lanes = oncePerRepo(checkouts)
+  const names = isSeveral ? await laneNames($) : new Map()
   const failures = []
   for (const { root, repo: scope } of lanes) {
     const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
@@ -604,7 +608,7 @@ async function refreshIssues($) {
       continue
     }
     // Among several checkouts, one whose remotes are not on GitHub has no GitHub issues: no failure, and not tried again.
-    if (lanes.length > 1 && NOT_ON_GITHUB.test(run?.stderr ?? '')) {
+    if (isSeveral && NOT_ON_GITHUB.test(run?.stderr ?? '')) {
       await state.setIssues(io($), me, [], scope)
       continue
     }
@@ -613,7 +617,7 @@ async function refreshIssues($) {
     if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
     isIssuesWarned = true
     const failure = (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
-    failures.push(lanes.length > 1 ? `${names.get(normalFolder(root)) || root}: ${failure}` : failure)
+    failures.push(isSeveral ? `${names.get(normalFolder(root)) || root}: ${failure}` : failure)
   }
   if (failures.length === 0) {
     issueRetries = 0
@@ -958,7 +962,7 @@ async function pickIntent($, text) {
   const { root } = await laneOf($)
   if (intents.some(one => one.key === text)) return trackKey($, text)
   if (intents.some(one => one.slug === text && otherRoot(one) === '') || (await state.hasIntentFolder(io($), root, text))) return trackSlug($, text)
-  for (const other of await state.workspace(io($), cwd || root, repos)) {
+  for (const other of await state.workspace(io($), root || cwd, repos)) {
     if (await state.hasIntentFolder(io($), other, text)) return trackSlug($, text, other)
   }
   // Only on origin/main: tracking says it is not here yet.

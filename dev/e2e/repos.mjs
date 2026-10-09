@@ -72,11 +72,11 @@ const makeWorkspace = () => {
 }
 
 // A session opened in `root`, started as the app starts it.
-const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable, ghAt, kept }) => {
+const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable, ghAt, kept, cwd }) => {
   const engine = createEngine({ root, surfaces: [], user, writable, ghAt, kept })
   engine.setSessionId(sessionId)
   register(engine.on, { briefGate: 'warn', ...options })
-  await engine.start()
+  await engine.start(true, cwd)
   // The timezone probe and the workspace read run in the background.
   await new Promise(resolve => setTimeout(resolve, 500))
   return { engine, sessionId }
@@ -835,8 +835,51 @@ const refresh = async engine => {
   engine.setSurfaces(['terminal'])
   await engine.flush()
   const alone = await refresh(engine)
-  const reply = await engine.command('ather', 'issues')
-  expect('alone, a checkout that is not on GitHub still fails the refresh', alone.said.includes(NOT_ON_GITHUB) && JSON.stringify(reply ?? '').includes('none of the git remotes'), [alone, reply])
+  // What a refresh that worked and found nothing says: the failure is something else.
+  ghAt[web] = { issues: [] }
+  const empty = await refresh(engine)
+  expect('alone, a checkout that is not on GitHub still fails the refresh', alone.said !== '' && empty.said !== '' && alone.said !== empty.said, [alone, empty])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // Two clones of one repository whose remotes are not on GitHub: several checkouts, one gh call.
+  const parent = fs.mkdtempSync(path.join(BASE, 'work-'))
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: INTENTS })
+  const webB = path.join(parent, 'web-b')
+  git(parent, 'clone', '-q', git(web, 'remote', 'get-url', 'origin'), webB)
+  const ghAt = { [web]: { fails: NOT_ON_GITHUB }, [webB]: { fails: NOT_ON_GITHUB } }
+  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0024', ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, { [web]: {} })
+  await engine.flush()
+  const both = await refresh(engine)
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect('two clones of a repository that is not on GitHub are asked once each time, in the first', lists.length > 0 && lists.every(cwd => cwd === web), lists)
+  expect('and no retry is scheduled, at the start or on a refresh', !engine.record.afters.includes(60000), engine.record.afters)
+  // What a refresh that worked and found nothing says is what was said of them.
+  ghAt[web] = { issues: [] }
+  const empty = await refresh(engine)
+  expect('and are no failure: an empty list is kept, and the refresh says what one with no issues says', engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 0 && both.said !== '' && both.said === empty.said, [both.said, empty.said])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+// ---------------------------------------------------------------- the workspace stays with the session's root
+
+{
+  // A session opened in the parent folder starts again (a resume, a reload) after the shell moved into web/.
+  const { parent, s2, web } = makeWorkspace()
+  writeIntent(s2, 'login')
+  writeIntent(web, 'login')
+  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0025', cwd: web })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'pick')
+  const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id).sort()
+  expect("a session started with the shell in web/ still lists both checkouts' intents by key", JSON.stringify(ids) === JSON.stringify(['intent:s2/login', 'intent:web/login']), ids)
+  await engine.command('ather', 'intent s2/login')
+  expect('and tracks s2/login by its key', JSON.stringify(engine.store.get('pinned:harness-session-0025')) === JSON.stringify({ slug: 'login', root: s2 }), engine.store.get('pinned:harness-session-0025'))
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 }

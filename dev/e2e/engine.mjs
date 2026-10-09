@@ -293,7 +293,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     // The person types a prompt and presses Enter.
     type: text => dispatch('prompt.submit', { text, wait: false, origin: { kind: 'composer' } }, e => ({ text: e.text })),
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),
-    start: (isInteractive = true) => dispatch('session.start', { cwd: root, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
+    // `cwd`: the shell's folder as the session starts (a resume after a `cd`), when it is not the session's root.
+    start: (isInteractive = true, cwd = root) => dispatch('session.start', { cwd, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
     turnEnd: () => dispatch('turn.complete', { reason: 'answer' }, () => ({ text: '' })),
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
     close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),

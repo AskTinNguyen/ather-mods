@@ -91,7 +91,8 @@ export function register(on, options) {
     try {
       const { me, root, isS2, pack } = await laneOf($)
       await registerTools($, pack)
-      void state.workspace(io($), cwd || root, repos, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
+      // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
+      void state.workspace(io($), root || cwd, repos, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
