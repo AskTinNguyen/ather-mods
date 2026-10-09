@@ -1,4 +1,2 @@
 # Tool outputs captured as they were printed: keep their bytes.
 ather-automata/tests/fixtures/** -text
-# Built by dev/pack-templates.mjs, byte for byte.
-*.zip binary

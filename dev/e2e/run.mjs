@@ -1529,11 +1529,12 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
 // ---------------------------------------------------------------- setting a repository up for intents
 //
 // A repository with a package.json and no docs/intent: /ather offers the setup, /ather setup hands the
-// session one prompt naming the bundle's zip and the pieces to add. The test then writes the pieces,
-// standing in for the session. Nothing here is laid out: the layouts stay those of the blocks above.
+// session one prompt naming the plugin's SETUP.md, the public repository and the pieces to add. The test
+// then writes the pieces, standing in for the session. Nothing here is laid out: the layouts stay those of
+// the blocks above.
 
 {
-  const { SETUP_PIECES } = await import('./out/hooks/setup.mjs')
+  const { INTENT_REPOSITORY, SETUP_PIECES } = await import('./out/hooks/setup.mjs')
   const paths = SETUP_PIECES.map(one => one.path)
   const start = async root => {
     fs.mkdirSync(path.join(root, '.git'), { recursive: true })
@@ -1550,8 +1551,8 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true })
     fs.writeFileSync(path.join(root, name), text)
   }
-  // The one prompt: it names the zip, and which of the five target paths.
-  const names = (sent, wanted) => sent.length === 1 && /intent-setup\.zip/.test(sent[0]) && paths.every(one => sent[0].includes(one) === wanted.includes(one))
+  // The one prompt: it names the steps in the plugin's folder, the public repository, and which of the five target paths.
+  const names = (sent, wanted) => sent.length === 1 && /templates\/intent-setup\/SETUP\.md/.test(sent[0]) && sent[0].includes(INTENT_REPOSITORY) && !/\.zip/.test(sent[0]) && paths.every(one => sent[0].includes(one) === wanted.includes(one))
 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-setup-'))
   put(root, 'package.json', '{ "name": "new-here", "scripts": { "test": "node --test" } }\n')
@@ -1564,10 +1565,10 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   const dismissed = await run(engine, [dismiss])
   expect('setup: the question dismissed sends nothing', dismissed.dialogs.length === 1 && dismissed.sent.length === 0 && dismissed.out === later.out, dismissed)
   const chosen = await run(engine, [pick('Set up intents here')])
-  expect('setup: "Set up intents here" submits exactly one prompt, naming the zip and the five target paths', chosen.dialogs.length === 1 && names(chosen.sent, paths), chosen)
+  expect('setup: "Set up intents here" submits exactly one prompt, naming SETUP.md, the repository and the five target paths', chosen.dialogs.length === 1 && names(chosen.sent, paths), chosen)
   for (const word of ['setup', 'init']) {
     const typedOut = await run(engine, [], 'ather', word)
-    expect(`setup: /ather ${word} asks nothing and submits exactly one prompt, naming the zip and the five target paths`, typedOut.dialogs.length === 0 && names(typedOut.sent, paths) && paths.every(one => typedOut.out.includes(one)), typedOut)
+    expect(`setup: /ather ${word} asks nothing and submits exactly one prompt, naming SETUP.md, the repository and the five target paths`, typedOut.dialogs.length === 0 && names(typedOut.sent, paths) && paths.every(one => typedOut.out.includes(one)), typedOut)
   }
   expect('setup: the prompt names the web pack beside a package.json', / web\b/.test(chosen.sent[0] ?? '') && !/unreal/.test(chosen.sent[0] ?? ''), chosen.sent)
 
@@ -1601,7 +1602,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   put(partial, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n')
   const second = await start(partial)
   const some = await run(second, [], 'ather', 'setup')
-  expect('setup: where docs/intent/README.md is there and the profile is not, the prompt names .ather/profile.json and not the readme', names(some.sent, paths.filter(one => one !== 'docs/intent/README.md')) && some.dialogs.length === 0, some)
+  expect('setup: where docs/intent/README.md is there and the profile is not, the prompt names .ather/profile.json and not the readme, and still the repository (the skill is missing too)', names(some.sent, paths.filter(one => one !== 'docs/intent/README.md')) && some.dialogs.length === 0, some)
   const home = await run(second, [])
   expect('setup: a repository that runs intents with pieces missing still opens Home on /ather, with no setup question', home.dialogs.length === 0 && home.sent.length === 0 && second.record.opens.some(pane => pane.id === 'ather'), [home, second.record.opens])
   expect('no hook threw in the partial setup scenario', second.record.hookErrors.length === 0, second.record.hookErrors)
