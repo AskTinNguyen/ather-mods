@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 22
+- Rev: 23
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -109,6 +109,9 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A60 (rev 22): A release reaches its holder: releases another session's A5R makes (lapse, unseen grant) are written to a file only that writer owns (`Saved/A5R/released/<id8>.json`), read by the holder, so the holder's own session-file writes can never erase them (finding 5). Proof: gate: engine test (the holder saves after the release; the release and its notice survive).
 - A61 (rev 22): While `.git/MERGE_HEAD` exists in the shared checkout, no Editor grant is made, whatever the sync's state (an expired sync no longer opens the Editor over a half-done merge; finding 9). Proof: gate: engine test.
 - A62 (rev 22): Measure before acting: every time a rule would free, pass on or yield a lease (A54, A55, and the candidate Tier 1 rules: Editor gone with the lease held, holder gone, holder idle with a 🟥 open), A5R appends one line to `Saved/A5R/orchestrate.log` with the time, rule, lane, every process the probe saw, the holder's liveness, last turn, running agents and whether the lease is a build, and whether it acted (A54/A55 as amended) or only logged (the candidates). Proof: gate: unit tests on the line; review: Hai reads a week of it before Tier 1.
+- A63 (rev 23): A title mark (🟥 / ⏯️) set by A5R is taken off when Hai types in that session even after a reload or an app restart: the original title is the current one without its mark, never a value held only in memory. MEASURED 2026-10-09: `markedFrom` (register.ts) lives only in memory, so every release (hot reload) and restart left marks that never cleared; Hai's sidebar showed 🟥 on working and completed sessions. Proof: gate: engine test (marked, module reloaded, Hai types → title restored).
+- A64 (rev 23): No A5R rule reads the title mark or PENDING.md to judge a session: the A62 candidate "holder waiting on Hai" drops both; whether a session waits on Hai is read from its own transcript (A65). Hai, 2026-10-09: "rule không nên phụ thuộc vào dấu này". Proof: gate: unit test (a 🟥 title or an open PENDING line alone triggers nothing).
+- A65 (rev 23): An advisory judge for a holder that holds too long: when a lease is past its end, or its holder has run no turn for 10 minutes while holding the Editor or the sync, one judging agent (one per incident, claimed like the alerts) is spawned in the session that saw it. It reads the facts (lease, processes, the holder's workers) and the tail of the holder's own transcript (its record file under the Claude projects folder, by its full session id; tail only), and concludes one of: working (a build/test/Editor making progress), waiting on Hai (its last message asks him something, or a question is open), stuck or crashed, unsure. It acts on nothing: it sends Hai one message with the session, what it is doing, the evidence and its recommendation, and appends the verdict to `orchestrate.log`. Proof: gate: engine tests (trigger once per incident; a working holder, a waiting one and a gone one each get the right verdict from fixture transcripts; nothing is released); review: Hai reads its first verdicts.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -122,6 +125,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 23 (2026-10-09): L-26: A63 title marks clear after a reload, A64 no rule reads the title mark or PENDING.md, A65 an advisory judge reads the holder's transcript and reports to Hai.
 - rev 22 (2026-10-09): L-25: adversary review of the Orchestrate proposal: A58 lapse only as S2 §2 allows and never during a build, A59 a failed wake never mutes a session, A60 releases in a file of their own, A61 no Editor grant over MERGE_HEAD, A62 orchestrate.log before any Tier 1 rule acts.
 - rev 21 (2026-10-09): L-24: A56 nghiệm thu only at the checklist end (before Ship), never at every PR; A57 it never waits on an answer (pass by command).
 - rev 20 (2026-10-09): L-23: reopened; A54 a lapsed Editor lease with no Editor running is released by A5R and the queue advances, A55 a grant an idle session never saw passes on after 10 min.

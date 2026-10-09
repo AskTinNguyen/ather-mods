@@ -175,3 +175,13 @@ Relayed: Hai's answer in the mc-loco-stop-triage session's dialog (09:5x), repor
 > Dont suprise me with any hidden caveat
 
 The review (Fable, read-only) found live defects in 0.13.0 (A54 can free a build lease; A54 skips S2 §2's "holder gone"; the lock pid is never updated; a failed wake mutes a session; two writers of the holder's file; sync expiry lifts the Editor freeze over MERGE_HEAD) and promises the proposal could not keep. Plan: Step 0 fix now (rev 22), Step 1 a week of orchestrate.log, Step 2 Tier 1 after Hai's review, Step 3 Tier 2 only if the log shows the need. Open: Hai's call on S2 §3 for a live holder.
+
+## L-26 (2026-10-09) | class: intent | -> rev 23
+
+> Không có cách hữu hiệu nào để trigger một session AI đánh giá thực tế một session khác đang giữ Editor quá lâu là hợp lý hay không à?
+> Sao phải chờ tới một tuần vậy?
+
+> Có thể các session trong hình chụp dùng bản A5R cũ hoặc lỗi sao đó, tôi thấy ngay cả session đang working vẫn bị mark dấu đỏ 🟥
+> Nên rule không nên phụ thuộc vào dấu này
+
+With a screenshot of the sidebar: 🟥 on pinned, working and completed sessions. The advisory judge (A65) follows the orchestrator's proposal, its default taken (Hai did not object).
