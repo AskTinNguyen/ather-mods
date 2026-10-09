@@ -41,6 +41,12 @@ under `files/` next to this page, and the steps are below.
    - `api`: the HTTP API and its handlers (`server/api/`).
    ```
 
+   When the repository already has an area list (`## Areas` in
+   `docs/intent/README.md`, or `areas` in `.ather/profile.json`), use that
+   list as it is and propose nothing new. When intents already exist under
+   `docs/intent/`, keep every name their `- Area:` lines use, spelled the
+   same: an intent whose area is not in the list is shown as unsorted.
+
 3. **Propose the gates.** A gate is a command that proves something about the
    work. For each one give:
    - `id`: a short name, for example `tests`;

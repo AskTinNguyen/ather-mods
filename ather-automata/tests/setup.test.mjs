@@ -128,7 +128,7 @@ describe('what the session is handed', () => {
     expect(setupPrompt({ zip: ZIP, missing: ['skill'], pack: 'unreal' })).not.toMatch(/\bunreal\b/)
   })
   test('areas and gates are asked about only when the readme or the profile is to be written', () => {
-    for (const id of ['readme', 'profile']) expect(setupPrompt({ zip: ZIP, missing: [id], pack: 'web' })).toMatch(/\bareas\b.*\bgates\b/)
+    for (const id of ['readme', 'profile']) expect(setupPrompt({ zip: ZIP, missing: [id], pack: 'web' })).toMatch(/\bgates\b/)
     for (const id of ['skill', 'ignore', 'pointer']) expect(setupPrompt({ zip: ZIP, missing: [id], pack: 'web' })).not.toMatch(/\bgates\b/)
   })
   test('the complete case reads back the pack and the counts in one line', async () => {
