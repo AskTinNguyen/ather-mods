@@ -91,6 +91,9 @@ export function register(on, options) {
     try {
       const { me, root, isS2, pack } = await laneOf($)
       await registerTools($, pack)
+      // A repository set up in this session has a new pack: the tools are registered again under the
+      // same names, which replaces them, so they carry its areas, roles and held kinds.
+      state.onSetUp('watch', setUp => registerTools($, setUp))
       // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
       void state.workspace(io($), root || cwd, repos, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
       await state.migrateRole(io($), me)

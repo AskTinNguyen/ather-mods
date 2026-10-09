@@ -9,7 +9,7 @@
 import { isHolding, isRecordingQuestions, ledgerWithWindow, newWindow, nextLedgerId, nextParkId, offAway, pendingEntry } from './away.mjs'
 import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
-import { packFor } from './packs/index.mjs'
+import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
@@ -25,7 +25,7 @@ import { groupByOf } from './worklist.mjs'
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
- *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.1, and as the Paseo version still keeps them).
+ *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.3, and as the Paseo version still keeps them).
  *   `real`: the folder a path really lands in, behind any symbolic link; without it an id holds the folder as given.
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
@@ -155,6 +155,17 @@ export const repoId = (url, root) => {
 /** @param {string} repo from repoId @param {string} root the checkout's top folder */
 export const checkoutId = (repo, root) => (repo === '' || repo.startsWith('path:') ? repo : `${repo}@${folderId(root)}`)
 
+// Roots read without intents. One that has them at a later read was set up in this session
+// (/ather setup): its profile is new, so its pack is chosen again and each half is told.
+/** @type {Set<string>} */
+const bare = new Set()
+/** @type {Map<string, (pack: Pack) => unknown>} */
+const setUpHandlers = new Map()
+
+// What a half does when a repository is set up mid-session; one handler per `who`, the last one kept.
+/** @param {string} who @param {(pack: Pack) => unknown} handler */
+export const onSetUp = (who, handler) => void setUpHandlers.set(who, handler)
+
 // Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
 // (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session);
 // `repo` which repository it is (repoId), when the Io can say. `userRoot`: where git's user name is read,
@@ -183,7 +194,22 @@ const cachedLane = (cache, key, read) => {
 
 // The session's lane: the lane of its own folder's root, which need not be a checkout.
 /** @param {Io} io @param {string} cwd */
-export const lane = (io, cwd) => cachedLane(lanes, cwd, async () => readCheckout(io, (await io.root().catch(() => cwd)) || cwd))
+export const lane = (io, cwd) =>
+  cachedLane(lanes, cwd, async () => {
+    const root = (await io.root().catch(() => cwd)) || cwd
+    const isS2 = await io.exists(`${root}/docs/intent`)
+    const isSetUp = isS2 && bare.delete(root)
+    if (!isS2) bare.add(root)
+    if (isSetUp) {
+      await forgetPack({ sessionId: io.sessionId }, root)
+      // The same folder read as a workspace checkout (laneAt) was kept without intents, with the old pack.
+      for (const kept of rootLanes.keys()) if (normalFolder(kept) === normalFolder(root)) rootLanes.delete(kept)
+    }
+    const found = { ...(await readCheckout(io, root)), isS2 }
+    // A handler that fails must not cost the reading.
+    if (isSetUp) for (const handler of setUpHandlers.values()) await Promise.resolve().then(() => handler(found.pack)).catch(() => undefined)
+    return found
+  })
 
 // Any checkout's lane, by its root: its own pack and repository.
 /** @param {Io} io @param {string} root */
@@ -228,12 +254,24 @@ const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(aw
 /** @param {Io} io @param {string} [root] */
 const checkoutAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? checkoutId(await repoOf(io), await realFolder(io, await io.root().catch(() => ''))) : checkoutId((await laneAt(io, normalFolder(root))).repo, await realFolder(io, root)))
 
-// Before 0.2.1 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
+// Before 0.2.3 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
 // per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
 /** @param {Io} io @param {string} scoped @param {string} legacy */
 const readScoped = async (io, scoped, legacy) => {
   const value = await io.get(scoped)
   return value !== undefined || scoped === legacy ? value : io.get(legacy)
+}
+
+// For /ather where there were no intents: /ather setup may have added them in this session. A kept
+// reading without intents is dropped once the folder is there, and the checkout read again. A lane
+// that runs intents is kept as read.
+/** @param {Io} io @param {string} cwd */
+export const laneAgain = async (io, cwd) => {
+  const kept = lane(io, cwd)
+  const found = await kept
+  if (found.isS2 || !(await io.exists(`${found.root}/docs/intent`))) return found
+  if (lanes.get(cwd) === kept) lanes.delete(cwd)
+  return lane(io, cwd)
 }
 
 /** @param {Io} io */
@@ -292,7 +330,7 @@ export const checkoutScope = async (io, checkout) => {
 /** @param {Io} io @param {string} slug @param {string} [root] */
 export const intentScope = async (io, slug, root) => inScope(await checkoutAt(io, root), slug)
 
-// What is kept for a scope: an intent's from before 0.2.1 too, while its scoped record has none. Only an
+// What is kept for a scope: an intent's from before 0.2.3 too, while its scoped record has none. Only an
 // intent in the session's own checkout: that proof was never another checkout's.
 /** @param {Io} io @param {string} scope */
 const storedEvidence = async (io, scope) => {
@@ -385,7 +423,7 @@ export const readPrStates = async (io, repo) => Object.fromEntries(Object.entrie
 /** @param {Io} io @param {string} me @param {string} [root] @returns {Promise<string | null>} */
 export const readLast = async (io, me, root) => {
   const scoped = KEY.last(me, await checkoutAt(io, root))
-  // Only the session's own checkout reads through to the key from before 0.2.1.
+  // Only the session's own checkout reads through to the key from before 0.2.3.
   const isOwn = root === undefined || (await isSessionRoot(io, root))
   return /** @type {string | null} */ ((await readScoped(io, scoped, isOwn ? KEY.last(me, '') : scoped)) ?? null)
 }
@@ -501,7 +539,7 @@ export const track = (io, root, slug, options = {}) =>
     if (options.me) {
       const last = KEY.last(options.me, await checkoutAt(io, at))
       await io.set(last, slug)
-      // Once the own checkout's scoped "Continue …" is written, the unscoped one from before 0.2.1 must not
+      // Once the own checkout's scoped "Continue …" is written, the unscoped one from before 0.2.3 must not
       // read through again. Tracking in another checkout leaves it: it is still the own checkout's.
       if (isOwn && last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
     }
@@ -524,7 +562,7 @@ export const untrack = (io, me) =>
     const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
     if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
     await io.remove(KEY.pinned(sid))
-    // The unscoped "Continue …" from before 0.2.1 goes too, or it would read through again.
+    // The unscoped "Continue …" from before 0.2.3 goes too, or it would read through again.
     for (const key of new Set([KEY.last(me, await checkoutAt(io, pin.isOwn ? undefined : pin.root)), ...(pin.isOwn ? [KEY.last(me, '')] : [])])) if ((await io.get(key)) === slug) await io.remove(key)
     const stopped = (await readStops(io, sid)).filter(one => !isStopOf(one, slug, pin.isOwn ? null : pin.root))
     await setList(io, KEY.untracked(sid), [...stopped, pin.isOwn ? slug : { slug, root: pin.root }])

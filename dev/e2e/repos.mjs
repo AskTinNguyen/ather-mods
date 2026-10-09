@@ -891,6 +891,48 @@ const refresh = async engine => {
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- setting up, in a workspace
+
+{
+  const { SETUP_PIECES } = await import('./out/hooks/setup.mjs')
+  const paths = SETUP_PIECES.map(one => one.path)
+  const PACKAGE = { 'package.json': `${JSON.stringify({ name: 'app' }, null, 2)}\n` }
+  // One /ather: the dialogs it asked (each dismissed) and the prompts it submitted.
+  const run = async (engine, args) => {
+    const dialogs = engine.record.dialogs.length
+    const submits = engine.record.submits.length
+    const out = await engine.command('ather', args)
+    await engine.flush()
+    return { out: out.text, dialogs: engine.record.dialogs.slice(dialogs), sent: engine.record.submits.slice(submits) }
+  }
+
+  // The session's own checkout has no intents; web/, beside it, has one.
+  const parent = fs.mkdtempSync(join(BASE, 'work-'))
+  const app = makeCheckout(parent, 'app', { owner: 'AskTinNguyen', name: 'app', files: PACKAGE })
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, ...PACKAGE } })
+  writeIntent(web, 'login')
+  const { engine } = await boot({ root: app, sessionId: 'harness-session-0026', options: { repos: '../web' } })
+  engine.setSurfaces(['terminal'])
+  const opened = await run(engine, 'pick')
+  const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id)
+  expect("a session whose own checkout has no intents opens the pane on the other checkout's, and is asked no setup question", opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather') && JSON.stringify(ids) === JSON.stringify(['intent:web/login']), [opened, ids])
+  const setup = await run(engine, 'setup')
+  expect("/ather setup there submits the one setup prompt, for the session's own checkout: all five pieces", setup.dialogs.length === 0 && setup.sent.length === 1 && /intent-setup\.zip/.test(setup.sent[0]) && paths.every(one => setup.sent[0].includes(one)), setup)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+
+  // A parent folder whose checkouts have no intents at all.
+  const bare = fs.mkdtempSync(join(BASE, 'work-'))
+  makeCheckout(bare, 'app', { owner: 'AskTinNguyen', name: 'app', files: PACKAGE })
+  makeCheckout(bare, 'site', { owner: 'AskTinNguyen', name: 'site', files: PACKAGE })
+  const none = await boot({ root: bare, sessionId: 'harness-session-0027' })
+  none.engine.setSurfaces(['terminal'])
+  const asked = await run(none.engine, '')
+  expect('a parent folder whose checkouts have no intents: /ather asks the one setup question and opens no pane', asked.dialogs.length === 1 && asked.dialogs[0].options.map(option => option.label).join('|') === 'Set up intents here|Not now' && asked.sent.length === 0 && none.engine.record.opens.length === 0, [asked, none.engine.record.opens])
+  expect('no hook threw', none.engine.record.hookErrors.length === 0, none.engine.record.hookErrors)
+  await none.engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

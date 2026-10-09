@@ -32,11 +32,16 @@ fs.writeFileSync(path.join(link, 'package.json'), JSON.stringify({ name: 'claude
 fs.writeFileSync(path.join(link, 'testing.mjs'), `export * from '${new URL('./shim/node-test.mjs', import.meta.url).href}'
 `)
 
+const NODE = `"${process.execPath}"`
+
+// The setup bundle's zip is committed: it must be what its folder gives.
+console.log('== templates')
+sh(`${NODE} pack-templates.mjs --check`, HERE)
+
 // The Paseo versions (paseo/): their copies of the mods' shared code must match, and they type-check
 // once `npm install` has run in each (skipped, and said so, before that).
 console.log('== paseo')
 const PASEO = path.resolve(HERE, '../paseo')
-const NODE = `"${process.execPath}"`
 sh(`${NODE} server/sync.mjs --check`, path.join(PASEO, 'ather-automata'))
 sh(`${NODE} server/embed.mjs --check`, path.join(PASEO, 'week-calendar'))
 for (const plugin of ['ather-automata', 'week-calendar']) {
@@ -60,6 +65,8 @@ if (types) {
 console.log('== unit')
 const unit = path.join(WORK, 'unit')
 copy(path.join(MOD, 'hooks'), path.join(unit, 'hooks'))
+// The setup bundle, as it ships: tests/setup.test.mjs reads its files.
+copy(path.join(MOD, 'templates'), path.join(unit, 'templates'))
 const shim = path.join(HERE, 'shim/testing.mjs').replace(/\\/g, '/')
 copy(path.join(MOD, 'tests'), path.join(unit, 'tests'), s => s.replace(/from 'claude-code\/testing'/g, `from 'file:///${shim.replace(/^\//, '')}'`))
 const tests = fs.readdirSync(path.join(MOD, 'tests')).filter(f => f.endsWith('.test.mjs'))

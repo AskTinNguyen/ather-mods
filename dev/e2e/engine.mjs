@@ -6,7 +6,8 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 
 export const AFK = Symbol('afk')
-const DISMISSED = '[User dismissed — do not proceed, wait for next instruction]'
+// What the tool answers when the person closes its dialog (Esc, or "Chat about this").
+const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected."
 
 // Elements are called as functions: Text({ ... }) returns a node.
 const element = type => (props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
@@ -22,7 +23,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
+  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -74,11 +75,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     if (input.tool === 'AskUserQuestion') {
       const question = input.questions[0]
       const answer = answerDialog(question)
-      // The real dialog reports a dismissal or an unanswered question as an answer string.
+      // A dialog left alone resolves by itself with no answer; a dismissed one is the tool's error.
       if (answer === AFK) return { result: { questions: input.questions, answers: {}, afkTimeoutMs: 600000 }, text: 'auto-resolved' }
-      if (answer === null) return { result: { questions: input.questions, answers: { [question.question]: DISMISSED } }, text: 'dismissed' }
-      const isOption = question.options.some(option => option.label === answer)
-      return { result: { questions: input.questions, answers: isOption || /^\[.*\]$/.test(answer) ? { [question.question]: answer } : {}, response: isOption ? undefined : answer }, text: `answered: ${answer}` }
+      if (answer === null) return { result: `Error: ${REJECTED}`, text: REJECTED, isError: true }
+      // A label picked and words typed under Other both come back as the question's answer.
+      return { result: { questions: input.questions, answers: { [question.question]: answer }, annotations: {} }, text: `answered: ${answer}` }
     }
     record.tools.push(input)
     return { result: 'ok', text: input.__text ?? 'ok', isError: input.__isError ?? undefined }
@@ -177,6 +178,16 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
       },
       close: async pane => void record.closes.push(pane),
       panes: async () => [],
+      // The engine's own dialog: a tool.call of AskUserQuestion through the hooks (the plugin's own see it, origin the
+      // plugin), labels only, fewer than two padded with Yes/No. Resolves to the answer; rejects when there is none.
+      ask: async (question, options = {}) => {
+        const { options: labels = [], header = '' } = Array.isArray(options) ? { options } : options
+        const padded = [...labels, ...['Yes', 'No'].filter(label => !labels.includes(label))].slice(0, Math.max(2, labels.length))
+        const ran = await dispatch('tool.call', { tool: 'AskUserQuestion', tool_use_id: `toolu_plugin_${record.dialogs.length}`, questions: [{ question, header, options: padded.map(label => ({ label, description: '' })), multiSelect: false }] }, toolBottom, 'ather-automata')
+        const answer = ran.deny === undefined && ran.isError !== true ? ran.result?.answers?.[question] : undefined
+        if (typeof answer !== 'string' || answer === '') throw new Error(`ather-automata: $.ui.ask: no answer (${ran.deny ?? ran.text})`)
+        return answer
+      },
     },
     prompt: {
       submit: async input => {
@@ -201,9 +212,15 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     tool: {
       register: async spec => {
         record.registeredTools.push(spec.name)
+        // A name registered again is replaced, as the engine does: the last spec is what the model reads.
+        record.toolSpecs.set(spec.name, spec)
         return { tool: `mcp__ather-automata__${spec.name}` }
       },
-      call: async input => dispatch('tool.call', input, toolBottom, 'ather-automata'),
+      call: async input => {
+        // The engine refuses the dialog's tool from a plugin: it is $.ui.ask.
+        if (input.tool === 'AskUserQuestion') throw new Error('ather-automata: tool.call: runs the AskUserQuestion tool: that is $.ui.ask (host check)')
+        return dispatch('tool.call', input, toolBottom, 'ather-automata')
+      },
     },
     agent: { list: async () => agents.map(one => ({ ...one })) },
   }

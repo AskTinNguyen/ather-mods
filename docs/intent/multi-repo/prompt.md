@@ -62,7 +62,7 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 | S4 | D7, D9, D10: pane intents and sync across the workspace. | S3 |
 | S5 | D8: issues and PRs across. | S4 |
 | S6 | Whole-diff review, README and changelog, final e2e. | S5 |
-| S7 | After merging main (0.2.0): its 0.1.8 to 0.2.0 features over several checkouts. Ships as 0.2.1. | S6 |
+| S7 | After merging main (0.2.0): its 0.1.8 to 0.2.0 features over several checkouts. Ships as 0.2.3. | S6 |
 | S8 | D11: unique short names; one repository's issues once. | S7 |
 | S9 | D12: proof, changes and Continue per checkout. | S8 |
 | S10 | D13: one id through a symbolic link; a checkout not on GitHub in the issue list. | S9 |
