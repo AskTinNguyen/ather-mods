@@ -21,7 +21,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
+  const record = { ghRuns: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -202,6 +202,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     tool: {
       register: async spec => {
         record.registeredTools.push(spec.name)
+        // A name registered again is replaced, as the engine does: the last spec is what the model reads.
+        record.toolSpecs.set(spec.name, spec)
         return { tool: `mcp__ather-automata__${spec.name}` }
       },
       call: async input => {

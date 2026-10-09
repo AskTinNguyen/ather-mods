@@ -10,7 +10,7 @@
 import { isHolding, isRecordingQuestions, ledgerWithWindow, newWindow, nextLedgerId, nextParkId, offAway, pendingEntry } from './away.mjs'
 import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
-import { packFor } from './packs/index.mjs'
+import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { groupByOf } from './worklist.mjs'
 
@@ -83,6 +83,16 @@ const changed = io => {
 
 /** @type {Map<string, Promise<{ root: string, isS2: boolean, me: string, pack: Pack }>>} */
 const lanes = new Map()
+// Roots read without intents. One that has them at a later read was set up in this session
+// (/ather setup): its profile is new, so its pack is chosen again and each half is told.
+/** @type {Set<string>} */
+const bare = new Set()
+/** @type {Map<string, (pack: Pack) => unknown>} */
+const setUpHandlers = new Map()
+
+// What a half does when a repository is set up mid-session; one handler per `who`, the last one kept.
+/** @param {string} who @param {(pack: Pack) => unknown} handler */
+export const onSetUp = (who, handler) => void setUpHandlers.set(who, handler)
 
 // Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
 // (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session).
@@ -93,8 +103,14 @@ export const lane = (io, cwd) => {
   const read = (async () => {
     const root = (await io.root().catch(() => cwd)) || cwd
     const list = io.list ?? (async () => [])
+    const isS2 = await io.exists(`${root}/docs/intent`)
+    const isSetUp = isS2 && bare.delete(root)
+    if (!isS2) bare.add(root)
+    if (isSetUp) await forgetPack({ sessionId: io.sessionId }, root)
     const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
-    return { root, isS2: await io.exists(`${root}/docs/intent`), me: await io.gitUser().catch(() => ''), pack }
+    // A handler that fails must not cost the reading.
+    if (isSetUp) for (const handler of setUpHandlers.values()) await Promise.resolve().then(() => handler(pack)).catch(() => undefined)
+    return { root, isS2, me: await io.gitUser().catch(() => ''), pack }
   })()
   lanes.set(cwd, read)
   // A git name that failed to read (a slow first start) is asked again next time, never kept.
@@ -102,6 +118,18 @@ export const lane = (io, cwd) => {
     if (found.me === '' && lanes.get(cwd) === read) lanes.delete(cwd)
   })
   return read
+}
+
+// For /ather where there were no intents: /ather setup may have added them in this session. A kept
+// reading without intents is dropped once the folder is there, and the checkout read again. A lane
+// that runs intents is kept as read.
+/** @param {Io} io @param {string} cwd */
+export const laneAgain = async (io, cwd) => {
+  const kept = lane(io, cwd)
+  const found = await kept
+  if (found.isS2 || !(await io.exists(`${found.root}/docs/intent`))) return found
+  if (lanes.get(cwd) === kept) lanes.delete(cwd)
+  return lane(io, cwd)
 }
 
 /** @param {Io} io */
