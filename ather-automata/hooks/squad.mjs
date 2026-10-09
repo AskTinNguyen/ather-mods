@@ -6,7 +6,7 @@
 import { isAutomationCommand, isBuildCommand, mcpKind } from './guards.mjs'
 
 /** @typedef {'editor' | 'builder' | 'tester' | 'scout' | 'reviewer' | 'general'} Kind */
-/** @typedef {'reading' | 'editing' | 'building' | 'testing' | 'editor' | 'reviewing' | 'profiling' | 'idle'} Prop */
+/** @typedef {'reading' | 'editing' | 'building' | 'testing' | 'editor' | 'reviewing' | 'profiling' | 'asking' | 'idle'} Prop `asking`: a question to the person in flight; `idle`: computed silence */
 /** @typedef {'running' | 'done' | 'failed' | 'waiting'} WorkerState */
 /** @typedef {'seen' | 'adopted' | 'unknown'} Origin how much Ather knows of a worker: saw it dispatched, found it running later, or neither */
 
@@ -25,9 +25,9 @@ export const STATE_COLOURS = /** @type {const} */ ({ running: '#ddff00', done: '
 export const STATE_GLYPHS = /** @type {const} */ ({ running: '●', done: '✓', failed: '✗', waiting: '○' })
 
 export const PROP_WORDS = /** @type {const} */ ({
-  reading: 'reading', editing: 'editing files', building: 'building', testing: 'testing', editor: 'in the Editor', reviewing: 'reviewing', profiling: 'profiling', idle: 'waiting',
+  reading: 'reading', editing: 'editing files', building: 'building', testing: 'testing', editor: 'in the Editor', reviewing: 'reviewing', profiling: 'profiling', asking: 'asking you', idle: 'quiet',
 })
-const TRAIL_WORDS = /** @type {const} */ ({ reading: 'read', editing: 'edit', building: 'build', testing: 'test', editor: 'Editor', reviewing: 'review', profiling: 'profile', idle: 'wait' })
+const TRAIL_WORDS = /** @type {const} */ ({ reading: 'read', editing: 'edit', building: 'build', testing: 'test', editor: 'Editor', reviewing: 'review', profiling: 'profile', asking: 'ask', idle: 'wait' })
 
 // ---------------------------------------------------------------- what kind, what now
 
@@ -58,7 +58,8 @@ const kindOf = text => {
 export const propForTool = (tool, input) => {
   if (/^(Read|Grep|Glob|LS|WebFetch|WebSearch|NotebookRead)$/.test(tool)) return 'reading'
   if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(tool)) return 'editing'
-  if (/^(AskUserQuestion|SendMessage)$/.test(tool)) return 'idle'
+  // A question waits on the person. A message sent is not waiting on anything: SendMessage does not wait for a reply.
+  if (tool === 'AskUserQuestion') return 'asking'
   if (tool === 'Skill') return /review|thermo/i.test(String(input.skill ?? '')) ? 'reviewing' : null
   if (tool === 'Bash' || tool === 'PowerShell') {
     const command = String(input.command ?? '')
@@ -80,6 +81,10 @@ export const propForTool = (tool, input) => {
 /** @param {readonly Prop[]} trail */
 export const trailWords = trail => trail.map(prop => TRAIL_WORDS[prop]).join(' → ')
 
+// Running, or queued to run (Claude Code's pending): not finished.
+/** @param {WorkerState} state */
+export const isLive = state => state === 'running' || state === 'waiting'
+
 /** @param {string} status @returns {WorkerState} */
 export const workerState = status => (status === 'running' ? 'running' : status === 'completed' ? 'done' : /fail|kill|error|cancel/i.test(status) ? 'failed' : 'waiting')
 
@@ -96,15 +101,19 @@ export const durationText = ms => {
 /**
  * What a worker row says, from what is known of the worker. `origin`: 'seen' (Ather saw it
  * dispatched), 'adopted' (found running later; start from Claude Code's record), 'unknown' (no record).
- * `elapsed` null: its time is not known. `via`: the worker that started it, or ''.
+ * `elapsed` null: its time is not known. `via`: the worker that started it when that one is not drawn
+ * above it ("Thermo round 1 fixes", "Thermo round 1 fixes (finished)"), or ''.
  * @param {{ state: WorkerState, prop: Prop | null, origin: Origin, elapsed: number | null, tools: number, via: string }} one
  * @returns {{ doing: string, line: string }}
  */
 export const crewWords = one => {
-  const isLive = one.state === 'running' || one.state === 'waiting'
+  const isRunning = isLive(one.state)
   const isFresh = one.origin === 'seen' && one.elapsed !== null && one.elapsed < 60000
-  const doing = !isLive ? (one.state === 'done' ? 'finished' : 'stopped') : one.prop ? PROP_WORDS[one.prop] : isFresh ? 'starting' : 'working'
-  const time = one.elapsed === null ? (isLive ? 'running · start unknown' : '') : `${isLive ? 'running' : one.state === 'done' ? 'took' : 'stopped at'} ${durationText(one.elapsed)}`
+  // Claude Code's pending status (not running yet) reads "queued": "waiting" is kept for a worker waiting on something (⏳).
+  const isQueued = one.state === 'waiting'
+  const doing = !isRunning ? (one.state === 'done' ? 'finished' : 'stopped') : isQueued ? 'queued' : one.prop ? PROP_WORDS[one.prop] : isFresh ? 'starting' : 'working'
+  const liveWord = isQueued ? 'queued' : 'running'
+  const time = one.elapsed === null ? (isRunning ? `${liveWord} · start unknown` : '') : `${isRunning ? liveWord : one.state === 'done' ? 'took' : 'stopped at'} ${durationText(one.elapsed)}`
   // Counted only for a worker Ather saw start: one found later shows no count rather than too few.
   const tools = one.origin === 'seen' ? `${one.tools} tool call${one.tools === 1 ? '' : 's'}` : ''
   return { doing, line: [time, tools, one.via ? `started by ${one.via}` : ''].filter(Boolean).join(' · ') }
@@ -130,6 +139,7 @@ const PROP_ART = {
   editor: `<g transform="translate(66 60) rotate(32)"><rect x="-3" y="10" width="7" height="30" rx="2" fill="#2d2d2d" ${OUT}/><rect x="-4.5" y="3" width="10" height="9" fill="#bdbdb6" ${OUT}/><path d="M0.5 -16 C -9 -4, -6 4, 0.5 4 C 7 4, 10 -4, 0.5 -16 Z" fill="#ff7ab8" ${OUT}/></g>`,
   reviewing: `<g transform="translate(58 62)"><path d="M20 20 L32 32" stroke="#111" stroke-width="8" stroke-linecap="round"/><path d="M20 20 L32 32" stroke="#6b4a2a" stroke-width="5" stroke-linecap="round"/><circle cx="13" cy="13" r="11" fill="#cfe9ff" fill-opacity=".85" stroke="#111" stroke-width="5"/><circle cx="13" cy="13" r="11" fill="none" stroke="#9aa3ad" stroke-width="2.4"/></g>`,
   profiling: `<g transform="translate(55 70) rotate(-6)"><rect width="31" height="24" rx="2" fill="#f1ede2" ${OUT}/><path d="M5 19 L12 12 L17 15 L26 6" fill="none" stroke="#2f9a4a" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 5 h6 v6" fill="none" stroke="#2f9a4a" stroke-width="3.2" stroke-linecap="round"/></g>`,
+  asking: `<g transform="translate(56 64)"><path d="M3 2 h26 a3 3 0 0 1 3 3 v14 a3 3 0 0 1 -3 3 h-15 l-7 6 v-6 h-4 a3 3 0 0 1 -3 -3 v-14 a3 3 0 0 1 3 -3 z" fill="#f4f4ef" ${OUT}/><path d="M12 8 q4 -4 8 0 q2 3 -3 5 v3" fill="none" stroke="#1a1a1a" stroke-width="2.6" stroke-linecap="round"/><circle cx="17" cy="19.5" r="1.6" fill="#1a1a1a"/></g>`,
   idle: `<g transform="translate(60 74)"><circle cx="20" cy="9" r="5.5" fill="none" stroke="#111" stroke-width="5"/><circle cx="20" cy="9" r="5.5" fill="none" stroke="#f4f4ef" stroke-width="2.4"/><rect width="20" height="19" rx="4" fill="#f4f4ef" ${OUT}/><path d="M6 -4 q3 -4 0 -8 M12 -4 q3 -4 0 -8" stroke="#bdbdb6" stroke-width="2" fill="none" stroke-linecap="round"/></g>`,
 }
 

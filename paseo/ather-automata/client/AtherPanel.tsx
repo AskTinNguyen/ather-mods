@@ -23,6 +23,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   const agentTitle = agent?.title || `Agent ${agentId.slice(0, 8)}`;
   // The checkout's folder name, e.g. "s2_new" from E:\s2_new.
   const folder = cwd.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  const who = [agentTitle, folder].filter(Boolean).join(" · ");
   const home = useRpc(atherHome);
   const actRpc = useRpc(atherAct);
   const queryClient = useQueryClient();
@@ -81,10 +82,10 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   const open_ = view.items.filter((one) => one.kind !== "away-end" && !isSent(one.id));
 
   if (view.intentView) {
-    return <IntentScreen kit={kit} intent={view.intentView} busy={busy} run={run} />;
+    return <IntentScreen kit={kit} who={who} intent={view.intentView} busy={busy} run={run} />;
   }
   if (view.issueView) {
-    return <IssueScreen kit={kit} issue={view.issueView} busy={busy} run={run} now={now} />;
+    return <IssueScreen kit={kit} who={who} issue={view.issueView} busy={busy} run={run} now={now} />;
   }
 
   return (
@@ -100,13 +101,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
             ATHER AUTOMATA
           </Text>
           <Text style={s.title}>{view.title}</Text>
-          {/* Which agent and checkout this pane speaks for. */}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
-            <Icon name="Bot" size={12} color={c.foregroundMuted} />
-            <Text style={[s.hint, { flexShrink: 1 }]} numberOfLines={1}>
-              {[agentTitle, folder].filter(Boolean).join(" · ")}
-            </Text>
-          </View>
+          <WhoLine kit={kit} who={who} />
         </View>
         {view.githubLogin ? (
           <FadeIn style={{ marginTop: 4 }}>
@@ -557,9 +552,24 @@ function CrewRow({ kit, one, index, now, isLightTheme }: { kit: Kit; one: HomeVi
   );
 }
 
+// Which agent and checkout a pane speaks for. Every screen shows it: each button here sends to this agent, and
+// the tab itself can only say "Ather" (the host labels a tab from the plugin's fixed title).
+function WhoLine({ kit, who }: { kit: Kit; who: string }) {
+  const { s, c } = kit;
+  if (!who) return null;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
+      <Icon name="Bot" size={12} color={c.foregroundMuted} />
+      <Text style={[s.hint, { flexShrink: 1 }]} numberOfLines={1}>
+        {who}
+      </Text>
+    </View>
+  );
+}
+
 // An intent opened to look at: where it stands, its proof (by session), who else tracks it, and today's
 // lines. Looking never tracks it; Work on this here does, and the tracked one offers Stop tracking.
-function IntentScreen({ kit, intent, busy, run }: { kit: Kit; intent: NonNullable<HomeView["intentView"]>; busy: boolean; run: (kind: ActKind, id: string) => void }) {
+function IntentScreen({ kit, who, intent, busy, run }: { kit: Kit; who: string; intent: NonNullable<HomeView["intentView"]>; busy: boolean; run: (kind: ActKind, id: string) => void }) {
   const { s, c, compact } = kit;
   return (
     <ScrollView style={s.screen}>
@@ -568,6 +578,7 @@ function IntentScreen({ kit, intent, busy, run }: { kit: Kit; intent: NonNullabl
           <Button kit={kit} variant="ghost" icon="ArrowLeft" accessibilityLabel="Back" onPress={() => run("back", "")} />
           <Text style={s.brand}>INTENT</Text>
         </View>
+        <WhoLine kit={kit} who={who} />
         <FadeIn>
           <Text style={[s.title, { marginTop: 8 }]}>{intent.slug}</Text>
           <Text style={[s.hint, { marginTop: 4 }]}>{[intent.stage, intent.progress, intent.owner].filter(Boolean).join(" · ")}</Text>
@@ -791,7 +802,7 @@ function WorkSection({ kit, view, now, busy, isSent, run, light }: { kit: Kit; v
 
 // An assigned issue opened to look at, as the Claude Code pane's issue card: Start an intent, Open on GitHub,
 // Copy link. Pressing an issue row only opens this; nothing goes to the agent until Start an intent.
-function IssueScreen({ kit, issue, busy, run, now }: { kit: Kit; issue: NonNullable<HomeView["issueView"]>; busy: boolean; run: (kind: ActKind, id: string) => void; now: number }) {
+function IssueScreen({ kit, who, issue, busy, run, now }: { kit: Kit; who: string; issue: NonNullable<HomeView["issueView"]>; busy: boolean; run: (kind: ActKind, id: string) => void; now: number }) {
   const { s, c, compact } = kit;
   const toast = useToast();
   // A link the app may open: https, printable characters only, of a sane length.
@@ -806,6 +817,7 @@ function IssueScreen({ kit, issue, busy, run, now }: { kit: Kit; issue: NonNulla
           <Button kit={kit} variant="ghost" icon="ArrowLeft" accessibilityLabel="Back" onPress={() => run("back", "")} />
           <Text style={s.brand}>{`ISSUE #${issue.number}`}</Text>
         </View>
+        <WhoLine kit={kit} who={who} />
         <FadeIn>
           <Text style={[s.title, { marginTop: 8 }]}>{issue.name || issue.title}</Text>
           {issue.name && issue.name !== issue.title ? <Text style={[s.hint, { marginTop: 4 }]}>{issue.title}</Text> : null}

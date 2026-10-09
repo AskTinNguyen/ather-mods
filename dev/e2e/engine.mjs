@@ -6,11 +6,14 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 
 export const AFK = Symbol('afk')
-const DISMISSED = '[User dismissed — do not proceed, wait for next instruction]'
+// What the tool answers when the person closes its dialog (Esc, or "Chat about this").
+const REJECTED = "The user doesn't want to proceed with this tool use. The tool use was rejected."
 
 // Elements are called as functions: Text({ ... }) returns a node.
 const element = type => (props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
 const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select', 'Markdown', 'Link', 'Code', 'Svg'].map(name => [name, element(name)]))
+// The mobile app's table: no Input or Select (the app draws no field yet), as claude-code.d.ts says.
+const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => name !== 'Input' && name !== 'Select'))
 
 export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => {
   const store = new Map()
@@ -18,7 +21,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], invalidations: 0 }
+  const record = { ghRuns: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -38,13 +41,14 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
   }
   const matches = (matcher, e) => !matcher || Object.entries(matcher).every(([key, value]) => e[key] === value)
 
-  const dispatch = async (event, e, bottom, origin = 'engine') => {
+  // `signal`: the dispatch's own AbortSignal (the person's Esc); a fresh one that never aborts by default.
+  const dispatch = async (event, e, bottom, origin = 'engine', signal = undefined) => {
     const chain = hooks.filter(one => one.event === event && matches(one.matcher, e))
     const run = async (index, ev) => {
       if (index >= chain.length) return bottom(ev)
       const next = next2 => run(index + 1, next2 ?? ev)
       next.origin = { plugin: origin, tier: 'user' }
-      next.signal = new AbortController().signal
+      next.signal = signal ?? new AbortController().signal
       return chain[index].hook($, ev, next)
     }
     return run(0, e)
@@ -68,11 +72,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     if (input.tool === 'AskUserQuestion') {
       const question = input.questions[0]
       const answer = answerDialog(question)
-      // The real dialog reports a dismissal or an unanswered question as an answer string.
+      // A dialog left alone resolves by itself with no answer; a dismissed one is the tool's error.
       if (answer === AFK) return { result: { questions: input.questions, answers: {}, afkTimeoutMs: 600000 }, text: 'auto-resolved' }
-      if (answer === null) return { result: { questions: input.questions, answers: { [question.question]: DISMISSED } }, text: 'dismissed' }
-      const isOption = question.options.some(option => option.label === answer)
-      return { result: { questions: input.questions, answers: isOption || /^\[.*\]$/.test(answer) ? { [question.question]: answer } : {}, response: isOption ? undefined : answer }, text: `answered: ${answer}` }
+      if (answer === null) return { result: `Error: ${REJECTED}`, text: REJECTED, isError: true }
+      // A label picked and words typed under Other both come back as the question's answer.
+      return { result: { questions: input.questions, answers: { [question.question]: answer }, annotations: {} }, text: `answered: ${answer}` }
     }
     record.tools.push(input)
     return { result: 'ok', text: input.__text ?? 'ok', isError: input.__isError ?? undefined }
@@ -147,7 +151,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
       surfaces: async () => surfaces.slice(),
     },
     ui: {
-      resolve: () => ELEMENTS,
+      resolve: e => (e?.surface === 'mobile' ? MOBILE : ELEMENTS),
       toast: text => record.toasts.push(text),
       copy: async ({ text }) => {
         record.copies.push(text)
@@ -164,6 +168,16 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
       },
       close: async pane => void record.closes.push(pane),
       panes: async () => [],
+      // The engine's own dialog: a tool.call of AskUserQuestion through the hooks (the plugin's own see it, origin the
+      // plugin), labels only, fewer than two padded with Yes/No. Resolves to the answer; rejects when there is none.
+      ask: async (question, options = {}) => {
+        const { options: labels = [], header = '' } = Array.isArray(options) ? { options } : options
+        const padded = [...labels, ...['Yes', 'No'].filter(label => !labels.includes(label))].slice(0, Math.max(2, labels.length))
+        const ran = await dispatch('tool.call', { tool: 'AskUserQuestion', tool_use_id: `toolu_plugin_${record.dialogs.length}`, questions: [{ question, header, options: padded.map(label => ({ label, description: '' })), multiSelect: false }] }, toolBottom, 'ather-automata')
+        const answer = ran.deny === undefined && ran.isError !== true ? ran.result?.answers?.[question] : undefined
+        if (typeof answer !== 'string' || answer === '') throw new Error(`ather-automata: $.ui.ask: no answer (${ran.deny ?? ran.text})`)
+        return answer
+      },
     },
     prompt: {
       submit: async input => {
@@ -188,9 +202,15 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     tool: {
       register: async spec => {
         record.registeredTools.push(spec.name)
+        // A name registered again is replaced, as the engine does: the last spec is what the model reads.
+        record.toolSpecs.set(spec.name, spec)
         return { tool: `mcp__ather-automata__${spec.name}` }
       },
-      call: async input => dispatch('tool.call', input, toolBottom, 'ather-automata'),
+      call: async input => {
+        // The engine refuses the dialog's tool from a plugin: it is $.ui.ask.
+        if (input.tool === 'AskUserQuestion') throw new Error('ather-automata: tool.call: runs the AskUserQuestion tool: that is $.ui.ask (host check)')
+        return dispatch('tool.call', input, toolBottom, 'ather-automata')
+      },
     },
     agent: { list: async () => agents.map(one => ({ ...one })) },
   }
@@ -233,9 +253,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     },
     modelTool: input => dispatch('tool.call', input, toolBottom, 'engine'),
     // A background worker: dispatched with a brief, then calling tools in its own loop.
-    // `parentId`: a worker another worker dispatched from its own loop.
-    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5', parentId }) => {
-      const result = await dispatch('agent.spawn', { tool_use_id: `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model, ...(parentId ? { agentId: parentId } : {}) }, () => ({ model, agentId }))
+    // `parentId`: a worker another worker dispatched from its own loop (the spawn's parentAgentId, as the engine
+    // pins it). `toolUseId`: the Agent call this spawn belongs to; `background`: false for a foreground call that waits.
+    spawn: async ({ agentId, prompt, description, subagentType = 'general-purpose', model = 'claude-opus-5-5', parentId, toolUseId, background = true }) => {
+      const result = await dispatch('agent.spawn', { tool_use_id: toolUseId ?? `spawn-${agentId}`, prompt, description, subagentType, provider: { plugin: 'engine', tier: 'core' }, parentModel: model, background, fork: false, ...(parentId ? { parentAgentId: parentId } : {}) }, () => ({ model, agentId }))
       agents.push({ id: agentId, description, type: subagentType, status: 'running', ...(parentId ? { parentId } : {}) })
       return result
     },
@@ -244,6 +265,34 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     // A worker's own turn ends (its answer), as Claude Code reports it.
     agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', agentId }, () => ({ text: '' })),
     agentTool: (agentId, input) => dispatch('tool.call', { ...input, agentId }, toolBottom, 'engine'),
+    // A tool call held in flight: it reaches the tool (`reached`) and stays there until released (it runs),
+    // refused (the tool answers with a deny) or failed (the tool throws). `agentId` undefined: the main loop.
+    // `ask`: the engine's tool.check answers "ask" first (the mode then settles it: in auto mode the classifier
+    // may allow it at once). `dialog`: the permission dialog is then shown to the person, as Claude Code reports it
+    // (classic.PermissionRequest: agent_id inside a subagent, tool_name, tool_input, no tool_use_id); the call waits
+    // there. `abort()`: the dispatch is aborted (Esc) and the call never settles.
+    holdTool: (agentId, input, { ask = false, dialog = false } = {}) => {
+      const stop = new AbortController()
+      let release = () => undefined
+      let fail = () => undefined
+      let reach = () => undefined
+      const gate = new Promise((resolve, reject) => {
+        release = resolve
+        fail = reject
+      })
+      const reached = new Promise(resolve => (reach = resolve))
+      const done = dispatch('tool.call', { tool_use_id: `held-${Math.random().toString(36).slice(2, 10)}`, ...input, ...(agentId ? { agentId } : {}) }, async ev => {
+        if (ask || dialog) await dispatch('tool.check', { tool: ev.tool, input: ev, tool_use_id: ev.tool_use_id }, () => ({ decision: 'ask', reason: 'not in the allow list' }))
+        if (dialog) {
+          const { tool, tool_use_id: _id, agentId: loop, ...toolInput } = ev
+          await dispatch('classic.PermissionRequest', { hook_event_name: 'PermissionRequest', session_id: sessionId, transcript_path: '', cwd: root, tool_name: tool, tool_input: toolInput, ...(loop ? { agent_id: loop, agent_type: 'general-purpose' } : {}) }, () => ({}))
+        }
+        reach(ev)
+        const how = await gate
+        return how === 'deny' ? { deny: 'refused by the person' } : toolBottom(ev)
+      }, 'engine', stop.signal)
+      return { done, reached, release: () => release('run'), deny: () => release('deny'), fail: (error = new Error('the tool threw')) => fail(error), abort: () => stop.abort() }
+    },
     setAgentStatus: (agentId, status) => {
       const agent = agents.find(one => one.id === agentId)
       if (agent) agent.status = status

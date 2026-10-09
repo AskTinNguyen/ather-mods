@@ -36,12 +36,23 @@ export const draw = (node, width) => {
   // A blank line above, as marginTop draws it.
   if (node.type === 'Box' && node.props.marginTop > 0) return [...Array(node.props.marginTop).fill(''), ...draw({ ...node, props: { ...node.props, marginTop: 0 } }, width)]
   if (typeof node === 'string' || typeof node === 'number') return wrap(String(node), width)
+  // Indented by paddingLeft, and laid out in what is left of the width.
+  if (node.type === 'Box' && node.props.paddingLeft > 0) {
+    const pad = node.props.paddingLeft
+    return draw({ ...node, props: { ...node.props, paddingLeft: 0 } }, Math.max(1, width - pad)).map(line => (line === '' ? '' : `${' '.repeat(pad)}${line}`))
+  }
   if (node.type === 'Box') {
     if (node.props.flexDirection === 'row') {
-      // A column beside something (a glyph, then a worker's three lines): lay the parts side by side.
+      // A column beside something (a glyph, then a worker's three lines): lay the parts side by side,
+      // each in the width the parts before it left.
       if (node.children.some(child => child && child.type === 'Box' && child.props.flexDirection !== 'row' && child.children.length > 1)) {
         const gap = ' '.repeat(node.props.gap ?? 0)
-        const parts = node.children.map(child => draw(child, width))
+        let used = 0
+        const parts = node.children.map(child => {
+          const part = draw(child, Math.max(1, width - used))
+          used += Math.max(0, ...part.map(line => line.length)) + gap.length
+          return part
+        })
         const widths = parts.map(part => Math.max(0, ...part.map(line => line.length)))
         const height = Math.max(...parts.map(part => part.length))
         return Array.from({ length: height }, (_, row) => parts.map((part, index) => (part[row] ?? '').padEnd(index < parts.length - 1 ? widths[index] : 0)).join(gap).trimEnd())
@@ -56,6 +67,7 @@ export const draw = (node, width) => {
     }
     return node.children.flatMap(child => draw(child, width))
   }
+  if (node.type === 'Markdown') return String(node.props.text ?? '').split('\n').flatMap(line => wrap(line, width))
   if (node.type === 'Text') {
     const text = textOf(node)
     return node.props.wrap === 'truncate' ? [text.length > width ? `${text.slice(0, width - 1)}…` : text] : wrap(text, width)

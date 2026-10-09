@@ -88,6 +88,10 @@ export const shortTitle = (text, max = 80) => {
   return `${(space > 20 ? cut.slice(0, space) : cut).replace(/[,;:\s]+$/, '')}…`
 }
 
+// A label cut at a word past `max`, ended with "…" when cut.
+/** @param {string} text @param {number} max */
+export const cutWords = (text, max) => (text.length <= max ? text : `${text.slice(0, max - 1).replace(/\s+\S*$/, '')}…`)
+
 // The same text whole, for a surface that wraps it: no label, every sentence, cut only past `max`.
 /** @param {string} text @param {number} [max] */
 export const fullTitle = (text, max = 400) => {
@@ -121,6 +125,105 @@ const sections = (text, heading) =>
 
 const CLOSED = /\b(accepted|rejected|resolved|closed|superseded|withdrawn|answered)\b/i
 
+// ---------------------------------------------------------------- a finding's options and resolution
+
+/** @typedef {{ letter: string, label: string, text: string, isRecommended: boolean }} FindingOption `label`: its first clause, cut to fit a button; `text`: the whole option, plain */
+
+// A clause that only sets the scene ("In the next C++ build", "After the import"): no action of its own.
+const LEADING = /^(in|on|at|after|before|when|whenever|if|once|until|unless|during|while|by|from|then|first)\b/i
+
+// An option's first clause ("keep it as is, with the confirmation (…)" → "Keep it as is"), at least
+// a few words long ("no, drops only" stays whole), cut at a word past `max`. A clause of fewer than
+// three words, or one that only sets the scene, says too little alone: the whole text is cut instead.
+/** @param {string} text @param {number} [max] */
+export const optionLabel = (text, max = 60) => {
+  const plain = plainText(text)
+  const end = [...plain.matchAll(/[,;:(]|\s[—–-]\s|\.(?=\s|$)/g)].map(match => match.index ?? 0).find(at => at >= 12) ?? plain.length
+  const first = plain.slice(0, end).trim()
+  const clause = LEADING.test(first) || first.split(/\s+/).length < 3 ? plain : first
+  const capital = clause.charAt(0).toUpperCase() + clause.slice(1)
+  if (capital.length <= max) return capital
+  const cut = capital.slice(0, max - 1)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > 20 ? cut.slice(0, space) : cut).replace(/[,;:\s]+$/, '')}…`
+}
+
+// "Recommendation: (a)", "Recommendation: B": the letter, upper case, or ''.
+/** @param {string} body */
+const recommendationOf = body => (/\brecommendation\**[ \t]*:\**[ \t]*\(?([a-z])\)?(?![\w])/i.exec(body)?.[1] ?? '').toUpperCase()
+
+// The options a finding writes, in either of the two formats the findings use:
+//   **Options:**                                   or inline, in one paragraph or list item that
+//   - A (recommended): prove both on a map …         says Options or Recommendation:
+//   - B: add a lab rig …                             Options: (a) keep it as is; (b) add a hook …
+//                                                    Recommendation: (a).
+// A finding updated later ("**Options now:**") is read from its last options heading. Lettered
+// evidence ("- (a) Before Kawaii: …") with neither word nearby is not options. The recommended one is
+// marked "(recommended)", named by a "Recommendation:" line, or (only when neither says) the one
+// option whose text says "recommended". Fewer than two found: [].
+/** @param {string} body @returns {FindingOption[]} */
+export const parseOptions = body => {
+  const lines = body.split(/\r?\n/)
+  /** @type {{ letter: string, text: string, isMarked: boolean }[]} */
+  let found = []
+  // The list format: an "Options:" line on its own, then "- <Letter>[ (recommended)]: <text>" items and their indented continuations.
+  const head = lines.findLastIndex(line => /^\s*[-*]?\s*\**\s*options(?:\s+\w+)?\s*\**\s*:\s*\**\s*$/i.test(line))
+  if (head >= 0) {
+    for (const line of lines.slice(head + 1)) {
+      const item = /^\s*[-*]\s+\**\s*([A-Za-z])\b\s*(?:\(([^)]*)\))?\s*\**\s*[:.)]\s*\**\s*(.*)$/.exec(line)
+      const last = found[found.length - 1]
+      if (item) found.push({ letter: (item[1] ?? '').toUpperCase(), text: item[3] ?? '', isMarked: /recommended/i.test(item[2] ?? '') })
+      else if (last && /^\s{2,}\S/.test(line) && !/^\s*[-*]\s/.test(line)) last.text += ` ${line.trim()}`
+      else if (found.length > 0 || line.trim() !== '') break
+    }
+  }
+  // The inline format: "(a) … (b) …" in one paragraph or list item, its continuation lines joined.
+  if (found.length === 0) {
+    // Each "(a)" line's paragraph or list item, whole: back to where it starts, on to where the next begins.
+    const starts = (/** @type {string} */ line) => line.trim() === '' || /^\s?[-*]\s|^\s*#|^\s*\*\*\w/.test(line)
+    const paragraphs = lines.flatMap((line, at) => {
+      if (!/\(a\)\s/.test(line)) return []
+      let from = at
+      while (from > 0 && !starts(lines[from] ?? '') && (lines[from - 1] ?? '').trim() !== '') from -= 1
+      let to = at + 1
+      while (to < lines.length && !starts(lines[to] ?? '')) to += 1
+      return [lines.slice(from, to).join(' ').replace(/\s+/g, ' ')]
+    })
+    const paragraph = paragraphs.find(text => /\b(options?|recommendation)\b/i.test(text))
+    if (paragraph) {
+      const from = paragraph.slice(paragraph.indexOf('(a)')).replace(/\s*\brecommendation\**\s*:.*$/i, '')
+      const parts = from.split(/\(([a-z])\)\s+/).slice(1)
+      for (let index = 0; index + 1 < parts.length; index += 2) {
+        const letter = (parts[index] ?? '').toUpperCase()
+        const last = found[found.length - 1]
+        // Letters in order only: a later "(x)" inside an option's text stays in it.
+        if (letter.charCodeAt(0) !== 65 + found.length) {
+          if (last) last.text += ` (${parts[index]}) ${parts[index + 1] ?? ''}`
+          continue
+        }
+        found.push({ letter, text: parts[index + 1] ?? '', isMarked: false })
+      }
+      found = found.map(one => ({ ...one, text: one.text.replace(/[\s;,.]+(or|and)?\s*$/i, '').trim(), isMarked: /\(recommended\)/i.test(one.text) }))
+    }
+  }
+  if (found.length < 2) return []
+  const named = recommendationOf(body)
+  const marked = found.filter(one => one.isMarked)
+  const saying = found.filter(one => /\brecommended\b/i.test(one.text))
+  const pick = named || (marked.length === 1 ? (marked[0]?.letter ?? '') : saying.length === 1 ? (saying[0]?.letter ?? '') : '')
+  return found.map(one => {
+    const text = plainText(one.text.replace(/\s*\(recommended\)/i, ''))
+    return { letter: one.letter, label: optionLabel(text), text: text.charAt(0).toUpperCase() + text.slice(1), isRecommended: one.letter === pick }
+  })
+}
+
+// A finding's lines about itself: "Status: …", "**Resolution:** …", "- Resolution (orchestrator, 2026-10-05): …".
+const SELF_LINE = /^[ \t]*[-*]?[ \t]*\**[ \t]*(status|resolution)[ \t]*(?:\([^)\n]*\))?[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.*)$/gim
+
+// What a filled Resolution says when it settles nothing: "open; reported for …", "open (Q3).",
+// "partly addressed …", "not yet", "pending", "tbd", a template's "<pending owner>", "-".
+const UNSETTLED = /^(open|pending|partly|not yet|tbd)\b|^[<\-—–]/i
+
 // Open findings. Template heading: "## F-<n> (date, rev r) | blocking: yes|no | status: open (owner)".
 /** @param {string} findings @param {string} prompt */
 export const parseFindings = (findings, prompt) => {
@@ -136,17 +239,27 @@ export const parseFindings = (findings, prompt) => {
       const headStatus = /status:\s*(\w+)(?:\s*\(([^)]*)\))?/i.exec(rest)
       const headBlocking = /blocking:\s*(yes|no)\b/i.exec(rest)
       const owner = headStatus?.[2]?.trim() ?? ''
-      const statusLine = /^\s*[-*]?\s*\**(status|resolution)\**\s*:\s*(.+)$/im.exec(body)
-      const isClosed = headStatus
-        ? (headStatus[1] ?? '').toLowerCase() !== 'open'
-        : CLOSED.test(rest) || (statusLine !== null && CLOSED.test(statusLine[2] ?? '')) || new RegExp(`\\b${id.replace(/-/g, '\\-')}\\b`).test(decisions)
-      const isBlocking = headBlocking ? headBlocking[1]?.toLowerCase() === 'yes' : /blocking:\s*yes/i.test(part) || (/\bblocking\b/i.test(rest) && !/non-blocking/i.test(rest))
+      const said = [...body.matchAll(SELF_LINE)].map(match => ({ kind: (match[1] ?? '').toLowerCase(), text: (match[2] ?? '').replace(/[*_`]/g, '').trim() })).filter(line => line.text !== '')
+      // A settled Resolution closes it, whatever the heading says; an unsettled one ("pending Director",
+      // often left behind) never reopens a heading that says it is closed ("status: resolved (…)").
+      // Without one, the heading's status, else a closing word in the heading or a Status line, else the Decisions.
+      const resolution = said.filter(line => line.kind === 'resolution').at(-1)
+      const statusLine = said.find(line => line.kind === 'status')
+      const isHeadClosed = headStatus !== null && (headStatus[1] ?? '').toLowerCase() !== 'open'
+      const isClosed = resolution
+        ? !UNSETTLED.test(resolution.text) || isHeadClosed
+        : headStatus
+          ? isHeadClosed
+          : CLOSED.test(rest) || (statusLine !== undefined && CLOSED.test(statusLine.text)) || new RegExp(`\\b${id.replace(/-/g, '\\-')}\\b`).test(decisions)
+      // "(open, not blocking)" and "non-blocking for this change" say it does not block.
+      const isBlocking = headBlocking ? headBlocking[1]?.toLowerCase() === 'yes' : /blocking:\s*yes/i.test(part) || (/\bblocking\b/i.test(rest) && !/\b(non|not)[\s-]+blocking\b/i.test(rest))
       const isDirectorCall = owner ? /director|producer|design|production|user/i.test(owner) : /\(a\)\s/.test(body) || /director|design lead|production call/i.test(body)
       const headTitle = shortTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
       const bodyTitle = shortTitle(body.trim().split('\n').find(line => line.trim() !== '' && !line.trim().startsWith('#')) ?? '')
       const headFull = fullTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
       const bodyFull = fullTitle(body.trim().split('\n').find(line => line.trim() !== '' && !line.trim().startsWith('#')) ?? '')
-      return { id, title: headTitle || bodyTitle || id, full: headFull || bodyFull || id, isBlocking, isDirectorCall, isOpen: !isClosed }
+      // `source`: the finding as written (capped), for the pane's finding view.
+      return { id, title: headTitle || bodyTitle || id, full: headFull || bodyFull || id, isBlocking, isDirectorCall, options: parseOptions(body), source: part.trim().slice(0, 6000), isOpen: !isClosed }
     })
     .filter(one => one.isOpen)
     .map(({ isOpen: _open, ...one }) => one)

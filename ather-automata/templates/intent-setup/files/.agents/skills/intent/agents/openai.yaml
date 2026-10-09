@@ -1,0 +1,4 @@
+interface:
+  display_name: "Intent"
+  short_description: "Run a feature against a living, committed intent file"
+  default_prompt: "Run this feature as an intent-driven session using .agents/skills/intent. Infer the feature slug, skill, and acceptance list from the prompt, save the prompt verbatim to docs/intent/<feature>/log.md, write prompt.md rev 1, start a worker from assets/worker-brief.md, amend prompt.md on each correction, and relay progress and blocking findings."
