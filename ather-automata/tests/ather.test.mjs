@@ -1684,6 +1684,43 @@ describe('the workspace', () => {
     expect(found.clones).toEqual(['/private/tmp/s2', '/private/tmp/s2'])
   })
 
+  test('a worktree list git could not give makes the read unsure, with the checkouts and the worktrees that were found', async () => {
+    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/s2-x/.git': LINK, '/w/web-y/.git': LINK }
+    /** @type {Record<string, string>} */
+    const lists = { '/w/s2': listed(tree('/w/s2'), tree('/w/s2-x')), '/w/web': listed(tree('/w/web'), tree('/w/web-y')) }
+    const files = (/** @type {string[]} */ ...silent) => ({ ...disk(paths), worktrees: async (/** @type {string} */ root) => (silent.includes(root) ? null : (lists[root] ?? '')) })
+    const unsure = await readWorkspace(files('/w/web'), '/w/s2', '../web')
+    expect(unsure.isSure).toBe(false)
+    expect(unsure.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
+    expect((await readWorkspace(files('/w/s2', '/w/web'), '/w/s2', '../web')).roots).toEqual(['/w/s2', '/w/web'])
+    // Git answering, whatever it says, is sure; so is an Io that cannot ask.
+    const sure = await readWorkspace(files(), '/w/s2', '../web')
+    expect(sure.isSure).toBe(true)
+    expect(sure.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x', '/w/web-y'])
+    expect((await readWorkspace(disk(paths), '/w/s2', '../web')).isSure).toBe(true)
+  })
+
+  test('an unsure workspace is read again, a sure one is kept, and the log says each answer once', async () => {
+    const memory = memoryIo()
+    memory.files.set('/ws3/a/.git/HEAD', HEAD)
+    memory.files.set('/ws3/a-x/.git', LINK)
+    // Git cannot say twice, then answers.
+    const answers = [null, null, listed(tree('/ws3/a'), tree('/ws3/a-x'))]
+    let asked = 0
+    const io = { ...memory.io, worktrees: async () => answers[asked++] ?? null }
+    const lines = /** @type {string[]} */ ([])
+    const log = (/** @type {string} */ line) => void lines.push(line)
+    // Callers at the same time share one read.
+    expect(await Promise.all([state.workspace(io, '/ws3/a', '', log), state.workspace(io, '/ws3/a', '', log)])).toEqual([['/ws3/a'], ['/ws3/a']])
+    expect(asked).toBe(1)
+    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a'])
+    expect(asked).toBe(2)
+    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a', '/ws3/a-x'])
+    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a', '/ws3/a-x'])
+    expect(asked).toBe(3)
+    expect(lines).toHaveLength(2)
+  })
+
   test('a session folder that is a link and the same checkout named by its real path in the repos option are one checkout', async () => {
     const paths = { '/tmp/s2/.git/HEAD': HEAD, '/private/tmp/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD }
     const real = async (/** @type {string} */ folder) => folder.replace(/^\/tmp\//, '/private/tmp/')

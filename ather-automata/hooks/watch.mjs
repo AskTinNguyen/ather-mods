@@ -69,11 +69,12 @@ async function readOrigin($, root) {
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
 }
 
-// What `git worktree list --porcelain` prints in the checkout at `root`, '' when git could not say.
-/** @param {Engine} $ @param {string} root */
+// What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
+// could not say (the app aborted the run, it ran out of time): the workspace asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
 async function readWorktrees($, root) {
   const run = await $.process.run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
-  return run?.exitCode === 0 ? (run.stdout ?? '') : ''
+  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '') : ''
 }
 
 /** @param {Engine} $ */

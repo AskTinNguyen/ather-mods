@@ -99,7 +99,8 @@ let isSyncing = false
 // The pane's checkouts, as last read (paneLanes): the workspace checkouts that have intents.
 /** @type {import('./state.mjs').Checkout[]} */
 let checkouts = []
-// The workspace checkouts other than the session's own, read once per session.
+// The workspace checkouts other than the session's own, read once per session: a read git could not answer
+// in full is not kept, so the next one asks again.
 /** @type {Promise<string[]> | null} */
 let otherRoots = null
 // Which clone each workspace checkout is of, by its folder, read with them: a checkout and its worktrees share one.
@@ -165,11 +166,12 @@ async function readOrigin($, root) {
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
 }
 
-// What `git worktree list --porcelain` prints in the checkout at `root`, '' when git could not say.
-/** @param {Engine} $ @param {string} root */
+// What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
+// could not say (the app aborted the run, it ran out of time): the workspace asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
 async function readWorktrees($, root) {
   const run = await $.process.run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
-  return run?.exitCode === 0 ? (run.stdout ?? '') : ''
+  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '') : ''
 }
 
 // Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV.
@@ -222,11 +224,11 @@ async function readOtherRoots($, root) {
   const files = io($)
   const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
   // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
-  const roots = await state.workspace(files, root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))
-  const found = await state.workspaceClones(files, root || cwd, repos)
+  const { roots, clones: found, isSure } = await state.workspaceClones(files, root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))
   // The session's lane is its folder's, which may be inside its checkout.
   for (const one of own) if (found.has(one)) found.set(normalFolder(root), found.get(one) ?? one)
   clones = found
+  if (!isSure) otherRoots = null
   return roots.filter(one => !own.has(normalFolder(one)))
 }
 

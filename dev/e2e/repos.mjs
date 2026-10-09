@@ -5,7 +5,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
-import { createEngine } from './engine.mjs'
+import { aborts, createEngine } from './engine.mjs'
 
 const OUT = process.argv[2]
 const { register } = await import('./out/hooks/ather.mjs')
@@ -998,6 +998,27 @@ const refresh = async engine => {
   expect("Work on this here on the worktree's draft tracks { slug: 'draft', root: the worktree }", JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'draft', root: tree }), engine.store.get(`pinned:${sid}`))
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
+
+  // The app aborts the session's first worktree lists: the pane starts with the checkout alone and finds the worktree at its next read.
+  const late = makeClone('web-x')
+  writeIntent(late.tree, 'draft', LOGIN.replace('# Login', '# Draft'))
+  Object.assign(aborts, { argv: 'git worktree list', times: 99 })
+  const slow = await boot({ root: late.web, sessionId: 'harness-session-0036' })
+  slow.engine.setSurfaces(['terminal'])
+  await slow.engine.command('ather', 'pick')
+  const slowPane = () => slow.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const first = intentRows(await slowPane()).map(one => one.id).sort()
+  expect('while git cannot list the worktrees, the pane lists the checkout alone', aborts.times < 99 && JSON.stringify(first) === JSON.stringify(['intent:login', 'intent:pay']), [aborts.times, first])
+  await slow.engine.flush()
+  await slow.engine.flush()
+  aborts.times = 0
+  byKey(await slowPane(), 'sync')?.props.onPress()
+  await slow.engine.flush()
+  await slow.engine.flush()
+  const then = intentRows(await slowPane()).map(one => one.id).sort()
+  expect("after its next read the pane lists the worktree's own intent, the checkout's keys unchanged", JSON.stringify(then) === JSON.stringify(['intent:login', 'intent:pay', 'intent:web-x/draft']), then)
+  expect('no hook threw', slow.engine.record.hookErrors.length === 0, slow.engine.record.hookErrors)
+  await slow.engine.end('other')
 }
 
 {

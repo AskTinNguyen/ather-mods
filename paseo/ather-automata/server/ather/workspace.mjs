@@ -7,8 +7,9 @@
  * @typedef {{
  *   read: (path: string) => Promise<string | null>, exists: (path: string) => Promise<boolean>,
  *   list?: (path: string) => Promise<{ name: string, kind: string }[]>,
- *   worktrees?: (root: string) => Promise<string>, real?: (folder: string) => Promise<string>
- * }} Files `worktrees`: what `git worktree list --porcelain` prints in the checkout at `root`, '' when git could not say.
+ *   worktrees?: (root: string) => Promise<string | null>, real?: (folder: string) => Promise<string>
+ * }} Files `worktrees`: what `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or
+ *   null when git could not say (the run was aborted, ran out of time, could not start).
  *   `real`: the folder a path really lands in, behind any symbolic link.
  */
 
@@ -90,9 +91,10 @@ export const parseWorktrees = text => {
  * once. A checkout is the same one by the folder its path really lands in, under its first name: git names
  * real paths, the session folder may be a link.
  * `skipped`: option folders in no checkout. `clones`: for each root, its clone's main folder, the same for a
- * checkout and its worktrees. `left`: the checkouts the two limits left out.
+ * checkout and its worktrees. `left`: the checkouts the two limits left out. `isSure` false: git could not
+ * say for one of them (`worktrees` gave null), so worktrees may be missing: worth reading again.
  * @param {Files} files @param {string} sessionFolder @param {string} option
- * @returns {Promise<{ roots: string[], skipped: string[], clones: string[], left: string[] }>}
+ * @returns {Promise<{ roots: string[], skipped: string[], clones: string[], left: string[], isSure: boolean }>}
  */
 export const readWorkspace = async (files, sessionFolder, option) => {
   /** @type {string[]} */
@@ -131,9 +133,12 @@ export const readWorkspace = async (files, sessionFolder, option) => {
   const left = found.slice(MAX_CHECKOUTS)
   /** @type {Map<string, string>} where a folder lands → its clone */
   const cloneOf = new Map()
+  let isSure = true
   if (files.worktrees) {
     for (const root of [...roots]) {
-      const { main, folders } = parseWorktrees(await files.worktrees(root).catch(() => ''))
+      const text = await files.worktrees(root).catch(() => null)
+      if (text === null) isSure = false
+      const { main, folders } = parseWorktrees(text ?? '')
       if (main === '') continue
       const clone = normalFolder(main)
       cloneOf.set(lands.get(root) ?? '', clone)
@@ -149,7 +154,7 @@ export const readWorkspace = async (files, sessionFolder, option) => {
     }
   }
   const clones = roots.map(root => cloneOf.get(lands.get(root) ?? '') ?? root)
-  return { roots, skipped, clones, left }
+  return { roots, skipped, clones, left, isSure }
 }
 
 /**

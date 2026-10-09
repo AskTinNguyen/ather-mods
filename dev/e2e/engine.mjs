@@ -17,6 +17,10 @@ const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => na
 
 // `writable`: more folders the model's Write and Edit may change (a sibling checkout); with it, a relative path is taken from `root`.
 // `kept`: what the store already holds (an earlier session's on this machine).
+// The next `times` runs whose command line starts with `argv` are rejected, as the app aborts a run. For every
+// engine of the run: an earlier session's timers still fire, and their runs must not answer for the one under test.
+export const aborts = { argv: '', times: 0 }
+
 export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable, kept }) => {
   const store = new Map(kept)
   // Background workers the session dispatched, as $.agent.list() reports them.
@@ -134,6 +138,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     process: {
       run: async (argv, init = {}) => {
         if (user !== undefined && argv.join(' ') === 'git config user.name') return { exitCode: 0, stdout: `${user}\n`, stderr: '' }
+        if (aborts.times > 0 && aborts.argv !== '' && argv.join(' ').startsWith(aborts.argv)) {
+          aborts.times -= 1
+          throw new Error(`$.process.run(${argv[0]}) aborted`)
+        }
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
         if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
         if (argv[0] === 'gh') record.ghAt.push({ argv: argv.join(' '), cwd: init.cwd ?? root })
