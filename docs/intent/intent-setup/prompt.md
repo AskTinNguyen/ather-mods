@@ -1,7 +1,7 @@
 # Ather Automata: set up intents in a repository
 
 - Rev: 3
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Hoàng Vũ
 - Skill: `plugin-authoring`
@@ -58,3 +58,4 @@ Ather Automata works only in a repository that has the intent structure, and unt
 - rev 1 (2026-10-09): created from L-1, L-2, L-3.
 - rev 2 (2026-10-09): the release is 0.2.2, on top of the question fix merged from PR #24 (D8, A8), from L-5.
 - rev 3 (2026-10-09): the skill and the contract come from the public repository; the zip and its builder are removed (D9 to D13; A1, A3, A4, A7 and A8 rewritten, A2 widened), from L-6 and L-7.
+- completed (2026-10-09): every acceptance item of rev 3 is met and PR #30 is merged (release 0.2.4).
