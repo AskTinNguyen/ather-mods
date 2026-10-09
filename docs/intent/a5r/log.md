@@ -166,3 +166,12 @@ Relayed: Hai's answer in the mc-loco-stop-triage session's dialog (09:5x), repor
 
 > Btw, tôi có vài task bị dừng qua đêm vì chờ câu hỏi và trả lời của A5R, rất phiền. Lưu ý chỉ can thiệp khi đã ở cuối của checklist, trước Ship
 > KHông phải nhảy vào đòi trả lời ở every PR
+
+## L-25 (2026-10-09 15:50) | class: intent | -> rev 22
+
+> A5R có thể có chế độ Orchestrate, là đánh giá và điều phối các session đang active không? (…) A5R được tôi giao chức năng điều phối cả Editor và Sync, vậy nó có thể giúp orchestrate unblock luôn không? Có conflict gì với các workflow đang có hoặc nature của Claude không?
+
+> Adversary Review your suggestion then give me clear final plan.
+> Dont suprise me with any hidden caveat
+
+The review (Fable, read-only) found live defects in 0.13.0 (A54 can free a build lease; A54 skips S2 §2's "holder gone"; the lock pid is never updated; a failed wake mutes a session; two writers of the holder's file; sync expiry lifts the Editor freeze over MERGE_HEAD) and promises the proposal could not keep. Plan: Step 0 fix now (rev 22), Step 1 a week of orchestrate.log, Step 2 Tier 1 after Hai's review, Step 3 Tier 2 only if the log shows the need. Open: Hai's call on S2 §3 for a live holder.
