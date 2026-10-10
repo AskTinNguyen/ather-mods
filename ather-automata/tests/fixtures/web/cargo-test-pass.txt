@@ -1,0 +1,17 @@
+   Compiling tally v0.1.0 (<repo>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+     Running unittests src/lib.rs (target/debug/deps/tally-8f08ac73ce885ce3)
+
+running 3 tests
+test tests::finds_max ... ok
+test tests::sum_of_none ... ok
+test tests::sums ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests tally
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

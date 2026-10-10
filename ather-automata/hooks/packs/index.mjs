@@ -8,18 +8,21 @@
 // → unreal; package.json or pyproject.toml → web), then the core alone. Read once
 // per session and root, and cached.
 
+import { gitDirOf, isAbsolute, normalFolder } from '../workspace.mjs'
 import { core } from './core.mjs'
 import { unreal } from './unreal.mjs'
 import { makeWebPack } from './web.mjs'
 
 /**
  * @typedef {{ state: 'none' | 'pass' | 'fail', detail: string, at?: number, by?: string }} Rung `at`, `by`: when, and by which session (its first 8 hex), the record was written
- * @typedef {{ rungs: { rung: string, value: Rung }[], context: string[], toasts: { text: string, timeoutMs?: number }[], bumps: string[] }} ShellReading
+ * @typedef {{ rungs: { rung: string, value: Rung, gates?: RungGates }[], context: string[], toasts: { text: string, timeoutMs?: number }[], bumps: string[] }} ShellReading
+ * @typedef {{ ran: string[], all: string[] }} RungGates on a rung that gates declare: the gates a command ran (none: a command that is no gate), of all that declare it
  * @typedef {{ id: string, pattern: RegExp, title: string, fix: string, rule?: { file: string, text: string } }} PackTrap
  * @typedef {{ name: string, verb: string, isGlobal?: boolean }} CreateItem
  * @typedef {{ isHeld: boolean, isFree: boolean, holder: string, until: string }} EditorState
- * @typedef {{ command: string, proofs: string[], id?: string, proves?: string }} Gate
+ * @typedef {{ command: string, proofs: string[], id?: string, proves?: string, passOn?: 'exit' | 'counts' }} Gate `passOn`: how its tests and ui proofs pass, on its exit code (also without the field) or on test counts
  * @typedef {{ host: string, branch: string, deployment: string, url: string, expectStatus: number }} Production
+ * @typedef {{ files?: readonly string[], defaultBranch?: string }} Found what else was read of a repository where its pack is chosen: the names of the files at its root, and the default branch its clone knows
  * @typedef {{ pack: Pack, held: readonly string[], isProven: boolean }} HeldAt what a folder's own checkout holds, when that is not the session's
  * @typedef {{ isProven?: boolean, scripts?: Record<string, string>, at?: (folder: string | null) => HeldAt | null }} HeldContext
  * @typedef {{
@@ -36,8 +39,9 @@ import { makeWebPack } from './web.mjs'
  *   traps: readonly PackTrap[],
  *   held: { labels: Record<string, string>, nouns: Record<string, string>, kinds: readonly string[], defaults: readonly string[] },
  *   heldSegment: (segment: string, held: readonly string[], context: HeldContext) => string | null,
- *   mergePolicy: 'hold' | 'with-proof', mergeRungs?: readonly string[],
- *   isAssetSave: (input: string) => boolean, readShell: (command: string, text: string, ran: { isError?: boolean }) => ShellReading,
+ *   mergePolicy: 'hold' | 'with-proof', mergeRungs?: readonly string[], rungGates?: Readonly<Record<string, string[]>>,
+ *   baseBranch?: string,
+ *   isAssetSave: (input: string) => boolean, readShell: (command: string, text: string, ran: { isError?: boolean, deny?: string }) => ShellReading,
  *   mcpKind: (input: string) => 'write' | 'read' | 'pie' | null, binaryAssets: RegExp | null, briefPaths: RegExp,
  *   skillGroups: readonly { group: string, names: readonly string[] }[], createGroups: readonly { group: string, items: readonly CreateItem[] }[],
  *   createOrder: Record<string, readonly string[]>, createTitle: string, createMeta: (editor: EditorState) => string, createPrompt: (verb: string, name: string, editor: EditorState) => string,
@@ -65,6 +69,19 @@ const json = text => {
   }
 }
 
+// The default branch a clone knows: where refs/remotes/origin/HEAD points, in the git folder its worktrees share.
+// Read from the files, with no git call; '' when it cannot be told.
+/** @param {PackIo} io @param {string} root */
+const defaultBranchOf = async (io, root) => {
+  const named = await gitDirOf(io, root)
+  if (!named) return ''
+  // A worktree's .git file may name its git folder from the worktree.
+  const gitDir = named === `${root}/.git` || isAbsolute(named) ? named : normalFolder(`${root}/${named}`)
+  const common = ((await io.read(`${gitDir}/commondir`)) ?? '').trim()
+  const shared = common === '' ? gitDir : isAbsolute(common) ? common : normalFolder(`${gitDir}/${common}`)
+  return /^ref:\s*refs\/remotes\/origin\/(.+)/.exec((await io.read(`${shared}/refs/remotes/origin/HEAD`)) ?? '')?.[1]?.trim() ?? ''
+}
+
 /**
  * Which pack a repository gets, and why. Pure over what it reads.
  * @param {PackIo} io @param {string} root
@@ -75,11 +92,13 @@ export const choosePack = async (io, root) => {
   const packageJson = json(await io.read(`${root}/package.json`))
   const named = typeof profile?.pack === 'string' ? profile.pack.toLowerCase() : ''
   if (named === 'unreal') return { pack: unreal, source: 'profile', profile }
-  if (named === 'web') return { pack: makeWebPack(profile, packageJson), source: 'profile', profile }
   if (named === 'core') return { pack: core, source: 'profile', profile }
   const entries = await io.list(root).catch(() => [])
+  const files = entries.filter(entry => entry.kind === 'file' && typeof entry.name === 'string').map(entry => entry.name)
+  const web = async () => makeWebPack(profile, packageJson, { files, defaultBranch: await defaultBranchOf(io, root).catch(() => '') })
+  if (named === 'web') return { pack: await web(), source: 'profile', profile }
   if (entries.some(entry => entry.kind === 'file' && /\.uproject$/i.test(entry.name))) return { pack: unreal, source: 'marker', profile }
-  if (packageJson || entries.some(entry => entry.kind === 'file' && /^(package\.json|pyproject\.toml)$/i.test(entry.name))) return { pack: makeWebPack(profile, packageJson), source: 'marker', profile }
+  if (packageJson || entries.some(entry => entry.kind === 'file' && /^(package\.json|pyproject\.toml)$/i.test(entry.name))) return { pack: await web(), source: 'marker', profile }
   return { pack: core, source: 'none', profile }
 }
 

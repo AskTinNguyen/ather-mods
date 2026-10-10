@@ -9,7 +9,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
-import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, gitFolders, heldKindsOf, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
+import { briefIssues, explainGuard, gitFolders, heldKindsOf, heldLabel, heldNoun, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
 import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
@@ -448,8 +448,9 @@ async function hold($, kind, command, heldHere) {
   const held = await state.park(io($), kind, command, Date.now(), heldHere)
   if (held === null) return null
   void state.bump(io($), 'heldParked').catch(() => undefined)
-  $.ui.toast(`Ather: held ${HELD_NOUNS[kind]} until you review the away window (${held.parked.id}).`)
-  return `Held by the Ather away window until the user reviews it: ${HELD_LABELS[kind]}. Recorded as ${held.parked.id}. Do not retry it; continue with other work.`
+  const pack = await laneOf($).then(lane => lane.pack, () => undefined)
+  $.ui.toast(`Ather: held ${heldNoun(kind, pack)} until you review the away window (${held.parked.id}).`)
+  return `Held by the Ather away window until the user reviews it: ${heldLabel(kind, pack)}. Recorded as ${held.parked.id}. Do not retry it; continue with other work.`
 }
 
 /** @param {Engine} $ @param {Record<string, unknown>} input */
@@ -463,7 +464,7 @@ async function awayTool($, input) {
     const started = await state.startAway(io($), choice, { root, me, tz, now: Date.now(), pack })
     if (started === null) return 'An away window is already running or waiting for the user\'s review.'
     $.ui.toast(`Ather: away window running ${windowEndText(started, tz)}.`)
-    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => HELD_LABELS[/** @type {import('./guards.mjs').HeldKind} */ (kind)] ?? kind).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
+    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => heldLabel(kind, pack)).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
   }
   if (action === 'end') return (await state.endAway(io($))) ? 'Autonomy window ended; the user reviews it with /ather.' : 'No autonomy window is running.'
   if (action === 'close') return (await state.closeAway(io($))) ? 'Autonomy window closed.' : 'No autonomy window to close.'
@@ -640,7 +641,7 @@ async function afterShell($, command, ran) {
   const guard = explainGuard(command)
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
   const reading = pack.readShell(command, text, ran)
-  for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value)
+  for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value, one.gates)
   context.push(...reading.context)
   for (const toast of reading.toasts) $.ui.toast(toast.text, toast.timeoutMs === undefined ? undefined : { timeoutMs: toast.timeoutMs })
   for (const key of reading.bumps) void state.bump(io($), key).catch(() => undefined)

@@ -253,7 +253,7 @@ async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, i
   if (guard !== null && isError) void note(agentId, "warn", `Guard: ${guard}`);
   const reading = pack.readShell(command, text, { isError });
   const scope = await state.evidenceScope(io);
-  for (const one of reading.rungs) await state.setRung(io, scope, one.rung, one.value);
+  for (const one of reading.rungs) await state.setRung(io, scope, one.rung, one.value, one.gates);
   context.push(...reading.context);
   for (const toast of reading.toasts) void note(agentId, "warn", String(toast.text).replace(/^Ather:\s*/, ""));
   for (const key of reading.bumps) void state.bump(io, key).catch(() => undefined);

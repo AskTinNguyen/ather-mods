@@ -1,0 +1,67 @@
+Scope: all 3 workspace projects
+Already up to date
+
+Done in 380ms
+$ node --test tests/scripts.test.mjs && node --test tests/config.test.mjs && node --test tests/release.test.mjs && pnpm -r --if-present test
+✔ scripts case 1 (0.417375ms)
+✔ scripts case 2 (0.12775ms)
+✔ scripts case 3 (0.054958ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 55.499584
+✔ config case 1 (0.486416ms)
+✔ config case 2 (0.069292ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 56.299125
+✔ release case 1 (0.4725ms)
+✔ release case 2 (0.07075ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 59.207125
+Scope: 2 of 3 workspace projects
+packages/contracts test$ node --test tests/contracts.test.mjs
+packages/web test$ node --test tests/web.test.mjs
+packages/contracts test: ✔ contracts case 1 (0.447834ms)
+packages/contracts test: ✔ contracts case 2 (0.130583ms)
+packages/contracts test: ✔ contracts case 3 (0.186625ms)
+packages/contracts test: ✔ contracts case 4 (0.134916ms)
+packages/web test: ✔ web case 1 (0.541ms)
+packages/web test: ✔ web case 2 (0.071917ms)
+packages/web test: ✔ web case 3 (0.061875ms)
+packages/web test: ✔ web case 4 (0.057542ms)
+packages/web test: ✔ web case 5 (0.056666ms)
+packages/web test: ✔ web case 6 (0.046292ms)
+packages/contracts test: ℹ tests 4
+packages/contracts test: ℹ suites 0
+packages/contracts test: ℹ pass 4
+packages/contracts test: ℹ fail 0
+packages/contracts test: ℹ cancelled 0
+packages/contracts test: ℹ skipped 0
+packages/contracts test: ℹ todo 0
+packages/contracts test: ℹ duration_ms 68.877
+packages/web test: ℹ tests 6
+packages/web test: ℹ suites 0
+packages/web test: ℹ pass 6
+packages/web test: ℹ fail 0
+packages/web test: ℹ cancelled 0
+packages/web test: ℹ skipped 0
+packages/web test: ℹ todo 0
+packages/web test: ℹ duration_ms 71.459292
+packages/contracts test: Done
+packages/web test: Done

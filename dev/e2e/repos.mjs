@@ -144,6 +144,53 @@ const NODE_TEST_PASS = fs.readFileSync(new URL('../../ather-automata/tests/fixtu
   expect('and in no other scope', JSON.stringify([...engine.store.keys()].filter(key => key.startsWith('evidence:'))) === JSON.stringify([`evidence:${sid}`]), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
 }
 
+// ---------------------------------------------------------------- two gates on one rung
+
+{
+  const parent = fs.mkdtempSync(join(BASE, 'gates-'))
+  const profile = { ...WEB_PROFILE, gates: [...WEB_PROFILE.gates, { id: 'lint', command: 'npm run lint', proofs: ['lint'] }, { id: 'typecheck', command: 'npm run typecheck', proofs: ['lint'] }], required: ['tests', 'lint'] }
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(profile, null, 2)}\n` } })
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0046' })
+  const lint = () => engine.store.get(`evidence:${sid}`)?.lint
+  await startAway(engine)
+  await bash(engine, 'npm test', NODE_TEST_PASS)
+  await engine.modelTool({ tool: 'Bash', command: 'npm run typecheck', __text: 'src/a.ts(1,1): error TS2322: wrong\nFound 1 error.', __isError: true })
+  await bash(engine, 'npm run lint')
+  const failed = await bash(engine, 'gh pr merge 3')
+  expect("a lint gate that passed after the rung's other gate failed leaves lint failed", lint()?.state === 'fail', lint())
+  expect('and the with-proof merge is held', failed.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'merge', failed.deny)
+  await bash(engine, 'npm run typecheck')
+  const proven = await bash(engine, 'gh pr merge 3')
+  expect('with both lint gates and the tests passed in this session, the merge goes through', lint()?.state === 'pass' && proven.deny === undefined, [lint(), proven.deny])
+  const record = engine.store.get(`evidence:${sid}`)
+  if (record?.lint?.gates?.lint) record.lint.gates.lint.at = Date.now() - 60 * 60 * 1000
+  const stale = await bash(engine, 'gh pr merge 3')
+  expect('a gate that passed before this session does not prove the merge, though the other passed in it', stale.deny !== undefined, [record?.lint, stale.deny])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+// ---------------------------------------------------------------- a gate that passes on its exit code
+
+for (const [index, [name, command]] of [['go', 'go test ./...'], ['cargo', 'cargo test']].entries()) {
+  const output = kind => fs.readFileSync(new URL(`../../ather-automata/tests/fixtures/web/${name}-test-${kind}.txt`, import.meta.url), 'utf8')
+  const parent = fs.mkdtempSync(join(BASE, 'exit-'))
+  const profile = { version: 1, pack: 'web', gates: [{ id: 'tests', command, proofs: ['tests'], passOn: 'exit' }], mergePolicy: 'with-proof' }
+  const repo = makeCheckout(parent, name, { owner: 'AskTinNguyen', name, files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(profile, null, 2)}\n` } })
+  const { engine, sessionId: sid } = await boot({ root: repo, sessionId: `harness-session-00${47 + index}` })
+  const tests = () => engine.store.get(`evidence:${sid}`)?.tests
+  await startAway(engine)
+  await engine.modelTool({ tool: 'Bash', command, __text: output('fail'), __isError: true })
+  const failed = await bash(engine, 'gh pr merge 3')
+  expect(`${command}, a gate that passes on exit: the failing run fails tests`, tests()?.state === 'fail', tests())
+  expect('and the with-proof merge is held', failed.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'merge', failed.deny)
+  await bash(engine, command, output('pass'))
+  const proven = await bash(engine, 'gh pr merge 3')
+  expect(`${command}: the passing run, which prints no counts the pack reads, passes tests and the merge goes through`, tests()?.state === 'pass' && proven.deny === undefined, [tests(), proven.deny])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- an intent tracked in another checkout
 
 const LOGIN = '# Login\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: the form posts.\n- [ ] A2: errors show.\n'
@@ -336,6 +383,117 @@ const writeIntent = (root, slug, text = LOGIN) => {
   expect('with no repository name', rows.length === 1 && rows.every(one => one.repo === ''), rows.map(one => one.repo))
   await engine.flush()
   expect('and fetches its one origin', fetchRuns(engine).length === 1, fetchRuns(engine).map(run => run.argv))
+}
+
+// ---------------------------------------------------------------- no profile, a pnpm lockfile
+
+{
+  const parent = fs.mkdtempSync(join(BASE, 'pnpm-'))
+  const scripts = { test: 'node --test', lint: 'eslint .', build: 'vite build' }
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, 'package.json': `${JSON.stringify({ name: 'web', scripts }, null, 2)}\n`, 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" } })
+  writeIntent(web, 'pay', '# Pay\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: it pays.\n')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0047' })
+  engine.setSurfaces(['terminal'])
+  await bash(engine, 'pnpm test', NODE_TEST_PASS)
+  expect('without a profile, a passing pnpm test records tests as passed', engine.store.get(`evidence:${sid}`)?.tests?.state === 'pass', engine.store.get(`evidence:${sid}`))
+  await engine.command('ather', 'intent pay')
+  const submits = engine.record.submits.length
+  byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')?.props.onPress()
+  await engine.flush()
+  const prove = engine.record.submits.slice(submits).join('\n')
+  expect("with a pnpm-lock.yaml and no profile, Prove names pnpm test, pnpm lint and pnpm build, and no npm command", ['`pnpm test`', '`pnpm lint`', '`pnpm build`'].every(command => prove.includes(command)) && !/`npm /.test(prove), prove)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+// ---------------------------------------------------------------- pull requests into another branch than main
+
+{
+  const parent = fs.mkdtempSync(join(BASE, 'base-'))
+  // A web checkout on a feature branch, with a develop branch on its origin.
+  const makeWeb = (folder, profile) => {
+    const root = makeCheckout(parent, folder, { owner: 'AskTinNguyen', name: folder, files: { ...INTENTS, 'package.json': '{ "name": "web" }\n', '.ather/profile.json': `${JSON.stringify(profile, null, 2)}\n` } })
+    git(root, 'checkout', '-q', '-b', 'develop')
+    git(root, 'push', '-q', 'origin', 'develop')
+    git(root, 'checkout', '-q', '-b', 'feat/x')
+    return root
+  }
+  const isHeldAs = (engine, sid, answer, kind, command) => answer.deny !== undefined && parked(engine, sid).at(-1)?.kind === kind && parked(engine, sid).at(-1)?.command === command
+  const OLD_PROFILE = { version: 1, pack: 'web', gates: [{ id: 'test', command: 'npm test', proofs: ['tests'] }] }
+
+  {
+    const web = makeWeb('named', { ...OLD_PROFILE, baseBranch: 'develop' })
+    const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0048' })
+    const started = String((await startAway(engine))?.result ?? '')
+    expect('with "baseBranch": "develop", the away tool says PRs open to develop and names develop among what is held', /open PRs to develop/.test(started) && /Held: [^.]*develop/.test(started) && !/PRs to main/.test(started), started)
+    const develop = await bash(engine, 'git push origin develop')
+    expect('git push origin develop is held and parked as push-main', isHeldAs(engine, sid, develop, 'push-main', 'git push origin develop'), [develop.deny, parked(engine, sid)])
+    expect('and the refusal names develop', /develop/.test(String(develop.deny).replace('git push origin develop', '')), develop.deny)
+    const main = await bash(engine, 'git push origin main')
+    expect('git push origin main is still held', isHeldAs(engine, sid, main, 'push-main', 'git push origin main'), [main.deny, parked(engine, sid)])
+    const feature = await bash(engine, 'git push -u origin feat/x')
+    expect('a push of a feature branch is not held', feature.deny === undefined, feature.deny)
+    const bare = await bash(engine, 'git push')
+    expect('a bare push on a feature branch is not held', bare.deny === undefined, bare.deny)
+    const pr = await bash(engine, 'gh pr merge 5')
+    expect('gh pr merge 5 is held, whatever branch the PR goes into', isHeldAs(engine, sid, pr, 'merge', 'gh pr merge 5'), [pr.deny, parked(engine, sid)])
+    const pull = await bash(engine, 'git merge origin/develop')
+    expect('git merge origin/develop on a feature branch is not held', pull.deny === undefined, pull.deny)
+    git(web, 'checkout', '-q', 'develop')
+    const merge = await bash(engine, 'git merge feat/x')
+    expect('git merge feat/x while develop is checked out is held as a merge', isHeldAs(engine, sid, merge, 'merge', 'git merge feat/x'), [merge.deny, parked(engine, sid)])
+    const barePush = await bash(engine, 'git push')
+    expect('a bare git push while develop is checked out is held', isHeldAs(engine, sid, barePush, 'push-main', 'git push'), [barePush.deny, parked(engine, sid)])
+    expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+    await engine.end('other')
+  }
+
+  {
+    // A profile as 0.2.5 wrote it; the clone knows develop as the default branch of its origin.
+    const web = makeWeb('default', OLD_PROFILE)
+    git(web, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop')
+    const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0049' })
+    const started = String((await startAway(engine))?.result ?? '')
+    expect("with no field and origin/HEAD at develop, the away tool says PRs open to develop", /open PRs to develop/.test(started), started)
+    const develop = await bash(engine, 'git push origin develop')
+    expect('and a push to develop is held as push-main', isHeldAs(engine, sid, develop, 'push-main', 'git push origin develop'), [develop.deny, parked(engine, sid)])
+    const main = await bash(engine, 'git push origin main')
+    expect('and a push to main is held', isHeldAs(engine, sid, main, 'push-main', 'git push origin main'), [main.deny, parked(engine, sid)])
+    expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+    await engine.end('other')
+  }
+
+  {
+    // The same clone from a worktree of it: origin/HEAD is in the git folder the worktrees share.
+    const web = makeWeb('shared', OLD_PROFILE)
+    git(web, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop')
+    const worktree = join(parent, 'shared-wt')
+    git(web, 'worktree', 'add', '-q', '-b', 'feat/y', worktree)
+    const { engine, sessionId: sid } = await boot({ root: worktree, sessionId: 'harness-session-0050' })
+    await startAway(engine)
+    const develop = await bash(engine, 'git push origin develop')
+    expect("in a worktree of that clone, a push to develop is held as push-main", isHeldAs(engine, sid, develop, 'push-main', 'git push origin develop'), [develop.deny, parked(engine, sid)])
+    expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+    await engine.end('other')
+  }
+
+  {
+    // The same profile and no origin/HEAD: as before.
+    const web = makeWeb('plain', OLD_PROFILE)
+    expect('a checkout made by push has no origin/HEAD', !fs.existsSync(join(web, '.git/refs/remotes/origin/HEAD')))
+    const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0051' })
+    const started = String((await startAway(engine))?.result ?? '')
+    expect('with no field and no origin/HEAD, the away tool reads as before: PRs to main, "Pushes to main"', /open PRs to main/.test(started) && /Pushes to main/.test(started) && !/develop/.test(started), started)
+    const develop = await bash(engine, 'git push origin develop')
+    expect('and a push to develop is not held (as before)', develop.deny === undefined, develop.deny)
+    git(web, 'checkout', '-q', 'develop')
+    const merge = await bash(engine, 'git merge feat/x')
+    expect('nor a local merge while develop is checked out (as before)', merge.deny === undefined, merge.deny)
+    const main = await bash(engine, 'git push origin main')
+    expect('and a push to main is held (as before)', isHeldAs(engine, sid, main, 'push-main', 'git push origin main'), [main.deny, parked(engine, sid)])
+    expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+    await engine.end('other')
+  }
 }
 
 // ---------------------------------------------------------------- issues and PRs from every checkout
