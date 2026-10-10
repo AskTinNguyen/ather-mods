@@ -185,6 +185,20 @@ describe('gates as people type them', () => {
     expect(rungs('python3 -m unittest discover -s tests')).toEqual([])
     expect(rungs('cd web && python3 -m unittest discover -s tests')).toEqual([])
   })
+  test('a "cd" gate needs "&&" between the two segments: "||", a pipe and ";" do not count', () => {
+    expect(rungs('npm ci && cd app && python3 -m unittest discover -s tests')).toEqual(['tests'])
+    expect(rungs('cd app || python3 -m unittest discover -s tests')).toEqual([])
+    expect(rungs('cd app | python3 -m unittest discover -s tests')).toEqual([])
+    expect(rungs('cd app; python3 -m unittest discover -s tests')).toEqual([])
+  })
+  test('a gate whose first word is a path is compared as written', () => {
+    const gates = gatesOf({ gates: [{ command: './scripts/check.sh', proofs: ['lint'] }] })
+    expect(rungs('./scripts/check.sh', gates)).toEqual(['lint'])
+    expect(rungs('./scripts/check.sh --fast', gates)).toEqual(['lint'])
+    expect(rungs('./other/check.sh', gates)).toEqual([])
+    expect(rungs('/tmp/check.sh', gates)).toEqual([])
+    expect(rungs('scripts\\check.sh.exe', gates)).toEqual([])
+  })
   test('a command that only looks like a gate proves nothing', () => {
     expect(rungs('python3 scripts/other.py')).toEqual([])
     expect(rungs('ruby scripts/validate.py')).toEqual([])

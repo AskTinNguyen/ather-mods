@@ -55,9 +55,19 @@ const programOf = word => {
   return /^python(3(\.\d+)?)?$/.test(program) ? 'python' : program
 }
 
-// A command as a gate is compared: env prefix dropped, its first word a program, npm spellings folded.
+// A command as a gate that names a bare program is compared: env prefix dropped, its first word a
+// program, npm spellings folded.
 /** @param {string} command */
 const asTyped = command => normal(bareCommand(command).replace(/^\S+/, programOf))
+
+// A gate's command for comparing, and whether its first word is a path. A bare program name
+// ("python3", "pnpm") is that program wherever it is run from; a path ("./scripts/check.sh") is
+// compared as written, so another script of the same name elsewhere does not prove it.
+/** @param {string} command */
+const gateCommand = command => {
+  const isPath = /^\S*[\\/]/.test(bareCommand(command))
+  return { isPath, command: isPath ? normal(command) : asTyped(command) }
+}
 
 // The folder a `cd` segment goes to, as written, without a trailing slash.
 /** @param {string} segment */
@@ -66,27 +76,37 @@ const cdFolder = segment => /^cd\s+(.+)$/.exec(segment)?.[1]?.replace(/(?<=.)[\\
 // A gate as it is compared. One written `cd <folder> && <command>` is two segments: the folder and
 // the command. Any other chain (more than one `&&`, or a first segment that is not a `cd`) stays
 // whole, so it never matches a command, which is read one segment at a time.
-/** @param {string} gate @returns {{ folder: string | null, command: string }} */
+/** @param {string} gate @returns {{ folder: string | null, isPath: boolean, command: string }} */
 const gateParts = gate => {
   const parts = segments(gate)
   const folder = parts.length === 2 && gate.includes('&&') ? cdFolder(parts[0] ?? '') : null
-  return folder === null ? { folder: null, command: asTyped(gate) } : { folder, command: asTyped(parts[1] ?? '') }
+  return { folder, ...gateCommand(folder === null ? gate : parts[1] ?? '') }
 }
+
+// A mark put after each `&&` of a command before it is split: a segment that starts with it is
+// joined to the one before by `&&`. `segments` itself drops the operators.
+const AFTER_AND = '\u0000'
+
+/** @param {string} segment */
+const unmarked = segment => segment.replaceAll(AFTER_AND, '').trim()
 
 /**
  * The gate a segment runs: its command is the segment or a prefix of it, and a `cd` gate also needs
- * that `cd` as the segment before. Among several, the longest command wins, wherever it stands.
- * @param {readonly string[]} parts the command's segments @param {number} at @param {readonly Gate[]} gates
+ * that `cd` as the segment before, joined with `&&`: after `;`, `||` or `|` the command does not
+ * depend on the `cd`, so those do not count. Among several, the longest command wins, wherever it stands.
+ * @param {readonly string[]} marked the command's segments, AFTER_AND kept @param {number} at @param {readonly Gate[]} gates
  * @returns {Gate | null}
  */
-const gateOf = (parts, at, gates) => {
-  const typed = asTyped(parts[at] ?? '')
-  const before = at > 0 ? cdFolder(parts[at - 1] ?? '') : null
+const gateOf = (marked, at, gates) => {
+  const segment = unmarked(marked[at] ?? '')
+  const forms = { written: normal(segment), program: asTyped(segment) }
+  const before = at > 0 && (marked[at] ?? '').startsWith(AFTER_AND) ? cdFolder(unmarked(marked[at - 1] ?? '')) : null
   /** @type {Gate | null} */
   let best = null
   let longest = 0
   for (const gate of gates) {
-    const { folder, command } = gateParts(gate.command)
+    const { folder, isPath, command } = gateParts(gate.command)
+    const typed = isPath ? forms.written : forms.program
     if (command === '' || !(typed === command || typed.startsWith(`${command} `))) continue
     if (folder !== null && folder !== before) continue
     const length = command.length + (folder === null ? 0 : `cd ${folder} && `.length)
@@ -111,10 +131,10 @@ const hostOf = url => /^https?:\/\/([^/:?#\s]+)/i.exec(url)?.[1]?.toLowerCase() 
 export const rungsOfCommand = (command, scripts, gates, production = null, depth = 0) => {
   /** @type {Set<string>} */
   const found = new Set()
-  const parts = segments(command)
-  for (const [at, segment] of parts.entries()) {
-    const bare = bareCommand(segment)
-    const gate = gateOf(parts, at, gates)
+  const marked = segments(command.replaceAll('&&', `&&${AFTER_AND}`))
+  for (const [at, part] of marked.entries()) {
+    const bare = bareCommand(unmarked(part))
+    const gate = gateOf(marked, at, gates)
     if (gate) {
       for (const proof of gate.proofs) if (ALIASES[proof] && ALIASES[proof] !== 'prod') found.add(ALIASES[proof])
       continue
