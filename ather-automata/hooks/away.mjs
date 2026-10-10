@@ -71,11 +71,11 @@ export const windowEndText = (away, tz) => (away.untilDone ? 'until done (24 hou
 
 // The same for the session to read: "until 17:30 local time", or "until the work is done (hard stop 13:45 local
 // time)" for a window with no set end, whose `wakeAt` is only its 24-hour limit, never when the person is back.
-/** @param {Away} away @param {number} tz */
+/** @param {Pick<Away, 'untilDone' | 'wakeAt'>} away @param {number} tz */
 export const awayUntilText = (away, tz) => (away.untilDone ? `until the work is done (hard stop ${clockText(away.wakeAt, tz)} local time)` : `until ${clockText(away.wakeAt, tz)} local time`)
 
 // Why a question is not asked now: the person is away, or has not reviewed the window that ended.
-/** @param {Away} away @param {number} tz */
+/** @param {{ phase: string, untilDone: boolean, wakeAt: number }} away @param {number} tz */
 export const awayReason = (away, tz) => (away.phase === 'review' ? 'The user has not reviewed the away window yet' : `The user is away ${awayUntilText(away, tz)}`)
 
 /** @param {WindowChoice} choice @param {number} now @param {string} ledgerPath @param {{ person: string, root: string }} owner @returns {Away} */

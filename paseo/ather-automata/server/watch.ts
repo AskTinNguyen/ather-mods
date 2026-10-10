@@ -76,7 +76,7 @@ export async function onPermission(event: PermissionEvent, context: PluginHookCo
       .deferQuestions(io, questions.map((one) => ({ question: String(one.question ?? ""), options: one.options ?? [] })), lastPersonAt(event.agent.id))
       .catch(() => null);
     if (!deferred) return;
-    const { ids, away } = deferred as { ids: string[]; away: { phase: string; wakeAt: number; ledgerPath: string } };
+    const { ids, away } = deferred as { ids: string[]; away: { phase: string; untilDone: boolean; wakeAt: number; ledgerPath: string } };
     void state.bump(io, "decisionsLedgered").catch(() => undefined);
     void note(event.agent.id, "info", `${ids.join(", ")} recorded for your review instead of waiting.`);
     await respond({
