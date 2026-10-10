@@ -1327,6 +1327,52 @@ const refresh = async engine => {
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- a press while a turn runs
+
+// Next's row as the pane draws it, and the last pop-up.
+const nextRow = async engine => byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')
+const lastToast = engine => engine.record.toasts.at(-1) ?? ''
+
+{
+  // One web checkout; the session tracks its intent, so Home has a Next step to hand over.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0020' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('ather')
+  const idle = await nextRow(engine)
+  expect('Home offers a Next step for the tracked intent', idle && !/queued|sent/.test(idle.props.label), idle?.props.label)
+
+  // The person typed a prompt and its turn runs: the engine holds a plugin's prompt until that turn ends.
+  await engine.turnStart()
+  const submitsBefore = engine.record.submits.length
+  idle.props.onPress()
+  await engine.flush()
+  expect('pressed while a turn runs, Next is queued behind it: the session has nothing yet', engine.queued().length === 1 && engine.record.submits.length === submitsBefore, [engine.queued(), engine.record.submits.slice(submitsBefore)])
+  expect('the pop-up says queued until the turn ends, never sent', /^Ather: Queued until this turn ends/.test(lastToast(engine)) && !/sent/i.test(lastToast(engine)), lastToast(engine))
+  const waiting = await nextRow(engine)
+  expect('its row reads queued, not sent', /^⏳ queued · /.test(waiting?.props.label ?? ''), waiting?.props.label)
+  const band = await engine.render('AbovePrompt', {})
+  expect('the line above the prompt says a press is queued', /queued until this turn ends/.test(textIn(band)), textIn(band))
+
+  // A second press of the same row, by a click or its key, sends nothing more.
+  waiting.props.onPress()
+  await engine.flush()
+  expect('pressed again while it waits: still one prompt queued, and the pop-up says it already waits', engine.queued().length === 1 && /^Ather: Already queued/.test(lastToast(engine)), [engine.queued().length, lastToast(engine)])
+
+  await engine.turnEnd()
+  await engine.flush()
+  expect('when the turn ends the session gets the one prompt', engine.queued().length === 0 && engine.record.submits.length === submitsBefore + 1, engine.record.submits.slice(submitsBefore))
+  expect('and the pop-up says it was sent, after how long', /^Ather: Sent to the session: it was queued for \d+s\.$/.test(lastToast(engine)), lastToast(engine))
+  const done = await nextRow(engine)
+  expect('its row then reads sent', /^✓ sent · /.test(done?.props.label ?? ''), done?.props.label)
+  const debug = engine.record.logs.filter(line => /^Ather hand-off: /.test(line))
+  expect('the debug log has the press, the second press and the delivery', debug.some(line => /pressed at .*queued behind the running turn/.test(line)) && debug.some(line => /pressed again while it waits/.test(line)) && debug.some(line => /delivered after \d+ ms/.test(line)), debug)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

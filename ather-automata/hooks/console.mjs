@@ -29,6 +29,7 @@ import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
 import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from './setup.mjs'
+import { createOutbox, toldText } from './handoff.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding' | 'repos'} Mode */
@@ -52,6 +53,10 @@ let me = ''
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
 const sent = new Set()
+// Those the session does not have yet (handoff.mjs): a press while a turn runs waits for the turn's end.
+const outbox = createOutbox()
+// The model turn running now in the main conversation ('' between turns), as turn.start named it.
+let turnRunning = ''
 let paneMode = /** @type {Mode} */ ('home')
 // Create groups opened past their first three.
 /** @type {Set<string>} */
@@ -340,7 +345,14 @@ export function register(on, options) {
     return result
   })
 
+  // A prompt handed over while a turn runs is queued by the engine until the turn ends: the pane says so.
+  on('turn.start', async ($, e, next) => {
+    turnRunning = e.turnId
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId && e.turnId === turnRunning) turnRunning = ''
     const result = await next(e)
     // Read again in the background: the turn's end never waits on git.
     if (!e.agentId && (await hasIntents($))) void refresh($).catch(() => undefined)
@@ -445,6 +457,7 @@ export function register(on, options) {
 /** @param {Engine} $ @param {string} folder */
 async function openConsole($, folder) {
   sent.clear()
+  outbox.reset()
   paneMode = 'home'
   isIssuesWarned = false
   isWhoWarned = false
@@ -855,6 +868,9 @@ function bandHint(model) {
   const { header } = model
   if (header.stage === 'Away') return `🌙 Away ${header.progress} · ${header.sentence} · /ather`
   if (model.open.some(one => one.kind === 'review')) return '☀ Welcome back · review the away window · /ather'
+  // Handed over while a turn runs: the session has not read it yet.
+  const queued = outbox.queued().length
+  if (queued > 0) return `⏳ ${queued === 1 ? 'Your press is' : `${queued} presses are`} queued until this turn ends · /ather`
   if (model.isNewcomer) return '◆ New here? Take the tour'
   if (model.open.length > 0) return `◆ ${header.title} · ${model.open.length} need${model.open.length === 1 ? 's' : ''} you · /ather`
   return ''
@@ -881,22 +897,34 @@ function fill($, text) {
   })
 }
 
-// The one way things go to the session: shown as sent at once, `onDelivered` once the
-// session has the prompt, offered again if delivery fails.
-/** @param {Engine} $ @param {readonly string[]} ids @param {string} text @param {() => Promise<unknown>} [onDelivered] @param {() => Promise<unknown>} [onFailed] */
-function handOff($, ids, text, onDelivered, onFailed) {
-  for (const id of ids) sent.add(id)
-  stale()
-  void deliver($, text).then(
-    () => onDelivered?.(),
-    error => {
-      for (const id of ids) sent.delete(id)
-      void onFailed?.()
+// What the outbox (handoff.mjs) needs of the engine, for one press.
+/** @param {Engine} $ @returns {import('./handoff.mjs').Host} */
+function outboxHost($) {
+  return {
+    submit: text => deliver($, text),
+    after: (ms, run) => $.clock.after(ms, run),
+    isBusy: () => turnRunning !== '',
+    onChange: () => {
       stale()
       $.ui.invalidate('ui.render')
-      $.ui.toast(`Ather: could not send to the session: ${String(error)}`)
     },
-  )
+    say: text => $.ui.toast(`Ather: ${text}`),
+    log: line => $.ui.log(`Ather hand-off: ${line}`, { to: 'debug' }),
+  }
+}
+
+// The one way things go to the session: shown as sent, or as queued while a turn runs (the engine starts a
+// prompt's turn only once the session is idle); `onDelivered` once the session has the prompt, offered
+// again if delivery fails. A press for something that still waits sends nothing. Resolves what the press did.
+/** @param {Engine} $ @param {readonly string[]} ids @param {string} text @param {() => Promise<unknown>} [onDelivered] @param {() => Promise<unknown>} [onFailed] */
+function handOff($, ids, text, onDelivered, onFailed) {
+  const handed = outbox.hand(outboxHost($), ids, text, onDelivered, async () => {
+    for (const id of ids) sent.delete(id)
+    await onFailed?.()
+  })
+  if (handed !== 'pending') for (const id of ids) sent.add(id)
+  stale()
+  return handed
 }
 
 /** @param {Engine} $ @param {Item} one */
@@ -907,11 +935,9 @@ async function act($, one) {
     // session's questions reach them. The prompt carries every decision and held action.
     const saved = await state.readAway(io($))
     await state.closeAway(io($))
-    handOff($, [one.id], one.prompt, undefined, () => state.restoreAway(io($), saved))
-    return 'Sent to the session.'
+    return toldText(handOff($, [one.id], one.prompt, undefined, () => state.restoreAway(io($), saved)), 'Sent to the session.')
   }
-  handOff($, [one.id], one.prompt, () => state.settleItem(io($), one))
-  return 'Sent to the session.'
+  return toldText(handOff($, [one.id], one.prompt, () => state.settleItem(io($), one)), 'Sent to the session.')
 }
 
 // "I'm back": ends the window and hands its review to the session in one step.
@@ -925,10 +951,10 @@ async function comeBack($) {
 
 /** @param {Engine} $ @param {readonly Item[]} items */
 async function actAll($, items) {
-  handOff($, items.map(one => one.id), batchPrompt(items), async () => {
+  const handed = handOff($, items.map(one => one.id), batchPrompt(items), async () => {
     for (const one of items) await state.settleItem(io($), one)
   })
-  return `Sent ${items.length} things to the session; it takes you through them one at a time.`
+  return toldText(handed, `Sent ${items.length} things to the session; it takes you through them one at a time.`)
 }
 
 // An answer given in place: the row shows "✓ Decided" for a while, then folds. The session gets
@@ -941,14 +967,14 @@ async function answerItem($, one, answer, prompt) {
   $.clock.after(DECIDED_SHOWN_MS + 100, () => $.ui.invalidate('ui.render'))
   const settle = () => new Promise(resolve => $.clock.after(DECIDED_SHOWN_MS, () => resolve(state.settleItem(io($), one))))
   const unanswer = async () => void (answerState = { ...answerState, decided: answerState.decided.filter(each => each.id !== one.id) })
-  if (prompt) handOff($, [one.id], prompt, settle, unanswer)
-  else {
+  const handed = prompt ? handOff($, [one.id], prompt, settle, unanswer) : null
+  if (handed === null) {
     sent.add(one.id)
     stale()
     void settle()
   }
   $.ui.invalidate('ui.render')
-  return prompt ? `sent your answer to the session: ${answer}` : `closed: ${answer}`
+  return handed === null ? `closed: ${answer}` : handed === 'queued' ? `your answer (${answer}) is queued until this turn ends; the session gets it then.` : `sent your answer to the session: ${answer}`
 }
 
 // A typed answer, from the field or the dialog's Other: the person's words are the choice.
@@ -968,7 +994,7 @@ async function typeAnswer($, one, answers, hasInput) {
   }
   /** @type {Choice[]} */
   const choices = answers.options.slice(0, 4).map(option => ({ label: cutWords(`${option.letter}: ${option.label}${option.isRecommended ? ' (Recommended)' : ''}`, 60), description: cutWords(option.text, 200), run: () => answerItem($, one, option.letter, option.prompt) }))
-  if (choices.length === 0) choices.push({ label: 'Explain it first', description: 'The session explains it; nothing is decided.', run: async () => (handOff($, [], answers.explain), 'asked the session to explain it.') })
+  if (choices.length === 0) choices.push({ label: 'Explain it first', description: 'The session explains it; nothing is decided.', run: async () => toldText(handOff($, [], answers.explain), 'asked the session to explain it.') })
   return ask($, { header: 'Answer', question: `${one.question}. Pick one, or type your own answer under Other.`, choices, fallback: 'Nothing answered.', onTyped: words => answerTyped($, one, answers, words) })
 }
 
@@ -981,21 +1007,18 @@ async function doNext($, next) {
     fill($, next.prompt)
     return 'It is in the prompt box: finish it and press Enter.'
   }
-  handOff($, [next.id], next.prompt)
-  return 'Sent to the session.'
+  return toldText(handOff($, [next.id], next.prompt), 'Sent to the session.')
 }
 
 /** @param {Engine} $ */
 async function startTour($) {
-  handOff($, ['next:tour'], pack.prompts.tour, () => state.setProfile(io($), me, { tourDone: true }))
-  return 'Starting the Ather tour.'
+  return toldText(handOff($, ['next:tour'], pack.prompts.tour, () => state.setProfile(io($), me, { tourDone: true })), 'Starting the Ather tour.')
 }
 
 /** @param {Engine} $ @param {Work} work */
 async function startWork($, work) {
   if (work.kind === 'intent') return trackKey($, work.key)
-  handOff($, [work.id], work.prompt)
-  return `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`
+  return toldText(handOff($, [work.id], work.prompt), `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
 }
 
 // An issue by number, from the assigned list or not: `7` or `#7` the session checkout's issue 7, else the first
@@ -1014,20 +1037,17 @@ async function startIssue($, ref, isInQuestion = false) {
   const found = lane ? listed.find(one => one.repo === lane.repo) : (listed.find(one => one.key === String(number)) ?? listed[0])
   const assigned = found && lane ? issueAt(found, lane, name ?? '', isOwn) : found
   if (assigned) {
-    handOff($, [issueId(assigned)], issuePrompt(assigned, me))
-    return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
+    return toldText(handOff($, [issueId(assigned)], issuePrompt(assigned, me)), `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
   }
   /** @type {import('./issues.mjs').Issue} */
   let issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
   if (lane && !isOwn) issue = issueAt(issue, lane, name ?? '', false)
   const go = async () => {
-    handOff($, [issueId(issue)], issuePrompt(issue, me))
-    return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
+    return toldText(handOff($, [issueId(issue)], issuePrompt(issue, me)), `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
   }
   // Already inside a question: the session confirms instead of a third dialog.
   if (isInQuestion) {
-    handOff($, [issueId(issue)], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`)
-    return `Sent issue #${number} to the session; it confirms with you first, since it is not assigned to you.`
+    return toldText(handOff($, [issueId(issue)], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`), `Sent issue #${number} to the session; it confirms with you first, since it is not assigned to you.`)
   }
   return ask($, {
     header: 'Issue',
@@ -1128,8 +1148,9 @@ async function startAway($, choice) {
   if (away === null) return 'An away window is already running or waiting for your review: /ather shows it.'
   const { root } = await laneOf($)
   const ledger = away.ledgerPath.startsWith(root) ? away.ledgerPath.slice(root.length + 1) : away.ledgerPath
-  handOff($, ['away-start'], `I am away ${windowEndText(away, tz)}. Goal: ${choice.goal || 'continue the active work'}. Work through it without waiting for me and record every decision you take for me in ${ledger}.`)
-  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}`
+  // The window holds from now; what the session is told may wait for its turn to end.
+  const handed = handOff($, ['away-start'], `I am away ${windowEndText(away, tz)}. Goal: ${choice.goal || 'continue the active work'}. Work through it without waiting for me and record every decision you take for me in ${ledger}.`)
+  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}${handed === 'queued' ? ' The session is told when this turn ends.' : ''}`
 }
 
 // Text typed instead of picking: an intent, a question for the session, or nothing.
@@ -1140,8 +1161,7 @@ async function typed($, text, isInQuestion = true) {
   if (number) return startIssue($, number[1] ?? number[2] ?? '', isInQuestion)
   if (searchIntents(intents, text).length > 0) return lookUp($, text)
   const question = /^(help|\?)$/i.test(text.trim()) ? 'What can Ather do for me?' : text
-  void deliver($, askPrompt(question, pack)).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
-  return 'Sent your question to the session.'
+  return toldText(handOff($, [], askPrompt(question, pack)), 'Sent your question to the session.')
 }
 
 // ---------------------------------------------------------------- commands
@@ -1176,8 +1196,8 @@ async function setupCommand($) {
   // The steps ship in the plugin, beside hooks/.
   const steps = `${$.plugin.root.replace(/\\/g, '/')}/templates/intent-setup/SETUP.md`
   const pack = suggestPack(await $.fs.list(root).catch(() => []))
-  void deliver($, setupPrompt({ root: root.replace(/\\/g, '/'), steps, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
-  return `Asked the session to set up intents here. To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
+  const handed = handOff($, [], setupPrompt({ root: root.replace(/\\/g, '/'), steps, missing: setup.missing, pack }))
+  return `${handed === 'sent' ? 'Asked the session to set up intents here.' : toldText(handed, '')} To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
 }
 
 // /ather where there are no intents: one question, never the setup itself. Unanswered, it says where
@@ -1878,7 +1898,7 @@ async function seeIntent($) {
 // A press on a worker: the session gives its status, without stopping or redirecting it.
 /** @param {Engine} $ @param {Crew} one */
 function askWorker($, one) {
-  return press($, async () => { handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`); return `asked the session about ${one.title}` }, false)
+  return press($, async () => toldText(handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`), `asked the session about ${one.title}`), false)
 }
 
 // How Needs you answers in place (rows.mjs Answering): this session's state, and each press as a closure.
@@ -1893,7 +1913,7 @@ function answering($, model, hasInput) {
     view: needsView(model.items, model.open, answerState, callsOpen, Date.now(), hasInput),
     onOpen: id => () => change({ opened: id, typing: '' }),
     onAnswer: (one, option) => press($, () => answerItem($, one, option.letter, option.prompt), true),
-    onExplain: (_one, answers) => press($, async () => (handOff($, [], answers.explain), 'asked the session to explain it; nothing is decided.'), true),
+    onExplain: (_one, answers) => press($, async () => toldText(handOff($, [], answers.explain), 'asked the session to explain it; nothing is decided.'), true),
     onType: (one, answers) => press($, () => typeAnswer($, one, answers, hasInput), true),
     onTyped: (one, answers) => words => press($, () => answerTyped($, one, answers, words), true)(),
     // Leaving the row's view closes its typed answer: Back does not land in the field again.
@@ -2029,7 +2049,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       )
       // Looking never tracks: working on it here is its own press, and needs its folder in this
       // checkout. Asking about it never needs one: the session reads it from origin/main if it must.
-      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent))); return `asked the session about ${key}` }, false) })
+      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => toldText(handOff($, [], aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent))), `asked the session about ${key}`), false) })
       const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackKey($, key), true) })] : []
       if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
       if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: 'Not in this checkout yet: pull main to work on it here.' }))
@@ -2047,7 +2067,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
                   width: '100%',
                   children: [
                     Text({ color: one.kind === 'done' ? '#3ccf7a' : one.kind === 'yours' ? LIME : '#8fb8ff', children: changeGlyph(one.kind) }),
-                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => { handOff($, [], `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`); return 'asked the session about that change' }, false) })] }),
+                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => toldText(handOff($, [], `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`), 'asked the session about that change'), false) })] }),
                     Text({ color: QUIET, children: one.time }),
                   ],
                 }),
@@ -2079,7 +2099,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
           label(el, `create-${group}-label`, group, width),
           ...shown.map(one => {
             index += 1
-            return choice(el, { key: one.id, title: one.verb, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => { handOff($, [], one.prompt); return `sent to the session: ${one.verb}` }, false) })
+            return choice(el, { key: one.id, title: one.verb, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => toldText(handOff($, [], one.prompt), `sent to the session: ${one.verb}`), false) })
           }),
           ...(more > 0
             ? [Button({ key: `create-${group}-more`, label: `More… (${more})`, plain: true, dimColor: true, onPress: () => { createOpen.add(group); $.ui.invalidate('ui.render') } })]
@@ -2103,7 +2123,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
           label(el, `skills-${group}-label`, group, width),
           ...list.map(one => {
             index += 1
-            return choice(el, { key: one.id, title: one.name, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => { handOff($, [one.id], one.prompt); return `sent to the session: ${one.name}` }, false) })
+            return choice(el, { key: one.id, title: one.name, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => toldText(handOff($, [one.id], one.prompt), `sent to the session: ${one.name}`), false) })
           }),
         ]),
       )
@@ -2148,14 +2168,14 @@ function paneView(el, $, model, columns, surface, crew = []) {
   const digit = () => (digits < 9 ? String(++digits) : undefined)
   if (model.actions.length > 0) {
     // Start something new, or run the skill that fits now: one press each.
-    rows.push(Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => { handOff($, [one.id], one.prompt ?? ''); return `sent to the session: ${one.label.replace(/^\S+ /, '')}` }, false) })) }))
+    rows.push(Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => toldText(handOff($, [one.id], one.prompt ?? ''), `sent to the session: ${one.label.replace(/^\S+ /, '')}`), false) })) }))
   }
 
   if (model.items.length > 0) {
     rows.push(
       section(el, 'needs', [
         label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width, LIME),
-        ...needsRows(el, isClicked, { items: model.items, open: model.open, opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
+        ...needsRows(el, isClicked, { items: model.items, open: model.open, queued: new Set(outbox.queued()), opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
       ]),
     )
   }
@@ -2175,7 +2195,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       borderStyle: 'round',
       borderColor: LIME,
       paddingX: 1,
-      children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })),
+      children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })),
     })
     rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card]))
   }
