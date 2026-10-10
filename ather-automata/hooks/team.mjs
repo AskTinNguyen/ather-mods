@@ -13,7 +13,9 @@
  *   read: (path: string) => Promise<string | null>,
  *   list: (path: string) => Promise<readonly { name: string, kind: string }[]>,
  *   mtime: (path: string) => Promise<number>,
- * }} Repo `git` runs in the checkout with GIT_ENV; one that could not start or ran out of time answers exit code -1, the reason in stderr
+ *   real?: (folder: string) => Promise<string>,
+ * }} Repo `git` runs in the checkout with GIT_ENV; one that could not start or ran out of time answers exit code -1, the reason in stderr.
+ *   `real`: the folder a path really lands in, behind any symbolic link; without it folders are compared as given
  * @typedef {{ files: string[], at: number, firstAuthor: string, prompt: string, progress: string, findings: string }} MainFolder `at`: the folder's last commit, ms
  * @typedef {{ sha: string, folders: Map<string, MainFolder> }} MainSnapshot what origin/main held at `sha`
  * @typedef {{ key: string, dirty: Set<string>, committed: Set<string> }} LocalState which folders are uncommitted, and which this branch committed since main, as of `key`
@@ -182,7 +184,8 @@ export const localWins = (local, onMain, isNewer) =>
  */
 export const readTeam = async (repo, root, { cache, pinned }) => {
   const top = await repo.git(['rev-parse', '--show-toplevel'])
-  const isRepo = top.exitCode === 0 && isSamePath(top.stdout, root)
+  // Git names the checkout's real folder; the session may have reached it through a link (macOS /var, /tmp).
+  const isRepo = top.exitCode === 0 && (isSamePath(top.stdout, root) || (repo.real !== undefined && isSamePath(top.stdout, await repo.real(root).catch(() => root))))
   const main = isRepo ? await readMain(repo, cache.main) : null
   const folders = []
   for (const entry of await repo.list(`${root}/${INTENTS}`).catch(() => [])) {
