@@ -2,6 +2,8 @@
 // Intent completion from one source each (.agents/skills/intent/SKILL.md): ids in prompt.md,
 // verdicts in progress.md's Acceptance table, PRs on progress.md's "- PR:" line.
 // Namespace imports, so a missing export fails its own test rather than the whole file.
+import fs from 'node:fs'
+
 import { describe, expect, test } from 'claude-code/testing'
 
 import * as changes from '../hooks/changes.mjs'
@@ -70,6 +72,65 @@ describe('acceptance from one source', () => {
   test('ids with no table and no boxes are all open, not "no checklist"', () => {
     const intent = parsed(NEW_PROMPT, '')
     expect([intent.acceptanceDone, intent.acceptanceTotal]).toEqual([0, 6])
+  })
+})
+
+// The older intents of this repository write the section as a table: | Id | Item | Proof |.
+/** @param {readonly (readonly [string, string])[]} rows */
+const tableOf = rows => `| Id | Item | Proof |\n| --- | --- | --- |\n${rows.map(([id, item]) => `| ${id} | ${item} | Unit. |`).join('\n')}`
+
+describe('acceptance written as a table', () => {
+  test('ids and texts in order, verdicts from progress.md, and a row progress.md does not list is open', () => {
+    const prompt = promptOf(tableOf([['A1', 'Calls recorded per loop.'], ['A12a', 'A `long` call is never idle.'], ['A2', 'Tree: children under their parent.']]))
+    expect(model.acceptanceItems(prompt, progressOf([['A1', 'met'], ['A12a', 'open']]))).toEqual([
+      { id: 'A1', text: 'Calls recorded per loop.', isDone: true },
+      { id: 'A12a', text: 'A `long` call is never idle.', isDone: false },
+      { id: 'A2', text: 'Tree: children under their parent.', isDone: false },
+    ])
+    const intent = parsed(prompt, progressOf([['A1', 'met'], ['A12a', 'met'], ['A2', 'met']]))
+    expect([intent.acceptanceDone, intent.acceptanceTotal]).toEqual([3, 3])
+    expect(parsed(prompt, '').acceptanceTotal).toBe(3)
+  })
+
+  test('a list, and a list with a table beside it, are read as the list', () => {
+    const list = '- B1: One. Proof: tests.\n- B2: Two.'
+    const progress = progressOf([['B1', 'met'], ['T1', 'met']])
+    const alone = model.acceptanceItems(promptOf(list), progress)
+    expect(alone).toEqual([{ id: 'B1', text: ': One. Proof: tests.', isDone: true }, { id: 'B2', text: ': Two.', isDone: false }])
+    expect(model.acceptanceItems(promptOf(`${list}\n\n${tableOf([['T1', 'From the table.'], ['B2', 'Two, again.']])}`), progress)).toEqual(alone)
+    // Legacy boxes are a list too, with or without ids.
+    const boxes = '- [x] Snow look.\n- [ ] Sand look.'
+    expect(model.acceptanceItems(promptOf(`${boxes}\n\n${tableOf([['T1', 'From the table.']])}`), '')).toEqual([{ id: '', text: 'Snow look.', isDone: true }, { id: '', text: 'Sand look.', isDone: false }])
+  })
+
+  test('each Acceptance section is read on its own: a table in one and a list in a later one both count', () => {
+    const later = (/** @type {string} */ first, /** @type {string} */ second) => `${promptOf(first)}\n## Acceptance, rev 2\n\n${second}\n`
+    const progress = progressOf([['A1', 'open'], ['A2', 'met']])
+    const mixed = later(tableOf([['A1', 'One.']]), '- A2: Two.')
+    expect(model.acceptanceItems(mixed, progress)).toEqual([{ id: 'A1', text: 'One.', isDone: false }, { id: 'A2', text: ': Two.', isDone: true }])
+    expect([parsed(mixed, progress).acceptanceDone, parsed(mixed, progress).acceptanceTotal]).toEqual([1, 2])
+    expect(model.acceptanceItems(later(tableOf([['A1', 'One.']]), tableOf([['A2', 'Two.'], ['A3', 'Three.']])), progress).map(item => item.id)).toEqual(['A1', 'A2', 'A3'])
+    expect(model.acceptanceItems(later('- A1: One.', '- A2: Two.\n- A3: Three.'), progress).map(item => item.id)).toEqual(['A1', 'A2', 'A3'])
+  })
+
+  test('the header row, the rule row and a table with no id in its first cell give no items', () => {
+    expect(model.acceptanceItems(promptOf(tableOf([])), ALL_MET)).toEqual([])
+    expect(model.acceptanceItems(promptOf('| Build | Platform | Result |\n| --- | --- | --- |\n| Editor | Win64 | Pass |\n| second A1 | Linux | Pass |'), ALL_MET)).toEqual([])
+    expect(parsed(promptOf(tableOf([])), '').acceptanceTotal).toBe(0)
+  })
+
+  test("this repository's four intents written as tables read with the number of rows their tables have", () => {
+    for (const slug of ['crew-tree-and-groups', 'decide-in-place', 'team-truth', 'multi-repo']) {
+      const read = (/** @type {string} */ name) => fs.readFileSync(new URL(`../../docs/intent/${slug}/${name}`, import.meta.url), 'utf8')
+      const prompt = read('prompt.md')
+      // The section's table lines, less its header row and its rule row.
+      const rows = model.section(prompt, 'Acceptance').split(/\r?\n/).filter(line => line.startsWith('|')).length - 2
+      const items = model.acceptanceItems(prompt, read('progress.md'))
+      expect(rows > 0).toBe(true)
+      expect(items.length).toBe(rows)
+      expect(new Set(items.map(item => item.id)).size).toBe(rows)
+      expect(items.every(item => item.text !== '')).toBe(true)
+    }
   })
 })
 

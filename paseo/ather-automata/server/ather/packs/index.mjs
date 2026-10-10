@@ -22,8 +22,8 @@ import { makeWebPack } from './web.mjs'
  * @typedef {{ command: string, proofs: string[], id?: string, proves?: string, passOn?: 'exit' | 'counts' }} Gate `passOn`: how its tests and ui proofs pass, on its exit code (also without the field) or on test counts
  * @typedef {{ host: string, branch: string, deployment: string, url: string, expectStatus: number }} Production
  * @typedef {{ files?: readonly string[], defaultBranch?: string }} Found what else was read of a repository where its pack is chosen: the names of the files at its root, and the default branch its clone knows
- * @typedef {{ pack: Pack, held: readonly string[], isProven: boolean }} HeldAt what a folder's own checkout holds, when that is not the session's
- * @typedef {{ isProven?: boolean, scripts?: Record<string, string>, at?: (folder: string | null) => HeldAt | null }} HeldContext
+ * @typedef {{ pack: Pack, held: readonly string[], isProven: boolean, base?: string }} HeldAt what a folder's own checkout holds, when that is not the session's; `base`: the branch its team merges into, when not main
+ * @typedef {{ isProven?: boolean, scripts?: Record<string, string>, base?: string, at?: (folder: string | null) => HeldAt | null }} HeldContext `base`: the branch the session's checkout merges into, when not main
  * @typedef {{
  *   id: 'unreal' | 'web' | 'core',
  *   roles: readonly string[], roleLabels: Record<string, string>, roleDescriptions: Record<string, string>,

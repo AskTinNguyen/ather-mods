@@ -14,7 +14,7 @@ import { buildHome } from '../hooks/home.mjs'
 import { ledgerWithWindow, mandateText, newWindow, offAway } from '../hooks/away.mjs'
 import { emptyEvidence, nextStep, parseIntent } from '../hooks/model.mjs'
 import { choosePack, core, forgetPacks, makeWebPack, packFor, unreal } from '../hooks/packs/index.mjs'
-import { WEB_TRAPS, readToolOutput } from '../hooks/packs/web.mjs'
+import { WEB_TRAPS, gatesOf, readToolOutput, rungsOfCommand } from '../hooks/packs/web.mjs'
 import * as state from '../hooks/state.mjs'
 
 /** @param {string} name */
@@ -444,6 +444,63 @@ describe('how a gate passes', () => {
       const failed = await run(command, fixture('node-test-fail.txt'), true)
       expect([failed.tests?.state, store.get('evidence:s1').tests.gates.unit.state, store.get('evidence:s1').tests.gates.strict.state]).toEqual(['fail', 'fail', 'fail'])
     }
+  })
+})
+
+describe('gates as people type them', () => {
+  // The gates of sipherxyz/ninetails-monitoring's setup, the wide validate run listed before the narrow one.
+  const WIDE = { command: 'python3 scripts/validate.py', proofs: ['tests', 'lint', 'build'] }
+  const NARROW = { command: 'python3 scripts/validate.py --structural-only', proofs: ['lint'] }
+  const REST = [
+    { command: 'python3 scripts/check_docs.py', proofs: ['lint'] },
+    { command: 'pnpm run typecheck', proofs: ['lint'] },
+    { command: 'pnpm test', proofs: ['tests'] },
+    { command: 'pnpm --dir web test:node', proofs: ['tests'] },
+    { command: 'pnpm run build', proofs: ['build'] },
+    { command: 'cd app && python3 -m unittest discover -s tests', proofs: ['tests'] },
+  ]
+  const GATES = gatesOf({ gates: [WIDE, NARROW, ...REST] })
+  /** @param {string} command */
+  const rungs = (command, gates = GATES) => rungsOfCommand(command, {}, gates).sort()
+
+  test('the longest gate that matches is the gate, wherever it stands in the profile', () => {
+    for (const gates of [GATES, gatesOf({ gates: [NARROW, WIDE, ...REST] })]) {
+      expect(rungs('python3 scripts/validate.py --structural-only', gates)).toEqual(['lint'])
+      expect(rungs('python3 scripts/validate.py', gates)).toEqual(['build', 'lint', 'tests'])
+    }
+  })
+  test('the first word is a program: a venv python, a versioned one, a Windows python.exe and an env prefix all run the python3 gate', () => {
+    for (const command of [
+      '.venv/bin/python scripts/validate.py',
+      'python scripts/validate.py',
+      '/usr/local/bin/python3.12 scripts/validate.py',
+      '.venv\\Scripts\\python.exe scripts/validate.py',
+      'DYLD_LIBRARY_PATH=/x python3 scripts/validate.py',
+    ]) expect(rungs(command)).toEqual(['build', 'lint', 'tests'])
+  })
+  test('a gate written "cd <folder> && <command>" needs both segments, one after the other', () => {
+    expect(rungs('cd app && python3 -m unittest discover -s tests')).toEqual(['tests'])
+    expect(rungs('python3 -m unittest discover -s tests')).toEqual([])
+    expect(rungs('cd web && python3 -m unittest discover -s tests')).toEqual([])
+  })
+  test('a "cd" gate needs "&&" between the two segments: "||", a pipe and ";" do not count', () => {
+    expect(rungs('npm ci && cd app && python3 -m unittest discover -s tests')).toEqual(['tests'])
+    expect(rungs('cd app || python3 -m unittest discover -s tests')).toEqual([])
+    expect(rungs('cd app | python3 -m unittest discover -s tests')).toEqual([])
+    expect(rungs('cd app; python3 -m unittest discover -s tests')).toEqual([])
+  })
+  test('a gate whose first word is a path is compared as written', () => {
+    const gates = gatesOf({ gates: [{ command: './scripts/check.sh', proofs: ['lint'] }] })
+    expect(rungs('./scripts/check.sh', gates)).toEqual(['lint'])
+    expect(rungs('./scripts/check.sh --fast', gates)).toEqual(['lint'])
+    expect(rungs('./other/check.sh', gates)).toEqual([])
+    expect(rungs('/tmp/check.sh', gates)).toEqual([])
+    expect(rungs('scripts\\check.sh.exe', gates)).toEqual([])
+  })
+  test('a command that only looks like a gate proves nothing', () => {
+    expect(rungs('python3 scripts/other.py')).toEqual([])
+    expect(rungs('ruby scripts/validate.py')).toEqual([])
+    expect(rungs('pnpm --dir web test')).toEqual([])
   })
 })
 

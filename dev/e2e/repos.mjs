@@ -1481,6 +1481,130 @@ const refresh = async engine => {
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- a team that merges into another branch
+
+{
+  // A clone at <parent>/<folder> of a bare origin whose default branch is `base`, so the checkout knows it
+  // (refs/remotes/origin/HEAD, as any clone does). `also`: more branches the origin has, each at the first commit.
+  const makeClone = (parent, folder, { owner, name, base, files = {}, also = [] }) => {
+    const origin = path.join(`${parent}-origins`, owner, `${name}.git`)
+    fs.mkdirSync(origin, { recursive: true })
+    git(origin, 'init', '--bare', '-q', '-b', base)
+    const seed = fs.mkdtempSync(join(BASE, 'seed-'))
+    git(seed, 'init', '-q', '-b', base)
+    for (const [file, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(join(seed, file)), { recursive: true })
+      fs.writeFileSync(join(seed, file), text)
+    }
+    git(seed, 'add', '-A')
+    git(seed, '-c', 'user.name=Lam Phung', '-c', 'user.email=lam@example.com', 'commit', '-q', '-m', 'start')
+    git(seed, 'push', '-q', origin, base, ...also.map(one => `${base}:${one}`))
+    git(parent, 'clone', '-q', origin, folder)
+    const root = join(parent, folder)
+    git(root, 'config', 'user.name', 'Tin Nguyen')
+    git(root, 'config', 'user.email', 'tin@example.com')
+    return root
+  }
+  // A teammate merges an intent into `branch` of a checkout's origin: the checkout has not pulled it. Resolves its commit.
+  const mergeIntent = (root, branch, slug) => {
+    const other = fs.mkdtempSync(join(BASE, 'other-'))
+    git(other, 'clone', '-q', '-b', branch, git(root, 'remote', 'get-url', 'origin'), '.')
+    writeIntent(other, slug, LOGIN.replace('Owner: Tin Nguyen', 'Owner: Lam Phung'))
+    git(other, 'add', '-A')
+    git(other, '-c', 'user.name=Lam Phung', '-c', 'user.email=lam@example.com', 'commit', '-q', '-m', slug)
+    git(other, 'push', '-q', 'origin', branch)
+    return git(other, 'rev-parse', 'HEAD')
+  }
+  const warnOf = (tree, id) => textIn(byKey(tree, `${intentRows(tree).find(one => one.id === id)?.key}-warn`)).trim()
+  const refsAsked = engine => engine.record.gitRuns.filter(run => run.argv.includes('--verify')).map(run => run.argv.at(-1))
+
+  // nm/ merges into develop (its origin's main exists and stays behind); web/ beside it merges into main.
+  const parent = fs.mkdtempSync(join(BASE, 'work-'))
+  const nm = makeClone(parent, 'nm', { owner: 'sipherxyz', name: 'nm', base: 'develop', also: ['main'], files: { ...INTENTS, 'pyproject.toml': '[project]\nname = "nm"\n' } })
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, 'package.json': '{"name":"web"}\n' } })
+  writeIntent(web, 'login')
+  // One intent merged into develop and pulled, a later one the checkout has not pulled; main has neither.
+  mergeIntent(nm, 'develop', 'merged')
+  git(nm, 'pull', '-q', '--ff-only', 'origin', 'develop')
+  const later = mergeIntent(nm, 'develop', 'later')
+  const { engine, sessionId: sid } = await boot({ root: nm, sessionId: 'harness-session-0050', options: { repos: '../web' } })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'pick')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const first = await pane()
+  expect("a checkout whose origin's default is develop lists the intent merged there as the team's, not tagged local", intentRows(first).some(one => one.id === 'intent:merged') && warnOf(first, 'intent:merged') === '', [intentRows(first).map(one => one.id), warnOf(first, 'intent:merged')])
+  await engine.flush()
+  await engine.flush()
+  const fetches = fetchRuns(engine).map(run => run.argv.slice(2))
+  expect('its fetch names develop in both halves of the refspec', fetches.some(argv => argv[0] === nm && argv.at(-1) === '+refs/heads/develop:refs/remotes/origin/develop'), fetches)
+  expect('the checkout on main beside it still fetches main', fetches.some(argv => argv[0] === web && argv.at(-1) === '+refs/heads/main:refs/remotes/origin/main') && fetches.length === 2, fetches)
+  expect("after it, origin/develop is at what the teammate merged, and origin/main was not asked for in nm", git(nm, 'rev-parse', 'origin/develop') === later && !engine.record.gitRuns.some(run => run.argv[2] === nm && run.argv.at(-1) === 'origin/main^{commit}'), engine.record.gitRuns.filter(run => run.argv[2] === nm).map(run => run.argv.slice(3).join(' ')))
+  const after = await pane()
+  const rows = intentRows(after).map(one => one.id).sort()
+  expect("the list then holds both of develop's intents and web's own, the later one not in the checkout and not tagged local", JSON.stringify(rows) === JSON.stringify(['intent:later', 'intent:merged', 'intent:web/login']) && warnOf(after, 'intent:later') === '' && !fs.existsSync(join(nm, 'docs/intent/later')), [rows, warnOf(after, 'intent:later')])
+  const heads = engine.record.gitRuns.filter(run => run.argv.includes('symbolic-ref'))
+  expect("each checkout's default branch is asked once, with GIT_OPTIONAL_LOCKS=0", heads.length === 2 && heads.every(run => run.env.GIT_OPTIONAL_LOCKS === '0'), heads)
+
+  await startAway(engine)
+  const toBase = await bash(engine, 'git push origin develop')
+  expect('with an away window, git push origin develop is held as a push to the base', toBase.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'push-main', [toBase.deny, parked(engine, sid)])
+  const toMain = await bash(engine, 'git push origin main')
+  expect('git push origin main is held there too', toMain.deny !== undefined && parked(engine, sid).length === 2, parked(engine, sid))
+  const toFeature = await bash(engine, 'git push origin feature')
+  expect('git push origin feature is not', toFeature.deny === undefined, toFeature.deny)
+  const inWeb = await bash(engine, 'git -C ../web push origin develop')
+  expect("develop is not web's base: a push to it there is not held", inWeb.deny === undefined, inWeb.deny)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+
+  // The other way round: a session in web (base main), nm beside it. What is held in nm is said with nm's base.
+  const beside = await boot({ root: web, sessionId: 'harness-session-0052', options: { repos: '../nm' } })
+  await startAway(beside.engine)
+  const there = await bash(beside.engine, 'git -C ../nm push origin develop')
+  expect("from a session on main, a push to develop in ../nm is held and the denial names develop", there.deny !== undefined && /develop/.test(there.deny), there.deny)
+  const here = await bash(beside.engine, 'git push origin main')
+  expect("a push to main in the session's own checkout is said as before", here.deny !== undefined && !/develop/.test(here.deny), here.deny)
+  await beside.engine.end('other')
+
+  // rel/: the origin's default is main, the team merges into release, and the profile says so.
+  const rel = makeClone(fs.mkdtempSync(join(BASE, 'work-')), 'rel', { owner: 'sipherxyz', name: 'rel', base: 'main', also: ['release'], files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify({ version: 1, pack: 'core', baseBranch: 'release' })}\n` } })
+  mergeIntent(rel, 'release', 'on-release')
+  git(rel, 'fetch', '-q', 'origin')
+  const profiled = await boot({ root: rel, sessionId: 'harness-session-0051' })
+  profiled.engine.setSurfaces(['terminal'])
+  await profiled.engine.command('ather', 'pick')
+  const listed = intentRows(await profiled.engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id)
+  await profiled.engine.flush()
+  await profiled.engine.flush()
+  expect('a profile with "baseBranch": "release" lists what origin/release holds', JSON.stringify(listed) === JSON.stringify(['intent:on-release']), listed)
+  expect("and reads and fetches release, never main, whatever the remote's default", refsAsked(profiled.engine).includes('origin/release^{commit}') && !refsAsked(profiled.engine).includes('origin/main^{commit}') && fetchRuns(profiled.engine).every(run => run.argv.at(-1) === '+refs/heads/release:refs/remotes/origin/release') && fetchRuns(profiled.engine).length === 1, [refsAsked(profiled.engine), fetchRuns(profiled.engine).map(run => run.argv.at(-1))])
+  expect('no hook threw', profiled.engine.record.hookErrors.length === 0, profiled.engine.record.hookErrors)
+  await profiled.engine.end('other')
+
+  // multi/ merges into main; its worktree beside it, multi-rel/, names release in a profile of its own.
+  const group = fs.mkdtempSync(join(BASE, 'work-'))
+  const multi = makeClone(group, 'multi', { owner: 'sipherxyz', name: 'multi', base: 'main', also: ['release'], files: { ...INTENTS } })
+  const tree = join(group, 'multi-rel')
+  git(multi, 'worktree', 'add', '-q', '-b', 'feat/rel', tree)
+  fs.mkdirSync(join(tree, '.ather'), { recursive: true })
+  fs.writeFileSync(join(tree, '.ather/profile.json'), `${JSON.stringify({ version: 1, pack: 'core', baseBranch: 'release' })}\n`)
+  mergeIntent(multi, 'main', 'on-main')
+  mergeIntent(multi, 'release', 'on-release')
+  const two = await boot({ root: multi, sessionId: 'harness-session-0053', writable: [group] })
+  two.engine.setSurfaces(['terminal'])
+  await two.engine.command('ather', 'pick')
+  await two.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  await two.engine.flush()
+  await two.engine.flush()
+  const pass = fetchRuns(two.engine).map(run => [run.argv[2], run.argv.at(-1)])
+  expect('a clone on main with a worktree on another base: one pass fetches both branches, each in its own checkout', JSON.stringify(pass) === JSON.stringify([[multi, '+refs/heads/main:refs/remotes/origin/main'], [tree, '+refs/heads/release:refs/remotes/origin/release']]), pass)
+  const drawn = await two.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const both = intentRows(drawn).map(one => one.id).sort()
+  expect("the worktree's row for its base's intent is the team's, not tagged local, beside main's", JSON.stringify(both) === JSON.stringify(['intent:multi-rel/on-release', 'intent:on-main']) && warnOf(drawn, 'intent:multi-rel/on-release') === '', [both, warnOf(drawn, 'intent:multi-rel/on-release')])
+  expect('no hook threw', two.engine.record.hookErrors.length === 0, two.engine.record.hookErrors)
+  await two.engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

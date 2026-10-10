@@ -6,7 +6,7 @@
 
 import { unreal } from './packs/unreal.mjs'
 import { WEB_HELD, makeWebPack } from './packs/web.mjs'
-import { MAIN, pushTarget, withFolders } from './shell.mjs'
+import { isBaseBranch, pushTarget, withFolders } from './shell.mjs'
 
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
 
@@ -19,14 +19,19 @@ export const HELD_LABELS = { merge: 'Merges', 'push-main': 'Pushes to main', ...
 export const HELD_NOUNS = { merge: 'a merge', 'push-main': 'a push to main', ...unreal.held.nouns, ...WEB.held.nouns }
 /** @typedef {string} HeldKind merge, push-main, or one of a pack's held kinds */
 // The Unreal pack's kinds, as before packs.
+// What a held text says of main, for a checkout whose team merges into another branch: a push there is held
+// as one to main is, and PRs open against it. With base main the text is as it was.
+/** @param {string} text @param {string} [base] */
+export const forBase = (text, base = 'main') => (base === 'main' ? text : text.replace(/\b(push(?:es)? to) main\b/gi, `$1 ${base} or main`).replace(/\bPRs to main\b/g, `PRs to ${base}`))
 export const HELD_KINDS = /** @type {HeldKind[]} */ (['merge', 'push-main', 'editor-restart', 'asset-save'])
 /** @param {Pack} pack @returns {string[]} */
 export const heldKindsOf = pack => ['merge', 'push-main', ...pack.held.kinds]
-// A kind's label and noun: as the pack words it when it does, else as every pack does.
-/** @param {string} kind @param {Pack} [pack] */
-export const heldLabel = (kind, pack) => pack?.held.labels[kind] ?? HELD_LABELS[kind] ?? kind
-/** @param {string} kind @param {Pack} [pack] */
-export const heldNoun = (kind, pack) => pack?.held.nouns[kind] ?? HELD_NOUNS[kind] ?? kind
+// A kind's label and noun: as the pack words it when it does, else as every pack does; then for the
+// checkout's base (forBase), where the words still say main.
+/** @param {string} kind @param {Pack} [pack] @param {string} [base] */
+export const heldLabel = (kind, pack, base) => forBase(pack?.held.labels[kind] ?? HELD_LABELS[kind] ?? kind, base)
+/** @param {string} kind @param {Pack} [pack] @param {string} [base] */
+export const heldNoun = (kind, pack, base) => forBase(pack?.held.nouns[kind] ?? HELD_NOUNS[kind] ?? kind, base)
 export { WEB_HELD }
 
 // The Unreal pack's readers, kept here for the modules and tests that read them from the guards.
@@ -52,6 +57,7 @@ export const isMergeCommand = command => /\bgit\b(?:\s+-C\s+\S+)?\s+(merge(?![-\
 
 // A shell command the window holds, if any. `branchOf` gives the branch checked out in a folder
 // (null: the session's folder), or '' when it cannot be told; then only an explicit main is held.
+// main means main, master, or the checkout's base (`context.base`) when its team merges into another branch.
 // With the web pack's with-proof policy (D2), a merge passes once every gate the profile requires has passed:
 // `context.isProven` says so, read from this session's evidence by the caller.
 // `context.at` gives a folder in another checkout that checkout's pack, held kinds and proof; null keeps the session's.
@@ -59,28 +65,35 @@ export const isMergeCommand = command => /\bgit\b(?:\s+-C\s+\S+)?\s+(merge(?![-\
  * @param {string} command @param {readonly string[]} held @param {(folder: string | null) => string} branchOf
  * @param {Pack} [pack] @param {import('./packs/index.mjs').HeldContext} [context] @returns {string | null}
  */
-export const heldShell = (command, held, branchOf, pack = unreal, context = {}) => {
+export const heldShell = (command, held, branchOf, pack = unreal, context = {}) => heldShellAt(command, held, branchOf, pack, context)?.kind ?? null
+
+// The same, with the base of the checkout the held segment ran in: what is said of it names that branch.
+/**
+ * @param {string} command @param {readonly string[]} held @param {(folder: string | null) => string} branchOf
+ * @param {Pack} [pack] @param {import('./packs/index.mjs').HeldContext} [context] @returns {{ kind: string, base: string } | null}
+ */
+export const heldShellAt = (command, held, branchOf, pack = unreal, context = {}) => {
   for (const { segment, folder } of withFolders(command)) {
     const here = context.at?.(folder) ?? null
-    const judged = here ? { ...here, scripts: here.pack.scripts } : { pack, held, isProven: context.isProven === true, scripts: context.scripts ?? pack.scripts }
+    const judged = here ? { ...here, scripts: here.pack.scripts } : { pack, held, isProven: context.isProven === true, scripts: context.scripts ?? pack.scripts, base: context.base }
     const kind = heldSegmentIn(segment, branchOf(folder), judged)
-    if (kind) return kind
+    if (kind) return { kind, base: judged.base ?? 'main' }
   }
   return null
 }
 
-// main and master in every repository, and the branch the pack says pull requests go into.
-/** @param {string} branch @param {Pack} pack */
-const isProtected = (branch, pack) => MAIN.test(branch) || (Boolean(pack.baseBranch) && branch.replace(/^refs\/heads\//, '') === pack.baseBranch)
+// main and master in every repository, the branch the pack says pull requests go into, and the checkout's base.
+/** @param {string} branch @param {Pack} pack @param {string} [base] */
+const isProtected = (branch, pack, base) => isBaseBranch(branch, base) || (Boolean(pack.baseBranch) && branch.replace(/^refs\/heads\//, '') === pack.baseBranch)
 
-/** @param {string} segment @param {string} branch @param {{ pack: Pack, held: readonly string[], isProven: boolean, scripts?: Record<string, string> }} judged */
-const heldSegmentIn = (segment, branch, { pack, held, isProven, scripts }) => {
+/** @param {string} segment @param {string} branch @param {{ pack: Pack, held: readonly string[], isProven: boolean, scripts?: Record<string, string>, base?: string }} judged */
+const heldSegmentIn = (segment, branch, { pack, held, isProven, scripts, base }) => {
   const merges = !(pack.mergePolicy === 'with-proof' && isProven)
   const isPrMerge = /^gh\s+pr\s+merge\b/i.test(segment) || /^gh\s+api\b.*\bpulls\/\d+\/merge\b/i.test(segment)
   // A local merge matters only into a protected branch; merging main into a feature branch is ordinary work.
-  const isMainMerge = /^git\b(?:\s+-C\s+\S+)?\s+merge\s+(?!--abort)/i.test(segment) && isProtected(branch, pack)
+  const isMainMerge = /^git\b(?:\s+-C\s+\S+)?\s+merge\s+(?!--abort)/i.test(segment) && isProtected(branch, pack, base)
   if (held.includes('merge') && merges && (isPrMerge || isMainMerge)) return 'merge'
-  if (held.includes('push-main') && /^git\b(?:\s+-C\s+\S+)?\s+push\b/i.test(segment) && isProtected(pushTarget(segment, branch), pack)) return 'push-main'
+  if (held.includes('push-main') && /^git\b(?:\s+-C\s+\S+)?\s+push\b/i.test(segment) && isProtected(pushTarget(segment, branch), pack, base)) return 'push-main'
   const kind = pack.heldSegment(segment, held, { isProven, scripts })
   return kind && (kind !== 'merge' || merges) ? kind : null
 }

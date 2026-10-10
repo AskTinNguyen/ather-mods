@@ -6,7 +6,7 @@
 // actions held while the person is away, known traps, and the words the
 // session is asked with. Pure: no `$`.
 
-import { MAIN, bareCommand, isPiped, segments, withoutHeredocs } from '../shell.mjs'
+import { MAIN, bareCommand, branchNamed, isPiped, segments, withoutHeredocs } from '../shell.mjs'
 
 /** @typedef {import('./index.mjs').Pack} Pack */
 /** @typedef {import('./index.mjs').Rung} Rung */
@@ -47,11 +47,79 @@ const normal = command =>
     .replace(/^(npm|pnpm|yarn|bun)\s+(?:run|run-script)\s+(test|start)\b/i, '$1 $2')
     .trim()
 
-/** @param {string} gate @param {string} segment */
-const isGate = (gate, segment) => {
-  const a = normal(gate)
-  const b = normal(segment)
-  return a !== '' && (b === a || b.startsWith(`${a} `))
+// The program a command's first word runs: the last part of its path, without ".exe" (Windows names
+// have no case), and every python is one program. ".venv/bin/python" and "python3.12" are "python".
+/** @param {string} word */
+const programOf = word => {
+  const name = word.slice(Math.max(word.lastIndexOf('/'), word.lastIndexOf('\\')) + 1) || word
+  const program = /\.exe$/i.test(name) ? name.slice(0, -4).toLowerCase() : name
+  return /^python(3(\.\d+)?)?$/.test(program) ? 'python' : program
+}
+
+// A command as a gate that names a bare program is compared: env prefix dropped, its first word a
+// program, npm spellings folded.
+/** @param {string} command */
+const asTyped = command => normal(bareCommand(command).replace(/^\S+/, programOf))
+
+// A gate's command for comparing, and whether its first word is a path. A bare program name
+// ("python3", "pnpm") is that program wherever it is run from; a path ("./scripts/check.sh") is
+// compared as written, so another script of the same name elsewhere does not prove it.
+/** @param {string} command */
+const gateCommand = command => {
+  const isPath = /^\S*[\\/]/.test(bareCommand(command))
+  return { isPath, command: isPath ? normal(command) : asTyped(command) }
+}
+
+// The folder a `cd` segment goes to, as written, without a trailing slash.
+/** @param {string} segment */
+const cdFolder = segment => /^cd\s+(.+)$/.exec(segment)?.[1]?.replace(/(?<=.)[\\/]+$/, '') ?? null
+
+// A gate as it is compared. One written `cd <folder> && <command>` is two segments: the folder and
+// the command. Any other chain (more than one `&&`, or a first segment that is not a `cd`) stays
+// whole, so it never matches a command, which is read one segment at a time.
+/** @param {string} gate @returns {{ folder: string | null, isPath: boolean, command: string }} */
+const gateParts = gate => {
+  const parts = segments(gate)
+  const folder = parts.length === 2 && gate.includes('&&') ? cdFolder(parts[0] ?? '') : null
+  return { folder, ...gateCommand(folder === null ? gate : parts[1] ?? '') }
+}
+
+// A mark put after each `&&` of a command before it is split: a segment that starts with it is
+// joined to the one before by `&&`. `segments` itself drops the operators.
+const AFTER_AND = '\u0000'
+
+/** @param {string} segment */
+const unmarked = segment => segment.replaceAll(AFTER_AND, '').trim()
+
+// A command's segments, each one that follows an `&&` marked with AFTER_AND.
+/** @param {string} command */
+const markedSegments = command => segments(command.replaceAll('&&', `&&${AFTER_AND}`))
+
+/**
+ * The gates a segment runs: a gate's command is the segment or a prefix of it, and a `cd` gate also needs
+ * that `cd` as the segment before, joined with `&&`: after `;`, `||` or `|` the command does not
+ * depend on the `cd`, so those do not count. Among several, the longest command wins, wherever it stands;
+ * gates written the same are all run.
+ * @param {readonly string[]} marked the command's segments, AFTER_AND kept @param {number} at @param {readonly Gate[]} gates
+ * @returns {Gate[]}
+ */
+const gatesRun = (marked, at, gates) => {
+  const segment = unmarked(marked[at] ?? '')
+  const forms = { written: normal(segment), program: asTyped(segment) }
+  const before = at > 0 && (marked[at] ?? '').startsWith(AFTER_AND) ? cdFolder(unmarked(marked[at - 1] ?? '')) : null
+  /** @type {Gate[]} */
+  let best = []
+  let longest = 0
+  for (const gate of gates) {
+    const { folder, isPath, command } = gateParts(gate.command)
+    const typed = isPath ? forms.written : forms.program
+    if (command === '' || !(typed === command || typed.startsWith(`${command} `))) continue
+    if (folder !== null && folder !== before) continue
+    const length = command.length + (folder === null ? 0 : `cd ${folder} && `.length)
+    if (length > longest) [best, longest] = [[gate], length]
+    else if (length === longest) best.push(gate)
+  }
+  return best
 }
 
 // The npm script a segment runs: "npm run lint" → "lint", "npm test" → "test".
@@ -77,9 +145,10 @@ const checksOfCommand = (command, scripts, gates, production = null, depth = 0) 
   const found = new Map()
   /** @param {string} rung @param {Iterable<string>} [ran] */
   const add = (rung, ran = []) => found.set(rung, new Set([...(found.get(rung) ?? []), ...ran]))
-  for (const segment of segments(command)) {
-    const bare = bareCommand(segment)
-    const ran = gates.filter(one => isGate(one.command, bare))
+  const marked = markedSegments(command)
+  for (const [at, part] of marked.entries()) {
+    const bare = bareCommand(unmarked(part))
+    const ran = gatesRun(marked, at, gates)
     if (ran.length > 0) {
       for (const gate of ran) for (const proof of gate.proofs) if (ALIASES[proof] && ALIASES[proof] !== 'prod') add(ALIASES[proof], [gateKey(gate)])
       continue
@@ -357,14 +426,6 @@ const runnerOf = (profile, packageJson, found) => {
   return runnerNamed(profile?.packageManager) ?? runnerNamed(packageJson?.packageManager) ?? LOCKFILES.find(([file]) => files.includes(file))?.[1] ?? 'npm'
 }
 
-// A branch name as a profile or a ref gives it; '' when it does not read as one.
-/** @param {unknown} value */
-const branchNamed = value => {
-  if (typeof value !== 'string') return ''
-  const name = value.trim().replace(/^refs\/heads\//, '')
-  return name.length <= 100 && /^[A-Za-z0-9._\/-]+$/.test(name) ? name : ''
-}
-
 /**
  * The branch pull requests go into, when it is not main or master: the profile's word, then the default branch the clone knows.
  * @param {any} profile @param {Found} found
@@ -435,7 +496,8 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
     const rungs = [...checks.keys()]
     // A gate passes on its exit code when the command runs it itself, unless the profile says it passes on test counts.
     // A gate found inside a script is read on counts.
-    const direct = segments(command).flatMap(segment => gates.filter(gate => gate.passOn !== 'counts' && isGate(gate.command, bareCommand(segment))))
+    const marked = markedSegments(command)
+    const direct = marked.flatMap((_, at) => gatesRun(marked, at, gates).filter(gate => gate.passOn !== 'counts'))
     const onExit = new Set(direct.map(gateKey))
     const isOwn = isOwnExit(command)
     let isHidden = false

@@ -1,9 +1,12 @@
 // @ts-check
-// Ather Automata: the team's intents as origin/main has them, each dated by its folder's
-// last commit there, merged with the folders only this checkout has (D1-D3). Pure: git
+// Ather Automata: the team's intents as origin/main has them (or origin/<base>, where the team
+// merges into another branch), each dated by its folder's last commit there, merged with the
+// folders only this checkout has (D1-D3). Pure: git
 // and the files come through a Repo of closures built where `$` lives (console.mjs).
 // Every git call here reads, and never the working tree or the index; the fetch writes
 // only the remote-tracking ref.
+
+import { branchNamed } from './shell.mjs'
 
 /**
  * `isAborted`: the app took the run back before it ended (it never ran to an exit code).
@@ -25,16 +28,34 @@
 
 // Every git call Ather makes reads without taking the index lock, and never asks for a password (D2).
 export const GIT_ENV = { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
-export const MAIN = 'origin/main'
+// The remote-tracking ref of the branch a checkout's team merges into (its base).
+/** @param {string} base */
+const refOf = base => `origin/${base}`
+export const MAIN = refOf('main')
 const INTENTS = 'docs/intent'
-// The fetch (D2): origin's main into origin/main by an explicit refspec (a narrowed remote.origin.fetch
+// The fetch (D2): origin's base into origin/<base> by an explicit refspec (a narrowed remote.origin.fetch
 // would not move it otherwise), no tags, no FETCH_HEAD, no submodules, and no automatic gc or
 // maintenance: a background fetch in a shared checkout must not start a repack.
-export const FETCH_ARGS = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', '+refs/heads/main:refs/remotes/origin/main']
+/** @param {string} base */
+export const fetchArgs = base => ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', `+refs/heads/${base}:refs/remotes/${refOf(base)}`]
+export const FETCH_ARGS = fetchArgs('main')
 export const FETCH_EVERY_MS = 10 * 60 * 1000
 // As long as the engine lets a process run: a slow fetch is not a failed one.
 export const FETCH_TIMEOUT_MS = 10 * 60 * 1000
 export const EMPTY_CACHE = /** @type {TeamCache} */ ({ main: null, local: null })
+
+// The branch a checkout's team merges into: `baseBranch` in its .ather/profile.json when it reads as a branch name, else the remote's default
+// branch (`remote`: what `git symbolic-ref --short refs/remotes/origin/HEAD` says, "origin/develop"; '' when
+// the remote names none; null when git could not say), else main. Without a way to ask git, main.
+// null: git could not say, so the caller asks again rather than settle on main.
+/** @param {Record<string, any> | null} profile @param {() => Promise<string | null>} [remote] @returns {Promise<string | null>} */
+export const baseOf = async (profile, remote) => {
+  const named = branchNamed(profile?.baseBranch)
+  if (named) return named
+  if (!remote) return 'main'
+  const head = await remote().catch(() => null)
+  return head === null ? null : head.trim().replace(/^origin\//, '') || 'main'
+}
 
 /** @param {string} text */
 const lf = text => text.replace(/\r\n/g, '\n')
@@ -125,12 +146,12 @@ const shaOf = async (repo, ref) => {
   return ran.exitCode === 0 ? ran.stdout.trim() : ''
 }
 
-// What origin/main holds under docs/intent: every folder's files, last commit and first author, its
-// prompt.md, and the progress and findings of open ones. Read again only when the ref moved:
-// `previous` is returned as it is while origin/main is still at its commit. null: no origin/main.
-/** @param {Repo} repo @param {MainSnapshot | null} previous @returns {Promise<MainSnapshot | null>} */
-export const readMain = async (repo, previous) => {
-  const sha = await shaOf(repo, MAIN)
+// What origin/main (origin/<base>) holds under docs/intent: every folder's files, last commit and first
+// author, its prompt.md, and the progress and findings of open ones. Read again only when the ref moved:
+// `previous` is returned as it is while the ref is still at its commit. null: no such ref.
+/** @param {Repo} repo @param {MainSnapshot | null} previous @param {string} [base] @returns {Promise<MainSnapshot | null>} */
+export const readMain = async (repo, previous, base = 'main') => {
+  const sha = await shaOf(repo, refOf(base))
   if (!sha) return null
   if (previous?.sha === sha) return previous
   const [tree, log] = await Promise.all([repo.git(['ls-tree', '-r', '--name-only', sha, '--', INTENTS]), repo.git(['log', sha, '--format=%x00%ct%x09%an', '--name-only', '--', INTENTS])])
@@ -177,16 +198,17 @@ export const localWins = (local, onMain, isNewer) =>
 // main unless the checkout's copy wins (localWins); the tracked one (`pinned`) always from the
 // checkout, where its session writes. Main's are dated by their last commit there, the checkout's by
 // their files (D3). `isRepo` false: not a git checkout of its own, so only its folders are read, untagged.
+// `base`: the branch the checkout's team merges into, when that is not main; "main" above is then origin/<base>.
 /**
  * @param {Repo} repo @param {string} root
- * @param {{ cache: TeamCache, pinned: string | null }} options
+ * @param {{ cache: TeamCache, pinned: string | null, base?: string }} options
  * @returns {Promise<{ isRepo: boolean, cache: TeamCache, intents: IntentFiles[] }>}
  */
-export const readTeam = async (repo, root, { cache, pinned }) => {
+export const readTeam = async (repo, root, { cache, pinned, base = 'main' }) => {
   const top = await repo.git(['rev-parse', '--show-toplevel'])
   // Git names the checkout's real folder; the session may have reached it through a link (macOS /var, /tmp).
   const isRepo = top.exitCode === 0 && (isSamePath(top.stdout, root) || (repo.real !== undefined && isSamePath(top.stdout, await repo.real(root).catch(() => root))))
-  const main = isRepo ? await readMain(repo, cache.main) : null
+  const main = isRepo ? await readMain(repo, cache.main, base) : null
   const folders = []
   for (const entry of await repo.list(`${root}/${INTENTS}`).catch(() => [])) {
     if (entry.kind !== 'dir') continue
@@ -225,7 +247,8 @@ export const readTeam = async (repo, root, { cache, pinned }) => {
 
 /**
  * Where the background fetch stands, for the sync line. `lock`: the git lock a failed fetch ran into.
- * @typedef {{ isRepo: boolean, hasMain: boolean, isFetching: boolean, triedAt: number, fetchedAt: number, failedAt: number, error: string, lock: string }} Sync
+ * `base`: the branch fetched, when the checkout's team does not merge into main.
+ * @typedef {{ isRepo: boolean, hasMain: boolean, isFetching: boolean, triedAt: number, fetchedAt: number, failedAt: number, error: string, lock: string, base?: string }} Sync
  */
 
 /** @type {Sync} */
@@ -246,14 +269,14 @@ export const lockOf = text => {
   return path.includes('/.git/') ? path.slice(path.lastIndexOf('/.git/') + 6) : path.split('/').pop() ?? ''
 }
 
-// Fetches origin's main. Synced means git said so and origin/main resolves after it (`moved`: it moved).
+// Fetches origin's main, or the `base` given. Synced means git said so and origin/<base> resolves after it (`moved`: it moved).
 // On a failure: git's last line of complaint, and the lock it ran into, if any. `isAborted`: the app took the
 // run back, so nothing was tried.
-/** @param {Repo} repo @returns {Promise<{ error: string, lock: string, moved: boolean, isAborted?: true }>} */
-export const fetchMain = async repo => {
-  const before = await shaOf(repo, MAIN)
-  const ran = await repo.git(FETCH_ARGS, { timeoutMs: FETCH_TIMEOUT_MS })
-  const after = await shaOf(repo, MAIN)
+/** @param {Repo} repo @param {string} [base] @returns {Promise<{ error: string, lock: string, moved: boolean, isAborted?: true }>} */
+export const fetchMain = async (repo, base = 'main') => {
+  const before = await shaOf(repo, refOf(base))
+  const ran = await repo.git(base === 'main' ? FETCH_ARGS : fetchArgs(base), { timeoutMs: FETCH_TIMEOUT_MS })
+  const after = await shaOf(repo, refOf(base))
   if (ran.exitCode === 0 && after) return { error: '', lock: '', moved: after !== before }
   const stderr = ran.stderr ?? ''
   return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false, ...(ran.isAborted ? { isAborted: /** @type {const} */ (true) } : {}) }
@@ -283,5 +306,5 @@ export const syncText = (sync, now) => {
   const synced = sync.fetchedAt ? `synced ${agoText(now - sync.fetchedAt)}` : ''
   if (sync.failedAt > sync.fetchedAt) return `${sync.lock ? `sync waits on ${sync.lock}` : 'sync failed'}${synced ? ` · ${synced}` : ''} ↻`
   if (synced) return `${synced} ↻`
-  return sync.hasMain ? 'not synced yet ↻' : 'no origin/main ↻'
+  return sync.hasMain ? 'not synced yet ↻' : `no ${refOf(sync.base ?? 'main')} ↻`
 }

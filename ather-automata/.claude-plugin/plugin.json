@@ -1,6 +1,6 @@
 {
   "name": "ather-automata",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Ather Automata: what needs you and what is next in every S2 session and web app repository (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
   "author": {
     "name": "Tin Nguyen"
