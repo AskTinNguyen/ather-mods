@@ -64,3 +64,15 @@
 - Asked for by the owner: tell the agent to add a repository and have the pane follow. The mod gave the model three tools and none for this; `/ather repos` is the person's command, which a session cannot run. D17 (Rev 9): a fourth tool, `repos` (list, add, remove), through the code the view's buttons use, with no confirmation, as the owner chose.
 - The pane's following was already there (D15): the tool only had to reach it.
 
+## 2026-10-10, the owner decides F-1 to F-3 (rev 10)
+
+Pressed in the pane, as sent to the session:
+
+> Decide F-1 on multi-repo: A — Keep D12 as built, per checkout. Proof says something about one working tree, and a with-proof merge in one clone should not pass on another clone's tests. Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.
+
+> Decide F-2 on multi-repo: A — Keep D11 as built. The usual case reads as the repository's name, and only a clash falls back to folders. Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.
+
+> Decide F-3 on multi-repo: A — Keep D13 as built: quiet among several, as on main for one. Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.
+
+- Classified as three decisions. All three keep what is built, so there is no amendment to fold: the findings are marked accepted with their Resolution, prompt.md goes to rev 10 with D18, and no worker is dispatched.
+
