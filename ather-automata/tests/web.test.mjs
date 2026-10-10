@@ -16,6 +16,7 @@ import { emptyEvidence, nextStep, parseIntent } from '../hooks/model.mjs'
 import { choosePack, core, forgetPacks, makeWebPack, packFor, unreal } from '../hooks/packs/index.mjs'
 import { WEB_TRAPS, gatesOf, readToolOutput, rungsOfCommand } from '../hooks/packs/web.mjs'
 import * as state from '../hooks/state.mjs'
+import { baseOf } from '../hooks/team.mjs'
 
 /** @param {string} name */
 const fixture = name => fs.readFileSync(new URL(`./fixtures/web/${name}`, import.meta.url), 'utf8')
@@ -954,5 +955,54 @@ describe('a base branch that is not main', () => {
     expect(await packFor(fake.io, 'R')).toBe(first)
     expect(fake.reads.count).toBe(reads)
     forgetPacks()
+  })
+})
+
+describe('gate matching, a result per gate and the base branch, together', () => {
+  const WIDE = { id: 'validate', command: 'python3 scripts/validate.py', proofs: ['lint'] }
+  const NARROW = { id: 'structure', command: 'python3 scripts/validate.py --structural-only', proofs: ['lint'] }
+
+  test('the narrower gate that a command runs keeps its own result: the wider gate of the same rung is still owed', async () => {
+    const pack = makeWebPack({ pack: 'web', gates: [WIDE, NARROW] }, null)
+    const { run, store } = session(pack)
+    expect((await run('.venv/bin/python scripts/validate.py --structural-only')).lint.state).toBe('none')
+    expect(Object.keys(store.get('evidence:s1').lint.gates)).toEqual(['structure'])
+    expect((await run('python3 scripts/validate.py')).lint.state).toBe('pass')
+  })
+  test('a cd gate passes on its own exit code when the command joins the cd with &&, and is no gate after ";"', () => {
+    const pack = makeWebPack({ pack: 'web', gates: [{ id: 'unit', command: 'cd app && python3 -m unittest discover -s tests', proofs: ['tests'], passOn: 'exit' }] }, null)
+    /** @param {string} command */
+    const tests = command => pack.readShell(command, 'OK', {}).rungs.filter(one => one.rung === 'tests').map(one => one.value.state)
+    expect(tests('cd app && .venv/bin/python -m unittest discover -s tests')).toEqual(['pass'])
+    expect(tests('cd app; python3 -m unittest discover -s tests')).toEqual([])
+  })
+  test('one key names the base branch for the pack and for the checkout, and a value that is no branch name is no value for either', async () => {
+    const remote = async () => 'origin/main'
+    for (const [value, base] of /** @type {const} */ ([['develop', 'develop'], ['refs/heads/release', 'release'], ['two words', 'main'], [7, 'main']])) {
+      const profile = { pack: 'web', baseBranch: value }
+      expect(await baseOf(profile, remote)).toBe(base)
+      expect(makeWebPack(profile, null).baseBranch || 'main').toBe(base)
+    }
+    // The key as it was first proposed is not read.
+    expect(await baseOf({ pack: 'web', base: 'develop' }, remote)).toBe('main')
+  })
+  test("what is held is worded once: the pack's own word where it has one, else the shared one for the checkout's base", () => {
+    const develop = makeWebPack({ pack: 'web', baseBranch: 'develop' }, null)
+    expect(heldLabel('push-main', develop, 'develop')).toBe('Pushes to develop and main')
+    expect(heldNoun('push-main', develop, 'develop')).toBe('a push to develop or main')
+    expect(heldLabel('push-main', unreal, 'develop')).toBe('Pushes to develop or main')
+    expect(heldLabel('push-main', makeWebPack({ pack: 'web' }, null), 'main')).toBe('Pushes to main')
+    const away = newWindow({ hours: 8, untilDone: false, goal: '', held: ['merge', 'push-main'] }, 0, 'L', { person: 'p', root: 'R' })
+    expect(mandateText(away, 0, develop, 'develop')).toContain('open PRs to develop')
+    expect(mandateText(away, 0, develop, 'develop')).not.toContain('develop or develop')
+    expect(mandateText(away, 0, unreal, 'develop')).toContain('Pushes to develop or main')
+  })
+  test('a push to the base branch is held whichever of the two names it: the pack or the checkout', () => {
+    const held = ['merge', 'push-main']
+    const on = () => 'feat/x'
+    expect(heldShell('git push origin develop', held, on, makeWebPack({ pack: 'web', baseBranch: 'develop' }, null))).toBe('push-main')
+    expect(heldShell('git push origin develop', held, on, unreal, { base: 'develop' })).toBe('push-main')
+    expect(heldShell('git push origin develop', held, on, unreal, { base: 'main' })).toBe(null)
+    expect(heldShell('git push origin main', held, on, unreal, { base: 'develop' })).toBe('push-main')
   })
 })
