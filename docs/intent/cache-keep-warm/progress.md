@@ -4,7 +4,7 @@
 - Worker: the orchestrating session itself (no background worker: the intent skill is not on this branch, L-2)
 - Current step: S5, the PR
 - Next step: review (Tin)
-- PR: see S5
+- PR: https://github.com/AskTinNguyen/ather-mods/pull/51 (open, for review; not merged)
 
 ## Acceptance
 
@@ -30,5 +30,5 @@
 - S2 (rev 2, 2026-10-10): F-1 found by bisection and fixed (D7); repos e2e junctions (D9, commit b359cfb); Paseo copies synced (`server/sync.mjs`). Evidence: `node dev/test-all.mjs` (CLAUDE_CODE_TYPES set) → type-check clean, `322/322 passed`; repos e2e `292 of 292 checks passed` on the branch and on main. Acceptance: A8 (part).
 - S3 (rev 2, 2026-10-11): F-2 found live (sessions C, D) and fixed (D10: from the second turn; calibration from the third; `/warm` shows the last read); the e2e's command list now has /warm. Evidence: commits a7704de, d41002f; the full suite as in A8.
 - S4 (rev 2, 2026-10-11): A1 live, sessions A and B on the frozen a7704de, 00:06 to 02:02. Evidence: [proof/](proof/README.md), transcripts' usage in proof/transcript-usage.txt. Acceptance: A1.
-- S5 (rev 2, 2026-10-11): PR to main for review. Acceptance: A9 (review half open).
+- S5 (rev 2, 2026-10-11): PR #51 to main for review. Acceptance: A9 (review half open).
 
