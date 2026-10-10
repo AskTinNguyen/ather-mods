@@ -45,9 +45,9 @@ With keep-warm on, Ather reads the cache once just before it would lapse, 55 min
 
 - **Off by default.** `/warm on` turns it on for this session, `/warm 2h` sets the cap, `/warm off` stops it. The `cacheKeepWarm` setting turns it on for every session (`on`), or suggests it once per session (`ask`); `cacheKeepWarmHours` sets the cap.
 - **While it waits,** the status line reads `◔ warm 1/3 · next 14:55`.
-- **It does not read** in a session nobody can come back to (`claude -p`, the SDK), while a turn runs, for a context under 30k tokens (cheap to rebuild), past the cap, while an away window runs that ends after the cap (or runs until done), when a rate-limit window is over 85% used, or once the cache has already lapsed (the machine slept): a read then would pay the full write for nothing.
+- **It does not read** in a session nobody can come back to (`claude -p`, the SDK), before your second turn (Claude Code never reads a session's first request from the cache again, so there is nothing to keep yet), while a turn runs, for a context under 30k tokens (cheap to rebuild), past the cap, while an away window runs that ends after the cap (or runs until done), when a rate-limit window is over 85% used, or once the cache has already lapsed (the machine slept): a read then would pay the full write for nothing.
 - **It stops** for the idle period if a read finds the cache gone (a changed prefix after `/model` or `/compact`), and for the session if a turn shows the five-minute TTL.
-- **`/warm`** says whether it is on, when the next read is, and what keep-warm has done on this machine: reads, returns to a warm or a cold cache, dollars spent and the rewrite avoided (estimated), reads missed and wasted.
+- **`/warm`** says whether it is on, when the next read is, what the last read took from the cache ("101,700 of 101,738 tokens from the cache (kept)"), and what keep-warm has done on this machine: reads, returns to a warm or a cold cache, dollars spent and the rewrite avoided (estimated), reads missed and wasted.
 
 ## Proof
 
