@@ -16,11 +16,13 @@ import { clockText } from './model.mjs'
  * One idle period: from the last response (or the last ping that hit) until the session's next turn.
  * @typedef {{ lastAt: number, context: number, pings: number, lastPingUsd: number, isStopped: boolean }} Period
  * What the guards read besides the period.
- * @typedef {{ mode: WarmMode, hours: number, ttl: Ttl, isBusy: boolean, isInteractive: boolean, away: { phase: string, untilDone: boolean, wakeAt: number }, quota: number }} Facts
+ * @typedef {{ mode: WarmMode, hours: number, ttl: Ttl, isBusy: boolean, isInteractive: boolean, turns: number, away: { phase: string, untilDone: boolean, wakeAt: number }, quota: number }} Facts
  * Kept for the machine: what keeping warm did and what it came to.
  * @typedef {{ pings: number, missed: number, wasted: number, returnsWarm: number, returnsCold: number, pingUsd: number, avoidedUsd: number }} Ledger
  * The ledger's numbers are summed, so a change is any subset of them.
  * @typedef {Partial<Ledger>} LedgerChange
+ * What the last read did: when, the tokens the cache served and wrote, and the context it was to keep; `reason` when no reply came.
+ * @typedef {{ at: number, read: number, written: number, context: number, reason: string }} LastRead
  */
 
 // A ping this long before the TTL: the fork takes seconds, and a timer can fire late on a busy machine.
@@ -68,6 +70,9 @@ export const skipReason = (period, now, facts) => {
   if (facts.mode !== 'on') return 'off'
   if (!facts.isInteractive) return 'unattended'
   if (period === null) return 'no-turn'
+  // A session's first turn leaves a cache entry that no later request reads, not even the session's own next turn
+  // (Claude Code 2.1.295, F-2): a read would only write it again.
+  if (facts.turns < 2) return 'first-turn'
   if (period.isStopped) return 'stopped'
   if (facts.ttl !== '1h') return 'short-ttl'
   if (facts.isBusy) return 'busy'
@@ -144,6 +149,7 @@ const reasonText = reason =>
     off: 'off',
     unattended: 'off in a session nobody watches',
     'no-turn': 'on; waiting for the first turn to end',
+    'first-turn': "on; from your second turn (a session's first turn leaves nothing the next one reads)",
     stopped: 'stopped for this idle period (the cache was not there to keep)',
     'short-ttl': 'paused: the cache lives five minutes in this session, too short to keep',
     busy: 'on; a turn is running',
@@ -155,11 +161,22 @@ const reasonText = reason =>
   })[reason] ?? reason
 
 // What `/warm` answers: this session's state, then what keeping warm has done on this machine.
-/** @param {{ reason: string, period: Period | null, facts: Facts, tz: number, ledger: Ledger, source: string }} view */
-export const warmReport = ({ reason, period, facts, tz, ledger, source }) => {
+/** @param {number} n */
+const tokens = n => n.toLocaleString('en-US')
+
+// One line on the last read: what the cache served of the context it was to keep.
+/** @param {LastRead} last @param {number} tz */
+export const lastReadText = (last, tz) =>
+  last.reason
+    ? `Last read at ${clockText(last.at, tz)}: no reply (${last.reason}).`
+    : `Last read at ${clockText(last.at, tz)}: ${tokens(last.read)} of ${tokens(last.context)} tokens from the cache${last.written > 0 ? `, ${tokens(last.written)} written` : ''} (${isHit({ cache_read_input_tokens: last.read }, last.context) ? 'kept' : 'not kept'}).`
+
+/** @param {{ reason: string, period: Period | null, facts: Facts, tz: number, ledger: Ledger, source: string, last?: LastRead | null }} view */
+export const warmReport = ({ reason, period, facts, tz, ledger, source, last = null }) => {
   const cap = `${facts.hours} hour${facts.hours === 1 ? '' : 's'}`
   const now = reason === '' && period ? `on; next read at ${clockText(nextPingAt(period, facts.ttl), tz)} (${period.pings} of ${maxPings(facts.hours, facts.ttl)} this idle period)` : reasonText(reason)
   const lines = [`Keep the cache warm: ${now}. Cap ${cap}, ${source}.`]
+  if (last) lines.push(lastReadText(last, tz))
   if (facts.mode !== 'on') lines.push('/warm on keeps it warm while you are idle; /warm 2h sets the cap.')
   else lines.push('/warm off stops it; /warm <n>h sets the cap.')
   if (ledger.pings + ledger.missed > 0) {

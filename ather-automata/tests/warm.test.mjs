@@ -8,7 +8,7 @@ const HOUR = 60 * MIN
 const CONTEXT = 150000
 
 /** @param {Partial<import('../hooks/warm.mjs').Facts>} [fields] @returns {import('../hooks/warm.mjs').Facts} */
-const facts = (fields = {}) => ({ mode: 'on', hours: 3, ttl: '1h', isBusy: false, isInteractive: true, away: { phase: 'off', untilDone: false, wakeAt: 0 }, quota: 0, ...fields })
+const facts = (fields = {}) => ({ mode: 'on', hours: 3, ttl: '1h', isBusy: false, isInteractive: true, turns: 4, away: { phase: 'off', untilDone: false, wakeAt: 0 }, quota: 0, ...fields })
 const usage = (read = 0, written = 0) => ({ input_tokens: 10, output_tokens: 2, cache_read_input_tokens: read, cache_creation_input_tokens: written })
 
 describe('keep warm: timing (A3)', () => {
@@ -37,6 +37,7 @@ describe('keep warm: guards (A4)', () => {
     expect(skipReason(period, at, facts({ mode: 'ask' }))).toBe('off')
     expect(skipReason(period, at, facts({ isInteractive: false }))).toBe('unattended')
     expect(skipReason(null, at, facts())).toBe('no-turn')
+    expect(skipReason(period, at, facts({ turns: 1 }))).toBe('first-turn')
     expect(skipReason({ ...period, isStopped: true }, at, facts())).toBe('stopped')
     expect(skipReason(period, at, facts({ ttl: '5m' }))).toBe('short-ttl')
     expect(skipReason(period, at, facts({ isBusy: true }))).toBe('busy')

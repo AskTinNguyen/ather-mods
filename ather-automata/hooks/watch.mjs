@@ -45,6 +45,8 @@ let warmMode = /** @type {import('./warm.mjs').WarmMode} */ ('off')
 let warmHours = 3
 let isWarmAttended = false
 let isTurnRunning = false
+// Main-thread turns since the session (or /clear) began: the first one's cache is never read again.
+let warmTurns = 0
 /** @type {import('./warm.mjs').Period | null} */
 let warmPeriod = null
 /** @type {import('claude-code').Timer | null} */
@@ -53,6 +55,9 @@ let warmTimer = null
 /** @type {{ period: import('./warm.mjs').Period, at: number, isPerson: boolean } | null} */
 let warmTurn = null
 let isWarmAsked = false
+// What the last read in this session did, for /warm.
+/** @type {import('./warm.mjs').LastRead | null} */
+let lastRead = null
 let isShortTold = false
 // The one user message a ping sends: it asks for the shortest reply, since a fork takes no output cap.
 export const PING_PROMPT = 'Keep-alive check from a plugin; nothing to do. Reply with a single period.'
@@ -767,10 +772,12 @@ async function auditMerge($, root, pack) {
 async function startWarm($, isAttended) {
   isWarmAttended = isAttended
   isTurnRunning = false
+  warmTurns = 0
   warmPeriod = null
   warmTurn = null
   isWarmAsked = false
   isShortTold = false
+  lastRead = null
   cancelWarm($)
   await $.command.register({ name: 'warm', description: 'Ather Automata: keep the prompt cache warm while you are idle', argumentHint: '[on | off | <n>h]' })
 }
@@ -782,6 +789,8 @@ function endWarm($) {
   if (warmPeriod && warmPeriod.pings > 0) void state.noteWarm(io($), { wasted: warmPeriod.pings }).catch(() => undefined)
   warmPeriod = null
   warmTurn = null
+  // After /clear the session goes on under a new id with no session.start: its next turn is a first turn again.
+  warmTurns = 0
   try {
     cancelWarm($)
   } catch {
@@ -816,6 +825,7 @@ async function warmFacts($) {
     ttl: choice.ttl ?? '1h',
     isBusy: isTurnRunning,
     isInteractive: isWarmAttended,
+    turns: warmTurns,
     away: { phase: away?.phase ?? 'off', untilDone: away?.untilDone ?? false, wakeAt: away?.wakeAt ?? 0 },
     quota: Math.max(0, ...(usage?.rateLimits ?? []).map(one => one.percentUsed)),
   }
@@ -825,19 +835,18 @@ async function warmFacts($) {
 /** @param {Engine} $ @param {import('claude-code').TurnUsage | undefined} usage */
 async function endTurn($, usage) {
   isTurnRunning = false
+  warmTurns += 1
   const now = await $.clock.now()
   const context = (await $.session.usage().catch(() => null))?.context.tokens ?? 0
   const from = warmTurn
   warmTurn = null
-  if (from && usage) {
-    const ttl = learnTtl(from.at - from.period.lastAt, usage, from.period.context)
-    if (ttl === '5m' && (await state.readWarm(io($))).ttl !== '5m') {
-      await state.setWarm(io($), { ttl })
-      if (!isShortTold && (await warmFacts($)).mode === 'on') $.ui.toast('Ather: the prompt cache lives five minutes in this session, too short to keep warm. Paused; /warm says more.', { timeoutMs: 10000 })
-      isShortTold = true
-    }
-    if (from.isPerson) await state.noteWarm(io($), returnChange(from.period, from.at, usage, (await warmFacts($)).ttl))
+  // A second turn always writes the first one's part again (F-2): only later turns say anything of the TTL.
+  if (from && usage && warmTurns > 2 && learnTtl(from.at - from.period.lastAt, usage, from.period.context) === '5m' && (await state.readWarm(io($))).ttl !== '5m') {
+    await state.setWarm(io($), { ttl: '5m' })
+    if (!isShortTold && (await warmFacts($)).mode === 'on') $.ui.toast('Ather: the prompt cache lives five minutes in this session, too short to keep warm. Paused; /warm says more.', { timeoutMs: 10000 })
+    isShortTold = true
   }
+  if (from && usage && from.isPerson) await state.noteWarm(io($), returnChange(from.period, from.at, usage, (await warmFacts($)).ttl))
   // A turn the person did not start (a schedule, a wakeup) read the cache too, but the cap counts from their last turn.
   warmPeriod = { ...newPeriod(now, context), pings: from && !from.isPerson ? from.period.pings : 0 }
   await armWarm($)
@@ -870,6 +879,9 @@ async function pingWarm($, at) {
   const before = (await $.session.usage().catch(() => null))?.cost?.usd ?? 0
   const reply = await $.model.fork({ prompt: PING_PROMPT })
   const usd = Math.max(0, ((await $.session.usage().catch(() => null))?.cost?.usd ?? before) - before)
+  const usage = 'usage' in reply ? reply.usage : null
+  lastRead = { at: await $.clock.now(), read: usage?.cache_read_input_tokens ?? 0, written: usage?.cache_creation_input_tokens ?? 0, context: at.context, reason: reply.isAnswered ? '' : reply.reason }
+  $.ui.log(`Ather warm: read ${JSON.stringify({ ...usage, context: at.context, usd, reason: lastRead.reason })}`, { to: 'debug' })
   if (warmPeriod !== at) return
   if (!reply.isAnswered && reply.reason === 'nothing-to-fork') return cancelWarm($)
   if (reply.isAnswered && isHit(reply.usage, at.context)) {
@@ -896,5 +908,5 @@ async function warmCommand($, args) {
   const stored = await state.readWarm(io($))
   const source = stored.mode !== undefined || stored.hours !== undefined ? 'set for this session' : 'from the plugin settings'
   const reason = skipReason(warmPeriod, await $.clock.now(), facts)
-  return warmReport({ reason, period: warmPeriod, facts, tz: await state.readTz(io($)), ledger: await state.readWarmLedger(io($)), source })
+  return warmReport({ reason, period: warmPeriod, facts, tz: await state.readTz(io($)), ledger: await state.readWarmLedger(io($)), source, last: lastRead })
 }

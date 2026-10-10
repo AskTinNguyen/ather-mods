@@ -64,6 +64,10 @@ test('keep warm on: a ping each 55 minutes up to the cap, then a warm return is 
   const world: Reads = { reads: [], forks: [], status: [], cost: 0 }
   warmWorld(on, world)
   await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  // Past the session's first turn, whose cache no later request reads.
+  await $.prompt.submit({ text: 'first' })
+  await endTurn($)
+  await $.prompt.submit({ text: 'second' })
   await endTurn($)
   await clock.settle()
   expect(world.status.at(-1) ?? '').toMatch(/^◔ warm 0\/3 · next /)
@@ -87,12 +91,29 @@ test('keep warm on: a ping each 55 minutes up to the cap, then a warm return is 
   expect(report).toMatch(/3 pings · 1 return warm, 0 cold · \$0\.2[23] spent, ~\$1\.4[23] re-write avoided/)
 })
 
+test('after the first turn alone, no read: its cache is never read again', { options: { cacheKeepWarm: 'on' } }, async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  const world: Reads = { reads: [], forks: [], status: [], cost: 0 }
+  warmWorld(on, world)
+  await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'only' })
+  await endTurn($)
+  await clock.advance(120 * MINUTE)
+  expect(world.forks.length).toBe(0)
+  expect((await $.command.run({ command: 'warm', args: '' })).text ?? '').toMatch(/from your second turn/)
+})
+
 test('keep warm is off by default: no ping in two idle hours', async ($, on) => {
   const clock = mock.clock(on)
   mock.store(on)
   const world: Reads = { reads: [], forks: [], status: [], cost: 0 }
   warmWorld(on, world)
   await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  // Past the session's first turn, whose cache no later request reads.
+  await $.prompt.submit({ text: 'first' })
+  await endTurn($)
+  await $.prompt.submit({ text: 'second' })
   await endTurn($)
   await clock.advance(120 * MINUTE)
   expect(world.forks.length).toBe(0)
@@ -105,6 +126,10 @@ test('/warm on turns it on for the session; a ping that misses stops the idle pe
   const world: Reads = { reads: [0], forks: [], status: [], cost: 0 }
   warmWorld(on, world)
   await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  // Past the session's first turn, whose cache no later request reads.
+  await $.prompt.submit({ text: 'first' })
+  await endTurn($)
+  await $.prompt.submit({ text: 'second' })
   await endTurn($)
   expect((await $.command.run({ command: 'warm', args: '2h' })).text ?? '').toMatch(/^Keep the cache warm: on; next read at .* \(0 of 2 this idle period\)\. Cap 2 hours, set for this session\./)
   await clock.advance(55 * MINUTE)
@@ -120,6 +145,10 @@ test('a re-write after 20 idle minutes means the five-minute TTL: keep warm paus
   const world: Reads = { reads: [], forks: [], status: [], cost: 0 }
   warmWorld(on, world)
   await $.session.start({ cwd: '.', surface: 'terminal', isInteractive: true })
+  // Past the session's first turn, whose cache no later request reads.
+  await $.prompt.submit({ text: 'first' })
+  await endTurn($)
+  await $.prompt.submit({ text: 'second' })
   await endTurn($)
   await clock.advance(20 * MINUTE)
   await $.prompt.submit({ text: 'next' })
