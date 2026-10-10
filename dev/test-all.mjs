@@ -1,4 +1,4 @@
-// Type-check, then run the unit tests and the end-to-end harness against ../ather-automata.
+// Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata.
 // The mod is plain .mjs: nothing to compile. Run from anywhere: `node dev/test-all.mjs`.
 // Type-checking needs the engine's API types: set CLAUDE_CODE_TYPES to a claude-code.d.ts
 // (the plugin-authoring skill writes one, and a loaded mod gets .claude-plugin/types/claude-code/index.d.ts);
@@ -69,11 +69,22 @@ const tests = fs.readdirSync(path.join(MOD, 'tests')).filter(f => f.endsWith('.t
 fs.writeFileSync(path.join(unit, 'main.mjs'), `${tests.map(f => `import './tests/${f}'`).join('\n')}\nimport { run } from 'file:///${shim.replace(/^\//, '')}'\nawait run()\n`)
 sh('node main.mjs', unit)
 
-console.log('== e2e')
 const e2e = path.join(HERE, 'e2e')
 fs.rmSync(path.join(e2e, 'out'), { recursive: true, force: true })
 copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
-// --layouts <dir> passes through: the e2e run writes every pane laid out at 72 and 110 columns there.
-const layouts = process.argv.includes('--layouts') ? path.resolve(process.argv[process.argv.indexOf('--layouts') + 1]) : null
-sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"${layouts ? ` --layouts "${layouts}"` : ''}`, e2e)
-console.log(`report: ${path.join(WORK, 'e2e-report.md')}`)
+
+// Several real git checkouts under the temp folder: needs no S2 checkout.
+console.log('== repos e2e')
+sh(`node repos.mjs "${path.join(WORK, 'repos-report.md')}"`, e2e)
+
+console.log('== e2e')
+// The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for
+// people who do not work on the game (web, tools) and have no S2 checkout on their PC. A S2_ROOT that is
+// set but wrong still fails in run.mjs. A change to what an S2 session sees still needs one run with S2_ROOT.
+if (!process.env.S2_ROOT) console.log('skipped: the S2 e2e did not run. Set S2_ROOT to an S2 checkout to run it (not needed for non-game work)')
+else {
+  // --layouts <dir> passes through: the e2e run writes every pane laid out at 72 and 110 columns there.
+  const layouts = process.argv.includes('--layouts') ? path.resolve(process.argv[process.argv.indexOf('--layouts') + 1]) : null
+  sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"${layouts ? ` --layouts "${layouts}"` : ''}`, e2e)
+  console.log(`report: ${path.join(WORK, 'e2e-report.md')}`)
+}

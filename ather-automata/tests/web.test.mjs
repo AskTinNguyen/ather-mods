@@ -212,6 +212,19 @@ describe('web held actions while away (A4)', () => {
     expect(heldShell('gh pr merge 15', ['merge', 'push-main'], feature, unreal, { isProven: true })).toBe('merge')
     expect(heldShell('vercel --prod', ['merge', 'push-main'], feature, WEB)).toBe(null)
   })
+  test("a folder in another checkout is judged by that checkout's pack, held kinds and proof", () => {
+    const windowHeld = ['merge', 'push-main']
+    // The session is an Unreal checkout; ../web is a web checkout with its own defaults.
+    const at = (/** @type {boolean} */ isProven) => (/** @type {string | null} */ folder) => (folder === '../web' ? { pack: WEB, held: [...WEB.held.defaults], isProven } : null)
+    expect(heldShell('cd ../web && vercel --prod', windowHeld, feature, unreal, { at: at(false) })).toBe('deploy-prod')
+    expect(heldShell('cd ../web && gh pr merge 3', windowHeld, feature, unreal, { at: at(false) })).toBe('merge')
+    expect(heldShell('cd ../web && gh pr merge 3', windowHeld, feature, unreal, { at: at(true) })).toBe(null)
+    // The session's own folder keeps the session's pack: proof elsewhere does not free an Unreal merge.
+    expect(heldShell('gh pr merge 3 && cd ../web && npm test', windowHeld, feature, unreal, { at: at(true) })).toBe('merge')
+    // Without a lookup, as before: the Unreal pack holds no deploy.
+    expect(heldShell('cd ../web && vercel --prod', windowHeld, feature, unreal)).toBe(null)
+    expect(heldShell('cd ../web && vercel --prod', windowHeld, feature, unreal, { at: () => null })).toBe(null)
+  })
   test("the web window's defaults hold every web kind, and its mandate says how merges go", () => {
     expect(WEB.held.defaults).toEqual(['merge', 'push-main', 'deploy-prod', 'migrate', 'env-secret', 'publish', 'infra-apply'])
     const away = newWindow({ hours: 8, untilDone: false, goal: '', held: [...WEB.held.defaults] }, 0, 'L.md', { person: 'p', root: 'R' })

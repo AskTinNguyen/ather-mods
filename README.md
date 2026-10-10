@@ -52,7 +52,7 @@ Restart your sessions afterwards.
 
 ## Releasing a change (maintainers)
 
-1. Edit `ather-automata/`, then run `S2_ROOT=<your S2 checkout> HANVIET_ROOT=<a han-viet checkout> node dev/test-all.mjs` (unit tests plus an end-to-end run against a stand-in engine, on a sandbox copy of that checkout's intents; set `CLAUDE_CODE_TYPES` to type-check too; `HANVIET_ROOT` adds the web pane; `--layouts <dir>` writes every pane layout for a diff). Afterwards `node --test ather-automata/tests/*.test.mjs` runs the unit tests alone, and `claude plugin test ather-automata` loads the module in the engine.
+1. Edit `ather-automata/`, then run `S2_ROOT=<your S2 checkout> HANVIET_ROOT=<a han-viet checkout> node dev/test-all.mjs` (unit tests plus an end-to-end run against a stand-in engine, on a sandbox copy of that checkout's intents; set `CLAUDE_CODE_TYPES` to type-check too; `HANVIET_ROOT` adds the web pane; `--layouts <dir>` writes every pane layout for a diff). Without `S2_ROOT` the S2 end-to-end run is skipped and says so, and the rest still runs: this is for people who do not work on the game and have no S2 checkout; a change to what an S2 session sees still needs one run with it. Afterwards `node --test ather-automata/tests/*.test.mjs` runs the unit tests alone, and `claude plugin test ather-automata` loads the module in the engine.
 2. Check it loads: `claude plugin validate ather-automata`.
 3. Bump `version` in both `ather-automata/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`, and add a line under Changes in the mod's README.
 4. Bring the Paseo version along. In `paseo/ather-automata`:

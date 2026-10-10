@@ -11,9 +11,9 @@
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
 import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
-import { issueLink, issuePrompt, parseIssues } from './issues.mjs'
+import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { crewOf } from './crew.mjs'
@@ -22,15 +22,17 @@ import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
 import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
 import { changeGlyph } from './changes.mjs'
-import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from './team.mjs'
+import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncSummary, syncText } from './team.mjs'
+import { MAX_CHECKOUTS, checkoutNames, checkoutOf, normalFolder, parseRepos } from './workspace.mjs'
+import { withFolders } from './shell.mjs'
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
 import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from './setup.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
-/** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
-/** @typedef {ReturnType<typeof buildHome>} Home */
+/** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding' | 'repos'} Mode */
+/** @typedef {ReturnType<typeof buildHome> & { sync: import('./team.mjs').Sync }} Home */
 /** @typedef {import('./home.mjs').Item} Item */
 /** @typedef {import('./home.mjs').Next} Next */
 /** @typedef {import('./home.mjs').Work} Work */
@@ -57,9 +59,9 @@ const createOpen = new Set()
 // Intent changes after this were not seen yet: they make the band's notice.
 let intentSeenAt = 0
 // The issue whose card is open (paneMode 'issue'), and the view to go back to.
-let issueShown = 0
+let issueShown = ''
 let issueBack = /** @type {'home' | 'pick'} */ ('home')
-// The intent whose view is open (paneMode 'intent'; '' is the tracked one), and the view to go back to.
+// The intent whose view is open (paneMode 'intent'; its key, '' for the tracked one), and the view to go back to.
 let intentShown = ''
 let intentBack = /** @type {'home' | 'pick'} */ ('home')
 // The "Everything open" list: the words searched, its sort, how the teammates' intents are grouped
@@ -82,14 +84,33 @@ const callsOpen = new Set()
 let answerState = { ...FRESH_ANSWERS }
 let findingShown = ''
 let isSearchOpen = false
-// What the last read of the team's intents learned (team.mjs reads each part again only when it moved),
-// and where the background fetch stands. Both, and `intents`, change together, in readIntents.
-let teamCache = EMPTY_CACHE
-let sync = NO_SYNC
-// A fetch that ended (the `count`th), for the first read that began after it to apply with what it brought in.
-/** @type {{ count: number, sync: Partial<import('./team.mjs').Sync> } | null} */
-let fetched = null
+// The Repositories view: the workspace's source folders as last read (readSources), and whether its field is open.
+/** @typedef {{ folder: string, from: 'session' | 'setting' | 'kept', count: number, isCheckout: boolean }} Source */
+/** @type {Source[]} */
+let sources = []
+let isFolderOpen = false
+// Per checkout root: what the last read of its team's intents learned (team.mjs reads each part again
+// only when it moved), and where its background fetch stands. Both, and `intents`, change together, in readIntents.
+/** @type {Map<string, import('./team.mjs').TeamCache>} */
+const teamCaches = new Map()
+/** @type {Map<string, import('./team.mjs').Sync>} */
+const syncs = new Map()
+// Per checkout root, a fetch that ended (the `count`th), for the first read that began after it to apply with what it brought in.
+/** @type {Map<string, { count: number, sync: Partial<import('./team.mjs').Sync> }>} */
+const fetched = new Map()
 let fetchesEnded = 0
+// A fetch is running: one at a time over every checkout.
+let isSyncing = false
+// The pane's checkouts, as last read (paneLanes): the workspace checkouts that have intents.
+/** @type {import('./state.mjs').Checkout[]} */
+let checkouts = []
+// The workspace checkouts other than the session's own, read once per session: a read git could not answer
+// in full is not kept, so the next one asks again.
+/** @type {Promise<string[]> | null} */
+let otherRoots = null
+// Which clone each workspace checkout is of, by its folder, read with them: a checkout and its worktrees share one.
+/** @type {Map<string, string>} */
+let clones = new Map()
 // The read running now, and whether another was asked for while it ran.
 /** @type {Promise<void> | null} */
 let reading = null
@@ -109,9 +130,15 @@ let isPrsReading = false
 let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
 let isAwake = null
+// The console's timers run: its work began in a session that had intents to show.
+let isWorking = false
+// The `repos` option: more checkouts this session works with.
+let repos = ''
 /** @type {{ version: number, at: number, model: Home | null }} */
 let view = { version: -1, at: 0, model: null }
-// The pack this checkout's lane chose (packs/index.mjs), for the drawing; set whenever the view is rebuilt.
+// How many times the view was marked stale: one built while that happened is not kept as fresh.
+let staled = 0
+// The pack whose words the pane uses (packs/index.mjs, wordsLane); set whenever the view is rebuilt.
 /** @type {import('./packs/index.mjs').Pack} */
 let pack = unreal
 
@@ -128,21 +155,43 @@ function io($) {
     exists: path => $.fs.exists(path).catch(() => false),
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
-    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitUser: async root => ((await $.process.run(['git', 'config', 'user.name'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
+    origin: root => readOrigin($, root),
+    repo: async () => (await laneOf($)).repo,
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
+    worktrees: root => readWorktrees($, root),
   }
 }
 
-// Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV.
+// The origin URL of the checkout at `root` ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readOrigin($, root) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  // Exit 1: no such key.
+  return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
+}
+
+// What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
+// could not say (the app aborted the run, it ran out of time): the workspace asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readWorktrees($, root) {
+  const run = await $.process.run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '') : ''
+}
+
+// Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV. A run the app took back (the hook
+// call that started it was abandoned) is marked: the engine rejects it with a message ending in "aborted".
 /** @param {Engine} $ @param {string} root @returns {import('./team.mjs').Repo} */
 function repo($, root) {
   return {
     git: (args, { stdin, timeoutMs = 120000 } = {}) =>
-      $.process.run(['git', '-C', root, ...args], { cwd: root, env: GIT_ENV, timeoutMs, ...(stdin === undefined ? {} : { stdin }) }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error) })),
+      $.process.run(['git', '-C', root, ...args], { cwd: root, env: GIT_ENV, timeoutMs, ...(stdin === undefined ? {} : { stdin }) }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error), isAborted: /aborted$/.test(String(error)) })),
     read: path => $.fs.read(path).then(text => (typeof text === 'string' ? text : null), () => null),
     list: path => $.fs.list(path),
     mtime: path => $.fs.stat(path).then(stat => stat.mtimeMs, () => 0),
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
   }
 }
 
@@ -165,11 +214,113 @@ function laneOf($) {
   return state.lane(io($), cwd)
 }
 
-/** @param {import('claude-code').On} on */
-export function register(on) {
+// The pane's checkouts: the workspace checkouts that have intents, in workspace order, the session's own
+// (its lane) first. A session opened in a parent folder has none of its own.
+/** @param {Engine} $ @returns {Promise<import('./state.mjs').Checkout[]>} */
+async function paneLanes($) {
+  const session = await laneOf($)
+  if (!otherRoots) otherRoots = readOtherRoots($, session.root)
+  const others = []
+  for (const root of await otherRoots) {
+    const lane = await state.laneAt(io($), root)
+    if (lane.isS2) others.push(lane)
+  }
+  return session.isS2 ? [session, ...others] : others
+}
+
+/** @param {Engine} $ @param {string} root the session lane's root */
+async function readOtherRoots($, root) {
+  const files = io($)
+  const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
+  // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
+  const { roots, clones: found, isSure } = await state.workspaceClones(files, root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))
+  // The session's lane is its folder's, which may be inside its checkout.
+  for (const one of own) if (found.has(one)) found.set(normalFolder(root), found.get(one) ?? one)
+  clones = found
+  if (!isSure) otherRoots = null
+  return roots.filter(one => !own.has(normalFolder(one)))
+}
+
+// The clone a checkout is of: its own folder when it has no other worktree in the workspace.
+/** @param {string} root */
+function cloneOf(root) {
+  return clones.get(normalFolder(root)) ?? normalFolder(root)
+}
+
+// The lane an intent's checkout has in the pane (the session's for its own).
+/** @param {Engine} $ @param {string} root */
+async function laneFor($, root) {
+  return checkouts.find(one => normalFolder(one.root) === normalFolder(root)) ?? (await laneOf($))
+}
+
+// The lane of the checkout a worker's shell command runs in: its last segment's, as its proof is read (watch.mjs afterShell).
+/** @param {Engine} $ @param {string} command */
+async function commandLane($, command) {
+  return (await state.folderLane(io($), await laneOf($), withFolders(command).at(-1)?.folder ?? null)).lane
+}
+
+// The lane whose pack gives the pane its words (Next, Create, Prove, the role): the tracked intent's
+// checkout, else the session's own when it has intents, else the first pane checkout.
+/** @param {Engine} $ */
+async function wordsLane($) {
+  const tracked = await state.trackedLane(io($), cwd)
+  const session = await laneOf($)
+  return tracked ? tracked.lane : session.isS2 ? session : (checkouts[0] ?? session)
+}
+
+// Whether a pane checkout is the session's own (the session lane is read again until git's answers are sure,
+// so it is matched by root, not by object).
+/** @param {import('./state.mjs').Checkout} session @param {import('./state.mjs').Checkout} lane */
+function isOwnLane(session, lane) {
+  return session.isS2 && normalFolder(lane.root) === normalFolder(session.root)
+}
+
+// An intent's key in the pane: its slug in the session's own checkout, `<its checkout's short name>/<slug>` in another.
+/** @param {string} name @param {boolean} isOwn @param {string} slug */
+function keyOf(name, isOwn, slug) {
+  return isOwn ? slug : `${name}/${slug}`
+}
+
+// The short name of each checkout the pane works with, by its folder: the workspace's checkouts in order, then
+// the tracked intent's when it is outside them. Each is different (checkoutNames), so keys and lookups by name agree;
+// the workspace's never change in a session, whatever is tracked, so a key built earlier still names its intent.
+/** @param {Engine} $ @returns {Promise<Map<string, string>>} */
+async function laneNames($) {
+  const session = await laneOf($)
+  const listed = await issueLanes($)
+  // A session folder with intents that is no checkout is in the pane, though no issues are read there.
+  const lanes = session.isS2 && !listed.some(one => normalFolder(one.root) === normalFolder(session.root)) ? [session, ...listed] : [...listed]
+  const tracked = await state.trackedLane(io($), cwd)
+  const outside = tracked && !lanes.some(one => normalFolder(one.root) === normalFolder(tracked.lane.root)) ? [tracked.lane] : []
+  const names = checkoutNames(lanes.map(lane => ({ root: lane.root, repo: lane.repo, clone: cloneOf(lane.root) })), outside)
+  return new Map([...lanes, ...outside].map((lane, at) => [normalFolder(lane.root), names[at] ?? '']))
+}
+
+/** @param {Engine} $ @param {import('./state.mjs').Checkout} lane */
+async function shortName($, lane) {
+  return (await laneNames($)).get(normalFolder(lane.root)) ?? ''
+}
+
+// The tracked intent's key, '' when nothing is tracked.
+/** @param {Engine} $ */
+async function trackedKey($) {
+  const tracked = await state.trackedLane(io($), cwd)
+  if (!tracked) return ''
+  return tracked.isOwn ? tracked.slug : keyOf(await shortName($, tracked.lane), false, tracked.slug)
+}
+
+/** @param {Engine} $ */
+async function hasIntents($) {
+  return (await paneLanes($)).length > 0
+}
+
+/** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} [options] */
+export function register(on, options) {
+  repos = String(options?.repos ?? '')
   // A repository set up in this session: the console's work, skipped at the start, begins with the next wake.
+  // Where another checkout's intents began it already, it goes on and reads the new ones.
   state.onSetUp('console', () => {
-    isAwake = null
+    if (checkouts.length === 0) isAwake = null
   })
 
   // The desktop app runs sessions the way the SDK does: not interactive at start, no surface yet.
@@ -192,7 +343,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     // Read again in the background: the turn's end never waits on git.
-    if (!e.agentId && (await laneOf($)).isS2) void refresh($).catch(() => undefined)
+    if (!e.agentId && (await hasIntents($))) void refresh($).catch(() => undefined)
     // A worker's turn ended: it finished now, not when the pane is next drawn.
     if (e.agentId) recordEnd(e.agentId, Date.now())
     // Its turn is over: nothing in its loop is in flight, whatever did not settle.
@@ -204,15 +355,21 @@ export function register(on) {
   on('command.run', { command: 'ather' }, async ($, e) => {
     // Setting up is for a repository without intents too, so it is answered before the check below.
     if (/^(setup|init)$/i.test(e.args.trim())) return { text: await setupCommand($) }
-    // A checkout without intents is read again: /ather setup may have added them in this session.
-    if (!(await state.laneAgain(io($), cwd)).isS2) return { text: await setupQuestion($) }
+    // So are the folders to list: one of them may be where the intents are.
+    if (/^repos(\s|$)/i.test(e.args.trim())) return { text: await reposCommand($, e.args.trim().slice('repos'.length).trim()) }
+    // A checkout without intents is read again: /ather setup may have added them in this session. The
+    // question is for a pane that would have nothing: another workspace checkout's intents open it.
+    await state.laneAgain(io($), cwd)
+    if (!(await hasIntents($))) return { text: await setupQuestion($) }
     await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }
   })
 
+  on('tool.call', { tool: 'mcp__ather-automata__repos' }, async ($, e) => ({ result: await reposTool($, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))) }))
+
   on('command.run', { command: 'away' }, async ($, e) => {
-    if (!(await laneOf($)).isS2) return { text: (await laneOf($)).pack.notHere }
+    if (!(await hasIntents($))) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     return { text: await awayCommand($, e.args.trim()) }
   })
@@ -231,7 +388,7 @@ export function register(on) {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !(await laneOf($)).isS2) return next(e)
+    if (e.props.hasSurvey || !(await hasIntents($))) return next(e)
     void wake($)
     const model = await home($)
     const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
@@ -265,8 +422,9 @@ export function register(on) {
     isDrawn = true
     void syncMain($)
     if (paneMode === 'intent') await readIntentView($)
+    if (paneMode === 'repos') sources = await readSources($)
     if (paneMode === 'pick' && !isGroupRead) await readGroup($)
-    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack))
+    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
   })
 
   on('ui.close', ($, e, next) => {
@@ -274,6 +432,7 @@ export function register(on) {
       // Only the view resets: this session's answers stay.
       paneMode = 'home'
       isSearchOpen = false
+      isFolderOpen = false
       answerState = { ...answerState, typing: '' }
     }
     return next(e)
@@ -292,6 +451,7 @@ async function openConsole($, folder) {
   issueRetries = 0
   resetTranscripts()
   isAwake = null
+  isWorking = false
   view = { version: -1, at: 0, model: null }
   closedHint = null
   intentSeenAt = Date.now()
@@ -306,15 +466,21 @@ async function openConsole($, folder) {
   answerState = { ...FRESH_ANSWERS }
   findingShown = ''
   isSearchOpen = false
-  teamCache = EMPTY_CACHE
-  sync = NO_SYNC
-  fetched = null
+  sources = []
+  isFolderOpen = false
+  teamCaches.clear()
+  syncs.clear()
+  fetched.clear()
+  isSyncing = false
+  checkouts = []
+  otherRoots = null
+  clones = new Map()
   fetchesEnded = 0
   isDrawn = false
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | setup]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | repos [add | remove <folder>] | setup]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -333,13 +499,17 @@ function wake($) {
 /** @param {Engine} $ */
 async function startConsoleWork($) {
   const lane = await laneOf($)
+  await state.workspace(io($), lane.root || cwd, repos, line => $.ui.log(line, { to: 'debug' }))
   if (lane.me !== '') me = lane.me
   pack = lane.pack
-  if (!lane.isS2) return
+  if (!(await hasIntents($))) return
+  isWorking = true
   await refresh($)
   $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
-  // A running worker's clock: redrawn every five seconds while one runs, never otherwise.
+  // A running worker's clock: redrawn every five seconds while one runs, never otherwise. And the fetches
+  // still due while the pane is drawn: one the app took back with the draw that started it is asked again here.
   $.clock.every(5000, () => {
+    if (isDrawn) void syncMain($).catch(() => undefined)
     void $.agent.list().then(agents => agents.some(agent => agent.status === 'running') && $.ui.invalidate('ui.render')).catch(() => undefined)
   })
   // watch.mjs may pick up last night's window just after this; show it.
@@ -347,7 +517,7 @@ async function startConsoleWork($) {
   void refreshIssues($).catch(() => undefined)
   $.clock.every(ISSUES_EVERY_MS, () => void refreshIssues($).catch(() => undefined))
   if ((await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
-    $.ui.toast(lane.pack.prompts.tourToast, { timeoutMs: 12000 })
+    $.ui.toast(pack.prompts.tourToast, { timeoutMs: 12000 })
     await state.setProfile(io($), me, { isNudged: true })
   }
 }
@@ -380,24 +550,44 @@ function refresh($) {
 async function readIntents($) {
   // Only a fetch that ended before this read began is applied with what this read finds.
   const seen = fetchesEnded
-  const { root, me: who, pack: chosen } = await laneOf($)
-  if (who !== me) stale()
-  me = who
-  pack = chosen
+  const session = await laneOf($)
+  if (session.me !== me) stale()
+  me = session.me
   const files = io($)
-  const pinned = await state.readPinned(files)
-  const team = await readTeam(repo($, root), root, { cache: teamCache, pinned })
+  const lanes = await paneLanes($)
+  const tracked = await state.readTracked(files)
+  const names = await laneNames($)
   const read = []
-  for (const one of team.intents) read.push(parseIntent({ ...one, hasDebrief: one.slug === pinned && (await files.exists(`${root}/${chosen.debriefPath(one.slug)}`)) }, chosen))
-  const ended = fetched && fetched.count <= seen ? fetched : null
-  if (ended) fetched = null
-  teamCache = team.cache
+  // What each clone's first pane checkout read of origin/main: its other worktrees share it, and list only their own.
+  /** @type {Map<string, import('./team.mjs').MainSnapshot | null>} */
+  const mains = new Map()
+  for (const lane of lanes) {
+    const { root, pack: its } = lane
+    const isOwn = isOwnLane(session, lane)
+    const name = names.get(normalFolder(root)) ?? ''
+    // Its intents: one tracked in another checkout is not one of them.
+    const pinned = tracked && normalFolder(tracked.root) === normalFolder(root) ? tracked.slug : null
+    const clone = cloneOf(root)
+    const isFirst = !mains.has(clone)
+    const kept = teamCaches.get(root) ?? EMPTY_CACHE
+    const team = await readTeam(repo($, root), root, { cache: isFirst ? kept : { ...kept, main: mains.get(clone) ?? kept.main }, pinned })
+    if (isFirst) mains.set(clone, team.cache.main)
+    const tag = { root, repo: lane.repo, repoName: name }
+    for (const one of isFirst ? team.intents : team.intents.filter(listed => listed.source === 'local')) read.push(parseIntent({ ...one, ...tag, key: keyOf(name, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
+    const ended = fetched.get(root)
+    const isApplied = ended !== undefined && ended.count <= seen
+    if (isApplied) fetched.delete(root)
+    teamCaches.set(root, team.cache)
+    syncs.set(root, { ...(syncs.get(root) ?? NO_SYNC), ...(isApplied ? ended.sync : {}), isRepo: team.isRepo, hasMain: team.cache.main !== null })
+  }
+  checkouts = lanes
   intents = read.sort((a, b) => b.updatedAt - a.updatedAt)
   // This session's answers to decisions are kept until the files read them resolved; an answer to
   // anything else (a rule) has no file to settle it, so it stays for the session.
-  const waiting = new Set(intents.flatMap(one => directorCalls(one).map(finding => callId(one.slug, finding.id))))
+  const waiting = new Set(intents.flatMap(one => directorCalls(one).map(finding => callId(one.key, finding.id))))
   answerState = { ...answerState, decided: pruneDecided(answerState.decided, id => waiting.has(id) || !id.startsWith('call:'), Date.now()) }
-  sync = { ...sync, ...ended?.sync, isRepo: team.isRepo, hasMain: team.cache.main !== null }
+  const { root, pack: chosen } = await wordsLane($)
+  pack = chosen
   // The listed skills that exist here, each with the first sentence of its own description.
   const found = []
   for (const name of new Set([...chosen.skillGroups.flatMap(one => one.names), ...chosen.createGroups.flatMap(one => one.items.filter(item => !item.isGlobal).map(item => item.name))])) {
@@ -419,66 +609,175 @@ async function refreshPrs($) {
   if (isPrsReading) return
   isPrsReading = true
   try {
-    const { root } = await laneOf($)
-    /** @type {Record<string, import('./model.mjs').PrState>} */
-    const read = {}
-    for (const number of prsToRead(intents, await state.readPrRecords(io($)), Date.now())) {
-      const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
-      read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
+    // Each checkout's intents: their PRs are its repository's, read with gh there.
+    for (const { root, repo: scope } of await paneLanes($)) {
+      const its = intents.filter(one => normalFolder(one.root) === normalFolder(root))
+      /** @type {Record<string, import('./model.mjs').PrState>} */
+      const read = {}
+      for (const number of prsToRead(its, await state.readPrRecords(io($), scope), Date.now())) {
+        const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
+        read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
+      }
+      await state.setPrStates(io($), read, Date.now(), scope)
     }
-    await state.setPrStates(io($), read, Date.now())
   } finally {
     isPrsReading = false
   }
 }
 
-// Fetches origin's main in the background (D2): once the pane is drawn, then at most every ten minutes,
-// or at once from ↻ (after a git lock, only at the next due time); one at a time. The sync line says
-// synced once the read after the fetch has landed; a failure keeps the last list and says so.
+// Fetches each pane clone's origin main in the background (D2): once the pane is drawn, then at most
+// every ten minutes, or at once from ↻ (after a git lock, only at the next due time); one fetch at a time
+// over every checkout. The sync line says synced once the read after the fetch has landed; a failure keeps
+// the last list and says so. A fetch the app took back is no try: the sync stands as it stood and stays due.
 /** @param {Engine} $ @param {boolean} [isAsked] */
 async function syncMain($, isAsked = false) {
-  if (!(isAsked ? canFetchNow : isFetchDue)(sync, Date.now())) return
-  sync = { ...sync, isFetching: true, triedAt: Date.now() }
-  $.ui.invalidate('ui.render')
-  const { error, lock, moved } = await fetchMain(repo($, (await laneOf($)).root))
-  $.ui.log(error ? `Ather: git fetch failed: ${error}` : `Ather: origin/main ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
-  fetchesEnded += 1
-  fetched = { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } }
-  await refresh($).catch(() => undefined)
-  // The reads failed: the fetch's outcome is still said.
-  if (fetched) {
-    sync = { ...sync, ...fetched.sync }
-    fetched = null
-    $.ui.invalidate('ui.render')
+  if (isSyncing) return
+  isSyncing = true
+  try {
+    const lanes = await paneLanes($)
+    for (const { root } of lanes) {
+      // A clone is fetched once, in its first pane checkout: the outcome is that of every one of them.
+      const roots = lanes.map(one => one.root).filter(one => cloneOf(one) === cloneOf(root))
+      if (roots[0] !== root) continue
+      const before = syncs.get(root) ?? NO_SYNC
+      if (!(isAsked ? canFetchNow : isFetchDue)(before, Date.now())) continue
+      for (const one of roots) syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), isFetching: true, triedAt: Date.now() })
+      stale()
+      $.ui.invalidate('ui.render')
+      const { error, lock, moved, isAborted } = await fetchMain(repo($, root))
+      const where = checkouts.length > 1 ? ` (${root})` : ''
+      if (isAborted) {
+        // No redraw here: a draw starts a fetch, and a newer draw is what takes one back.
+        for (const one of roots) syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), isFetching: false, triedAt: before.triedAt })
+        stale()
+        $.ui.log(`Ather: the app took the git fetch back${where}; it stays due.`, { to: 'debug' })
+        continue
+      }
+      $.ui.log(error ? `Ather: git fetch failed${where}: ${error}` : `Ather: origin/main${where} ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
+      fetchesEnded += 1
+      for (const one of roots) fetched.set(one, { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } })
+      await refresh($).catch(() => undefined)
+      // The reads failed: the fetch's outcome is still said.
+      for (const one of roots) {
+        const ended = fetched.get(one)
+        if (!ended) continue
+        syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), ...ended.sync })
+        fetched.delete(one)
+        stale()
+        $.ui.invalidate('ui.render')
+      }
+    }
+  } finally {
+    isSyncing = false
   }
+}
+
+// Where the pane's checkouts' fetches stand, as one: the sync line's.
+function syncShown() {
+  return syncSummary(checkouts.map(({ root }) => syncs.get(root) ?? NO_SYNC))
 }
 
 function stale() {
+  staled += 1
   view = { ...view, version: -1 }
 }
 
+// What gh says in a checkout whose remotes are not on GitHub, or that has none.
+const NOT_ON_GITHUB = /none of the git remotes configured for this repository point to a known GitHub host|no git remotes found/i
+
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
-/** @param {Engine} $ @returns {Promise<string>} why the read failed, or '' when it worked */
+// Each workspace repository is read in turn, in its first checkout, and its list kept under it.
+/** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
 async function refreshIssues($) {
-  const { root } = await laneOf($)
-  const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
-  if (!run || run.exitCode !== 0) {
+  const checkouts = await issueLanes($)
+  // Several checkouts, though gh is asked once for each repository: two clones of one are still a workspace,
+  // a clone and its worktrees are one checkout.
+  const isSeveral = new Set(checkouts.map(one => cloneOf(one.root))).size > 1
+  const lanes = oncePerRepo(checkouts)
+  const names = isSeveral ? await laneNames($) : new Map()
+  const failures = []
+  for (const { root, repo: scope } of lanes) {
+    const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
+    if (run && run.exitCode === 0) {
+      await state.setIssues(io($), me, parseIssues(run.stdout), scope)
+      continue
+    }
+    // Among several checkouts, one whose remotes are not on GitHub has no GitHub issues: no failure, and not tried again.
+    if (isSeveral && NOT_ON_GITHUB.test(run?.stderr ?? '')) {
+      await state.setIssues(io($), me, [], scope)
+      continue
+    }
     // Signed out: the last list may be stale, so none is shown.
-    if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [])
+    if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [], scope)
     if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
     isIssuesWarned = true
-    // A slow first start or a network blip is tried again in a minute, three times at most:
-    // without gh at all, the 15-minute refresh is enough.
-    if (issueRetries < 3) {
-      issueRetries += 1
-      $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
-    }
-    return (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
+    const failure = (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
+    failures.push(isSeveral ? `${names.get(normalFolder(root)) || root}: ${failure}` : failure)
   }
-  issueRetries = 0
-  await state.setIssues(io($), me, parseIssues(run.stdout))
-  return ''
+  if (failures.length === 0) {
+    issueRetries = 0
+    return ''
+  }
+  // A slow first start or a network blip is tried again in a minute, three times at most:
+  // without gh at all, the 15-minute refresh is enough.
+  if (issueRetries < 3) {
+    issueRetries += 1
+    $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
+  }
+  return failures.join('; ')
+}
+
+// The checkouts whose issues are read: every workspace checkout, intents or not, the session's own first.
+// A session folder in no checkout (a parent folder) has no issues of its own, unless it is all there is.
+/** @param {Engine} $ */
+async function issueLanes($) {
+  const session = await laneOf($)
+  if (!otherRoots) otherRoots = readOtherRoots($, session.root)
+  const others = []
+  for (const root of await otherRoots) others.push(await state.laneAt(io($), root))
+  const isCheckout = session.isS2 || (await checkoutOf(io($), session.root)) !== null
+  return isCheckout || others.length === 0 ? [session, ...others] : others
+}
+
+// One checkout for each repository: the first in order, so the session's own when it is one of them. A
+// repository's issues are the same in every checkout of it. A clone without an origin is a repository for
+// each of its worktrees (its folder), and is still asked once.
+/** @param {import('./state.mjs').Checkout[]} lanes */
+function oncePerRepo(lanes) {
+  return lanes.filter((lane, at) => lanes.findIndex(one => one.repo === lane.repo || cloneOf(one.root) === cloneOf(lane.root)) === at)
+}
+
+// An issue as a checkout lists it: its key is its number in the session's own checkout and `<short name>#<number>` in another.
+/** @param {import('./issues.mjs').Issue} issue @param {import('./state.mjs').Checkout} lane @param {string} name @param {boolean} isOwn @returns {import('./issues.mjs').Issue} */
+function issueAt(issue, lane, name, isOwn) {
+  return { ...issue, root: lane.root, repo: lane.repo, repoName: name, key: isOwn ? String(issue.number) : `${name}#${issue.number}` }
+}
+
+// The assigned issues of every workspace repository, in workspace order, each tagged with the checkout that lists it.
+/** @param {Engine} $ @returns {Promise<import('./issues.mjs').Issue[]>} */
+async function paneIssues($) {
+  const session = await laneOf($)
+  const names = await laneNames($)
+  const read = []
+  for (const lane of oncePerRepo(await issueLanes($))) {
+    const isOwn = normalFolder(lane.root) === normalFolder(session.root)
+    for (const issue of await state.readIssues(io($), me, lane.repo)) read.push(issueAt(issue, lane, names.get(normalFolder(lane.root)) ?? '', isOwn))
+  }
+  return read
+}
+
+// Every pane checkout's PR states in one map: the session's own by number, another's by `<root>#<number>` (prKey).
+/** @param {Engine} $ @returns {Promise<import('./model.mjs').PrStates>} */
+async function panePrs($) {
+  const session = await laneOf($)
+  /** @type {Record<string, import('./model.mjs').PrState>} */
+  const all = {}
+  for (const lane of await paneLanes($)) {
+    const isOwn = normalFolder(lane.root) === normalFolder(session.root)
+    for (const [number, value] of Object.entries(await state.readPrStates(io($), lane.repo))) all[isOwn ? number : `${lane.root}#${number}`] = value
+  }
+  return all
 }
 
 /** @param {Engine} $ @returns {Promise<Home>} */
@@ -486,7 +785,9 @@ async function home($) {
   const version = state.stateVersion()
   if (view.model && view.version === version && Date.now() - view.at < VIEW_TTL_MS) return view.model
   const files = io($)
-  const { root, me: who, pack: chosen } = await laneOf($)
+  const { me: who } = await laneOf($)
+  // The tracked intent's checkout gives the stage its pack, the role and the Editor lock.
+  const { root, pack: chosen } = await wordsLane($)
   pack = chosen
   if (who !== '') me = who
   else if (!isWhoWarned && (isWhoWarned = true)) $.ui.log('Ather: git user.name could not be read; the pane treats nobody as you until it is.', { to: 'debug' })
@@ -496,9 +797,13 @@ async function home($) {
   const profile = await state.readProfile(files, me, chosen)
   // The week-calendar plugin keeps this week's figures in ~/.calendar/latest.json.
   const userHome = await homeDir(host($))
-  const model = buildHome({
+  // The list and its sync line are taken together: a read that lands while the rest is awaited marks
+  // the view stale, so this one is drawn once and not kept.
+  const seen = staled
+  const sync = syncShown()
+  const built = buildHome({
     intents,
-    pinned: await state.readPinned(files),
+    pinned: (await trackedKey($)) || null,
     me,
     ...profile,
     evidence: await state.readEvidence(files, await state.evidenceScope(files), chosen),
@@ -507,10 +812,10 @@ async function home($) {
     lost: await state.readLost(files),
     lock: await namedLock($, root, chosen.parseLock(chosen.lockFile ? await files.read(`${root}/${chosen.lockFile}`) : null, localMinutes(now, tz))),
     recurring: await state.readRecurring(files, chosen),
-    issues: await state.readIssues(files, me),
-    prs: await state.readPrStates(files),
+    issues: (await paneIssues($)).sort(issueOrder),
+    prs: await panePrs($),
     week: userHome ? parseWeek(await files.read(`${userHome}/.calendar/latest.json`), now) : null,
-    last: await state.readLast(files, me),
+    last: await lastKey($),
     sent: [...sent],
     skills,
     workers: (await $.agent.list().catch(() => [])).filter(agent => agent.status === 'running').length,
@@ -518,8 +823,23 @@ async function home($) {
     tz,
     pack: chosen,
   })
-  view = { version, at: now, model }
+  const model = { ...built, sync }
+  view = { version: seen === staled ? version : -1, at: now, model }
   return model
+}
+
+// The intent the person last worked on, by key: the "Continue …" kept for each pane checkout,
+// the session's own first. With one checkout, its slug as kept.
+/** @param {Engine} $ */
+async function lastKey($) {
+  const session = await laneOf($)
+  if (checkouts.length <= 1 && session.isS2) return state.readLast(io($), me)
+  for (const lane of checkouts) {
+    const isOwn = isOwnLane(session, lane)
+    const slug = await state.readLast(io($), me, isOwn ? undefined : lane.root)
+    if (slug && intents.some(one => one.slug === slug && normalFolder(one.root) === normalFolder(lane.root))) return keyOf(await shortName($, lane), isOwn, slug)
+  }
+  return null
 }
 
 // A held lock that names a Claude session shows that session's name, as its tab shows it.
@@ -673,27 +993,40 @@ async function startTour($) {
 
 /** @param {Engine} $ @param {Work} work */
 async function startWork($, work) {
-  if (work.kind === 'intent') return trackSlug($, work.slug)
+  if (work.kind === 'intent') return trackKey($, work.key)
   handOff($, [work.id], work.prompt)
   return `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`
 }
 
-// An issue by number, from the assigned list or not.
-/** @param {Engine} $ @param {number} number @param {boolean} [isInQuestion] */
-async function startIssue($, number, isInQuestion = false) {
-  const assigned = (await state.readIssues(io($), me)).find(one => one.number === number)
+// An issue by number, from the assigned list or not: `7` or `#7` the session checkout's issue 7, else the first
+// pane checkout's; `web#7` the one in the checkout named web, which starts it there even when another checkout
+// of its repository lists it.
+/** @param {Engine} $ @param {string} ref @param {boolean} [isInQuestion] */
+async function startIssue($, ref, isInQuestion = false) {
+  const [, name, digits] = /^(?:([\w.-]+)#|#)?(\d+)$/.exec(ref.trim()) ?? []
+  const number = Number(digits)
+  const session = await laneOf($)
+  const names = await laneNames($)
+  const lane = name ? (await issueLanes($)).find(one => names.get(normalFolder(one.root)) === name) : undefined
+  if (name && !lane) return `No checkout here is named ${name}.`
+  const isOwn = lane !== undefined && normalFolder(lane.root) === normalFolder(session.root)
+  const listed = (await paneIssues($)).filter(one => one.number === number)
+  const found = lane ? listed.find(one => one.repo === lane.repo) : (listed.find(one => one.key === String(number)) ?? listed[0])
+  const assigned = found && lane ? issueAt(found, lane, name ?? '', isOwn) : found
   if (assigned) {
-    handOff($, [`issue:${number}`], issuePrompt(assigned, me))
+    handOff($, [issueId(assigned)], issuePrompt(assigned, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
   }
-  const issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
+  /** @type {import('./issues.mjs').Issue} */
+  let issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
+  if (lane && !isOwn) issue = issueAt(issue, lane, name ?? '', false)
   const go = async () => {
-    handOff($, [`issue:${number}`], issuePrompt(issue, me))
+    handOff($, [issueId(issue)], issuePrompt(issue, me))
     return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
   }
   // Already inside a question: the session confirms instead of a third dialog.
   if (isInQuestion) {
-    handOff($, [`issue:${number}`], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`)
+    handOff($, [issueId(issue)], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`)
     return `Sent issue #${number} to the session; it confirms with you first, since it is not assigned to you.`
   }
   return ask($, {
@@ -706,19 +1039,37 @@ async function startIssue($, number, isInQuestion = false) {
 }
 
 // Tracks an intent by its folder name: the deliberate act (Work on this here, Next, /ather intent <name>).
-/** @param {Engine} $ @param {string} slug */
-async function trackSlug($, slug) {
+// `at`: another workspace checkout holding it.
+/** @param {Engine} $ @param {string} slug @param {string} [at] */
+async function trackSlug($, slug, at) {
   const { root } = await laneOf($)
   // An intent read from origin/main that this checkout does not have yet cannot be worked on here.
-  if (!(await state.track(io($), root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
+  if (!(await state.track(io($), at ?? root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
-  return `Now tracking ${slug}.`
+  // Its key names the checkout when it is another's: "web/login".
+  return `Now tracking ${(await trackedKey($)) || slug}.`
 }
 
-// /ather intent <name> and /ather pick <name>: an exact folder name tracks it; words show the one intent they match.
+// Tracks a listed intent by its key, in its own checkout.
+/** @param {Engine} $ @param {string} key */
+async function trackKey($, key) {
+  const intent = intents.find(one => one.key === key)
+  return intent ? trackSlug($, intent.slug, otherRoot(intent) || undefined) : trackSlug($, key)
+}
+
+// /ather intent <name> and /ather pick <name>: an exact key or folder name tracks it; words show the one intent
+// they match. A name only another workspace checkout has is tracked there (this checkout first, then workspace order).
 /** @param {Engine} $ @param {string} text */
 async function pickIntent($, text) {
-  return intents.some(one => one.slug === text) ? trackSlug($, text) : lookUp($, text)
+  const { root } = await laneOf($)
+  if (intents.some(one => one.key === text)) return trackKey($, text)
+  if (intents.some(one => one.slug === text && otherRoot(one) === '') || (await state.hasIntentFolder(io($), root, text))) return trackSlug($, text)
+  for (const other of await state.workspace(io($), root || cwd, repos)) {
+    if (await state.hasIntentFolder(io($), other, text)) return trackSlug($, text, other)
+  }
+  // Only on origin/main: tracking says it is not here yet.
+  if (intents.some(one => one.slug === text)) return trackSlug($, text)
+  return lookUp($, text)
 }
 
 // Words that match one intent show it and never track it; several are listed; none is said.
@@ -726,36 +1077,36 @@ async function pickIntent($, text) {
 async function lookUp($, text) {
   const matches = searchIntents(intents, text)
   const [only] = matches
-  if (matches.length === 1 && only) return showIntent($, only.slug)
-  return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.slug).join(', ')}.` : `No open intent matches "${text}".`
+  if (matches.length === 1 && only) return showIntent($, only.key)
+  return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.key).join(', ')}.` : `No open intent matches "${text}".`
 }
 
 // Looking at an intent: its view in the pane, where Work on this here tracks it. Without a pane,
 // where it stands and the command that tracks it.
-/** @param {Engine} $ @param {string} slug */
-async function showIntent($, slug) {
+/** @param {Engine} $ @param {string} key */
+async function showIntent($, key) {
   if (await hasPane($)) {
-    intentShown = slug
+    intentShown = key
     intentBack = 'home'
     return openPane($, 'intent')
   }
-  return whereText($, slug)
+  return whereText($, key)
 }
 
 // Without a pane or a dialog: where an intent stands, and the command that works on it here.
-/** @param {Engine} $ @param {string} slug */
-async function whereText($, slug) {
-  const pinned = await state.readPinned(io($))
-  const one = (await home($)).work.find(work => work.kind === 'intent' && work.slug === slug)
-  const where = one ? one.hint : slug
-  return slug === pinned ? `${where}. This session tracks it.` : `${where}. To work on it in this session: /ather intent ${slug}`
+/** @param {Engine} $ @param {string} key */
+async function whereText($, key) {
+  const pinned = await trackedKey($)
+  const one = (await home($)).work.find(work => work.kind === 'intent' && work.key === key)
+  const where = one ? one.hint : key
+  return key === pinned ? `${where}. This session tracks it.` : `${where}. To work on it in this session: /ather intent ${key}`
 }
 
-// A row's press: the intent's view, never tracking it.
-/** @param {Engine} $ @param {string} slug @param {'home' | 'pick'} back */
-function viewIntent($, slug, back) {
+// A row's press: the intent's view (by key), never tracking it.
+/** @param {Engine} $ @param {string} key @param {'home' | 'pick'} back */
+function viewIntent($, key, back) {
   return () => {
-    intentShown = slug
+    intentShown = key
     intentBack = back
     paneMode = 'intent'
     $.ui.invalidate('ui.render')
@@ -786,7 +1137,7 @@ async function startAway($, choice) {
 async function typed($, text, isInQuestion = true) {
   if (/^tours?$/i.test(text.trim())) return startTour($)
   const number = /^#(\d+)$|^(\d{3,7})$/.exec(text.trim())
-  if (number) return startIssue($, Number(number[1] ?? number[2]), isInQuestion)
+  if (number) return startIssue($, number[1] ?? number[2] ?? '', isInQuestion)
   if (searchIntents(intents, text).length > 0) return lookUp($, text)
   const question = /^(help|\?)$/i.test(text.trim()) ? 'What can Ather do for me?' : text
   void deliver($, askPrompt(question, pack)).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
@@ -825,7 +1176,7 @@ async function setupCommand($) {
   // The steps ship in the plugin, beside hooks/.
   const steps = `${$.plugin.root.replace(/\\/g, '/')}/templates/intent-setup/SETUP.md`
   const pack = suggestPack(await $.fs.list(root).catch(() => []))
-  void deliver($, setupPrompt({ steps, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
+  void deliver($, setupPrompt({ root: root.replace(/\\/g, '/'), steps, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
   return `Asked the session to set up intents here. To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
 }
 
@@ -847,7 +1198,7 @@ async function setupQuestion($) {
 }
 
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'setup', 'init']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'repos', 'setup', 'init']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -862,7 +1213,7 @@ async function atherCommand($, args) {
     return rest ? findText($) : searchQuestion($)
   }
   if ((word === 'intent' || word === 'pick') && rest) return pickIntent($, rest)
-  if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
+  if ((word === 'issue' || word === 'issues') && /^(?:[\w.-]+#|#)?\d+$/.test(rest)) return startIssue($, rest)
   if (word === 'role') {
     const role = pack.parseRole(rest)
     if (!role) return pack.roleHelp
@@ -879,7 +1230,7 @@ async function atherCommand($, args) {
     // Read them now: a list that never showed up is explained here instead of staying empty.
     const failure = await refreshIssues($).catch(error => String(error))
     if (failure) return `Could not read your GitHub issues: ${failure}`
-    if ((await state.readIssues(io($), me)).length === 0) return 'No open GitHub issues are assigned to you.'
+    if ((await paneIssues($)).length === 0) return 'No open GitHub issues are assigned to you.'
     return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
   }
   if (word === 'pick') return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
@@ -960,7 +1311,7 @@ async function menuQuestion($) {
   if (next?.isTour) {
     choices.push({ label: 'Take the tour (Recommended)', description: next.hint, run: () => doNext($, next) })
     const [mine] = model.work.filter(one => one.isMine)
-    if (mine) choices.push({ label: cutWords(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.slug}`, 40), description: mine.hint, run: () => startWork($, mine) })
+    if (mine) choices.push({ label: cutWords(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.key}`, 40), description: mine.hint, run: () => startWork($, mine) })
     choices.push({ label: 'Skip the tour', description: 'You know your way around; Ather asks your role instead.', run: () => skipTour($) })
   }
   // What happened while the person was away is reviewed on its own, before anything else.
@@ -992,6 +1343,12 @@ async function menuQuestion($) {
   return ask($, { header: 'Ather', question: `${lead}${waiting} What now?`, choices: choices.slice(0, 4), fallback: status, onTyped: text => typed($, text) })
 }
 
+// What a piece of work is called in a line or a choice: an intent by its key, since two checkouts may hold one slug.
+/** @param {Work} one */
+function workName(one) {
+  return one.kind === 'intent' ? one.key : one.label
+}
+
 /** @param {Engine} $ */
 async function workQuestion($) {
   const work = (await home($)).work.slice(0, 4)
@@ -1000,7 +1357,7 @@ async function workQuestion($) {
     header: 'Work',
     question: 'What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number.',
     // The question is the verb: a choice works on it at once, and says so (D5).
-    choices: work.map(one => ({ label: cutWords(one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
+    choices: work.map(one => ({ label: cutWords(workName(one), 40), description: workChoiceText(one), run: () => startWork($, one) })),
     fallback: 'Nothing chosen.',
     onTyped: text => typedWork($, text),
   })
@@ -1023,17 +1380,19 @@ async function typedWork($, text) {
   const words = text.trim()
   // The tour and an issue number mean what they mean anywhere.
   if (/^tours?$/i.test(words) || /^#?\d+$/.test(words)) return typed($, text)
-  const matches = intents.some(one => one.slug === words) ? intents.filter(one => one.slug === words) : searchIntents(intents, words)
+  const exact = intents.filter(one => one.key === words)
+  const named = exact.length > 0 ? exact : intents.filter(one => one.slug === words)
+  const matches = named.length > 0 ? named : searchIntents(intents, words)
   const [only] = matches
-  if (matches.length === 1 && only) return intentQuestion($, only.slug)
+  if (matches.length === 1 && only) return intentQuestion($, only.key)
   if (matches.length > 1 && matches.length <= 4) {
     const work = (await home($)).work
     return ask($, {
       header: 'Work',
       question: `${matches.length} intents match "${words}". Which one should this session work on?`,
       choices: matches.map(one => {
-        const row = work.find(item => item.kind === 'intent' && item.slug === one.slug)
-        return { label: cutWords(one.slug, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackSlug($, one.slug) }
+        const row = work.find(item => item.kind === 'intent' && item.key === one.key)
+        return { label: cutWords(one.key, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackKey($, one.key) }
       }),
       fallback: await lookUp($, words),
       onTyped: more => typed($, more),
@@ -1044,29 +1403,31 @@ async function typedWork($, text) {
 
 // One intent named in the Work question, without a pane: where it stands, what working on it here
 // means, and three ways on. Where no dialog can be asked, the reply says how to work on it instead.
-/** @param {Engine} $ @param {string} slug */
-async function intentQuestion($, slug) {
-  const intent = intents.find(one => one.slug === slug)
-  if (!intent) return lookUp($, slug)
+/** @param {Engine} $ @param {string} key */
+async function intentQuestion($, key) {
+  const intent = intents.find(one => one.key === key)
+  if (!intent) return lookUp($, key)
+  const { slug } = intent
   const files = io($)
-  const { root, pack: chosen } = await laneOf($)
+  // Read in its own checkout, with that checkout's pack and the person's role there.
+  const { root, pack: chosen } = await laneFor($, intent.root)
   const { role } = await state.readProfile(files, me, chosen)
-  const evidence = await state.readEvidence(files, slug, chosen)
-  const prs = await state.readPrStates(files)
+  const evidence = await state.readEvidence(files, await state.intentScope(files, slug, otherRoot(intent) || undefined), chosen)
+  const prs = await panePrs($)
   const stands = intentStands(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, heldByLine(await state.readPeers(files, root, chosen.localDir), slug, Date.now()))
   const look = async () => {
     const step = nextStep(role, intent, evidence, 0, me, prs, chosen)
-    return `${stands}${step ? ` Its next step: ${step.label}.` : ''} Not tracked here; /ather intent ${slug} works on it in this session.`
+    return `${stands}${step ? ` Its next step: ${step.label}.` : ''} Not tracked here; /ather intent ${key} works on it in this session.`
   }
   return ask($, {
-    header: slug,
+    header: key,
     question: `${stands} Work on it here? ${trackConsequence(chosen)}`,
     choices: [
-      { label: 'Work on it here', description: 'Tracks it in this session now.', run: () => trackSlug($, slug) },
+      { label: 'Work on it here', description: 'Tracks it in this session now.', run: () => trackKey($, key) },
       { label: 'Just look', description: 'Says where it stands and its next step; tracks nothing.', run: look },
       { label: 'Pick something else', description: 'Back to what this session could work on.', run: () => workQuestion($) },
     ],
-    fallback: await whereText($, slug),
+    fallback: await whereText($, key),
     onTyped: more => typed($, more),
   })
 }
@@ -1136,7 +1497,7 @@ function toggleIn($, opened, key) {
 /** @param {Engine} $ */
 async function findText($) {
   const found = filterWork((await home($)).work, pickQuery)
-  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(one => one.label).join(', ')}${found.length > 8 ? ', …' : ''}.`
+  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(workName).join(', ')}${found.length > 8 ? ', …' : ''}.`
 }
 
 // Where the surface draws no text field (and for /ather find without words): one question, and what is typed under Other is the search.
@@ -1151,6 +1512,159 @@ async function searchQuestion($) {
   })
 }
 
+// ---------------------------------------------------------------- the folders listed (Repositories)
+
+// The folder a person typed: absolute, `~/…` from the home folder, or from the session folder.
+/** @param {Engine} $ @param {string} text */
+async function typedFolder($, text) {
+  const typed = text.trim()
+  const userHome = /^~([\\/]|$)/.test(typed) ? await host($).home() : ''
+  return parseRepos(userHome ? `${userHome}${typed.slice(1)}` : typed, (await laneOf($)).root || cwd)[0] ?? ''
+}
+
+// Where a folder really lands, as two names for one checkout compare (workspace.mjs).
+/** @param {Engine} $ @param {string} folder */
+async function landing($, folder) {
+  return normalFolder(await io($).real?.(folder).catch(() => folder) ?? folder).toLowerCase()
+}
+
+// The workspace's source folders in order: the session's own checkout (its folder, when it is in none), the
+// `repos` setting's, then those kept for the machine. `count`: the workspace checkouts each brings, itself and
+// its clone's worktrees.
+/** @param {Engine} $ @returns {Promise<Source[]>} */
+async function readSources($) {
+  const files = io($)
+  const base = (await laneOf($)).root || cwd
+  const lanes = await issueLanes($)
+  const own = await checkoutOf(files, base)
+  const named = [...parseRepos(repos, base).map(folder => ({ folder, from: /** @type {const} */ ('setting') })), ...(await state.readTraced(files)).map(folder => ({ folder, from: /** @type {const} */ ('kept') }))]
+  /** @type {Source[]} */
+  const read = []
+  /** @type {Set<string>} */
+  const brought = new Set()
+  for (const { folder, from } of [{ folder: own ?? normalFolder(base), from: /** @type {const} */ ('session') }, ...named]) {
+    const root = folder === own ? own : await checkoutOf(files, folder)
+    // A session folder in no checkout brings the checkouts directly inside it: those no other folder brings.
+    const isParent = from === 'session' && own === null
+    if (root !== null) brought.add(cloneOf(root))
+    read.push({ folder, from, isCheckout: root !== null || isParent, count: root === null ? 0 : lanes.filter(one => cloneOf(one.root) === cloneOf(root)).length })
+  }
+  const [first] = read
+  if (first && own === null) first.count = lanes.filter(one => !brought.has(cloneOf(one.root)) && normalFolder(one.root) !== normalFolder(base)).length
+  return read
+}
+
+/** @param {Source} one */
+function sourceText(one) {
+  const from = one.from === 'session' ? 'this session' : one.from === 'setting' ? 'the repos setting' : 'added here'
+  return `${from} · ${one.isCheckout ? `${one.count} checkout${one.count === 1 ? '' : 's'}` : 'not a git checkout'}`
+}
+
+// Keeps a folder's checkout for the machine and lists it at once; else says in a line why not.
+/** @param {Engine} $ @param {string} text */
+async function addFolder($, text) {
+  const files = io($)
+  const folder = await typedFolder($, text)
+  if (folder === '') return 'Name a folder: /ather repos add <folder>.'
+  const root = await checkoutOf(files, folder)
+  if (root === null) return `Not added: ${folder} is not in a git checkout.`
+  const { roots, named } = await state.workspaceClones(files, (await laneOf($)).root || cwd, repos)
+  const at = await landing($, root)
+  for (const one of roots) if ((await landing($, one)) === at) return `Not added: ${root} is already listed.`
+  if (named >= MAX_CHECKOUTS) return `Not added: ${MAX_CHECKOUTS} checkouts are listed already, the most one session works with.`
+  await state.addTraced(files, root)
+  await applyFolders($)
+  return `Added ${root}. It is listed here now, and in every session on this PC from its next start.`
+}
+
+// Takes a kept folder out, named by its folder (any spelling that lands where it does, or a folder inside its
+// checkout) or by its checkout's name in the pane. Nothing on disk or kept for it changes.
+/** @param {Engine} $ @param {string} text */
+async function removeFolder($, text) {
+  const files = io($)
+  const folder = await typedFolder($, text)
+  if (folder === '') return 'Name a folder: /ather repos remove <folder>.'
+  const root = await checkoutOf(files, folder)
+  const names = await laneNames($)
+  const meant = new Set([await landing($, folder), ...(root === null ? [] : [await landing($, root)])])
+  let found
+  for (const one of await state.readTraced(files)) {
+    if (found === undefined && (meant.has(await landing($, one)) || names.get(normalFolder(one)) === text.trim())) found = one
+  }
+  if (found === undefined) return `Not removed: ${text.trim()} is not a folder added here.`
+  await state.removeTraced(files, found)
+  await applyFolders($)
+  return `Removed ${found} from the list. Nothing on disk changed.`
+}
+
+// The kept folders changed: the workspace is read again, with what the console kept of it forgotten, and the
+// pane drawn with the checkouts it has now. Names may have changed, so what was open by a key goes back to the list.
+/** @param {Engine} $ */
+async function applyFolders($) {
+  otherRoots = null
+  clones = new Map()
+  const now = new Set((await issueLanes($)).map(one => normalFolder(one.root)))
+  for (const kept of [teamCaches, syncs, fetched]) for (const root of [...kept.keys()]) if (!now.has(normalFolder(root))) kept.delete(root)
+  if (paneMode === 'intent' || paneMode === 'issue' || paneMode === 'finding') paneMode = 'home'
+  intentShown = ''
+  issueShown = ''
+  findingShown = ''
+  callsOpen.clear()
+  answerState = { ...answerState, opened: '', typing: '' }
+  // A session that had no intents to show starts its work now, as after /ather setup: that reads them too.
+  if (!isWorking) {
+    isAwake = null
+    await wake($)
+  } else {
+    await refresh($).catch(() => undefined)
+    void refreshIssues($).catch(() => undefined)
+  }
+  stale()
+  $.ui.invalidate('ui.render')
+}
+
+/** @param {Engine} $ @param {string} rest what follows `/ather repos` */
+async function reposCommand($, rest) {
+  const verb = rest.split(/\s+/)[0]?.toLowerCase() ?? ''
+  const folder = rest.slice(verb.length).trim()
+  await wake($)
+  if (verb === 'add') return addFolder($, folder)
+  if (verb === 'remove') return removeFolder($, folder)
+  if (await hasPane($)) return openPane($, 'repos')
+  return [...(await sourceLines($)), 'Add one with /ather repos add <folder>; it is kept for this PC.'].join('\n')
+}
+
+// The folders listed, one line each, for a reply in words.
+/** @param {Engine} $ */
+async function sourceLines($) {
+  return ['Folders Ather lists:', ...(await readSources($)).map(one => `- ${one.folder} (${sourceText(one)})`)]
+}
+
+// The session's own way to the folders listed (the `repos` tool): what the view's buttons and `/ather repos`
+// do, asked for in words. A change redraws the pane as theirs does.
+/** @param {Engine} $ @param {Record<string, unknown>} input */
+async function reposTool($, input) {
+  const action = String(input.action ?? 'list')
+  const folder = typeof input.folder === 'string' ? input.folder.trim() : ''
+  if (action !== 'list' && action !== 'add' && action !== 'remove') return `No such action "${action}": list, add or remove.`
+  await wake($)
+  if (action === 'list') return (await sourceLines($)).join('\n')
+  if (folder === '') return `Name the folder to ${action}.`
+  return action === 'add' ? addFolder($, folder) : removeFolder($, folder)
+}
+
+// Where the surface draws no text field: one question, and what is typed under Other is the folder.
+/** @param {Engine} $ */
+async function folderQuestion($) {
+  return ask($, {
+    header: 'Repositories',
+    question: 'Add a folder to list its intents, issues and PRs here. Type its path under Other: absolute, ~/…, or from the session folder.',
+    choices: [{ label: 'Keep the list', description: 'Add nothing.', run: async () => 'Nothing added.' }],
+    fallback: 'Nothing added.',
+    onTyped: text => addFolder($, text),
+  })
+}
+
 // ---------------------------------------------------------------- the pane (terminal)
 
 /** @param {Engine} $ @param {Mode} mode */
@@ -1158,7 +1672,7 @@ async function openPane($, mode) {
   paneMode = mode
   await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
   $.ui.invalidate('ui.render')
-  return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
+  return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : mode === 'repos' ? 'Repositories: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
 }
 
 /** @param {Engine} $ @param {() => Promise<string>} run @param {boolean} keepOpen */
@@ -1182,7 +1696,7 @@ function refreshIssuesButton(el, $) {
     void refreshIssues($)
       .catch(error => String(error))
       .then(async failure => {
-        const count = failure ? 0 : (await state.readIssues(io($), me)).length
+        const count = failure ? 0 : (await paneIssues($)).length
         $.ui.toast(failure ? `Ather: could not read your GitHub issues: ${failure}` : `Ather: ${count === 0 ? 'no open GitHub issues are assigned to you' : `${count} open GitHub issue${count === 1 ? '' : 's'} assigned to you`}.`)
       })
       .finally(() => {
@@ -1218,11 +1732,12 @@ const hotkeyFor = hotkey => (isClicked ? undefined : hotkey)
 /** @param {any} el @param {import('./rows.mjs').Choice} row */
 const choice = (el, row) => choiceRow(el, row, isClicked)
 
-/** @param {Engine} $ @param {number} number @param {string} link */
-function openIssue($, number, link) {
+// gh opens it from the checkout it was read in.
+/** @param {Engine} $ @param {import('./issues.mjs').Issue} issue @param {string} link */
+function openIssue($, { number, root }, link) {
   return () =>
-    void laneOf($)
-      .then(({ root }) => $.process.run(['gh', 'issue', 'view', String(number), '--web'], { cwd: root, timeoutMs: 20000 }))
+    void (root ? Promise.resolve({ root }) : laneOf($))
+      .then(({ root: at }) => $.process.run(['gh', 'issue', 'view', String(number), '--web'], { cwd: at, timeoutMs: 20000 }))
       .then(run => $.ui.toast(run.exitCode === 0 ? `Ather: opened issue #${number} in your browser.` : `Ather: could not open the browser; the link is ${link}`))
       .catch(() => $.ui.toast(`Ather: could not open the browser; the link is ${link}`))
 }
@@ -1230,7 +1745,7 @@ function openIssue($, number, link) {
 // Open on GitHub: a link the desktop opens on a click; in the terminal, a button.
 /** @param {any} el @param {Engine} $ @param {import('./issues.mjs').Issue} issue @param {string} link @param {{ key: string, label: string, hotkey?: string, isQuiet?: boolean }} look */
 function openControl(el, $, issue, link, look) {
-  return isClicked ? el.Link({ key: look.key, href: link, label: look.label }) : el.Button({ key: look.key, label: look.label, plain: true, hotkey: look.hotkey, dimColor: look.isQuiet ? true : undefined, onPress: openIssue($, issue.number, link) })
+  return isClicked ? el.Link({ key: look.key, href: link, label: look.label }) : el.Button({ key: look.key, label: look.label, plain: true, hotkey: look.hotkey, dimColor: look.isQuiet ? true : undefined, onPress: openIssue($, issue, link) })
 }
 
 /** @param {Engine} $ @param {string} link */
@@ -1242,10 +1757,10 @@ function copyLink($, link) {
       .catch(error => $.ui.toast(`Ather: could not copy the link: ${String(error)}`))
 }
 
-/** @param {Engine} $ @param {number} number @param {'home' | 'pick'} back */
-function showIssue($, number, back) {
+/** @param {Engine} $ @param {string} id the issue's work id @param {'home' | 'pick'} back */
+function showIssue($, id, back) {
   return () => {
-    issueShown = number
+    issueShown = id
     issueBack = back
     paneMode = 'issue'
     $.ui.invalidate('ui.render')
@@ -1270,12 +1785,12 @@ const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug}
 // press that shows the intent (or the issue's card), never tracking it.
 /** @param {Engine} $ @param {number} width @param {'home' | 'pick'} back @returns {import('./rows.mjs').Look} */
 function lookOf($, width, back) {
-  return { isClicked, width, now: Date.now(), isTagged: sync.hasMain, ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.issue.number, back) : viewIntent($, one.slug, back)) }
+  return { isClicked, width, now: Date.now(), isTagged: one => (one.root ? syncs.get(one.root)?.hasMain : checkouts.some(({ root }) => syncs.get(root)?.hasMain)) === true, ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.id, back) : viewIntent($, one.key, back)) }
 }
 
 // The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
-/** @param {any} el @param {Engine} $ @param {string} text @param {number} width */
-function headerLine(el, $, text, width) {
+/** @param {any} el @param {Engine} $ @param {import('./team.mjs').Sync} sync @param {string} text @param {number} width */
+function headerLine(el, $, sync, text, width) {
   return statusLine(el, { text, fresh: syncText(sync, Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
 }
 
@@ -1285,37 +1800,67 @@ function headerLine(el, $, text, width) {
 let intentToday = []
 
 // What the Intent view shows beside the intent's files: whether this session tracks it, its proof
-// (each record another session wrote named by it), the other live sessions tracking it.
-/** @type {{ slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string }} */
-let intentView = { slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '' }
+// (each record another session wrote named by it), the other live sessions tracking it. `intent`: the
+// tracked intent read from its own files when its checkout is not one the pane lists.
+/** @type {{ key: string, slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string, intent: import('./model.mjs').Intent | null }} */
+let intentView = { key: '', slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '', intent: null }
 
 // The shown intent (the tracked one unless a row or words chose another): its lines since the start
-// of the person's day, newest first, with their time; and the rest of what its view shows.
+// of the person's day, newest first, with their time; and the rest of what its view shows, read in
+// its own checkout.
 /** @param {Engine} $ */
 async function readIntentView($) {
   const files = io($)
-  const { root, pack: chosen } = await laneOf($)
-  const pinned = await state.readPinned(files)
-  const slug = intentShown || pinned || ''
+  const tracked = await state.trackedLane(files, cwd)
+  const pinned = await trackedKey($)
+  const key = intentShown || pinned
+  const shown = intents.find(one => one.key === key)
+  const isTracked = tracked !== null && key === pinned
+  const slug = isTracked ? tracked.slug : (shown?.slug ?? key)
+  const { root, pack: chosen } = isTracked ? tracked.lane : shown ? await laneFor($, shown.root) : await laneOf($)
   const tz = await state.readTz(files)
   const now = Date.now()
-  const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000) : []
+  const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000, root) : []
   intentToday = lines.map(one => ({ kind: one.kind, text: one.text, time: clockText(one.at, tz) }))
   const mine = state.shortSession(await state.sessionId(files))
-  const evidence = await state.readEvidence(files, slug || mine, chosen)
+  const evidence = await state.readEvidence(files, slug ? await state.intentScope(files, slug, root) : mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
-  // Working on it here needs its folder in this checkout; asking about it does not.
+  // Working on it here needs its folder in its checkout; asking about it does not.
   const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
-  intentView = { slug, isHere: slug !== '' && slug === pinned, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
+  const intent = isTracked && !shown ? await readTrackedIntent($, tracked, key) : null
+  intentView = { key, slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now), intent }
+}
+
+// The tracked intent from its own files, for a checkout outside the pane's (a write into a folder the
+// workspace does not name); undefined when its prompt is gone.
+/** @param {Engine} $ @param {{ slug: string, lane: import('./state.mjs').Checkout }} tracked @param {string} key */
+async function readTrackedIntent($, { slug, lane }, key) {
+  const files = io($)
+  const dir = `${lane.root}/docs/intent/${slug}`
+  const prompt = await files.read(`${dir}/prompt.md`)
+  if (prompt === null) return null
+  return parseIntent({
+    slug,
+    key,
+    root: lane.root,
+    repoName: await shortName($, lane),
+    prompt,
+    findings: (await files.read(`${dir}/findings.md`)) ?? '',
+    progress: (await files.read(`${dir}/progress.md`)) ?? '',
+    files: (await $.fs.list(dir).catch(() => [])).map(entry => entry.name),
+    hasDebrief: await files.exists(`${lane.root}/${lane.pack.debriefPath(slug)}`),
+    updatedAt: 0,
+    source: 'local',
+    firstAuthor: '',
+  }, lane.pack)
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
 /** @param {Engine} $ */
 async function unseenChanges($) {
-  const files = io($)
-  const slug = await state.readPinned(files)
-  return slug ? state.readChanges(files, slug, intentSeenAt + 1) : []
+  const tracked = await state.trackedLane(io($), cwd)
+  return tracked ? state.readChanges(io($), tracked.slug, intentSeenAt + 1, tracked.lane.root) : []
 }
 
 /** @param {Engine} $ */
@@ -1377,7 +1922,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
 
   if (paneMode === 'pick') {
     const shown = filterWork(model.work, pickQuery)
-    rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
+    rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, model.sync, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
     // Search opens a field (without one, a question whose Other is the words). Sort cycles Recent, Ready to close, Oldest; Group cycles Person, Area, Stage, None.
     const field = isSearchOpen && hasInput
     const search = field
@@ -1392,6 +1937,40 @@ function paneView(el, $, model, columns, surface, crew = []) {
     return Box({ flexDirection: 'column', children: rows })
   }
 
+  if (paneMode === 'repos') {
+    rows.push(masthead(el, [label(el, 'brand', 'Repositories', width), Text({ key: 'title', bold: true, children: 'Folders Ather lists' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: 'A folder you add is kept for this PC and listed at once, here and in every new session.' })], surface))
+    rows.push(
+      section(
+        el,
+        'repos-list',
+        // Two lines each, so a narrow pane still reads: the name a person knows the folder by, then its whole path and what it brings.
+        sources.map((one, index) => {
+          const name = one.folder.split('/').pop() || one.folder
+          const remove = one.from === 'kept' ? [Button({ key: `repos-remove-${index}`, label: 'Remove', plain: true, dimColor: true, onPress: press($, () => removeFolder($, one.folder), true) })] : []
+          return Box({
+            key: `repos-row-${index}`,
+            flexDirection: 'column',
+            width: '100%',
+            marginTop: index === 0 ? 0 : 1,
+            children: [
+              Box({ key: `repos-row-${index}-head`, flexDirection: 'row', gap: 2, width: '100%', children: [Box({ key: `repos-row-${index}-words`, flexGrow: 1, children: [Text({ key: `repos-folder-${index}`, bold: true, children: fit(name, Math.max(8, width - (remove.length > 0 ? 10 : 0))) })] }), ...remove] }),
+              Text({ key: `repos-path-${index}`, color: one.isCheckout ? QUIET : AMBER, wrap: 'wrap', children: `${one.folder} · ${sourceText(one)}` }),
+            ],
+          })
+        }),
+      ),
+    )
+    // Add a folder opens a field (without one, a question whose Other is the path).
+    const field = isFolderOpen && hasInput
+    const add = field
+      ? el.Input({ key: 'repos-add-field', label: 'Folder: ', placeholder: 'a path: absolute, ~/… or from the session folder', value: '', submitLabel: 'add', autoFocus: true, onSubmit: (/** @type {string} */ words) => ((isFolderOpen = false), press($, () => addFolder($, words), true)()) })
+      : Button({ key: 'repos-add', label: '＋ Add a folder', hotkey: hotkeyFor('a'), autoFocus: true, onPress: hasInput ? () => ((isFolderOpen = true), $.ui.invalidate('ui.render')) : press($, () => folderQuestion($), true) })
+    rows.push(section(el, 'repos-add-row', [add]))
+    rows.push(section(el, 'repos-back', [Button({ key: 'repos-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: () => ((isFolderOpen = false), show($, 'home')()) })]))
+    rows.push(...foot)
+    return Box({ flexDirection: 'column', children: rows })
+  }
+
   if (header.stage === 'Away') {
     // Nothing is focused: one stray Enter must not end the window and lift its holds.
     const [end] = model.items
@@ -1402,7 +1981,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'issue') {
-    const one = model.work.find(work => work.kind === 'issue' && work.issue.number === issueShown)
+    const one = model.work.find(work => work.kind === 'issue' && work.id === issueShown)
     if (one?.kind === 'issue') {
       const { issue } = one
       rows.push(masthead(el, [label(el, 'brand', `Issue #${issue.number}`, width), Text({ key: 'title', bold: true, wrap: 'wrap', children: issue.name }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: one.hint })], surface))
@@ -1430,8 +2009,8 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'intent') {
-    const { slug, isHere } = intentView
-    const intent = intents.find(one => one.slug === slug)
+    const { key, slug, isHere } = intentView
+    const intent = intents.find(one => one.key === key) ?? (intentView.intent?.key === key ? intentView.intent : undefined)
     if (intent) {
       // Seeing the tracked intent's view settles the band's notice; another intent's view does not.
       if (isHere) intentSeenAt = Date.now()
@@ -1440,7 +2019,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
           el,
           [
             label(el, 'brand', 'Intent', width),
-            Text({ key: 'title', bold: true, children: fit(slug, width) }),
+            Text({ key: 'title', bold: true, children: fit(key, width) }),
             ...(intent.goal ? [Text({ key: 'goal', wrap: 'wrap', children: intent.goal })] : []),
             ...(intentView.proof ? [Text({ key: 'proof', color: QUIET, wrap: 'wrap', children: `Proof: ${intentView.proof}` })] : []),
             ...(intentView.heldBy ? [Text({ key: 'held-by', color: AMBER, wrap: 'wrap', children: intentView.heldBy })] : []),
@@ -1450,8 +2029,8 @@ function paneView(el, $, model, columns, surface, crew = []) {
       )
       // Looking never tracks: working on it here is its own press, and needs its folder in this
       // checkout. Asking about it never needs one: the session reads it from origin/main if it must.
-      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main')); return `asked the session about ${slug}` }, false) })
-      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] : []
+      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent))); return `asked the session about ${key}` }, false) })
+      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackKey($, key), true) })] : []
       if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
       if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: 'Not in this checkout yet: pull main to work on it here.' }))
       const today = intentToday.slice(0, 5)
@@ -1468,7 +2047,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
                   width: '100%',
                   children: [
                     Text({ color: one.kind === 'done' ? '#3ccf7a' : one.kind === 'yours' ? LIME : '#8fb8ff', children: changeGlyph(one.kind) }),
-                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => { handOff($, [], `In intent ${slug}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`); return 'asked the session about that change' }, false) })] }),
+                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => { handOff($, [], `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`); return 'asked the session about that change' }, false) })] }),
                     Text({ color: QUIET, children: one.time }),
                   ],
                 }),
@@ -1478,7 +2057,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       if (isHere && model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
       const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
       // Stop tracking keeps the view on this intent, which then offers Work on this here again.
-      const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = slug), untrackHere($)), true) })
+      const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = key), untrackHere($)), true) })
       rows.push(section(el, 'intent-back', isHere ? [Box({ key: 'intent-back-row', flexDirection: 'row', gap: 3, children: [stop, back] })] : [back]))
       rows.push(...foot)
       return Box({ flexDirection: 'column', children: rows })
@@ -1556,7 +2135,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       [
         // The pane's title bar names Ather: no brand line repeats it (D7).
         isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') }),
-        headerLine(el, $, status, width),
+        headerLine(el, $, model.sync, status, width),
         ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
         ...(meta ? [metaRow(el, header)] : []),
       ].filter(Boolean),
@@ -1583,7 +2162,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
 
   if (model.attention.length > 0) {
     // The person's own intents that want a press; each opens its intent, nothing is done for them.
-    rows.push(section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.slug, 'home') }))]))
+    rows.push(section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.key, 'home') }))]))
   }
 
   const next = model.next
@@ -1609,6 +2188,9 @@ function paneView(el, $, model, columns, surface, crew = []) {
     const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: isClicked ? undefined : true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
     rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
   }
+
+  // The folders Ather lists, and adding one: a quiet way in at the foot.
+  rows.push(section(el, 'home-repos-row', [Button({ key: 'home-repos', label: 'Repositories ›', hotkey: hotkeyFor('r'), plain: true, dimColor: true, onPress: show($, 'repos') })]))
 
   rows.push(...foot)
   return Box({ flexDirection: 'column', children: rows })

@@ -29,6 +29,9 @@ export const fit = (text, width) => {
   return clean.length <= width ? clean : `${clean.slice(0, Math.max(1, width - 1))}…`
 }
 
+// A checkout's name after a row's title: a worktree's folder can be longer than the title it sits beside, so it is cut.
+const REPO_CELLS = 16
+
 // A top-level section label, spaced out as the studio's are ("N E E D S   Y O U"), plain when too wide.
 /** @param {any} el @param {string} key @param {string} text @param {number} width @param {string} [colour] */
 export const label = (el, key, text, width, colour = INK) => {
@@ -62,12 +65,13 @@ export const choiceRow = (el, row, isClicked) => {
   return el.Box({ key: `row-${row.key}`, flexDirection: 'column', width: '100%', marginTop: row.marginTop, children: body })
 }
 
-// One row of work, the same in every list (D7): stage glyph and title (and its warning), then the
+// One row of work, the same in every list (D7): stage glyph and title (its warning, then its repository's
+// name, dim, when the pane lists several), then the
 // progress bar and count, age and owner, each in a column as wide as the list's widest. `hotkey`:
 // as the surface draws it (none on the desktop).
 // On the desktop (`isClicked`) the bar is drawn as an SVG, the count sits at its column's right
 // edge with room for the font's wider digits, and a long title is clipped in its own box, so
-// the right-hand columns stay where they are.
+// the right-hand columns stay where they are; its warning and repository's name are in that box too.
 /** @param {any} el @param {{ key: string, cells: RowCells, cols: Columns, width: number, ownerColour: string, hotkey?: string, autoFocus?: boolean, onPress: () => void, isClicked?: boolean }} row */
 export const workLine = (el, row) => {
   const { cells, cols } = row
@@ -80,14 +84,15 @@ export const workLine = (el, row) => {
   ]).filter(([, , , size]) => size > 0)
   const right = columns.reduce((sum, [, , , size]) => sum + size + 2, 0)
   const warn = cells.warn ? ` ${cells.warn}` : ''
-  const title = fit(`${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, Math.max(8, row.width - right - warn.length - (row.hotkey ? 3 : 0)))
+  const repo = cells.repo ? ` ${fit(cells.repo, REPO_CELLS)}` : ''
+  const title = fit(`${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, Math.max(8, row.width - right - warn.length - repo.length - (row.hotkey ? 3 : 0)))
   return el.Box({
     key: `row-${row.key}`,
     flexDirection: 'row',
     justifyContent: 'space-between',
     width: '100%',
     children: [
-      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, children: [el.Button({ key: row.key, label: title, hotkey: row.hotkey, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: warn })] : [])] }),
+      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, children: [el.Button({ key: row.key, label: title, hotkey: row.hotkey, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: warn })] : []), ...(repo ? [el.Text({ key: `${row.key}-repo`, color: QUIET, children: repo })] : [])] }),
       el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, children: columns.map(([name, text, color, size]) => el.Box({ key: `${row.key}-${name}`, width: size, children: [el.Text({ key: `${row.key}-${name}-text`, color, children: text })] })) }),
     ],
   })
@@ -105,13 +110,18 @@ const deskLine = (el, row) => {
     ...(cols.age > 0 ? [column('age', cols.age + 1, el.Text({ key: `${row.key}-age-text`, color: QUIET, children: cells.age }), true)] : []),
     ...(cols.owner > 0 ? [column('owner', cols.owner, el.Text({ key: `${row.key}-owner-text`, color: row.ownerColour, wrap: 'truncate', children: cells.owner }))] : []),
   ]
+  const title = [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : [])]
+  // With a repository's name the title alone gives way in a narrow pane: the name is what tells two checkouts' rows of one intent apart.
+  const main = cells.repo
+    ? [el.Box({ key: `${row.key}-title`, flexDirection: 'row', flexShrink: 1, overflow: 'hidden', children: title }), el.Box({ key: `${row.key}-repo`, flexShrink: 0, paddingRight: 1, children: [el.Text({ key: `${row.key}-repo-text`, color: QUIET, children: ` ${fit(cells.repo, REPO_CELLS)}` })] })]
+    : title
   return el.Box({
     key: `row-${row.key}`,
     flexDirection: 'row',
     width: '100%',
     alignItems: 'center',
     children: [
-      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : [])] }),
+      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: main }),
       el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, alignItems: 'center', children: columns }),
     ],
   })
@@ -134,7 +144,7 @@ export const statusLine = (el, { text, fresh, width, hotkey, onPress }) => {
 /**
  * How a pane draws work rows: on which surface and how wide, whether rows carry a `local` tag, each
  * owner's colour, and what a press on a row does.
- * @typedef {{ isClicked: boolean, width: number, now: number, isTagged: boolean, ownerColour: (name: string) => string, onRow: (one: Work) => () => void }} Look
+ * @typedef {{ isClicked: boolean, width: number, now: number, isTagged: boolean | ((one: import('./worklist.mjs').RowWork) => boolean), ownerColour: (name: string) => string, onRow: (one: Work) => () => void }} Look
  */
 
 /** @param {any} el @param {Look} look @param {Work} one @param {Map<string, RowCells>} cells @param {Columns} cols @param {string} key @param {string | undefined} hotkey @param {boolean} [autoFocus] */

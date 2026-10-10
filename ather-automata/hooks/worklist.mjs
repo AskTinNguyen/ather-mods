@@ -150,7 +150,7 @@ export const blocksOf = (group, list, all, { sort, groupBy, areas = [], isSearch
 /** @param {{ status: string, statusNote: string }} intent */
 export const isParkedBare = intent => intent.status === 'parked' && !intent.statusNote
 
-/** @typedef {{ id: string, slug: string, kind: 'close' | 'reason', title: string, ask: string }} Attention */
+/** @typedef {{ id: string, slug: string, key: string, kind: 'close' | 'reason', title: string, ask: string }} Attention `key`: the intent's key in the pane */
 
 // The person's own open intents that want a press: every item met ("Close it?"), or parked with no reason given.
 /** @param {readonly Intent[]} intents @param {string} me @param {import('./model.mjs').PrStates} [prs] @returns {Attention[]} */
@@ -160,8 +160,8 @@ export const needsAttention = (intents, me, prs = {}) =>
     .flatMap(one => {
       /** @type {Attention[]} */
       const wants = isParkedBare(one)
-        ? [{ id: `attention:${one.slug}`, slug: one.slug, kind: 'reason', title: `${one.slug} · parked, no reason`, ask: 'Add one?' }]
-        : listStage(one, prs) === 'met' ? [{ id: `attention:${one.slug}`, slug: one.slug, kind: 'close', title: `${one.slug} · ready to close`, ask: 'Close it?' }] : []
+        ? [{ id: `attention:${one.key}`, slug: one.slug, key: one.key, kind: 'reason', title: `${one.key} · parked, no reason`, ask: 'Add one?' }]
+        : listStage(one, prs) === 'met' ? [{ id: `attention:${one.key}`, slug: one.slug, key: one.key, kind: 'close', title: `${one.key} · ready to close`, ask: 'Close it?' }] : []
       return wants
     })
 
@@ -242,7 +242,7 @@ export const miniBar = (done, total) => {
   return `${'▰'.repeat(lit)}${'▱'.repeat(BAR_CELLS - lit)}`
 }
 
-/** @typedef {{ glyph: string, title: string, warn: string, bar: string, count: string, age: string, owner: string }} RowCells */
+/** @typedef {{ glyph: string, title: string, warn: string, repo: string, bar: string, count: string, age: string, owner: string }} RowCells */
 
 // Each row's cells, and the widths of the right-hand columns shared by every row in the list,
 // so they line up: count, age and owner as wide as their widest (the owner at most `ownerMax`).
@@ -254,16 +254,18 @@ export const rowColumns = (rows, ownerMax) => ({
 })
 
 /**
- * @typedef {{ kind: 'intent' | 'issue', label: string, stage: ListStage | '', updatedAt: number, isMine: boolean, done?: number, total?: number, who?: string, warn?: string, source?: string }} RowWork
+ * @typedef {{ kind: 'intent' | 'issue', label: string, stage: ListStage | '', updatedAt: number, isMine: boolean, done?: number, total?: number, who?: string, warn?: string, source?: string, repoName?: string, root?: string }} RowWork
  */
 
-// A work row's cells: an intent's stage glyph, its warning and `local` tag (when main was read, `isTagged`),
-// its checklist, age and owner (blank for the person's own); an issue's title and age.
-/** @param {RowWork} one @param {number} now @param {boolean} isTagged @returns {RowCells} */
+// A work row's cells: an intent's stage glyph, its warning and `local` tag (when its checkout's main was read,
+// `isTagged`), its repository's short name (when the pane lists several), its checklist, age and owner (blank
+// for the person's own); an issue's title and age.
+/** @param {RowWork} one @param {number} now @param {boolean | ((one: RowWork) => boolean)} isTagged @returns {RowCells} */
 export const rowCells = (one, now, isTagged) => ({
   glyph: one.stage ? STAGE_GLYPHS[one.stage] : '',
   title: one.label,
-  warn: [one.warn ? `⚠ ${one.warn}` : '', isTagged && one.source === 'local' ? 'local' : ''].filter(Boolean).join(' · '),
+  warn: [one.warn ? `⚠ ${one.warn}` : '', one.source === 'local' && (typeof isTagged === 'function' ? isTagged(one) : isTagged) ? 'local' : ''].filter(Boolean).join(' · '),
+  repo: one.repoName ?? '',
   bar: miniBar(one.done ?? 0, one.total ?? 0),
   count: one.total ? `${one.done ?? 0}/${one.total}` : '',
   age: ageText(one.updatedAt, now),
@@ -272,7 +274,7 @@ export const rowCells = (one, now, isTagged) => ({
 
 // The cells of every row a view shows, by id, and the right-hand column widths they share so the
 // columns line up; a narrow pane (under 90 columns) gives the owner at most 12.
-/** @template {RowWork & { id: string }} T @param {readonly T[]} list @param {number} now @param {boolean} isTagged @param {number} width */
+/** @template {RowWork & { id: string }} T @param {readonly T[]} list @param {number} now @param {boolean | ((one: RowWork) => boolean)} isTagged @param {number} width */
 export const listCells = (list, now, isTagged, width) => {
   const cells = new Map(list.map(one => [one.id, rowCells(one, now, isTagged)]))
   return { cells, cols: rowColumns([...cells.values()], width < 90 ? 12 : 22) }

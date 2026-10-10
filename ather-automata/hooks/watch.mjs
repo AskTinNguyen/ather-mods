@@ -17,6 +17,8 @@ import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCal
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { heldByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
+import { withFolders } from './shell.mjs'
+import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -24,6 +26,8 @@ const IDLE_MS = 10 * 60 * 1000
 
 let cwd = ''
 let briefGate = 'warn'
+// The `repos` option: more checkouts this session works with.
+let repos = ''
 // Traps already counted in this session: each counts once per session.
 const seenTraps = new Set()
 // Workers already warned about (quiet, or waiting on permission): each is warned once.
@@ -47,10 +51,30 @@ function io($) {
     exists: path => $.fs.exists(path).catch(() => false),
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
-    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitUser: async root => ((await $.process.run(['git', 'config', 'user.name'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
+    origin: root => readOrigin($, root),
+    repo: async () => (await laneOf($)).repo,
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
+    worktrees: root => readWorktrees($, root),
   }
+}
+
+// The origin URL of the checkout at `root` ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readOrigin($, root) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  // Exit 1: no such key.
+  return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
+}
+
+// What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
+// could not say (the app aborted the run, it ran out of time): the workspace asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readWorktrees($, root) {
+  const run = await $.process.run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '') : ''
 }
 
 /** @param {Engine} $ */
@@ -61,6 +85,7 @@ function laneOf($) {
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} options */
 export function register(on, options) {
   briefGate = String(options?.briefGate ?? 'warn')
+  repos = String(options?.repos ?? '')
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -78,6 +103,8 @@ export function register(on, options) {
       // A repository set up in this session has a new pack: the tools are registered again under the
       // same names, which replaces them, so they carry its areas, roles and held kinds.
       state.onSetUp('watch', setUp => registerTools($, setUp))
+      // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
+      void state.workspace(io($), root || cwd, repos, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
@@ -115,7 +142,8 @@ export function register(on, options) {
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e)
     try {
-      const text = (await laneOf($)).isS2 ? await laneText($) : ''
+      // A session whose folder has no intents is still told about an intent it tracks in a workspace checkout.
+      const text = (await laneOf($)).isS2 || (await state.readTracked(io($))) !== null ? await laneText($) : ''
       return text === '' ? result : { ...result, sections: [...result.sections, { id: 'ather-automata:lane', text, scope: /** @type {const} */ ('session') }] }
     } catch {
       return result
@@ -123,7 +151,9 @@ export function register(on, options) {
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => shell($, e.command, e, next))
-  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => shell($, e.command, e, next))
+  // PowerShell is a tool on Windows only, so the engine's types written on another machine do not list
+  // it. It takes `command` as Bash does, and is typed as Bash here.
+  on('tool.call', { tool: /** @type {'Bash'} */ (/** @type {string} */ ('PowerShell')) }, async ($, e, next) => shell($, e.command, e, next))
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const issues = briefGate === 'off' ? [] : briefIssues(e.prompt, e.subagent_type, (await laneOf($).catch(() => null))?.pack)
@@ -183,7 +213,8 @@ export function register(on, options) {
     const path = /** @type {{ file_path?: unknown }} */ (e).file_path
     const isWrite = /^(Write|Edit|MultiEdit)$/.test(tool)
     // The session's own orchestration (its main thread, never a worker) writing an intent's prompt.md or log.md
-    // tracks that intent once the write has gone through; creating a prompt.md switches to the new intent.
+    // tracks that intent, in the checkout the write lands in, once the write has gone through; creating a
+    // prompt.md switches to the new intent.
     const orchestrated = isWrite && e.agentId === undefined ? orchestrationFileOf(path) : null
     const isNewIntent = orchestrated?.file === 'prompt.md' && !(await io($).exists(await fullPath($, String(path))))
     // An edit to an intent's prompt, findings or progress: what it changed, read off the file before and after.
@@ -194,7 +225,7 @@ export function register(on, options) {
     const settled = () => (e.agentId ? recordHeard(e.agentId, Date.now()) : undefined)
     const ran = await during({ loop: e.agentId ?? '', toolUseId: String(e.tool_use_id ?? ''), tool, input: /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), at: Date.now() }, () => next(e), settled, next.signal)
     const hasRun = ran.deny === undefined && ran.isError !== true
-    if (orchestrated && hasRun) void laneOf($).then(({ root }) => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
+    if (orchestrated && hasRun) void intentRootOf($, String(path)).then(root => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
     if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
     return ran
@@ -203,10 +234,16 @@ export function register(on, options) {
 
 // ---------------------------------------------------------------- what an intent edit recorded
 
-// A tool's file path as written, or relative to the checkout.
+// A tool's file path as written, or relative to the session folder.
 /** @param {Engine} $ @param {string} path */
 async function fullPath($, path) {
-  return /^([A-Za-z]:|[\\/])/.test(path) ? path : `${(await laneOf($)).root}/${path}`
+  return /^([A-Za-z]:|[\\/])/.test(path) ? path : `${cwd || (await laneOf($)).root}/${path}`
+}
+
+// The folder holding the docs/intent an intent file is in: the checkout it lands in.
+/** @param {Engine} $ @param {string} path */
+async function intentRootOf($, path) {
+  return normalFolder((await fullPath($, path)).replace(/[\\/]docs[\\/]intent[\\/][^\\/]+[\\/][^\\/]+$/i, ''))
 }
 
 /** @param {Engine} $ @param {string} path */
@@ -220,14 +257,15 @@ async function noteIntentEdit($, target, path, before) {
   // The edited file's sibling, as it is now: prompt.md for findings and progress, progress.md for prompt.
   const sibling = async (/** @type {string} */ name) => (await readFile($, path.replace(/[^\\/]+\.md$/i, name))) ?? ''
   const intent = target.file === 'prompt.md' ? { progress: await sibling('progress.md') } : { prompt: await sibling('prompt.md') }
-  await state.noteChanges(io($), target.slug, intentChanges(target.file, before, after, intent), Date.now())
+  await state.noteChanges(io($), target.slug, intentChanges(target.file, before, after, intent), Date.now(), await intentRootOf($, path))
 }
 
 // ---------------------------------------------------------------- intents and the lane
 
-/** @param {Engine} $ @param {string} slug */
-async function readIntent($, slug) {
-  const { root, pack } = await laneOf($)
+// The tracked intent's files, read in its own checkout with that checkout's pack.
+/** @param {Engine} $ @param {{ slug: string, lane: import('./state.mjs').Checkout }} tracked */
+async function readIntent($, { slug, lane }) {
+  const { root, pack } = lane
   const dir = `${root}/docs/intent/${slug}`
   const files = io($)
   const prompt = await files.read(`${dir}/prompt.md`)
@@ -252,18 +290,10 @@ async function readBranch($, folder = null) {
   const { root } = await laneOf($)
   const base = folder === null ? root : /^([A-Za-z]:[\\/]|[\\/])/.test(folder) ? folder : `${root}/${folder}`
   const files = io($)
-  let head = null
-  // Walk up to the checkout the folder is in: `cd Plugins/X && git push` pushes the checkout's branch.
-  for (let folderAt = base.replace(/[\\/]+$/, ''), depth = 0; head === null && folderAt !== '' && depth < 12; depth += 1) {
-    head = await files.read(`${folderAt}/.git/HEAD`)
-    if (head === null) {
-      // A worktree: .git is a file naming its gitdir.
-      const gitdir = /gitdir:\s*(.+)/.exec((await files.read(`${folderAt}/.git`)) ?? '')?.[1]?.trim()
-      if (gitdir) head = await files.read(`${gitdir}/HEAD`)
-    }
-    const parent = folderAt.replace(/[\\/][^\\/]*$/, '')
-    folderAt = parent === folderAt ? '' : parent
-  }
+  // The checkout the folder is in: `cd Plugins/X && git push` pushes the checkout's branch.
+  const checkout = await checkoutOf(files, base)
+  const gitDir = checkout === null ? null : await gitDirOf(files, checkout)
+  const head = gitDir === null ? null : await files.read(`${gitDir}/HEAD`)
   return /ref:\s*refs\/heads\/(.+)/.exec(head ?? '')?.[1]?.trim() ?? (head ?? '').trim().slice(0, 12)
 }
 
@@ -275,11 +305,17 @@ async function branchesFor($, command) {
   return (/** @type {string | null} */ folder) => branches.get(folder) ?? ''
 }
 
+// The heartbeat, in the session's checkout and in the tracked intent's when that is another. A session
+// whose folder has no intents (a parent folder) writes only to the tracked intent's checkout, and to the
+// checkouts it wrote to before.
 /** @param {Engine} $ @param {boolean} hasEnded */
 async function heartbeat($, hasEnded) {
   const { root, isS2, pack } = await laneOf($)
-  if (!isS2) return
-  await state.writeHeartbeat(io($), { root, localDir: pack.localDir, branch: await readBranch($), hasEnded })
+  const tracked = await state.trackedLane(io($), cwd)
+  const other = tracked && !tracked.isOwn ? tracked.lane : null
+  if (!isS2 && !other && !state.hasHeartbeats()) return
+  const also = other ? { root: other.root, localDir: other.pack.localDir, branch: await readBranch($, other.root).catch(() => '') } : null
+  await state.writeHeartbeat(io($), { root: isS2 ? root : '', localDir: pack.localDir, branch: isS2 ? await readBranch($) : '', hasEnded, also })
 }
 
 // A session this checkout can vouch has gone: its heartbeat is here and says ended, or is stale.
@@ -299,15 +335,23 @@ async function isLaneAlive($, sid) {
   return lane !== null && state.isLaneLive(lane)
 }
 
-// Where this session's evidence goes: the tracked intent at its current commit, or the session.
+// Where proof seen in the session's own checkout goes: the tracked intent when it lives here, else the session.
 /** @param {Engine} $ */
 async function scopeOf($) {
-  return state.evidenceScope(io($))
+  return state.checkoutScope(io($), { isOwn: true, repo: '' })
 }
 
-/** @param {Engine} $ */
-async function peers($) {
-  const { root, pack } = await laneOf($)
+// The checkout a command's folder runs in (null: the session folder) and its lane. `isOwn`: it is the
+// session's own checkout, or in no checkout at all; both use the session's lane.
+/** @param {Engine} $ @param {string | null} folder @returns {Promise<{ lane: import('./state.mjs').Checkout, isOwn: boolean }>} */
+async function checkoutLane($, folder) {
+  return state.folderLane(io($), await laneOf($), folder)
+}
+
+// The other live sessions in a checkout: the session's own unless a lane is given.
+/** @param {Engine} $ @param {import('./state.mjs').Checkout} [lane] */
+async function peers($, lane) {
+  const { root, pack } = lane ?? (await laneOf($))
   return state.readPeers(io($), root, pack.localDir)
 }
 
@@ -317,15 +361,17 @@ async function laneText($) {
   const { root, me, pack } = await laneOf($)
   const lines = []
   const tz = await state.readTz(io($))
-  const slug = await state.readPinned(io($))
-  const intent = slug ? await readIntent($, slug) : undefined
+  const tracked = await state.trackedLane(io($), cwd)
+  const intent = tracked ? await readIntent($, tracked) : undefined
   const live = await peers($)
-  if (intent) {
-    const { role } = await state.readProfile(io($), me, pack)
-    const prs = await state.readPrStates(io($))
-    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), pack), role, prs, pack)]
-    lines.push(`Tracked intent: ${intent.slug} (docs/intent/${intent.slug}/), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
-    const held = heldByLine(live, intent.slug, Date.now())
+  if (tracked && intent) {
+    const { pack: its } = tracked.lane
+    const { role } = await state.readProfile(io($), me, its)
+    const prs = await state.readPrStates(io($), tracked.isOwn ? undefined : tracked.lane.repo)
+    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), its), role, prs, its)]
+    const folder = tracked.isOwn ? `docs/intent/${intent.slug}/` : `${tracked.lane.root}/docs/intent/${intent.slug}/`
+    lines.push(`Tracked intent: ${intent.slug} (${folder}), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
+    const held = heldByLine(tracked.isOwn ? live : await peers($, tracked.lane), intent.slug, Date.now())
     if (held) lines.push(`${held}.`)
   }
   const lock = pack.parseLock(pack.lockFile ? await io($).read(`${root}/${pack.lockFile}`) : null, localMinutes(Date.now(), tz))
@@ -395,10 +441,11 @@ async function detectTz($) {
 
 // ---------------------------------------------------------------- the model's tools
 
-// A held action, parked for the person's review; null when no window holds it.
-/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command */
-async function hold($, kind, command) {
-  const held = await state.park(io($), kind, command, Date.now())
+// A held action, parked for the person's review; null when no window holds it. `heldHere`: the kinds
+// held where it runs, when that is more than the window's own.
+/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command @param {readonly string[]} [heldHere] */
+async function hold($, kind, command, heldHere) {
+  const held = await state.park(io($), kind, command, Date.now(), heldHere)
   if (held === null) return null
   void state.bump(io($), 'heldParked').catch(() => undefined)
   $.ui.toast(`Ather: held ${HELD_NOUNS[kind]} until you review the away window (${held.parked.id}).`)
@@ -439,7 +486,10 @@ async function profileTool($, input) {
     done.push(untrackText(await state.untrack(io($), me)))
   } else if (typeof input.track === 'string' && input.track.trim() !== '') {
     const slug = input.track.trim()
-    if (!(await state.track(io($), root, slug))) return `No intent named "${slug}" in docs/intent.`
+    // `folder`: another checkout holding the intent, absolute or from the session folder.
+    const folder = typeof input.folder === 'string' ? input.folder.trim() : ''
+    const at = folder === '' ? root : normalFolder(/^([A-Za-z]:|[\\/])/.test(folder) ? folder : `${cwd || root}/${folder}`)
+    if (!(await state.track(io($), at, slug))) return `No intent named "${slug}" in ${folder === '' ? '' : `${folder}/`}docs/intent.`
     done.push(`This session now tracks intent ${slug}.`)
   }
   return done.join(' ') || 'Nothing to change: pass role, area or track.'
@@ -448,24 +498,27 @@ async function profileTool($, input) {
 /** @param {Engine} $ */
 async function statusText($) {
   const { root, me, pack } = await laneOf($)
-  const slug = await state.readPinned(io($))
-  const intent = slug ? await readIntent($, slug) : undefined
-  const { role, area } = await state.readProfile(io($), me, pack)
-  const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)), pack)
+  const tracked = await state.trackedLane(io($), cwd)
+  const intent = tracked ? await readIntent($, tracked) : undefined
+  // The tracked intent is read, staged and proved with its own checkout's pack.
+  const its = tracked?.lane.pack ?? pack
+  const { role, area } = await state.readProfile(io($), me, its)
+  const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)), its)
   const away = await state.readAway(io($))
   const tz = await state.readTz(io($))
-  const prs = await state.readPrStates(io($))
+  const prs = await state.readPrStates(io($), tracked && !tracked.isOwn ? tracked.lane.repo : undefined)
   return JSON.stringify(
     {
       me,
       role,
       area,
       tracked: intent
-        ? { slug: intent.slug, status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer', prs, pack)], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, prs: prStatusList(intent, prs), directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) }
+        ? { slug: intent.slug, ...(tracked?.isOwn === false ? { checkout: tracked.lane.root } : {}), status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer', prs, its)], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, prs: prStatusList(intent, prs), directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) }
         : null,
       evidence,
       ...(pack.lockFile ? { editorLock: pack.parseLock(await io($).read(`${root}/${pack.lockFile}`), localMinutes(Date.now(), tz)).raw } : {}),
-      ...(pack.id === 'unreal' ? {} : { pack: pack.id, gates: pack.gates.map(gate => `${gate.command}: ${gate.proofs.join(', ')}`), mergePolicy: pack.mergePolicy }),
+      // The tracked intent's checkout's gates and merge policy: what proves it.
+      ...(its.id === 'unreal' ? {} : { pack: its.id, gates: its.gates.map(gate => `${gate.command}: ${gate.proofs.join(', ')}`), mergePolicy: its.mergePolicy }),
       peers: (await peers($)).map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`),
       away: { phase: away.phase, until: away.phase === 'off' ? '' : windowEndText(away, tz), ledger: away.ledgerPath, parked: away.parked.map(one => `${one.id}: ${one.command}`) },
       recurringGotchas: (await state.readRecurring(io($), pack)).map(one => `${one.title} (${one.count} sessions)`),
@@ -508,7 +561,21 @@ async function registerTools($, pack) {
         role: { type: 'string', enum: [...pack.roles] },
         ...(pack.areas.length > 0 ? { area: { type: 'string', enum: [...pack.areas] } } : { area: { type: 'string' } }),
         track: { type: 'string', description: 'The folder name of an intent under docs/intent for this session to track, or "none" to stop tracking.' },
+        folder: { type: 'string', description: 'With track: another checkout holding that docs/intent, absolute or relative to the session folder. Default: this checkout.' },
       },
+    },
+  })
+  await $.tool.register({
+    name: 'repos',
+    description:
+      'Ather Automata: the folders Ather lists besides this session\'s own checkout; their intents, issues and PRs show in the Ather pane. Use it when the user asks to add, remove or show a repository or folder in Ather ("add the lancaster repository to Ather"). "add" keeps the folder\'s git checkout for this PC and lists it at once: the pane redraws by itself, with that checkout\'s worktrees too, and no restart or command is needed. "remove" takes a kept folder out. "list" shows every folder listed and where it comes from. Nothing on disk changes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'add', 'remove'] },
+        folder: { type: 'string', description: 'With add or remove: the folder, absolute, ~/…, or relative to the session folder. With remove it may also be the checkout\'s name as the pane shows it.' },
+      },
+      required: ['action'],
     },
   })
 }
@@ -518,10 +585,9 @@ async function registerTools($, pack) {
 /** @param {Engine} $ @param {string} command @param {any} e @param {any} next */
 async function shell($, command, e, next) {
   const away = await state.readAway(io($)).catch(() => offAway())
-  const { pack } = isHolding(away) ? await laneOf($) : { pack: null }
-  const kind = pack ? heldShell(command, away.held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack) }) : null
-  if (kind) {
-    const denied = await hold($, kind, command).catch(() => null)
+  const found = isHolding(away) ? await heldIn($, command, away.held) : null
+  if (found) {
+    const denied = await hold($, found.kind, command, found.held).catch(() => null)
     if (denied) return { deny: denied }
   }
   const ran = await next(e)
@@ -533,11 +599,30 @@ async function shell($, command, e, next) {
   }
 }
 
-// With-proof merges (D2): every rung the profile requires passed in tool output in this session.
-/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack */
-async function isMergeProven($, pack) {
+// What the window holds in a command, each segment judged by the checkout it runs in. Another checkout
+// holds the window's kinds and its own pack's defaults, so a window never holds less there than that
+// repository would, and counts only proof this session saw in that checkout. Resolves the kind held,
+// with every kind held across the command's checkouts for parking it, or null.
+/** @param {Engine} $ @param {string} command @param {readonly string[]} held @returns {Promise<{ kind: string, held: string[] } | null>} */
+async function heldIn($, command, held) {
+  const { pack } = await laneOf($)
+  /** @type {Map<string | null, import('./packs/index.mjs').HeldAt | null>} */
+  const at = new Map()
+  for (const { folder } of withFolders(command)) {
+    if (at.has(folder)) continue
+    const { lane, isOwn } = await checkoutLane($, folder)
+    if (isOwn) at.set(folder, null)
+    else at.set(folder, { pack: lane.pack, held: [...new Set([...held, ...lane.pack.held.defaults])], isProven: await isMergeProven($, lane.pack, await state.checkoutScope(io($), { isOwn, repo: lane.repo, root: lane.root })) })
+  }
+  const kind = heldShell(command, held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack, await scopeOf($)), at: folder => at.get(folder) ?? null })
+  return kind ? { kind, held: [...new Set([...held, ...[...at.values()].flatMap(one => one?.held ?? [])])] } : null
+}
+
+// With-proof merges (D2): every rung the profile requires passed in tool output in this session, in `scope`.
+/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack @param {string} scope */
+async function isMergeProven($, pack, scope) {
   if (pack.mergePolicy !== 'with-proof') return false
-  const evidence = await state.readEvidence(io($), await scopeOf($), pack)
+  const evidence = await state.readEvidence(io($), scope, pack)
   const rungs = pack.mergeRungs ?? []
   const seen = /** @type {Record<string, { state: string, at?: number }>} */ (evidence)
   return rungs.length > 0 && rungs.every(rung => seen[rung]?.state === 'pass' && (seen[rung]?.at ?? 0) >= sessionStartedAt)
@@ -547,17 +632,20 @@ async function isMergeProven($, pack) {
 async function afterShell($, command, ran) {
   const context = []
   const text = ran.text ?? ''
-  const { pack } = await laneOf($)
+  // The checkout the command ran in is its last segment's: its pack reads the output, and its proof is kept there.
+  const { lane, isOwn } = await checkoutLane($, withFolders(command).at(-1)?.folder ?? null)
+  const { pack } = lane
+  const scope = await state.checkoutScope(io($), { isOwn, repo: lane.repo, root: lane.root })
   if (!isSearchCommand(command)) await noteTraps($, text, pack)
   const guard = explainGuard(command)
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
   const reading = pack.readShell(command, text, ran)
-  for (const one of reading.rungs) await state.setRung(io($), await scopeOf($), one.rung, one.value)
+  for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value)
   context.push(...reading.context)
   for (const toast of reading.toasts) $.ui.toast(toast.text, toast.timeoutMs === undefined ? undefined : { timeoutMs: toast.timeoutMs })
   for (const key of reading.bumps) void state.bump(io($), key).catch(() => undefined)
   if (isMergeCommand(command) && ran.deny === undefined && ran.isError !== true) {
-    const lost = await auditMerge($).catch(() => [])
+    const lost = await auditMerge($, lane.root, pack).catch(() => [])
     if (lost.length > 0) {
       await state.flagLost(io($), lost)
       void state.bump(io($), 'lostWorkFlags').catch(() => undefined)
@@ -588,9 +676,8 @@ async function noteMcp($, tool, input, ran) {
 }
 
 // After a merge: binary assets byte-identical to the merged-in side lost this branch's edits.
-/** @param {Engine} $ */
-async function auditMerge($) {
-  const { root, pack } = await laneOf($)
+/** @param {Engine} $ @param {string} root the checkout merged in @param {import('./packs/index.mjs').Pack} pack */
+async function auditMerge($, root, pack) {
   const binary = pack.binaryAssets
   if (!binary) return []
   const git = (/** @type {string[]} */ args) => $.process.run(['git', '-C', root, ...args], { env: GIT_ENV, timeoutMs: 30000 })

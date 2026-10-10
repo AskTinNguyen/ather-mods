@@ -6,13 +6,16 @@
 // only the remote-tracking ref.
 
 /**
- * @typedef {{ exitCode: number, stdout: string, stderr?: string }} Ran
+ * `isAborted`: the app took the run back before it ended (it never ran to an exit code).
+ * @typedef {{ exitCode: number, stdout: string, stderr?: string, isAborted?: boolean }} Ran
  * @typedef {{
  *   git: (args: readonly string[], options?: { stdin?: string, timeoutMs?: number }) => Promise<Ran>,
  *   read: (path: string) => Promise<string | null>,
  *   list: (path: string) => Promise<readonly { name: string, kind: string }[]>,
  *   mtime: (path: string) => Promise<number>,
- * }} Repo `git` runs in the checkout with GIT_ENV; one that could not start or ran out of time answers exit code -1, the reason in stderr
+ *   real?: (folder: string) => Promise<string>,
+ * }} Repo `git` runs in the checkout with GIT_ENV; one that could not start or ran out of time answers exit code -1, the reason in stderr.
+ *   `real`: the folder a path really lands in, behind any symbolic link; without it folders are compared as given
  * @typedef {{ files: string[], at: number, firstAuthor: string, prompt: string, progress: string, findings: string }} MainFolder `at`: the folder's last commit, ms
  * @typedef {{ sha: string, folders: Map<string, MainFolder> }} MainSnapshot what origin/main held at `sha`
  * @typedef {{ key: string, dirty: Set<string>, committed: Set<string> }} LocalState which folders are uncommitted, and which this branch committed since main, as of `key`
@@ -181,7 +184,8 @@ export const localWins = (local, onMain, isNewer) =>
  */
 export const readTeam = async (repo, root, { cache, pinned }) => {
   const top = await repo.git(['rev-parse', '--show-toplevel'])
-  const isRepo = top.exitCode === 0 && isSamePath(top.stdout, root)
+  // Git names the checkout's real folder; the session may have reached it through a link (macOS /var, /tmp).
+  const isRepo = top.exitCode === 0 && (isSamePath(top.stdout, root) || (repo.real !== undefined && isSamePath(top.stdout, await repo.real(root).catch(() => root))))
   const main = isRepo ? await readMain(repo, cache.main) : null
   const folders = []
   for (const entry of await repo.list(`${root}/${INTENTS}`).catch(() => [])) {
@@ -243,15 +247,25 @@ export const lockOf = text => {
 }
 
 // Fetches origin's main. Synced means git said so and origin/main resolves after it (`moved`: it moved).
-// On a failure: git's last line of complaint, and the lock it ran into, if any.
-/** @param {Repo} repo @returns {Promise<{ error: string, lock: string, moved: boolean }>} */
+// On a failure: git's last line of complaint, and the lock it ran into, if any. `isAborted`: the app took the
+// run back, so nothing was tried.
+/** @param {Repo} repo @returns {Promise<{ error: string, lock: string, moved: boolean, isAborted?: true }>} */
 export const fetchMain = async repo => {
   const before = await shaOf(repo, MAIN)
   const ran = await repo.git(FETCH_ARGS, { timeoutMs: FETCH_TIMEOUT_MS })
   const after = await shaOf(repo, MAIN)
   if (ran.exitCode === 0 && after) return { error: '', lock: '', moved: after !== before }
   const stderr = ran.stderr ?? ''
-  return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false }
+  return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false, ...(ran.isAborted ? { isAborted: /** @type {const} */ (true) } : {}) }
+}
+
+// One sync line for several checkouts: a failed fetch in any of them, else one running, else the least
+// recently synced (never synced counts as the least). One checkout's is its own.
+/** @param {readonly Sync[]} syncs @returns {Sync} */
+export const syncSummary = syncs => {
+  const repos = syncs.filter(one => one.isRepo)
+  const failed = repos.find(one => one.failedAt > one.fetchedAt && !one.isFetching)
+  return failed ?? repos.find(one => one.isFetching) ?? [...repos].sort((a, b) => a.fetchedAt - b.fetchedAt)[0] ?? syncs[0] ?? NO_SYNC
 }
 
 /** @param {number} ms */

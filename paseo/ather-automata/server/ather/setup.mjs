@@ -82,18 +82,18 @@ export const suggestPack = entries => (entries.some(entry => entry.kind === 'fil
 // ---------------------------------------------------------------- what the session is handed
 
 /**
- * The one prompt. It names the steps (`steps`: the path of SETUP.md in the plugin's folder) and the
- * missing pieces by target path, the public repository only when a piece comes from it, and repeats
- * the rules that must hold even if the session never reads the steps.
- * @param {{ steps: string, missing: readonly PieceId[], pack: string }} input
+ * The one prompt. It names the repository's folder, the steps (`steps`: the path of SETUP.md in the
+ * plugin's folder) and the missing pieces by target path, the public repository only when a piece
+ * comes from it, and repeats the rules that must hold even if the session never reads the steps.
+ * @param {{ root: string, steps: string, missing: readonly PieceId[], pack: string }} input `root`: the repository's folder, with forward slashes as `steps` is.
  */
-export const setupPrompt = ({ steps, missing, pack }) => {
+export const setupPrompt = ({ root, steps, missing, pack }) => {
   const wanted = SETUP_PIECES.filter(one => missing.includes(one.id))
   // Areas and gates go into the readme and the profile; the other pieces need no proposal.
   const asks = missing.includes('readme') || missing.includes('profile') ? 'ask me to confirm the areas and the gates in one question' : 'tell me what you will add and wait for my yes'
   return [
-    `Set up the intent structure in this repository. The steps are in ${steps}: read it and follow it.`,
-    ...(wanted.some(one => one.from === 'repo') ? [`The intent skill and the project contract come from the public repository ${INTENT_REPOSITORY}: clone it (git clone --depth 1) to a temporary folder outside this repository.`] : []),
+    `Set up the intent structure in the repository at ${root}; the paths below are from that folder. The steps are in ${steps}: read it and follow it.`,
+    ...(wanted.some(one => one.from === 'repo') ? [`The intent skill and the project contract come from the public repository ${INTENT_REPOSITORY}: clone it (git clone --depth 1) to a temporary folder outside the repository you are setting up.`] : []),
     `Add ${wanted.length < SETUP_PIECES.length ? 'only what is missing here' : 'these'}: ${wanted.map(one => `${one.path} (${one.what})`).join('; ')}.${wanted.length < SETUP_PIECES.length ? ' Every other piece is already here: leave it as it is.' : ''}`,
     ...(missing.includes('profile') ? [`The pack for the profile: ${pack}.`] : []),
     `Read the repository first, then ${asks} before you write anything. Never overwrite a file that exists, do not touch an existing intent, and do not commit until I say so.`,

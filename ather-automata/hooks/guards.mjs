@@ -49,23 +49,31 @@ export const isMergeCommand = command => /\bgit\b(?:\s+-C\s+\S+)?\s+(merge(?![-\
 // (null: the session's folder), or '' when it cannot be told; then only an explicit main is held.
 // With the web pack's with-proof policy (D2), a merge passes once every gate the profile requires has passed:
 // `context.isProven` says so, read from this session's evidence by the caller.
+// `context.at` gives a folder in another checkout that checkout's pack, held kinds and proof; null keeps the session's.
 /**
  * @param {string} command @param {readonly string[]} held @param {(folder: string | null) => string} branchOf
  * @param {Pack} [pack] @param {import('./packs/index.mjs').HeldContext} [context] @returns {string | null}
  */
 export const heldShell = (command, held, branchOf, pack = unreal, context = {}) => {
-  const merges = !(pack.mergePolicy === 'with-proof' && context.isProven === true)
   for (const { segment, folder } of withFolders(command)) {
-    const branch = branchOf(folder)
-    const isPrMerge = /^gh\s+pr\s+merge\b/i.test(segment) || /^gh\s+api\b.*\bpulls\/\d+\/merge\b/i.test(segment)
-    // A local merge matters only into main; merging main into a feature branch is ordinary work.
-    const isMainMerge = /^git\b(?:\s+-C\s+\S+)?\s+merge\s+(?!--abort)/i.test(segment) && MAIN.test(branch)
-    if (held.includes('merge') && merges && (isPrMerge || isMainMerge)) return 'merge'
-    if (held.includes('push-main') && /^git\b(?:\s+-C\s+\S+)?\s+push\b/i.test(segment) && MAIN.test(pushTarget(segment, branch))) return 'push-main'
-    const kind = pack.heldSegment(segment, held, { ...context, scripts: context.scripts ?? pack.scripts })
-    if (kind && (kind !== 'merge' || merges)) return kind
+    const here = context.at?.(folder) ?? null
+    const judged = here ? { ...here, scripts: here.pack.scripts } : { pack, held, isProven: context.isProven === true, scripts: context.scripts ?? pack.scripts }
+    const kind = heldSegmentIn(segment, branchOf(folder), judged)
+    if (kind) return kind
   }
   return null
+}
+
+/** @param {string} segment @param {string} branch @param {{ pack: Pack, held: readonly string[], isProven: boolean, scripts?: Record<string, string> }} judged */
+const heldSegmentIn = (segment, branch, { pack, held, isProven, scripts }) => {
+  const merges = !(pack.mergePolicy === 'with-proof' && isProven)
+  const isPrMerge = /^gh\s+pr\s+merge\b/i.test(segment) || /^gh\s+api\b.*\bpulls\/\d+\/merge\b/i.test(segment)
+  // A local merge matters only into main; merging main into a feature branch is ordinary work.
+  const isMainMerge = /^git\b(?:\s+-C\s+\S+)?\s+merge\s+(?!--abort)/i.test(segment) && MAIN.test(branch)
+  if (held.includes('merge') && merges && (isPrMerge || isMainMerge)) return 'merge'
+  if (held.includes('push-main') && /^git\b(?:\s+-C\s+\S+)?\s+push\b/i.test(segment) && MAIN.test(pushTarget(segment, branch))) return 'push-main'
+  const kind = pack.heldSegment(segment, held, { isProven, scripts })
+  return kind && (kind !== 'merge' || merges) ? kind : null
 }
 
 // "mcp__unreal-mcp__get_actor" → "unreal-mcp": a readback must read from the server that was written to.

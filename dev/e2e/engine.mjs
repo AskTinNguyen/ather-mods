@@ -15,13 +15,19 @@ const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select',
 // The mobile app's table: no Input or Select (the app draws no field yet), as claude-code.d.ts says.
 const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => name !== 'Input' && name !== 'Select'))
 
-export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => {
-  const store = new Map()
+// `writable`: more folders the model's Write and Edit may change (a sibling checkout); with it, a relative path is taken from `root`.
+// `kept`: what the store already holds (an earlier session's on this machine).
+// The next `times` runs whose command line starts with `argv` are rejected, as the app aborts a run. For every
+// engine of the run: an earlier session's timers still fire, and their runs must not answer for the one under test.
+export const aborts = { argv: '', times: 0 }
+
+export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable, kept }) => {
+  const store = new Map(kept)
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
+  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -63,10 +69,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
   }
 
   const toolBottom = input => {
-    if ((input.tool === 'Write' || input.tool === 'Edit') && typeof input.file_path === 'string' && input.file_path.startsWith(root)) {
+    const file = typeof input.file_path === 'string' && writable && !path.isAbsolute(input.file_path) ? path.resolve(root, input.file_path).split(path.sep).join('/') : input.file_path
+    if ((input.tool === 'Write' || input.tool === 'Edit') && typeof file === 'string' && [root, ...(writable ?? [])].some(dir => file.startsWith(dir))) {
       // Write makes the folder it writes into, as the real tool does.
-      if (input.tool === 'Write') fs.mkdirSync(path.dirname(input.file_path), { recursive: true }), fs.writeFileSync(input.file_path, input.content ?? '')
-      else fs.writeFileSync(input.file_path, fs.readFileSync(input.file_path, 'utf8').replace(input.old_string, input.new_string))
+      if (input.tool === 'Write') fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, input.content ?? '')
+      else fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(input.old_string, input.new_string))
       return { result: 'ok', text: 'ok' }
     }
     if (input.tool === 'AskUserQuestion') {
@@ -91,6 +98,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
         return { cancel: () => undefined }
       },
       after: (ms, fn) => {
+        record.afters.push(ms)
         const timer = setTimeout(fn, ms)
         // A long timer (a retry a minute out) must not keep the run alive after the checks.
         if (ms >= 10000) timer.unref?.()
@@ -113,9 +121,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
           return { name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false }
         }),
       exists: async file => fs.existsSync(file),
-      stat: async file => {
+      // `resolve`: with the path the file really is at, behind any symbolic link.
+      stat: async (file, { resolve = false } = {}) => {
         const stat = fs.statSync(file)
-        return { kind: stat.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false }
+        return { kind: stat.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false, ...(resolve ? { realPath: fs.realpathSync(file) } : {}) }
       },
     },
     store: {
@@ -129,13 +138,22 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     process: {
       run: async (argv, init = {}) => {
         if (user !== undefined && argv.join(' ') === 'git config user.name') return { exitCode: 0, stdout: `${user}\n`, stderr: '' }
+        if (aborts.times > 0 && aborts.argv !== '' && argv.join(' ').startsWith(aborts.argv)) {
+          aborts.times -= 1
+          throw new Error(`$.process.run(${argv[0]}) aborted`)
+        }
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
         if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
+        if (argv[0] === 'gh') record.ghAt.push({ argv: argv.join(' '), cwd: init.cwd ?? root })
+        // `ghAt` ({ [folder]: { issues, prs, fails } }): each checkout's own fixtures, by the folder gh runs in.
+        // `fails`: what gh says on stderr as it exits 1 there, whatever it was asked.
+        const { issues: ghIssuesHere, prs: ghPrsHere, fails } = ghAt ? (ghAt[init.cwd ?? root] ?? {}) : { issues: ghIssues, prs: ghPrs }
+        if (argv[0] === 'gh' && fails !== undefined) return { exitCode: 1, stdout: '', stderr: fails }
         // Every git call, with the variables it was given: the checks read its argv and env.
         if (argv[0] === 'git') record.gitRuns.push({ argv: [...argv], env: { ...(init.env ?? {}) } })
         // `gh pr view <n>`: the PR states are a fixture too ({ [n]: 'MERGED' | 'OPEN' }); an unknown PR is not found.
-        if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return ghPrs?.[argv[3]] ? { exitCode: 0, stdout: JSON.stringify({ state: ghPrs[argv[3]], mergedAt: ghPrs[argv[3]] === 'MERGED' ? '2026-10-04T01:31:16Z' : null }), stderr: '' } : { exitCode: 1, stdout: '', stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${argv[3]}.` }
-        if (argv[0] === 'gh') return ghIssues === undefined ? { exitCode: 1, stdout: '', stderr: 'gh: To get started with GitHub CLI, please run: gh auth login' } : { exitCode: 0, stdout: JSON.stringify(ghIssues), stderr: '' }
+        if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return ghPrsHere?.[argv[3]] ? { exitCode: 0, stdout: JSON.stringify({ state: ghPrsHere[argv[3]], mergedAt: ghPrsHere[argv[3]] === 'MERGED' ? '2026-10-04T01:31:16Z' : null }), stderr: '' } : { exitCode: 1, stdout: '', stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${argv[3]}.` }
+        if (argv[0] === 'gh') return ghIssuesHere === undefined ? { exitCode: 1, stdout: '', stderr: 'gh: To get started with GitHub CLI, please run: gh auth login' } : { exitCode: 0, stdout: JSON.stringify(ghIssuesHere), stderr: '' }
         try {
           const stdout = execFileSync(argv[0], argv.slice(1), { cwd: init.cwd ?? root, env: { ...process.env, ...(init.env ?? {}) }, encoding: 'utf8', timeout: init.timeoutMs ?? 30000, input: init.stdin, stdio: [init.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
           return { exitCode: 0, stdout, stderr: '' }
@@ -300,7 +318,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     // The person types a prompt and presses Enter.
     type: text => dispatch('prompt.submit', { text, wait: false, origin: { kind: 'composer' } }, e => ({ text: e.text })),
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),
-    start: (isInteractive = true) => dispatch('session.start', { cwd: root, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
+    // `cwd`: the shell's folder as the session starts (a resume after a `cd`), when it is not the session's root.
+    start: (isInteractive = true, cwd = root) => dispatch('session.start', { cwd, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
     turnEnd: () => dispatch('turn.complete', { reason: 'answer' }, () => ({ text: '' })),
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
     close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),

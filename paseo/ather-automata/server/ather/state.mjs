@@ -11,22 +11,38 @@ import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
+import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
 
 /**
  * @typedef {{
  *   get: (key: string) => Promise<unknown>, set: (key: string, value: unknown) => Promise<void>, remove: (key: string) => Promise<void>, keys: () => Promise<string[]>,
  *   read: (path: string) => Promise<string | null>, write: (path: string, text: string) => Promise<void>, exists: (path: string) => Promise<boolean>,
- *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: () => Promise<string>, redraw: () => void,
- *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>
- * }} Io
+ *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: (root?: string) => Promise<string>, redraw: () => void,
+ *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
+ *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>,
+ *   real?: (folder: string) => Promise<string>,
+ *   worktrees?: (root: string) => Promise<string | null>
+ * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
+ *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
+ *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
+ *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.5, and as the Paseo version still keeps them).
+ *   `real`: the folder a path really lands in, behind any symbolic link; without it an id holds the folder as given.
+ *   `worktrees`: what `git worktree list --porcelain` prints in the checkout at `root`, '' when git refused, null when
+ *   git could not say (the workspace is then read again); without it the workspace holds no worktree that is not named.
  * @typedef {import('./packs/index.mjs').Pack} Pack
  * @typedef {import('./away.mjs').Away} Away
  * @typedef {import('./model.mjs').Evidence} Evidence
  */
 
+// A key's id within one repository, or one checkout of it (checkoutId): the same slug or person in another is
+// another key. No repository (an Io without `repo`) keeps the unscoped key.
+/** @param {string} scope @param {string} id */
+const inScope = (scope, id) => (scope ? `${scope}|${id}` : id)
+
 const KEY = {
   away: (/** @type {string} */ sid) => `away:${sid}`,
+  // The tracked intent: its slug in the session's own checkout, `{ slug, root }` in another.
   pinned: (/** @type {string} */ sid) => `pinned:${sid}`,
   evidence: (/** @type {string} */ sid) => `evidence:${sid}`,
   lost: (/** @type {string} */ sid) => `lost:${sid}`,
@@ -41,13 +57,17 @@ const KEY = {
   groupBy: (/** @type {string} */ me) => `groupBy:${personId(me)}`,
   // The sessions holding an away window for this person, so a new session finds them without a scan.
   windows: (/** @type {string} */ person) => `windows:${person}`,
-  issues: (/** @type {string} */ me) => `issues:${personId(me)}`,
-  last: (/** @type {string} */ me) => `last:${personId(me)}`,
-  // What edits recorded in an intent, newest last: shared by every session on the machine.
-  changes: (/** @type {string} */ slug) => `changes:${slug}`,
+  // Kept per repository: gh reads a repository's issues and PRs, whichever of its checkouts asks.
+  issues: (/** @type {string} */ me, /** @type {string} */ repo) => `issues:${inScope(repo, personId(me))}`,
+  // Kept per checkout: two clones of one repository each have their own "Continue …" and their own files.
+  last: (/** @type {string} */ me, /** @type {string} */ checkout) => `last:${inScope(checkout, personId(me))}`,
+  // What edits recorded in an intent, newest last: shared by every session on that checkout.
+  changes: (/** @type {string} */ slug, /** @type {string} */ checkout) => `changes:${inScope(checkout, slug)}`,
   // What gh last said about the PRs intents name: shared by every session on the machine.
-  prs: 'prStates',
+  prs: (/** @type {string} */ repo) => (repo ? `prStates:${repo}` : 'prStates'),
   tz: 'tz',
+  // The folders the person added from the pane, for every session on the machine.
+  traced: 'tracedFolders',
   hits: 'gotchaHits',
   ruled: 'gotchaRuled',
   score: 'score',
@@ -80,8 +100,90 @@ const changed = io => {
 
 // ---------------------------------------------------------------- the lane
 
-/** @type {Map<string, Promise<{ root: string, isS2: boolean, me: string, pack: Pack }>>} */
+/** @typedef {{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, isSure: boolean }} Checkout */
+// The session's lane by its folder, and each checkout's by its root.
+/** @type {Map<string, Promise<Checkout>>} */
 const lanes = new Map()
+/** @type {Map<string, Promise<Checkout>>} */
+const rootLanes = new Map()
+// Where each folder really lands, asked once per folder.
+/** @type {Map<string, Promise<string>>} */
+const realFolders = new Map()
+
+// A store key holds 256 characters at most (the engine's limit), and a folder is one part of it, beside a
+// session's id, a repository and an intent's name. A longer folder is kept as a digest of the whole and
+// its last characters: still one id per folder, and still told apart by eye.
+const FOLDER_MAX = 120
+// A 53-bit digest of a text (cyrb53), in base 36: the same on every machine and in every engine.
+/** @param {string} text */
+const digest = text => {
+  let high = 0xdeadbeef
+  let low = 0x41c6ce57
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at)
+    high = Math.imul(high ^ code, 2654435761)
+    low = Math.imul(low ^ code, 1597334677)
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909)
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909)
+  return (4294967296 * (2097151 & low) + (high >>> 0)).toString(36)
+}
+
+// A folder as an id holds it: normalised and lowercased, so it reads the same from every session.
+/** @param {string} root */
+const folderId = root => {
+  const folder = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  if (folder.length <= FOLDER_MAX) return folder
+  const mark = `~${digest(folder)}~`
+  return mark + folder.slice(mark.length - FOLDER_MAX)
+}
+
+// The folder an id is made from: where the path really lands, so a checkout reached through a symbolic link
+// (macOS's /tmp, a linked projects folder) has the id it has by its real path. Only for ids: files are read
+// and git is run in the folder as given. An Io that cannot say, or a folder it could not resolve, keeps it as given.
+/** @param {Io} io @param {string} folder */
+const realFolder = (io, folder) => {
+  const { real } = io
+  if (!real || folder === '') return Promise.resolve(folder)
+  const cached = realFolders.get(folder)
+  if (cached) return cached
+  const reading = real(folder).then(
+    found => found || folder,
+    () => {
+      // Asked again next time, never kept.
+      realFolders.delete(folder)
+      return folder
+    },
+  )
+  realFolders.set(folder, reading)
+  return reading
+}
+
+// A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
+// clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
+//   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → asktinnguyen/han-viet
+//   D:\Mirrors\Sipher\S2.git (a local origin, as Windows writes it) → sipher/s2
+/** @param {string} url @param {string} root */
+export const repoId = (url, root) => {
+  const path = url
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\//i, '')
+    .replace(/^[^@/\s]+@[^:/\s]+:/, '')
+    .replace(/\.git\/?$/i, '')
+    .replace(/\/+$/, '')
+  const parts = path.split('/').filter(Boolean)
+  if (parts.length >= 2) return parts.slice(-2).join('/').toLowerCase()
+  return `path:${folderId(root)}`
+}
+
+// A checkout's id: its repository's and its folder, so two clones or worktrees of one repository keep their
+// own proof, changes and "Continue …". Without an origin the repository's id is the folder already; without
+// a repository (an Io without `repo`) there is none.
+//   sipher/s2 in D:\S2 → sipher/s2@d:/s2
+/** @param {string} repo from repoId @param {string} root the checkout's top folder */
+export const checkoutId = (repo, root) => (repo === '' || repo.startsWith('path:') ? repo : `${repo}@${folderId(root)}`)
+
 // Roots read without intents. One that has them at a later read was set up in this session
 // (/ather setup): its profile is new, so its pack is chosen again and each half is told.
 /** @type {Set<string>} */
@@ -94,29 +196,135 @@ const setUpHandlers = new Map()
 export const onSetUp = (who, handler) => void setUpHandlers.set(who, handler)
 
 // Who and where, read once per checkout and shared by both halves. `isS2`: the repository runs intents
-// (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session).
-/** @param {Io} io @param {string} cwd */
-export const lane = (io, cwd) => {
-  const cached = lanes.get(cwd)
+// (a docs/intent folder), whatever its kind; `pack` says which kind (packs/index.mjs, once per session);
+// `repo` which repository it is (repoId), when the Io can say. `userRoot`: where git's user name is read,
+// none for the session's own lane, which reads it in the session folder as it always has.
+/** @param {Io} io @param {string} root @param {string} [userRoot] */
+const readCheckout = async (io, root, userRoot) => {
+  const list = io.list ?? (async () => [])
+  const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
+  const origin = io.origin ? await io.origin(root).catch(() => null) : ''
+  const me = await (userRoot === undefined ? io.gitUser() : io.gitUser(userRoot)).catch(() => '')
+  return { root, repo: io.origin ? repoId(origin ?? '', await realFolder(io, root)) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
+}
+
+/** @param {typeof lanes} cache @param {string} key @param {() => Promise<Checkout>} read */
+const cachedLane = (cache, key, read) => {
+  const cached = cache.get(key)
   if (cached) return cached
-  const read = (async () => {
+  const reading = read()
+  cache.set(key, reading)
+  // A git name or origin that failed to read (a slow first start) is asked again next time, never kept.
+  void reading.then(found => {
+    if (!found.isSure && cache.get(key) === reading) cache.delete(key)
+  })
+  return reading
+}
+
+// The session's lane: the lane of its own folder's root, which need not be a checkout.
+/** @param {Io} io @param {string} cwd */
+export const lane = (io, cwd) =>
+  cachedLane(lanes, cwd, async () => {
     const root = (await io.root().catch(() => cwd)) || cwd
-    const list = io.list ?? (async () => [])
     const isS2 = await io.exists(`${root}/docs/intent`)
     const isSetUp = isS2 && bare.delete(root)
     if (!isS2) bare.add(root)
-    if (isSetUp) await forgetPack({ sessionId: io.sessionId }, root)
-    const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
+    if (isSetUp) {
+      await forgetPack({ sessionId: io.sessionId }, root)
+      // The same folder read as a workspace checkout (laneAt) was kept without intents, with the old pack.
+      for (const kept of [...rootLanes.keys()]) {
+        if (normalFolder(kept) !== normalFolder(root)) continue
+        rootLanes.delete(kept)
+        await forgetPack({ sessionId: io.sessionId }, kept)
+      }
+    }
+    const found = { ...(await readCheckout(io, root)), isS2 }
     // A handler that fails must not cost the reading.
-    if (isSetUp) for (const handler of setUpHandlers.values()) await Promise.resolve().then(() => handler(pack)).catch(() => undefined)
-    return { root, isS2, me: await io.gitUser().catch(() => ''), pack }
-  })()
-  lanes.set(cwd, read)
-  // A git name that failed to read (a slow first start) is asked again next time, never kept.
-  void read.then(found => {
-    if (found.me === '' && lanes.get(cwd) === read) lanes.delete(cwd)
+    if (isSetUp) for (const handler of setUpHandlers.values()) await Promise.resolve().then(() => handler(found.pack)).catch(() => undefined)
+    return found
   })
-  return read
+
+// Any checkout's lane, by its root: its own pack and repository.
+/** @param {Io} io @param {string} root */
+export const laneAt = (io, root) => cachedLane(rootLanes, root, () => readCheckout(io, root, root))
+
+// The checkout a command's folder is in (null: the session folder; a relative one is taken from the session's
+// root) and its lane. `isOwn`: it is the session's own checkout, or in no checkout at all; both use the session's lane.
+/** @param {Io} io @param {Checkout} session the session's lane @param {string | null} folder @returns {Promise<{ lane: Checkout, isOwn: boolean }>} */
+export const folderLane = async (io, session, folder) => {
+  if (folder === null) return { lane: session, isOwn: true }
+  const root = await checkoutOf(io, /^([A-Za-z]:[\\/]|[\\/])/.test(folder) ? folder : `${session.root}/${folder}`)
+  if (root === null || root === (await checkoutOf(io, session.root))) return { lane: session, isOwn: true }
+  return { lane: await laneAt(io, root), isOwn: false }
+}
+
+/** @typedef {{ roots: string[], skipped: string[], named: number, clones: string[], left: string[], isSure: boolean }} Workspace */
+/** @type {Map<string, Promise<Workspace>>} */
+const workspaces = new Map()
+// What the debug log last heard of each workspace: a read that finds the same is not said again.
+/** @type {Map<string, string>} */
+const workspacesSaid = new Map()
+
+// The folders kept for the machine (the pane's Repositories), in the order they were added.
+/** @param {Io} io @returns {Promise<string[]>} */
+export const readTraced = async io => {
+  const kept = await io.get(KEY.traced)
+  return Array.isArray(kept) ? kept.filter(one => typeof one === 'string') : []
+}
+
+// The session's workspace (workspace.mjs), read once per session folder and `repos` option, with the folders
+// kept then; this session changing those (addTraced, removeTraced) forgets every read. A read git could not
+// answer in full (not sure) is shared by the callers waiting on it and then forgotten: the next call reads again.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} log */
+const readWorkspaceOnce = (io, folder, option, log) => {
+  const key = `${normalFolder(folder)}\n${option}`
+  const cached = workspaces.get(key)
+  if (cached) return cached
+  const { real, worktrees } = io
+  const files = { read: io.read, exists: io.exists, list: io.list, ...(worktrees ? { worktrees } : {}), ...(real ? { real: (/** @type {string} */ one) => realFolder(io, one) } : {}) }
+  const reading = readTraced(io)
+    .catch(() => [])
+    .then(kept => readWorkspace(files, folder, option, kept))
+    .catch(() => /** @type {Workspace} */ ({ roots: [], skipped: [], named: 0, clones: [], left: [], isSure: true }))
+    .then(found => {
+      if (!found.isSure && workspaces.get(key) === reading) workspaces.delete(key)
+      const lines = [...found.skipped.map(skipped => `Ather: ${skipped} (repos or a kept folder) is not in a git checkout; skipped.`), `Ather: workspace ${found.roots.join(', ') || '(no checkout)'}`, ...(found.left.length > 0 ? [`Ather: workspace is full; left out ${found.left.join(', ')}`] : [])]
+      if (workspacesSaid.get(key) !== lines.join('\n')) for (const line of lines) log(line)
+      workspacesSaid.set(key, lines.join('\n'))
+      return found
+    })
+  workspaces.set(key, reading)
+  return reading
+}
+
+// The checkouts this session works with, their clones' worktrees after them, shared by both halves. `log`
+// hears the option folders that are in no checkout and what the limits left out, once per read that finds something new.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} [log] */
+export const workspace = (io, folder, option, log = () => undefined) => readWorkspaceOnce(io, folder, option, log).then(found => found.roots)
+
+// The same read with which clone each checkout is of, by its folder (normalFolder): a checkout and its worktrees
+// share one. `named`: how many of `roots` came before the worktrees. `isSure` false: git could not list every
+// checkout's worktrees, and the next call reads again.
+/** @param {Io} io @param {string} folder the session folder @param {string} option @param {(line: string) => void} [log] @returns {Promise<{ roots: string[], named: number, clones: Map<string, string>, isSure: boolean }>} */
+export const workspaceClones = (io, folder, option, log = () => undefined) =>
+  readWorkspaceOnce(io, folder, option, log).then(found => ({ roots: found.roots, named: found.named, clones: new Map(found.roots.map((root, at) => [normalFolder(root), found.clones[at] ?? root])), isSure: found.isSure }))
+
+/** @param {Io} io */
+const repoOf = io => (io.repo ? io.repo().catch(() => '') : Promise.resolve(''))
+
+/** @param {Io} io @param {string} root */
+const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(await io.root().catch(() => ''))
+
+// The checkout a folder holding docs/intent is, by its id: the session's own for its root, else that folder's.
+/** @param {Io} io @param {string} [root] */
+const checkoutAt = async (io, root) => (root === undefined || (await isSessionRoot(io, root)) ? checkoutId(await repoOf(io), await realFolder(io, await io.root().catch(() => ''))) : checkoutId((await laneAt(io, normalFolder(root))).repo, await realFolder(io, root)))
+
+// Before 0.2.5 a key had no repository in it. A scoped key not written yet reads the unscoped one, once
+// per upgrade: the next write goes to the scoped key, and the old one ages out on its own.
+/** @param {Io} io @param {string} scoped @param {string} legacy */
+const readScoped = async (io, scoped, legacy) => {
+  const value = await io.get(scoped)
+  return value !== undefined || scoped === legacy ? value : io.get(legacy)
 }
 
 // For /ather where there were no intents: /ather setup may have added them in this session. A kept
@@ -167,8 +375,33 @@ export const readAway = async io => /** @type {Away} */ ({ ...offAway(), .../** 
 // today; with the session when nothing is tracked. Each record is good for a day (EVIDENCE_TTL_MS).
 /** @param {Io} io */
 export const evidenceScope = async io => {
-  const pinned = /** @type {string | undefined} */ (await io.get(KEY.pinned(await io.sessionId())))
-  return pinned ?? io.sessionId()
+  const pin = await readPin(io)
+  return pin === null ? io.sessionId() : intentScope(io, pin.slug, pin.isOwn ? undefined : pin.root)
+}
+
+// Where a shell command's proof goes, by the checkout it ran in (`root`, its top folder): the tracked
+// intent's checkout proves the intent; otherwise it is this session's proof there, `<sid>` in its own
+// checkout and `<sid>|<checkout id>` in another.
+/** @param {Io} io @param {{ isOwn: boolean, repo: string, root?: string }} checkout */
+export const checkoutScope = async (io, checkout) => {
+  const pin = await readPin(io)
+  const isIntents = pin !== null && (checkout.isOwn ? pin.isOwn : !pin.isOwn && normalFolder(pin.root) === normalFolder(checkout.root ?? ''))
+  if (isIntents) return evidenceScope(io)
+  return checkout.isOwn ? io.sessionId() : `${await io.sessionId()}|${checkoutId(checkout.repo, await realFolder(io, checkout.root ?? ''))}`
+}
+
+// An intent's evidence scope: the intent in its checkout, as evidenceScope names it. `root`: the folder
+// holding its docs/intent, when that is not the session's.
+/** @param {Io} io @param {string} slug @param {string} [root] */
+export const intentScope = async (io, slug, root) => inScope(await checkoutAt(io, root), slug)
+
+// What is kept for a scope: an intent's from before 0.2.5 too, while its scoped record has none. Only an
+// intent in the session's own checkout: that proof was never another checkout's.
+/** @param {Io} io @param {string} scope */
+const storedEvidence = async (io, scope) => {
+  const own = await checkoutAt(io)
+  const legacy = own && scope.startsWith(`${own}|`) ? scope.slice(own.length + 1) : scope
+  return /** @type {Record<string, any>} */ ((await readScoped(io, KEY.evidence(scope), KEY.evidence(legacy))) ?? {})
 }
 
 // Proof older than this no longer counts: the code has likely moved on since.
@@ -176,7 +409,7 @@ const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
 
 /** @param {Io} io @param {string} scope from evidenceScope @param {Pack} [pack] @returns {Promise<Evidence>} */
 export const readEvidence = async (io, scope, pack = unreal) => {
-  const stored = /** @type {Record<string, { state: string, detail: string, at?: number }>} */ ((await io.get(KEY.evidence(scope))) ?? {})
+  const stored = /** @type {Record<string, { state: string, detail: string, at?: number }>} */ (await storedEvidence(io, scope))
   const fresh = Object.fromEntries(Object.entries(stored).filter(([, rung]) => Date.now() - (rung.at ?? 0) < EVIDENCE_TTL_MS))
   return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh })
 }
@@ -188,14 +421,35 @@ export const shortSession = sid => sid.slice(0, 8)
 // Writes one scope's evidence, each record stamped with when it was seen and `by` the session that saw it.
 /** @param {Io} io @param {string} scope @param {Partial<Evidence>} change */
 const writeEvidence = async (io, scope, change) => {
-  const stored = /** @type {object} */ ((await io.get(KEY.evidence(scope))) ?? {})
+  const stored = await storedEvidence(io, scope)
   const by = shortSession(await io.sessionId())
   const stamped = Object.fromEntries(Object.entries(change).map(([rung, value]) => [rung, { ...value, at: Date.now(), by }]))
   await io.set(KEY.evidence(scope), { ...stored, ...stamped })
   changed(io)
 }
+// The tracked intent as stored: a plain slug is in the session's own root.
+/** @param {Io} io @returns {Promise<{ slug: string, root: string, isOwn: boolean } | null>} */
+const readPin = async io => {
+  const value = /** @type {unknown} */ (await io.get(KEY.pinned(await io.sessionId())))
+  if (typeof value === 'string') return { slug: value, root: await io.root().catch(() => ''), isOwn: true }
+  const pin = /** @type {{ slug?: unknown, root?: unknown } | null | undefined} */ (value)
+  return typeof pin?.slug === 'string' && typeof pin.root === 'string' ? { slug: pin.slug, root: pin.root, isOwn: false } : null
+}
 /** @param {Io} io @returns {Promise<string | null>} */
-export const readPinned = async io => /** @type {string | null} */ ((await io.get(KEY.pinned(await io.sessionId()))) ?? null)
+export const readPinned = async io => (await readPin(io))?.slug ?? null
+// The tracked intent and the folder holding its docs/intent.
+/** @param {Io} io @returns {Promise<{ slug: string, root: string } | null>} */
+export const readTracked = async io => {
+  const pin = await readPin(io)
+  return pin && { slug: pin.slug, root: pin.root }
+}
+// The tracked intent with the lane its files are read with: the session's own lane, or its checkout's.
+/** @param {Io} io @param {string} cwd @returns {Promise<{ slug: string, isOwn: boolean, lane: Checkout } | null>} */
+export const trackedLane = async (io, cwd) => {
+  const pin = await readPin(io)
+  if (pin === null) return null
+  return { slug: pin.slug, isOwn: pin.isOwn, lane: pin.isOwn ? await lane(io, cwd) : await laneAt(io, pin.root) }
+}
 /** @param {Io} io @returns {Promise<{ paths: string[], isDisclosed: boolean } | null>} */
 export const readLost = async io => /** @type {any} */ ((await io.get(KEY.lost(await io.sessionId()))) ?? null)
 /** @param {Io} io */
@@ -219,18 +473,25 @@ export const readRecurring = async (io, pack = unreal) => {
   }))
   return recurring.filter((_, index) => !isWritten[index])
 }
-/** @param {Io} io @param {string} me @returns {Promise<import('./issues.mjs').Issue[]>} */
-export const readIssues = async (io, me) => {
-  const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me)))
+// The issues, PR records and PR states below are the session's repository's, or with `repo` that repository's.
+/** @param {Io} io @param {string} me @param {string} [repo] @returns {Promise<import('./issues.mjs').Issue[]>} */
+export const readIssues = async (io, me, repo) => {
+  const cached = /** @type {{ at?: number, list?: import('./issues.mjs').Issue[] } | undefined} */ (await io.get(KEY.issues(me, repo ?? (await repoOf(io)))))
   return cached?.list && Date.now() - (cached.at ?? 0) < ISSUES_TTL_MS ? cached.list : []
 }
-/** @param {Io} io @returns {Promise<Record<string, import('./prs.mjs').PrRecord>>} */
-export const readPrRecords = async io => /** @type {Record<string, import('./prs.mjs').PrRecord>} */ ((await io.get(KEY.prs)) ?? {})
+/** @param {Io} io @param {string} [repo] @returns {Promise<Record<string, import('./prs.mjs').PrRecord>>} */
+export const readPrRecords = async (io, repo) => /** @type {Record<string, import('./prs.mjs').PrRecord>} */ ((await io.get(KEY.prs(repo ?? (await repoOf(io))))) ?? {})
 // PR number → its last read state, for the pure readers in model.mjs.
-/** @param {Io} io @returns {Promise<import('./model.mjs').PrStates>} */
-export const readPrStates = async io => Object.fromEntries(Object.entries(await readPrRecords(io)).map(([number, record]) => [number, record.state]))
-/** @param {Io} io @param {string} me @returns {Promise<string | null>} */
-export const readLast = async (io, me) => /** @type {string | null} */ ((await io.get(KEY.last(me))) ?? null)
+/** @param {Io} io @param {string} [repo] @returns {Promise<import('./model.mjs').PrStates>} */
+export const readPrStates = async (io, repo) => Object.fromEntries(Object.entries(await readPrRecords(io, repo)).map(([number, record]) => [number, record.state]))
+// The person's "Continue …" in a checkout: the session's, or with `root` the one holding that docs/intent.
+/** @param {Io} io @param {string} me @param {string} [root] @returns {Promise<string | null>} */
+export const readLast = async (io, me, root) => {
+  const scoped = KEY.last(me, await checkoutAt(io, root))
+  // Only the session's own checkout reads through to the key from before 0.2.5.
+  const isOwn = root === undefined || (await isSessionRoot(io, root))
+  return /** @type {string | null} */ ((await readScoped(io, scoped, isOwn ? KEY.last(me, '') : scoped)) ?? null)
+}
 // The person's grouping for Everything open; Person until they choose another.
 /** @param {Io} io @param {string} me */
 export const readGroupBy = async (io, me) => groupByOf(await io.get(KEY.groupBy(me)))
@@ -239,10 +500,10 @@ export const readScore = async io => /** @type {Record<string, number>} */ ((awa
 
 // ---------------------------------------------------------------- changing
 
-/** @param {Io} io @param {string} me @param {import('./issues.mjs').Issue[]} issues */
-export const setIssues = (io, me, issues) =>
+/** @param {Io} io @param {string} me @param {import('./issues.mjs').Issue[]} issues @param {string} [repo] */
+export const setIssues = (io, me, issues, repo) =>
   serial(async () => {
-    await io.set(KEY.issues(me), { at: Date.now(), list: issues })
+    await io.set(KEY.issues(me, repo ?? (await repoOf(io))), { at: Date.now(), list: issues })
     changed(io)
   })
 
@@ -250,12 +511,13 @@ export const setIssues = (io, me, issues) =>
 const PRS_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 // What gh just said about some PRs ('UNREAD' when it could not say), each stamped `at`.
-/** @param {Io} io @param {import('./model.mjs').PrStates} states @param {number} at */
-export const setPrStates = (io, states, at) =>
+/** @param {Io} io @param {import('./model.mjs').PrStates} states @param {number} at @param {string} [repo] */
+export const setPrStates = (io, states, at, repo) =>
   serial(async () => {
     if (Object.keys(states).length === 0) return
-    const kept = Object.entries(await readPrRecords(io)).filter(([, record]) => at - record.at < PRS_TTL_MS)
-    await io.set(KEY.prs, { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
+    const scope = repo ?? (await repoOf(io))
+    const kept = Object.entries(await readPrRecords(io, scope)).filter(([, record]) => at - record.at < PRS_TTL_MS)
+    await io.set(KEY.prs(scope), { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
     changed(io)
   })
 
@@ -265,21 +527,46 @@ const CHANGES_TTL_MS = 36 * 60 * 60 * 1000
 /** @typedef {import('./changes.mjs').Change & { at: number }} Recorded */
 
 // The lines an intent gained, newest first, from `since` on (the start of the person's day).
-/** @param {Io} io @param {string} slug @param {number} since @returns {Promise<Recorded[]>} */
-export const readChanges = async (io, slug, since) => (/** @type {Recorded[]} */ ((await io.get(KEY.changes(slug))) ?? [])).filter(one => one.at >= since).reverse()
+// `root`: the folder holding its docs/intent, when that is not the session's.
+/** @param {Io} io @param {string} slug @param {number} since @param {string} [root] @returns {Promise<Recorded[]>} */
+export const readChanges = async (io, slug, since, root) => (/** @type {Recorded[]} */ ((await io.get(KEY.changes(slug, await checkoutAt(io, root)))) ?? [])).filter(one => one.at >= since).reverse()
 
-// An edit's lines join the intent's; the same line again (a re-tick, a rewrite) replaces the older one.
-/** @param {Io} io @param {string} slug @param {readonly import('./changes.mjs').Change[]} lines @param {number} at */
-export const noteChanges = (io, slug, lines, at) =>
+// An edit's lines join the intent's, in the checkout edited (`root`, as readChanges);
+// the same line again (a re-tick, a rewrite) replaces the older one.
+/** @param {Io} io @param {string} slug @param {readonly import('./changes.mjs').Change[]} lines @param {number} at @param {string} [root] */
+export const noteChanges = (io, slug, lines, at, root) =>
   serial(async () => {
     if (lines.length === 0) return
-    const kept = /** @type {Recorded[]} */ ((await io.get(KEY.changes(slug))) ?? []).filter(one => at - one.at < CHANGES_TTL_MS && !lines.some(line => line.kind === one.kind && line.id === one.id))
-    await io.set(KEY.changes(slug), [...kept, ...lines.map(line => ({ ...line, at }))].slice(-CHANGES_KEPT))
+    const key = KEY.changes(slug, await checkoutAt(io, root))
+    const kept = /** @type {Recorded[]} */ ((await io.get(key)) ?? []).filter(one => at - one.at < CHANGES_TTL_MS && !lines.some(line => line.kind === one.kind && line.id === one.id))
+    await io.set(key, [...kept, ...lines.map(line => ({ ...line, at }))].slice(-CHANGES_KEPT))
     changed(io)
   })
 
 /** @param {Io} io @param {number} offset */
 export const setTz = (io, offset) => serial(() => io.set(KEY.tz, offset))
+
+// Keeps a folder for the machine, once, after those already kept.
+/** @param {Io} io @param {string} folder */
+export const addTraced = (io, folder) =>
+  serial(async () => {
+    const kept = await readTraced(io)
+    if (kept.includes(normalFolder(folder))) return
+    await io.set(KEY.traced, [...kept, normalFolder(folder)])
+    workspaces.clear()
+    changed(io)
+  })
+
+// Takes a folder out of the kept ones. Nothing kept for its checkout is touched.
+/** @param {Io} io @param {string} folder */
+export const removeTraced = (io, folder) =>
+  serial(async () => {
+    const kept = await readTraced(io)
+    if (!kept.includes(normalFolder(folder))) return
+    await io.set(KEY.traced, kept.filter(one => one !== normalFolder(folder)))
+    workspaces.clear()
+    changed(io)
+  })
 
 // Before 0.9 the role was kept per machine under "coach"; it becomes this person's.
 /** @param {Io} io @param {string} me */
@@ -312,20 +599,38 @@ export const setGroupBy = (io, me, by) =>
 /** @param {Io} io @param {string} root @param {string} slug */
 export const hasIntentFolder = (io, root, slug) => io.exists(`${root}/docs/intent/${slug}/prompt.md`)
 
+// A stop on tracking an intent: its plain slug in the session's own checkout, `{ slug, root }` in another,
+// so the same slug in two checkouts is stopped on its own.
+/** @typedef {string | { slug: string, root: string }} Stop */
+/** @param {Stop} stop @param {string} slug @param {string | null} root null: the session's own checkout */
+const isStopOf = (stop, slug, root) => (typeof stop === 'string' ? root === null && stop === slug : root !== null && stop?.slug === slug && stop.root === root)
+/** @param {Io} io @param {string} sid @returns {Promise<Stop[]>} */
+const readStops = async (io, sid) => /** @type {Stop[]} */ ((await io.get(KEY.untracked(sid))) ?? [])
+
 // Tracks an intent, if it exists. The one path for /ather, the profile tool and a write into an intent.
+// `root`: the folder holding its docs/intent, the session's own or another checkout's.
 // `isAuto`: a write into the intent, which never tracks one this session stopped tracking; tracking one
-// on purpose lifts that stop. `me`: the person's "Continue …" moves to it too.
+// on purpose lifts that stop. `me`: the person's "Continue …" in its checkout moves to it too.
 /** @param {Io} io @param {string} root @param {string} slug @param {{ onlyIfNone?: boolean, isAuto?: boolean, me?: string }} [options] */
 export const track = (io, root, slug, options = {}) =>
   serial(async () => {
-    if (!(await hasIntentFolder(io, root, slug))) return false
+    const isOwn = await isSessionRoot(io, root)
+    const at = isOwn ? root : normalFolder(root)
+    if (!(await hasIntentFolder(io, at, slug))) return false
     const sid = await io.sessionId()
-    const stopped = /** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? [])
-    if (options.isAuto && stopped.includes(slug)) return false
+    const stopped = await readStops(io, sid)
+    const isStopped = stopped.some(one => isStopOf(one, slug, isOwn ? null : at))
+    if (options.isAuto && isStopped) return false
     if (options.onlyIfNone && (await io.get(KEY.pinned(sid))) !== undefined) return false
-    await io.set(KEY.pinned(sid), slug)
-    if (options.me) await io.set(KEY.last(options.me), slug)
-    if (!options.isAuto && stopped.includes(slug)) await setList(io, KEY.untracked(sid), stopped.filter(one => one !== slug))
+    await io.set(KEY.pinned(sid), isOwn ? slug : { slug, root: at })
+    if (options.me) {
+      const last = KEY.last(options.me, await checkoutAt(io, at))
+      await io.set(last, slug)
+      // Once the own checkout's scoped "Continue …" is written, the unscoped one from before 0.2.5 must not
+      // read through again. Tracking in another checkout leaves it: it is still the own checkout's.
+      if (isOwn && last !== KEY.last(options.me, '')) await io.remove(KEY.last(options.me, ''))
+    }
+    if (!options.isAuto && isStopped) await setList(io, KEY.untracked(sid), stopped.filter(one => !isStopOf(one, slug, isOwn ? null : at)))
     await beat(io)
     changed(io)
     return true
@@ -338,19 +643,22 @@ export const track = (io, root, slug, options = {}) =>
 export const untrack = (io, me) =>
   serial(async () => {
     const sid = await io.sessionId()
-    const slug = /** @type {string | undefined} */ (await io.get(KEY.pinned(sid)))
-    if (slug === undefined) return { result: /** @type {const} */ ('none'), slug: '' }
+    const pin = await readPin(io)
+    if (pin === null) return { result: /** @type {const} */ ('none'), slug: '' }
+    const { slug } = pin
     const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
     if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
     await io.remove(KEY.pinned(sid))
-    if ((await io.get(KEY.last(me))) === slug) await io.remove(KEY.last(me))
-    await setList(io, KEY.untracked(sid), [.../** @type {string[]} */ ((await io.get(KEY.untracked(sid))) ?? []), slug])
+    // The unscoped "Continue …" from before 0.2.5 goes too, or it would read through again.
+    for (const key of new Set([KEY.last(me, await checkoutAt(io, pin.isOwn ? undefined : pin.root)), ...(pin.isOwn ? [KEY.last(me, '')] : [])])) if ((await io.get(key)) === slug) await io.remove(key)
+    const stopped = (await readStops(io, sid)).filter(one => !isStopOf(one, slug, pin.isOwn ? null : pin.root))
+    await setList(io, KEY.untracked(sid), [...stopped, pin.isOwn ? slug : { slug, root: pin.root }])
     await beat(io)
     changed(io)
     return { result: /** @type {const} */ ('untracked'), slug }
   })
 
-/** @param {Io} io @param {string} key @param {string[]} list */
+/** @param {Io} io @param {string} key @param {Stop[]} list */
 const setList = async (io, key, list) => {
   const kept = [...new Set(list)]
   if (kept.length === 0) await io.remove(key)
@@ -375,33 +683,49 @@ export const markActive = (at = Date.now()) => {
   activeAt = at
 }
 
-/** @type {{ path: string, lane: Lane } | null} */
-let lastBeat = null
+// The heartbeats last written. `isHome`: the session's own checkout's, which always names the tracked intent.
+/** @type {{ path: string, lane: Lane, isHome?: boolean }[]} */
+let lastBeats = []
 
-// Writes this session's heartbeat; after any change in hand, so it never undoes one.
-/** @param {Io} io @param {{ root: string, localDir: string, branch: string, hasEnded: boolean }} at */
+// Writes this session's heartbeat; after any change in hand, so it never undoes one. `also`: the tracked
+// intent's checkout, when it is not the session's, so its sessions see this one. A checkout written to
+// earlier keeps a live heartbeat (naming no intent) until the session ends: one that went stale or said
+// ended there would let its sessions take this one for gone and prune its lane. `root` '': the session
+// folder is no checkout with intents (a parent folder), so only `also` and earlier checkouts are written.
+/** @param {Io} io @param {{ root: string, localDir: string, branch: string, hasEnded: boolean, also?: { root: string, localDir: string, branch: string } | null }} at */
 export const writeHeartbeat = (io, at) =>
   serial(async () => {
     const sid = await io.sessionId()
     const away = await readAway(io)
     /** @type {Lane} */
     const lane = { sessionId: sid, intent: await readPinned(io), branch: at.branch, updatedAt: Date.now(), lastActiveAt: activeAt, away: away.phase, hasEnded: at.hasEnded }
-    const path = `${at.root}/${at.localDir}/lanes/${sid}.json`
-    await io.write(path, JSON.stringify(lane))
-    lastBeat = { path, lane }
+    /** @type {typeof lastBeats} */
+    const beats = at.root ? [{ path: `${at.root}/${at.localDir}/lanes/${sid}.json`, lane, isHome: true }] : []
+    if (at.also) beats.push({ path: `${at.also.root}/${at.also.localDir}/lanes/${sid}.json`, lane: { ...lane, branch: at.also.branch } })
+    for (const old of lastBeats) {
+      if (old.lane.sessionId !== sid || beats.some(one => one.path === old.path) || !(await io.exists(old.path))) continue
+      beats.push({ path: old.path, lane: { ...lane, intent: null, branch: old.lane.branch } })
+    }
+    for (const one of beats) await io.write(one.path, JSON.stringify(one.lane))
+    lastBeats = beats
   })
+
+// Whether this session has written a heartbeat anywhere yet.
+export const hasHeartbeats = () => lastBeats.length > 0
 
 // The heartbeat again, at once, when what the session tracks changes: peers see it before the next tick.
 /** @param {Io} io */
 const beat = async io => {
   const sid = await io.sessionId()
-  if (lastBeat === null || lastBeat.lane.sessionId !== sid) return
-  const { path } = lastBeat
-  // Only over a heartbeat that is still there: never brings back one a cleanup removed.
-  if (!(await io.exists(path))) return
-  const lane = { ...lastBeat.lane, intent: /** @type {string | undefined} */ (await io.get(KEY.pinned(sid))) ?? null, updatedAt: Date.now(), lastActiveAt: activeAt }
-  await io.write(path, JSON.stringify(lane)).catch(() => undefined)
-  lastBeat = { path, lane }
+  const intent = await readPinned(io)
+  lastBeats = await Promise.all(lastBeats.map(async old => {
+    // Only over a heartbeat that is still there: never brings back one a cleanup removed. A checkout
+    // other than the session's names the intent only while it is the tracked intent's (the next tick says).
+    if (old.lane.sessionId !== sid || !(await io.exists(old.path))) return old
+    const lane = { ...old.lane, intent: old.isHome || old.lane.intent === intent ? intent : null, updatedAt: Date.now(), lastActiveAt: activeAt }
+    await io.write(old.path, JSON.stringify(lane)).catch(() => undefined)
+    return { ...old, lane }
+  }))
 }
 
 // One session's heartbeat on this checkout, or null when it has none here (it may live in another checkout).
@@ -444,7 +768,7 @@ export const setRung = (io, scope, rung, value) => serial(() => writeEvidence(io
 /** @param {Io} io @param {string} scope @param {'write' | 'read' | 'pie'} kind @param {string} server @param {boolean} isOk */
 export const noteMcp = (io, scope, kind, server, isOk) =>
   serial(async () => {
-    const evidence = { ...emptyEvidence(), .../** @type {object} */ ((await io.get(KEY.evidence(scope))) ?? {}) }
+    const evidence = { ...emptyEvidence(), ...(await storedEvidence(io, scope)) }
     const pending = `pending readback on ${server}`
     /** @type {Partial<Evidence>} */
     let change = {}
@@ -515,10 +839,12 @@ const withAway = (io, change) =>
 export const startAway = (io, choice, at) =>
   withAway(io, async away => {
     if (away.phase !== 'off') return { result: null }
-    const pinned = /** @type {string | undefined} */ (await io.get(KEY.pinned(await io.sessionId())))
-    const owner = pinned ? intentOwner((await io.read(`${at.root}/docs/intent/${pinned}/prompt.md`)) ?? '') : ''
+    const pin = await readPin(io)
+    // The tracked intent's folder, in whichever checkout it lives.
+    const dir = pin ? `${pin.isOwn ? at.root : pin.root}/docs/intent/${pin.slug}` : ''
+    const owner = pin ? intentOwner((await io.read(`${dir}/prompt.md`)) ?? '') : ''
     const stamp = new Date(at.now + at.tz * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-    const ledgerPath = pinned && isSamePerson(owner, at.me) ? `${at.root}/docs/intent/${pinned}/decisions.md` : `${at.root}/${(at.pack ?? unreal).localDir}/away/${stamp}.md`
+    const ledgerPath = pin && isSamePerson(owner, at.me) ? `${dir}/decisions.md` : `${at.root}/${(at.pack ?? unreal).localDir}/away/${stamp}.md`
     const started = newWindow({ ...choice, held: choice.held ?? [...(at.pack ?? unreal).held.defaults] }, at.now, ledgerPath, { person: personId(at.me), root: at.root })
     await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz, at.pack ?? unreal))
     return { away: started, result: started }
@@ -536,10 +862,11 @@ export const closeAway = io => withAway(io, async away => (away.phase === 'off' 
 export const restoreAway = (io, saved) => withAway(io, async away => (isHolding(away) || !isHolding(saved) ? { result: false } : { away: saved, result: true }))
 
 // Records a held action; resolves the parked entry, or null when no running window holds this kind.
-/** @param {Io} io @param {string} kind @param {string} command @param {number} now */
-export const park = (io, kind, command, now) =>
+// `held`: the kinds held where the command runs, when another checkout holds more than the window's own.
+/** @param {Io} io @param {string} kind @param {string} command @param {number} now @param {readonly string[]} [held] */
+export const park = (io, kind, command, now, held) =>
   withAway(io, async away => {
-    if (!isHolding(away) || !away.held.includes(kind)) return { result: null }
+    if (!isHolding(away) || !(held ?? away.held).includes(kind)) return { result: null }
     const parked = { id: nextParkId(away.parked), kind, command: command.slice(0, 400), at: now }
     return { away: { ...away, parked: [...away.parked, parked] }, result: { parked, away } }
   })
@@ -591,8 +918,10 @@ export const prune = async (io, isGone) => {
   /** @type {Map<string, string[]>} */
   const bySession = new Map()
   for (const key of await io.keys()) {
-    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]
-    if (sid && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
+    // `<sid>|<checkout id>` is a session's proof in another checkout and goes with it; `<checkout id>|<slug>` is
+    // an intent's (a checkout id has a / or a :) and belongs to no session.
+    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]?.split('|')[0]
+    if (sid && !/[/:]/.test(sid) && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
   }
   for (const [sid, keys] of bySession) {
     if (!(await isGone(sid))) continue

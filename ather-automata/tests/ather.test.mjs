@@ -4,19 +4,21 @@ import { describe, expect, test } from 'claude-code/testing'
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
-import { areaFromLabels, issueLabel, issueName, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { aboutIntentPrompt, closestWord, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
+import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
+import { checkoutNames, checkoutOf, parseRepos, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
 import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
 import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
-import { workGroups } from '../hooks/rows.mjs'
+import { needsRows, workGroups, workLine } from '../hooks/rows.mjs'
+import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
 import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
-import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncText } from '../hooks/team.mjs'
+import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
@@ -367,6 +369,21 @@ describe('shared state: one owner, one change at a time', () => {
     store.set('evidence:elsewhere', {})
     await state.prune(io, async sid => sid === 'gone' || sid === 'sleeping')
     expect([...store.keys()].sort()).toEqual(['away:sleeping', 'evidence:elsewhere', 'pinned:elsewhere', 'pinned:live', 'pinned:sleeping'])
+  })
+
+  test("pruning takes a session's proof in another checkout with it, never an intent's proof", async () => {
+    const { io, store } = memoryIo('now')
+    store.set('evidence:gone', {})
+    store.set('evidence:gone|asktinnguyen/web@/work/web', {})
+    store.set('evidence:gone|path:/work/local', {})
+    store.set('evidence:asktinnguyen/web@/work/web|spawner', {})
+    store.set('evidence:path:/work/web|spawner', {})
+    store.set('evidence:live|asktinnguyen/web@/work/web', {})
+    /** @type {string[]} */
+    const asked = []
+    await state.prune(io, async sid => (asked.push(sid), sid === 'gone'))
+    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web@/work/web|spawner', 'evidence:live|asktinnguyen/web@/work/web', 'evidence:path:/work/web|spawner'])
+    expect(asked.sort()).toEqual(['gone', 'live'])
   })
 
   test('tracking refuses an intent that does not exist', async () => {
@@ -1106,6 +1123,16 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect(elsewhere.calls.map(args => args[0])).toEqual(['rev-parse'])
   })
 
+  test("a checkout reached through a link is still a checkout of its own: git names its real folder, the session its link", async () => {
+    // macOS: /var/folders/… is a link to /private/var/folders/…, and `git rev-parse --show-toplevel` answers with the real one.
+    const linked = fakeRepo({ top: '/private/var/x/S2', local: { 'docs/intent/a/prompt.md': '# A\n\n- Status: active\n' } })
+    const read = await readTeam({ ...linked.repo, real: async folder => (folder === '/var/x/S2' ? '/private/var/x/S2' : folder) }, '/var/x/S2', { cache: EMPTY_CACHE, pinned: null })
+    expect([read.isRepo, read.cache.main !== null]).toEqual([true, true])
+    // Without a way to resolve the folder (Paseo), the folders are compared as given, as before.
+    const unresolved = await readTeam(fakeRepo({ top: '/private/var/x/S2', local: {} }).repo, '/var/x/S2', { cache: EMPTY_CACHE, pinned: null })
+    expect(unresolved.isRepo).toBe(false)
+  })
+
   test('the fetch: narrow refspec, no tags; due when the pane is first drawn, then at most every ten minutes, one at a time (A3)', () => {
     expect(FETCH_ARGS).toEqual(['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', '+refs/heads/main:refs/remotes/origin/main'])
     expect(GIT_ENV).toEqual({ GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' })
@@ -1142,6 +1169,15 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect(lockOf('Error: timed out after 600000 ms')).toBe('')
     const locked = { ...NO_SYNC, isRepo: true, hasMain: true, triedAt: NOON - MIN, failedAt: NOON - MIN, lock: 'index.lock' }
     expect([canFetchNow(locked, NOON), canFetchNow({ ...locked, lock: '' }, NOON), canFetchNow(locked, NOON + 10 * MIN), canFetchNow({ ...locked, isFetching: true, lock: '' }, NOON)]).toEqual([false, true, true, false])
+  })
+
+  test('a fetch the app took back says so; one git failed and one out of time are failures as before (A14)', async () => {
+    const taken = await fetchMain(fakeRepo({ fetch: { exitCode: -1, stdout: '', stderr: 'HooksError: ather-automata: $.process.run(git) aborted', isAborted: true } }).repo)
+    expect(taken.isAborted).toBe(true)
+    const refused = await fetchMain(fakeRepo({ fetch: { exitCode: 128, stdout: '', stderr: "fatal: 'origin' does not appear to be a git repository\n" } }).repo)
+    expect([refused.isAborted === true, refused.error, refused.lock]).toEqual([false, "fatal: 'origin' does not appear to be a git repository", ''])
+    const late = await fetchMain(fakeRepo({ fetch: { exitCode: -1, stdout: '', stderr: 'Error: timed out after 600000 ms' } }).repo)
+    expect([late.isAborted === true, late.error, late.lock]).toEqual([false, 'Error: timed out after 600000 ms', ''])
   })
 
   test('Ready to close groups the list in stage blocks: all met, proving, building, parked (A5)', () => {
@@ -1196,7 +1232,7 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect([miniBar(0, 0), miniBar(0, 4), miniBar(2, 4), miniBar(4, 4)]).toEqual(['     ', '▱▱▱▱▱', '▰▰▰▱▱', '▰▰▰▰▰'])
     expect([ageText(0, NOON), ageText(NOON - 5 * MIN, NOON), ageText(NOON - 3 * 60 * MIN, NOON), ageText(NOON - 12 * DAY, NOON)]).toEqual(['', '5m', '3h', '12d'])
     const theirs = rowCells({ kind: 'intent', label: 'lead-vfx', stage: 'parked', updatedAt: NOON - 2 * DAY, isMine: false, done: 1, total: 4, who: 'Tien Dang', warn: 'parked, no reason', source: 'local' }, NOON, true)
-    expect(theirs).toEqual({ glyph: '‖', title: 'lead-vfx', warn: '⚠ parked, no reason · local', bar: '▰▱▱▱▱', count: '1/4', age: '2d', owner: 'Tien Dang' })
+    expect(theirs).toEqual({ glyph: '‖', title: 'lead-vfx', warn: '⚠ parked, no reason · local', repo: '', bar: '▰▱▱▱▱', count: '1/4', age: '2d', owner: 'Tien Dang' })
     const own = rowCells({ kind: 'intent', label: 'x', stage: 'met', updatedAt: 0, isMine: true, done: 2, total: 2, who: 'Tin Nguyen', warn: '', source: 'local' }, NOON, false)
     expect([own.glyph, own.warn, own.owner, own.age]).toEqual(['✓', '', '', ''])
     const issueRow = rowCells({ kind: 'issue', label: '#28887 Dodge', stage: '', updatedAt: NOON - DAY, isMine: true }, NOON, true)
@@ -1223,6 +1259,933 @@ describe('asking about an intent (0.1.6)', () => {
     expect(main).toContain('origin/main -- docs/intent/worn-edges')
     expect(main).toContain('Do not fetch, pull, check out, track it or write anything.')
     expect(main).toContain('who owns it, its status and stage')
+  })
+})
+
+describe('several repositories on one machine', () => {
+  // Two checkouts of different repositories over one store: what each keeps must stay its own.
+  const twoRepos = () => {
+    const memory = memoryIo()
+    const s2 = { ...memory.io, repo: async () => 'sipher/s2' }
+    const web = { ...memory.io, repo: async () => 'asktinnguyen/han-viet' }
+    return { ...memory, s2, web }
+  }
+  const ISSUE = { number: 7, title: 'Fix login', url: 'u', area: 'Unsorted', isUrgent: false, updatedAt: '' }
+
+  test("a command's proof is kept by the checkout it ran in", async () => {
+    const { s2, files } = twoRepos()
+    const own = { isOwn: true, repo: 'sipher/s2' }
+    const other = { isOwn: false, repo: 'asktinnguyen/web', root: '/Work/web/' }
+    // Nothing tracked: the session's own checkout keeps the session's scope.
+    expect(await state.checkoutScope(s2, own)).toBe('s1')
+    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web@/work/web')
+    // A tracked intent: the session's checkout proves it; another checkout's proof stays this session's there.
+    files.set('R/docs/intent/spawner/prompt.md', '# S\n\n- Owner: Tin Nguyen\n')
+    await state.track(s2, 'R', 'spawner')
+    expect(await state.checkoutScope(s2, own)).toBe('sipher/s2@r|spawner')
+    expect(await state.checkoutScope(s2, other)).toBe('s1|asktinnguyen/web@/work/web')
+  })
+
+  test('an intent tracked in another checkout is kept as its slug and root, and scoped by that checkout', async () => {
+    const memory = memoryIo()
+    const { store, files } = memory
+    const origins = /** @type {Record<string, string>} */ ({ '/s3/web': 'https://github.com/AskTinNguyen/web' })
+    const io = { ...memory.io, repo: async () => 'sipher/s2', origin: async (/** @type {string} */ root) => origins[root] ?? '' }
+    const asWeb = { ...io, repo: async () => 'asktinnguyen/web', root: async () => '/s3/web' }
+    files.set('/s3/web/docs/intent/login/prompt.md', '# Login\n\n- Owner: Tin Nguyen\n')
+    expect(await state.track(io, '/s3/web/', 'login', { me: 'Tin Nguyen' })).toBe(true)
+    expect(store.get('pinned:s1')).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.readPinned(io)).toBe('login')
+    expect(await state.readTracked(io)).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.evidenceScope(io)).toBe('asktinnguyen/web@/s3/web|login')
+    // A command in the intent's checkout proves it; the session's own checkout and a third keep the session's.
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('asktinnguyen/web@/s3/web|login')
+    expect(await state.checkoutScope(io, { isOwn: true, repo: 'sipher/s2' })).toBe('s1')
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'sipher/tools', root: '/s3/tools' })).toBe('s1|sipher/tools@/s3/tools')
+    // "Continue …" and the changes an edit records are web's.
+    expect(await state.readLast(asWeb, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(io, 'Tin Nguyen')).toBe(null)
+    await state.noteChanges(io, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now(), '/s3/web')
+    expect(await state.readChanges(io, 'login', 0, '/s3/web')).toHaveLength(1)
+    expect(await state.readChanges(asWeb, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(io, 'login', 0)).toHaveLength(0)
+    // /clear carries the pair as it is.
+    await state.moveLane(io, 's1', 's1b')
+    memory.switchSession('s1b')
+    expect(store.get('pinned:s1b')).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.readTracked(io)).toEqual({ slug: 'login', root: '/s3/web' })
+    expect(await state.untrack(io, 'Tin Nguyen')).toEqual({ result: 'untracked', slug: 'login' })
+    expect(store.has('pinned:s1b')).toBe(false)
+    expect(await state.readLast(asWeb, 'Tin Nguyen')).toBe(null)
+    expect(await state.evidenceScope(io)).toBe('s1b')
+  })
+
+  test('a stop is kept per checkout: stopping web/login does not stop a write tracking s2/login', async () => {
+    const memory = memoryIo()
+    const origins = /** @type {Record<string, string>} */ ({ '/s3stop/web': 'https://github.com/AskTinNguyen/web' })
+    const io = { ...memory.io, repo: async () => 'sipher/s2', origin: async (/** @type {string} */ root) => origins[root] ?? '' }
+    memory.files.set('/s3stop/web/docs/intent/login/prompt.md', '# Login\n')
+    memory.files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(io, '/s3stop/web', 'login')
+    await state.untrack(io, 'Tin Nguyen')
+    expect(memory.store.get('untracked:s1')).toEqual([{ slug: 'login', root: '/s3stop/web' }])
+    expect(await state.track(io, '/s3stop/web', 'login', { isAuto: true })).toBe(false)
+    expect(await state.track(io, 'R', 'login', { isAuto: true })).toBe(true)
+    expect(memory.store.get('pinned:s1')).toBe('login')
+    // Stopping the own one keeps its plain slug; tracking web's on purpose lifts only web's stop.
+    await state.untrack(io, 'Tin Nguyen')
+    expect(memory.store.get('untracked:s1')).toEqual([{ slug: 'login', root: '/s3stop/web' }, 'login'])
+    expect(await state.track(io, '/s3stop/web', 'login')).toBe(true)
+    expect(memory.store.get('untracked:s1')).toEqual(['login'])
+  })
+
+  test("prune takes a gone session's foreign pin and its proof in that checkout, never the intent's proof", async () => {
+    const { io, store } = memoryIo('live')
+    store.set('pinned:gone', { slug: 'login', root: '/s3prune/web' })
+    store.set('evidence:gone|asktinnguyen/web@/s3prune/web', { tests: { state: 'pass', detail: '', at: Date.now() } })
+    store.set('evidence:asktinnguyen/web@/s3prune/web|login', { tests: { state: 'pass', detail: '', at: Date.now() } })
+    await state.prune(io, async sid => sid === 'gone')
+    expect([...store.keys()].sort()).toEqual(['evidence:asktinnguyen/web@/s3prune/web|login'])
+  })
+
+  test("an intent in the session's own checkout is kept as a plain slug, as before", async () => {
+    const memory = memoryIo()
+    const io = { ...memory.io, repo: async () => 'sipher/s2' }
+    memory.store.set('pinned:s1', 'spawner')
+    expect(await state.readTracked(io)).toEqual({ slug: 'spawner', root: 'R' })
+    memory.files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(io, 'R', 'login')
+    expect(memory.store.get('pinned:s1')).toBe('login')
+    expect(await state.checkoutScope(io, { isOwn: true, repo: 'sipher/s2' })).toBe('sipher/s2@r|login')
+    expect(await state.checkoutScope(io, { isOwn: false, repo: 'asktinnguyen/web', root: '/s3/web' })).toBe('s1|asktinnguyen/web@/s3/web')
+  })
+
+  test('a repository is named by its origin, whatever the protocol; without one, by its folder', () => {
+    expect(state.repoId('git@github.com:AskTinNguyen/han-viet.git', 'R')).toBe('asktinnguyen/han-viet')
+    expect(state.repoId('https://github.com/AskTinNguyen/han-viet', 'R')).toBe('asktinnguyen/han-viet')
+    expect(state.repoId('ssh://git@github.com:22/Sipher/S2.git/', 'R')).toBe('sipher/s2')
+    expect(state.repoId('D:\\Mirrors\\Sipher\\S2.git', 'R')).toBe('sipher/s2')
+    expect(state.repoId('', 'C:\\Work\\S2\\')).toBe('path:c:/work/s2')
+  })
+
+  test('a checkout is named by its repository and its folder; without an origin by its folder, without a repository not at all', () => {
+    expect(state.checkoutId('sipher/s2', 'C:\\Work\\S2\\')).toBe('sipher/s2@c:/work/s2')
+    expect(state.checkoutId('sipher/s2', '/Work/s2-b')).toBe('sipher/s2@/work/s2-b')
+    expect(state.checkoutId('path:c:/work/s2', 'C:\\Work\\S2')).toBe('path:c:/work/s2')
+    expect(state.checkoutId('', '/Work/s2')).toBe('')
+  })
+
+  test('a folder too long for a store key is kept as a digest and its end: one id per folder, and a key on it stays within 256 characters', () => {
+    const deep = `C:\\Users\\someone\\AppData\\${'a-long-folder-name\\'.repeat(9)}look`
+    const id = state.checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods`)
+    expect(/^asktinnguyen\/ather-mods@~[0-9a-z]+~.*look\/ather-mods$/.test(id)).toBe(true)
+    expect(id.length).toBe('asktinnguyen/ather-mods@'.length + 120)
+    expect(`evidence:${'0'.repeat(36)}|${id}`.length <= 256).toBe(true)
+    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep}/Ather-Mods/`)).toBe(id)
+    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods-b`) === id).toBe(false)
+    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep.replace('someone', 'another')}\\ather-mods`) === id).toBe(false)
+    expect(state.repoId('', `${deep}\\ather-mods`).startsWith('path:~')).toBe(true)
+    // A folder of 120 characters is kept as it is.
+    expect(state.checkoutId('sipher/s2', `C:\\${'x'.repeat(117)}`)).toBe(`sipher/s2@c:/${'x'.repeat(117)}`)
+  })
+
+  // Two clones of one origin, /work/s2 and /work/s2-b, over one store: `own` is a session in the first,
+  // `inSecond` one in the second, and `own` reaches the second by its root.
+  const twoClones = () => {
+    const memory = memoryIo()
+    const origin = async () => 'git@github.com:Sipher/S2.git'
+    const own = { ...memory.io, repo: async () => 'sipher/s2', root: async () => '/work/s2', origin }
+    const inSecond = { ...own, root: async () => '/work/s2-b' }
+    for (const root of ['/work/s2', '/work/s2-b']) memory.files.set(`${root}/docs/intent/login/prompt.md`, '# Login\n')
+    return { ...memory, own, inSecond, second: '/work/s2-b' }
+  }
+
+  test("two checkouts of one repository keep their own intent proof and session proof", async () => {
+    const { own, inSecond, second, store } = twoClones()
+    expect(await state.intentScope(own, 'login')).toBe('sipher/s2@/work/s2|login')
+    expect(await state.intentScope(own, 'login', second)).toBe('sipher/s2@/work/s2-b|login')
+    // A session in the second clone names its intent as the first clone's session does from outside.
+    expect(await state.intentScope(inSecond, 'login')).toBe('sipher/s2@/work/s2-b|login')
+    await state.track(own, second, 'login')
+    const scope = await state.evidenceScope(own)
+    await state.setRung(own, scope, 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login', second))).build.state).toBe('pass')
+    expect((await state.readEvidence(inSecond, await state.intentScope(inSecond, 'login'))).build.state).toBe('pass')
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login'))).build.state).toBe('none')
+    expect([...store.keys()].filter(key => key.startsWith('evidence:'))).toEqual(['evidence:sipher/s2@/work/s2-b|login'])
+    // Nothing tracked: this session's proof in the other clone is that clone's, not the repository's.
+    await state.untrack(own, 'Tin Nguyen')
+    expect(await state.checkoutScope(own, { isOwn: false, repo: 'sipher/s2', root: second })).toBe('s1|sipher/s2@/work/s2-b')
+    expect(await state.checkoutScope(own, { isOwn: false, repo: 'sipher/s2', root: '/work/s2-c' })).toBe('s1|sipher/s2@/work/s2-c')
+    expect(await state.checkoutScope(own, { isOwn: true, repo: 'sipher/s2' })).toBe('s1')
+  })
+
+  test('two checkouts of one repository keep their own changes and Continue', async () => {
+    const { own, inSecond, second, store } = twoClones()
+    await state.noteChanges(own, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now(), second)
+    expect(await state.readChanges(own, 'login', 0, second)).toHaveLength(1)
+    expect(await state.readChanges(inSecond, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(own, 'login', 0)).toHaveLength(0)
+    await state.track(own, second, 'login', { me: 'Tin Nguyen' })
+    expect(await state.readLast(own, 'Tin Nguyen', second)).toBe('login')
+    expect(await state.readLast(inSecond, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe(null)
+    await state.track(own, '/work/s2', 'login', { me: 'Tin Nguyen' })
+    expect(store.get('last:sipher/s2@/work/s2|tinnguyen')).toBe('login')
+    expect(store.get('last:sipher/s2@/work/s2-b|tinnguyen')).toBe('login')
+    // Untracking the first clone's leaves the second clone's Continue.
+    await state.untrack(own, 'Tin Nguyen')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe(null)
+    expect(await state.readLast(own, 'Tin Nguyen', second)).toBe('login')
+    // Issues and PR states stay the repository's.
+    await state.setPrStates(own, { 12: 'MERGED' }, Date.now())
+    expect(await state.readPrStates(inSecond)).toEqual({ 12: 'MERGED' })
+    expect(store.has('prStates:sipher/s2')).toBe(true)
+  })
+
+  // One checkout at /private/tmp/one/s2, also reached as /tmp/one/s2 through a link, beside web/ (on GitHub)
+  // and local/ (no origin). `byLink` and `byReal` are sessions over one store; `real` resolves the link.
+  const linked = (/** @type {{ canResolve?: boolean }} */ { canResolve = true } = {}) => {
+    const memory = memoryIo()
+    const origin = async root => (root.endsWith('/local') ? '' : root.endsWith('/web') ? 'git@github.com:AskTinNguyen/web.git' : 'git@github.com:Sipher/S2.git')
+    const real = async folder => folder.replace(/^\/tmp\//, '/private/tmp/')
+    const dir = canResolve ? 'one' : 'two'
+    const byLink = { ...memory.io, repo: async () => 'sipher/s2', root: async () => `/tmp/${dir}/s2`, origin, ...(canResolve ? { real } : {}) }
+    const byReal = { ...byLink, root: async () => `/private/tmp/${dir}/s2` }
+    for (const base of [`/tmp/${dir}`, `/private/tmp/${dir}`]) for (const name of ['s2', 'web']) memory.files.set(`${base}/${name}/docs/intent/login/prompt.md`, '# Login\n')
+    return { ...memory, byLink, byReal, link: `/tmp/${dir}`, at: `/private/tmp/${dir}` }
+  }
+
+  test('a checkout reached through a link has the id it has by its real path', async () => {
+    const { byLink, byReal, link, at, store } = linked()
+    expect(await state.intentScope(byLink, 'login')).toBe(`sipher/s2@${at}/s2|login`)
+    expect(await state.intentScope(byLink, 'login')).toBe(await state.intentScope(byReal, 'login'))
+    // Another checkout, named by the link in one session and by its real path in the other.
+    expect(await state.intentScope(byLink, 'login', `${link}/web`)).toBe(`asktinnguyen/web@${at}/web|login`)
+    expect(await state.intentScope(byLink, 'login', `${link}/web`)).toBe(await state.intentScope(byReal, 'login', `${at}/web`))
+    expect(await state.checkoutScope(byLink, { isOwn: false, repo: 'asktinnguyen/web', root: `${link}/web` })).toBe(`s1|asktinnguyen/web@${at}/web`)
+    expect(await state.checkoutScope(byLink, { isOwn: false, repo: 'asktinnguyen/web', root: `${link}/web` })).toBe(await state.checkoutScope(byReal, { isOwn: false, repo: 'asktinnguyen/web', root: `${at}/web` }))
+    // A checkout without an origin is named by where its folder lands too.
+    expect((await state.laneAt(byLink, `${link}/local`)).repo).toBe(`path:${at}/local`)
+    expect((await state.laneAt(byLink, `${link}/local`)).repo).toBe((await state.laneAt(byReal, `${at}/local`)).repo)
+    // Changes and Continue written through the link are read by the real path, in the own checkout and in another.
+    await state.noteChanges(byLink, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now())
+    await state.noteChanges(byLink, 'login', [{ kind: 'done', id: 'A2', text: 'ticked A2' }], Date.now(), `${link}/web`)
+    expect(await state.readChanges(byReal, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(byReal, 'login', 0, `${at}/web`)).toHaveLength(1)
+    await state.track(byLink, `${link}/web`, 'login', { me: 'Tin Nguyen' })
+    expect(await state.readLast(byReal, 'Tin Nguyen', `${at}/web`)).toBe('login')
+    await state.track(byLink, `${link}/s2`, 'login', { me: 'Tin Nguyen' })
+    expect(await state.readLast(byReal, 'Tin Nguyen')).toBe('login')
+    expect([...store.keys()].filter(key => /^(last|changes):/.test(key)).sort()).toEqual([`changes:asktinnguyen/web@${at}/web|login`, `changes:sipher/s2@${at}/s2|login`, `last:asktinnguyen/web@${at}/web|tinnguyen`, `last:sipher/s2@${at}/s2|tinnguyen`])
+    // The folder a path is read in stays as given: the intent is tracked where the session named it.
+    expect(store.get('pinned:s1')).toBe('login')
+  })
+
+  test('an Io that cannot resolve a folder keeps it as given', async () => {
+    const { byLink, byReal, link, at } = linked({ canResolve: false })
+    expect(await state.intentScope(byLink, 'login')).toBe(`sipher/s2@${link}/s2|login`)
+    expect(await state.intentScope(byReal, 'login')).toBe(`sipher/s2@${at}/s2|login`)
+    expect(await state.checkoutScope(byLink, { isOwn: false, repo: 'asktinnguyen/web', root: `${link}/web` })).toBe(`s1|asktinnguyen/web@${link}/web`)
+    expect((await state.laneAt(byLink, `${link}/local`)).repo).toBe(`path:${link}/local`)
+    // A resolve that fails keeps the folder as given too.
+    const failing = { ...byLink, real: async () => Promise.reject(new Error('ENOENT')) }
+    expect(await state.intentScope(failing, 'login', `${link}/web`)).toBe(`asktinnguyen/web@${link}/web|login`)
+  })
+
+  test("proof from before the upgrade reads through for the session's own checkout only", async () => {
+    const { own, second, store } = twoClones()
+    store.set('evidence:login', { build: { state: 'pass', detail: 'Result: Succeeded', at: Date.now() } })
+    const there = await state.intentScope(own, 'login', second)
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login'))).build.state).toBe('pass')
+    expect((await state.readEvidence(own, there)).build.state).toBe('none')
+    // A rung written in the other checkout does not take the old proof with it.
+    await state.setRung(own, there, 'pie', { state: 'pass', detail: 'ran' })
+    expect(Object.keys(store.get(`evidence:${there}`))).toEqual(['pie'])
+    expect((await state.readEvidence(own, there)).build.state).toBe('none')
+    // Nor does this session's proof there.
+    const mine = await state.checkoutScope(own, { isOwn: false, repo: 'sipher/s2', root: second })
+    store.set('evidence:sipher/s2@/work/s2-b', { build: { state: 'pass', detail: '', at: Date.now() } })
+    expect((await state.readEvidence(own, mine)).build.state).toBe('none')
+  })
+
+  test('tracking an intent in another checkout leaves the Continue from before the upgrade to the own checkout', async () => {
+    const { own, second, store } = twoClones()
+    store.set('last:tinnguyen', 'login')
+    await state.track(own, second, 'login', { me: 'Tin Nguyen' })
+    expect(store.get('last:tinnguyen')).toBe('login')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe('login')
+    await state.untrack(own, 'Tin Nguyen')
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(own, 'Tin Nguyen', second)).toBe(null)
+    // Tracking one in the own checkout writes its scoped key, and the old one goes.
+    await state.track(own, '/work/s2', 'login', { me: 'Tin Nguyen' })
+    expect(store.has('last:tinnguyen')).toBe(false)
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe('login')
+  })
+
+  test("the per-repository keys of before are not read", async () => {
+    const { own, store } = twoClones()
+    store.set('evidence:sipher/s2|login', { build: { state: 'pass', detail: '', at: Date.now() } })
+    store.set('changes:sipher/s2|login', [{ kind: 'done', id: 'A1', text: 'ticked A1', at: Date.now() }])
+    store.set('last:sipher/s2|tinnguyen', 'login')
+    expect((await state.readEvidence(own, await state.intentScope(own, 'login'))).build.state).toBe('none')
+    expect(await state.readChanges(own, 'login', 0)).toHaveLength(0)
+    expect(await state.readLast(own, 'Tin Nguyen')).toBe(null)
+  })
+
+  test('the same slug in two repositories keeps its own proof and changes', async () => {
+    const { s2, web, files } = twoRepos()
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login')
+    const scope = await state.evidenceScope(s2)
+    expect(scope).toBe('sipher/s2@r|login')
+    await state.setRung(s2, scope, 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    await state.noteChanges(s2, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now())
+    expect((await state.readEvidence(s2, await state.intentScope(s2, 'login'))).build.state).toBe('pass')
+    expect((await state.readEvidence(web, await state.intentScope(web, 'login'))).build.state).toBe('none')
+    expect(await state.readChanges(s2, 'login', 0)).toHaveLength(1)
+    expect(await state.readChanges(web, 'login', 0)).toHaveLength(0)
+  })
+
+  test("issues, PR states and Continue are each repository's own", async () => {
+    const { s2, web, files } = twoRepos()
+    await state.setIssues(s2, 'Tin Nguyen', [ISSUE])
+    await state.setPrStates(s2, { 12: 'MERGED' }, Date.now())
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login', { me: 'Tin Nguyen' })
+    expect(await state.readIssues(s2, 'Tin Nguyen')).toHaveLength(1)
+    expect(await state.readIssues(web, 'Tin Nguyen')).toEqual([])
+    expect(await state.readPrStates(s2)).toEqual({ 12: 'MERGED' })
+    expect(await state.readPrStates(web)).toEqual({})
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe('login')
+    expect(await state.readLast(web, 'Tin Nguyen')).toBe(null)
+  })
+
+  test('without a repository (the Paseo version) the keys are as before', async () => {
+    const { io, store, files } = memoryIo()
+    await state.setIssues(io, 'Tin Nguyen', [ISSUE])
+    await state.setPrStates(io, { 12: 'OPEN' }, Date.now())
+    expect(store.has('issues:tinnguyen')).toBe(true)
+    expect(store.has('prStates')).toBe(true)
+    // Proof, changes and Continue too: no repository, so no checkout in the key.
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(io, 'R', 'login', { me: 'Tin Nguyen' })
+    expect(await state.evidenceScope(io)).toBe('login')
+    await state.setRung(io, 'login', 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    await state.noteChanges(io, 'login', [{ kind: 'done', id: 'A1', text: 'ticked A1' }], Date.now())
+    expect(store.get('last:tinnguyen')).toBe('login')
+    expect(store.has('evidence:login')).toBe(true)
+    expect(store.has('changes:login')).toBe(true)
+  })
+
+  test("proof and Continue from before the upgrade read through until the scoped key is written; untracking clears both", async () => {
+    const { s2, store, files } = twoRepos()
+    store.set('evidence:login', { tests: { state: 'pass', detail: '12 passed', at: Date.now() } })
+    store.set('last:tinnguyen', 'login')
+    const scope = await state.intentScope(s2, 'login')
+    expect((await state.readEvidence(s2, scope)).tests.state).toBe('pass')
+    await state.setRung(s2, scope, 'build', { state: 'pass', detail: 'Result: Succeeded' })
+    const kept = await state.readEvidence(s2, scope)
+    expect([kept.tests.state, kept.build.state]).toEqual(['pass', 'pass'])
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe('login')
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login', { me: 'Tin Nguyen' })
+    await state.untrack(s2, 'Tin Nguyen')
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe(null)
+    expect(store.has('last:tinnguyen')).toBe(false)
+  })
+
+  test('an old "Continue" naming another intent does not come back after tracking and untracking one', async () => {
+    const { s2, store, files } = twoRepos()
+    store.set('last:tinnguyen', 'old-one')
+    files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    await state.track(s2, 'R', 'login', { me: 'Tin Nguyen' })
+    await state.untrack(s2, 'Tin Nguyen')
+    expect(await state.readLast(s2, 'Tin Nguyen')).toBe(null)
+    expect(store.has('last:tinnguyen')).toBe(false)
+  })
+
+  test('the lane names its repository when the Io can read the origin, and asks again when git could not say', async () => {
+    const { io } = memoryIo()
+    let origin = /** @type {string | null} */ (null)
+    const withOrigin = { ...io, origin: async () => origin }
+    const first = await state.lane(withOrigin, 'cwd-repo-test')
+    expect(first.repo).toBe('path:r')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    origin = 'git@github.com:Sipher/S2.git'
+    expect((await state.lane(withOrigin, 'cwd-repo-test')).repo).toBe('sipher/s2')
+    expect((await state.lane(io, 'cwd-no-origin')).repo).toBe('')
+  })
+})
+
+describe('the workspace', () => {
+  // Folders and files over plain maps: a folder exists when something is in it.
+  const disk = (/** @type {Record<string, string>} */ paths) => {
+    const files = new Map(Object.entries(paths))
+    const has = (/** @type {string} */ path) => [...files.keys()].some(one => one === path || one.startsWith(`${path}/`))
+    return {
+      files,
+      read: async (/** @type {string} */ path) => files.get(path) ?? null,
+      exists: async (/** @type {string} */ path) => has(path),
+      list: async (/** @type {string} */ dir) => {
+        const names = new Set([...files.keys()].filter(path => path.startsWith(`${dir}/`)).map(path => path.slice(dir.length + 1).split('/')[0]))
+        return [...names].map(name => ({ name, kind: files.has(`${dir}/${name}`) ? 'file' : 'dir' }))
+      },
+    }
+  }
+  const HEAD = 'ref: refs/heads/main\n'
+
+  test('a folder resolves to the checkout holding it: a .git folder, a worktree .git file, or none', async () => {
+    const files = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/Plugins/X/a.txt': '', '/w/tree/.git': 'gitdir: /w/s2/.git/worktrees/tree\n', '/w/loose/a.txt': '' })
+    expect(await checkoutOf(files, '/w/s2')).toBe('/w/s2')
+    expect(await checkoutOf(files, '/w/s2/Plugins/X')).toBe('/w/s2')
+    expect(await checkoutOf(files, '/w/s2/Plugins/X/../../')).toBe('/w/s2')
+    expect(await checkoutOf(files, '/w/tree/src')).toBe('/w/tree')
+    expect(await checkoutOf(files, '/w/loose')).toBe(null)
+  })
+
+  test('the repos option splits on ; and new lines, drops blanks, and takes relative folders from the session folder', () => {
+    expect(parseRepos(' ../web ;\n\n/abs/game\r\nC:\\Work\\S2\\ ; ', '/w/s2')).toEqual(['/w/web', '/abs/game', 'C:/Work/S2'])
+    expect(parseRepos('', '/w/s2')).toEqual([])
+  })
+
+  test('the workspace lists the session checkout first, then option folders, each once; a folder in no checkout is skipped', async () => {
+    const files = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/Source/a.cpp': '', '/w/web/.git/HEAD': HEAD, '/w/loose/a.txt': '', '/w/other/.git/HEAD': HEAD })
+    const found = await readWorkspace(files, '/w/s2/Source', '../../web; /w/s2/; Source; ../../loose')
+    expect(found.roots).toEqual(['/w/s2', '/w/web'])
+    expect(found.skipped).toEqual(['/w/loose'])
+  })
+
+  test("a session folder in no checkout adds its child checkouts by name, after the option's, at most 8 in all", async () => {
+    /** @type {Record<string, string>} */
+    const paths = { '/w/notes/a.md': '', '/w/x/.git/HEAD': HEAD, '/w/b/.git': 'gitdir: /w/x/.git/worktrees/b\n' }
+    for (const name of ['c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']) paths[`/w/${name}/.git/HEAD`] = HEAD
+    const found = await readWorkspace(disk(paths), '/w', 'x')
+    expect(found.roots).toEqual(['/w/x', '/w/b', '/w/c', '/w/d', '/w/e', '/w/f', '/w/g', '/w/h'])
+    // Inside a checkout, the children are not looked at.
+    const inside = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/sub/.git/HEAD': HEAD })
+    expect((await readWorkspace(inside, '/w/s2', '')).roots).toEqual(['/w/s2'])
+  })
+
+  // `git worktree list --porcelain`: one block per worktree.
+  const listed = (/** @type {string[]} */ ...blocks) => `${blocks.join('\n\n')}\n\n`
+  const tree = (/** @type {string} */ folder, /** @type {string} */ ...more) => [`worktree ${folder}`, 'HEAD 1f2e3d4c5b6a79880011223344556677889900aa', ...(more.length > 0 ? more : [`branch refs/heads/${folder.split('/').pop()}`])].join('\n')
+  const LINK = `gitdir: /w/s2/.git/worktrees/x\n`
+
+  test('the worktree list parsed: the main worktree, a linked one and a detached one; bare and prunable left out', () => {
+    const found = parseWorktrees(listed(tree('/w/s2'), tree('/w/s2/.claude/worktrees/x', 'branch refs/heads/feat/x', 'locked being built'), tree('/w/loose head', 'detached'), tree('/w/gone', 'branch refs/heads/gone', 'prunable gitdir file points to non-existent location')))
+    expect(found).toEqual({ main: '/w/s2', folders: ['/w/s2', '/w/s2/.claude/worktrees/x', '/w/loose head'] })
+    // A bare repository is the clone, though no checkout; git on Windows ends its lines its own way.
+    expect(parseWorktrees('worktree C:/Mirrors/s2.git\r\nbare\r\n\r\nworktree C:/Work/s2\r\nHEAD 1f2e\r\nbranch refs/heads/main\r\n\r\n')).toEqual({ main: 'C:/Mirrors/s2.git', folders: ['C:/Work/s2'] })
+    expect(parseWorktrees('')).toEqual({ main: '', folders: [] })
+  })
+
+  test("the workspace adds each checkout's worktrees after the checkouts, in git's order, each once", async () => {
+    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/s2-x/.git': LINK, '/w/s2-z/.git': LINK, '/w/web/.claude/worktrees/y/.git': LINK }
+    /** @type {Record<string, string>} */
+    const lists = {
+      // /w/gone was removed by hand: listed, no longer a checkout.
+      '/w/s2': listed(tree('/w/s2'), tree('/w/gone'), tree('/w/s2-z'), tree('/w/s2-x')),
+      '/w/s2-x': listed(tree('/w/s2'), tree('/w/gone'), tree('/w/s2-z'), tree('/w/s2-x')),
+      '/w/web': listed(tree('/w/web'), tree('/w/web/.claude/worktrees/y')),
+    }
+    const asked = /** @type {string[]} */ ([])
+    const files = { ...disk(paths), worktrees: async (/** @type {string} */ root) => (asked.push(root), lists[root] ?? '') }
+    // The `repos` option names a worktree of the session's clone: it keeps its place and is not added again.
+    const found = await readWorkspace(files, '/w/s2', '../web;../s2-x')
+    expect(found.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x', '/w/s2-z', '/w/web/.claude/worktrees/y'])
+    expect(asked).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
+    // Which checkouts are one clone.
+    expect(found.clones).toEqual(['/w/s2', '/w/web', '/w/s2', '/w/s2', '/w/web'])
+    // An Io that cannot ask git gives what it gave before.
+    const before = await readWorkspace(disk(paths), '/w/s2', '../web;../s2-x')
+    expect(before.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
+    expect(before.skipped).toEqual([])
+    // Git failing in a checkout adds nothing.
+    const failing = { ...disk(paths), worktrees: async () => Promise.reject(new Error('git')) }
+    expect((await readWorkspace(failing, '/w/s2', '../web;../s2-x')).roots).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
+  })
+
+  test('a session folder that is a link and the real path git names for it are one checkout', async () => {
+    const files = {
+      ...disk({ '/tmp/s2/.git/HEAD': HEAD, '/private/tmp/s2/.git/HEAD': HEAD, '/private/tmp/s2-x/.git': LINK }),
+      real: async (/** @type {string} */ folder) => folder.replace(/^\/tmp\//, '/private/tmp/'),
+      worktrees: async () => listed(tree('/private/tmp/s2'), tree('/private/tmp/s2-x')),
+    }
+    const found = await readWorkspace(files, '/tmp/s2', '')
+    expect(found.roots).toEqual(['/tmp/s2', '/private/tmp/s2-x'])
+    expect(found.clones).toEqual(['/private/tmp/s2', '/private/tmp/s2'])
+  })
+
+  test('a worktree list git could not give makes the read unsure, with the checkouts and the worktrees that were found', async () => {
+    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/s2-x/.git': LINK, '/w/web-y/.git': LINK }
+    /** @type {Record<string, string>} */
+    const lists = { '/w/s2': listed(tree('/w/s2'), tree('/w/s2-x')), '/w/web': listed(tree('/w/web'), tree('/w/web-y')) }
+    const files = (/** @type {string[]} */ ...silent) => ({ ...disk(paths), worktrees: async (/** @type {string} */ root) => (silent.includes(root) ? null : (lists[root] ?? '')) })
+    const unsure = await readWorkspace(files('/w/web'), '/w/s2', '../web')
+    expect(unsure.isSure).toBe(false)
+    expect(unsure.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
+    expect((await readWorkspace(files('/w/s2', '/w/web'), '/w/s2', '../web')).roots).toEqual(['/w/s2', '/w/web'])
+    // Git answering, whatever it says, is sure; so is an Io that cannot ask.
+    const sure = await readWorkspace(files(), '/w/s2', '../web')
+    expect(sure.isSure).toBe(true)
+    expect(sure.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x', '/w/web-y'])
+    expect((await readWorkspace(disk(paths), '/w/s2', '../web')).isSure).toBe(true)
+  })
+
+  test('an unsure workspace is read again, a sure one is kept, and the log says each answer once', async () => {
+    const memory = memoryIo()
+    memory.files.set('/ws3/a/.git/HEAD', HEAD)
+    memory.files.set('/ws3/a-x/.git', LINK)
+    // Git cannot say twice, then answers.
+    const answers = [null, null, listed(tree('/ws3/a'), tree('/ws3/a-x'))]
+    let asked = 0
+    const io = { ...memory.io, worktrees: async () => answers[asked++] ?? null }
+    const lines = /** @type {string[]} */ ([])
+    const log = (/** @type {string} */ line) => void lines.push(line)
+    // Callers at the same time share one read.
+    expect(await Promise.all([state.workspace(io, '/ws3/a', '', log), state.workspace(io, '/ws3/a', '', log)])).toEqual([['/ws3/a'], ['/ws3/a']])
+    expect(asked).toBe(1)
+    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a'])
+    expect(asked).toBe(2)
+    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a', '/ws3/a-x'])
+    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a', '/ws3/a-x'])
+    expect(asked).toBe(3)
+    expect(lines).toHaveLength(2)
+  })
+
+  test('a session folder that is a link and the same checkout named by its real path in the repos option are one checkout', async () => {
+    const paths = { '/tmp/s2/.git/HEAD': HEAD, '/private/tmp/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD }
+    const real = async (/** @type {string} */ folder) => folder.replace(/^\/tmp\//, '/private/tmp/')
+    // The first spelling of a folder is kept: the session's own as it was given.
+    expect((await readWorkspace({ ...disk(paths), real }, '/tmp/s2', '/private/tmp/s2;/w/web')).roots).toEqual(['/tmp/s2', '/w/web'])
+    // An Io that cannot say where a folder lands compares the folders as given.
+    expect((await readWorkspace(disk(paths), '/tmp/s2', '/private/tmp/s2;/w/web')).roots).toEqual(['/tmp/s2', '/private/tmp/s2', '/w/web'])
+  })
+
+  test('worktrees fill the workspace to 24 and never cut one of the 8 checkouts', async () => {
+    /** @type {Record<string, string>} */
+    const paths = { '/w/notes/a.md': '' }
+    for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']) paths[`/w/${name}/.git/HEAD`] = HEAD
+    const trees = Array.from({ length: 20 }, (_, at) => `/t/n${String(at + 1).padStart(2, '0')}`)
+    for (const folder of trees) paths[`${folder}/.git`] = LINK
+    const files = { ...disk(paths), worktrees: async (/** @type {string} */ root) => (root === '/w/a' ? listed(tree('/w/a'), ...trees.map(folder => tree(folder))) : listed(tree(root))) }
+    const found = await readWorkspace(files, '/w', '')
+    expect(found.roots).toEqual([...['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(name => `/w/${name}`), ...trees.slice(0, 16)])
+    expect(found.left).toEqual(['/w/i', ...trees.slice(16)])
+  })
+
+  test('each checkout gets its own lane: repository and pack', async () => {
+    const { io, files } = memoryIo()
+    files.set('/ws/game/Game.uproject', '{}')
+    // memoryIo's exists sees a folder only as its own entry.
+    files.set('/ws/game/docs/intent', '')
+    files.set('/ws/web/package.json', '{"name":"web"}')
+    const origins = /** @type {Record<string, string>} */ ({ '/ws/game': 'git@github.com:Sipher/S2.git', '/ws/web': 'https://github.com/AskTinNguyen/han-viet' })
+    // The web repository sets its own user.name; the session folder's is Tin Nguyen.
+    const names = /** @type {Record<string, string>} */ ({ '/ws/web': 'tin-web', R: 'not the session folder' })
+    const withOrigin = { ...io, origin: async (/** @type {string} */ root) => origins[root] ?? '', gitUser: async (/** @type {string | undefined} */ root) => (root && names[root]) || 'Tin Nguyen' }
+    const game = await state.laneAt(withOrigin, '/ws/game')
+    const web = await state.laneAt(withOrigin, '/ws/web')
+    expect([game.root, game.repo, game.pack.id, game.isS2, game.me]).toEqual(['/ws/game', 'sipher/s2', 'unreal', true, 'Tin Nguyen'])
+    expect([web.root, web.repo, web.pack.id, web.isS2, web.me]).toEqual(['/ws/web', 'asktinnguyen/han-viet', 'web', false, 'tin-web'])
+    // The session's lane reads the name in the session folder, as it always has.
+    expect((await state.lane(withOrigin, 'cwd-own-user-test')).me).toBe('Tin Nguyen')
+  })
+
+  test('the workspace is read once per session folder and option, and the session lane is its root', async () => {
+    const memory = memoryIo()
+    memory.files.set('/ws2/a/.git/HEAD', HEAD)
+    memory.files.set('/ws2/web/.git/HEAD', HEAD)
+    const lines = /** @type {string[]} */ ([])
+    const first = await state.workspace(memory.io, '/ws2/a', '../web;../none', line => lines.push(line))
+    memory.files.set('/ws2/none/.git/HEAD', HEAD)
+    expect(await state.workspace(memory.io, '/ws2/a', '../web;../none', line => lines.push(line))).toEqual(first)
+    expect(first).toEqual(['/ws2/a', '/ws2/web'])
+    expect(lines).toHaveLength(2)
+    expect((await state.lane(memory.io, 'cwd-workspace-test')).root).toBe('R')
+  })
+
+  test('the kept folders are read, added to and removed from under one key for the machine, each once', async () => {
+    const { io, store } = memoryIo()
+    expect(await state.readTraced(io)).toEqual([])
+    await state.addTraced(io, '/w/web')
+    await state.addTraced(io, '/w/s2/')
+    await state.addTraced(io, '/w/web')
+    expect(await state.readTraced(io)).toEqual(['/w/web', '/w/s2'])
+    // One key, with no repository, person or session in it.
+    expect([...store.keys()]).toEqual(['tracedFolders'])
+    await state.removeTraced(io, '/w/web')
+    expect(await state.readTraced(io)).toEqual(['/w/s2'])
+    expect([...store.keys()]).toEqual(['tracedFolders'])
+  })
+
+  test("the workspace takes the kept folders after the setting's, before any worktree, inside the limit of 8", async () => {
+    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/kept/.git/HEAD': HEAD, '/w/kept-x/.git': LINK, '/w/s2-x/.git': LINK }
+    /** @type {Record<string, string>} */
+    const lists = { '/w/s2': listed(tree('/w/s2'), tree('/w/s2-x')), '/w/kept': listed(tree('/w/kept'), tree('/w/kept-x')) }
+    const files = { ...disk(paths), worktrees: async (/** @type {string} */ root) => lists[root] ?? '' }
+    // A kept folder the setting names too is in once, at the setting's place.
+    const found = await readWorkspace(files, '/w/s2', '../web', ['/w/kept', '/w/web'])
+    expect(found.roots).toEqual(['/w/s2', '/w/web', '/w/kept', '/w/s2-x', '/w/kept-x'])
+    expect(found.named).toBe(3)
+    // Nine checkouts: the session's, four of the setting's and four kept; the last kept one is left out.
+    /** @type {Record<string, string>} */
+    const many = { '/m/own/.git/HEAD': HEAD }
+    for (const name of ['a', 'b', 'c', 'd', 'k1', 'k2', 'k3', 'k4']) many[`/m/${name}/.git/HEAD`] = HEAD
+    const full = await readWorkspace(disk(many), '/m/own', '../a;../b;../c;/m/d', ['/m/k1', '/m/k2', '/m/k3', '/m/k4'])
+    expect(full.roots).toEqual(['/m/own', '/m/a', '/m/b', '/m/c', '/m/d', '/m/k1', '/m/k2', '/m/k3'])
+    expect(full.left).toEqual(['/m/k4'])
+    expect(full.named).toBe(8)
+  })
+
+  test('a kept folder that is no checkout is skipped by the workspace and stays in the list; a changed list is read again', async () => {
+    const memory = memoryIo()
+    memory.files.set('/ws4/a/.git/HEAD', HEAD)
+    memory.files.set('/ws4/web/.git/HEAD', HEAD)
+    await state.addTraced(memory.io, '/ws4/gone')
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a'])
+    expect(await state.readTraced(memory.io)).toEqual(['/ws4/gone'])
+    // The same list is the same read, whatever the disk now holds.
+    memory.files.set('/ws4/gone/.git/HEAD', HEAD)
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a'])
+    await state.addTraced(memory.io, '/ws4/web')
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a', '/ws4/gone', '/ws4/web'])
+    await state.removeTraced(memory.io, '/ws4/gone')
+    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a', '/ws4/web'])
+  })
+
+  test('each checkout is named by its repository, and only those that would share a name by their folder', () => {
+    const at = (/** @type {string} */ root, /** @type {string} */ repo) => ({ root, repo })
+    // One checkout, and names that already differ: as before.
+    expect(checkoutNames([at('/w/s2', 'sipher/s2')])).toEqual(['s2'])
+    expect(checkoutNames([at('/w/game', 'sipher/s2'), at('/w/site', 'asktinnguyen/web')])).toEqual(['s2', 'web'])
+    // Two clones of one repository.
+    expect(checkoutNames([at('/w/s2', 'sipher/s2'), at('/w/s2-b', 'sipher/s2')])).toEqual(['s2', 's2-b'])
+    // a/web beside b/web.
+    expect(checkoutNames([at('/w/front', 'a/web'), at('/w/back', 'b/web')])).toEqual(['front', 'back'])
+    // The same folder name twice, and three times: numbered in order.
+    expect(checkoutNames([at('/a/web', 'a/web'), at('/b/web', 'b/web')])).toEqual(['web', 'web-2'])
+    expect(checkoutNames([at('/a/s2', 'sipher/s2'), at('/b/s2', 'sipher/s2'), at('/c/s2', 'sipher/s2')])).toEqual(['s2', 's2-2', 's2-3'])
+    // A mix: only the clashing ones change.
+    expect(checkoutNames([at('/w/game', 'sipher/s2'), at('/w/site', 'asktinnguyen/web'), at('/w/game-b', 'sipher/s2'), at('/w/docs', 'sipher/handbook')])).toEqual(['game', 'web', 'game-b', 'handbook'])
+    // Without an origin a checkout is its folder; a folder name another checkout already has is numbered.
+    expect(checkoutNames([at('/w/web', 'path:/w/web'), at('/w/x', 'a/tool'), at('/w/web-2', 'b/tool'), at('C:\\Work\\web\\', 'path:c:/work/web')])).toEqual(['web', 'x', 'web-2', 'web-3'])
+    const names = checkoutNames([at('/a/web', 'a/web'), at('/b/web', 'b/web'), at('/c/web-2', 'c/web-2')])
+    expect(new Set(names).size).toBe(3)
+    expect(checkoutNames([])).toEqual([])
+  })
+
+  test("a clone's first checkout is named as if its other worktrees were not there, and each of those by its folder", () => {
+    const at = (/** @type {string} */ root, /** @type {string} */ repo, /** @type {string} */ clone) => ({ root, repo, clone })
+    const s2 = [at('/w/s2', 'sipher/s2', '/w/s2'), at('/w/s2/.claude/worktrees/x', 'sipher/s2', '/w/s2'), at('/w/fix', 'sipher/s2', '/w/s2')]
+    // Alone: the first keeps the repository's short name.
+    expect(checkoutNames(s2)).toEqual(['s2', 'x', 'fix'])
+    // Beside another repository, whatever the order; a worktree's folder that is taken is numbered.
+    expect(checkoutNames([...s2, at('/w/site', 'asktinnguyen/web', '/w/site')])).toEqual(['s2', 'x', 'fix', 'web'])
+    expect(checkoutNames([s2[0], at('/w/site', 'asktinnguyen/web', '/w/site'), at('/w/web', 'sipher/s2', '/w/s2'), at('/t/s2', 'sipher/s2', '/w/s2')])).toEqual(['s2', 'web', 'web-2', 's2-2'])
+    // The session in a worktree: it is the clone's first, the main checkout is named by its folder.
+    expect(checkoutNames([at('/w/s2/.claude/worktrees/x', 'sipher/s2', '/w/s2'), at('/w/s2', 'sipher/s2', '/w/s2')])).toEqual(['s2', 's2-2'])
+    // Two clones of one repository are named as they were, each with its worktrees after.
+    expect(checkoutNames([at('/w/s2', 'sipher/s2', '/w/s2'), at('/w/s2-b', 'sipher/s2', '/w/s2-b'), at('/w/x', 'sipher/s2', '/w/s2-b')])).toEqual(['s2', 's2-b', 'x'])
+    expect(checkoutNames([{ root: '/w/s2', repo: 'sipher/s2' }, { root: '/w/s2-b', repo: 'sipher/s2' }])).toEqual(['s2', 's2-b'])
+  })
+
+  test('a checkout outside the workspace takes a name that is left and renames none; a name holds only what <name>#<n> reads', () => {
+    const at = (/** @type {string} */ root, /** @type {string} */ repo) => ({ root, repo })
+    const inside = [at('/w/tools', 'sipher/tools'), at('/w/web', 'asktinnguyen/web')]
+    const alone = checkoutNames(inside)
+    // Another clone of a workspace repository, and a folder named as a workspace checkout is.
+    for (const outside of [at('/x/tools-b', 'sipher/tools'), at('/x/tools', 'sipher/tools'), at('/x/web', 'other/site'), at('/x/tools', 'path:/x/tools')]) {
+      const names = checkoutNames(inside, [outside])
+      expect(names.slice(0, 2)).toEqual(alone)
+      expect(alone.includes(names[2] ?? '')).toBe(false)
+    }
+    expect(checkoutNames(inside, [at('/x/tools-b', 'sipher/tools')])).toEqual(['tools', 'web', 'tools-b'])
+    expect(checkoutNames(inside, [at('/x/tools', 'sipher/tools')])).toEqual(['tools', 'web', 'tools-2'])
+    expect(checkoutNames(inside, [at('/x/docs', 'sipher/handbook')])).toEqual(['tools', 'web', 'handbook'])
+    // Two clones in folders with a space: different names that /ather issue <name>#<n> reads.
+    const spaced = checkoutNames([at('/w/S2 clone', 'sipher/s2'), at('/w/S2 other', 'sipher/s2'), at('/w/Trò chơi', 'path:/w/trò chơi')])
+    expect(new Set(spaced).size).toBe(3)
+    for (const name of spaced) expect(/^[\w.-]+$/.test(name)).toBe(true)
+  })
+})
+
+describe('one pane over the workspace', () => {
+  const MIN = 60000
+  // An intent read from a checkout: its key is its slug in the session's own checkout, `<repoName>/<slug>` in another.
+  const from = (root, repoName, slug, isOwn, fields = {}, extra = {}) => {
+    const one = intent(slug, fields, extra)
+    return { ...one, root, repoName, key: isOwn ? slug : `${repoName}/${slug}` }
+  }
+
+  test('two checkouts: ids are keys, the same slug in both is two rows, each row carries its repository', () => {
+    const intents = [from('/ws/s2', 's2', 'login', false, {}, { updatedAt: 3 }), from('/ws/web', 'web', 'login', false, {}, { updatedAt: 2 }), from('/ws/web', 'web', 'search', false, { Owner: 'TienPham' }, { updatedAt: 1 })]
+    const work = workList(intents, [], 'Tin Nguyen', '', NOON)
+    expect(work.map(one => one.id)).toEqual(['intent:s2/login', 'intent:web/login', 'intent:web/search'])
+    expect(work.filter(one => one.kind === 'intent' && one.slug === 'login')).toHaveLength(2)
+    const cells = work.map(one => rowCells(/** @type {any} */ (one), NOON, true))
+    expect(cells.map(cell => cell.repo)).toEqual(['s2', 'web', 'web'])
+    // Its own cell, not the warning's.
+    expect(cells[0]?.warn).toBe('local')
+    // `local` follows the row's own checkout: tagged only where that checkout's main was read.
+    const own = work.map(one => rowCells(/** @type {any} */ (one), NOON, row => row.root === '/ws/web').warn)
+    expect(own).toEqual(['', 'local', 'local'])
+  })
+
+  test("the session's own checkout and another: own keys stay slugs", () => {
+    const work = workList([from('/ws/s2', 's2', 'login', true), from('/ws/web', 'web', 'login', false)], [], 'Tin Nguyen', '', NOON)
+    expect(work.map(one => one.id)).toEqual(['intent:login', 'intent:web/login'])
+  })
+
+  test('one checkout: no repository name, ids are intent:<slug>', () => {
+    const work = workList([from('/ws/s2', 's2', 'login', true), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON)
+    expect(work.map(one => one.id).sort()).toEqual(['intent:board', 'intent:login'])
+    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn)).toEqual(['local', 'local'])
+    expect(workList([intent('spawner')], [], 'Tin Nguyen', '', NOON).map(one => one.id)).toEqual(['intent:spawner'])
+  })
+
+  test('home tracks, continues and searches by key', () => {
+    const s2 = from('/ws/s2', 's2', 'login', true)
+    const web = from('/ws/web', 'web', 'login', false)
+    const model = buildHome(/** @type {any} */ (base({ intents: [s2, web], pinned: 'web/login', away: OFF })))
+    expect(model.header.title).toBe('web/login')
+    const untracked = buildHome(/** @type {any} */ (base({ intents: [s2, web], pinned: null, last: 'web/login', away: OFF })))
+    expect(untracked.next?.id).toBe('intent:web/login')
+    expect(searchIntents([s2, web], 'web login').map(one => one.key)).toEqual(['web/login'])
+    expect(filterWork(untracked.work, 'web/login').map(one => one.id)).toEqual(['intent:web/login'])
+  })
+
+  test('Ask about an intent in another checkout reads it there with git -C', () => {
+    expect(aboutIntentPrompt('login', true, '/ws/web')).toContain('git -C /ws/web show origin/main:docs/intent/login/<file>')
+    expect(aboutIntentPrompt('login', false, '/ws/web')).toContain('/ws/web/docs/intent/login/')
+    expect(aboutIntentPrompt('login', true)).toBe(aboutIntentPrompt('login', true, ''))
+  })
+
+  test('the sync line over several checkouts: an error wins, else the least recently synced', () => {
+    const at = { ...NO_SYNC, isRepo: true, hasMain: true }
+    const fresh = { ...at, fetchedAt: NOON - MIN }
+    const older = { ...at, fetchedAt: NOON - 8 * MIN }
+    const failed = { ...at, fetchedAt: NOON, failedAt: NOON + 1 }
+    expect(syncSummary([fresh])).toBe(fresh)
+    expect(syncSummary([fresh, older])).toBe(older)
+    expect(syncSummary([older, fresh])).toBe(older)
+    expect(syncSummary([fresh, { ...at }])).toEqual({ ...at })
+    expect(syncSummary([older, failed, fresh])).toBe(failed)
+    expect(syncSummary([NO_SYNC, fresh])).toBe(fresh)
+    expect(syncSummary([])).toBe(NO_SYNC)
+  })
+
+  // The pane's elements, as plain nodes; every node of a drawn list that passes `test`.
+  const node = (/** @type {string} */ type) => (/** @type {any} */ props = {}) => ({ type, props, children: [props.children].flat(Infinity).filter(child => child !== null && child !== undefined && child !== false && child !== '') })
+  const el = Object.fromEntries(['Box', 'Text', 'Button', 'Svg', 'Input'].map(name => [name, node(name)]))
+  /** @param {any} tree @param {(one: any) => boolean} test @returns {any[]} */
+  const all = (tree, test) => (!tree || typeof tree !== 'object' ? [] : [...(test(tree) ? [tree] : []), ...(tree.children ?? []).flatMap((/** @type {any} */ child) => all(child, test))])
+  /** @param {any} node @returns {string} */
+  const textOf = node => (typeof node === 'string' ? node : (node?.children ?? []).map(textOf).join(''))
+  const keysOf = (/** @type {any} */ tree) => all({ children: tree }, one => typeof one.props?.key === 'string').map(one => one.props.key)
+  const repeated = (/** @type {string[]} */ keys) => keys.filter((key, at) => keys.indexOf(key) !== at)
+  const look = (/** @type {boolean} */ isClicked) => ({ isClicked, width: 100, now: NOON, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined })
+
+  test('a desktop row draws its repository after the title, as a terminal row does; without one it is drawn as before', () => {
+    const [named, plain] = workList([from('/ws/web', 'web', 'login', false, { Status: 'parked' }), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON).map(one => ({ ...one, repoName: one.key === 'board' ? '' : one.repoName }))
+    const cols = { count: 3, age: 2, owner: 0 }
+    const draw = (/** @type {any} */ one, /** @type {boolean} */ isClicked) => workLine(el, { key: `pick-${one.id}`, cells: rowCells(one, NOON, false), cols, width: 100, ownerColour: '#ffffff', onPress: () => undefined, isClicked })
+    const mainOf = (/** @type {any} */ row) => all(row, one => /-main$/.test(one.props?.key ?? ''))[0]
+    // The terminal: inside the title's box, after the warning.
+    const main = mainOf(draw(named, false))
+    expect(main.children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:web/login', 'pick-intent:web/login-warn', 'pick-intent:web/login-repo'])
+    expect(main.children[2].children.join('').trim()).toBe('web')
+    // The desktop: the title and its warning give way in a box that shrinks and clips; the name's box does not shrink.
+    const [title, repo] = mainOf(draw(named, true)).children
+    expect([title.props.flexShrink, title.props.overflow, title.children.map((/** @type {any} */ child) => child.props.key)]).toEqual([1, 'hidden', ['pick-intent:web/login', 'pick-intent:web/login-warn']])
+    expect([repo.props.key, repo.props.flexShrink, textOf(repo).trim()]).toEqual(['pick-intent:web/login-repo', 0, 'web'])
+    for (const isClicked of [false, true]) expect(mainOf(draw(plain, isClicked)).children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:board'])
+  })
+
+  test("a long checkout name (a worktree's folder) is cut so that the title keeps its place, on both surfaces", () => {
+    const long = workList([from('/ws/ather-mods/.claude/worktrees/automata-multi-repo-support-bbfecb', 'automata-multi-repo-support-bbfecb', 'multi-repo', false), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON).find(one => one.label === 'multi-repo')
+    const cols = { count: 3, age: 2, owner: 0 }
+    const mainOf = (/** @type {any} */ row) => all(row, one => /-main$/.test(one.props?.key ?? ''))[0]
+    for (const isClicked of [false, true]) {
+      const row = workLine(el, { key: `pick-${long.id}`, cells: rowCells(long, NOON, false), cols, width: 46, ownerColour: '#ffffff', onPress: () => undefined, isClicked })
+      const name = textOf(all(mainOf(row), one => one.props?.key === `pick-${long.id}-repo`)[0]).trim()
+      expect([name.length <= 16, name.startsWith('automata-multi-'), name.endsWith('…')]).toEqual([true, true, true])
+      expect(all(mainOf(row), one => one.props?.key === `pick-${long.id}`)[0].props.label).toContain('multi-repo')
+    }
+  })
+
+  const CALLS = `# Findings\n\n## F-1 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nDrops only, or a full respawn?\n\n**Options:**\n- A (recommended): drops only\n- B: a full respawn\n\n## F-2 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nWhich pool size?\n`
+
+  test("a decision on another checkout's intent: its id and answers name the key and its findings file; the session's own as with one checkout", () => {
+    const own = from('/ws/s2', 's2', 'login', true, {}, { findings: CALLS, updatedAt: 2 })
+    const web = from('/ws/web', 'web', 'login', false, {}, { findings: CALLS, updatedAt: 1 })
+    const model = buildHome(/** @type {any} */ (base({ intents: [own, web], pinned: null, away: OFF })))
+    const calls = model.items.filter(one => one.kind === 'call')
+    expect(calls.map(one => one.id)).toEqual(['call:login:F-1', 'call:login:F-2', 'call:web/login:F-1', 'call:web/login:F-2'])
+    expect(calls.map(one => one.kind === 'call' && one.slug)).toEqual(['login', 'login', 'web/login', 'web/login'])
+    const [mine, , theirs] = calls
+    const [f1] = own.findings
+    // The session's own checkout: the words one checkout gets.
+    const alone = buildHome(/** @type {any} */ (base({ intents: [intent('login', {}, { findings: CALLS })], pinned: null, away: OFF }))).items[0]
+    expect([mine?.id, mine?.prompt, mine?.answers?.explain, mine?.answers?.options.map(one => one.prompt), mine?.answers?.typed('x')]).toEqual([alone?.id, alone?.prompt, alone?.answers?.explain, alone?.answers?.options.map(one => one.prompt), alone?.answers?.typed('x')])
+    expect(mine?.answers?.options[0]?.prompt).toBe(findingAnswers('login', /** @type {any} */ (f1)).options[0]?.prompt)
+    // Another checkout's: every answer names the key and the findings file there.
+    const said = [...(theirs?.answers?.options.map(one => one.prompt) ?? []), theirs?.answers?.explain ?? '', theirs?.answers?.typed('later') ?? '', theirs?.prompt ?? '']
+    expect(said).toHaveLength(5)
+    expect(said.every(text => text.includes('/ws/web/docs/intent/login/findings.md'))).toBe(true)
+    expect(said.slice(0, 4).every(text => text.includes('F-1 on web/login'))).toBe(true)
+    expect(theirs?.answers?.source?.startsWith('## F-1')).toBe(true)
+  })
+
+  test('the same slug in two checkouts: two blocks of decisions; answering one neither marks, folds nor prunes the other', () => {
+    const own = from('/ws/s2', 's2', 'login', true, {}, { findings: CALLS, updatedAt: 2 })
+    const web = from('/ws/web', 'web', 'login', false, {}, { findings: CALLS, updatedAt: 1 })
+    const model = buildHome(/** @type {any} */ (base({ intents: [own, web], pinned: null, away: OFF })))
+    const now = 1_000_000
+    const opened = new Set(['web/login'])
+    const view = needsView(model.items, model.open, { ...FRESH_ANSWERS }, opened, now, true)
+    expect(view.blocks.map(block => [block.slug, block.items.map(one => one.id)])).toEqual([['login', ['call:login:F-1', 'call:login:F-2']], ['web/login', ['call:web/login:F-1', 'call:web/login:F-2']]])
+    // Only web's block is open: its first decision is the one opened, the session's own stay behind their head.
+    expect([view.shownId, view.states['call:login:F-1']]).toEqual(['call:web/login:F-1', 'line'])
+    const decided = [{ id: 'call:web/login:F-1', answer: 'A', at: now }]
+    const after = needsView(model.items, model.open.filter(one => one.id !== 'call:web/login:F-1'), { ...FRESH_ANSWERS, decided }, new Set(['web/login', 'login']), now + 1000, true)
+    expect([after.states['call:web/login:F-1'], after.states['call:login:F-1'], after.shownId]).toEqual(['decided', 'opened', 'call:login:F-1'])
+    const folded = needsView(model.items, model.open, { ...FRESH_ANSWERS, decided }, opened, now + DECIDED_SHOWN_MS, true)
+    expect([folded.folded.map(one => one.id), folded.blocks.map(block => block.items.length)]).toEqual([['call:web/login:F-1'], [2, 1]])
+    // Read again with web's F-1 resolved: its answer goes, by its key; one given to the other login's F-1 stays.
+    const waiting = new Set(['call:login:F-1', 'call:login:F-2', 'call:web/login:F-2'])
+    expect(pruneDecided([...decided, { id: 'call:login:F-1', answer: 'B', at: now }], id => waiting.has(id), now + 60000).map(one => one.id)).toEqual(['call:login:F-1'])
+    // Drawn: both heads and every row, no element key twice.
+    const press = () => () => undefined
+    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined }
+    const keys = keysOf(needsRows(el, false, { items: model.items, open: model.open, opened: new Set(['web/login', 'login']), width: 100, key: () => undefined, onAct: press, onToggle: press, answer: /** @type {any} */ (answer) }))
+    expect(repeated(keys)).toEqual([])
+    expect(['calls-login', 'calls-web/login', 'item-call:login:F-1', 'item-call:web/login:F-1'].every(key => keys.includes(key))).toBe(true)
+  })
+
+  test("the same slug in two checkouts: a session tracking one is offered that one's decisions, not the other's", () => {
+    const own = from('/ws/s2', 's2', 'login', true, {}, { findings: FINDINGS, updatedAt: 2 })
+    const web = from('/ws/web', 'web', 'login', false, {}, { findings: FINDINGS, updatedAt: 1 })
+    const calls = (/** @type {string} */ pinned) => buildHome(/** @type {any} */ (base({ intents: [own, web], pinned, away: OFF }))).items.filter(one => one.kind === 'call').map(one => one.id)
+    expect(calls('web/login')).toEqual(['call:web/login:F-1'])
+    expect(calls('login')).toEqual(['call:login:F-1'])
+  })
+
+  test("teammates' intents from two checkouts, grouped: every row once, the same slug twice, each with its repository", () => {
+    const theirs = (/** @type {string} */ root, /** @type {string} */ slug, /** @type {Record<string, string>} */ fields, /** @type {number} */ updatedAt) => from(`/ws/${root}`, root, slug, false, fields, { updatedAt })
+    const intents = [
+      theirs('s2', 'board', { Owner: 'TienPham', Area: 'Combat' }, 20),
+      theirs('web', 'board', { Owner: 'TienPham', Area: 'Web' }, 19),
+      theirs('web', 'search', { Owner: 'LamPhung', Area: 'Web', Status: 'parked (waiting on design)' }, 18),
+      ...Array.from({ length: 7 }, (_, n) => theirs(n % 2 ? 'web' : 's2', `big-${n >> 1}`, { Owner: 'DuyTran', Area: 'Tools' }, 10 - n)),
+    ]
+    const work = workList(intents, [], 'Tin Nguyen', '', NOON)
+    const ids = work.map(one => one.id).sort()
+    expect(ids).toHaveLength(10)
+    expect(ids.filter(id => /\/big-0$/.test(id))).toEqual(['intent:s2/big-0', 'intent:web/big-0'])
+    /** @param {boolean} isClicked @param {any} groupBy @param {string} query @param {Set<string>} [folded] */
+    const draw = (isClicked, groupBy, query, folded = new Set()) => workGroups(el, look(isClicked), { work, shown: filterWork(work, query), query, sort: 'recent', groupBy, areas: ['Combat', 'Tools'], folded, me: 'Tin Nguyen', onFold: key => () => void (folded.has(key) ? folded.delete(key) : folded.add(key)), issuesFoot: [] })
+    const rows = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Button' && /^pick-intent:/.test(one.props.key)).map(one => one.props.key.slice('pick-'.length))
+    const heads = (/** @type {any} */ tree) => all({ children: tree }, one => one.type === 'Text' && /^(sub|park)-/.test(one.props.key ?? '')).map(one => one.props.children)
+    const repos = (/** @type {any} */ tree) => rows(tree).map(id => [id.slice('intent:'.length).split('/')[0], all({ children: tree }, one => one.props?.key === `pick-${id}-repo`).map(one => textOf(one).trim()).join('|')])
+    for (const isClicked of [false, true]) {
+      for (const groupBy of ['person', 'area', 'stage', 'none']) {
+        // A search that keeps everything: nothing starts folded, and every head counts "x of y".
+        const tree = draw(isClicked, groupBy, ' ')
+        expect(rows(tree).sort()).toEqual(ids)
+        expect(repos(tree).every(([name, drawn]) => name === drawn)).toBe(true)
+        expect(repeated(keysOf(tree))).toEqual([])
+        const counts = heads(tree).map((/** @type {string} */ head) => / · (\d+) of (\d+)$/.exec(head)?.slice(1).map(Number) ?? [])
+        expect(counts.every(([shown, total]) => shown === total)).toBe(true)
+        expect(counts.reduce((sum, [shown]) => sum + (shown ?? 0), 0)).toBe(groupBy === 'none' ? 1 : 10)
+      }
+      // No search, by person: the seven of one person (over two checkouts) and Parked start folded; a press opens them.
+      const folded = new Set()
+      const first = draw(isClicked, 'person', '', folded)
+      expect(heads(first)).toEqual(['Duy Tran · 7', 'Tien Pham · 2', '‖ Parked · 1'])
+      expect(rows(first)).toEqual(['intent:s2/board', 'intent:web/board'])
+      all({ children: first }, one => one.type === 'Button' && one.props.key === 'sub-others-0-fold')[0].props.onPress()
+      all({ children: first }, one => one.type === 'Button' && one.props.key === 'park-others-fold')[0].props.onPress()
+      expect(rows(draw(isClicked, 'person', '', folded)).sort()).toEqual(ids)
+      // A search: both boards, "2 of 2" of their person, and the repository still drawn.
+      const found = draw(isClicked, 'person', 'board')
+      expect([rows(found), heads(found), repos(found)]).toEqual([['intent:s2/board', 'intent:web/board'], ['Tien Pham · 2 of 2'], [['s2', 's2'], ['web', 'web']]])
+    }
+  })
+})
+
+describe('issues and PRs from every workspace checkout', () => {
+  const ISSUE = { number: 7, title: 'Fix login', name: 'Fix login', url: 'u', labels: [], area: 'Unsorted', isUrgent: false, updatedAt: 1 }
+  // An issue read in a checkout: its key is its number in the session's own checkout, `<repoName>#<n>` in another.
+  const at = (root, repoName, isOwn, number = 7) => ({ ...ISSUE, number, root, repo: `o/${repoName}`, repoName, key: isOwn ? String(number) : `${repoName}#${number}` })
+  const linkedTo = (root, repoName, slug, isOwn, number) => {
+    const one = parseIntent({ slug, prompt: prompt({ Status: 'active', Area: 'Combat', Owner: 'Tin Nguyen', Issue: `#${number}` }), findings: '', progress: '', files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' })
+    return { ...one, root, repoName, key: isOwn ? slug : `${repoName}/${slug}` }
+  }
+  const ids = (/** @type {any[]} */ work) => work.filter(one => one.kind === 'issue').map(one => one.id)
+
+  test('ids: issue:<n> in the session checkout, issue:<repoName>#<n> elsewhere; two #7s are two rows with names', () => {
+    const work = workList([], [at('/ws/s2', 's2', true), at('/ws/web', 'web', false)], 'Tin Nguyen', '', NOON)
+    expect(ids(work)).toEqual(['issue:7', 'issue:web#7'])
+    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).repo)).toEqual(['s2', 'web'])
+    expect(issueId(ISSUE)).toBe('issue:7')
+    expect(issueOtherRoot(at('/ws/web', 'web', false))).toBe('/ws/web')
+    expect(issueOtherRoot(at('/ws/s2', 's2', true))).toBe('')
+    expect(issueOtherRoot(ISSUE)).toBe('')
+  })
+
+  test('one checkout: no name, ids issue:<n>', () => {
+    const work = workList([], [at('/ws/s2', 's2', true), at('/ws/s2', 's2', true, 9)], 'Tin Nguyen', '', NOON)
+    expect(ids(work)).toEqual(['issue:7', 'issue:9'])
+    expect(work.map(one => rowCells(/** @type {any} */ (one), NOON, true).warn)).toEqual(['', ''])
+    expect(ids(workList([], [ISSUE], 'Tin Nguyen', '', NOON))).toEqual(['issue:7'])
+  })
+
+  test('an issue hides behind an intent only in the same checkout', () => {
+    const issues = [at('/ws/s2', 's2', false), at('/ws/web', 'web', false)]
+    expect(ids(workList([linkedTo('/ws/web', 'web', 'login', false, 7)], issues, 'Tin Nguyen', '', NOON))).toEqual(['issue:s2#7'])
+    expect(ids(workList([linkedTo('/ws/s2', 's2', 'login', false, 7)], issues, 'Tin Nguyen', '', NOON))).toEqual(['issue:web#7'])
+    // Without checkouts (Paseo, tests) as before.
+    expect(ids(workList([linkedTo('', '', 'login', true, 7)], [ISSUE], 'Tin Nguyen', '', NOON))).toEqual([])
+  })
+
+  test("an issue in another checkout names that checkout's docs/intent", () => {
+    expect(issuePrompt(at('/ws/web', 'web', false), 'Tin Nguyen')).toContain('/ws/web/docs/intent')
+    // The session's own checkout keeps the relative skill paths: no checkout folder is named.
+    expect(issuePrompt(at('/ws/s2', 's2', true), 'Tin Nguyen')).not.toContain('/ws/s2')
+  })
+
+  test("an intent's PRs are read under its own checkout's key", () => {
+    const met = (/** @type {string} */ root, /** @type {string} */ key) => /** @type {any} */ ({ slug: 'login', key, root, status: 'active', acceptanceDone: 1, acceptanceTotal: 1, prs: [12] })
+    const own = met('/ws/s2', 'login')
+    const web = met('/ws/web', 'web/login')
+    const prs = { 12: 'OPEN', '/ws/web#12': 'MERGED' }
+    expect(prKey(own, 12)).toBe('12')
+    expect(prKey(web, 12)).toBe('/ws/web#12')
+    expect(isReadyToClose(own, prs)).toBe(false)
+    expect(isReadyToClose(web, prs)).toBe(true)
+    expect(listStage(web, prs)).toBe('met')
+    expect(prStatusList(web, prs)).toEqual(prStatusList(own, { 12: 'MERGED' }))
+  })
+
+  test('the issue and PR readers take an explicit repository, the session one by default', async () => {
+    const memory = memoryIo()
+    const io = { ...memory.io, repo: async () => 'sipher/s2' }
+    await state.setIssues(io, 'Tin Nguyen', [ISSUE])
+    await state.setIssues(io, 'Tin Nguyen', [{ ...ISSUE, number: 8 }], 'o/web')
+    expect((await state.readIssues(io, 'Tin Nguyen')).map(one => one.number)).toEqual([7])
+    expect((await state.readIssues(io, 'Tin Nguyen', 'sipher/s2')).map(one => one.number)).toEqual([7])
+    expect((await state.readIssues(io, 'Tin Nguyen', 'o/web')).map(one => one.number)).toEqual([8])
+    await state.setPrStates(io, { 12: 'OPEN' }, NOON)
+    await state.setPrStates(io, { 12: 'MERGED' }, NOON, 'o/web')
+    expect(await state.readPrStates(io)).toEqual({ 12: 'OPEN' })
+    expect(await state.readPrStates(io, 'o/web')).toEqual({ 12: 'MERGED' })
+    expect(Object.keys(await state.readPrRecords(io, 'o/web'))).toEqual(['12'])
+    // The session's keys are the ones written before.
+    expect(memory.store.has('prStates:sipher/s2')).toBe(true)
+    expect(memory.store.has('prStates:o/web')).toBe(true)
   })
 })
 
@@ -1324,6 +2287,50 @@ describe('who waits on whom: calls in flight and the worker tree (0.1.9)', () =>
     // No resource is inferred: a command that does not name the lock file gets no lock line.
     expect(editorLockLine('Build.bat S2Editor', 'held by Lane B')).toBe('')
     expect(unreal.lockLine).toBe(editorLockLine)
+  })
+
+  test("several checkouts: a waiting line's lock is read in the checkout the command runs in, with that checkout's pack", async () => {
+    resetWorkers()
+    resetCalls()
+    const wait = 'cd ../s2-b && while ((Get-Content Saved/EDITOR_OWNER.txt) -notmatch "free") { Start-Sleep 30 }'
+    recordSpawn({ agentId: 'w', subagentType: 'general-purpose', prompt: 'Build it.', description: 'Waits for the Editor', model: 'opus', at: 0 })
+    recordTool('w', 'PowerShell', { command: wait }, 1000)
+    startCall({ loop: 'w', tool: 'PowerShell', input: { command: wait, description: 'Wait for the Editor lock' }, at: 1000 })
+    const agents = [{ id: 'w', description: 'Waits for the Editor', type: 'general-purpose', status: 'running' }]
+    const files = { '/ws/s2/Saved/EDITOR_OWNER.txt': 'Lane A holds the Editor', '/ws/s2-b/Saved/EDITOR_OWNER.txt': 'Lane B holds the Editor' }
+    const reads = []
+    const host = { ...fakeHost(agents, files), read: async (/** @type {string} */ path) => (reads.push(path), files[path] ?? null) }
+    /** @param {string} command */
+    const where = async command => (command.startsWith('cd ../s2-b') ? { root: '/ws/s2-b', pack: unreal } : { root: '/ws/web', pack: {} })
+    // A session in /ws/s2: the command waits in /ws/s2-b, so that checkout's lock is the one quoted.
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/s2', 's1', unreal, where)))[0]?.wait).toBe('⏳ Wait for the Editor lock · Lane B holds the Editor')
+    expect(reads).toEqual(['/ws/s2-b/Saved/EDITOR_OWNER.txt'])
+    // A session whose own pack reads no lock (a web checkout, a parent folder) still quotes it.
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/web', 's1', {}, where)))[0]?.wait).toBe('⏳ Wait for the Editor lock · Lane B holds the Editor')
+    // In a checkout whose pack reads none, nothing is quoted; with one checkout, the session's own, as before.
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/s2', 's1', unreal, async () => ({ root: '/ws/web', pack: {} }))))[0]?.wait).toBe('⏳ Wait for the Editor lock')
+    expect((await atTime(11 * 60000, () => crewOf(host, '/ws/s2', 's1', unreal)))[0]?.wait).toBe('⏳ Wait for the Editor lock · Lane A holds the Editor')
+  })
+
+  test("several checkouts: each checkout's session records are read from its own folder, so a worker found later is still adopted", async () => {
+    resetWorkers()
+    resetCalls()
+    resetTranscripts()
+    const dirs = { '/home/u/.claude/projects': [{ name: '-ws-s2', kind: 'dir' }, { name: '-ws-web', kind: 'dir' }], '/home/u/.claude/projects/-ws-web': [{ name: 'aaaaaaaa-1.jsonl', kind: 'file' }] }
+    const record = '/home/u/.claude/projects/-ws-s2/s1/subagents/agent-old'
+    const host = /** @type {any} */ ({
+      ...fakeHost([{ id: 'old', description: 'Found later', type: 'general-purpose', status: 'running' }], { [`${record}.meta.json`]: '{"model":"claude-opus-5-5"}' }),
+      home: async () => '/home/u',
+      list: async (/** @type {keyof typeof dirs} */ path) => dirs[path] ?? [],
+      exists: async (/** @type {string} */ path) => path === `${record}.jsonl`,
+      run: async (/** @type {string[]} */ argv) => ({ exitCode: 0, stdout: argv.at(-1) === `${record}.jsonl` ? '"timestamp":"2026-10-03T05:00:00.000Z"' : '"customTitle":"Web login"' }),
+    })
+    // Another checkout's session is named first (an intent there, proved by it) …
+    expect(await sessionName(host, '/ws/web', 'aaaaaaaa')).toBe('Web login')
+    // … and this session's worker is still found under its own checkout's records.
+    const crew = await atTime(NOON + 60000, () => crewOf(host, '/ws/s2', 's1'))
+    expect([crew[0]?.origin, crew[0]?.elapsed]).toEqual(['adopted', 60000])
+    resetTranscripts()
   })
 
   test('A4: a worker found later with no call seen shows no in-flight line', async () => {

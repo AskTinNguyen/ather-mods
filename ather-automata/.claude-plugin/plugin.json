@@ -1,6 +1,6 @@
 {
   "name": "ather-automata",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Ather Automata: what needs you and what is next in every S2 session and web app repository (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
   "author": {
     "name": "Tin Nguyen"
@@ -12,6 +12,12 @@
       "description": "What happens when a worker brief lacks paths, acceptance checks or the shared-tree rule: warn adds a reminder, enforce refuses the Agent call, off does nothing. Read-only agents (Explore, Plan) are never gated.",
       "default": "warn",
       "options": ["warn", "enforce", "off"]
+    },
+    "repos": {
+      "type": "string",
+      "title": "Other repositories",
+      "description": "More checkouts this session works with, besides the one it is opened in: folders separated by ; or new lines, absolute or relative to the session folder. A folder that is not in a git checkout is skipped. A session opened in a folder holding several checkouts finds them on its own.",
+      "default": ""
     }
   }
 }
