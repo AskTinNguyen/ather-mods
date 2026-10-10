@@ -1543,7 +1543,7 @@ const refresh = async engine => {
   const rows = intentRows(after).map(one => one.id).sort()
   expect("the list then holds both of develop's intents and web's own, the later one not in the checkout and not tagged local", JSON.stringify(rows) === JSON.stringify(['intent:later', 'intent:merged', 'intent:web/login']) && warnOf(after, 'intent:later') === '' && !fs.existsSync(join(nm, 'docs/intent/later')), [rows, warnOf(after, 'intent:later')])
   const heads = engine.record.gitRuns.filter(run => run.argv.includes('symbolic-ref'))
-  expect("each checkout's default branch is asked once, with GIT_OPTIONAL_LOCKS=0", heads.length === 2 && heads.every(run => run.env.GIT_OPTIONAL_LOCKS === '0'), heads)
+  expect("no checkout's default branch is asked of git: it is read from the clone's files", heads.length === 0, heads)
 
   await startAway(engine)
   const toBase = await bash(engine, 'git push origin develop')
@@ -1603,6 +1603,206 @@ const refresh = async engine => {
   expect("the worktree's row for its base's intent is the team's, not tagged local, beside main's", JSON.stringify(both) === JSON.stringify(['intent:multi-rel/on-release', 'intent:on-main']) && warnOf(drawn, 'intent:multi-rel/on-release') === '', [both, warnOf(drawn, 'intent:multi-rel/on-release')])
   expect('no hook threw', two.engine.record.hookErrors.length === 0, two.engine.record.hookErrors)
   await two.engine.end('other')
+}
+
+// ---------------------------------------------------------------- a press while a turn runs
+
+// Next's row as the pane draws it, and the last pop-up.
+const nextRow = async engine => byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')
+const lastToast = engine => engine.record.toasts.at(-1) ?? ''
+const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button' && node.props?.key === key)
+
+{
+  // One web checkout; the session tracks its intent, so Home has a Next step to hand over.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0020' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('ather')
+  const idle = await nextRow(engine)
+  expect('Home offers a Next step for the tracked intent', idle && !/queued|sent/.test(idle.props.label), idle?.props.label)
+
+  // The person typed a prompt and its turn runs: the engine holds a plugin's prompt until that turn ends.
+  await engine.turnStart()
+  const submitsBefore = engine.record.submits.length
+  idle.props.onPress()
+  await engine.flush()
+  expect('pressed while a turn runs, Next is queued behind it: the session has nothing yet', engine.queued().length === 1 && engine.record.submits.length === submitsBefore, [engine.queued(), engine.record.submits.slice(submitsBefore)])
+  expect('the pop-up says queued until the turn ends, never sent', /^Ather: Queued until this turn ends/.test(lastToast(engine)) && !/sent/i.test(lastToast(engine)), lastToast(engine))
+  const waiting = await nextRow(engine)
+  expect('its row reads queued, not sent', /^⏳ queued · /.test(waiting?.props.label ?? ''), waiting?.props.label)
+  const band = await engine.render('AbovePrompt', {})
+  expect('the line above the prompt says a press is queued', /queued until this turn ends/.test(textIn(band)), textIn(band))
+
+  // A second press of the same row, by a click or its key, sends nothing more.
+  waiting.props.onPress()
+  await engine.flush()
+  expect('pressed again while it waits: still one prompt queued, and the pop-up says it already waits', engine.queued().length === 1 && /^Ather: Already queued/.test(lastToast(engine)), [engine.queued().length, lastToast(engine)])
+
+  await engine.turnEnd()
+  await engine.flush()
+  expect('when the turn ends the session gets the one prompt', engine.queued().length === 0 && engine.record.submits.length === submitsBefore + 1, engine.record.submits.slice(submitsBefore))
+  expect('and the pop-up says it was sent, after how long', /^Ather: Sent to the session: it was queued for \d+s\.$/.test(lastToast(engine)), lastToast(engine))
+  const done = await nextRow(engine)
+  expect('its row then reads sent', /^✓ sent · /.test(done?.props.label ?? ''), done?.props.label)
+  const debug = engine.record.logs.filter(line => /^Ather hand-off: /.test(line))
+  expect('the debug log has the press, the second press and the delivery', debug.some(line => /pressed at .*queued behind the running turn/.test(line)) && debug.some(line => /pressed again while it waits/.test(line)) && debug.some(line => /delivered after \d+ ms/.test(line)), debug)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // "I'm back" pressed while a turn runs: the window must hold until the session has read it.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0021' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('away', 'until done')
+  await engine.flush()
+  expect('an away window runs', engine.store.get(`away:${sid}`)?.phase === 'running', engine.store.get(`away:${sid}`))
+  const asked = await engine.modelTool({ tool: 'AskUserQuestion', questions: [{ question: 'Ship it?', header: 'Ship', options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }] })
+  expect('a question during a window with no set end is refused with "until the work is done", not a time of day', /The user is away until the work is done \(hard stop \d\d:\d\d local time\)/.test(asked.deny ?? '') && !/away until \d/.test(asked.deny ?? ''), asked.deny)
+
+  await engine.turnStart()
+  await engine.command('ather')
+  const back = buttonOf(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'end')
+  const submitsBefore = engine.record.submits.length
+  back?.props.onPress()
+  await engine.flush()
+  const waiting = engine.store.get(`away:${sid}`)
+  expect("pressed mid-turn, the review is queued and the window is not closed: it waits for its review", engine.queued().some(text => /^I am back\./.test(text)) && engine.record.submits.length === submitsBefore && waiting?.phase === 'review', [engine.queued(), waiting?.phase])
+  expect('the pop-up says it is queued and that merges are still held', /^Ather: Queued until this turn ends\. .*merges are still held/.test(lastToast(engine)), lastToast(engine))
+  const held = await bash(engine, 'gh pr merge 5 --merge')
+  expect('a merge the running turn tries meanwhile is still held', held.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'merge', [held.deny, parked(engine, sid)])
+  const again = await engine.modelTool({ tool: 'AskUserQuestion', questions: [{ question: 'Merge now?', header: 'Merge', options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }] })
+  expect('and its question is still recorded, not asked', /has not reviewed the away window yet/.test(again.deny ?? ''), again.deny)
+
+  await engine.turnEnd()
+  await engine.flush()
+  expect('when the turn ends the session gets "I am back", once', engine.record.submits.slice(submitsBefore).filter(text => /^I am back\./.test(text)).length === 1, engine.record.submits.slice(submitsBefore))
+  expect('and only then the window closes', engine.store.get(`away:${sid}`) === undefined, engine.store.get(`away:${sid}`))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // "I'm back" waits behind a turn: the pane stays and offers to stop that turn. Only that press stops it.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0022' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('away', '4h')
+  await engine.flush()
+  const running = await engine.turnStart()
+  await engine.command('ather')
+  const closesBefore = engine.record.closes.length
+  const submitsBefore = engine.record.submits.length
+  buttonOf(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'end')?.props.onPress()
+  await engine.flush()
+  const home = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const stop = nodesOf(home).find(node => node.type === 'Button' && /^now-review:\d+-press$/.test(node.props?.key ?? ''))
+  expect('queued mid-turn, the pane stays open and the review reads queued', engine.record.closes.length === closesBefore && nodesOf(home).some(node => node.type === 'Button' && /^⏳ queued · Review/.test(node.props?.label ?? '')), [engine.record.closes.length - closesBefore, nodesOf(home).filter(node => node.type === 'Button').map(node => node.props.label)])
+  expect('it offers to stop the running turn and send now; no turn is stopped unasked', stop?.props.label === 'Stop the running turn and send now' && engine.record.aborts.length === 0 && engine.store.get(`away:${sid}`)?.phase === 'review', [stop?.props.label, engine.record.aborts])
+  stop?.props.onPress()
+  await engine.flush()
+  expect('that press stops the running turn, by its id', JSON.stringify(engine.record.aborts) === JSON.stringify([running]), [engine.record.aborts, running])
+  expect('the session then gets "I am back" once, and the window closes', engine.record.submits.slice(submitsBefore).filter(text => /^I am back\./.test(text)).length === 1 && engine.queued().length === 0 && engine.store.get(`away:${sid}`) === undefined, [engine.record.submits.slice(submitsBefore), engine.store.get(`away:${sid}`)])
+  const after = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  expect('nothing offers to stop a turn once it is delivered', !nodesOf(after).some(node => /^now-/.test(node.props?.key ?? '')), nodesOf(after).filter(node => node.type === 'Button').map(node => node.props.key))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // With the session idle "I'm back" goes at once: the pane closes as before, and nothing offers to stop a turn.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0023' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('away', '4h')
+  await engine.flush()
+  await engine.command('ather')
+  const closesBefore = engine.record.closes.length
+  buttonOf(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'end')?.props.onPress()
+  await engine.flush()
+  expect('idle: the session has "I am back" at once, the window is closed, the pane closes, no turn is stopped', /^I am back\./.test(engine.record.submits.at(-1) ?? '') && engine.store.get(`away:${sid}`) === undefined && engine.record.closes.length === closesBefore + 1 && engine.record.aborts.length === 0 && lastToast(engine) === 'Ather: Sent to the session.', [engine.record.submits.at(-1), engine.store.get(`away:${sid}`), lastToast(engine)])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+// ---------------------------------------------------------------- a press about another session's intent
+
+{
+  // Two sessions on one checkout. The first tracks login; the second tracks nothing, so its Home offers
+  // login's decision too. A press there asks where it goes before anything lands in a chat.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  writeFindings(web, 'login')
+  const first = await boot({ root: web, sessionId: 'harness-session-0030' })
+  await first.engine.command('ather', 'intent login')
+  await first.engine.timers()
+  const lane = join(web, '.ather/local/lanes', 'harness-session-0030.json')
+  const beat = readJson(lane)
+  expect("the first session's heartbeat names login", beat?.intent === 'login' && beat.hasEnded === false, beat)
+
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0031' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const CALL = 'call:login:F-1'
+  const counts = () => [engine.record.sends.length, engine.record.submits.length, engine.record.dialogs.length]
+  expect("the second session tracks nothing and is offered login's decision", !engine.store.has(`pinned:${sid}`) && Boolean(byKey(await pane(), `option-${CALL}-A`)), nodesOf(await pane()).map(node => node.props?.key).filter(key => /call:/.test(key ?? '')))
+
+  // Closed without choosing: nothing goes anywhere.
+  let [sends, submits, dialogs] = counts()
+  engine.script.push(() => null)
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  const asked = engine.record.dialogs.at(-1)
+  expect('Explain on it asks where it should go, naming the session that tracks login first', engine.record.dialogs.length === dialogs + 1 && asked?.header === 'Send where?' && /login is tracked in another session, not in this one/.test(asked.question) && JSON.stringify(asked.options.map(option => option.label)) === JSON.stringify(['Send to session harness- (Recommended)', 'Send here']), asked)
+  expect('closed without an answer, nothing is sent to either session', engine.record.sends.length === sends && engine.record.submits.length === submits && lastToast(engine) === 'Ather: Not sent: it was not said where it should go.', [counts(), lastToast(engine)])
+
+  // Send here: this session's chat gets it, as before, because the person said so.
+  ;[sends, submits, dialogs] = counts()
+  engine.script.push(() => 'Send here')
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('"Send here" puts it in this session and sends nothing across', engine.record.sends.length === sends && engine.record.submits.length === submits + 1 && /^Explain decision F-1 on login/.test(lastSubmit(engine)), [counts(), lastSubmit(engine)])
+
+  // The other session cannot be reached: said, and nothing lands here unasked.
+  ;[sends, submits, dialogs] = counts()
+  engine.setSend({ isDelivered: false, reason: 'that session is not running' })
+  engine.script.push(question => question.options[0].label)
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('a session that cannot be reached is said, with the reason, and nothing is put here instead', engine.record.sends.length === sends + 1 && engine.record.submits.length === submits && /^Ather: could not reach session harness-: that session is not running\. Nothing was sent/.test(lastToast(engine)), [counts(), lastToast(engine)])
+  engine.setSend({ isDelivered: true })
+
+  // The first session has ended: nobody else tracks login, so the press goes here with no question.
+  ;[sends, submits, dialogs] = counts()
+  fs.writeFileSync(lane, JSON.stringify({ ...beat, hasEnded: true }))
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('with no other live session on login, it goes here unasked', engine.record.dialogs.length === dialogs && engine.record.sends.length === sends && engine.record.submits.length === submits + 1, counts())
+  fs.writeFileSync(lane, JSON.stringify({ ...beat, updatedAt: Date.now() }))
+
+  // The answer itself, sent to the session that tracks login: by its id, and not into this chat.
+  ;[sends, submits, dialogs] = counts()
+  engine.script.push(question => question.options[0].label)
+  byKey(await pane(), `option-${CALL}-A`)?.props.onPress()
+  await engine.flush()
+  const routed = engine.record.sends.at(-1)
+  expect("answering A sends the decision to the first session by its id, and nothing into this session's chat", engine.record.sends.length === sends + 1 && engine.record.submits.length === submits && JSON.stringify(routed?.to) === JSON.stringify({ sessionId: 'harness-session-0030' }), [counts(), routed?.to])
+  expect('what it reads says where the press was made, names login and carries the decision whole', /^From the Ather pane of "session harness-": the person pressed this there/.test(routed?.text ?? '') && routed.text.includes('it tracks intent login') && routed.text.includes('Decide F-1 on login: A — One page'), routed?.text)
+  expect('the pop-up names the session it went to', /^Ather: sent to session harness-, which tracks login\./.test(lastToast(engine)), lastToast(engine))
+  const answered = nodesOf(await pane()).map(node => node.props?.key)
+  expect('the row reads decided here', answered.includes(`item-${CALL}-done`), answered.filter(key => /call:/.test(key ?? '')))
+  expect('no hook threw', engine.record.hookErrors.length === 0 && first.engine.record.hookErrors.length === 0, [engine.record.hookErrors, first.engine.record.hookErrors])
+  await engine.end('other')
 }
 
 // ---------------------------------------------------------------- report

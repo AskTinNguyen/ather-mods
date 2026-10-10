@@ -1136,11 +1136,23 @@ const hasFocus = tree => {
   const viewTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
   const view = check(viewTree, 72)
   screens.push(['Terminal · the Intent view (72 columns)', view.lines.join('\n')])
-  expect('See opens the Intent view: the goal, today\'s line with its time, and Next', /I N T E N T\nfluid-snow-sand-look/.test(view.lines.join('\n')) && new RegExp(`T O D A Y\\n✓ Ticked ${unticked[1]} · .+ \\d\\d:\\d\\d`).test(view.lines.join('\n')) && /N E X T/.test(view.lines.join('\n')) && view.problems.length === 0, view.lines)
+  // With a worker on it the next step is a look ("See how the work is going"): the view itself answers it, so no Next card repeats it.
+  expect('See opens the Intent view: the goal, where it stands as its files say, and today\'s line with its time', /I N T E N T\nfluid-snow-sand-look/.test(view.lines.join('\n')) && /W H E R E   I T   S T A N D S\nBuild · \d+\/\d+ met · yours/.test(view.lines.join('\n')) && /\nStill open: A\d+ /.test(view.lines.join('\n')) && /\nFrom its files; what is met is what progress\.md says\.\n/.test(view.lines.join('\n')) && new RegExp(`T O D A Y\\n✓ Ticked ${unticked[1]} · .+ \\d\\d:\\d\\d`).test(view.lines.join('\n')) && !/N E X T/.test(view.lines.join('\n')) && view.problems.length === 0, view.lines)
   expect('once seen, the notice leaves the band', !/◆ Intent:/.test(check(await engine.render('AbovePrompt', props, 'band'), 110).lines.join('')))
   findKey(viewTree, 'change-0-press').props.onPress({})
   await engine.flush()
   expect('pressing a line asks the session to explain it, briefly, with your own words as the why', engine.record.submits.some(text => new RegExp(`explain in at most four lines what "Ticked ${unticked[1]}`).test(text) && /Quote what I said/.test(text)), engine.record.submits)
+  // Home's Next for it: a press shows the same view and sends the session nothing.
+  pressKey(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'intent-back')
+  await engine.flush()
+  const homeTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const homeLines = check(homeTree, 72).lines.join('\n')
+  const sentBefore = engine.record.submits.length
+  const closedBefore = engine.record.closes.length
+  pressKey(homeTree, 'next')
+  await engine.flush()
+  const looked = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  expect('"See how the work is going" opens the Intent view from the files: no prompt goes to the session, and the pane stays', /See how the work is going/.test(homeLines) && /^I N T E N T\nfluid-snow-sand-look$/m.test(looked) && /W H E R E   I T   S T A N D S/.test(looked) && engine.record.submits.length === sentBefore && engine.record.closes.length === closedBefore, [homeLines.split('\n').slice(0, 30), looked.split('\n').slice(0, 8), engine.record.submits.slice(sentBefore)])
   done()
 }
 
@@ -1429,7 +1441,7 @@ const hasFocus = tree => {
   expect('the Intent view names the session that produced proof when it is not this one', /^Proof: build ✓ by session 1a2b3c4d$/m.test(peerView.lines.join('\n')), peerView.lines.slice(0, 8))
   await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
   const laneText = (await engine.compose()).sections.find(one => one.id === 'ather-automata:lane')?.text ?? ''
-  expect('the lane text carries the same line for the tracked intent', /\nAlso tracked in 1 other session · active 3m ago\.\n/.test(laneText), laneText)
+  expect('the lane text says so for the tracked intent, without the age: the session keeps this text for the whole conversation, where an age would go stale', /\nAlso tracked in 1 other session\.\n/.test(laneText) && !/active \d+m ago|active now/.test(laneText), laneText)
   fs.rmSync(path.join(lanes, '1a2b3c4d-0000-4000-8000-000000000000.json'))
   const alone = (await engine.compose()).sections.find(one => one.id === 'ather-automata:lane')?.text ?? ''
   const aloneView = check(await pane(), 72).lines.join('\n')

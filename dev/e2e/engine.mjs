@@ -27,12 +27,20 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
+  const record = { sends: [], aborts: [], ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
   let sessionId = 'harness-session-0001'
   let submitFails = false
+  // What $.session.send answers: delivered, unless a test says the other session is gone.
+  let sendResult = { isDelivered: true }
+  // The model turn running now, and the prompts the plugin submitted while it ran. The engine starts a turn of
+  // its own with them once the session is idle, and $.prompt.submit resolves as that turn starts, not when the
+  // prompt is queued (seen on Claude Code 2.1.296: two prompts queued behind one turn started one turn together).
+  let turn = ''
+  let turns = 0
+  const queue = []
   // The engine refuses a prompt or a command queued from inside a command hook.
   const holdingTurn = what => {
     if (holding > 0) throw new Error(`ather-automata: ${what}: called from a command.run hook, it would wait on the turn this hook is holding`)
@@ -87,6 +95,26 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     }
     record.tools.push(input)
     return { result: 'ok', text: input.__text ?? 'ok', isError: input.__isError ?? undefined }
+  }
+
+  const startTurn = async text => {
+    turn = `turn-${++turns}`
+    await dispatch('turn.start', { text, turnId: turn }, e => ({ turnId: e.turnId }))
+    return turn
+  }
+  const endTurn = async reason => {
+    const turnId = turn
+    turn = ''
+    const result = await dispatch('turn.complete', { reason, isAborted: reason === 'aborted', answer: '', ...(turnId ? { turnId } : {}) }, () => ({ text: '' }))
+    const waiting = queue.splice(0)
+    if (waiting.length > 0) {
+      await startTurn(waiting.at(-1).text)
+      for (const one of waiting) {
+        record.submits.push(one.text)
+        one.resolve({ text: one.text })
+      }
+    }
+    return result
   }
 
   const $ = {
@@ -164,6 +192,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     },
     session: {
       id: async () => sessionId,
+      // To another of the person's sessions, by its id: resolves once queued there, or says why not.
+      send: async input => {
+        record.sends.push(input)
+        return sendResult
+      },
       root: async () => root,
       cwd: async () => root,
       surfaces: async () => surfaces.slice(),
@@ -201,6 +234,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
       submit: async input => {
         holdingTurn('prompt.submit')
         if (submitFails) throw new Error('the prompt box is busy')
+        if (turn !== '') return new Promise(resolve => queue.push({ text: input.text, resolve }))
         record.submits.push(input.text)
         return {}
       },
@@ -208,6 +242,14 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
         holdingTurn('prompt.fill')
         record.fills.push(input.text)
         return { isFilled: true }
+      },
+    },
+    turn: {
+      // Cancels the running turn; the prompts queued behind it then start their own.
+      abort: async ({ turnId } = {}) => {
+        if (!turnId || turnId !== turn) throw new Error(`ather-automata: $.turn.abort: ${turnId} is not the running turn (${turn || 'none'})`)
+        record.aborts.push(turnId)
+        await endTurn('aborted')
       },
     },
     command: {
@@ -320,7 +362,15 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),
     // `cwd`: the shell's folder as the session starts (a resume after a `cd`), when it is not the session's root.
     start: (isInteractive = true, cwd = root) => dispatch('session.start', { cwd, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
-    turnEnd: () => dispatch('turn.complete', { reason: 'answer' }, () => ({ text: '' })),
+    // A model turn begins (the person typed a prompt); it ends with turnEnd, and the prompts the plugin
+    // submitted meanwhile then start a turn of their own.
+    turnStart: (text = 'a typed prompt') => startTurn(text),
+    turnEnd: () => endTurn('answer'),
+    // The prompts waiting for the running turn to end.
+    queued: () => queue.map(one => one.text),
+    setSend: value => {
+      sendResult = value
+    },
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
     close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),
   }

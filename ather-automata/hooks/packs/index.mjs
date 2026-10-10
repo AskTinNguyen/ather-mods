@@ -83,23 +83,25 @@ const defaultBranchOf = async (io, root) => {
 }
 
 /**
- * Which pack a repository gets, and why. Pure over what it reads.
+ * Which pack a repository gets, and why, with the default branch its clone knows ('' when it cannot be told).
+ * Pure over what it reads.
  * @param {PackIo} io @param {string} root
- * @returns {Promise<{ pack: Pack, source: 'profile' | 'marker' | 'none', profile: Record<string, any> | null }>}
+ * @returns {Promise<{ pack: Pack, source: 'profile' | 'marker' | 'none', profile: Record<string, any> | null, defaultBranch: string }>}
  */
 export const choosePack = async (io, root) => {
   const profile = json(await io.read(`${root}/.ather/profile.json`))
   const packageJson = json(await io.read(`${root}/package.json`))
+  const defaultBranch = await defaultBranchOf(io, root).catch(() => '')
   const named = typeof profile?.pack === 'string' ? profile.pack.toLowerCase() : ''
-  if (named === 'unreal') return { pack: unreal, source: 'profile', profile }
-  if (named === 'core') return { pack: core, source: 'profile', profile }
+  if (named === 'unreal') return { pack: unreal, source: 'profile', profile, defaultBranch }
+  if (named === 'core') return { pack: core, source: 'profile', profile, defaultBranch }
   const entries = await io.list(root).catch(() => [])
   const files = entries.filter(entry => entry.kind === 'file' && typeof entry.name === 'string').map(entry => entry.name)
-  const web = async () => makeWebPack(profile, packageJson, { files, defaultBranch: await defaultBranchOf(io, root).catch(() => '') })
-  if (named === 'web') return { pack: await web(), source: 'profile', profile }
-  if (entries.some(entry => entry.kind === 'file' && /\.uproject$/i.test(entry.name))) return { pack: unreal, source: 'marker', profile }
-  if (packageJson || entries.some(entry => entry.kind === 'file' && /^(package\.json|pyproject\.toml)$/i.test(entry.name))) return { pack: await web(), source: 'marker', profile }
-  return { pack: core, source: 'none', profile }
+  const web = () => makeWebPack(profile, packageJson, { files, defaultBranch })
+  if (named === 'web') return { pack: web(), source: 'profile', profile, defaultBranch }
+  if (entries.some(entry => entry.kind === 'file' && /\.uproject$/i.test(entry.name))) return { pack: unreal, source: 'marker', profile, defaultBranch }
+  if (packageJson || entries.some(entry => entry.kind === 'file' && /^(package\.json|pyproject\.toml)$/i.test(entry.name))) return { pack: web(), source: 'marker', profile, defaultBranch }
+  return { pack: core, source: 'none', profile, defaultBranch }
 }
 
 /** @type {Map<string, ReturnType<typeof choosePack>>} */

@@ -8,14 +8,14 @@
 // The host reads on(...) and $.noun.method(...) from source, so they are
 // spelled literally, and helpers that take $ are top-level functions.
 
-import { clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
+import { awayReason, clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
 import { briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldLabel, heldNoun, heldShellAt, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
 import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
-import { heldByLine, untrackText } from './home.mjs'
+import { trackedByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
 import { withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
@@ -55,7 +55,6 @@ function io($) {
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
     origin: root => readOrigin($, root),
-    base: root => readDefaultBranch($, root),
     repo: async () => (await laneOf($)).repo,
     real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
     worktrees: root => readWorktrees($, root),
@@ -68,14 +67,6 @@ async function readOrigin($, root) {
   const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
   // Exit 1: no such key.
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
-}
-
-// The default branch of the origin of the checkout at `root`, as its remote-tracking HEAD names it ("origin/develop";
-// '' when it names none), or null when git could not say: the lane asks again.
-/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
-async function readDefaultBranch($, root) {
-  const run = await $.process.run(['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
-  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '').trim() : ''
 }
 
 // What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
@@ -188,7 +179,7 @@ export function register(on, options) {
     void state.bump(io($), 'decisionsLedgered').catch(() => undefined)
     $.ui.toast(`Ather: ${ids.join(', ')} recorded for your review instead of waiting.`)
     return {
-      deny: `${away.phase === 'review' ? 'The user has not reviewed the away window yet' : `The user is away until ${clockText(away.wakeAt, await state.readTz(io($)))}`} (Ather autonomy window). Do not wait. Take the recommended option for ${ids.join(', ')}, complete ${ids.length === 1 ? 'its entry' : 'their entries'} in ${away.ledgerPath} (Choice, Why, Evidence, Revert), and continue. Exception: if the question is about a destructive, production, credential, cost or CI-global action, do not take it; set the entry's Choice to "parked for the director" and move on to other work.`,
+      deny: `${awayReason(away, await state.readTz(io($)))} (Ather autonomy window). Do not wait. Take the recommended option for ${ids.join(', ')}, complete ${ids.length === 1 ? 'its entry' : 'their entries'} in ${away.ledgerPath} (Choice, Why, Evidence, Revert), and continue. Exception: if the question is about a destructive, production, credential, cost or CI-global action, do not take it; set the entry's Choice to "parked for the director" and move on to other work.`,
     }
   })
 
@@ -380,7 +371,9 @@ async function laneText($) {
     const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), its), role, prs, its)]
     const folder = tracked.isOwn ? `docs/intent/${intent.slug}/` : `${tracked.lane.root}/docs/intent/${intent.slug}/`
     lines.push(`Tracked intent: ${intent.slug} (${folder}), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
-    const held = heldByLine(tracked.isOwn ? live : await peers($, tracked.lane), intent.slug, Date.now())
+    // Without the age the pane shows: the session keeps this text as first read for the whole
+    // conversation, so an age would soon be wrong.
+    const held = trackedByLine(tracked.isOwn ? live : await peers($, tracked.lane), intent.slug)
     if (held) lines.push(`${held}.`)
   }
   const lock = pack.parseLock(pack.lockFile ? await io($).read(`${root}/${pack.lockFile}`) : null, localMinutes(Date.now(), tz))
