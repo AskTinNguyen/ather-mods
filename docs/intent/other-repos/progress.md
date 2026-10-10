@@ -1,8 +1,8 @@
 # Ather Automata: repositories that are not S2: Progress
 
-- Working under rev: 2
+- Working under rev: 3
 - Worker: Claude Opus 5.5 builders, one per slice; Codex gpt-6.1-sol reviews each slice; the coordinator commits
-- Current step: none; every slice is built and reviewed
+- Current step: none; every slice is built and reviewed, and the branch is merged with the web pack's changes (S5)
 - Next step: the owner reads PR 44 and merges it; then set Status: completed
 - PR: #44
 
@@ -26,3 +26,9 @@
 | S2 | D2: gates as people type them | done: c801955, 621853d |
 | S3 | D1: the base branch | done: dd10154, f757366 |
 | S4 | D4, D5: the pages and the release | done: 833af2f, 6ad1311 |
+| S5 | Rev 3: merged with PR 45 and PR 48 on `combine/web-pack-other-repos` | done: 6c3cccb, 082f137 |
+
+## Reconciliations
+
+- rev 2 -> 3 (2026-10-10): merged with the web pack's changes on one branch, after the setup was removed. Still valid: A2, A3 and their evidence; A1 with the key renamed (`baseBranch`): its unit tests and e2e rows run under the new key; A5's gates, run again on the merged branch (below). Redone: A1's base now goes through the branch-name check the web pack uses, so a value that is no branch name falls back to the remote's default; a held label is the pack's own word first, then worded for the checkout's base. Dropped: the `SETUP.md` half of A4 and the setup prompt's link (D6); the README steps no longer name `/ather setup`.
+- Evidence on the merged branch (082f137): `CLAUDE_CODE_TYPES=<engine types> S2_ROOT=<S2 intents copy> node dev/test-all.mjs` → exit 0, type-check clean, unit 311/311, repos e2e 292/292, S2 e2e 348/348. Every unit test and e2e row of PR 44 and of PR 48 is there (main 244, 234; PR 48 adds 48 and 39; PR 44 adds 14 and 19; five more unit tests cover where they meet). The Paseo plugin type-checks (`tsc --noEmit`, exit 0).

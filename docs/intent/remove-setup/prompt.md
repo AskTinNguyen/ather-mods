@@ -1,7 +1,7 @@
 # Ather Automata: stop setting repositories up
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Hoàng Vũ
 - Skill: `plugin-authoring`
@@ -44,3 +44,4 @@ Ather Automata stops setting a repository up for intents. `/ather setup`, the qu
 ## Changelog
 
 - rev 1 (2026-10-10): created from L-1 and L-2.
+- completed (2026-10-10): every acceptance item is met and PR #47 is merged (merge commit 42a3774, release 0.2.6).
