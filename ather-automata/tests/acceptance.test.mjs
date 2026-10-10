@@ -100,7 +100,17 @@ describe('acceptance written as a table', () => {
     expect(model.acceptanceItems(promptOf(`${list}\n\n${tableOf([['T1', 'From the table.'], ['B2', 'Two, again.']])}`), progress)).toEqual(alone)
     // Legacy boxes are a list too, with or without ids.
     const boxes = '- [x] Snow look.\n- [ ] Sand look.'
-    expect(model.acceptanceItems(promptOf(`${boxes}\n\n${tableOf([['T1', 'From the table.']])}`), '')).toEqual(model.acceptanceItems(promptOf(boxes), ''))
+    expect(model.acceptanceItems(promptOf(`${boxes}\n\n${tableOf([['T1', 'From the table.']])}`), '')).toEqual([{ id: '', text: 'Snow look.', isDone: true }, { id: '', text: 'Sand look.', isDone: false }])
+  })
+
+  test('each Acceptance section is read on its own: a table in one and a list in a later one both count', () => {
+    const later = (/** @type {string} */ first, /** @type {string} */ second) => `${promptOf(first)}\n## Acceptance, rev 2\n\n${second}\n`
+    const progress = progressOf([['A1', 'open'], ['A2', 'met']])
+    const mixed = later(tableOf([['A1', 'One.']]), '- A2: Two.')
+    expect(model.acceptanceItems(mixed, progress)).toEqual([{ id: 'A1', text: 'One.', isDone: false }, { id: 'A2', text: ': Two.', isDone: true }])
+    expect([parsed(mixed, progress).acceptanceDone, parsed(mixed, progress).acceptanceTotal]).toEqual([1, 2])
+    expect(model.acceptanceItems(later(tableOf([['A1', 'One.']]), tableOf([['A2', 'Two.'], ['A3', 'Three.']])), progress).map(item => item.id)).toEqual(['A1', 'A2', 'A3'])
+    expect(model.acceptanceItems(later('- A1: One.', '- A2: Two.\n- A3: Three.'), progress).map(item => item.id)).toEqual(['A1', 'A2', 'A3'])
   })
 
   test('the header row, the rule row and a table with no id in its first cell give no items', () => {

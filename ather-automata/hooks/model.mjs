@@ -114,14 +114,13 @@ export const section = (text, heading) => {
   return end ? rest.slice(0, end.index) : rest
 }
 
-// Every section headed so, in order: "## Acceptance" and a later "## Acceptance, rev 2" both count.
+// Every section headed so, in order, each on its own: "## Acceptance" and a later "## Acceptance, rev 2" both count.
 /** @param {string} text @param {string} heading */
 const sections = (text, heading) =>
   text
     .split(/^(?=##\s)/m)
     .filter(part => new RegExp(`^##\\s+${heading}\\b`, 'i').test(part))
     .map(part => part.replace(/^.*$/m, ''))
-    .join('\n')
 
 const CLOSED = /\b(accepted|rejected|resolved|closed|superseded|withdrawn|answered)\b/i
 
@@ -310,30 +309,38 @@ const splitItem = line => {
 
 // The acceptance items and which are done. Ids come from prompt.md's top-level items, or, in a
 // section with no list, from its table's rows (the id in the first cell, the text in the second);
-// met-ness from progress.md's table, whose rows for ids prompt.md does not list are ignored. Without
-// that table, legacy "- [x]" boxes count as before; without either, every listed item is open.
+// each Acceptance section is read on its own, so a table in one and a list in a later one both
+// count. Met-ness comes from progress.md's table, whose rows for ids prompt.md does not list are
+// ignored. Without that table, legacy "- [x]" boxes count as before; without either, every listed
+// item is open.
 /** @param {string} prompt @param {string} progress @returns {AcceptanceItem[]} */
 export const acceptanceItems = (prompt, progress) => {
-  const lines = sections(prompt, 'Acceptance').split(/\r?\n/)
   /** @type {Map<string, string>} */
   const listed = new Map()
-  for (const line of lines) {
-    const item = splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')
-    if (item.id !== '' && !listed.has(item.id)) listed.set(item.id, item.text)
-  }
-  const boxes = lines.flatMap(line => {
-    const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
-    return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
-  })
-  if (listed.size === 0 && boxes.length === 0) {
-    for (const row of tableRows(lines)) {
-      const id = ITEM_ID.exec(row[0] ?? '')?.[1]
-      if (id && !listed.has(id)) listed.set(id, row[1] ?? '')
+  // What counts without a verdict table once any section has boxes: the boxes, and the rows of the sections written as tables.
+  /** @type {AcceptanceItem[]} */
+  const legacy = []
+  let hasBoxes = false
+  for (const part of sections(prompt, 'Acceptance')) {
+    const lines = part.split(/\r?\n/)
+    const items = lines.map(line => splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')).filter(item => item.id !== '')
+    const boxes = lines.flatMap(line => {
+      const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
+      return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
+    })
+    const isTable = items.length === 0 && boxes.length === 0
+    const rows = isTable ? tableRows(lines).map(row => ({ id: ITEM_ID.exec(row[0] ?? '')?.[1] ?? '', text: row[1] ?? '' })).filter(item => item.id !== '') : items
+    for (const item of rows) {
+      if (listed.has(item.id)) continue
+      listed.set(item.id, item.text)
+      if (isTable) legacy.push({ ...item, isDone: false })
     }
+    legacy.push(...boxes)
+    hasBoxes ||= boxes.length > 0
   }
   const verdicts = acceptanceVerdicts(progress)
   if (verdicts && listed.size > 0) return [...listed].map(([id, text]) => ({ id, text, isDone: MET.test(verdicts.get(id) ?? '') }))
-  if (boxes.length > 0) return boxes
+  if (hasBoxes) return legacy
   return [...listed].map(([id, text]) => ({ id, text, isDone: false }))
 }
 
