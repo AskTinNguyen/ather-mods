@@ -6,9 +6,9 @@
 
 import type { PluginHookContext, PluginLifecycleEvents } from "@getpaseo/plugin/server";
 type AgentTimelineItem = PluginLifecycleEvents["agent.turn_ended"]["timeline"][number];
-import { isHolding } from "./ather/away.mjs";
+import { awayReason, isHolding } from "./ather/away.mjs";
 import { briefIssues, explainGuard, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from "./ather/guards.mjs";
-import { andList, clockText } from "./ather/model.mjs";
+import { andList } from "./ather/model.mjs";
 import { intentChanges, intentFileOf, orchestrationFileOf } from "./ather/changes.mjs";
 import * as state from "./ather/state.mjs";
 import { currentMode, forgetAgent, isNonAsking, knownAgents, lastPersonAt, markAgentActive, note, noteAgent, onTurnStarted as markTurn, paseo, remember, send } from "./agents";
@@ -81,7 +81,7 @@ export async function onPermission(event: PermissionEvent, context: PluginHookCo
     void note(event.agent.id, "info", `${ids.join(", ")} recorded for your review instead of waiting.`);
     await respond({
       behavior: "deny",
-      message: `${away.phase === "review" ? "The user has not reviewed the away window yet" : `The user is away until ${clockText(away.wakeAt, await state.readTz(io))}`} (Ather autonomy window). Do not wait. Take the recommended option for ${ids.join(", ")}, complete ${ids.length === 1 ? "its entry" : "their entries"} in ${away.ledgerPath} (Choice, Why, Evidence, Revert), and continue. Exception: if the question is about a destructive, production, credential, cost or CI-global action, do not take it; set the entry's Choice to "parked for the director" and move on to other work.`,
+      message: `${awayReason(away, await state.readTz(io))} (Ather autonomy window). Do not wait. Take the recommended option for ${ids.join(", ")}, complete ${ids.length === 1 ? "its entry" : "their entries"} in ${away.ledgerPath} (Choice, Why, Evidence, Revert), and continue. Exception: if the question is about a destructive, production, credential, cost or CI-global action, do not take it; set the entry's Choice to "parked for the director" and move on to other work.`,
     });
     return;
   }

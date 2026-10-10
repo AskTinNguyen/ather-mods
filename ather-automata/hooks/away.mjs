@@ -69,6 +69,15 @@ export const parseAwayArgs = (args, nowMinutes) => {
 /** @param {Away} away @param {number} tz */
 export const windowEndText = (away, tz) => (away.untilDone ? 'until done (24 hours at most)' : `until ${clockText(away.wakeAt, tz)}`)
 
+// The same for the session to read: "until 17:30 local time", or "until the work is done (hard stop 13:45 local
+// time)" for a window with no set end, whose `wakeAt` is only its 24-hour limit, never when the person is back.
+/** @param {Away} away @param {number} tz */
+export const awayUntilText = (away, tz) => (away.untilDone ? `until the work is done (hard stop ${clockText(away.wakeAt, tz)} local time)` : `until ${clockText(away.wakeAt, tz)} local time`)
+
+// Why a question is not asked now: the person is away, or has not reviewed the window that ended.
+/** @param {Away} away @param {number} tz */
+export const awayReason = (away, tz) => (away.phase === 'review' ? 'The user has not reviewed the away window yet' : `The user is away ${awayUntilText(away, tz)}`)
+
 /** @param {WindowChoice} choice @param {number} now @param {string} ledgerPath @param {{ person: string, root: string }} owner @returns {Away} */
 export const newWindow = (choice, now, ledgerPath, owner) => ({
   phase: 'running',
@@ -107,9 +116,7 @@ export const mandateText = (away, tz, pack = unreal) =>
   away.phase === 'review'
     ? `AWAY WINDOW ENDED (Ather Automata): the user has not reviewed it yet. Until they do, do not retry held actions (${heldText(away)}) and record any decision that would be theirs in ${away.ledgerPath} instead of asking.`
     : [
-    away.untilDone
-      ? `AUTONOMY WINDOW (Ather Automata): the user is away until the work is done (hard stop ${clockText(away.wakeAt, tz)} local time). When the goal is done, call the mcp__ather-automata__away tool with action "end" so the user gets the review.`
-      : `AUTONOMY WINDOW (Ather Automata): the user is away until ${clockText(away.wakeAt, tz)} local time.`,
+    `AUTONOMY WINDOW (Ather Automata): the user is away ${awayUntilText(away, tz)}.${away.untilDone ? ' When the goal is done, call the mcp__ather-automata__away tool with action "end" so the user gets the review.' : ''}`,
     `Goal: ${away.goal || 'continue the active work'}.`,
     `Allowed without asking for this window: ${pack.mandate.allowed}. Use them on feature branches; ${pack.mandate.merge}.`,
     `Do not stop to ask or wait for answers. On any decision that would be the user\'s, take the recommended option, prefer the reversible one, and ${pack.mandate.flags}.`,
