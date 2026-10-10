@@ -78,7 +78,13 @@ console.log('== repos e2e')
 sh(`node repos.mjs "${path.join(WORK, 'repos-report.md')}"`, e2e)
 
 console.log('== e2e')
-// --layouts <dir> passes through: the e2e run writes every pane laid out at 72 and 110 columns there.
-const layouts = process.argv.includes('--layouts') ? path.resolve(process.argv[process.argv.indexOf('--layouts') + 1]) : null
-sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"${layouts ? ` --layouts "${layouts}"` : ''}`, e2e)
-console.log(`report: ${path.join(WORK, 'e2e-report.md')}`)
+// The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for
+// people who do not work on the game (web, tools) and have no S2 checkout on their PC. A S2_ROOT that is
+// set but wrong still fails in run.mjs. A change to what an S2 session sees still needs one run with S2_ROOT.
+if (!process.env.S2_ROOT) console.log('skipped: the S2 e2e did not run. Set S2_ROOT to an S2 checkout to run it (not needed for non-game work)')
+else {
+  // --layouts <dir> passes through: the e2e run writes every pane laid out at 72 and 110 columns there.
+  const layouts = process.argv.includes('--layouts') ? path.resolve(process.argv[process.argv.indexOf('--layouts') + 1]) : null
+  sh(`node run.mjs "${path.join(WORK, 'e2e-report.md')}"${layouts ? ` --layouts "${layouts}"` : ''}`, e2e)
+  console.log(`report: ${path.join(WORK, 'e2e-report.md')}`)
+}
