@@ -7,6 +7,8 @@ test('the module loads with its packs, and /ather answers outside a repository w
   const ran = await $.command.run({ command: 'ather', args: '' })
   // The pack's own sentence, as every surface shows it.
   expect(ran.text ?? '').toMatch(/Ather Automata works in (S2 checkouts|repositories with intents)/)
+  // It names no command: Ather does not set a repository up.
+  expect(ran.text ?? '').not.toMatch(/setup/i)
 })
 
 test('/away answers the same way, and changes nothing', async $ => {
@@ -26,5 +28,4 @@ test('setup typed after /ather there submits no prompt and answers as /ather doe
   await clock.advance(1000)
   expect(sent.length).toBe(0)
   expect(ran.text ?? '').toBe(plain.text ?? '')
-  expect(ran.text ?? '').toMatch(/Ather Automata works in/)
 })
