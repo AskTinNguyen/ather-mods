@@ -1,6 +1,6 @@
 # Ather Automata cache keep-warm
 
-- Rev: 1
+- Rev: 2
 - Status: in progress
 - Area: ather-automata
 - Owner: Tin Nguyen
@@ -27,10 +27,13 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 ## Decisions
 
 - D1 (rev 1): The ping is `$.model.fork`, never a prompt into the session: it adds nothing to the transcript, runs no tools, and its usage says whether the cache was hit.
-- D2 (rev 1): Its own half, `hooks/warmth.mjs`, beside watch and console, with its pure rules in `hooks/warm.mjs`; stored values through `state.mjs`. Not wired into watch.mjs (the design's first sketch): the feature applies in every repository, also where Ather has no intents, and a failure in it must not touch the other halves.
+- D2 (rev 2): The pure rules are `hooks/warm.mjs`; the wiring is a section of `hooks/watch.mjs`, as the design first sketched; stored values go through `state.mjs`. Rev 1's own half (`warmth.mjs`) does not load: the engine refuses a second unmatched hook on `session.start`, `prompt.submit` and `session.end` within one module, and `$` may not cross files. `turn.complete`, whose unmatched hook is console.mjs's, is hooked under two matchers (`isAborted` false and true) that cover every turn.
 - D3 (rev 1): Its command is `/warm`, not `/ather warm`: `/ather` answers only where there are intents.
 - D4 (rev 1): `ask` mode is one toast per session at the first idle period that could use it, naming `/warm on`; no dialog, which would wait on a person who has just walked away.
 - D5 (rev 1): The TTL is learned, not read: assume one hour; a main-thread turn that re-wrote at least 80% of the context after a gap of 5 to 55 minutes means the five-minute TTL (or a changed prefix), and the session pauses keep-warm with one toast.
+- D7 (rev 2): The warm part of `session.end` is synchronous and its ledger write is not awaited (F-1).
+- D8 (rev 2): Proof of A1 comes from two live sessions driven headlessly in a Windows pseudo-console (pywinpty), their screens kept by a terminal emulator (pyte) and rendered to PNG (Pillow), and from their transcripts' per-response usage: A with `/warm on`, B with `/warm off` as the control, the same context and the same prompt at the same time ~115 minutes later. The driver strips the host session's `CLAUDE*`/`ANTHROPIC*` environment so each is a session of its own. Tools installed for it: pywinpty, pyte, Pillow (pip, user site).
+- D9 (rev 2): The repos e2e links folders as junctions (`fs.symlinkSync(…, 'junction')`): Windows refuses symbolic links without Developer Mode, and the type is ignored elsewhere.
 - D6 (rev 1): Money: a ping's real cost is the change in `$.session.usage().cost.usd` around it; the re-write it avoids is estimated as 19 times the cache-read part (2x write minus the 0.1x read the next turn still pays). Shown with "~".
 
 ## Acceptance
@@ -48,8 +51,9 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 ## Constraints
 
 - Keep Ather's conventions: pure rules without `$`, stored values only through `state.mjs`, hooks never block or fail the calls they watch, plain short wording.
-- No push, no PR without the owner's go.
+- Push the branch and open a PR to `main` for review (L-3); never merge.
 
 ## Changelog
 
 - rev 1 (2026-10-10): created from L-1 and L-2.
+- rev 2 (2026-10-10): L-3 (autonomy while away); D2 revised, D7-D9 added; constraint on pushing lifted.
