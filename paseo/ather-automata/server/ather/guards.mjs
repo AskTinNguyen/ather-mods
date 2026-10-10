@@ -19,9 +19,10 @@ export const HELD_NOUNS = { merge: 'a merge', 'push-main': 'a push to main', ...
 /** @typedef {string} HeldKind merge, push-main, or one of a pack's held kinds */
 // The Unreal pack's kinds, as before packs.
 // What a held text says of main, for a checkout whose team merges into another branch: a push there is held
-// as one to main is, and PRs open against it. With base main the text is as it was.
+// as one to main is ("Pushes to develop and main", "a push to develop or main", as the web pack words its
+// own), and PRs open against it. With base main the text is as it was.
 /** @param {string} text @param {string} [base] */
-export const forBase = (text, base = 'main') => (base === 'main' ? text : text.replace(/\b(push(?:es)? to) main\b/gi, `$1 ${base} or main`).replace(/\bPRs to main\b/g, `PRs to ${base}`))
+export const forBase = (text, base = 'main') => (base === 'main' ? text : text.replace(/\b(push(es)? to) main\b/gi, (_, words, plural) => `${words} ${base} ${plural ? 'and' : 'or'} main`).replace(/\bPRs to main\b/g, `PRs to ${base}`))
 export const HELD_KINDS = /** @type {HeldKind[]} */ (['merge', 'push-main', 'editor-restart', 'asset-save'])
 /** @param {Pack} pack @returns {string[]} */
 export const heldKindsOf = pack => ['merge', 'push-main', ...pack.held.kinds]

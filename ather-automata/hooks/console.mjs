@@ -172,7 +172,6 @@ function io($) {
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
     origin: root => readOrigin($, root),
-    base: root => readDefaultBranch($, root),
     repo: async () => (await laneOf($)).repo,
     real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
     worktrees: root => readWorktrees($, root),
@@ -185,14 +184,6 @@ async function readOrigin($, root) {
   const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
   // Exit 1: no such key.
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
-}
-
-// The default branch of the origin of the checkout at `root`, as its remote-tracking HEAD names it ("origin/develop";
-// '' when it names none), or null when git could not say: the lane asks again.
-/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
-async function readDefaultBranch($, root) {
-  const run = await $.process.run(['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
-  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '').trim() : ''
 }
 
 // What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git

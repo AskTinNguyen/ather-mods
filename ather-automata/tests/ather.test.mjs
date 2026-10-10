@@ -1223,33 +1223,26 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect([late.isAborted === true, late.error, late.lock]).toEqual([false, 'Error: timed out after 600000 ms', ''])
   })
 
-  test("the branch a team merges into: the profile's base, then the remote's default, then main; a git that could not say is not taken for main", async () => {
-    const asked = /** @type {(string | null)[]} */ ([])
-    const remote = (/** @type {string | null} */ answer) => async () => (asked.push(answer), answer)
-    expect(await baseOf({ baseBranch: 'release' }, remote('origin/develop'))).toBe('release')
-    // A profile that names it needs no git.
-    expect(asked).toEqual([])
-    expect(await baseOf({ baseBranch: '  ' }, remote('origin/develop'))).toBe('develop')
-    expect(await baseOf(null, remote('origin/develop'))).toBe('develop')
-    expect(await baseOf({ base: 7 }, remote(''))).toBe('main')
-    // An Io that cannot ask git (Paseo).
-    expect(await baseOf(null)).toBe('main')
-    expect(await baseOf(null, remote(null))).toBe(null)
-    expect(await baseOf(null, async () => Promise.reject(new Error('aborted')))).toBe(null)
+  test("the branch a team merges into: the profile's base, then the clone's default branch, then main", async () => {
+    expect(baseOf({ baseBranch: 'release' }, 'develop')).toBe('release')
+    expect(baseOf({ baseBranch: '  ' }, 'develop')).toBe('develop')
+    expect(baseOf(null, 'develop')).toBe('develop')
+    expect(baseOf(null, 'master')).toBe('master')
+    expect(baseOf({ base: 7 }, '')).toBe('main')
+    expect(baseOf(null, 'two words')).toBe('main')
 
-    // The lane carries it, read once; one git could not say is asked again, never kept as main.
-    const { io, files } = memoryIo()
-    let head = /** @type {string | null} */ (null)
-    let reads = 0
-    const withGit = { ...io, origin: async () => 'git@github.com:sipherxyz/ninetails-monitoring.git', base: async () => ((reads += 1), head) }
-    expect((await state.laneAt(withGit, '/base/nm')).isSure).toBe(false)
-    await new Promise(resolve => setTimeout(resolve, 5))
-    head = 'origin/develop'
-    expect((await state.laneAt(withGit, '/base/nm')).base).toBe('develop')
-    expect((await state.laneAt(withGit, '/base/nm')).base).toBe('develop')
-    expect(reads).toBe(2)
+    // The lane carries it, read with the pack from the clone's files.
+    const { io, files } = memoryIo('base-branch')
+    const withOrigin = { ...io, origin: async () => 'git@github.com:sipherxyz/ninetails-monitoring.git' }
+    for (const root of ['/base/nm', '/base/rel']) {
+      files.set(`${root}/.git/HEAD`, 'ref: refs/heads/feat/x\n')
+      files.set(`${root}/.git/refs/remotes/origin/HEAD`, 'ref: refs/remotes/origin/develop\n')
+    }
+    const nm = await state.laneAt(withOrigin, '/base/nm')
+    expect([nm.base, nm.isSure]).toEqual(['develop', true])
     files.set('/base/rel/.ather/profile.json', '{"pack":"core","baseBranch":"release"}')
-    expect((await state.laneAt(withGit, '/base/rel')).base).toBe('release')
+    expect((await state.laneAt(withOrigin, '/base/rel')).base).toBe('release')
+    // A folder whose clone names no default branch.
     expect((await state.laneAt(io, '/base/paseo')).base).toBe('main')
   })
 
