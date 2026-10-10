@@ -15,7 +15,7 @@ import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
-import { heldByLine, untrackText } from './home.mjs'
+import { trackedByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
 import { withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
@@ -371,7 +371,9 @@ async function laneText($) {
     const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), its), role, prs, its)]
     const folder = tracked.isOwn ? `docs/intent/${intent.slug}/` : `${tracked.lane.root}/docs/intent/${intent.slug}/`
     lines.push(`Tracked intent: ${intent.slug} (${folder}), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
-    const held = heldByLine(tracked.isOwn ? live : await peers($, tracked.lane), intent.slug, Date.now())
+    // Without the age the pane shows: the session keeps this text as first read for the whole
+    // conversation, so an age would soon be wrong.
+    const held = trackedByLine(tracked.isOwn ? live : await peers($, tracked.lane), intent.slug)
     if (held) lines.push(`${held}.`)
   }
   const lock = pack.parseLock(pack.lockFile ? await io($).read(`${root}/${pack.lockFile}`) : null, localMinutes(Date.now(), tz))
