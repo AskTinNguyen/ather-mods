@@ -1332,6 +1332,7 @@ const refresh = async engine => {
 // Next's row as the pane draws it, and the last pop-up.
 const nextRow = async engine => byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')
 const lastToast = engine => engine.record.toasts.at(-1) ?? ''
+const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button' && node.props?.key === key)
 
 {
   // One web checkout; the session tracks its intent, so Home has a Next step to hand over.
@@ -1369,6 +1370,41 @@ const lastToast = engine => engine.record.toasts.at(-1) ?? ''
   expect('its row then reads sent', /^✓ sent · /.test(done?.props.label ?? ''), done?.props.label)
   const debug = engine.record.logs.filter(line => /^Ather hand-off: /.test(line))
   expect('the debug log has the press, the second press and the delivery', debug.some(line => /pressed at .*queued behind the running turn/.test(line)) && debug.some(line => /pressed again while it waits/.test(line)) && debug.some(line => /delivered after \d+ ms/.test(line)), debug)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // "I'm back" pressed while a turn runs: the window must hold until the session has read it.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0021' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('away', 'until done')
+  await engine.flush()
+  expect('an away window runs', engine.store.get(`away:${sid}`)?.phase === 'running', engine.store.get(`away:${sid}`))
+  const asked = await engine.modelTool({ tool: 'AskUserQuestion', questions: [{ question: 'Ship it?', header: 'Ship', options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }] })
+  expect('a question during a window with no set end is refused with "until the work is done", not a time of day', /The user is away until the work is done \(hard stop \d\d:\d\d local time\)/.test(asked.deny ?? '') && !/away until \d/.test(asked.deny ?? ''), asked.deny)
+
+  await engine.turnStart()
+  await engine.command('ather')
+  const back = buttonOf(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'end')
+  const submitsBefore = engine.record.submits.length
+  back?.props.onPress()
+  await engine.flush()
+  const waiting = engine.store.get(`away:${sid}`)
+  expect("pressed mid-turn, the review is queued and the window is not closed: it waits for its review", engine.queued().some(text => /^I am back\./.test(text)) && engine.record.submits.length === submitsBefore && waiting?.phase === 'review', [engine.queued(), waiting?.phase])
+  expect('the pop-up says it is queued and that merges are still held', /^Ather: Queued until this turn ends\. .*merges are still held/.test(lastToast(engine)), lastToast(engine))
+  const held = await bash(engine, 'gh pr merge 5 --merge')
+  expect('a merge the running turn tries meanwhile is still held', held.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'merge', [held.deny, parked(engine, sid)])
+  const again = await engine.modelTool({ tool: 'AskUserQuestion', questions: [{ question: 'Merge now?', header: 'Merge', options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }], multiSelect: false }] })
+  expect('and its question is still recorded, not asked', /has not reviewed the away window yet/.test(again.deny ?? ''), again.deny)
+
+  await engine.turnEnd()
+  await engine.flush()
+  expect('when the turn ends the session gets "I am back", once', engine.record.submits.slice(submitsBefore).filter(text => /^I am back\./.test(text)).length === 1, engine.record.submits.slice(submitsBefore))
+  expect('and only then the window closes', engine.store.get(`away:${sid}`) === undefined, engine.store.get(`away:${sid}`))
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 }

@@ -4,8 +4,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { LATE_MS, PENDING_TEXT, QUEUED_TEXT, createOutbox, toldText, waitText } from '../hooks/handoff.mjs'
+import { isHolding } from '../hooks/away.mjs'
 import { needsView, FRESH_ANSWERS } from '../hooks/decide.mjs'
 import { choiceRow, needsRows } from '../hooks/rows.mjs'
+import * as state from '../hooks/state.mjs'
 
 // The engine as the outbox sees it: each submit waits until the test delivers or fails it, as the engine
 // holds a plugin's prompt until the session is idle. Timers run when the test says.
@@ -148,6 +150,72 @@ describe('handing a prompt to the session: queued or sent', () => {
 
   test('how long a prompt waited, in words', () => {
     expect([waitText(86), waitText(42000), waitText(131000), waitText(218000)]).toEqual(['1s', '42s', '2m 11s', '3m 38s'])
+  })
+})
+
+// The store and the ledger file in memory, for one session.
+const memoryIo = () => {
+  const store = new Map()
+  const files = new Map()
+  return /** @type {any} */ ({
+    get: async (/** @type {string} */ key) => store.get(key),
+    set: async (/** @type {string} */ key, /** @type {unknown} */ value) => void store.set(key, JSON.parse(JSON.stringify(value))),
+    remove: async (/** @type {string} */ key) => void store.delete(key),
+    keys: async () => [...store.keys()],
+    read: async (/** @type {string} */ path) => files.get(path) ?? null,
+    write: async (/** @type {string} */ path, /** @type {string} */ text) => void files.set(path, text),
+    exists: async (/** @type {string} */ path) => files.has(path),
+    sessionId: async () => 's1',
+    root: async () => 'R',
+    gitUser: async () => 'Tin Nguyen',
+    redraw: () => undefined,
+  })
+}
+const QUESTION = [{ question: 'Merge it now?', options: [{ label: 'Yes' }, { label: 'No' }] }]
+
+describe('"I am back" pressed while a turn runs', () => {
+  test('the away window closes when the session has the review, not at the press: until then it holds', async () => {
+    const io = memoryIo()
+    const now = Date.now()
+    await state.startAway(io, { hours: 24, untilDone: true, goal: '' }, { root: 'R', tz: 0, now, me: 'Tin Nguyen' })
+    // The press ends the window (it waits for its review) and hands the review over, as console.mjs does.
+    await state.endAway(io)
+    const outbox = createOutbox()
+    const { host, submits } = fakeHost({ isBusy: true })
+    /** @type {string[]} */
+    const order = []
+    const handed = outbox.hand(host, ['review:1'], 'I am back. Walk me through the away window.', async () => {
+      order.push('delivered')
+      await state.closeAway(io)
+      order.push('closed')
+    })
+    expect(handed).toBe('queued')
+    await settled()
+    // The turn runs on. The session has not read "I am back": a merge is still held, a question still recorded.
+    const waiting = await state.readAway(io)
+    expect([waiting.phase, isHolding(waiting), order]).toEqual(['review', true, []])
+    expect((await state.park(io, 'merge', 'gh pr merge 7', now))?.parked.id).toBe('P-1')
+    expect((await state.deferQuestions(io, QUESTION, 0))?.ids).toEqual(['D-1'])
+    submits[0]?.deliver()
+    await settled()
+    expect(order).toEqual(['delivered', 'closed'])
+    const after = await state.readAway(io)
+    expect([after.phase, isHolding(after)]).toEqual(['off', false])
+    expect(await state.park(io, 'merge', 'gh pr merge 7', now)).toBe(null)
+    expect(await state.deferQuestions(io, QUESTION, 0)).toBe(null)
+  })
+
+  test('a review that could not be sent leaves the window waiting for its review', async () => {
+    const io = memoryIo()
+    await state.startAway(io, { hours: 8, untilDone: false, goal: '' }, { root: 'R', tz: 0, now: Date.now(), me: 'Tin Nguyen' })
+    await state.endAway(io)
+    const outbox = createOutbox()
+    const { host, submits } = fakeHost()
+    outbox.hand(host, ['review:1'], 'I am back.', () => state.closeAway(io))
+    submits[0]?.fail(new Error('the prompt box is busy'))
+    await settled()
+    expect((await state.readAway(io)).phase).toBe('review')
+    expect(outbox.isWaiting('review:1')).toBe(false)
   })
 })
 

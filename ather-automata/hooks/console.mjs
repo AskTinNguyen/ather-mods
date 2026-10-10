@@ -931,11 +931,11 @@ function handOff($, ids, text, onDelivered, onFailed) {
 async function act($, one) {
   if (one.kind === 'away-end') return comeBack($)
   if (one.kind === 'review') {
-    // The review is the person walking through the window: holds end as it is handed over, so the
-    // session's questions reach them. The prompt carries every decision and held action.
-    const saved = await state.readAway(io($))
-    await state.closeAway(io($))
-    return toldText(handOff($, [one.id], one.prompt, undefined, () => state.restoreAway(io($), saved)), 'Sent to the session.')
+    // The review is the person walking through the window. The window closes when the session has the
+    // review, not at the press: a press while a turn runs waits for that turn's end, and until then the
+    // session has not read "I am back", so merges stay held and its questions still go to the ledger.
+    const handed = handOff($, [one.id], one.prompt, () => state.closeAway(io($)))
+    return handed === 'queued' ? 'Queued until this turn ends. The away window stays as it is until the session has it: merges are still held.' : toldText(handed, 'Sent to the session.')
   }
   return toldText(handOff($, [one.id], one.prompt, () => state.settleItem(io($), one)), 'Sent to the session.')
 }
