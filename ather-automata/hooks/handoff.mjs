@@ -13,7 +13,7 @@
  * What a press did: 'sent' with the session idle, 'queued' behind a running turn, 'pending' nothing (it
  * already waits).
  * @typedef {'sent' | 'queued' | 'pending'} Handed
- * @typedef {{ keys: readonly string[], at: number, isQueued: boolean }} Waiting
+ * @typedef {{ keys: readonly string[], at: number, isQueued: boolean, idleAt: number }} Waiting `idleAt`: when a turn first ended while it waited (0: none has)
  * @typedef {{
  *   submit: (text: string) => Promise<unknown>, after: (ms: number, run: () => void) => unknown, isBusy: () => boolean,
  *   onChange: () => void, say: (text: string) => void, log: (line: string) => void, now?: () => number
@@ -27,6 +27,9 @@ export const PENDING_TEXT = 'Already queued: the session gets it when this turn 
 // A prompt the session does not have after this long waits on something, whether or not a turn was seen
 // to start (the module was loaded again mid-turn, or the engine holds prompts for a reason of its own).
 export const LATE_MS = 3000
+// The engine starts a waiting prompt's turn as the running one ends. One still waiting this long after a turn
+// ended may never arrive (it never settles when the engine drops it), so it no longer stops a second press.
+export const GONE_MS = 10000
 
 // What a press says: `words` when the session has it at once, else that it waits.
 /** @param {Handed} handed @param {string} words */
@@ -55,12 +58,14 @@ export const createOutbox = () => {
       const now = host.now ?? Date.now
       const keys = ids.length > 0 ? ids : [text]
       const name = keys.map(key => key.slice(0, 60)).join(', ')
-      if (keys.some(key => waiting.has(key))) {
+      const isGone = (/** @type {Waiting | undefined} */ one) => one !== undefined && one.idleAt > 0 && now() - one.idleAt > GONE_MS
+      if (keys.some(key => waiting.has(key) && !isGone(waiting.get(key)))) {
         host.log(`pressed again while it waits, nothing sent: ${name}`)
         return 'pending'
       }
+      if (keys.some(key => waiting.has(key))) host.log(`not delivered ${GONE_MS} ms after a turn ended, sent again: ${name}`)
       /** @type {Waiting} */
-      const entry = { keys, at: now(), isQueued: host.isBusy() }
+      const entry = { keys, at: now(), isQueued: host.isBusy(), idleAt: 0 }
       for (const key of keys) waiting.set(key, entry)
       const isWaiting = () => keys.some(key => waiting.get(key) === entry)
       const settle = () => {
@@ -110,6 +115,11 @@ export const createOutbox = () => {
     /** @param {string} key */
     isQueued: key => waiting.get(key)?.isQueued === true,
     queued: () => [...waiting].filter(([, one]) => one.isQueued).map(([key]) => key),
+    // A turn ended: what waits now should be delivered with the next turn's start.
+    /** @param {number} [at] */
+    idle: (at = Date.now()) => {
+      for (const one of waiting.values()) if (one.idleAt === 0) one.idleAt = at
+    },
     reset: () => waiting.clear(),
   }
 }

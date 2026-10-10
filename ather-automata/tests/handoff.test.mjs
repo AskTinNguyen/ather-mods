@@ -3,7 +3,7 @@
 // and what follows a prompt only once the session has it.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { LATE_MS, PENDING_TEXT, QUEUED_TEXT, createOutbox, holdersOf, routedText, toldText, waitText } from '../hooks/handoff.mjs'
+import { GONE_MS, LATE_MS, PENDING_TEXT, QUEUED_TEXT, createOutbox, holdersOf, routedText, toldText, waitText } from '../hooks/handoff.mjs'
 import { isHolding } from '../hooks/away.mjs'
 import { needsView, FRESH_ANSWERS } from '../hooks/decide.mjs'
 import { choiceRow, needsRows } from '../hooks/rows.mjs'
@@ -138,6 +138,32 @@ describe('handing a prompt to the session: queued or sent', () => {
     expect([failed, delivered, outbox.isWaiting('editor')]).toEqual([1, 0, false])
     expect(said).toEqual(['could not send to the session: Error: the prompt box is busy'])
     expect(outbox.hand(host, ['editor'], 'Ask for the Editor')).toBe('sent')
+  })
+
+  test('a prompt the engine never delivers stops a second press only until well after a turn has ended', async () => {
+    const outbox = createOutbox()
+    const { host, submits, at, logged } = fakeHost({ isBusy: true })
+    let delivered = 0
+    outbox.hand(host, ['review:1'], 'I am back', () => void (delivered += 1))
+    // However long the turn runs, it waits: pressing again sends nothing.
+    at.now += 30 * 60000
+    expect(outbox.hand(host, ['review:1'], 'I am back')).toBe('pending')
+    // The turn ends; the engine would start the prompt's turn now. Still nothing after ten seconds: it can go again.
+    outbox.idle(at.now)
+    at.now += GONE_MS
+    expect(outbox.hand(host, ['review:1'], 'I am back')).toBe('pending')
+    at.now += 1
+    at.isBusy = false
+    expect(outbox.hand(host, ['review:1'], 'I am back', () => void (delivered += 1))).toBe('sent')
+    expect(submits).toHaveLength(2)
+    expect(logged.some(line => /not delivered \d+ ms after a turn ended, sent again: review:1/.test(line))).toBe(true)
+    // The first arriving after all does not clear the second, which still waits.
+    submits[0]?.deliver()
+    await settled()
+    expect([delivered, outbox.isWaiting('review:1')]).toEqual([1, true])
+    submits[1]?.deliver()
+    await settled()
+    expect([delivered, outbox.isWaiting('review:1')]).toEqual([2, false])
   })
 
   test('a new session starts with nothing waiting', () => {

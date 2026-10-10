@@ -62,7 +62,7 @@ let turnRunning = ''
 // The presses whose "Send where?" question is open: pressed again, they ask nothing more.
 /** @type {Set<string>} */
 const routing = new Set()
-const NOT_SENT = 'Not sent.'
+const NOT_SENT = 'Not sent: it was not said where it should go.'
 let paneMode = /** @type {Mode} */ ('home')
 // Create groups opened past their first three.
 /** @type {Set<string>} */
@@ -359,6 +359,7 @@ export function register(on, options) {
 
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId && e.turnId === turnRunning) turnRunning = ''
+    if (!e.agentId) outbox.idle()
     const result = await next(e)
     // Read again in the background: the turn's end never waits on git.
     if (!e.agentId && (await hasIntents($))) void refresh($).catch(() => undefined)
@@ -1037,7 +1038,7 @@ async function act($, one) {
 /** @param {Engine} $ */
 async function sendNow($) {
   const turnId = turnRunning
-  if (turnId === '') return 'No turn is running now: the session gets it as it is.'
+  if (turnId === '') return 'No turn is running now: there is nothing to stop.'
   await $.turn.abort({ turnId })
   return 'Stopped the running turn: the session reads "I am back" now.'
 }

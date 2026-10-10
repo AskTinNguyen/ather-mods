@@ -1486,7 +1486,7 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await engine.flush()
   const asked = engine.record.dialogs.at(-1)
   expect('Explain on it asks where it should go, naming the session that tracks login first', engine.record.dialogs.length === dialogs + 1 && asked?.header === 'Send where?' && /login is tracked in another session, not in this one/.test(asked.question) && JSON.stringify(asked.options.map(option => option.label)) === JSON.stringify(['Send to session harness- (Recommended)', 'Send here']), asked)
-  expect('closed without an answer, nothing is sent to either session', engine.record.sends.length === sends && engine.record.submits.length === submits && lastToast(engine) === 'Ather: Not sent.', [counts(), lastToast(engine)])
+  expect('closed without an answer, nothing is sent to either session', engine.record.sends.length === sends && engine.record.submits.length === submits && lastToast(engine) === 'Ather: Not sent: it was not said where it should go.', [counts(), lastToast(engine)])
 
   // Send here: this session's chat gets it, as before, because the person said so.
   ;[sends, submits, dialogs] = counts()
