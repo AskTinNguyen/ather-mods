@@ -3,8 +3,8 @@
 - Working under rev: 3
 - Worker: Claude Opus 5.5 builders, one per slice; Codex gpt-6.1-sol reviews each slice; the coordinator commits
 - Current step: none; every slice is built and reviewed, and the branch is merged with the web pack's changes (S5)
-- Next step: the owner reads PR 44 and merges it; then set Status: completed
-- PR: #44
+- Next step: none; it reaches `main` with PR #49, the branch that holds PR 44, PR 45 and PR 48
+- PR: #44, merged through #49
 
 ## Acceptance
 

@@ -1,7 +1,7 @@
 # Ather Automata: repositories that are not S2
 
 - Rev: 3
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Hoàng Vũ
 - Skill: `plugin-authoring`
@@ -48,3 +48,4 @@ Ather Automata was built for the S2 game repository on Windows PCs: its team lis
 - Rev 1 (2026-10-10): opened from the report of the session that ran `/ather setup` in ninetails-monitoring, and from the owner's word to do its four points.
 - Rev 2 (2026-10-10): from the reviews of S1 and S2. D3: sections are read one by one. D2 (b): only a gate that names a bare program is matched by that program at any path; a gate that is a path is compared as written.
 - Rev 3 (2026-10-10): merged on one branch with the web pack's changes (PR 45 and PR 48), after `/ather setup` was removed in 0.2.6. D1: one profile key, `baseBranch`, read through the web pack's branch-name check. D2's matching chooses the gates a command runs, and each gate keeps its own result (web-pack W7). D6: the pages without the setup. D5: 0.2.7.
+- completed (2026-10-10): every acceptance item is met; this file reaches `main` with the merge of PR #49 (release 0.2.7).
