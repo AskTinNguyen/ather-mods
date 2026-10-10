@@ -1456,6 +1456,77 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- a press about another session's intent
+
+{
+  // Two sessions on one checkout. The first tracks login; the second tracks nothing, so its Home offers
+  // login's decision too. A press there asks where it goes before anything lands in a chat.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  writeFindings(web, 'login')
+  const first = await boot({ root: web, sessionId: 'harness-session-0030' })
+  await first.engine.command('ather', 'intent login')
+  await first.engine.timers()
+  const lane = join(web, '.ather/local/lanes', 'harness-session-0030.json')
+  const beat = readJson(lane)
+  expect("the first session's heartbeat names login", beat?.intent === 'login' && beat.hasEnded === false, beat)
+
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0031' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const CALL = 'call:login:F-1'
+  const counts = () => [engine.record.sends.length, engine.record.submits.length, engine.record.dialogs.length]
+  expect("the second session tracks nothing and is offered login's decision", !engine.store.has(`pinned:${sid}`) && Boolean(byKey(await pane(), `option-${CALL}-A`)), nodesOf(await pane()).map(node => node.props?.key).filter(key => /call:/.test(key ?? '')))
+
+  // Closed without choosing: nothing goes anywhere.
+  let [sends, submits, dialogs] = counts()
+  engine.script.push(() => null)
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  const asked = engine.record.dialogs.at(-1)
+  expect('Explain on it asks where it should go, naming the session that tracks login first', engine.record.dialogs.length === dialogs + 1 && asked?.header === 'Send where?' && /login is tracked in another session, not in this one/.test(asked.question) && JSON.stringify(asked.options.map(option => option.label)) === JSON.stringify(['Send to session harness- (Recommended)', 'Send here']), asked)
+  expect('closed without an answer, nothing is sent to either session', engine.record.sends.length === sends && engine.record.submits.length === submits && lastToast(engine) === 'Ather: Not sent.', [counts(), lastToast(engine)])
+
+  // Send here: this session's chat gets it, as before, because the person said so.
+  ;[sends, submits, dialogs] = counts()
+  engine.script.push(() => 'Send here')
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('"Send here" puts it in this session and sends nothing across', engine.record.sends.length === sends && engine.record.submits.length === submits + 1 && /^Explain decision F-1 on login/.test(lastSubmit(engine)), [counts(), lastSubmit(engine)])
+
+  // The other session cannot be reached: said, and nothing lands here unasked.
+  ;[sends, submits, dialogs] = counts()
+  engine.setSend({ isDelivered: false, reason: 'that session is not running' })
+  engine.script.push(question => question.options[0].label)
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('a session that cannot be reached is said, with the reason, and nothing is put here instead', engine.record.sends.length === sends + 1 && engine.record.submits.length === submits && /^Ather: could not reach session harness-: that session is not running\. Nothing was sent/.test(lastToast(engine)), [counts(), lastToast(engine)])
+  engine.setSend({ isDelivered: true })
+
+  // The first session has ended: nobody else tracks login, so the press goes here with no question.
+  ;[sends, submits, dialogs] = counts()
+  fs.writeFileSync(lane, JSON.stringify({ ...beat, hasEnded: true }))
+  byKey(await pane(), `explain-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('with no other live session on login, it goes here unasked', engine.record.dialogs.length === dialogs && engine.record.sends.length === sends && engine.record.submits.length === submits + 1, counts())
+  fs.writeFileSync(lane, JSON.stringify({ ...beat, updatedAt: Date.now() }))
+
+  // The answer itself, sent to the session that tracks login: by its id, and not into this chat.
+  ;[sends, submits, dialogs] = counts()
+  engine.script.push(question => question.options[0].label)
+  byKey(await pane(), `option-${CALL}-A`)?.props.onPress()
+  await engine.flush()
+  const routed = engine.record.sends.at(-1)
+  expect("answering A sends the decision to the first session by its id, and nothing into this session's chat", engine.record.sends.length === sends + 1 && engine.record.submits.length === submits && JSON.stringify(routed?.to) === JSON.stringify({ sessionId: 'harness-session-0030' }), [counts(), routed?.to])
+  expect('what it reads says where the press was made, names login and carries the decision whole', /^From the Ather pane of "session harness-": the person pressed this there/.test(routed?.text ?? '') && routed.text.includes('it tracks intent login') && routed.text.includes('Decide F-1 on login: A — One page'), routed?.text)
+  expect('the pop-up names the session it went to', /^Ather: sent to session harness-, which tracks login\./.test(lastToast(engine)), lastToast(engine))
+  const answered = nodesOf(await pane()).map(node => node.props?.key)
+  expect('the row reads decided here', answered.includes(`item-${CALL}-done`), answered.filter(key => /call:/.test(key ?? '')))
+  expect('no hook threw', engine.record.hookErrors.length === 0 && first.engine.record.hookErrors.length === 0, [engine.record.hookErrors, first.engine.record.hookErrors])
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

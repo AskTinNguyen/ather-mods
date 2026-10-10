@@ -3,7 +3,7 @@
 // and what follows a prompt only once the session has it.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { LATE_MS, PENDING_TEXT, QUEUED_TEXT, createOutbox, toldText, waitText } from '../hooks/handoff.mjs'
+import { LATE_MS, PENDING_TEXT, QUEUED_TEXT, createOutbox, holdersOf, routedText, toldText, waitText } from '../hooks/handoff.mjs'
 import { isHolding } from '../hooks/away.mjs'
 import { needsView, FRESH_ANSWERS } from '../hooks/decide.mjs'
 import { choiceRow, needsRows } from '../hooks/rows.mjs'
@@ -266,5 +266,37 @@ describe('a row handed over while a turn runs', () => {
     buttons(both).find(node => node.props.label === 'Stop the running turn and send now')?.props.onPress()
     expect(stops).toBe(1)
     expect(labels(needsRows(el, false, { ...spec, queued: new Set() }))).toEqual(['✓ sent · Review: 2 decisions', '✓ sent · See what a merge lost'])
+  })
+})
+
+describe('which session a press about an intent is for', () => {
+  // The other live sessions on the intent's checkout, as their heartbeats read (state.readPeers).
+  const peers = [
+    { sessionId: 'aaaa1111', intent: 'web-load-speed', updatedAt: 100, lastActiveAt: 40 },
+    { sessionId: 'bbbb2222', intent: 'asset-library', updatedAt: 100, lastActiveAt: 99 },
+    { sessionId: 'cccc3333', intent: 'web-load-speed', updatedAt: 100, lastActiveAt: 90 },
+    { sessionId: 'dddd4444', intent: null, updatedAt: 100 },
+  ]
+
+  test('this session does not track the intent and others do: those sessions, by id, the last active first', () => {
+    expect(holdersOf('web-load-speed', false, peers).map(lane => lane.sessionId)).toEqual(['cccc3333', 'aaaa1111'])
+    // "Decide F-3" for web-load-speed pressed in the session that tracks asset-library: one session to ask about.
+    expect(holdersOf('web-load-speed', false, peers.slice(0, 2)).map(lane => lane.sessionId)).toEqual(['aaaa1111'])
+  })
+
+  test('it goes here, unasked, when this session tracks the intent or no other live session does', () => {
+    expect(holdersOf('web-load-speed', true, peers)).toEqual([])
+    expect(holdersOf('pause-ai', false, peers)).toEqual([])
+    expect(holdersOf('web-load-speed', false, [])).toEqual([])
+    // No intent to match, and a heartbeat without an id is no session to send to.
+    expect(holdersOf('', false, peers)).toEqual([])
+    expect(holdersOf('login', false, [{ sessionId: '', intent: 'login', updatedAt: 1 }])).toEqual([])
+  })
+
+  test('what the other session reads says where the press was made and carries the prompt whole', () => {
+    const text = routedText({ from: '"Asset library layout update"', slug: 'web-load-speed', text: 'Decide F-3 on web-load-speed: A — one page.' })
+    expect(text).toMatch(/^From the Ather pane of "Asset library layout update": the person pressed this there/)
+    expect(text).toContain('it tracks intent web-load-speed')
+    expect(text.endsWith('\n\nDecide F-3 on web-load-speed: A — one page.')).toBe(true)
   })
 })

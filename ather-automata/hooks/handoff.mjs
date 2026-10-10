@@ -1,5 +1,5 @@
 // @ts-check
-// Ather Automata: a prompt between the press and the session. Pure: no `$`;
+// Ather Automata: a prompt between the press and the session, and which session it is for. Pure: no `$`;
 // console.mjs gives the outbox the engine as closures, one set per press.
 //
 // The engine queues a plugin's prompt and starts a turn of its own with it once the session is idle: it is
@@ -79,13 +79,15 @@ export const createOutbox = () => {
           const waited = now() - entry.at
           settle()
           host.log(`delivered after ${waited} ms: ${name}`)
+          host.onChange()
+          if (entry.isQueued) host.say(`Sent to the session: it was queued for ${waitText(waited)}.`)
+          // What follows may take its time (an answered row settles after it has shown): nothing above waits on it.
           try {
             await onDelivered?.()
           } catch (error) {
             host.log(`after delivery of ${name}: ${String(error)}`)
           }
           host.onChange()
-          if (entry.isQueued) host.say(`Sent to the session: it was queued for ${waitText(waited)}.`)
         },
         async error => {
           settle()
@@ -111,3 +113,26 @@ export const createOutbox = () => {
     reset: () => waiting.clear(),
   }
 }
+
+// ---------------------------------------------------------------- which session
+
+// The live sessions a press about an intent could go to instead of this one: those on the intent's checkout
+// that track it, most recently active first. None when this session tracks it itself (it answers for its own
+// intent) or no other does (the press goes here, as before). When there are some, the person is asked: a
+// decision put into a session that does not track the intent has two sessions editing one intent folder.
+/**
+ * @param {string} slug the intent's slug in its checkout @param {boolean} isTrackedHere
+ * @param {readonly { sessionId: string, intent: string | null, updatedAt: number, lastActiveAt?: number }[]} peers the other live sessions on that checkout (state.readPeers)
+ */
+export const holdersOf = (slug, isTrackedHere, peers) =>
+  isTrackedHere || slug === ''
+    ? []
+    : peers
+        .filter(lane => lane.intent === slug && typeof lane.sessionId === 'string' && lane.sessionId !== '')
+        .sort((a, b) => Number(b.lastActiveAt ?? b.updatedAt) - Number(a.lastActiveAt ?? a.updatedAt))
+
+// What the other session reads. The engine frames it as a message from another session and that session
+// decides what it makes of one: this only says where the press was made and why it came there.
+/** @param {{ from: string, slug: string, text: string }} press `from`: this session, as its tab names it */
+export const routedText = ({ from, slug, text }) =>
+  `From the Ather pane of ${from}: the person pressed this there, and chose to send it to your session because it tracks intent ${slug} and that one does not.\n\n${text}`
