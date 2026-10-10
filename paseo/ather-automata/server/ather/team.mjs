@@ -5,7 +5,8 @@
 // only the remote-tracking ref.
 
 /**
- * @typedef {{ exitCode: number, stdout: string, stderr?: string }} Ran
+ * `isAborted`: the app took the run back before it ended (it never ran to an exit code).
+ * @typedef {{ exitCode: number, stdout: string, stderr?: string, isAborted?: boolean }} Ran
  * @typedef {{
  *   git: (args: readonly string[], options?: { stdin?: string, timeoutMs?: number }) => Promise<Ran>,
  *   read: (path: string) => Promise<string | null>,
@@ -242,15 +243,16 @@ export const lockOf = text => {
 }
 
 // Fetches origin's main. Synced means git said so and origin/main resolves after it (`moved`: it moved).
-// On a failure: git's last line of complaint, and the lock it ran into, if any.
-/** @param {Repo} repo @returns {Promise<{ error: string, lock: string, moved: boolean }>} */
+// On a failure: git's last line of complaint, and the lock it ran into, if any. `isAborted`: the app took the
+// run back, so nothing was tried.
+/** @param {Repo} repo @returns {Promise<{ error: string, lock: string, moved: boolean, isAborted?: true }>} */
 export const fetchMain = async repo => {
   const before = await shaOf(repo, MAIN)
   const ran = await repo.git(FETCH_ARGS, { timeoutMs: FETCH_TIMEOUT_MS })
   const after = await shaOf(repo, MAIN)
   if (ran.exitCode === 0 && after) return { error: '', lock: '', moved: after !== before }
   const stderr = ran.stderr ?? ''
-  return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false }
+  return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false, ...(ran.isAborted ? { isAborted: /** @type {const} */ (true) } : {}) }
 }
 
 // One sync line for several checkouts: a failed fetch in any of them, else one running, else the least

@@ -5,7 +5,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
-import { createEngine } from './engine.mjs'
+import { aborts, createEngine } from './engine.mjs'
 
 const OUT = process.argv[2]
 const { register } = await import('./out/hooks/ather.mjs')
@@ -930,6 +930,353 @@ const refresh = async engine => {
   const asked = await run(none.engine, '')
   expect('a parent folder whose checkouts have no intents: /ather asks the one setup question and opens no pane', asked.dialogs.length === 1 && asked.dialogs[0].options.map(option => option.label).join('|') === 'Set up intents here|Not now' && asked.sent.length === 0 && none.engine.record.opens.length === 0, [asked, none.engine.record.opens])
   expect('no hook threw', none.engine.record.hookErrors.length === 0, none.engine.record.hookErrors)
+  await none.engine.end('other')
+}
+
+// ---------------------------------------------------------------- a clone's worktrees
+
+{
+  // A web checkout whose origin/main holds `login` and `pay`, alone in its parent folder; with `tree`, a worktree of it beside it.
+  const makeClone = tree => {
+    const parent = fs.mkdtempSync(join(BASE, 'clone-'))
+    const web = makeCheckout(parent, 'web', {
+      owner: 'AskTinNguyen',
+      name: 'web',
+      files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(WEB_PROFILE, null, 2)}\n`, 'docs/intent/login/prompt.md': LOGIN, 'docs/intent/pay/prompt.md': LOGIN.replace('# Login', '# Pay') },
+    })
+    if (tree) git(web, 'worktree', 'add', '-q', '-b', 'feat/x', join(parent, tree))
+    return { web, tree: tree ? join(parent, tree) : '' }
+  }
+  const keysOf = tree => nodesOf(tree).map(node => node.props?.key).filter(key => typeof key === 'string')
+  // The pick pane of a session in `web`, once its issues are read and its first fetch has ended.
+  const drawn = async (web, sessionId, ghAt) => {
+    const { engine } = await boot({ root: web, sessionId, writable: [path.dirname(web)], ghAt })
+    engine.setSurfaces(['terminal'])
+    await issuesRead(engine, { [web]: {} })
+    await engine.command('ather', 'pick')
+    const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+    await pane()
+    await engine.flush()
+    await engine.flush()
+    return { engine, pane, pick: await pane() }
+  }
+
+  const alone = makeClone('')
+  const before = await drawn(alone.web, 'harness-session-0030', { [alone.web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] } })
+  await before.engine.end('other')
+
+  // The same checkout with a worktree that has nothing of its own.
+  const { web, tree } = makeClone('web-x')
+  const ghAt = { [web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] }, [tree]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] } }
+  const { engine, pane, pick } = await drawn(web, 'harness-session-0031', ghAt)
+  const sid = 'harness-session-0031'
+  const rows = intentRows(pick)
+  expect("a worktree with nothing of its own: the pane lists main's intents once, by their bare keys", JSON.stringify(rows.map(one => one.id).sort()) === JSON.stringify(['intent:login', 'intent:pay']), rows.map(one => one.id))
+  expect('its rows and keys are those of the checkout without the worktree', JSON.stringify(keysOf(pick)) === JSON.stringify(keysOf(before.pick)), [keysOf(pick), keysOf(before.pick)])
+  expect('no row carries a repository name', rows.length === 2 && rows.every(one => one.repo === '') && issueRows(pick).every(one => one.repo === ''), [rows.map(one => one.repo), issueRows(pick)])
+  expect("one pass runs one fetch, in the session's checkout", JSON.stringify(fetchRuns(engine).map(run => run.argv[2])) === JSON.stringify([web]), fetchRuns(engine).map(run => run.argv))
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect('gh issue list runs once for the clone, whatever its worktrees', JSON.stringify(lists) === JSON.stringify([web]), engine.record.ghAt)
+
+  // The worktree gets an intent of its own, committed on its branch, and an uncommitted changed copy of main's login.
+  writeIntent(tree, 'draft', LOGIN.replace('# Login', '# Draft'))
+  git(tree, 'add', 'docs/intent/draft')
+  git(tree, 'commit', '-q', '-m', 'draft')
+  writeIntent(tree, 'login', LOGIN.replace('- [ ] A2', '- [x] A2'))
+  byKey(await pane(), 'sync')?.props.onPress()
+  await engine.flush()
+  await engine.flush()
+  const more = intentRows(await pane())
+  const ids = more.map(one => one.id).sort()
+  expect("the worktree's own intent and its changed copy are listed under its folder's name, main's still once", JSON.stringify(ids) === JSON.stringify(['intent:login', 'intent:pay', 'intent:web-x/draft', 'intent:web-x/login']), ids)
+  expect("each of the worktree's rows carries its folder's name", more.filter(one => one.id.startsWith('intent:web-x/')).every(one => one.repo === 'web-x'), more.map(one => [one.id, one.repo]))
+  expect('and the pass still runs one fetch', JSON.stringify(fetchRuns(engine).map(run => run.argv[2])) === JSON.stringify([web, web]), fetchRuns(engine).map(run => run.argv[2]))
+
+  more.find(one => one.id === 'intent:web-x/draft')?.press()
+  byKey(await pane(), 'intent-work')?.props.onPress()
+  await engine.flush()
+  expect("Work on this here on the worktree's draft tracks { slug: 'draft', root: the worktree }", JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'draft', root: tree }), engine.store.get(`pinned:${sid}`))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+
+  // The app aborts the session's first worktree lists: the pane starts with the checkout alone and finds the worktree at its next read.
+  const late = makeClone('web-x')
+  writeIntent(late.tree, 'draft', LOGIN.replace('# Login', '# Draft'))
+  Object.assign(aborts, { argv: 'git worktree list', times: 99 })
+  const slow = await boot({ root: late.web, sessionId: 'harness-session-0036' })
+  slow.engine.setSurfaces(['terminal'])
+  await slow.engine.command('ather', 'pick')
+  const slowPane = () => slow.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const first = intentRows(await slowPane()).map(one => one.id).sort()
+  expect('while git cannot list the worktrees, the pane lists the checkout alone', aborts.times < 99 && JSON.stringify(first) === JSON.stringify(['intent:login', 'intent:pay']), [aborts.times, first])
+  await slow.engine.flush()
+  await slow.engine.flush()
+  aborts.times = 0
+  byKey(await slowPane(), 'sync')?.props.onPress()
+  await slow.engine.flush()
+  await slow.engine.flush()
+  const then = intentRows(await slowPane()).map(one => one.id).sort()
+  expect("after its next read the pane lists the worktree's own intent, the checkout's keys unchanged", JSON.stringify(then) === JSON.stringify(['intent:login', 'intent:pay', 'intent:web-x/draft']), then)
+  expect('no hook threw', slow.engine.record.hookErrors.length === 0, slow.engine.record.hookErrors)
+  await slow.engine.end('other')
+}
+
+{
+  // The app takes back the fetches the pane's draws start, as it does when a newer draw replaces one.
+  const { s2 } = makeWorkspace()
+  writeIntent(s2, 'login')
+  const ahead = advanceOrigin(s2)
+  Object.assign(aborts, { argv: `git -C ${s2} -c gc.auto=0`, times: 2 })
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0037' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'pick')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  await pane()
+  await engine.flush()
+  await engine.flush()
+  const line = String(byKey(await pane(), 'sync')?.props.label)
+  await engine.flush()
+  await engine.flush()
+  expect('the first fetch of a session is rejected, and the sync line does not say the sync failed', aborts.times === 0 && fetchRuns(engine).length === 0 && !/failed/.test(line), [aborts.times, fetchRuns(engine).length, line])
+  // No draw from here: the console's timer asks for the fetch that is still due.
+  await engine.timers()
+  await engine.flush()
+  await engine.flush()
+  expect("without another draw the console's timer fetches again: one fetch ended", fetchRuns(engine).length === 1 && git(s2, 'rev-parse', 'origin/main') === ahead, [fetchRuns(engine).map(run => run.argv[2]), git(s2, 'rev-parse', 'origin/main'), ahead])
+  const after = String(byKey(await pane(), 'sync')?.props.label)
+  await engine.timers()
+  await engine.flush()
+  expect('and the list is then synced, with no fetch after it', /^synced/.test(after) && fetchRuns(engine).length === 1, [after, fetchRuns(engine).length])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+
+  // A fetch git itself fails (a bad origin) is a failed sync, and waits its ten minutes.
+  const bad = makeWorkspace()
+  writeIntent(bad.s2, 'login')
+  git(bad.s2, 'remote', 'set-url', 'origin', join(BASE, 'no-such-origin.git'))
+  const failing = await boot({ root: bad.s2, sessionId: 'harness-session-0038' })
+  failing.engine.setSurfaces(['terminal'])
+  await failing.engine.command('ather', 'pick')
+  const badPane = () => failing.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  await badPane()
+  await failing.engine.flush()
+  await failing.engine.flush()
+  await failing.engine.timers()
+  await failing.engine.flush()
+  const failed = String(byKey(await badPane(), 'sync')?.props.label)
+  await failing.engine.flush()
+  expect('a fetch git fails still says the sync failed, and is not tried again before its ten minutes', /failed/.test(failed) && fetchRuns(failing.engine).length === 1, [failed, fetchRuns(failing.engine).length])
+  expect('no hook threw', failing.engine.record.hookErrors.length === 0, failing.engine.record.hookErrors)
+  await failing.engine.end('other')
+}
+
+{
+  // web/ beside s2/, which has a worktree nested inside it with an intent of its own.
+  const nested = () => {
+    const { parent, s2, web } = makeWorkspace()
+    const x = join(s2, '.claude/worktrees/x')
+    git(s2, 'worktree', 'add', '-q', '-b', 'x', x)
+    writeIntent(web, 'login')
+    writeIntent(x, 'draft')
+    return { parent, s2, web, x }
+  }
+  const idsOf = async engine => {
+    engine.setSurfaces(['terminal'])
+    await engine.command('ather', 'pick')
+    const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id).sort()
+    await engine.flush()
+    await engine.flush()
+    return ids
+  }
+
+  const above = nested()
+  const first = await boot({ root: above.parent, sessionId: 'harness-session-0032' })
+  const ids = await idsOf(first.engine)
+  expect("a parent-folder session finds the worktree nested in one of its checkouts", JSON.stringify(ids) === JSON.stringify(['intent:web/login', 'intent:x/draft']), ids)
+  expect('and fetches twice in a pass, once for each clone', JSON.stringify(fetchRuns(first.engine).map(run => run.argv[2])) === JSON.stringify([above.s2, above.web]), fetchRuns(first.engine).map(run => run.argv[2]))
+  expect('no hook threw', first.engine.record.hookErrors.length === 0, first.engine.record.hookErrors)
+  await first.engine.end('other')
+
+  const named = nested()
+  const second = await boot({ root: named.web, sessionId: 'harness-session-0033', options: { repos: '../s2' } })
+  const found = await idsOf(second.engine)
+  expect("a session in web whose repos option names the clone finds its worktree", JSON.stringify(found) === JSON.stringify(['intent:login', 'intent:x/draft']), found)
+  expect('and fetches twice in a pass, once for each clone', JSON.stringify(fetchRuns(second.engine).map(run => run.argv[2])) === JSON.stringify([named.web, named.s2]), fetchRuns(second.engine).map(run => run.argv[2]))
+  expect('no hook threw', second.engine.record.hookErrors.length === 0, second.engine.record.hookErrors)
+  await second.engine.end('other')
+}
+
+{
+  // A checkout with no origin (its repository is its folder), where gh is not signed in; with `tree`, a worktree beside it.
+  const refreshed = async (tree, sessionId) => {
+    const parent = fs.mkdtempSync(join(BASE, 'local-'))
+    const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(WEB_PROFILE, null, 2)}\n` } })
+    git(web, 'remote', 'remove', 'origin')
+    if (tree) git(web, 'worktree', 'add', '-q', '-b', 'feat/x', join(parent, tree))
+    const { engine } = await boot({ root: web, sessionId, ghAt: {} })
+    engine.setSurfaces(['terminal'])
+    await issuesRead(engine, { [web]: {} })
+    await engine.flush()
+    const { said } = await refresh(engine)
+    const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+    const errors = engine.record.hookErrors
+    await engine.end('other')
+    return { web, said, lists, errors }
+  }
+  const alone = await refreshed('', 'harness-session-0034')
+  const withTree = await refreshed('web-x', 'harness-session-0035')
+  expect('a checkout with no origin and a worktree: gh issue list runs once a read, in the checkout', JSON.stringify(withTree.lists) === JSON.stringify(alone.lists.map(() => withTree.web)) && alone.lists.length === 2, [alone.lists, withTree.lists])
+  expect('and Refresh reports what it reports without the worktree', withTree.said !== '' && withTree.said === alone.said, [alone.said, withTree.said])
+  expect('no hook threw', alone.errors.length === 0 && withTree.errors.length === 0, [...alone.errors, ...withTree.errors])
+}
+
+// ---------------------------------------------------------------- the traced folders
+
+{
+  const KEPT = 'tracedFolders'
+  const kept = engine => engine.store.get(KEPT) ?? []
+  // Wide enough that no folder is cut short.
+  const pane = engine => engine.render('Pane', { bodyColumns: 400 }, 'ather')
+  const idsOf = async engine => {
+    await engine.command('ather', 'pick')
+    return intentRows(await pane(engine)).map(one => one.id).sort()
+  }
+  // The Repositories view, opened from its row at the foot of Home.
+  const reposView = async engine => {
+    await engine.command('ather', '')
+    byKey(await pane(engine), 'home-repos')?.props.onPress()
+    return pane(engine)
+  }
+  // The folders the view lists, in order (each row's second line begins with the whole path), and whether each has Remove.
+  const sources = tree => nodesOf(tree).filter(node => /^repos-path-\d+$/.test(node.props?.key ?? '')).map(node => ({ folder: textIn(node).split(' · ')[0].trim(), hasRemove: Boolean(byKey(tree, node.props.key.replace('path', 'remove'))) }))
+  // A press there, until the pane says what came of it; the issues are then read in the background.
+  const said = async (engine, press) => {
+    const before = engine.record.toasts.length
+    press()
+    for (let tries = 0; tries < 100 && engine.record.toasts.length === before; tries += 1) await engine.flush()
+    await engine.flush()
+    return engine.record.toasts.slice(before).join('\n')
+  }
+  // Add a folder: its field, then the path typed into it.
+  const add = async (engine, folder) => {
+    byKey(await reposView(engine), 'repos-add')?.props.onPress()
+    const field = byKey(await pane(engine), 'repos-add-field')
+    return said(engine, () => field?.props.onSubmit(folder))
+  }
+  const threw = engine => [...engine.record.hookErrors, ...engine.record.toasts.filter(text => /Error/.test(text))]
+
+  // web/ beside s2/, which has a worktree with an intent of its own; app/ is a third checkout.
+  const { parent, s2, web } = makeWorkspace()
+  const tree = join(parent, 's2-x')
+  git(s2, 'worktree', 'add', '-q', '-b', 'x', tree)
+  const app = makeCheckout(parent, 'app', { owner: 'AskTinNguyen', name: 'app', files: INTENTS })
+  writeIntent(web, 'login')
+  writeIntent(s2, 'boss')
+  writeIntent(tree, 'draft')
+  const ghAt = { [web]: { issues: [] }, [s2]: { issues: [issue(7, 'Boss shield')] }, [app]: { issues: [] } }
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0040', ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, { [web]: {} })
+  const lists = () => engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect("a session in web lists web's intents alone, and its view its own checkout, without Remove", JSON.stringify(await idsOf(engine)) === JSON.stringify(['intent:login']) && JSON.stringify(sources(await reposView(engine))) === JSON.stringify([{ folder: web, hasRemove: false }]) && !lists().includes(s2), [await idsOf(engine), sources(await reposView(engine)), lists()])
+
+  expect('Everything open has no Repositories row', (await engine.command('ather', 'pick'), !nodesOf(await pane(engine)).some(node => /repos/.test(node.props?.key ?? ''))), nodesOf(await pane(engine)).map(node => node.props?.key).filter(key => /repos/.test(key ?? '')))
+  nodesOf(await reposView(engine)).find(node => node.type === 'Button' && node.props?.key === 'repos-back')?.props.onPress()
+  expect('Back in the view returns to Home', Boolean(byKey(await pane(engine), 'home-repos')) && !byKey(await pane(engine), 'repos-add'), nodesOf(await pane(engine)).map(node => node.props?.key).filter(Boolean))
+  expect('on the desktop Home draws the row too', Boolean(byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather', 'desktop'), 'home-repos')))
+
+  const added = await add(engine, '../s2')
+  expect("Add a folder with ../s2 keeps s2's folder for the machine", added !== '' && JSON.stringify(kept(engine)) === JSON.stringify([s2]), [added, kept(engine)])
+  expect('the view lists it after the session checkout, with Remove', JSON.stringify(sources(await pane(engine))) === JSON.stringify([{ folder: web, hasRemove: false }, { folder: s2, hasRemove: true }]), sources(await pane(engine)))
+  const ids = await idsOf(engine)
+  expect("without a restart the pane lists s2's intents and its worktree's", JSON.stringify(ids) === JSON.stringify(['intent:login', 'intent:s2-x/draft', 'intent:s2/boss']), ids)
+  expect('and gh issue list has run in s2', lists().includes(s2), engine.record.ghAt)
+
+  // Proof this session saw in s2 is kept for that checkout.
+  await bash(engine, 'cd ../s2 && Build.bat S2Editor Win64 Development', 'Result: Succeeded')
+  const proof = `evidence:${sid}|${checkoutId('sipher/s2', s2)}`
+  expect("a build in ../s2 is kept under s2's checkout", engine.store.get(proof)?.build?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+  const store = new Map(engine.store)
+
+  const view = await reposView(engine)
+  const gone = await said(engine, () => byKey(view, 'repos-remove-1')?.props.onPress())
+  const after = await idsOf(engine)
+  expect("Remove takes s2's intents and its worktree's out of the pane, and the folder out of the list", gone !== '' && JSON.stringify(after) === JSON.stringify(['intent:login']) && kept(engine).length === 0, [gone, after, kept(engine)])
+  expect("the proof kept for s2's checkout is still in the store", engine.store.get(proof)?.build?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
+
+  const loose = fs.mkdtempSync(join(BASE, 'loose-'))
+  const nowhere = await add(engine, loose)
+  expect('a path in no checkout stores nothing and says why', nowhere !== '' && kept(engine).length === 0, [nowhere, kept(engine)])
+  const own = await add(engine, join(web, 'docs'))
+  expect("the session's own checkout again stores nothing and says why", own !== '' && own !== nowhere && kept(engine).length === 0, [own, kept(engine)])
+  expect('no hook threw', threw(engine).length === 0, threw(engine))
+  await engine.end('other')
+
+  // A second session, in app/, on the machine as it was while s2 was kept.
+  const second = await boot({ root: app, sessionId: 'harness-session-0041', ghAt, kept: store })
+  second.engine.setSurfaces(['terminal'])
+  const fromStart = await idsOf(second.engine)
+  expect("a second session in another folder, with the same store, lists s2's intents from its start", JSON.stringify(fromStart) === JSON.stringify(['intent:s2-x/draft', 'intent:s2/boss']), fromStart)
+  expect('no hook threw', threw(second.engine).length === 0, threw(second.engine))
+  await second.engine.end('other')
+
+  // Eight checkouts: the session's and seven the setting names. A ninth is not added.
+  const full = fs.mkdtempSync(join(BASE, 'full-'))
+  const nine = [makeCheckout(full, 'c1', { owner: 'AskTinNguyen', name: 'c1', files: INTENTS })]
+  for (const name of ['c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9']) {
+    fs.mkdirSync(join(full, name))
+    git(join(full, name), 'init', '-q', '-b', 'main')
+    nine.push(join(full, name))
+  }
+  const eight = await boot({ root: nine[0], sessionId: 'harness-session-0042', options: { repos: nine.slice(1, 8).map(one => `../${path.basename(one)}`).join(';') } })
+  eight.engine.setSurfaces(['terminal'])
+  const ninth = await add(eight.engine, nine[8])
+  expect('a ninth checkout stores nothing and says why', ninth !== '' && ninth !== own && ninth !== nowhere && kept(eight.engine).length === 0, [ninth, kept(eight.engine)])
+  expect('no hook threw', threw(eight.engine).length === 0, threw(eight.engine))
+  await eight.engine.end('other')
+
+  // The same by command, in a session that draws no pane.
+  const typed = await boot({ root: web, sessionId: 'harness-session-0043', ghAt })
+  const run = async args => {
+    const out = await typed.engine.command('ather', args)
+    await typed.engine.flush()
+    return out.text
+  }
+  const addedBy = await run('repos add ../s2')
+  expect('/ather repos add ../s2 keeps s2 and replies', addedBy !== '' && JSON.stringify(kept(typed.engine)) === JSON.stringify([s2]), [addedBy, kept(typed.engine)])
+  const again = await run(`repos add ${tree}`)
+  expect("/ather repos add of s2's worktree, already in the workspace, stores nothing more", again !== addedBy && JSON.stringify(kept(typed.engine)) === JSON.stringify([s2]), [again, kept(typed.engine)])
+  const listed = await run('repos')
+  expect('/ather repos without a pane replies with the folders, and opens nothing', listed.includes(web) && listed.includes(s2) && typed.engine.record.opens.length === 0 && typed.engine.record.dialogs.length === 0, [listed, typed.engine.record.opens])
+  await run('intent s2/boss')
+  expect('the added checkout is worked with at once: /ather intent s2/boss tracks it there', JSON.stringify(typed.engine.store.get('pinned:harness-session-0043')) === JSON.stringify({ slug: 'boss', root: s2 }), typed.engine.store.get('pinned:harness-session-0043'))
+  const removedBy = await run('repos remove s2')
+  expect('/ather repos remove s2, its name in the pane, takes it out', removedBy !== '' && kept(typed.engine).length === 0, [removedBy, kept(typed.engine)])
+  await run('repos add ../s2')
+  await run('repos remove ../s2')
+  expect('/ather repos remove ../s2, its folder, takes it out too', kept(typed.engine).length === 0, kept(typed.engine))
+  // Kept through a link to s2/, removed by its real path: one folder under two spellings.
+  const link = join(BASE, 'link-s2')
+  fs.symlinkSync(s2, link)
+  await run(`repos add ${link}`)
+  const through = kept(typed.engine)
+  await run('repos remove ../s2')
+  expect('a folder kept through a link is removed by its real path', JSON.stringify(through) === JSON.stringify([link]) && kept(typed.engine).length === 0, [through, kept(typed.engine)])
+  const unknown = await run('repos remove ../app')
+  expect('/ather repos remove of a folder that was not added says so and changes nothing', unknown !== removedBy && kept(typed.engine).length === 0, [unknown, kept(typed.engine)])
+  expect('no hook threw', threw(typed.engine).length === 0, threw(typed.engine))
+  await typed.engine.end('other')
+
+  // A session in a repository with no docs/intent adds the folder that has intents.
+  const plain = makeCheckout(parent, 'plain', { owner: 'AskTinNguyen', name: 'plain', files: { 'package.json': '{ "name": "plain" }\n' } })
+  const none = await boot({ root: plain, sessionId: 'harness-session-0044', ghAt })
+  none.engine.setSurfaces(['terminal'])
+  const dialogs = none.engine.record.dialogs.length
+  const first = (await none.engine.command('ather', 'repos add ../s2')).text
+  await none.engine.flush()
+  const found = await idsOf(none.engine)
+  expect("in a repository with no intents, /ather repos add ../s2 asks no setup question and the pane then lists s2's intents", first !== '' && none.engine.record.dialogs.length === dialogs && JSON.stringify(kept(none.engine)) === JSON.stringify([s2]) && JSON.stringify(found) === JSON.stringify(['intent:s2-x/draft', 'intent:s2/boss']), [first, none.engine.record.dialogs.slice(dialogs), kept(none.engine), found])
+  expect('no hook threw', threw(none.engine).length === 0, threw(none.engine))
   await none.engine.end('other')
 }
 
