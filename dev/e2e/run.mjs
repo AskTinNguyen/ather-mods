@@ -46,8 +46,12 @@ const sandbox = () => {
   return root
 }
 
-const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env } = {}) => {
+// `ownFindingsOnly`: the copied intents come without their findings, so the only decisions that wait are the
+// ones a block writes itself. Needs you draws nine rows, and a checkout whose person has that many open
+// decisions would leave a block's own rows undrawn.
+const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env, ownFindingsOnly = false } = {}) => {
   const root = sandbox()
+  if (ownFindingsOnly) for (const entry of fs.readdirSync(path.join(root, 'docs/intent'), { withFileTypes: true })) if (entry.isDirectory()) fs.rmSync(path.join(root, 'docs/intent', entry.name, 'findings.md'), { force: true })
   const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues, ghPrs, env })
   for (const [key, value] of Object.entries({ tz: tzFor(hour), ...store })) engine.store.set(key, value)
   register(engine.on, { briefGate: 'warn' })
@@ -149,11 +153,14 @@ const pressIn = (tree, label) => {
   await desk.start(false)
   await desk.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band', 'desktop')
   await new Promise(resolve => setTimeout(resolve, 1500))
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  // Home previews five of the person's own rows, and on a checkout where they own that many intents the issue
+  // is not one of them: it is looked for where every row is, in Everything open.
+  findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'all')?.props.onPress({})
   const deskPane = check(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 70)
   const narrow = check(await desk.render('Pane', { bodyColumns: 30 }, 'ather', 'desktop'), 1000)
-  expect('on the desktop nothing is cut by column count: the full issue title shows, and rows span the panel', narrow.lines.some(line => line.includes('#28887')) && narrow.lines.some(line => line.includes('Dodge cancels the wrong montage')) &&narrow.lines.some(line => /^\s+In the snow\/sand lab/.test(line) && line.length > 60), narrow.lines)
-  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
-  findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'work-issue:28887')?.props.onPress({})
+  expect('on the desktop nothing is cut by column count: the full issue title shows, and rows span the panel', narrow.lines.some(line => line.includes('#28887') && line.includes('Dodge cancels the wrong montage') && line.length > 30), narrow.lines)
+  findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'pick-issue:28887')?.props.onPress({})
   const deskCard = await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
   expect("the desktop's issue card opens GitHub with a real link", findKey(deskCard, 'issue-open')?.type === 'Link' && findKey(deskCard, 'issue-open')?.props.href === 'https://github.com/sipherxyz/s2/issues/28887', findKey(deskCard, 'issue-open'))
   expect('on the desktop, the first draw starts the console: the assigned issue shows in the pane', /Dodge cancels the wrong montage/.test(deskPane.lines.join('\n')), deskPane.lines)
@@ -546,9 +553,11 @@ const GH_ISSUES = [
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, 'prompt.md'), '# Time dilation ownership\n\n- Status: active\n- Area: Combat\n- Owner: Tin Nguyen\n- Issue: #28887\n\n## Acceptance\n\n- [ ] fixed\n')
   await new Promise(resolve => setTimeout(resolve, 300))
-  const work = await run(engine, [pick('Pick something to work on'), dismiss])
-  const labels = work.dialogs[1]?.options.map(o => o.label) ?? []
-  expect('an issue that already has an intent is listed as that intent only', !labels.some(label => /#28887/.test(label)) && labels.includes('time-dilation-ownership'), labels)
+  // The Work question offers four rows, fewer than a person with many intents has: Everything open lists every one.
+  engine.setSurfaces(['terminal'])
+  await run(engine, [], 'ather', 'pick')
+  const labels = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather', 'terminal'), 110).lines
+  expect('an issue that already has an intent is listed as that intent only', !labels.some(label => /#28887/.test(label)) && labels.some(label => /time-dilation-ownership/.test(label)) && labels.some(label => /#31360/.test(label)), labels)
   done()
 }
 
@@ -903,7 +912,7 @@ const hasFocus = tree => {
   // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended) and F-4 with no options,
   // two decisions that wait as one block. A trap seen in three sessions waits too, and the Editor is held
   // (a designer's Ask for the Editor: an item with nothing to answer, offered while an intent is tracked).
-  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], ownFindingsOnly: true, store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
   const fixture = (slug, findings) => {
     fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
     fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: one\n- A2: two\n`)
@@ -943,7 +952,8 @@ const hasFocus = tree => {
   const pane = (cols = 72, surface = 'terminal') => engine.render('Pane', { bodyColumns: cols }, 'ather', surface)
   const text = async (cols = 72) => check(await pane(cols), cols).lines.join('\n')
   const id = n => `call:${n === 1 || n === 3 ? 'zz-decide' : 'zz-group'}:F-${n}`
-  const waiting = async () => Number(/N E E D S   Y O U   ·   (\d+)/.exec(await text(110))?.[1] ?? -1)
+  // A section label is spaced out, its count too: "N E E D S   Y O U   ·   1 2" is twelve.
+  const waiting = async () => Number((/N E E D S   Y O U   ·   (\d(?: \d)*)/.exec(await text(110))?.[1] ?? '-1').replace(/ /g, ''))
 
   // A session answers for the intent it tracks: another intent's decisions wait for a session that tracks it, or none.
   const tracked = await pane(72)
@@ -1051,8 +1061,8 @@ const hasFocus = tree => {
   const asked = engine.record.dialogs.at(-1)
   expect('A6: without a text field, Type an answer asks one question (2-4 answers) and the words typed under Other decide', asked?.header === 'Answer' && asked.options.length >= 2 && asked.options.length <= 4 && !nodeOf(await pane(72, 'mobile'), `typed-${id(4)}`) && engine.record.submits.at(-1) === `Decide F-4 on zz-group: "a pool of eight" (my own answer, in my words). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.`, [asked, engine.record.submits.at(-1)])
 
-  // D8: "make it a rule?" answers in place too.
-  pressKey(await pane(), 'item-rule:live-coding')
+  // D8: "make it a rule?" answers in place too. Every decision above is answered, so it is the one item left
+  // waiting, and the one Needs you has opened.
   const rule = await pane(72)
   expect('A8: the repeated-problem item opens with Make it a rule / No, leave it, Explain and Type an answer (no Open findings)', /^A: Make it a rule$/.test(nodeOf(rule, 'option-rule:live-coding-A')?.props.label ?? '') && /^B: No, leave it$/.test(nodeOf(rule, 'option-rule:live-coding-B')?.props.label ?? '') && Boolean(nodeOf(rule, 'explain-rule:live-coding')) && !nodeOf(rule, 'findings-rule:live-coding') && check(rule, 72).problems.length === 0, check(rule, 72).lines)
   pressKey(rule, 'option-rule:live-coding-A')
