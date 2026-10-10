@@ -96,7 +96,7 @@ export const packFor = async (io, root) => {
   return read
 }
 
-// A repository that got its intents mid-session (/ather setup) has a profile now: its pack is chosen again.
+// A repository that got its intents mid-session has a profile now: its pack is chosen again.
 /** @param {Pick<PackIo, 'sessionId'>} io @param {string} root */
 export const forgetPack = async (io, root) => void chosen.delete(`${await io.sessionId().catch(() => '')}|${root}`)
 

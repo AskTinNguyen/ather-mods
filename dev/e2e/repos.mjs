@@ -891,11 +891,9 @@ const refresh = async engine => {
   await engine.end('other')
 }
 
-// ---------------------------------------------------------------- setting up, in a workspace
+// ---------------------------------------------------------------- no intents, in a workspace
 
 {
-  const { SETUP_PIECES } = await import('./out/hooks/setup.mjs')
-  const paths = SETUP_PIECES.map(one => one.path)
   const PACKAGE = { 'package.json': `${JSON.stringify({ name: 'app' }, null, 2)}\n` }
   // One /ather: the dialogs it asked (each dismissed) and the prompts it submitted.
   const run = async (engine, args) => {
@@ -915,9 +913,7 @@ const refresh = async engine => {
   engine.setSurfaces(['terminal'])
   const opened = await run(engine, 'pick')
   const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id)
-  expect("a session whose own checkout has no intents opens the pane on the other checkout's, and is asked no setup question", opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather') && JSON.stringify(ids) === JSON.stringify(['intent:web/login']), [opened, ids])
-  const setup = await run(engine, 'setup')
-  expect("/ather setup there submits the one setup prompt, for the session's own checkout: all five pieces, its folder named and not web's", setup.dialogs.length === 0 && setup.sent.length === 1 && /templates\/intent-setup\/SETUP\.md/.test(setup.sent[0]) && paths.every(one => setup.sent[0].includes(one)) && setup.sent[0].includes(`the repository at ${app};`) && !setup.sent[0].includes(web), setup)
+  expect("a session whose own checkout has no intents opens the pane on the other checkout's, and is asked nothing", opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather') && JSON.stringify(ids) === JSON.stringify(['intent:web/login']), [opened, ids])
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 
@@ -928,7 +924,7 @@ const refresh = async engine => {
   const none = await boot({ root: bare, sessionId: 'harness-session-0027' })
   none.engine.setSurfaces(['terminal'])
   const asked = await run(none.engine, '')
-  expect('a parent folder whose checkouts have no intents: /ather asks the one setup question and opens no pane', asked.dialogs.length === 1 && asked.dialogs[0].options.map(option => option.label).join('|') === 'Set up intents here|Not now' && asked.sent.length === 0 && none.engine.record.opens.length === 0, [asked, none.engine.record.opens])
+  expect('a parent folder whose checkouts have no intents: /ather asks nothing, submits nothing and opens no pane', asked.dialogs.length === 0 && asked.sent.length === 0 && none.engine.record.opens.length === 0, [asked, none.engine.record.opens])
   expect('no hook threw', none.engine.record.hookErrors.length === 0, none.engine.record.hookErrors)
   await none.engine.end('other')
 }
@@ -1275,7 +1271,7 @@ const refresh = async engine => {
   const first = (await none.engine.command('ather', 'repos add ../s2')).text
   await none.engine.flush()
   const found = await idsOf(none.engine)
-  expect("in a repository with no intents, /ather repos add ../s2 asks no setup question and the pane then lists s2's intents", first !== '' && none.engine.record.dialogs.length === dialogs && JSON.stringify(kept(none.engine)) === JSON.stringify([s2]) && JSON.stringify(found) === JSON.stringify(['intent:s2-x/draft', 'intent:s2/boss']), [first, none.engine.record.dialogs.slice(dialogs), kept(none.engine), found])
+  expect("in a repository with no intents, /ather repos add ../s2 asks nothing and the pane then lists s2's intents", first !== '' && none.engine.record.dialogs.length === dialogs && JSON.stringify(kept(none.engine)) === JSON.stringify([s2]) && JSON.stringify(found) === JSON.stringify(['intent:s2-x/draft', 'intent:s2/boss']), [first, none.engine.record.dialogs.slice(dialogs), kept(none.engine), found])
   expect('no hook threw', threw(none.engine).length === 0, threw(none.engine))
   await none.engine.end('other')
 }
