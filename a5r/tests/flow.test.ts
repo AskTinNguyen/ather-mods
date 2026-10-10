@@ -60,15 +60,15 @@ test('A75: a recursive delete runs (in TEMP silently; elsewhere recorded for ngh
   expect(w.seen.filter(e => e.tool === 'Bash' || e.tool === 'PowerShell').length).toBe(2)
 })
 
-test('A73: ask mode in an away window gives the same answer as any mode: a clean reset --hard runs, nothing is asked', opts('ask'), async ($, on) => {
+test('A73: ask mode in an away window gives the same answer as any mode: a clean path-scoped checkout runs, nothing is asked', opts('ask'), async ($, on) => {
   const w = world(on)
   const asked: Rec[] = []
   on('tool.call', { tool: 'AskUserQuestion' }, async (_$: unknown, e: Rec) => {
     asked.push(e)
     return { deny: 'The user is away until 07:00 (Ather autonomy window).' }
   })
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toBeUndefined()
-  expect([asked.length, w.seen.filter(e => e.tool === 'Bash').length]).toEqual([0, 1])
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git checkout HEAD -- Source/S2/Foo.cpp' }))).toBeUndefined()
+  expect([asked.length, (w.calls.ask ?? []).length, w.seen.filter(e => e.tool === 'Bash').length]).toEqual([0, 0, 1])
 })
 
 test('A75: a shared config edit in a git project runs and is recorded', opts(), async ($, on) => {
@@ -85,7 +85,8 @@ test('A17: no per-turn report: a turn with edits, a failed build and no report e
   expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
   // What cannot be undone is still checked at the action (D10).
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5R · D1/D5')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('Source/S2/Other.cpp (no session claims it)') // A74: a fact, not a dialog
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git checkout HEAD -- Source/S2/Other.cpp' }))).toContain('Source/S2/Other.cpp (no session claims it)') // A74: a fact, not a dialog
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('use git checkout <ref> -- <paths>')
   expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Source/S2/Key.cpp`, content: `k = 'ghp_${'a'.repeat(36)}'` }))).toContain('secret')
   expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toContain('mcp__a5r__editor')
 })
@@ -101,7 +102,7 @@ test('a worker\'s own worktree: git and repository config there are its own (the
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x checkout -b HaiHuynh/tail-vfx origin/main' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x reset --hard' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Write', file_path: 'E:/wt/x/Config/DefaultGame.ini', content: '[x]' }))).toBeUndefined()
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('Config/DefaultGame.ini (no session claims it)')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git checkout HEAD -- Config/DefaultGame.ini' }))).toContain('Config/DefaultGame.ini (no session claims it)')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x add .' }))).toContain('stage exact paths')
 })
 

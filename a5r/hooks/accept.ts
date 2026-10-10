@@ -58,7 +58,7 @@ export type AcceptInput = {
   kitDirs?: string[]
   /** A75: actions that ran at the tool call and were recorded (kind: `tests` for removed assertions, `shared:…` for
    * shared config, `delete`, …), with the repository-relative path and who did it when. */
-  recorded?: { kind: string; path: string; at: number; lane: string }[]
+  recorded?: { kind: string; path: string; target?: string; at: number; lane: string; mine?: boolean }[]
 }
 
 const lower = (s: string) => s.replace(/\\/g, '/').toLowerCase()
@@ -139,6 +139,9 @@ export const passKey = (arg: string): string | null => {
   if (pr) return `#${pr[1]}`
   return /^[\w.-]+$/.test(t) && !/^\d/.test(t) ? t.toLowerCase() : null
 }
+
+/** A75: how nghiem thu names a recorded action. */
+const RECORD_LABEL: Record<string, string> = { delete: 'a recursive delete', 'git-config-global': 'a global git config change', 'p4-destructive': 'a Perforce revert or delete', scope: 'an edit outside the scope file', tests: 'removed test assertions' }
 
 /** Every rule – with why the diff could not be read (nothing scored). */
 export const unscored = (why: string): RuleScore[] => RULES5.map(([rule]) => ({ rule, state: 'na' as const, line: unreadLine(why), issues: [] }))
@@ -233,6 +236,19 @@ export const score = (x: AcceptInput): RuleScore[] => {
   for (const r of x.recorded ?? [])
     if (r.kind === 'tests' && x.files.some(f => lower(f) === lower(r.path)) && !mentions(x.progress, r.path) && !mentions(x.findings, r.path))
       r5.push({ file: r.path, what: `test assertions were removed (recorded, ${r.lane})`, todo: 'say why in progress.md or findings.md, or put them back' })
+  // A75 (review 6): every other action that ran and was recorded (recursive deletes, global git config, Perforce, shared
+  // agent config, edits outside a scope file) by this session, or on a path in the diff, is named with a reason.
+  for (const r of x.recorded ?? []) {
+    if (r.kind === 'tests') continue
+    const inDiff = x.files.some(f => lower(f) === lower(r.path))
+    if (r.kind.startsWith('shared:') && inDiff) continue // rule 3 asks for it in the PR body
+    if (!r.mine && !inDiff) continue
+    const target = r.target ?? r.path
+    if (mentions(x.progress, target) || mentions(x.findings, target)) continue
+    const label = RECORD_LABEL[r.kind] ?? (r.kind.startsWith('shared:') ? 'a shared config edit' : `a recorded action (${r.kind})`)
+    const at = new Date(r.at)
+    r5.push({ file: r.kind === 'scope' || r.kind.startsWith('shared:') ? r.path : undefined, what: `${label} ran at ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')} (${r.lane}): ${target.slice(0, 120)}`, todo: 'say what and why in progress.md or findings.md', group: label })
+  }
   scores.push(mk(5, r5, 'claims match the evidence'))
   return scores
 }

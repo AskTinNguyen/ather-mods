@@ -135,9 +135,10 @@ test('A15: in its frozen phase the holder\'s worker runs the sync\'s own git com
   const asWorker = (command: string) => $.tool.call({ tool: 'Bash', command, agentId: 'w-sync' } as never)
   for (const c of [OURS, 'git -C E:/s2 add -- Source/S2/Foo.cpp', 'git -C E:/s2 commit --no-edit', 'git -C E:/s2 merge --abort', 'git -C E:/s2 revert -m 1 1a2b3c4d --no-edit'])
     expect([c, refused(await asWorker(c))]).toEqual([c, undefined])
-  expect(refused(await asWorker('git -C E:/s2 reset --hard'))).toContain('Source/S2/Foo.cpp (no session claims it)')
-  expect(refused(await asWorker('git -C E:/s2 stash'))).toContain('would discard uncommitted changes')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 reset --hard' }))).toContain('would discard uncommitted changes') // the holder's own loop too
+  expect(refused(await asWorker('git -C E:/s2 reset --hard'))).toContain('rewinds the whole shared working tree')
+  expect(refused(await asWorker('git -C E:/s2 stash'))).toContain('names no paths')
+  expect(refused(await asWorker('git -C E:/s2 checkout HEAD -- Source/S2/Foo.cpp'))).toContain('Source/S2/Foo.cpp (no session claims it)')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 reset --hard' }))).toContain('rewinds the whole shared working tree') // the holder's own loop too
 })
 
 test('A15: before T (and for any session not holding the sync) the same commands keep A5R\'s rules and the freeze', opts(), async ($, on) => {

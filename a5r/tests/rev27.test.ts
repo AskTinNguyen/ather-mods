@@ -21,6 +21,7 @@ const touch = (w: ReturnType<typeof world>, id8: string, paths: string[], lane =
 const TALAB = ['tools/TALab/build_topic_stage.py', 'tools/TALab/stages/patterns.py', 'tools/TALab/stages/walker_wall.json', 'tools/TALab/stages/README.md']
 const TALAB_CMD = `git -C ${S2} checkout 55693182ad46 -- ${TALAB.join(' ')} && git -C ${S2} commit -m "TALab: restore the stage generator" -- ${TALAB.join(' ')}`
 const bashRan = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'Bash').length
+/** Every dialog (AskUserQuestion) the session raised, answered or not (rev 27 review 7: the world counts them all). */
 const asks = (w: ReturnType<typeof world>) => (w.calls.ask ?? []).length
 const shared = (w: ReturnType<typeof world>) => w.put(`${S2}/.git/HEAD`, 'ref: refs/heads/HaiHuynh/20261005')
 
@@ -32,7 +33,7 @@ test('A74: the TALab case runs: checkout <ref> -- 4 clean paths and the commit, 
   expect(refused(await $.tool.call({ tool: 'Bash', command: TALAB_CMD }))).toBeUndefined()
   expect([bashRan(w), asks(w)]).toEqual([1, 0])
   // The fact check is path-scoped (the hook's time budget): only the four paths are read.
-  expect(w.runs.find(r => r.includes('status --porcelain'))).toBe(`git -C ${S2} status --porcelain=v1 -z --untracked-files=all -- ${TALAB.join(' ')}`)
+  expect(w.runs.find(r => r.includes('status --porcelain'))).toBe(`git -C ${S2} status --porcelain=v1 -z --untracked-files=no -- ${TALAB.join(' ')}`)
 })
 
 test('A74: the same checkout over another session\'s uncommitted change is refused, naming the path and its owner', opts(), async ($, on) => {
@@ -55,20 +56,20 @@ test('A74: changed only in this session\'s own paths → it runs', opts(), async
   expect(refused(await $.tool.call({ tool: 'Bash', command: TALAB_CMD }))).toBeUndefined()
 })
 
-test('A74: reset --hard on a dirty tree is refused (whole tree read); switch and checkout <branch> say use a worktree', opts(), async ($, on) => {
+test('A74: reset --hard is refused with its alternative (a whole-tree status takes 36-82 s on S2); switch and checkout <branch> say use a worktree', opts(), async ($, on) => {
   const w = world(on, { git: { 'status --porcelain': { stdout: '?? Saved/notes.txt\0 M Source/S2/Foo.cpp\0' } } })
   shared(w)
   await $.session.start(START)
   const why = refused(await $.tool.call({ tool: 'Bash', command: `git -C ${S2} reset --hard` }))
-  expect(why).toContain('Saved/notes.txt (no session claims it); Source/S2/Foo.cpp (no session claims it)')
-  expect(w.runs.find(r => r.includes('status --porcelain'))).toBe(`git -C ${S2} status --porcelain=v1 -z --untracked-files=all --`)
+  expect(why).toContain('use git checkout <ref> -- <paths> for the files you mean, or a worktree of your own')
+  expect(w.runs.filter(r => r.includes('status --porcelain'))).toEqual([]) // never a whole-tree status
   for (const c of [`git -C ${S2} switch main`, `git -C ${S2} checkout main`]) expect([c, refused(await $.tool.call({ tool: 'Bash', command: c }))?.includes('work in a worktree of your own')]).toEqual([c, true])
   expect(bashRan(w)).toBe(0)
 })
 
 // ---------- A73 ----------
 const PROBES: { tool: string; [k: string]: unknown }[] = [
-  { tool: 'Bash', command: `git -C ${S2} reset --hard` },
+  { tool: 'Bash', command: `git -C ${S2} checkout HEAD -- Source/S2/Foo.cpp` },
   { tool: 'Bash', command: 'git push --force origin HaiHuynh/x' },
   { tool: 'Bash', command: 'git push origin HEAD:main' },
   { tool: 'Bash', command: 'git add -A' },
@@ -90,7 +91,7 @@ for (const mode of ['ask', 'deny'] as const)
     const { out, asked } = await answers($, w)
     expect(asked).toBe(0)
     expect(out.map(o => (o === undefined ? 'runs' : o.includes('→') ? 'refused with an alternative' : 'refused bare'))).toEqual([
-      'refused with an alternative', // reset --hard over an unclaimed change (a fact)
+      'refused with an alternative', // a checkout over an unclaimed change (a fact)
       'refused with an alternative', // force push
       'refused with an alternative', // push to main
       'refused with an alternative', // git add -A

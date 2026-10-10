@@ -147,8 +147,9 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   })
   on('tool.call', async (_$: unknown, e: Rec) => {
     // The dialog (`$.ui.ask` → AskUserQuestion): Hai picks `ask` when the test gives one.
+    // Rev 27 (review 7): every dialog is counted in calls.ask, answered or not.
+    if (e.tool === 'AskUserQuestion') (calls.ask ??= []).push(e)
     if (e.tool === 'AskUserQuestion' && answer !== undefined) {
-      ;(calls.ask ??= []).push(e)
       const q = String(((e.questions as Rec[] | undefined) ?? [])[0]?.question ?? '')
       return { result: { questions: e.questions, answers: { [q]: answer } }, text: answer }
     }

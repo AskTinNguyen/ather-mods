@@ -38,9 +38,24 @@ export type Located = { root: string | null; rel: string | null }
 const READERS = new Set(['cat', 'type', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'ls', 'dir',
   'get-childitem', 'gci', 'get-content', 'gc', 'wc', 'stat', 'file', 'test-path', 'get-item', 'gi', 'resolve-path', 'echo', 'write-output', 'write-host'])
 const DELETE_VERBS = new Set(['rm', 'rmdir', 'rd', 'del', 'erase', 'remove-item', 'ri'])
-// A76: moving into a folder writes nothing; git subcommands that only read.
+// A76: moving into a folder writes nothing; after a `cd` into the live kit only commands that write files there are
+// refused (deletes, moves, copies, in-place edits, redirects, git writes, package installs); reads, tests and builds run.
 const CHDIR = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir'])
-const GIT_READS = new Set(['status', 'log', 'diff', 'show', 'grep', 'rev-parse', 'ls-files', 'blame', 'branch', 'remote', 'describe', 'shortlog', 'cat-file', 'ls-tree'])
+const FILE_WRITERS = new Set(['mv', 'move', 'move-item', 'mi', 'cp', 'copy', 'copy-item', 'cpi', 'touch', 'mkdir', 'md', 'new-item', 'ni', 'tee', 'tee-object',
+  'set-content', 'sc', 'add-content', 'ac', 'out-file', 'clear-content', 'rename-item', 'ren', 'rni', 'ln', 'chmod', 'truncate', 'patch', 'dd', 'install'])
+const GIT_WRITES = new Set(['add', 'commit', 'checkout', 'switch', 'reset', 'restore', 'clean', 'rm', 'mv', 'stash', 'apply', 'am', 'merge', 'rebase', 'pull', 'cherry-pick', 'revert', 'init', 'clone', 'tag', 'worktree', 'submodule', 'config', 'update-index', 'sparse-checkout', 'lfs'])
+const PKG = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3'])
+const PKG_WRITES = new Set(['install', 'i', 'add', 'ci', 'update', 'upgrade', 'remove', 'rm', 'uninstall', 'un', 'link', 'init', 'create', 'unlink'])
+/** A76: whether a command segment writes files in the folder it runs in. */
+export const writesFiles = (raw: string, verb: string, args: readonly string[]): boolean => {
+  const sub = (args.find(a => !a.startsWith('-')) ?? '').toLowerCase()
+  if (/(^|[^0-9&])>>?(?!>)(?!\s*(&|\/dev\/null|nul\b|\$null))/i.test(blankQuotes(raw))) return true
+  if (DELETE_VERBS.has(verb) || FILE_WRITERS.has(verb)) return true
+  if ((verb === 'sed' || verb === 'perl') && args.some(a => /^-[a-z]*i/i.test(a))) return true
+  if (verb === 'git') return GIT_WRITES.has(sub)
+  if (PKG.has(verb)) return PKG_WRITES.has(sub)
+  return false
+}
 const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
 const WRAPPERS = new Set(['&', 'sudo', 'command', 'builtin', 'exec', 'time', 'nohup', 'xargs', 'call'])
 const PS_VALUE_PARAMS = new Set(['-erroraction', '-ea', '-exclude', '-include', '-filter', '-warningaction', '-wa'])
@@ -304,18 +319,23 @@ export class A5R {
    * a git command that runs elsewhere (`git -C <own worktree> …`). Unknown means shared. */
   preShell(command: string, workdir = '', env: Places = {}, depth = 0, isShared: (dir: string) => boolean = () => true): Decision | null {
     let firstAsk: Decision | null = null
-    let inKit: string | null = null // A76: a `cd` into the live kit: what runs after it there may only read
+    let inKit: string | null = null // A76: a `cd` into the live kit: what runs after it there may not write files
+    const dirs: (string | null)[] = []
     for (const raw of segments(stripHeredocs(command ?? ''))) {
       const bare = blankQuotes(raw)
       const applies = (r: Rule) => rx(r.re).test(bare) && (r.where !== 'shared' || isShared(gitTarget(raw, workdir)))
       for (const r of this.cfg.shell_deny) if (applies(r)) return decision('deny', 'D1/D5', r.why, r.id)
       const [verb, args] = commandVerb(tokenize(raw))
       if (CHDIR.has(verb)) {
+        if (verb === 'pushd') dirs.push(inKit)
         inKit = this.kitMentions.find(([re]) => re.test(raw.replace(/\\/g, '/').toLowerCase()))?.[1] ?? null
         continue
       }
-      if (inKit && !READERS.has(verb) && !(verb === 'git' && GIT_READS.has((args.find(a => !a.startsWith('-')) ?? '').toLowerCase())))
-        return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
+      if (verb === 'popd') {
+        inKit = dirs.pop() ?? null
+        continue
+      }
+      if (inKit && writesFiles(raw, verb, args)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
       const hit = this.writesProtected(raw, verb)
       if (hit) return decision('deny', 'D1', `This command touches the A5R kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
       if (NESTED_SHELLS.has(verb) && depth < 2) {

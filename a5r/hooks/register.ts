@@ -1,5 +1,5 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5R, blankQuotes, commandVerb, gitTarget, gitTargets, newLines, norm, rx, segments, stripHeredocs, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
+import { A5R, commandVerb, deleteTargets, gitTargets, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
@@ -12,6 +12,7 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
+import { classifyGit, exactAlternative, gitPlace, isGit, repoPath, walk } from './gitshared.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -310,67 +311,94 @@ const ACTIONS: Record<string, Act> = {
   'force-push': { act: 'refuse', alt: 'push to a new branch and open a PR; never rewrite shared history' },
   'push-main': { act: 'refuse', alt: 'push your branch and open a PR' },
   'add-all': { act: 'refuse', alt: 'stage exact paths: git add -- <path> ...' },
-  'git-switch': { act: 'refuse', alt: 'work in a worktree of your own: git worktree add <dir> <branch>' },
+  // git-discard and git-switch are read by gitSharedProblem (segment by segment, on facts).
+  'git-switch': { act: 'check' },
   'git-discard': { act: 'check' },
 }
-const actOf = (d: Decision): Act => ACTIONS[d.key] ?? (d.kind === 'deny' ? { act: 'refuse', alt: 'do it another way' } : { act: 'record' })
+/** A75 (review 6): global git keys whose change breaks every repository on the machine; p4 obliterate cannot be undone. */
+const GLOBAL_CONFIG_REFUSED = /\bconfig\s+--global\s+(?:--\S+\s+)*(credential\.|lfs\.|core\.(autocrlf|eol|hookspath|fsmonitor)\b|filter\.)/i
+const actOf = (d: Decision, command = ''): Act => {
+  if (d.key === 'git-config-global' && GLOBAL_CONFIG_REFUSED.test(command)) return { act: 'refuse', alt: 'set it for this repository (git config --local <key> <value>) or for one command (git -c <key>=<value> <command>)' }
+  if (d.key === 'p4-destructive' && /\bp4\s+obliterate\b/i.test(command)) return { act: 'refuse', alt: 'p4 obliterate cannot be undone: use p4 delete (a recoverable revision), or leave the files' }
+  return ACTIONS[d.key] ?? (d.kind === 'deny' ? { act: 'refuse', alt: 'do it another way' } : { act: 'record' })
+}
 
-/** A74: git that can discard work in the shared checkout runs when the paths it touches (all of the tree when it names
- * none) are clean, or changed only in paths this session's touch file lists; else it is refused, naming each path and
- * its owner. A path-scoped `git status` (8 s at most). Null: it may run. */
-async function discardProblem($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<string | null> {
-  const rule = a5r.cfg.shell_ask.find(r => r.id === 'git-discard')
-  if (!rule) return null
+/** A74 (rev 27, after the adversary review): git in the shared checkout, segment by segment with the folder each runs
+ * in (`cd`, `pushd`, `popd`, `-C`). Moving the tree, reset --hard, clean -x and the other forms that cannot be read on
+ * facts are refused with the alternative; a discard runs when the exact paths it names (resolved to the repository)
+ * have no uncommitted change, or only changes in this session's touch paths that no other live session claims; a
+ * discard that names no paths, `.`, or a whole top folder is refused with the same command on exact paths (a status of
+ * the whole S2 tree takes 36-82 s). One path-scoped `git status` per segment, 8 s at most. Null: it may run. */
+async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<string | null> {
   const gate = gateOf('D1')
-  for (const raw of segments(stripHeredocs(command))) {
-    if (!rx(rule.re).test(blankQuotes(raw))) continue
-    const dir = norm(gitTarget(raw, cwd) || cwd, cwd)
+  for (const seg of walk(command, cwd)) {
+    if (!isGit(seg)) continue
+    const { dir, args } = gitPlace(seg)
+    const act = classifyGit(args)
+    if (!act) continue
     const root = (await locate($, a5r, `${dir}/_`)).root
     if (!root || !(await isSharedRoot($, root))) continue
-    const [, args] = commandVerb(tokenize(raw))
-    const rest: string[] = []
-    for (let i = 0; i < args.length; i += 1) {
-      const a = args[i] ?? ''
-      if (a === '-C' || a === '-c') i += 1
-      else rest.push(a)
-    }
-    const sub = (rest.find(a => !a.startsWith('-')) ?? '').toLowerCase()
-    const after = rest.slice(rest.indexOf(rest.find(a => !a.startsWith('-')) ?? '') + 1)
-    if (sub === 'stash' && /^(drop|clear)$/i.test(after.find(a => !a.startsWith('-')) ?? '')) {
-      const list = await $.process.run(['git', '-C', dir, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
+    if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared checkout)`, act.alt)
+    if (act.kind === 'stash-drop') {
+      const list = await $.process.run(['git', '-C', root, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
       const n = list?.exitCode === 0 ? list.stdout.split(/\r?\n/).filter(Boolean).length : null
       if (n === 0) continue
       return blocked(gate, n === null ? 'git stash list could not be read' : `the shared checkout holds ${n} stash entr${n === 1 ? 'y' : 'ies'}, any of them maybe another session's`, 'leave the stash as it is; keep your own work in a commit or a worktree of your own')
     }
-    const dash = after.indexOf('--')
-    let paths: string[] = []
-    if (dash >= 0) paths = after.slice(dash + 1)
-    else if (sub === 'checkout' && after.includes('.')) paths = ['.']
-    else if (sub === 'restore' || sub === 'rm') {
-      for (let i = 0; i < after.length; i += 1) {
-        const a = after[i] ?? ''
-        if (a === '-s' || a === '--source') i += 1
-        else if (!a.startsWith('-')) paths.push(a)
-      }
+    if (act.paths.length === 0) return blocked(gate, `git ${act.sub} names no paths, so it would act on the whole shared working tree`, exactAlternative(act.sub))
+    const rels: string[] = []
+    for (const spec of act.paths) {
+      const r = repoPath(spec, dir, root)
+      if ('why' in r) return blocked(gate, `git ${act.sub} on ${r.why} cannot be checked on facts in the shared checkout`, exactAlternative(act.sub))
+      rels.push(r.rel)
     }
-    const ran = await $.process.run(['git', '-C', dir, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths], { timeoutMs: 8_000 }).catch(() => null)
-    if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would discard is unknown`, 'name the paths after --, or run it in a worktree of your own')
+    const ran = await $.process.run(['git', '-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${act.untracked ? 'all' : 'no'}`, '--', ...rels], { timeoutMs: 8_000 }).catch(() => null)
+    if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${act.sub} would discard is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
     const changed = ran.stdout.split(/\0|\r?\n/).filter(e => /^.. \S/.test(e)).map(e => e.slice(3).trim()).filter(Boolean)
     const now = await $.clock.now()
     const mine = new Set([...touched].map(p => p.toLowerCase()))
     const others = touches.filter(t => isLive(t.id8, now))
-    const foreign = changed.filter(p => !mine.has(p.toLowerCase())).map(p => {
+    const foreign: string[] = []
+    for (const p of changed) {
       const t = others.find(o => o.paths.some(x => x.toLowerCase() === p.toLowerCase()))
-      return `${p} (${t ? `${t.lane}'s, session ${t.id8}` : 'no session claims it'})`
-    })
+      // A74 (review 5): a path another live session claims is its, even when this session touched it too.
+      if (t) foreign.push(`${p} (${t.lane}'s, session ${t.id8}${mine.has(p.toLowerCase()) ? '; this session touched it too' : ''})`)
+      else if (!mine.has(p.toLowerCase())) foreign.push(`${p} (no session claims it)`)
+    }
     if (foreign.length > 0)
-      return blocked(gate, `git ${sub} would discard uncommitted changes in the shared checkout: ${foreign.slice(0, 6).join('; ')}${foreign.length > 6 ? `; and ${foreign.length - 6} more` : ''}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
+      return blocked(gate, `git ${act.sub} would discard uncommitted changes in the shared checkout: ${foreign.slice(0, 6).join('; ')}${foreign.length > 6 ? `; and ${foreign.length - 6} more` : ''}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
   }
   return null
 }
 
+/** A74 (review 5): after this session commits in the shared checkout, its touch set keeps only the paths still changed
+ * (a committed path is no longer its uncommitted work). */
+async function pruneTouched($: Engine, opts: Opts): Promise<void> {
+  if (!me || touched.size === 0) return
+  const paths = [...touched].slice(-200)
+  const ran = await $.process.run(['git', '-C', s2Root(opts), 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths], { timeoutMs: 8_000 }).catch(() => null)
+  if (!ran || ran.exitCode !== 0) return
+  const still = new Set(ran.stdout.split(/\0|\r?\n/).filter(e => /^.. \S/.test(e)).map(e => e.slice(3).trim().toLowerCase()))
+  let changed = false
+  for (const p of [...touched]) if (!still.has(p.toLowerCase())) {
+    touched.delete(p)
+    changed = true
+  }
+  if (!changed) return
+  const t: Touch = { session: me.session, id8: me8, lane: me.lane, paths: [...touched].slice(-500), updatedAt: await $.clock.now() }
+  await $.fs.write(`${hfDir(opts)}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
+}
+
 /** A75: one action that ran and is recorded for nghiem thu: Saved/A5R/recorded/<id8>.json, this session's file. */
-type Recorded = { at: number; id8: string; lane: string; kind: string; rule: string; path: string; root: string | null; why: string }
+type Recorded = { at: number; id8: string; lane: string; kind: string; rule: string; path: string; target?: string; root: string | null; why: string }
+/** A75 (review 6): what a recorded shell action is about, for nghiem thu to look for in progress.md or findings.md: a
+ * delete's targets, a config key, a depot path; else the command. */
+const recordTarget = (kind: string, command: string): string => {
+  const [, args] = commandVerb(tokenize(command))
+  if (kind === 'delete') return deleteTargets(args).join(' ') || command.slice(0, 120)
+  if (kind === 'git-config-global') return /--global\s+(?:--\S+\s+)*(\S+)/.exec(command)?.[1] ?? command.slice(0, 120)
+  return args.filter(a => !a.startsWith('-')).slice(-1)[0] ?? command.slice(0, 120)
+}
 async function recordAction($: Engine, opts: Opts, r: Omit<Recorded, 'at' | 'id8' | 'lane'>): Promise<void> {
   if (!(await $.fs.exists(s2Root(opts)))) return
   const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
@@ -1701,7 +1729,7 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
     cfg: a5r.cfg,
     kitDirs: kitDirsIn(root),
     // A75: the actions recorded at the tool call in this repository (shared config, removed assertions, ...).
-    recorded: (await readRecorded($, opts)).filter(r => !r.root || sameRoot(r.root, root)).map(r => ({ kind: r.kind, path: r.path, at: r.at, lane: r.lane })),
+    recorded: (await readRecorded($, opts)).filter(r => !r.root || sameRoot(r.root, root)).map(r => ({ kind: r.kind, path: r.path, target: r.target ?? r.path, at: r.at, lane: r.lane, mine: r.id8 === me8 })),
   }
 }
 
@@ -1971,7 +1999,7 @@ const A5R_HELP = [
   '/a5r status · the state as text',
   '/a5r accept · A5R acceptance now, for this session\'s repository (the full list)',
   '/a5r pass <intent slug | PR number> · lets the next PR call or close of that intent (or that PR\'s after-the-fact score) through once, even if acceptance fails; acceptance never asks',
-  'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs when no other session\'s uncommitted change is in its way (else it names the path and owner); shared config, recursive deletes and removed test assertions run and are recorded for acceptance; force push, push to main, git add ., --no-verify, GIT_LFS_SKIP_SMUDGE and sparse-checkout in the shared checkout are refused with what to do instead.',
+  'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs on exact paths when no other session\'s uncommitted change is in its way (else it names the path and owner); with no paths, `.` or a top folder it is refused with the same command on exact paths; shared config, recursive deletes and removed test assertions run and are recorded for acceptance; force push, push to main, git add ., --no-verify, GIT_LFS_SKIP_SMUDGE, reset --hard, clean -x and moving the shared tree are refused with what to do instead.',
   '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
@@ -2748,22 +2776,25 @@ export const register: Register = (on, options) => {
         what = path
       }
     }
+    // A74: git in the shared checkout, read on facts segment by segment (every form, whatever rule 1's patterns match);
+    // the sync's own commands in its frozen phase pass (A15).
+    if (isOn && SHELL_TOOLS.has(tool) && /\bgit\b/.test(what) && !(isSyncCommandOnly(what) && (await isFrozenHolder($, opts)))) {
+      const problem = await gitSharedProblem($, opts, a5r, what, await $.session.cwd())
+      if (problem) {
+        count('D1')
+        return { deny: problem }
+      }
+    }
     // A73: no gate asks or waits; the same answer for the main loop, a worker, bypass mode and an away window.
     if (d) {
-      const a = actOf(d)
+      const a = actOf(d, what)
       if (a.act === 'refuse') {
         count(d.rule)
         return { deny: blocked(gateOf(d.rule), d.why, a.alt ?? 'do it another way') }
       }
-      if (a.act === 'check') {
-        const problem = await discardProblem($, opts, a5r, what, await $.session.cwd())
-        if (problem) {
-          count(d.rule)
-          return { deny: problem }
-        }
-      }
       if (a.act === 'record') {
-        await recordAction($, opts, { kind: d.key, rule: d.rule, path: SHELL_TOOLS.has(tool) ? what.slice(0, 300) : (dLoc?.rel ?? what), root: dLoc?.root ?? null, why: d.why }).catch(() => undefined)
+        const target = SHELL_TOOLS.has(tool) ? recordTarget(d.key, what) : (dLoc?.rel ?? what)
+        await recordAction($, opts, { kind: d.key, rule: d.rule, path: SHELL_TOOLS.has(tool) ? what.slice(0, 300) : (dLoc?.rel ?? what), target, root: dLoc?.root ?? null, why: d.why }).catch(() => undefined)
       }
     }
 
@@ -2793,6 +2824,8 @@ export const register: Register = (on, options) => {
       if (text && mcpKind(text) === 'pie') isPieRunning = true
       if (text && PIE_STOP.test(text)) isPieRunning = false
       if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, opts, locs)
+      // A74 (review 5): a commit in the shared checkout takes its committed paths out of this session's touch set.
+      if (isS2 && SHELL_TOOLS.has(tool) && /\bgit\b[^\n]*\bcommit\b/.test(what)) await pruneTouched($, opts).catch(() => undefined)
     }
     // A director call added to an intent's findings this turn (🟥 routing); no per-turn report is kept (D10).
     if (EDIT_TOOLS.has(tool) && ran.isError !== true && parts.some(([path, old, neu]) => isFindingsFile(path) && newLines(old, neu).some(isDirectorCallLine))) wroteDirectorCall = true
