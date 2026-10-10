@@ -5,7 +5,7 @@
 // actions held while the person is away, known traps, and the words the
 // session is asked with. Pure: no `$`.
 
-import { bareCommand, isPiped, segments } from '../shell.mjs'
+import { bareCommand, isPiped, segments, withoutHeredocs } from '../shell.mjs'
 
 /** @typedef {import('./index.mjs').Pack} Pack */
 /** @typedef {import('./index.mjs').Rung} Rung */
@@ -126,6 +126,18 @@ export const exitOf = (command, text, ran) => {
   return 'ok'
 }
 
+// The command's exit code is its gates' own: one command, or several joined by "&&". After a pipe, ";", "||" or a new line it is another command's.
+/** @param {string} command */
+const isOwnExit = command => {
+  let quote = ''
+  for (const char of withoutHeredocs(command).trim()) {
+    if (quote !== '') quote = char === quote ? '' : quote
+    else if (char === '"' || char === "'") quote = char
+    else if (char === '|' || char === ';' || char === '\n') return false
+  }
+  return true
+}
+
 /** @param {RegExpMatchArray[]} matches @param {number} group */
 const sum = (matches, group) => matches.reduce((total, match) => total + Number(match[group] ?? 0), 0)
 
@@ -180,9 +192,10 @@ const prodResult = (text, production) => {
 /**
  * One rung's result from a finished command's output.
  * @param {string} rung @param {string} command @param {string} raw the output @param {{ isError?: boolean }} ran @param {Production | null} [production]
+ * @param {boolean} [passesOnExit] the command ran a gate of the profile that passes on its exit code, and the exit code is that gate's own
  * @returns {Rung | null} null: nothing to record
  */
-export const readToolOutput = (rung, command, raw, ran, production = null) => {
+export const readToolOutput = (rung, command, raw, ran, production = null, passesOnExit = false) => {
   const text = stripAnsi(raw)
   const exit = exitOf(command, text, ran)
   if (rung === 'tests' || rung === 'ui') {
@@ -191,6 +204,7 @@ export const readToolOutput = (rung, command, raw, ran, production = null) => {
     if (exit === 'fail') return { state: 'fail', detail: 'exited non-zero' }
     if (counts.none) return { state: 'fail', detail: 'no tests ran' }
     if (counts.passed > 0) return { state: 'pass', detail: `${counts.passed} passed, 0 failed` }
+    if (passesOnExit && exit === 'ok') return { state: 'pass', detail: 'exit 0, no test counts' }
     // Every run replaces the last result: a run whose outcome cannot be read is no evidence.
     return { state: 'none', detail: 'no test counts read' }
   }
@@ -303,6 +317,7 @@ const CREATE_ORDER = {
 
 /**
  * The profile's gates: [{ command, proofs: [...] }] (han-viet), or { name: { command, proofs | proof } }.
+ * `passOn` says how a gate's tests and ui proofs pass: "exit" or "counts"; anything else is no field.
  * @param {any} profile @returns {Gate[]}
  */
 export const gatesOf = profile => {
@@ -312,7 +327,8 @@ export const gatesOf = profile => {
     .filter(gate => gate && typeof gate.command === 'string' && gate.command.trim() !== '')
     .map(gate => {
       const proofs = [gate.proofs, gate.proof, gate.kind, gate.rungs].flat().filter(one => typeof one === 'string').map(one => ALIASES[one.toLowerCase()] ?? '').filter(Boolean)
-      return { id: typeof gate.id === 'string' ? gate.id : '', command: gate.command.trim(), proofs: [...new Set(proofs)], proves: typeof gate.proves === 'string' ? gate.proves : '' }
+      const passOn = gate.passOn === 'exit' || gate.passOn === 'counts' ? { passOn: /** @type {'exit' | 'counts'} */ (gate.passOn) } : {}
+      return { id: typeof gate.id === 'string' ? gate.id : '', command: gate.command.trim(), proofs: [...new Set(proofs)], proves: typeof gate.proves === 'string' ? gate.proves : '', ...passOn }
     })
 }
 
@@ -366,20 +382,37 @@ export const makeWebPack = (profile, packageJson) => {
   const mergeGates = andList(commandsFor(required))
   const port = Number(profile?.devPorts?.base ?? profile?.devPortBase ?? 0)
 
-  /** @param {string} command @param {string} text @param {{ isError?: boolean }} ran */
+  /** @param {string} command @param {string} text @param {{ isError?: boolean, deny?: string }} ran */
   const readShell = (command, text, ran) => {
     /** @type {import('./index.mjs').ShellReading} */
     const out = { rungs: [], context: [], toasts: [], bumps: [] }
+    // A call that was denied never ran.
+    if (ran.deny !== undefined) return out
     const checks = checksOfCommand(command, scripts, gates, production)
     const rungs = [...checks.keys()]
+    // A gate passes on its exit code when the command runs it itself, unless the profile says it passes on test counts.
+    // A gate found inside a script is read on counts.
+    const direct = segments(command).flatMap(segment => gates.filter(gate => gate.passOn !== 'counts' && isGate(gate.command, bareCommand(segment))))
+    const onExit = new Set(direct.map(gateKey))
+    const isOwn = isOwnExit(command)
+    let isHidden = false
     for (const rung of rungs) {
-      const value = readToolOutput(rung, command, text, ran, production)
       const all = rungGates[rung]
-      // The command has one output and one exit code: every gate in it gets this reading.
-      if (value) out.rungs.push(all ? { rung, value, gates: { ran: [...(checks.get(rung) ?? [])], all } } : { rung, value })
+      const keys = [...(checks.get(rung) ?? [])]
+      const exits = keys.filter(key => onExit.has(key))
+      // The command has one output and one exit code: every gate in it gets this reading, each kind of gate under its own way of passing.
+      const kinds = (rung === 'tests' || rung === 'ui') && exits.length > 0 && exits.length < keys.length ? [exits, keys.filter(key => !onExit.has(key))] : [keys]
+      for (const kind of kinds) {
+        const passesOnExit = kind.some(key => onExit.has(key))
+        const value = readToolOutput(rung, command, text, ran, production, passesOnExit && isOwn)
+        if (passesOnExit && !isOwn && value?.state === 'none') isHidden = true
+        if (value) out.rungs.push(all ? { rung, value, gates: { ran: kind, all } } : { rung, value })
+      }
     }
     if (rungs.length > 0 && isPiped(command) && out.rungs.some(one => one.value.state === 'none')) {
       out.context.push('Ather Automata: this check was piped through a filter, so its exit code is the filter\'s. Read the pass and fail counts (or run it unpiped) before claiming it passed.')
+    } else if (isHidden) {
+      out.context.push('Ather Automata: this gate passes on its exit code, and a pipe, ";" or "||" in the command hides it. Run the gate by itself, or after "&&" only, before claiming it passed.')
     }
     return out
   }

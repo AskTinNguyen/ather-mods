@@ -4,7 +4,8 @@
 // captured from runs in a scratch checkout of AskTinNguyen/han-viet (machine paths
 // stripped); han-viet-profile.json and han-viet-package.json are its .ather/profile.json
 // and package.json scripts on main. pnpm-recursive-*.txt are `pnpm test` in a scratch
-// pnpm workspace of two packages.
+// pnpm workspace of two packages. go-test-*.txt and cargo-test-*.txt are `go test ./...`
+// and `cargo test` in a scratch Go module and Rust crate of three tests, without dependencies.
 import { describe, expect, test } from 'claude-code/testing'
 import fs from 'fs'
 
@@ -13,7 +14,7 @@ import { buildHome } from '../hooks/home.mjs'
 import { mandateText, newWindow, offAway } from '../hooks/away.mjs'
 import { emptyEvidence, nextStep, parseIntent } from '../hooks/model.mjs'
 import { choosePack, core, forgetPacks, makeWebPack, packFor, unreal } from '../hooks/packs/index.mjs'
-import { WEB_TRAPS } from '../hooks/packs/web.mjs'
+import { WEB_TRAPS, readToolOutput } from '../hooks/packs/web.mjs'
 import * as state from '../hooks/state.mjs'
 
 /** @param {string} name */
@@ -44,6 +45,27 @@ const fakeIo = (files, names = Object.keys(files)) => {
 
 /** @param {string} command @param {string} text @param {boolean} [isError] */
 const read = (command, text, isError = false) => Object.fromEntries(WEB.readShell(command, text, { isError }).rungs.map(one => [one.rung, one.value.state]))
+
+// A session's store, and a command run in it as the hook runs one: read by the pack, each reading kept, the evidence read back.
+/** @param {import('../hooks/packs/index.mjs').Pack} pack */
+const session = pack => {
+  const store = new Map()
+  const io = /** @type {any} */ ({
+    get: async (/** @type {string} */ key) => store.get(key),
+    set: async (/** @type {string} */ key, /** @type {unknown} */ value) => void store.set(key, JSON.parse(JSON.stringify(value))),
+    read: async () => null,
+    exists: async () => false,
+    sessionId: async () => 's1',
+    root: async () => 'R',
+    redraw: () => undefined,
+  })
+  /** @param {string} command @param {string} [text] @param {boolean} [isError] @param {string} [deny] a call that was refused */
+  const run = async (command, text = '', isError = false, deny) => {
+    for (const one of pack.readShell(command, text, deny === undefined ? { isError } : { deny }).rungs) await state.setRung(io, 's1', one.rung, one.value, one.gates)
+    return state.readEvidence(io, 's1', pack)
+  }
+  return { store, run }
+}
 
 describe('pack selection (A2)', () => {
   test('the profile decides first: pack "web" even beside a .uproject, pack "unreal" even beside package.json', async () => {
@@ -123,10 +145,10 @@ describe('web proof from tool output (A3)', () => {
     expect(read('npm run ui:verify', fixture('playwright-fail.txt'), true)).toEqual({ ui: 'fail' })
     expect(read('npx playwright test --project=w1365', fixture('playwright-fail.txt'), true)).toEqual({ ui: 'fail' })
   })
-  test('npm test proves tests and build from one run; exit 0 with no counts proves nothing about tests', () => {
+  test('npm test proves tests and build from one run; exit 0 with no counts proves nothing about tests run directly', () => {
     expect(read('npm test', fixture('node-test-pass.txt'))).toEqual({ tests: 'pass', build: 'pass' })
     expect(read('npm test', fixture('node-test-fail.txt'), true)).toEqual({ tests: 'fail', build: 'fail' })
-    expect(read('npm run learner:test', 'all good')).toEqual({ tests: 'none' })
+    expect(read('node --test tests/learner-engine.test.mjs', 'all good')).toEqual({ tests: 'none' })
   })
   test('vitest and jest summaries (their documented formats)', () => {
     expect(read('npx vitest run', ' Test Files  3 passed (3)\n      Tests  12 passed (12)\n')).toEqual({ tests: 'pass' })
@@ -144,7 +166,7 @@ describe('web proof from tool output (A3)', () => {
     expect(tests('pnpm test | tail -40', fixture('pnpm-recursive-fail.txt'))?.state).toBe('fail')
     expect(tests('pnpm test', fixture('pnpm-recursive-fail.txt'), true)?.state).toBe('fail')
     // Text that only holds a count is still no summary line.
-    expect(tests('pnpm test', 'the last run said: ℹ pass 3\nsee the note: pass 3\n')?.state).toBe('none')
+    expect(tests('pnpm test | tail -5', 'the last run said: ℹ pass 3\nsee the note: pass 3\n')?.state).toBe('none')
   })
   test('production: the commit status through gh, and a probe of the public URL', () => {
     expect(read('gh api repos/AskTinNguyen/han-viet/commits/5b71d7f/status', '{"state":"success","statuses":[]}')).toEqual({ prod: 'pass' })
@@ -173,26 +195,6 @@ describe('several gates on one rung', () => {
   const pack = makeWebPack({ pack: 'web', packageManager: 'pnpm', gates: GATES, mergePolicy: 'with-proof' }, null)
   const COMMANDS = GATES.map(gate => gate.command)
 
-  // A session's store, and a command run in it as the hook runs one: read by the pack, each reading kept, the evidence read back.
-  const session = () => {
-    const store = new Map()
-    const io = /** @type {any} */ ({
-      get: async (/** @type {string} */ key) => store.get(key),
-      set: async (/** @type {string} */ key, /** @type {unknown} */ value) => void store.set(key, JSON.parse(JSON.stringify(value))),
-      read: async () => null,
-      exists: async () => false,
-      sessionId: async () => 's1',
-      root: async () => 'R',
-      redraw: () => undefined,
-    })
-    /** @param {string} command @param {string} [text] @param {boolean} [isError] */
-    const run = async (command, text = '', isError = false) => {
-      for (const one of pack.readShell(command, text, { isError }).rungs) await state.setRung(io, 's1', one.rung, one.value, one.gates)
-      return state.readEvidence(io, 's1', pack)
-    }
-    return { store, run }
-  }
-
   test('the prompts name every gate of the rungs they ask for', () => {
     const prompt = `# Lens\n\n- Rev: 1\n- Status: active\n- Area: Platform\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: one\n`
     const progress = '# p\n\n## Acceptance\n\n| Item | Verdict |\n| --- | --- |\n| A1 | met |\n'
@@ -208,7 +210,7 @@ describe('several gates on one rung', () => {
     }
   })
   test('one gate of a rung passing does not prove the rung; every gate passing does', async () => {
-    const { run } = session()
+    const { run } = session(pack)
     const one = await run('pnpm lint')
     expect(one.lint.state).toBe('none')
     expect(pack.isProven({ ...one, tests: { state: 'pass', detail: '' }, build: { state: 'pass', detail: '' } }, 'engineer')).toBe(false)
@@ -216,40 +218,232 @@ describe('several gates on one rung', () => {
     expect((await run('pnpm check:portable-paths')).lint.state).toBe('pass')
   })
   test("a later gate's pass does not hide an earlier gate's failure", async () => {
-    const { run } = session()
+    const { run } = session(pack)
     expect((await run('pnpm typecheck', fixture('tsc-fail.txt'), true)).lint.state).toBe('fail')
     expect((await run('pnpm check:portable-paths')).lint.state).toBe('fail')
     expect((await run('pnpm typecheck', fixture('tsc-pass.txt'))).lint.state).toBe('none')
     expect((await run('pnpm lint')).lint.state).toBe('pass')
   })
   test('a failing tool run that is no gate fails the rung until one of its gates runs again', async () => {
-    const { run } = session()
+    const { run } = session(pack)
     await run('pnpm lint && pnpm typecheck')
     expect((await run('pnpm check:portable-paths')).lint.state).toBe('pass')
     expect((await run('npx tsc --noEmit', fixture('tsc-fail.txt'), true)).lint.state).toBe('fail')
     expect((await run('pnpm typecheck', fixture('tsc-pass.txt'))).lint.state).toBe('pass')
     // Passing, it proves nothing the gates have not.
-    const fresh = session()
+    const fresh = session(pack)
     expect((await fresh.run('npx tsc --noEmit', fixture('tsc-pass.txt'))).lint.state).toBe('none')
   })
   test("a gate's run replaces only its own result, and an unreadable run is no evidence", async () => {
-    const { run } = session()
+    const { run } = session(pack)
     await run('pnpm lint && pnpm typecheck && pnpm check:portable-paths')
     expect((await run('pnpm lint | tail -3')).lint.state).toBe('none')
     expect((await run('pnpm lint')).lint.state).toBe('pass')
     // A rung with one gate reads as it always did.
     const tests = (await run('pnpm test', fixture('node-test-pass.txt'))).tests
     expect([tests.state, tests.detail]).toEqual(['pass', '77 passed, 0 failed'])
-    expect((await run('pnpm test', 'all good')).tests.state).toBe('none')
+    expect((await run('pnpm test | tail -3', 'all good')).tests.state).toBe('none')
     expect((await run('pnpm build')).build.state).toBe('pass')
   })
   test("a gate's result older than a day no longer counts", async () => {
-    const { run, store } = session()
+    const { run, store } = session(pack)
     await run('pnpm lint && pnpm typecheck')
     await run('pnpm check:portable-paths')
     const stored = store.get('evidence:s1')
     stored.lint.gates.typecheck.at = Date.now() - 25 * 3600 * 1000
     expect((await run('pnpm build')).lint.state).toBe('none')
+  })
+})
+
+describe('how a gate passes', () => {
+  /** @param {object[]} gates @param {any} [packageJson] */
+  const packOf = (gates, packageJson = null) => makeWebPack({ pack: 'web', gates, mergePolicy: 'with-proof' }, packageJson)
+  /** @param {import('../hooks/packs/index.mjs').Pack} pack @param {string} command @param {string} text @param {boolean} [isError] */
+  const tests = (pack, command, text, isError = false) => pack.readShell(command, text, { isError }).rungs.filter(one => one.rung === 'tests').map(one => one.value.state)
+  const GO = { id: 'tests', command: 'go test ./...', proofs: ['tests'] }
+  const CARGO = { id: 'tests', command: 'cargo test', proofs: ['tests'] }
+  const RUNS = /** @type {const} */ ([[GO, 'go-test-pass.txt', 'go-test-fail.txt'], [CARGO, 'cargo-test-pass.txt', 'cargo-test-fail.txt']])
+
+  test('the profile field is read in both forms of gates; anything but "exit" or "counts" is no field', () => {
+    const values = ['exit', 'counts', 'sometimes', 7, null, ['exit'], { on: 'exit' }]
+    const list = packOf([...values.map((passOn, index) => ({ id: `g${index}`, command: `make check${index}`, proofs: ['tests'], passOn })), { id: 'bare', command: 'make bare', proofs: ['tests'] }])
+    expect(list.gates.map(gate => gate.passOn)).toEqual(['exit', 'counts', undefined, undefined, undefined, undefined, undefined, undefined])
+    const named = makeWebPack({ pack: 'web', gates: { unit: { command: 'go test ./...', proofs: ['tests'], passOn: 'counts' }, e2e: { command: 'make e2e', proof: 'ui', passOn: 'exit' }, vet: 'go vet ./...' } }, null)
+    expect(named.gates.map(gate => [gate.id, gate.passOn])).toEqual([['unit', 'counts'], ['e2e', 'exit'], ['vet', undefined]])
+    // An unknown value reads as a gate without the field.
+    for (const index of [0, 2, 3, 4, 5, 6]) expect(tests(list, `make check${index}`, 'all good')).toEqual(['pass'])
+    expect(tests(list, 'make bare', 'all good')).toEqual(['pass'])
+    expect(tests(list, 'make check1', 'all good')).toEqual(['none'])
+  })
+  test("han-viet's profile as written: each gate run by itself passes, all of them prove an engineer, one failing fails its rung", async () => {
+    const outputs = {
+      'npm test': fixture('node-test-pass.txt'),
+      'npm run lint': fixture('eslint-pass.txt'),
+      'npm run curriculum:verify': 'curriculum ok\nstudy layer ok\ncharacter layer ok\n',
+      'npm run learner:test': fixture('node-test-pass.txt'),
+      'npm run build': fixture('vinext-build-pass.txt'),
+      'npm run build:next': fixture('next-build-pass.txt'),
+      'npm run ui:verify': fixture('playwright-pass.txt'),
+    }
+    expect(Object.keys(outputs)).toEqual(WEB.gates.map(gate => gate.command))
+    for (const gate of WEB.gates) {
+      const { run, store } = session(WEB)
+      await run(gate.command, outputs[/** @type {keyof typeof outputs} */ (gate.command)])
+      const kept = store.get('evidence:s1')
+      expect(gate.proofs.map(rung => kept[rung]?.gates?.[gate.id ?? '']?.state)).toEqual(gate.proofs.map(() => 'pass'))
+    }
+    const { run } = session(WEB)
+    let evidence = await run('npm test', outputs['npm test'])
+    expect(WEB.isProven(evidence, 'engineer')).toBe(false)
+    for (const [command, text] of Object.entries(outputs)) evidence = await run(command, text)
+    expect(['tests', 'lint', 'build', 'ui'].map(rung => evidence[rung]?.state)).toEqual(['pass', 'pass', 'pass', 'pass'])
+    expect(WEB.isProven(evidence, 'engineer')).toBe(true)
+    evidence = await run('npm run curriculum:verify', 'Exit code 1\nlesson 12: unknown reference', true)
+    expect(evidence.tests?.state).toBe('fail')
+    expect(WEB.isProven(evidence, 'engineer')).toBe(false)
+  })
+  test('a Go gate and a Rust gate that pass on exit: the passing run passes, the failing run fails, a piped run is not proven', async () => {
+    for (const [gate, passing, failing] of RUNS) {
+      const pack = packOf([{ ...gate, passOn: 'exit' }])
+      expect(tests(pack, gate.command, fixture(passing))).toEqual(['pass'])
+      expect(tests(pack, gate.command, fixture(failing), true)).toEqual(['fail'])
+      const piped = pack.readShell(`${gate.command} 2>&1 | tail -5`, fixture(passing), {})
+      expect(piped.rungs.map(one => one.value.state)).toEqual(['none'])
+      expect(piped.context).toHaveLength(1)
+      const { run } = session(pack)
+      expect(pack.isProven(await run(gate.command, fixture(failing), true), 'engineer')).toBe(false)
+      expect(pack.isProven(await run(gate.command, fixture(passing)), 'engineer')).toBe(true)
+    }
+  })
+  test("the exit code passes a gate only when it is the gate's own: not after a pipe, \";\" or \"||\"", async () => {
+    const hidden = ['go test ./... | cat', "go test ./... 2>&1 | sed -n '1,80p'", 'go test ./...; echo "exit=$?"', 'go test ./... || true', 'go test ./...\necho done']
+    for (const passOn of ['exit', undefined]) {
+      const pack = packOf([{ ...GO, passOn }, { id: 'unit', command: 'pnpm test', proofs: ['tests'], passOn }])
+      for (const command of hidden) {
+        // The exit code is another command's, so the tool call is no error whatever the tests did.
+        for (const text of [fixture('go-test-fail.txt'), fixture('go-test-pass.txt')]) {
+          const reading = pack.readShell(command, text, {})
+          expect(reading.rungs.map(one => one.value.state)).toEqual(['none'])
+          expect(reading.context).toHaveLength(1)
+        }
+      }
+      for (const command of ['go test ./...', 'cd api && go test ./... 2>&1', 'go test ./... -run "TestA|TestB"', "go test ./... -run 'TestA;TestB'"]) {
+        const reading = pack.readShell(command, fixture('go-test-pass.txt'), {})
+        expect(reading.rungs.map(one => one.value.state)).toEqual(['pass'])
+        expect(reading.context).toHaveLength(0)
+      }
+      // Counts decide as before, whatever joins the commands.
+      expect(tests(pack, 'pnpm test; echo done', fixture('node-test-pass.txt'))).toEqual(['pass'])
+      expect(pack.readShell('pnpm test; echo done', fixture('node-test-pass.txt'), {}).context).toHaveLength(0)
+      expect(tests(pack, 'pnpm test; echo done', fixture('node-test-fail.txt'))).toEqual(['fail'])
+      const single = packOf([{ ...GO, passOn }])
+      const { run } = session(single)
+      expect(single.isProven(await run('go test ./...', fixture('go-test-pass.txt')), 'engineer')).toBe(true)
+      const later = await run('go test ./...; echo done', fixture('go-test-fail.txt'))
+      expect(later.tests?.state).toBe('none')
+      expect(single.isProven(later, 'engineer')).toBe(false)
+    }
+  })
+  test('a gate found inside a script that is no gate is read on counts, not on the outer exit code', async () => {
+    const scripts = { check: 'go test ./... | cat', soft: 'go test ./... || true', echo: 'go test ./...; echo "exit=$?"', wrap: 'go test ./...', unit: 'pnpm test' }
+    for (const passOn of ['exit', undefined]) {
+      const pack = packOf([{ ...GO, passOn }], { scripts })
+      for (const script of ['check', 'soft', 'echo', 'wrap']) {
+        for (const text of [fixture('go-test-fail.txt'), fixture('go-test-pass.txt')]) {
+          const reading = pack.readShell(`npm run ${script}`, text, {})
+          expect(reading.rungs.map(one => [one.value.state, one.gates?.ran])).toEqual([['none', ['tests']]])
+          expect(reading.context).toHaveLength(0)
+        }
+        const { run, store } = session(pack)
+        expect(pack.isProven(await run('go test ./...', fixture('go-test-pass.txt')), 'engineer')).toBe(true)
+        const later = await run(`npm run ${script}`, fixture('go-test-fail.txt'))
+        expect(store.get('evidence:s1').tests.gates.tests.state).toBe('none')
+        expect(pack.isProven(later, 'engineer')).toBe(false)
+      }
+      // With counts nothing changes: a script that wraps a counted gate passes it on counts.
+      const counted = packOf([{ id: 'unit', command: 'pnpm test', proofs: ['tests'], passOn }], { scripts })
+      expect(tests(counted, 'pnpm unit', fixture('node-test-pass.txt'))).toEqual(['pass'])
+      expect(tests(counted, 'pnpm unit', fixture('node-test-fail.txt'))).toEqual(['fail'])
+      expect(tests(counted, 'pnpm unit', 'all good')).toEqual(['none'])
+    }
+  })
+  test('a call that was denied never ran: nothing is read from it', async () => {
+    const denied = { deny: 'refused by the person' }
+    for (const passOn of ['exit', undefined]) {
+      const pack = packOf([{ ...GO, passOn }, { id: 'lint', command: 'pnpm lint', proofs: ['lint'], passOn }, { id: 'build', command: 'pnpm build', proofs: ['build'], passOn }])
+      for (const command of ['go test ./...', 'pnpm lint', 'pnpm build', 'go test ./... && pnpm lint && pnpm build']) {
+        const reading = pack.readShell(command, '', denied)
+        expect([reading.rungs, reading.context]).toEqual([[], []])
+        expect(pack.readShell(command, '', {}).rungs.every(one => one.value.state === 'pass')).toBe(true)
+      }
+      const single = packOf([{ ...GO, passOn }])
+      const { run } = session(single)
+      expect(single.isProven(await run('go test ./...', '', false, denied.deny), 'engineer')).toBe(false)
+      expect(single.isProven(await run('go test ./...', fixture('go-test-pass.txt')), 'engineer')).toBe(true)
+      expect(single.isProven(await run('go test ./...', '', false, denied.deny), 'engineer')).toBe(true)
+    }
+  })
+  test('the same gates on counts are not proven by a passing run the pack reads no counts in', async () => {
+    for (const [gate, passing, failing] of RUNS) {
+      const pack = packOf([{ ...gate, passOn: 'counts' }])
+      expect(tests(pack, gate.command, fixture(passing))).toEqual(['none'])
+      expect(tests(pack, gate.command, fixture(failing), true)).toEqual(['fail'])
+      const { run } = session(pack)
+      expect(pack.isProven(await run(gate.command, fixture(passing)), 'engineer')).toBe(false)
+    }
+  })
+  test('on exit, a run that says no tests ran still fails, and so does a failure count, also piped', () => {
+    for (const passOn of ['exit', undefined]) {
+      const pack = packOf([{ id: 'test', command: 'pnpm test', proofs: ['tests'], passOn }, { id: 'ui', command: 'pnpm e2e', proofs: ['ui'], passOn }])
+      expect(tests(pack, 'pnpm test', 'No tests found, exiting with code 0\n')).toEqual(['fail'])
+      expect(tests(pack, 'pnpm test', 'ℹ tests 0\nℹ pass 0\nℹ fail 0\n')).toEqual(['fail'])
+      expect(tests(pack, 'pnpm test', fixture('pnpm-recursive-fail.txt'))).toEqual(['fail'])
+      expect(tests(pack, 'pnpm test | tail -40', fixture('pnpm-recursive-fail.txt'))).toEqual(['fail'])
+      expect(tests(pack, 'pnpm test', fixture('pnpm-recursive-pass.txt'))).toEqual(['pass'])
+      expect(tests(pack, 'pnpm test | tail -40', fixture('pnpm-recursive-pass.txt'))).toEqual(['pass'])
+      // The browser check is read the same way.
+      expect(pack.readShell('pnpm e2e', 'all good', {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['ui', 'pass']])
+      expect(pack.readShell('pnpm e2e | tail -3', 'all good', {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['ui', 'none']])
+      expect(pack.readShell('pnpm e2e', fixture('playwright-fail.txt'), {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['ui', 'fail']])
+    }
+  })
+  test('what is no gate of the profile is not proven by exit 0 alone: a tool, a script with no gate in it, a repository without a profile, the core', async () => {
+    expect(read('node --test tests/learner-engine.test.mjs', 'all good')).toEqual({ tests: 'none' })
+    expect(read('npx vitest run', 'all good')).toEqual({ tests: 'none' })
+    expect(read('npx playwright test', 'all good')).toEqual({ ui: 'none' })
+    // profile:verify runs node --test and is no gate of han-viet's profile.
+    expect(read('npm run profile:verify', 'all good')).toEqual({ tests: 'none' })
+    const { run } = session(WEB)
+    for (const gate of WEB.gates.filter(one => one.id !== 'curriculum')) await run(gate.command, gate.proofs.includes('ui') ? fixture('playwright-pass.txt') : fixture('node-test-pass.txt'))
+    expect((await run('npm run profile:verify', 'all good')).tests?.state).toBe('none')
+    const bare = makeWebPack(null, { scripts: { test: 'node --test', build: 'next build' } })
+    expect(bare.readShell('npm test', 'all good', {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['tests', 'none']])
+    expect((await session(bare).run('npm test', 'all good')).tests?.state).toBe('none')
+    expect(core.readShell('node --test', 'all good', {}).rungs.map(one => one.value.state)).toEqual(['none'])
+    expect(readToolOutput('tests', 'node --test', 'all good', {})?.state).toBe('none')
+    expect(readToolOutput('ui', 'playwright test', 'all good', {})?.state).toBe('none')
+  })
+  test('one command that ran a gate on exit and a gate on counts: each is read its own way', async () => {
+    const gates = [{ id: 'unit', command: 'pnpm test:unit', proofs: ['tests'] }, { id: 'strict', command: 'pnpm test:strict', proofs: ['tests'], passOn: 'counts' }, { id: 'lint', command: 'pnpm lint', proofs: ['lint'], passOn: 'counts' }]
+    const pack = packOf(gates, { scripts: { check: 'pnpm test:unit && pnpm test:strict && pnpm lint' } })
+    const all = ['unit', 'strict']
+    // Typed, the command runs the gates itself. Through a script that is no gate, both are read on counts.
+    const readings = /** @type {const} */ ([
+      ['pnpm test:unit && pnpm test:strict && pnpm lint', [['tests', 'pass', { ran: ['unit'], all }], ['tests', 'none', { ran: ['strict'], all }], ['lint', 'pass', { ran: ['lint'], all: ['lint'] }]], 'pass'],
+      ['pnpm check', [['tests', 'none', { ran: all, all }], ['lint', 'pass', { ran: ['lint'], all: ['lint'] }]], 'none'],
+    ])
+    for (const [command, expected, unit] of readings) {
+      const reading = pack.readShell(command, 'all good', {}).rungs
+      expect(reading.map(one => [one.rung, one.value.state, one.gates])).toEqual(expected)
+      const { run, store } = session(pack)
+      const evidence = await run(command, 'all good')
+      const kept = store.get('evidence:s1').tests.gates
+      expect([kept.unit.state, kept.strict.state, evidence.tests?.state, evidence.lint?.state]).toEqual([unit, 'none', 'none', 'pass'])
+      expect((await run(command, fixture('node-test-pass.txt'))).tests?.state).toBe('pass')
+      // A failure fails both.
+      const failed = await run(command, fixture('node-test-fail.txt'), true)
+      expect([failed.tests?.state, store.get('evidence:s1').tests.gates.unit.state, store.get('evidence:s1').tests.gates.strict.state]).toEqual(['fail', 'fail', 'fail'])
+    }
   })
 })
 

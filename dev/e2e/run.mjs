@@ -1519,8 +1519,8 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   await engine.modelTool({ tool: 'Bash', command: 'npm test', __text: fixture('node-test-pass.txt') })
   await engine.modelTool({ tool: 'Bash', command: 'npm run lint', __text: fixture('eslint-pass.txt') })
   expect('tests are not proven by npm test alone: the curriculum and learner gates declare them too', evidenceOf(engine)?.tests?.state === 'none', evidenceOf(engine))
-  // han-viet's curriculum:verify prints no counts: a counted output stands in.
-  await engine.modelTool({ tool: 'Bash', command: 'npm run curriculum:verify', __text: fixture('node-test-pass.txt') })
+  // han-viet's curriculum:verify prints no counts: run by itself, the gate passes on its exit code.
+  await engine.modelTool({ tool: 'Bash', command: 'npm run curriculum:verify', __text: 'curriculum ok\nstudy layer ok\ncharacter layer ok\n' })
   await engine.modelTool({ tool: 'Bash', command: 'npm run learner:test', __text: fixture('node-test-pass.txt') })
   await engine.modelTool({ tool: 'Bash', command: 'npm run build', __text: fixture('vinext-build-pass.txt') })
   await engine.modelTool({ tool: 'Bash', command: 'npm run build:next', __text: fixture('next-build-pass.txt') })

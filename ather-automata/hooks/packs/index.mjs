@@ -19,7 +19,7 @@ import { makeWebPack } from './web.mjs'
  * @typedef {{ id: string, pattern: RegExp, title: string, fix: string, rule?: { file: string, text: string } }} PackTrap
  * @typedef {{ name: string, verb: string, isGlobal?: boolean }} CreateItem
  * @typedef {{ isHeld: boolean, isFree: boolean, holder: string, until: string }} EditorState
- * @typedef {{ command: string, proofs: string[], id?: string, proves?: string }} Gate
+ * @typedef {{ command: string, proofs: string[], id?: string, proves?: string, passOn?: 'exit' | 'counts' }} Gate `passOn`: how its tests and ui proofs pass, on its exit code (also without the field) or on test counts
  * @typedef {{ host: string, branch: string, deployment: string, url: string, expectStatus: number }} Production
  * @typedef {{ pack: Pack, held: readonly string[], isProven: boolean }} HeldAt what a folder's own checkout holds, when that is not the session's
  * @typedef {{ isProven?: boolean, scripts?: Record<string, string>, at?: (folder: string | null) => HeldAt | null }} HeldContext
@@ -38,7 +38,7 @@ import { makeWebPack } from './web.mjs'
  *   held: { labels: Record<string, string>, nouns: Record<string, string>, kinds: readonly string[], defaults: readonly string[] },
  *   heldSegment: (segment: string, held: readonly string[], context: HeldContext) => string | null,
  *   mergePolicy: 'hold' | 'with-proof', mergeRungs?: readonly string[], rungGates?: Readonly<Record<string, string[]>>,
- *   isAssetSave: (input: string) => boolean, readShell: (command: string, text: string, ran: { isError?: boolean }) => ShellReading,
+ *   isAssetSave: (input: string) => boolean, readShell: (command: string, text: string, ran: { isError?: boolean, deny?: string }) => ShellReading,
  *   mcpKind: (input: string) => 'write' | 'read' | 'pie' | null, binaryAssets: RegExp | null, briefPaths: RegExp,
  *   skillGroups: readonly { group: string, names: readonly string[] }[], createGroups: readonly { group: string, items: readonly CreateItem[] }[],
  *   createOrder: Record<string, readonly string[]>, createTitle: string, createMeta: (editor: EditorState) => string, createPrompt: (verb: string, name: string, editor: EditorState) => string,

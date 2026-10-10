@@ -170,6 +170,27 @@ const NODE_TEST_PASS = fs.readFileSync(new URL('../../ather-automata/tests/fixtu
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- a gate that passes on its exit code
+
+for (const [index, [name, command]] of [['go', 'go test ./...'], ['cargo', 'cargo test']].entries()) {
+  const output = kind => fs.readFileSync(new URL(`../../ather-automata/tests/fixtures/web/${name}-test-${kind}.txt`, import.meta.url), 'utf8')
+  const parent = fs.mkdtempSync(join(BASE, 'exit-'))
+  const profile = { version: 1, pack: 'web', gates: [{ id: 'tests', command, proofs: ['tests'], passOn: 'exit' }], mergePolicy: 'with-proof' }
+  const repo = makeCheckout(parent, name, { owner: 'AskTinNguyen', name, files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(profile, null, 2)}\n` } })
+  const { engine, sessionId: sid } = await boot({ root: repo, sessionId: `harness-session-00${47 + index}` })
+  const tests = () => engine.store.get(`evidence:${sid}`)?.tests
+  await startAway(engine)
+  await engine.modelTool({ tool: 'Bash', command, __text: output('fail'), __isError: true })
+  const failed = await bash(engine, 'gh pr merge 3')
+  expect(`${command}, a gate that passes on exit: the failing run fails tests`, tests()?.state === 'fail', tests())
+  expect('and the with-proof merge is held', failed.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'merge', failed.deny)
+  await bash(engine, command, output('pass'))
+  const proven = await bash(engine, 'gh pr merge 3')
+  expect(`${command}: the passing run, which prints no counts the pack reads, passes tests and the merge goes through`, tests()?.state === 'pass' && proven.deny === undefined, [tests(), proven.deny])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- an intent tracked in another checkout
 
 const LOGIN = '# Login\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: the form posts.\n- [ ] A2: errors show.\n'
