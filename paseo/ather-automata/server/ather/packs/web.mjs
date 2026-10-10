@@ -45,11 +45,53 @@ const normal = command =>
     .replace(/^(npm|pnpm|yarn|bun)\s+(?:run|run-script)\s+(test|start)\b/i, '$1 $2')
     .trim()
 
-/** @param {string} gate @param {string} segment */
-const isGate = (gate, segment) => {
-  const a = normal(gate)
-  const b = normal(segment)
-  return a !== '' && (b === a || b.startsWith(`${a} `))
+// The program a command's first word runs: the last part of its path, without ".exe" (Windows names
+// have no case), and every python is one program. ".venv/bin/python" and "python3.12" are "python".
+/** @param {string} word */
+const programOf = word => {
+  const name = word.slice(Math.max(word.lastIndexOf('/'), word.lastIndexOf('\\')) + 1) || word
+  const program = /\.exe$/i.test(name) ? name.slice(0, -4).toLowerCase() : name
+  return /^python(3(\.\d+)?)?$/.test(program) ? 'python' : program
+}
+
+// A command as a gate is compared: env prefix dropped, its first word a program, npm spellings folded.
+/** @param {string} command */
+const asTyped = command => normal(bareCommand(command).replace(/^\S+/, programOf))
+
+// The folder a `cd` segment goes to, as written, without a trailing slash.
+/** @param {string} segment */
+const cdFolder = segment => /^cd\s+(.+)$/.exec(segment)?.[1]?.replace(/(?<=.)[\\/]+$/, '') ?? null
+
+// A gate as it is compared. One written `cd <folder> && <command>` is two segments: the folder and
+// the command. Any other chain (more than one `&&`, or a first segment that is not a `cd`) stays
+// whole, so it never matches a command, which is read one segment at a time.
+/** @param {string} gate @returns {{ folder: string | null, command: string }} */
+const gateParts = gate => {
+  const parts = segments(gate)
+  const folder = parts.length === 2 && gate.includes('&&') ? cdFolder(parts[0] ?? '') : null
+  return folder === null ? { folder: null, command: asTyped(gate) } : { folder, command: asTyped(parts[1] ?? '') }
+}
+
+/**
+ * The gate a segment runs: its command is the segment or a prefix of it, and a `cd` gate also needs
+ * that `cd` as the segment before. Among several, the longest command wins, wherever it stands.
+ * @param {readonly string[]} parts the command's segments @param {number} at @param {readonly Gate[]} gates
+ * @returns {Gate | null}
+ */
+const gateOf = (parts, at, gates) => {
+  const typed = asTyped(parts[at] ?? '')
+  const before = at > 0 ? cdFolder(parts[at - 1] ?? '') : null
+  /** @type {Gate | null} */
+  let best = null
+  let longest = 0
+  for (const gate of gates) {
+    const { folder, command } = gateParts(gate.command)
+    if (command === '' || !(typed === command || typed.startsWith(`${command} `))) continue
+    if (folder !== null && folder !== before) continue
+    const length = command.length + (folder === null ? 0 : `cd ${folder} && `.length)
+    if (length > longest) [best, longest] = [gate, length]
+  }
+  return best
 }
 
 // The npm script a segment runs: "npm run lint" → "lint", "npm test" → "test".
@@ -68,9 +110,10 @@ const hostOf = url => /^https?:\/\/([^/:?#\s]+)/i.exec(url)?.[1]?.toLowerCase() 
 export const rungsOfCommand = (command, scripts, gates, production = null, depth = 0) => {
   /** @type {Set<string>} */
   const found = new Set()
-  for (const segment of segments(command)) {
+  const parts = segments(command)
+  for (const [at, segment] of parts.entries()) {
     const bare = bareCommand(segment)
-    const gate = gates.find(one => isGate(one.command, bare))
+    const gate = gateOf(parts, at, gates)
     if (gate) {
       for (const proof of gate.proofs) if (ALIASES[proof] && ALIASES[proof] !== 'prod') found.add(ALIASES[proof])
       continue
