@@ -1280,6 +1280,53 @@ const refresh = async engine => {
   await none.engine.end('other')
 }
 
+// ---------------------------------------------------------------- the traced folders, set by the session
+
+{
+  // The model's own tool: asked in words ("add s2 to Ather"), the session adds the folder itself.
+  const KEPT = 'tracedFolders'
+  const tool = (engine, input) => engine.modelTool({ tool: 'mcp__ather-automata__repos', ...input }).then(answer => String(answer?.result ?? ''))
+  const pane = engine => engine.render('Pane', { bodyColumns: 400 }, 'ather')
+  const ids = async engine => intentRows(await pane(engine)).map(one => one.id).sort()
+  const { parent, s2, web } = makeWorkspace()
+  const tree = join(parent, 's2-x')
+  git(s2, 'worktree', 'add', '-q', '-b', 'x', tree)
+  writeIntent(web, 'login')
+  writeIntent(s2, 'boss')
+  writeIntent(tree, 'draft')
+  const ghAt = { [web]: { issues: [] }, [s2]: { issues: [issue(7, 'Boss shield')] } }
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0045', ghAt })
+  engine.setSurfaces(['terminal'])
+  await issuesRead(engine, { [web]: {} })
+  expect('the session is given a repos tool beside status, away and profile', engine.record.registeredTools.includes('repos'), engine.record.registeredTools)
+  // The pane is open on Everything open, and stays there: the person watches it change.
+  await engine.command('ather', 'pick')
+  expect("before, the open pane lists web's intent alone", JSON.stringify(await ids(engine)) === JSON.stringify(['intent:login']), await ids(engine))
+  const listed = await tool(engine, { action: 'list' })
+  expect('list names the session folder and nothing kept', listed.includes(web) && !listed.includes(s2), listed)
+
+  const invalidations = engine.record.invalidations
+  const added = await tool(engine, { action: 'add', folder: '../s2' })
+  await engine.flush()
+  expect("add with ../s2 keeps s2's folder for the machine and says so", JSON.stringify(engine.store.get(KEPT) ?? []) === JSON.stringify([s2]) && added.includes(s2), [added, engine.store.get(KEPT)])
+  expect("the open pane is asked to redraw and, with no command and no restart, lists s2's intents and its worktree's", engine.record.invalidations > invalidations && JSON.stringify(await ids(engine)) === JSON.stringify(['intent:login', 'intent:s2-x/draft', 'intent:s2/boss']), await ids(engine))
+  const after = await tool(engine, { action: 'list' })
+  expect('list then names both folders', after.includes(web) && after.includes(s2), after)
+
+  const again = await tool(engine, { action: 'add', folder: s2 })
+  const nowhere = await tool(engine, { action: 'add', folder: BASE })
+  const unnamed = await tool(engine, { action: 'add' })
+  expect('a folder already listed, a path in no checkout and no folder at all store nothing and say why', JSON.stringify(engine.store.get(KEPT)) === JSON.stringify([s2]) && [again, nowhere, unnamed].every(text => text !== '' && !/^Added/.test(text)), [again, nowhere, unnamed])
+
+  const removed = await tool(engine, { action: 'remove', folder: 's2' })
+  await engine.flush()
+  expect("remove by the checkout's name takes it out, and the open pane is back to web's intent", (engine.store.get(KEPT) ?? []).length === 0 && removed.includes(s2) && JSON.stringify(await ids(engine)) === JSON.stringify(['intent:login']), [removed, await ids(engine)])
+  const odd = await tool(engine, { action: 'sweep' })
+  expect('an action the tool does not have changes nothing and names the three it has', (engine.store.get(KEPT) ?? []).length === 0 && /list/.test(odd) && /add/.test(odd) && /remove/.test(odd), odd)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

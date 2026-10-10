@@ -565,6 +565,19 @@ async function registerTools($, pack) {
       },
     },
   })
+  await $.tool.register({
+    name: 'repos',
+    description:
+      'Ather Automata: the folders Ather lists besides this session\'s own checkout; their intents, issues and PRs show in the Ather pane. Use it when the user asks to add, remove or show a repository or folder in Ather ("add the lancaster repository to Ather"). "add" keeps the folder\'s git checkout for this PC and lists it at once: the pane redraws by itself, with that checkout\'s worktrees too, and no restart or command is needed. "remove" takes a kept folder out. "list" shows every folder listed and where it comes from. Nothing on disk changes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'add', 'remove'] },
+        folder: { type: 'string', description: 'With add or remove: the folder, absolute, ~/…, or relative to the session folder. With remove it may also be the checkout\'s name as the pane shows it.' },
+      },
+      required: ['action'],
+    },
+  })
 }
 
 // ---------------------------------------------------------------- shell and MCP calls

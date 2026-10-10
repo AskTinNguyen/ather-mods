@@ -366,6 +366,8 @@ export function register(on, options) {
     return { text: await atherCommand($, e.args.trim()) }
   })
 
+  on('tool.call', { tool: 'mcp__ather-automata__repos' }, async ($, e) => ({ result: await reposTool($, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))) }))
+
   on('command.run', { command: 'away' }, async ($, e) => {
     if (!(await hasIntents($))) return { text: (await laneOf($)).pack.notHere }
     await wake($)
@@ -1629,7 +1631,26 @@ async function reposCommand($, rest) {
   if (verb === 'add') return addFolder($, folder)
   if (verb === 'remove') return removeFolder($, folder)
   if (await hasPane($)) return openPane($, 'repos')
-  return ['Folders Ather lists:', ...(await readSources($)).map(one => `- ${one.folder} (${sourceText(one)})`), 'Add one with /ather repos add <folder>; it is kept for this PC.'].join('\n')
+  return [...(await sourceLines($)), 'Add one with /ather repos add <folder>; it is kept for this PC.'].join('\n')
+}
+
+// The folders listed, one line each, for a reply in words.
+/** @param {Engine} $ */
+async function sourceLines($) {
+  return ['Folders Ather lists:', ...(await readSources($)).map(one => `- ${one.folder} (${sourceText(one)})`)]
+}
+
+// The session's own way to the folders listed (the `repos` tool): what the view's buttons and `/ather repos`
+// do, asked for in words. A change redraws the pane as theirs does.
+/** @param {Engine} $ @param {Record<string, unknown>} input */
+async function reposTool($, input) {
+  const action = String(input.action ?? 'list')
+  const folder = typeof input.folder === 'string' ? input.folder.trim() : ''
+  if (action !== 'list' && action !== 'add' && action !== 'remove') return `No such action "${action}": list, add or remove.`
+  await wake($)
+  if (action === 'list') return (await sourceLines($)).join('\n')
+  if (folder === '') return `Name the folder to ${action}.`
+  return action === 'add' ? addFolder($, folder) : removeFolder($, folder)
 }
 
 // Where the surface draws no text field: one question, and what is typed under Other is the folder.

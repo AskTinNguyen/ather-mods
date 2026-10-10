@@ -59,3 +59,8 @@
 - After both: unit 268/268, `dev/e2e/repos.mjs` 225/225, S2 e2e 354/354, type-check clean, both Paseo plugins type-check, `claude plugin validate` and `claude plugin test` pass.
 - Noted, not changed: Needs you draws nine rows; with more waiting, the rest (a rule to make, later decisions) are not drawn and nothing says so beyond the count.
 
+## 2026-10-10, the session sets the traced folders (S14)
+
+- Asked for by the owner: tell the agent to add a repository and have the pane follow. The mod gave the model three tools and none for this; `/ather repos` is the person's command, which a session cannot run. D17 (Rev 9): a fourth tool, `repos` (list, add, remove), through the code the view's buttons use, with no confirmation, as the owner chose.
+- The pane's following was already there (D15): the tool only had to reach it.
+

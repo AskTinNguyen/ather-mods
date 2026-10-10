@@ -138,7 +138,7 @@ const pressIn = (tree, label) => {
 {
   const { engine, done } = await boot()
   expect('two commands: /ather and /away', engine.record.commands.join(',') === 'ather,away', engine.record.commands)
-  expect('three model tools: status, away, profile', engine.record.registeredTools.join(',') === 'status,away,profile', engine.record.registeredTools)
+  expect('four model tools: status, away, profile, repos', engine.record.registeredTools.join(',') === 'status,away,profile,repos', engine.record.registeredTools)
   done()
   const quiet = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen' })
   register(quiet.on, {})
@@ -147,7 +147,7 @@ const pressIn = (tree, label) => {
   // there at once, and the console's reading starts the first time it is drawn, never before.
   const quietReads = () => quiet.record.logs.length + quiet.record.invalidations
   const before = quietReads()
-  expect('a session the desktop app starts (not interactive) still gets /ather and /away, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away' && quiet.record.registeredTools.length === 3 && quietReads() === before, quiet.record.commands)
+  expect('a session the desktop app starts (not interactive) still gets /ather and /away, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away' && quiet.record.registeredTools.join(',') === 'status,away,profile,repos' && quietReads() === before, quiet.record.commands)
   const desk = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen', ghIssues: [{ number: 28887, title: '[BUG][GAS] Dodge cancels the wrong montage', url: 'https://github.com/sipherxyz/s2/issues/28887', labels: [{ name: 'combat' }], updatedAt: new Date().toISOString() }] })
   register(desk.on, {})
   await desk.start(false)
@@ -1617,7 +1617,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   write(root)
   const opened = await run(engine, [])
   expect('setup: with the five pieces written, /ather in the same session opens Home and asks no setup question', opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather'), [opened, engine.record.opens])
-  expect("setup: the profile tool is registered again with the new profile's areas (app, api), which it did not list before", toolAreas(engine).join(',') === 'app,api' && areasBefore.join(',') !== 'app,api' && engine.record.registeredTools.join(',') === 'status,away,profile,status,away,profile', [areasBefore, toolAreas(engine), engine.record.registeredTools])
+  expect("setup: the profile tool is registered again with the new profile's areas (app, api), which it did not list before", toolAreas(engine).join(',') === 'app,api' && areasBefore.join(',') !== 'app,api' && engine.record.registeredTools.join(',') === 'status,away,profile,repos,status,away,profile,repos', [areasBefore, toolAreas(engine), engine.record.registeredTools])
   const tree = JSON.stringify(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), (key, value) => (typeof value === 'function' ? undefined : value))
   expect('setup: Home is drawn for the repository, with the tour as the next step', /tour/i.test(tree), tree.slice(0, 600))
   const role = await run(engine, [], 'ather', 'skip')
