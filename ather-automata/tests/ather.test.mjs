@@ -1994,6 +1994,18 @@ describe('one pane over the workspace', () => {
     for (const isClicked of [false, true]) expect(mainOf(draw(plain, isClicked)).children.map((/** @type {any} */ child) => child.props.key)).toEqual(['pick-intent:board'])
   })
 
+  test("a long checkout name (a worktree's folder) is cut so that the title keeps its place, on both surfaces", () => {
+    const long = workList([from('/ws/ather-mods/.claude/worktrees/automata-multi-repo-support-bbfecb', 'automata-multi-repo-support-bbfecb', 'multi-repo', false), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON).find(one => one.label === 'multi-repo')
+    const cols = { count: 3, age: 2, owner: 0 }
+    const mainOf = (/** @type {any} */ row) => all(row, one => /-main$/.test(one.props?.key ?? ''))[0]
+    for (const isClicked of [false, true]) {
+      const row = workLine(el, { key: `pick-${long.id}`, cells: rowCells(long, NOON, false), cols, width: 46, ownerColour: '#ffffff', onPress: () => undefined, isClicked })
+      const name = textOf(all(mainOf(row), one => one.props?.key === `pick-${long.id}-repo`)[0]).trim()
+      expect([name.length <= 16, name.startsWith('automata-multi-'), name.endsWith('…')]).toEqual([true, true, true])
+      expect(all(mainOf(row), one => one.props?.key === `pick-${long.id}`)[0].props.label).toContain('multi-repo')
+    }
+  })
+
   const CALLS = `# Findings\n\n## F-1 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nDrops only, or a full respawn?\n\n**Options:**\n- A (recommended): drops only\n- B: a full respawn\n\n## F-2 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nWhich pool size?\n`
 
   test("a decision on another checkout's intent: its id and answers name the key and its findings file; the session's own as with one checkout", () => {
