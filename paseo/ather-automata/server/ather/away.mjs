@@ -2,7 +2,7 @@
 // its ledger text, and the mandate the session is given. Pure: no `$`; the one
 // place that changes a window is state.mjs.
 
-import { HELD_LABELS } from './guards.mjs'
+import { forBase, heldLabel } from './guards.mjs'
 import { clockText } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 
@@ -82,38 +82,39 @@ export const newWindow = (choice, now, ledgerPath, owner) => ({
   root: owner.root,
 })
 
-/** @param {Away} away */
-const heldText = away => away.held.map(kind => HELD_LABELS[/** @type {keyof typeof HELD_LABELS} */ (kind)] ?? kind).join(', ') || 'nothing'
+// `base`: the branch the checkout's team merges into; a window there says so where it says main (guards.mjs forBase).
+/** @param {Away} away @param {Pack} pack @param {string} [base] */
+const heldText = (away, pack, base) => away.held.map(kind => heldLabel(kind, pack, base)).join(', ') || 'nothing'
 
 // A ledger file with a new window appended (or started).
-/** @param {string} existing @param {Away} away @param {number} tz @param {Pack} [pack] */
-export const ledgerWithWindow = (existing, away, tz, pack = unreal) =>
+/** @param {string} existing @param {Away} away @param {number} tz @param {Pack} [pack] @param {string} [base] */
+export const ledgerWithWindow = (existing, away, tz, pack = unreal, base = 'main') =>
   [
     existing === '' ? '# Autonomy Window Decisions\n' : existing.trimEnd(),
     '',
     `## Autonomy window from ${clockText(away.startedAt, tz)}, ${windowEndText(away, tz)}`,
     '',
     `- Goal: ${away.goal || '(see the session)'}`,
-    `- Allowed without asking: ${pack.mandate.allowed}`,
-    `- Held: ${heldText(away)}`,
+    `- Allowed without asking: ${forBase(pack.mandate.allowed, base)}`,
+    `- Held: ${heldText(away, pack, base)}`,
     '',
     'Each decision taken for you while you were away. Entry format: Options, Choice, Why, Evidence, Revert, Status (provisional, kept, revert requested, reopened).',
     '',
   ].join('\n')
 
-/** @param {Away} away @param {number} tz @param {Pack} [pack] */
-export const mandateText = (away, tz, pack = unreal) =>
+/** @param {Away} away @param {number} tz @param {Pack} [pack] @param {string} [base] */
+export const mandateText = (away, tz, pack = unreal, base = 'main') =>
   away.phase === 'review'
-    ? `AWAY WINDOW ENDED (Ather Automata): the user has not reviewed it yet. Until they do, do not retry held actions (${heldText(away)}) and record any decision that would be theirs in ${away.ledgerPath} instead of asking.`
+    ? `AWAY WINDOW ENDED (Ather Automata): the user has not reviewed it yet. Until they do, do not retry held actions (${heldText(away, pack, base)}) and record any decision that would be theirs in ${away.ledgerPath} instead of asking.`
     : [
     away.untilDone
       ? `AUTONOMY WINDOW (Ather Automata): the user is away until the work is done (hard stop ${clockText(away.wakeAt, tz)} local time). When the goal is done, call the mcp__ather-automata__away tool with action "end" so the user gets the review.`
       : `AUTONOMY WINDOW (Ather Automata): the user is away until ${clockText(away.wakeAt, tz)} local time.`,
     `Goal: ${away.goal || 'continue the active work'}.`,
-    `Allowed without asking for this window: ${pack.mandate.allowed}. Use them on feature branches; ${pack.mandate.merge}.`,
+    `Allowed without asking for this window: ${forBase(pack.mandate.allowed, base)}. Use them on feature branches; ${pack.mandate.merge}.`,
     `Do not stop to ask or wait for answers. On any decision that would be the user\'s, take the recommended option, prefer the reversible one, and ${pack.mandate.flags}.`,
     `Record every such decision when you make it in ${away.ledgerPath} as "### D-<n> · <question>" with the lines Options, Choice, Why, Evidence, Revert, Status: provisional.`,
-    `Held until the user has reviewed the window (they will be refused and parked, do not retry them): ${heldText(away)}.`,
+    `Held until the user has reviewed the window (they will be refused and parked, do not retry them): ${heldText(away, pack, base)}.`,
     'The AGENTS.md safety contract still applies in full. When blocked on one item, move to another instead of waiting.',
   ].join(' ')
 

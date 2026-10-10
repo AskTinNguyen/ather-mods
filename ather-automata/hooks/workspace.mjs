@@ -39,7 +39,7 @@ export const normalFolder = folder => {
 }
 
 /** @param {string} folder */
-const isAbsolute = folder => /^([A-Za-z]:)?[\\/]/.test(folder)
+export const isAbsolute = folder => /^([A-Za-z]:)?[\\/]/.test(folder)
 
 // The git directory of a checkout's top folder: its .git folder, or the gitdir a worktree's .git file names.
 /** @param {Files} files @param {string} folder @returns {Promise<string | null>} */

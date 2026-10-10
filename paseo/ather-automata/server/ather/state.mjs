@@ -11,6 +11,7 @@ import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
+import { baseOf } from './team.mjs'
 import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
 
@@ -21,10 +22,13 @@ import { groupByOf } from './worklist.mjs'
  *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: (root?: string) => Promise<string>, redraw: () => void,
  *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
  *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>,
+ *   base?: (root: string) => Promise<string | null>,
  *   real?: (folder: string) => Promise<string>,
  *   worktrees?: (root: string) => Promise<string | null>
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
+ *   `base`: the default branch of the origin of the checkout at `root` ("origin/develop"), '' when it names none,
+ *   null when git could not say; without it a checkout's base is main.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
  *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.5, and as the Paseo version still keeps them).
  *   `real`: the folder a path really lands in, behind any symbolic link; without it an id holds the folder as given.
@@ -100,7 +104,7 @@ const changed = io => {
 
 // ---------------------------------------------------------------- the lane
 
-/** @typedef {{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, isSure: boolean }} Checkout */
+/** @typedef {{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, base: string, isSure: boolean }} Checkout `base`: the branch its team merges into (team.mjs baseOf) */
 // The session's lane by its folder, and each checkout's by its root.
 /** @type {Map<string, Promise<Checkout>>} */
 const lanes = new Map()
@@ -202,10 +206,12 @@ export const onSetUp = (who, handler) => void setUpHandlers.set(who, handler)
 /** @param {Io} io @param {string} root @param {string} [userRoot] */
 const readCheckout = async (io, root, userRoot) => {
   const list = io.list ?? (async () => [])
-  const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
+  const { pack, profile } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal, profile: null }))
   const origin = io.origin ? await io.origin(root).catch(() => null) : ''
+  const { base: remote } = io
+  const base = await baseOf(profile, remote && (() => remote(root)))
   const me = await (userRoot === undefined ? io.gitUser() : io.gitUser(userRoot)).catch(() => '')
-  return { root, repo: io.origin ? repoId(origin ?? '', await realFolder(io, root)) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
+  return { root, repo: io.origin ? repoId(origin ?? '', await realFolder(io, root)) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, base: base ?? 'main', isSure: me !== '' && origin !== null && base !== null }
 }
 
 /** @param {typeof lanes} cache @param {string} key @param {() => Promise<Checkout>} read */
@@ -214,7 +220,7 @@ const cachedLane = (cache, key, read) => {
   if (cached) return cached
   const reading = read()
   cache.set(key, reading)
-  // A git name or origin that failed to read (a slow first start) is asked again next time, never kept.
+  // A git name, origin or base that failed to read (a slow first start) is asked again next time, never kept.
   void reading.then(found => {
     if (!found.isSure && cache.get(key) === reading) cache.delete(key)
   })
@@ -407,11 +413,40 @@ const storedEvidence = async (io, scope) => {
 // Proof older than this no longer counts: the code has likely moved on since.
 const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
 
+// What is kept for a command that is no gate, on a rung that gates declare. No gate has this key.
+const NO_GATE = ''
+
+/**
+ * A rung that gates declare, from the result kept for each: passed when every gate passed, failed when one
+ * failed (or a command that is no gate did, since the rung's gates last ran), else not proven. A passed
+ * rung is as old as its oldest result, so proof from before a session is never taken for that session's.
+ * @param {Record<string, import('./model.mjs').Rung> | undefined} kept @param {readonly string[]} all the gates that declare the rung
+ * @returns {import('./model.mjs').Rung}
+ */
+const rungOfGates = (kept, all) => {
+  const fresh = [...all, NO_GATE].flatMap(key => {
+    const one = kept?.[key]
+    return one && Date.now() - (one.at ?? 0) < EVIDENCE_TTL_MS ? [{ key, ...one }] : []
+  })
+  const byAge = [...fresh].sort((a, b) => (a.at ?? 0) - (b.at ?? 0))
+  const stamp = (/** @type {typeof fresh[number] | undefined} */ one) => (one ? { at: one.at, by: one.by } : {})
+  const failed = byAge.filter(one => one.state === 'fail').at(-1)
+  if (failed) return { state: 'fail', detail: all.length > 1 && failed.key !== NO_GATE ? `${failed.key}: ${failed.detail}`.slice(0, 120) : failed.detail, ...stamp(failed) }
+  const passed = byAge.filter(one => one.state === 'pass' && one.key !== NO_GATE)
+  if (all.length === 1) {
+    const only = fresh.find(one => one.key !== NO_GATE)
+    return only ? { state: only.state, detail: only.detail, ...stamp(only) } : { state: 'none', detail: '' }
+  }
+  if (passed.length === all.length) return { state: 'pass', detail: `${all.length} gates passed`, ...stamp(passed[0]) }
+  return { state: 'none', detail: `${passed.length} of ${all.length} gates passed`, ...stamp(byAge.at(-1)) }
+}
+
 /** @param {Io} io @param {string} scope from evidenceScope @param {Pack} [pack] @returns {Promise<Evidence>} */
 export const readEvidence = async (io, scope, pack = unreal) => {
-  const stored = /** @type {Record<string, { state: string, detail: string, at?: number }>} */ (await storedEvidence(io, scope))
+  const stored = /** @type {Record<string, { state: string, detail: string, at?: number, gates?: Record<string, import('./model.mjs').Rung> }>} */ (await storedEvidence(io, scope))
   const fresh = Object.fromEntries(Object.entries(stored).filter(([, rung]) => Date.now() - (rung.at ?? 0) < EVIDENCE_TTL_MS))
-  return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh })
+  const gated = Object.fromEntries(Object.entries(pack.rungGates ?? {}).map(([rung, all]) => [rung, rungOfGates(stored[rung]?.gates, all)]))
+  return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh, ...gated })
 }
 
 // A session as people see it named: the first 8 hex of its id, as the Editor lock and the tab list show it.
@@ -761,8 +796,20 @@ export const readPeers = async (io, root, localDir) => {
   return out
 }
 
-/** @param {Io} io @param {string} scope @param {keyof Evidence} rung @param {import('./model.mjs').Rung} value */
-export const setRung = (io, scope, rung, value) => serial(() => writeEvidence(io, scope, { [rung]: { state: value.state, detail: value.detail.slice(0, 120) } }))
+// `gates`: on a rung that gates declare, the run replaces the result of each gate it ran and no other; a
+// command that is no gate is kept beside them until one of the rung's gates is next run.
+/** @param {Io} io @param {string} scope @param {keyof Evidence} rung @param {import('./model.mjs').Rung} value @param {import('./packs/index.mjs').RungGates} [gates] */
+export const setRung = (io, scope, rung, value, gates) =>
+  serial(async () => {
+    const result = { state: value.state, detail: value.detail.slice(0, 120) }
+    if (!gates) return writeEvidence(io, scope, { [rung]: result })
+    const stored = await storedEvidence(io, scope)
+    const stamped = { ...result, at: Date.now(), by: shortSession(await io.sessionId()) }
+    const before = Object.entries(/** @type {Record<string, import('./model.mjs').Rung>} */ (stored[rung]?.gates ?? {})).filter(([key]) => key !== NO_GATE)
+    const kept = Object.fromEntries([...before, ...(gates.ran.length > 0 ? gates.ran : [NO_GATE]).map(key => /** @type {[string, import('./model.mjs').Rung]} */ ([key, stamped]))])
+    await io.set(KEY.evidence(scope), { ...stored, [rung]: { ...rungOfGates(kept, gates.all), gates: kept } })
+    changed(io)
+  })
 
 // MCP evidence: a write waits for a read back on the same server; PIE counts when it started.
 /** @param {Io} io @param {string} scope @param {'write' | 'read' | 'pie'} kind @param {string} server @param {boolean} isOk */
@@ -833,7 +880,8 @@ const withAway = (io, change) =>
 
 /**
  * Opens a window, unless one is running or waiting for review.
- * @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {{ root: string, tz: number, now: number, me: string, pack?: Pack }} at
+ * @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {{ root: string, tz: number, now: number, me: string, pack?: Pack, base?: string }} at
+ *   `base`: the branch the checkout's team merges into, for what the ledger says is held
  * @returns {Promise<Away | null>}
  */
 export const startAway = (io, choice, at) =>
@@ -846,7 +894,7 @@ export const startAway = (io, choice, at) =>
     const stamp = new Date(at.now + at.tz * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-')
     const ledgerPath = pin && isSamePerson(owner, at.me) ? `${dir}/decisions.md` : `${at.root}/${(at.pack ?? unreal).localDir}/away/${stamp}.md`
     const started = newWindow({ ...choice, held: choice.held ?? [...(at.pack ?? unreal).held.defaults] }, at.now, ledgerPath, { person: personId(at.me), root: at.root })
-    await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz, at.pack ?? unreal))
+    await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz, at.pack ?? unreal, at.base))
     return { away: started, result: started }
   })
 

@@ -6,12 +6,13 @@
 // actions held while the person is away, known traps, and the words the
 // session is asked with. Pure: no `$`.
 
-import { bareCommand, isPiped, segments } from '../shell.mjs'
+import { MAIN, bareCommand, branchNamed, isPiped, segments, withoutHeredocs } from '../shell.mjs'
 
 /** @typedef {import('./index.mjs').Pack} Pack */
 /** @typedef {import('./index.mjs').Rung} Rung */
 /** @typedef {import('./index.mjs').Gate} Gate */
 /** @typedef {import('./index.mjs').Production} Production */
+/** @typedef {import('./index.mjs').Found} Found */
 
 export const RUNGS = /** @type {const} */ (['tests', 'lint', 'build', 'ui', 'prod'])
 const RUNG_LABELS = { tests: 'passing tests', lint: 'a clean lint and typecheck', build: 'a build that succeeded', ui: 'a passing browser check', prod: 'a healthy production deployment' }
@@ -46,49 +47,132 @@ const normal = command =>
     .replace(/^(npm|pnpm|yarn|bun)\s+(?:run|run-script)\s+(test|start)\b/i, '$1 $2')
     .trim()
 
-/** @param {string} gate @param {string} segment */
-const isGate = (gate, segment) => {
-  const a = normal(gate)
-  const b = normal(segment)
-  return a !== '' && (b === a || b.startsWith(`${a} `))
+// The program a command's first word runs: the last part of its path, without ".exe" (Windows names
+// have no case), and every python is one program. ".venv/bin/python" and "python3.12" are "python".
+/** @param {string} word */
+const programOf = word => {
+  const name = word.slice(Math.max(word.lastIndexOf('/'), word.lastIndexOf('\\')) + 1) || word
+  const program = /\.exe$/i.test(name) ? name.slice(0, -4).toLowerCase() : name
+  return /^python(3(\.\d+)?)?$/.test(program) ? 'python' : program
+}
+
+// A command as a gate that names a bare program is compared: env prefix dropped, its first word a
+// program, npm spellings folded.
+/** @param {string} command */
+const asTyped = command => normal(bareCommand(command).replace(/^\S+/, programOf))
+
+// A gate's command for comparing, and whether its first word is a path. A bare program name
+// ("python3", "pnpm") is that program wherever it is run from; a path ("./scripts/check.sh") is
+// compared as written, so another script of the same name elsewhere does not prove it.
+/** @param {string} command */
+const gateCommand = command => {
+  const isPath = /^\S*[\\/]/.test(bareCommand(command))
+  return { isPath, command: isPath ? normal(command) : asTyped(command) }
+}
+
+// The folder a `cd` segment goes to, as written, without a trailing slash.
+/** @param {string} segment */
+const cdFolder = segment => /^cd\s+(.+)$/.exec(segment)?.[1]?.replace(/(?<=.)[\\/]+$/, '') ?? null
+
+// A gate as it is compared. One written `cd <folder> && <command>` is two segments: the folder and
+// the command. Any other chain (more than one `&&`, or a first segment that is not a `cd`) stays
+// whole, so it never matches a command, which is read one segment at a time.
+/** @param {string} gate @returns {{ folder: string | null, isPath: boolean, command: string }} */
+const gateParts = gate => {
+  const parts = segments(gate)
+  const folder = parts.length === 2 && gate.includes('&&') ? cdFolder(parts[0] ?? '') : null
+  return { folder, ...gateCommand(folder === null ? gate : parts[1] ?? '') }
+}
+
+// A mark put after each `&&` of a command before it is split: a segment that starts with it is
+// joined to the one before by `&&`. `segments` itself drops the operators.
+const AFTER_AND = '\u0000'
+
+/** @param {string} segment */
+const unmarked = segment => segment.replaceAll(AFTER_AND, '').trim()
+
+// A command's segments, each one that follows an `&&` marked with AFTER_AND.
+/** @param {string} command */
+const markedSegments = command => segments(command.replaceAll('&&', `&&${AFTER_AND}`))
+
+/**
+ * The gates a segment runs: a gate's command is the segment or a prefix of it, and a `cd` gate also needs
+ * that `cd` as the segment before, joined with `&&`: after `;`, `||` or `|` the command does not
+ * depend on the `cd`, so those do not count. Among several, the longest command wins, wherever it stands;
+ * gates written the same are all run.
+ * @param {readonly string[]} marked the command's segments, AFTER_AND kept @param {number} at @param {readonly Gate[]} gates
+ * @returns {Gate[]}
+ */
+const gatesRun = (marked, at, gates) => {
+  const segment = unmarked(marked[at] ?? '')
+  const forms = { written: normal(segment), program: asTyped(segment) }
+  const before = at > 0 && (marked[at] ?? '').startsWith(AFTER_AND) ? cdFolder(unmarked(marked[at - 1] ?? '')) : null
+  /** @type {Gate[]} */
+  let best = []
+  let longest = 0
+  for (const gate of gates) {
+    const { folder, isPath, command } = gateParts(gate.command)
+    const typed = isPath ? forms.written : forms.program
+    if (command === '' || !(typed === command || typed.startsWith(`${command} `))) continue
+    if (folder !== null && folder !== before) continue
+    const length = command.length + (folder === null ? 0 : `cd ${folder} && `.length)
+    if (length > longest) [best, longest] = [[gate], length]
+    else if (length === longest) best.push(gate)
+  }
+  return best
 }
 
 // The npm script a segment runs: "npm run lint" → "lint", "npm test" → "test".
 /** @param {string} segment */
 const scriptOf = segment => /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+|run-script\s+)?([\w:.-]+)/i.exec(normal(segment))?.[1] ?? null
 
+// What a gate's result is kept under: its id, or its command when it has none.
+/** @param {Gate} gate */
+const gateKey = gate => gate.id || gate.command
+
 /** @param {string} url */
 const hostOf = url => /^https?:\/\/([^/:?#\s]+)/i.exec(url)?.[1]?.toLowerCase() ?? ''
 
 /**
- * The rungs a command tries, through the profile's gates first, then the scripts in package.json
- * (one level deep), then the tools it runs.
+ * The rungs a command tries, each with the gates it ran for that rung (none: a tool or a script that is
+ * no gate): through the profile's gates first, then the scripts in package.json (one level deep), then
+ * the tools it runs.
  * @param {string} command @param {Record<string, string>} scripts @param {readonly Gate[]} gates @param {Production | null} [production] @param {number} [depth]
- * @returns {string[]}
+ * @returns {Map<string, Set<string>>}
  */
-export const rungsOfCommand = (command, scripts, gates, production = null, depth = 0) => {
-  /** @type {Set<string>} */
-  const found = new Set()
-  for (const segment of segments(command)) {
-    const bare = bareCommand(segment)
-    const gate = gates.find(one => isGate(one.command, bare))
-    if (gate) {
-      for (const proof of gate.proofs) if (ALIASES[proof] && ALIASES[proof] !== 'prod') found.add(ALIASES[proof])
+const checksOfCommand = (command, scripts, gates, production = null, depth = 0) => {
+  /** @type {Map<string, Set<string>>} */
+  const found = new Map()
+  /** @param {string} rung @param {Iterable<string>} [ran] */
+  const add = (rung, ran = []) => found.set(rung, new Set([...(found.get(rung) ?? []), ...ran]))
+  const marked = markedSegments(command)
+  for (const [at, part] of marked.entries()) {
+    const bare = bareCommand(unmarked(part))
+    const ran = gatesRun(marked, at, gates)
+    if (ran.length > 0) {
+      for (const gate of ran) for (const proof of gate.proofs) if (ALIASES[proof] && ALIASES[proof] !== 'prod') add(ALIASES[proof], [gateKey(gate)])
       continue
     }
     const script = scriptOf(bare)
     if (script && depth < 2 && /^(npm|pnpm|yarn|bun)\b/i.test(bare) && scripts[script] !== undefined) {
-      for (const rung of rungsOfCommand(scripts[script] ?? '', scripts, gates, production, depth + 1)) found.add(rung)
+      for (const [rung, inside] of checksOfCommand(scripts[script] ?? '', scripts, gates, production, depth + 1)) add(rung, inside)
       continue
     }
-    if (/^node\b.*\s--test\b/i.test(bare) || /^(vitest|jest)\b/i.test(bare)) found.add('tests')
-    else if (/^playwright\s+test\b/i.test(bare)) found.add('ui')
-    else if (/^(tsc|vue-tsc)\b/i.test(bare) || /^(eslint|next\s+lint)\b/i.test(bare)) found.add('lint')
-    else if (/^(next|vinext|vite|astro|nuxt|remix)\s+build\b/i.test(bare)) found.add('build')
-    else if (isProdCheck(bare, production)) found.add('prod')
+    if (/^node\b.*\s--test\b/i.test(bare) || /^(vitest|jest)\b/i.test(bare)) add('tests')
+    else if (/^playwright\s+test\b/i.test(bare)) add('ui')
+    else if (/^(tsc|vue-tsc)\b/i.test(bare) || /^(eslint|next\s+lint)\b/i.test(bare)) add('lint')
+    else if (/^(next|vinext|vite|astro|nuxt|remix)\s+build\b/i.test(bare)) add('build')
+    else if (isProdCheck(bare, production)) add('prod')
   }
-  return [...found]
+  return found
 }
+
+/**
+ * The rungs a command tries.
+ * @param {string} command @param {Record<string, string>} scripts @param {readonly Gate[]} gates @param {Production | null} [production]
+ * @returns {string[]}
+ */
+export const rungsOfCommand = (command, scripts, gates, production = null) => [...checksOfCommand(command, scripts, gates, production).keys()]
 
 // A check of production: the deployment's status through gh or vercel, or a probe of the public URL.
 /** @param {string} bare @param {Production | null} production */
@@ -113,12 +197,28 @@ export const exitOf = (command, text, ran) => {
   return 'ok'
 }
 
+// The command's exit code is its gates' own: one command, or several joined by "&&". After a pipe, ";", "||" or a new line it is another command's.
+/** @param {string} command */
+const isOwnExit = command => {
+  let quote = ''
+  for (const char of withoutHeredocs(command).trim()) {
+    if (quote !== '') quote = char === quote ? '' : quote
+    else if (char === '"' || char === "'") quote = char
+    else if (char === '|' || char === ';' || char === '\n') return false
+  }
+  return true
+}
+
 /** @param {RegExpMatchArray[]} matches @param {number} group */
 const sum = (matches, group) => matches.reduce((total, match) => total + Number(match[group] ?? 0), 0)
 
+// What a workspace runner puts before every line of a package's output: pnpm "packages/web test: ", turbo "web:test: ".
+const RUNNER_PREFIX = /^[\w@./-]+[ :][\w:.#-]+: /gm
+
 // Pass and fail counts from every runner whose summary is in the output, added up.
-/** @param {string} text */
-export const testCounts = text => {
+/** @param {string} raw */
+export const testCounts = raw => {
+  const text = raw.replace(RUNNER_PREFIX, '')
   const nodePass = [...text.matchAll(/^\s*[#ℹ]\s*pass\s+(\d+)\s*$/gmu)]
   const nodeFail = [...text.matchAll(/^\s*[#ℹ]\s*fail\s+(\d+)\s*$/gmu)]
   const nodeCancelled = [...text.matchAll(/^\s*[#ℹ]\s*cancelled\s+(\d+)\s*$/gmu)]
@@ -163,9 +263,10 @@ const prodResult = (text, production) => {
 /**
  * One rung's result from a finished command's output.
  * @param {string} rung @param {string} command @param {string} raw the output @param {{ isError?: boolean }} ran @param {Production | null} [production]
+ * @param {boolean} [passesOnExit] the command ran a gate of the profile that passes on its exit code, and the exit code is that gate's own
  * @returns {Rung | null} null: nothing to record
  */
-export const readToolOutput = (rung, command, raw, ran, production = null) => {
+export const readToolOutput = (rung, command, raw, ran, production = null, passesOnExit = false) => {
   const text = stripAnsi(raw)
   const exit = exitOf(command, text, ran)
   if (rung === 'tests' || rung === 'ui') {
@@ -174,6 +275,7 @@ export const readToolOutput = (rung, command, raw, ran, production = null) => {
     if (exit === 'fail') return { state: 'fail', detail: 'exited non-zero' }
     if (counts.none) return { state: 'fail', detail: 'no tests ran' }
     if (counts.passed > 0) return { state: 'pass', detail: `${counts.passed} passed, 0 failed` }
+    if (passesOnExit && exit === 'ok') return { state: 'pass', detail: 'exit 0, no test counts' }
     // Every run replaces the last result: a run whose outcome cannot be read is no evidence.
     return { state: 'none', detail: 'no test counts read' }
   }
@@ -286,6 +388,7 @@ const CREATE_ORDER = {
 
 /**
  * The profile's gates: [{ command, proofs: [...] }] (han-viet), or { name: { command, proofs | proof } }.
+ * `passOn` says how a gate's tests and ui proofs pass: "exit" or "counts"; anything else is no field.
  * @param {any} profile @returns {Gate[]}
  */
 export const gatesOf = profile => {
@@ -295,7 +398,8 @@ export const gatesOf = profile => {
     .filter(gate => gate && typeof gate.command === 'string' && gate.command.trim() !== '')
     .map(gate => {
       const proofs = [gate.proofs, gate.proof, gate.kind, gate.rungs].flat().filter(one => typeof one === 'string').map(one => ALIASES[one.toLowerCase()] ?? '').filter(Boolean)
-      return { id: typeof gate.id === 'string' ? gate.id : '', command: gate.command.trim(), proofs: [...new Set(proofs)], proves: typeof gate.proves === 'string' ? gate.proves : '' }
+      const passOn = gate.passOn === 'exit' || gate.passOn === 'counts' ? { passOn: /** @type {'exit' | 'counts'} */ (gate.passOn) } : {}
+      return { id: typeof gate.id === 'string' ? gate.id : '', command: gate.command.trim(), proofs: [...new Set(proofs)], proves: typeof gate.proves === 'string' ? gate.proves : '', ...passOn }
     })
 }
 
@@ -307,11 +411,42 @@ export const productionOf = profile => {
   return { host: String(raw.host ?? ''), branch: String(raw.branch ?? 'main'), deployment: typeof raw.deployment === 'string' ? raw.deployment : '', url, expectStatus: Number(raw.probe?.expectStatus ?? raw.expectStatus ?? 200) || 200 }
 }
 
+// "pnpm@9.12.0+sha512…" and "pnpm" are pnpm; anything else is no runner.
+/** @param {unknown} value */
+const runnerNamed = value => (typeof value === 'string' ? /^(npm|pnpm|yarn|bun)(?:@|$)/.exec(value.trim())?.[1] ?? null : null)
+
+const LOCKFILES = /** @type {const} */ ([['pnpm-lock.yaml', 'pnpm'], ['yarn.lock', 'yarn'], ['bun.lock', 'bun'], ['bun.lockb', 'bun']])
+
 /**
- * The web pack for one repository, from its profile (or none) and its package.json.
- * @param {any} profile @param {any} packageJson @returns {Pack}
+ * The package manager a repository's scripts are run with: the profile's word, then package.json's, then a lockfile at the root, then npm.
+ * @param {any} profile @param {any} packageJson @param {Found} found
  */
-export const makeWebPack = (profile, packageJson) => {
+const runnerOf = (profile, packageJson, found) => {
+  const files = Array.isArray(found?.files) ? found.files : []
+  return runnerNamed(profile?.packageManager) ?? runnerNamed(packageJson?.packageManager) ?? LOCKFILES.find(([file]) => files.includes(file))?.[1] ?? 'npm'
+}
+
+/**
+ * The branch pull requests go into, when it is not main or master: the profile's word, then the default branch the clone knows.
+ * @param {any} profile @param {Found} found
+ */
+const baseBranchOf = (profile, found) => {
+  const name = branchNamed(profile?.baseBranch) || branchNamed(found?.defaultBranch)
+  return MAIN.test(name) ? '' : name
+}
+
+// The scripts that stand in for each rung's gates, in the order they are named.
+const RUNG_SCRIPTS = /** @type {Record<string, string[]>} */ ({ tests: ['test'], lint: ['lint', 'typecheck'], build: ['build'] })
+
+// `bun test` is Bun's own test runner, not the test script: bun keeps the `run`.
+/** @param {string} runner @param {string} script */
+const scriptCommand = (runner, script) => (runner === 'npm' ? (script === 'test' ? 'npm test' : `npm run ${script}`) : runner === 'bun' ? `bun run ${script}` : `${runner} ${script}`)
+
+/**
+ * The web pack for one repository, from its profile (or none), its package.json and what else was read at its root.
+ * @param {any} profile @param {any} packageJson @param {Found} [found] @returns {Pack}
+ */
+export const makeWebPack = (profile, packageJson, found = {}) => {
   const gates = gatesOf(profile)
   const production = productionOf(profile)
   /** @type {Record<string, string>} */
@@ -319,7 +454,7 @@ export const makeWebPack = (profile, packageJson) => {
   const declared = new Set(gates.flatMap(gate => gate.proofs))
   // Without a profile, the usual scripts stand in for gates.
   if (gates.length === 0) {
-    for (const [name, rung] of /** @type {const} */ ([['test', 'tests'], ['lint', 'lint'], ['typecheck', 'lint'], ['build', 'build']])) if (scripts[name] !== undefined) declared.add(rung)
+    for (const [rung, names] of Object.entries(RUNG_SCRIPTS)) if (names.some(name => scripts[name] !== undefined)) declared.add(rung)
   }
   if (production) declared.add('prod')
   const mergePolicy = String(profile?.mergePolicy ?? profile?.merge ?? '').toLowerCase() === 'with-proof' ? 'with-proof' : 'hold'
@@ -332,26 +467,57 @@ export const makeWebPack = (profile, packageJson) => {
     const want = (wants[role] ?? wants.engineer ?? []).filter(rung => declared.has(rung))
     return want.length > 0 ? want : declared.has('build') ? ['build'] : ['tests', 'build']
   }
-  // The command that proves a rung: the profile's gate, else the npm script.
+  // The gates that declare each rung, by what their results are kept under. Production is checked after the merge, by no gate.
+  /** @type {Record<string, string[]>} */
+  const rungGates = {}
+  for (const gate of gates) for (const rung of gate.proofs) if (rung !== 'prod') rungGates[rung] = [...new Set([...(rungGates[rung] ?? []), gateKey(gate)])]
+  const runner = runnerOf(profile, packageJson, found)
+  // The commands that prove a rung: every gate of the profile that declares it, else its scripts, run with the repository's package manager.
+  // Beside a profile's gates, a rung that no gate declares names its first script alone.
   /** @param {string} rung */
-  const gateFor = rung => gates.find(gate => gate.proofs[0] === rung)?.command ?? gates.find(gate => gate.proofs.includes(rung))?.command ??(rung === 'tests' && scripts.test ? 'npm test' : rung === 'lint' && scripts.lint ? 'npm run lint' : rung === 'build' && scripts.build ? 'npm run build' : '')
+  const gatesFor = rung => {
+    const named = gates.filter(gate => gate.proofs.includes(rung)).map(gate => gate.command)
+    if (named.length > 0) return named
+    return (RUNG_SCRIPTS[rung] ?? []).slice(0, gates.length > 0 ? 1 : undefined).filter(name => scripts[name]).map(name => scriptCommand(runner, name))
+  }
   /** @param {readonly string[]} rungs */
-  const commandsFor = rungs => [...new Set(rungs.map(gateFor).filter(Boolean))].map(command => `\`${command}\``)
+  const commandsFor = rungs => [...new Set(rungs.flatMap(gatesFor))].map(command => `\`${command}\``)
   const prodCheck = production ? `the production check (${production.host ? `${production.host[0]?.toUpperCase()}${production.host.slice(1)} ` : ''}deployment for the merge commit READY${production.url ? `, then ${production.url} answers ${production.expectStatus}` : ''})` : ''
   const mergeGates = andList(commandsFor(required))
   const port = Number(profile?.devPorts?.base ?? profile?.devPortBase ?? 0)
 
-  /** @param {string} command @param {string} text @param {{ isError?: boolean }} ran */
+  /** @param {string} command @param {string} text @param {{ isError?: boolean, deny?: string }} ran */
   const readShell = (command, text, ran) => {
     /** @type {import('./index.mjs').ShellReading} */
     const out = { rungs: [], context: [], toasts: [], bumps: [] }
-    const rungs = rungsOfCommand(command, scripts, gates, production)
+    // A call that was denied never ran.
+    if (ran.deny !== undefined) return out
+    const checks = checksOfCommand(command, scripts, gates, production)
+    const rungs = [...checks.keys()]
+    // A gate passes on its exit code when the command runs it itself, unless the profile says it passes on test counts.
+    // A gate found inside a script is read on counts.
+    const marked = markedSegments(command)
+    const direct = marked.flatMap((_, at) => gatesRun(marked, at, gates).filter(gate => gate.passOn !== 'counts'))
+    const onExit = new Set(direct.map(gateKey))
+    const isOwn = isOwnExit(command)
+    let isHidden = false
     for (const rung of rungs) {
-      const value = readToolOutput(rung, command, text, ran, production)
-      if (value) out.rungs.push({ rung, value })
+      const all = rungGates[rung]
+      const keys = [...(checks.get(rung) ?? [])]
+      const exits = keys.filter(key => onExit.has(key))
+      // The command has one output and one exit code: every gate in it gets this reading, each kind of gate under its own way of passing.
+      const kinds = (rung === 'tests' || rung === 'ui') && exits.length > 0 && exits.length < keys.length ? [exits, keys.filter(key => !onExit.has(key))] : [keys]
+      for (const kind of kinds) {
+        const passesOnExit = kind.some(key => onExit.has(key))
+        const value = readToolOutput(rung, command, text, ran, production, passesOnExit && isOwn)
+        if (passesOnExit && !isOwn && value?.state === 'none') isHidden = true
+        if (value) out.rungs.push(all ? { rung, value, gates: { ran: kind, all } } : { rung, value })
+      }
     }
     if (rungs.length > 0 && isPiped(command) && out.rungs.some(one => one.value.state === 'none')) {
       out.context.push('Ather Automata: this check was piped through a filter, so its exit code is the filter\'s. Read the pass and fail counts (or run it unpiped) before claiming it passed.')
+    } else if (isHidden) {
+      out.context.push('Ather Automata: this gate passes on its exit code, and a pipe, ";" or "||" in the command hides it. Run the gate by itself, or after "&&" only, before claiming it passed.')
     }
     return out
   }
@@ -359,6 +525,8 @@ export const makeWebPack = (profile, packageJson) => {
   const areas = Array.isArray(profile?.areas) && profile.areas.every((/** @type {unknown} */ one) => typeof one === 'string') ? profile.areas : DEFAULT_AREAS
   const flags = 'keep behaviour changes behind a flag that defaults to the current behaviour'
   const withProof = mergePolicy === 'with-proof'
+  const baseBranch = baseBranchOf(profile, found)
+  const into = baseBranch ? ` into ${baseBranch}` : ''
   return {
     id: 'web',
     roles: ROLES,
@@ -389,10 +557,17 @@ export const makeWebPack = (profile, packageJson) => {
     lockRoles: [],
     ownCheck: null,
     traps: WEB_TRAPS,
-    held: { labels: HELD_LABELS, nouns: HELD_NOUNS, kinds: WEB_HELD, defaults: ['merge', 'push-main', ...WEB_HELD] },
+    held: {
+      labels: baseBranch ? { ...HELD_LABELS, 'push-main': `Pushes to ${baseBranch} and main` } : HELD_LABELS,
+      nouns: baseBranch ? { ...HELD_NOUNS, 'push-main': `a push to ${baseBranch} or main` } : HELD_NOUNS,
+      kinds: WEB_HELD,
+      defaults: ['merge', 'push-main', ...WEB_HELD],
+    },
     heldSegment,
     mergePolicy,
+    baseBranch,
     mergeRungs: required,
+    rungGates,
     isAssetSave: () => false,
     readShell,
     mcpKind: () => null,
@@ -416,8 +591,8 @@ export const makeWebPack = (profile, packageJson) => {
         role === 'product'
           ? `Summarise intent ${slug} for landing: what changed, the gate that proved each checklist item, and what is still owed${prodCheck ? `; after it merges, run ${prodCheck}` : ''}.`
           : withProof
-            ? `Land intent ${slug}: open the PR from its branch, confirm ${mergeGates || 'every gate'} passed on its head in this session, then merge it (merge policy with-proof)${prodCheck ? ` and run ${prodCheck}` : ''}. If any gate has not passed, stop and tell me.`
-            : `Prepare intent ${slug} for landing: open the PR from its branch with the evidence for each checklist item, then wait for my go before merging.`,
+            ? `Land intent ${slug}: open the PR from its branch${into}, confirm ${mergeGates || 'every gate'} passed on its head in this session, then merge it (merge policy with-proof)${prodCheck ? ` and run ${prodCheck}` : ''}. If any gate has not passed, stop and tell me.`
+            : `Prepare intent ${slug} for landing: open the PR from its branch${into} with the evidence for each checklist item, then wait for my go before merging.`,
       shipHint: role => (role === 'product' ? 'Summarises the work and checks production once it lands.' : withProof ? `Merges once ${mergeGates || 'every gate'} passed; then checks production.` : 'A clean PR; nothing merges without your go.'),
       briefHint: 'A background agent does the work in its own worktree, proved with the repository gates.',
       tour: 'Give me the Ather tour for this repository: read AGENTS.md, .ather/profile.json and .agents/skills/intent/SKILL.md, then explain in six short steps how a feature runs here as an intent (Plan, Build, Prove with the gates the profile names, Ship), ending with my first intent started.',
@@ -426,7 +601,7 @@ export const makeWebPack = (profile, packageJson) => {
     },
     mandate: {
       flags,
-      allowed: withProof ? `push branches, open PRs, merge PRs to main once ${mergeGates || 'every gate'} passed` : 'push branches, open draft PRs, open PRs to main',
+      allowed: withProof ? `push branches, open PRs, merge PRs to ${baseBranch || 'main'} once ${mergeGates || 'every gate'} passed` : `push branches, open draft PRs, open PRs to ${baseBranch || 'main'}`,
       merge: withProof ? 'merge only when every gate the profile requires has passed in this session' : 'never merge',
       away: withProof ? 'The session may push branches, open PRs and merge with every gate passed; production deploys, migrations and secrets wait for you.' : 'The session may push branches and open PRs; nothing merges until you are back.',
       pane: 'The session keeps working; production deploys, migrations and secret changes wait for your review.',

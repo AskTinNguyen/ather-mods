@@ -1515,12 +1515,19 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   engine.store.set('role:web:tinnguyen', 'engineer')
   // Outputs captured from han-viet runs, the unit tests' fixtures.
   const fixture = name => fs.readFileSync(new URL(`../../ather-automata/tests/fixtures/web/${name}`, import.meta.url), 'utf8')
+  // Every gate of the profile: a rung passes when each gate that declares it has.
   await engine.modelTool({ tool: 'Bash', command: 'npm test', __text: fixture('node-test-pass.txt') })
   await engine.modelTool({ tool: 'Bash', command: 'npm run lint', __text: fixture('eslint-pass.txt') })
+  expect('tests are not proven by npm test alone: the curriculum and learner gates declare them too', evidenceOf(engine)?.tests?.state === 'none', evidenceOf(engine))
+  // han-viet's curriculum:verify prints no counts: run by itself, the gate passes on its exit code.
+  await engine.modelTool({ tool: 'Bash', command: 'npm run curriculum:verify', __text: 'curriculum ok\nstudy layer ok\ncharacter layer ok\n' })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run learner:test', __text: fixture('node-test-pass.txt') })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run build', __text: fixture('vinext-build-pass.txt') })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run build:next', __text: fixture('next-build-pass.txt') })
   await engine.modelTool({ tool: 'Bash', command: 'npm run ui:verify', __text: fixture('playwright-pass.txt') })
   await engine.flush()
   const evidence = evidenceOf(engine)
-  expect('npm test, lint and ui:verify outputs are read as tests, build, lint and ui passed', ['tests', 'build', 'lint', 'ui'].every(rung => evidence?.[rung]?.state === 'pass'), evidence)
+  expect("every gate's output read, tests, build, lint and ui passed", ['tests', 'build', 'lint', 'ui'].every(rung => evidence?.[rung]?.state === 'pass'), evidence)
   await run(engine, [], 'ather', 'intent zz-web-lens')
   for (const width of [72, 110]) {
     const pane = check(await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
@@ -1548,7 +1555,8 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   // Proof from before this session (an hour old, still within the day evidence is kept) does not let a merge through.
   const lensKey = scopedKey(engine, 'evidence', 'zz-web-lens') ?? ''
   const stored = engine.store.get(lensKey)
-  engine.store.set(lensKey, Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...value, at: Date.now() - 3600000 }])))
+  const hourOld = value => ({ ...value, at: Date.now() - 3600000 })
+  engine.store.set(lensKey, Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...hourOld(value), gates: Object.fromEntries(Object.entries(value.gates ?? {}).map(([gate, result]) => [gate, hourOld(result)])) }])))
   const stale = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
   expect("a merge on proof from before this session is held (D2: passed in this session's tool output)", typeof stale.deny === 'string' && /Merges/.test(stale.deny), stale.deny)
   expect('no hook threw in the web scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)

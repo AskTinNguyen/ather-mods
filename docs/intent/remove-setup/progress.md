@@ -3,7 +3,7 @@
 - Working under rev: 1
 - Worker: `Claude Opus 5.5 builder for the code; Codex gpt-6.1-sol reviews; the coordinator writes the READMEs, runs the gates and the live run, and commits`
 - Current step: none
-- Next step: review and merge of PR #47 by a person; the version moves if another 0.2.6 merges first
+- Next step: none; PR #47 is merged (merge commit 42a3774)
 - PR: #47
 
 ## Acceptance
@@ -32,4 +32,4 @@
 
 ## Follow-ups
 
-- PR 44 (`claude/ather-other-repos`) still edits `SETUP.md`, `hooks/setup.mjs` and a README step that says to type `/ather setup`. Those parts go when it is merged with this change.
+- Done: PR 44 (`claude/ather-other-repos`) edited `SETUP.md`, `hooks/setup.mjs` and a README step that said to type `/ather setup`. Those parts were dropped when it was merged with this change (`docs/intent/other-repos`, rev 3).

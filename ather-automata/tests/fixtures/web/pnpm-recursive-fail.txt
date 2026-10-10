@@ -1,0 +1,131 @@
+Scope: all 3 workspace projects
+Already up to date
+
+Done in 348ms
+$ node --test tests/scripts.test.mjs && node --test tests/config.test.mjs && node --test tests/release.test.mjs && pnpm -r --if-present test
+✔ scripts case 1 (0.6725ms)
+✔ scripts case 2 (0.156792ms)
+✔ scripts case 3 (0.063834ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 74.109625
+✔ config case 1 (0.611084ms)
+✔ config case 2 (0.094792ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 78.027875
+✔ release case 1 (0.583416ms)
+✔ release case 2 (0.076542ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70.41325
+Scope: 2 of 3 workspace projects
+packages/contracts test$ node --test tests/contracts.test.mjs
+packages/web test$ node --test tests/web.test.mjs
+packages/contracts test: ✔ contracts case 1 (0.844083ms)
+packages/contracts test: ✔ contracts case 2 (0.088459ms)
+packages/contracts test: ✔ contracts case 3 (0.058709ms)
+packages/contracts test: ✔ contracts case 4 (0.114ms)
+packages/web test: ✔ web case 1 (0.628459ms)
+packages/web test: ✖ web case 2 (0.832833ms)
+packages/web test: ✔ web case 3 (0.080208ms)
+packages/web test: ✖ web case 4 (0.138083ms)
+packages/web test: ✖ web case 5 (0.099292ms)
+packages/web test: ✔ web case 6 (0.676084ms)
+packages/contracts test: ℹ tests 4
+packages/contracts test: ℹ suites 0
+packages/contracts test: ℹ pass 4
+packages/contracts test: ℹ fail 0
+packages/contracts test: ℹ cancelled 0
+packages/contracts test: ℹ skipped 0
+packages/contracts test: ℹ todo 0
+packages/contracts test: ℹ duration_ms 71.484875
+packages/web test: ℹ tests 6
+packages/web test: ℹ suites 0
+packages/web test: ℹ pass 3
+packages/web test: ℹ fail 3
+packages/web test: ℹ cancelled 0
+packages/web test: ℹ skipped 0
+packages/web test: ℹ todo 0
+packages/web test: ℹ duration_ms 72.029291
+packages/web test: ✖ failing tests:
+packages/web test: test at tests/web.test.mjs:5:1
+packages/web test: ✖ web case 2 (0.832833ms)
+packages/web test:   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+packages/web test:   
+packages/web test:   3 !== 4
+packages/web test:   
+packages/web test:       at TestContext.<anonymous> (file://<repo>/packages/web/tests/web.test.mjs:5:35)
+packages/web test:       at Test.runInAsyncScope (node:async_hooks:214:14)
+packages/web test:       at Test.run (node:internal/test_runner/test:1047:25)
+packages/web test:       at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+packages/web test:       at Test.postRun (node:internal/test_runner/test:1173:19)
+packages/web test:       at Test.run (node:internal/test_runner/test:1101:12)
+packages/web test:       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:297:3) {
+packages/web test:     generatedMessage: true,
+packages/web test:     code: 'ERR_ASSERTION',
+packages/web test:     actual: 3,
+packages/web test:     expected: 4,
+packages/web test:     operator: 'strictEqual'
+packages/web test:   }
+packages/web test: test at tests/web.test.mjs:7:1
+packages/web test: ✖ web case 4 (0.138083ms)
+packages/web test:   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+packages/web test:   
+packages/web test:   5 !== 6
+packages/web test:   
+packages/web test:       at TestContext.<anonymous> (file://<repo>/packages/web/tests/web.test.mjs:7:35)
+packages/web test:       at Test.runInAsyncScope (node:async_hooks:214:14)
+packages/web test:       at Test.run (node:internal/test_runner/test:1047:25)
+packages/web test:       at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+packages/web test:       at Test.postRun (node:internal/test_runner/test:1173:19)
+packages/web test:       at Test.run (node:internal/test_runner/test:1101:12)
+packages/web test:       at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {
+packages/web test:     generatedMessage: true,
+packages/web test:     code: 'ERR_ASSERTION',
+packages/web test:     actual: 5,
+packages/web test:     expected: 6,
+packages/web test:     operator: 'strictEqual'
+packages/web test:   }
+packages/web test: test at tests/web.test.mjs:8:1
+packages/web test: ✖ web case 5 (0.099292ms)
+packages/web test:   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+packages/web test:   
+packages/web test:   6 !== 7
+packages/web test:   
+packages/web test:       at TestContext.<anonymous> (file://<repo>/packages/web/tests/web.test.mjs:8:35)
+packages/web test:       at Test.runInAsyncScope (node:async_hooks:214:14)
+packages/web test:       at Test.run (node:internal/test_runner/test:1047:25)
+packages/web test:       at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+packages/web test:       at Test.postRun (node:internal/test_runner/test:1173:19)
+packages/web test:       at Test.run (node:internal/test_runner/test:1101:12)
+packages/web test:       at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {
+packages/web test:     generatedMessage: true,
+packages/web test:     code: 'ERR_ASSERTION',
+packages/web test:     actual: 6,
+packages/web test:     expected: 7,
+packages/web test:     operator: 'strictEqual'
+packages/web test:   }
+packages/contracts test: Done
+packages/web test: Failed
+<repo>/packages/web:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/web@0.0.0 test: `node --test tests/web.test.mjs`
+Exit status 1
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+[ELIFECYCLE] Test failed. See above for more details.
+[WARN]  Local package.json exists, but node_modules missing, did you mean to install?

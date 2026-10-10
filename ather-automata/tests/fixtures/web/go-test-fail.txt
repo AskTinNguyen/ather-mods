@@ -1,0 +1,5 @@
+--- FAIL: TestMax (0.00s)
+    tally_test.go:19: Max(2, 9, 4) = 9, want 8
+FAIL
+FAIL	example.com/tally	0.547s
+FAIL

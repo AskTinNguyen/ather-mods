@@ -113,14 +113,13 @@ export const section = (text, heading) => {
   return end ? rest.slice(0, end.index) : rest
 }
 
-// Every section headed so, in order: "## Acceptance" and a later "## Acceptance, rev 2" both count.
+// Every section headed so, in order, each on its own: "## Acceptance" and a later "## Acceptance, rev 2" both count.
 /** @param {string} text @param {string} heading */
 const sections = (text, heading) =>
   text
     .split(/^(?=##\s)/m)
     .filter(part => new RegExp(`^##\\s+${heading}\\b`, 'i').test(part))
     .map(part => part.replace(/^.*$/m, ''))
-    .join('\n')
 
 const CLOSED = /\b(accepted|rejected|resolved|closed|superseded|withdrawn|answered)\b/i
 
@@ -267,22 +266,24 @@ export const parseFindings = (findings, prompt) => {
 // ---------------------------------------------------------------- acceptance and PRs
 //
 // One writer per fact (.agents/skills/intent/SKILL.md): prompt.md's Acceptance lists the items
-// ("- A1: ..."), progress.md's Acceptance table says which are met, progress.md's "- PR:" line
-// names the PRs. Intents from before that rule tick "- [x]" boxes in prompt.md instead.
+// ("- A1: ...", or rows "| A1 | ... | <proof> |"), progress.md's Acceptance table says which are met,
+// progress.md's "- PR:" line names the PRs. Intents from before that rule tick "- [x]" boxes in
+// prompt.md instead.
 
 // "A1", "B3", "SL15", "A12a": an acceptance id at the start of an item or a table cell.
 const ITEM_ID = /^\**([A-Z]{1,3}[0-9]+[a-z]?)\**(?=[\s:.(]|$)/
 // A verdict that counts as met: its leading word ("met on main", "Pass", "passed", "done", "✓", "✅").
 const MET = /^(met|pass|passed|done|✓|✔|✅)(?![\p{L}\p{N}])/iu
 
+// The table rows among some lines, each as its cells: "| A1 | Snow look. | Unit. |" → ['A1', 'Snow look.', 'Unit.'].
+/** @param {readonly string[]} lines */
+const tableRows = lines => lines.filter(line => /^\s*\|/.test(line)).map(line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim()))
+
 // progress.md's Acceptance table as id → verdict, or null when it has none (or no rows yet).
 // The verdict column is the one headed Verdict, Status or Result, else the second.
 /** @param {string} progress */
 const acceptanceVerdicts = progress => {
-  const rows = section(progress, 'Acceptance')
-    .split(/\r?\n/)
-    .filter(line => /^\s*\|/.test(line))
-    .map(line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => plainText(cell)))
+  const rows = tableRows(section(progress, 'Acceptance').split(/\r?\n/)).map(row => row.map(cell => plainText(cell)))
   const header = rows[0]
   if (!header) return null
   const named = header.findIndex(cell => /^(verdict|status|result)$/i.test(cell))
@@ -305,25 +306,40 @@ const splitItem = line => {
   return { id: match?.[1] ?? '', text: match ? line.slice(match[0].length).trim() : line }
 }
 
-// The acceptance items and which are done. Ids come from prompt.md's top-level items; met-ness
-// from progress.md's table, whose rows for ids prompt.md does not list are ignored. Without a
-// table, legacy "- [x]" boxes count as before; without either, every listed item is open.
+// The acceptance items and which are done. Ids come from prompt.md's top-level items, or, in a
+// section with no list, from its table's rows (the id in the first cell, the text in the second);
+// each Acceptance section is read on its own, so a table in one and a list in a later one both
+// count. Met-ness comes from progress.md's table, whose rows for ids prompt.md does not list are
+// ignored. Without that table, legacy "- [x]" boxes count as before; without either, every listed
+// item is open.
 /** @param {string} prompt @param {string} progress @returns {AcceptanceItem[]} */
 export const acceptanceItems = (prompt, progress) => {
-  const lines = sections(prompt, 'Acceptance').split(/\r?\n/)
   /** @type {Map<string, string>} */
   const listed = new Map()
-  for (const line of lines) {
-    const item = splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')
-    if (item.id !== '' && !listed.has(item.id)) listed.set(item.id, item.text)
+  // What counts without a verdict table once any section has boxes: the boxes, and the rows of the sections written as tables.
+  /** @type {AcceptanceItem[]} */
+  const legacy = []
+  let hasBoxes = false
+  for (const part of sections(prompt, 'Acceptance')) {
+    const lines = part.split(/\r?\n/)
+    const items = lines.map(line => splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')).filter(item => item.id !== '')
+    const boxes = lines.flatMap(line => {
+      const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
+      return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
+    })
+    const isTable = items.length === 0 && boxes.length === 0
+    const rows = isTable ? tableRows(lines).map(row => ({ id: ITEM_ID.exec(row[0] ?? '')?.[1] ?? '', text: row[1] ?? '' })).filter(item => item.id !== '') : items
+    for (const item of rows) {
+      if (listed.has(item.id)) continue
+      listed.set(item.id, item.text)
+      if (isTable) legacy.push({ ...item, isDone: false })
+    }
+    legacy.push(...boxes)
+    hasBoxes ||= boxes.length > 0
   }
   const verdicts = acceptanceVerdicts(progress)
   if (verdicts && listed.size > 0) return [...listed].map(([id, text]) => ({ id, text, isDone: MET.test(verdicts.get(id) ?? '') }))
-  const boxes = lines.flatMap(line => {
-    const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
-    return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
-  })
-  if (boxes.length > 0) return boxes
+  if (hasBoxes) return legacy
   return [...listed].map(([id, text]) => ({ id, text, isDone: false }))
 }
 
@@ -370,10 +386,11 @@ export const prKey = (intent, number) => (otherRoot(intent) ? `${otherRoot(inten
 
 /**
  * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string,
- *   key?: string, root?: string, repoName?: string }} IntentFiles
+ *   key?: string, root?: string, repoName?: string, base?: string }} IntentFiles
  * `updatedAt`: when it last changed (its last commit on main, or its files'); `source`: where it was read; `firstAuthor`: who first committed its folder.
  * Read from one of several checkouts: `key` names it in the pane (its slug in the session's own checkout,
- * `<repoName>/<slug>` in another), `root` is the checkout holding it, `repoName` the short name of its repository.
+ * `<repoName>/<slug>` in another), `root` is the checkout holding it, `repoName` the short name of its repository,
+ * `base` the branch that checkout's team merges into (main unless said).
  * @typedef {ReturnType<typeof parseIntent>} Intent
  */
 
@@ -406,6 +423,7 @@ export const parseIntent = (input, pack = unreal) => {
     key: input.key ?? input.slug,
     root: input.root ?? '',
     repoName: input.repoName ?? '',
+    base: input.base ?? 'main',
   }
 }
 
@@ -532,13 +550,14 @@ export const currentStage = (intent, evidence, role, prs = {}, pack = unreal) =>
 
 // Asking the session what an intent is and where it stands, changing nothing. One that this checkout
 // does not have (or has as it is on main) is read from origin/main itself, read-only. `root`: the checkout
-// holding it, when that is not the session's own; git and the files are then read there.
-/** @param {string} slug @param {boolean} fromMain @param {string} [root] */
-export const aboutIntentPrompt = (slug, fromMain, root = '') => {
+// holding it, when that is not the session's own; git and the files are then read there. `base`: the branch
+// its team merges into, read in place of main.
+/** @param {string} slug @param {boolean} fromMain @param {string} [root] @param {string} [base] */
+export const aboutIntentPrompt = (slug, fromMain, root = '', base = 'main') => {
   const files = ['prompt.md', 'findings.md', 'progress.md', 'log.md']
   const git = root ? `git -C ${root}` : 'git'
   const read = fromMain
-    ? `Read it from GitHub main, since this checkout may not have it or may be behind: use \`${git} show origin/main:docs/intent/${slug}/<file>\` for ${files.join(', ')} (those that exist) and \`${git} log -5 --format="%cs %an %s" origin/main -- docs/intent/${slug}\` for its recent history, with GIT_OPTIONAL_LOCKS=0. Do not fetch, pull, check out, track it or write anything.`
+    ? `Read it from GitHub ${base}, since this checkout may not have it or may be behind: use \`${git} show origin/${base}:docs/intent/${slug}/<file>\` for ${files.join(', ')} (those that exist) and \`${git} log -5 --format="%cs %an %s" origin/${base} -- docs/intent/${slug}\` for its recent history, with GIT_OPTIONAL_LOCKS=0. Do not fetch, pull, check out, track it or write anything.`
     : `Read ${root ? `${root}/` : ''}docs/intent/${slug}/ only; change nothing.`
   return `Tell me about intent ${slug}${root ? ` in the checkout at ${root}` : ''} in under ten lines: what it is for, who owns it, its status and stage (Plan, Build, Prove, Ship) and why, its checklist progress, which decisions are open and whose they are, and what the next step would be. ${read}`
 }
@@ -552,7 +571,7 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = u
   if (!intent) return { key: 'start', label: 'Start an intent', prompt: '/intent ', hint: 'Type what you want after /intent; the intent skill takes it from there.', isDraft: true }
   const slug = intent.slug
   if (!isMine(intent, me)) {
-    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent)) }
+    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base) }
   }
   const stage = currentStage(intent, evidence, role, prs, pack)
   if (stage === 'close') {
