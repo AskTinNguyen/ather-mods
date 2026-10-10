@@ -20,8 +20,8 @@ import { makeWebPack } from './web.mjs'
  * @typedef {{ isHeld: boolean, isFree: boolean, holder: string, until: string }} EditorState
  * @typedef {{ command: string, proofs: string[], id?: string, proves?: string }} Gate
  * @typedef {{ host: string, branch: string, deployment: string, url: string, expectStatus: number }} Production
- * @typedef {{ pack: Pack, held: readonly string[], isProven: boolean }} HeldAt what a folder's own checkout holds, when that is not the session's
- * @typedef {{ isProven?: boolean, scripts?: Record<string, string>, at?: (folder: string | null) => HeldAt | null }} HeldContext
+ * @typedef {{ pack: Pack, held: readonly string[], isProven: boolean, base?: string }} HeldAt what a folder's own checkout holds, when that is not the session's; `base`: the branch its team merges into, when not main
+ * @typedef {{ isProven?: boolean, scripts?: Record<string, string>, base?: string, at?: (folder: string | null) => HeldAt | null }} HeldContext `base`: the branch the session's checkout merges into, when not main
  * @typedef {{
  *   id: 'unreal' | 'web' | 'core',
  *   roles: readonly string[], roleLabels: Record<string, string>, roleDescriptions: Record<string, string>,

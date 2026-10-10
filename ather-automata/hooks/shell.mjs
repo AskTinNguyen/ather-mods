@@ -55,6 +55,10 @@ export const gitFolders = command => [...new Set(withFolders(command).filter(one
 
 export const MAIN = /^(?:refs\/heads\/)?(main|master)$/
 
+// A branch a team merges into: main, master, or the checkout's own base when it has another (develop).
+/** @param {string} branch @param {string} [base] */
+export const isBaseBranch = (branch, base = 'main') => MAIN.test(branch) || (branch !== '' && branch.replace(/^refs\/heads\//, '') === base)
+
 // Where a `git push` sends: its refspec's destination, or the current branch when it names none.
 /** @param {string} segment @param {string} branch */
 export const pushTarget = (segment, branch) => {

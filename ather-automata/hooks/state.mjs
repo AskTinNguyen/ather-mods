@@ -12,6 +12,7 @@ import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
+import { baseOf } from './team.mjs'
 import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
 
@@ -22,10 +23,13 @@ import { groupByOf } from './worklist.mjs'
  *   sessionId: () => Promise<string>, root: () => Promise<string>, gitUser: (root?: string) => Promise<string>, redraw: () => void,
  *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
  *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>,
+ *   base?: (root: string) => Promise<string | null>,
  *   real?: (folder: string) => Promise<string>,
  *   worktrees?: (root: string) => Promise<string | null>
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
+ *   `base`: the default branch of the origin of the checkout at `root` ("origin/develop"), '' when it names none,
+ *   null when git could not say; without it a checkout's base is main.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
  *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.5, and as the Paseo version still keeps them).
  *   `real`: the folder a path really lands in, behind any symbolic link; without it an id holds the folder as given.
@@ -101,7 +105,7 @@ const changed = io => {
 
 // ---------------------------------------------------------------- the lane
 
-/** @typedef {{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, isSure: boolean }} Checkout */
+/** @typedef {{ root: string, repo: string, isS2: boolean, me: string, pack: Pack, base: string, isSure: boolean }} Checkout `base`: the branch its team merges into (team.mjs baseOf) */
 // The session's lane by its folder, and each checkout's by its root.
 /** @type {Map<string, Promise<Checkout>>} */
 const lanes = new Map()
@@ -203,10 +207,12 @@ export const onSetUp = (who, handler) => void setUpHandlers.set(who, handler)
 /** @param {Io} io @param {string} root @param {string} [userRoot] */
 const readCheckout = async (io, root, userRoot) => {
   const list = io.list ?? (async () => [])
-  const { pack } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal }))
+  const { pack, profile } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal, profile: null }))
   const origin = io.origin ? await io.origin(root).catch(() => null) : ''
+  const { base: remote } = io
+  const base = await baseOf(profile, remote && (() => remote(root)))
   const me = await (userRoot === undefined ? io.gitUser() : io.gitUser(userRoot)).catch(() => '')
-  return { root, repo: io.origin ? repoId(origin ?? '', await realFolder(io, root)) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, isSure: me !== '' && origin !== null }
+  return { root, repo: io.origin ? repoId(origin ?? '', await realFolder(io, root)) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, base: base ?? 'main', isSure: me !== '' && origin !== null && base !== null }
 }
 
 /** @param {typeof lanes} cache @param {string} key @param {() => Promise<Checkout>} read */
@@ -215,7 +221,7 @@ const cachedLane = (cache, key, read) => {
   if (cached) return cached
   const reading = read()
   cache.set(key, reading)
-  // A git name or origin that failed to read (a slow first start) is asked again next time, never kept.
+  // A git name, origin or base that failed to read (a slow first start) is asked again next time, never kept.
   void reading.then(found => {
     if (!found.isSure && cache.get(key) === reading) cache.delete(key)
   })
@@ -834,7 +840,8 @@ const withAway = (io, change) =>
 
 /**
  * Opens a window, unless one is running or waiting for review.
- * @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {{ root: string, tz: number, now: number, me: string, pack?: Pack }} at
+ * @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {{ root: string, tz: number, now: number, me: string, pack?: Pack, base?: string }} at
+ *   `base`: the branch the checkout's team merges into, for what the ledger says is held
  * @returns {Promise<Away | null>}
  */
 export const startAway = (io, choice, at) =>
@@ -847,7 +854,7 @@ export const startAway = (io, choice, at) =>
     const stamp = new Date(at.now + at.tz * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-')
     const ledgerPath = pin && isSamePerson(owner, at.me) ? `${dir}/decisions.md` : `${at.root}/${(at.pack ?? unreal).localDir}/away/${stamp}.md`
     const started = newWindow({ ...choice, held: choice.held ?? [...(at.pack ?? unreal).held.defaults] }, at.now, ledgerPath, { person: personId(at.me), root: at.root })
-    await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz, at.pack ?? unreal))
+    await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz, at.pack ?? unreal, at.base))
     return { away: started, result: started }
   })
 

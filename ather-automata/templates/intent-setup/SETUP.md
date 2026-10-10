@@ -96,7 +96,8 @@ line and the pointer paragraph.
      `web` otherwise;
    - `gates`: the confirmed gates;
    - `mergePolicy`: `hold`;
-   - `areas`: the area names in the contract, spelled the same.
+   - `areas`: the area names in the contract, spelled the same;
+   - `base`: only when the team merges into a branch that is not the remote's default branch, that branch's name.
 
 8. **Add the ignore line.** Add `.ather/local/` on a line of its own to
    `.gitignore`. Create the file when there is none.

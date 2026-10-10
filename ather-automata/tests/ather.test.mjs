@@ -18,7 +18,7 @@ import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
 import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
-import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
+import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
@@ -1178,6 +1178,76 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect([refused.isAborted === true, refused.error, refused.lock]).toEqual([false, "fatal: 'origin' does not appear to be a git repository", ''])
     const late = await fetchMain(fakeRepo({ fetch: { exitCode: -1, stdout: '', stderr: 'Error: timed out after 600000 ms' } }).repo)
     expect([late.isAborted === true, late.error, late.lock]).toEqual([false, 'Error: timed out after 600000 ms', ''])
+  })
+
+  test("the branch a team merges into: the profile's base, then the remote's default, then main; a git that could not say is not taken for main", async () => {
+    const asked = /** @type {(string | null)[]} */ ([])
+    const remote = (/** @type {string | null} */ answer) => async () => (asked.push(answer), answer)
+    expect(await baseOf({ base: 'release' }, remote('origin/develop'))).toBe('release')
+    // A profile that names it needs no git.
+    expect(asked).toEqual([])
+    expect(await baseOf({ base: '  ' }, remote('origin/develop'))).toBe('develop')
+    expect(await baseOf(null, remote('origin/develop'))).toBe('develop')
+    expect(await baseOf({ base: 7 }, remote(''))).toBe('main')
+    // An Io that cannot ask git (Paseo).
+    expect(await baseOf(null)).toBe('main')
+    expect(await baseOf(null, remote(null))).toBe(null)
+    expect(await baseOf(null, async () => Promise.reject(new Error('aborted')))).toBe(null)
+
+    // The lane carries it, read once; one git could not say is asked again, never kept as main.
+    const { io, files } = memoryIo()
+    let head = /** @type {string | null} */ (null)
+    let reads = 0
+    const withGit = { ...io, origin: async () => 'git@github.com:sipherxyz/ninetails-monitoring.git', base: async () => ((reads += 1), head) }
+    expect((await state.laneAt(withGit, '/base/nm')).isSure).toBe(false)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    head = 'origin/develop'
+    expect((await state.laneAt(withGit, '/base/nm')).base).toBe('develop')
+    expect((await state.laneAt(withGit, '/base/nm')).base).toBe('develop')
+    expect(reads).toBe(2)
+    files.set('/base/rel/.ather/profile.json', '{"pack":"core","base":"release"}')
+    expect((await state.laneAt(withGit, '/base/rel')).base).toBe('release')
+    expect((await state.laneAt(io, '/base/paseo')).base).toBe('main')
+  })
+
+  test("a repository whose base is develop: the team's intents and their dates come from origin/develop, and the fetch names develop in both halves of its refspec", async () => {
+    const { repo, calls } = fakeRepo({ local: { 'docs/intent/mine-local/prompt.md': '# Mine\n\n- Status: active\n' }, after: 'beef' })
+    // origin/main is not asked for, and would not answer.
+    /** @type {import('../hooks/team.mjs').Repo} */
+    const develop = { ...repo, git: async (args, options) => (args.includes('origin/main^{commit}') ? (calls.push([...args]), { exitCode: 1, stdout: '' }) : repo.git(args, options)) }
+    const team = await readTeam(develop, 'R', { cache: EMPTY_CACHE, pinned: null, base: 'develop' })
+    const by = Object.fromEntries(team.intents.map(one => [one.slug, one]))
+    expect(Object.keys(by).sort()).toEqual(['both', 'done', 'main-only', 'mine-local', 'ownerless'])
+    expect([by['main-only']?.source, by['main-only']?.updatedAt, by['mine-local']?.source]).toEqual(['main', 1500000, 'local'])
+    const refs = () => calls.filter(args => args[0] === 'rev-parse' && args[1] === '--verify').map(args => args.at(-1))
+    expect([refs().includes('origin/develop^{commit}'), refs().includes('origin/main^{commit}')]).toEqual([true, false])
+
+    expect(fetchArgs('develop')).toEqual([...FETCH_ARGS.slice(0, -1), '+refs/heads/develop:refs/remotes/origin/develop'])
+    expect(fetchArgs('main')).toEqual(FETCH_ARGS)
+    expect(await fetchMain(develop, 'develop')).toEqual({ error: '', lock: '', moved: true })
+    expect(calls.find(args => args.includes('fetch'))).toEqual(fetchArgs('develop'))
+    expect(refs().includes('origin/main^{commit}')).toBe(false)
+  })
+
+  test('a push to the base is held as a push to main is, and a merge into it; main and master stay held whatever the base', () => {
+    const held = ['merge', 'push-main']
+    const on = (/** @type {string} */ branch) => () => branch
+    const develop = { base: 'develop' }
+    expect(heldShell('git push origin develop', held, on('feat/x'), unreal, develop)).toBe('push-main')
+    expect(heldShell('git push origin main', held, on('feat/x'), unreal, develop)).toBe('push-main')
+    expect(heldShell('git push origin feature', held, on('feat/x'), unreal, develop)).toBe(null)
+    expect(heldShell('git push', held, on('develop'), unreal, develop)).toBe('push-main')
+    expect(heldShell('git merge feat/x', held, on('develop'), unreal, develop)).toBe('merge')
+    expect(heldShell('git merge origin/develop', held, on('feat/x'), unreal, develop)).toBe(null)
+    // Base main, as before.
+    expect(heldShell('git push origin develop', held, on('feat/x'))).toBe(null)
+    expect(heldShell('git push origin develop', held, on('feat/x'), unreal, { base: 'main' })).toBe(null)
+    expect(heldShell('git push origin main', held, on('feat/x'), unreal, { base: 'main' })).toBe('push-main')
+    expect(heldShell('git merge feat/x', held, on('develop'))).toBe(null)
+    // A folder in another checkout is judged by that checkout's base.
+    const at = (/** @type {string | null} */ folder) => (folder === '../nm' ? { pack: unreal, held, isProven: false, base: 'develop' } : null)
+    expect(heldShell('git -C ../nm push origin develop', held, on(''), unreal, { at })).toBe('push-main')
+    expect(heldShell('git push origin develop', held, on('feat/x'), unreal, { at })).toBe(null)
   })
 
   test('Ready to close groups the list in stage blocks: all met, proving, building, parked (A5)', () => {

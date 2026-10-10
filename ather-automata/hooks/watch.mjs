@@ -9,7 +9,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
-import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, gitFolders, heldKindsOf, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
+import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
 import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
@@ -55,6 +55,7 @@ function io($) {
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
     origin: root => readOrigin($, root),
+    base: root => readDefaultBranch($, root),
     repo: async () => (await laneOf($)).repo,
     real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
     worktrees: root => readWorktrees($, root),
@@ -67,6 +68,14 @@ async function readOrigin($, root) {
   const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
   // Exit 1: no such key.
   return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
+}
+
+// The default branch of the origin of the checkout at `root`, as its remote-tracking HEAD names it ("origin/develop";
+// '' when it names none), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readDefaultBranch($, root) {
+  const run = await $.process.run(['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '').trim() : ''
 }
 
 // What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
@@ -358,7 +367,7 @@ async function peers($, lane) {
 // What every prompt is told about this lane: the tracked intent, the Editor lock, live peers, the window's mandate.
 /** @param {Engine} $ */
 async function laneText($) {
-  const { root, me, pack } = await laneOf($)
+  const { root, me, pack, base } = await laneOf($)
   const lines = []
   const tz = await state.readTz(io($))
   const tracked = await state.trackedLane(io($), cwd)
@@ -378,7 +387,7 @@ async function laneText($) {
   if (lock.state === 'held') lines.push(`Editor owner lock: held by ${lock.holder || 'another lane'}${lock.until ? ` until ${lock.until}` : ''}.`)
   if (live.length > 0) lines.push(`Live peer lanes on this checkout: ${live.map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`).join('; ')}.`)
   const away = await state.readAway(io($))
-  if (isHolding(away)) lines.push(mandateText(away, tz, pack))
+  if (isHolding(away)) lines.push(mandateText(away, tz, pack, base))
   return lines.length > 0 ? `Ather Automata lane state (live, read-only):\n${lines.join('\n')}` : ''
 }
 
@@ -448,8 +457,9 @@ async function hold($, kind, command, heldHere) {
   const held = await state.park(io($), kind, command, Date.now(), heldHere)
   if (held === null) return null
   void state.bump(io($), 'heldParked').catch(() => undefined)
-  $.ui.toast(`Ather: held ${HELD_NOUNS[kind]} until you review the away window (${held.parked.id}).`)
-  return `Held by the Ather away window until the user reviews it: ${HELD_LABELS[kind]}. Recorded as ${held.parked.id}. Do not retry it; continue with other work.`
+  const { base } = await laneOf($)
+  $.ui.toast(`Ather: held ${forBase(HELD_NOUNS[kind] ?? '', base)} until you review the away window (${held.parked.id}).`)
+  return `Held by the Ather away window until the user reviews it: ${forBase(HELD_LABELS[kind] ?? '', base)}. Recorded as ${held.parked.id}. Do not retry it; continue with other work.`
 }
 
 /** @param {Engine} $ @param {Record<string, unknown>} input */
@@ -457,13 +467,13 @@ async function awayTool($, input) {
   const action = String(input.action ?? '')
   const tz = await state.readTz(io($))
   if (action === 'start') {
-    const { root, me, pack } = await laneOf($)
+    const { root, me, pack, base } = await laneOf($)
     const held = Array.isArray(input.held) ? heldKindsOf(pack).filter(kind => /** @type {unknown[]} */ (input.held).includes(kind)) : undefined
     const choice = { hours: clampHours(Number(input.hours) || 8), untilDone: input.untilDone === true, goal: typeof input.goal === 'string' ? input.goal.trim() : '', held }
-    const started = await state.startAway(io($), choice, { root, me, tz, now: Date.now(), pack })
+    const started = await state.startAway(io($), choice, { root, me, tz, now: Date.now(), pack, base })
     if (started === null) return 'An away window is already running or waiting for the user\'s review.'
     $.ui.toast(`Ather: away window running ${windowEndText(started, tz)}.`)
-    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => HELD_LABELS[/** @type {import('./guards.mjs').HeldKind} */ (kind)] ?? kind).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
+    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${forBase(pack.mandate.allowed, base)}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => forBase(HELD_LABELS[/** @type {import('./guards.mjs').HeldKind} */ (kind)] ?? kind, base)).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
   }
   if (action === 'end') return (await state.endAway(io($))) ? 'Autonomy window ended; the user reviews it with /ather.' : 'No autonomy window is running.'
   if (action === 'close') return (await state.closeAway(io($))) ? 'Autonomy window closed.' : 'No autonomy window to close.'
@@ -605,16 +615,16 @@ async function shell($, command, e, next) {
 // with every kind held across the command's checkouts for parking it, or null.
 /** @param {Engine} $ @param {string} command @param {readonly string[]} held @returns {Promise<{ kind: string, held: string[] } | null>} */
 async function heldIn($, command, held) {
-  const { pack } = await laneOf($)
+  const { pack, base } = await laneOf($)
   /** @type {Map<string | null, import('./packs/index.mjs').HeldAt | null>} */
   const at = new Map()
   for (const { folder } of withFolders(command)) {
     if (at.has(folder)) continue
     const { lane, isOwn } = await checkoutLane($, folder)
     if (isOwn) at.set(folder, null)
-    else at.set(folder, { pack: lane.pack, held: [...new Set([...held, ...lane.pack.held.defaults])], isProven: await isMergeProven($, lane.pack, await state.checkoutScope(io($), { isOwn, repo: lane.repo, root: lane.root })) })
+    else at.set(folder, { pack: lane.pack, held: [...new Set([...held, ...lane.pack.held.defaults])], isProven: await isMergeProven($, lane.pack, await state.checkoutScope(io($), { isOwn, repo: lane.repo, root: lane.root })), base: lane.base })
   }
-  const kind = heldShell(command, held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack, await scopeOf($)), at: folder => at.get(folder) ?? null })
+  const kind = heldShell(command, held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack, await scopeOf($)), base, at: folder => at.get(folder) ?? null })
   return kind ? { kind, held: [...new Set([...held, ...[...at.values()].flatMap(one => one?.held ?? [])])] } : null
 }
 
