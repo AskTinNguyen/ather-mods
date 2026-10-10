@@ -598,3 +598,123 @@ describe('web words: Next, Prove and Create (A6)', () => {
     expect(model.header.role).toBe('Engineer')
   })
 })
+
+describe("without profile gates: the repository's package manager", () => {
+  const SCRIPTS = { test: 'node --test', lint: 'eslint .', typecheck: 'tsc --noEmit', build: 'vite build' }
+  const FOUR = {
+    npm: ['npm test', 'npm run lint', 'npm run typecheck', 'npm run build'],
+    pnpm: ['pnpm test', 'pnpm lint', 'pnpm typecheck', 'pnpm build'],
+    yarn: ['yarn test', 'yarn lint', 'yarn typecheck', 'yarn build'],
+    bun: ['bun run test', 'bun run lint', 'bun run typecheck', 'bun run build'],
+  }
+  /** @param {import('../hooks/packs/index.mjs').Pack} pack */
+  const prove = pack => pack.prompts.prove('engineer', 'lens')
+  // The runner of the command the Prove prompt names for the test script.
+  /** @param {import('../hooks/packs/index.mjs').Pack} pack */
+  const runner = pack => /`(npm|pnpm|yarn|bun)( run)? test`/.exec(prove(pack))?.[1] ?? ''
+  /** @param {string} text @param {string[]} commands */
+  const names = (text, commands) => {
+    for (const command of commands) expect(text).toContain(`\`${command}\``)
+  }
+
+  for (const name of /** @type {const} */ (['pnpm', 'yarn', 'bun'])) {
+    test(`packageManager ${name}: Prove, the worker brief and the role description name its commands and no npm command`, () => {
+      const pack = makeWebPack(null, { packageManager: `${name}@9.12.0+sha512.abc`, scripts: SCRIPTS })
+      for (const text of [prove(pack), pack.prompts.brief('engineer', 'lens'), pack.roleDescriptions.engineer ?? '']) {
+        names(text, FOUR[name])
+        expect(text).not.toMatch(/`npm /)
+      }
+    })
+  }
+  test('the lockfile alone names the runner; with several, pnpm, then yarn, then bun', () => {
+    const pack = (/** @type {string[]} */ ...files) => makeWebPack(null, { scripts: SCRIPTS }, { files })
+    expect(runner(pack('package.json', 'pnpm-lock.yaml'))).toBe('pnpm')
+    expect(runner(pack('yarn.lock'))).toBe('yarn')
+    expect(runner(pack('bun.lock'))).toBe('bun')
+    expect(runner(pack('bun.lockb'))).toBe('bun')
+    expect(runner(pack('bun.lock', 'yarn.lock', 'pnpm-lock.yaml'))).toBe('pnpm')
+    expect(runner(pack('bun.lockb', 'yarn.lock'))).toBe('yarn')
+    expect(runner(pack('package-lock.json'))).toBe('npm')
+    names(prove(pack('pnpm-lock.yaml')), FOUR.pnpm)
+  })
+  test("packageManager wins over another runner's lockfile; the profile's packageManager wins over both", () => {
+    expect(runner(makeWebPack(null, { packageManager: 'yarn@4.5.0', scripts: SCRIPTS }, { files: ['pnpm-lock.yaml'] }))).toBe('yarn')
+    expect(runner(makeWebPack({ pack: 'web', packageManager: 'bun' }, { packageManager: 'yarn@4.5.0', scripts: SCRIPTS }, { files: ['pnpm-lock.yaml'] }))).toBe('bun')
+  })
+  test('a packageManager that is no string or names no known runner is skipped, and nothing throws', () => {
+    for (const odd of ['deno@2', 42, {}, '', null, ['pnpm'], 'pnpmx@1']) {
+      expect(runner(makeWebPack(null, { packageManager: odd, scripts: SCRIPTS }))).toBe('npm')
+      expect(runner(makeWebPack(null, { packageManager: odd, scripts: SCRIPTS }, { files: ['yarn.lock'] }))).toBe('yarn')
+      expect(runner(makeWebPack({ pack: 'web', packageManager: odd }, { packageManager: 'pnpm@9.12.0', scripts: SCRIPTS }))).toBe('pnpm')
+    }
+    for (const odd of [null, 42, 'pnpm-lock.yaml', { files: 'pnpm-lock.yaml' }, { files: [42, null] }]) {
+      expect(runner(makeWebPack(null, { scripts: SCRIPTS }, /** @type {any} */ (odd)))).toBe('npm')
+    }
+  })
+  test('the typecheck script is named on the lint rung, after lint; alone, it is what lint names', () => {
+    names(prove(makeWebPack(null, { scripts: SCRIPTS })), FOUR.npm)
+    expect(prove(makeWebPack(null, { scripts: SCRIPTS }))).toMatch(/`npm run lint`, `npm run typecheck`/)
+    const only = prove(makeWebPack(null, { scripts: { typecheck: 'tsc --noEmit' } }, { files: ['pnpm-lock.yaml'] }))
+    expect(only).toContain('`pnpm typecheck`')
+    expect(only).not.toMatch(/`pnpm lint`/)
+  })
+  test('through choosePack: a pnpm-lock.yaml at the root names pnpm, by marker and under a profile that names web', async () => {
+    const files = { 'package.json': JSON.stringify({ scripts: SCRIPTS }) }
+    const marker = await choosePack(fakeIo(files, ['package.json', 'pnpm-lock.yaml']).io, 'R')
+    expect(marker.source).toBe('marker')
+    names(prove(marker.pack), FOUR.pnpm)
+    const named = await choosePack(fakeIo({ ...files, '.ather/profile.json': '{"pack":"web"}' }, ['.ather', 'package.json', 'pnpm-lock.yaml']).io, 'R')
+    expect(named.source).toBe('profile')
+    names(prove(named.pack), FOUR.pnpm)
+    // A root that cannot be listed is a root with no lockfile.
+    const fake = fakeIo({ ...files, '.ather/profile.json': '{"pack":"web"}' })
+    const unlisted = await choosePack({ ...fake.io, list: async () => { throw new Error('no such folder') } }, 'R')
+    expect(runner(unlisted.pack)).toBe('npm')
+  })
+  test('a profile that names unreal or core still returns its pack without listing the root', async () => {
+    for (const [name, pack] of /** @type {const} */ ([['unreal', unreal], ['core', core]])) {
+      const fake = fakeIo({ '.ather/profile.json': `{"pack":"${name}"}`, 'package.json': '{}' }, ['package.json', 'pnpm-lock.yaml'])
+      let lists = 0
+      const chosen = await choosePack({ ...fake.io, list: async () => { lists += 1; return [] } }, 'R')
+      expect(chosen.pack).toBe(pack)
+      expect(lists).toBe(0)
+      expect(fake.reads.count).toBe(2)
+    }
+  })
+
+  test('npm with test, lint and build scripts and no typecheck reads as it did, to the letter', () => {
+    const pack = makeWebPack(null, { scripts: { test: 'node --test', lint: 'eslint .', build: 'vite build' } }, { files: ['package.json', 'package-lock.json'] })
+    expect(prove(pack)).toBe("Prove intent lens: run `npm test`, `npm run lint` and `npm run build` and report each command's own exit code and its pass and fail counts. Ather reads the result from tool output.")
+    expect(prove(makeWebPack(null, { scripts: { test: 'node --test', lint: 'eslint .', build: 'vite build' } }))).toBe(prove(pack))
+  })
+  test("a profile with gates names the profile's commands, whatever the lockfile says", () => {
+    const pack = makeWebPack(PROFILE, { ...PACKAGE, packageManager: 'pnpm@9.12.0' }, { files: ['pnpm-lock.yaml'] })
+    for (const role of ['engineer', 'designer', 'product']) expect(pack.prompts.prove(role, 'lens')).toBe(WEB.prompts.prove(role, 'lens'))
+    expect(pack.prompts.ship('engineer', 'lens')).toBe(WEB.prompts.ship('engineer', 'lens'))
+    expect(pack.roleDescriptions).toEqual(WEB.roleDescriptions)
+  })
+  test('with profile gates, a rung that no gate declares names the one script it named before, with the runner', () => {
+    const profile = { pack: 'web', gates: [{ id: 'test', command: 'npm test', proofs: ['tests'] }, { id: 'build', command: 'npm run build', proofs: ['build'] }], mergePolicy: 'with-proof', required: ['tests', 'lint', 'build'] }
+    const scripts = { test: 'node --test', lint: 'eslint .', build: 'vite build' }
+    const pack = makeWebPack(profile, { scripts: { ...scripts, typecheck: 'tsc --noEmit' } })
+    const before = makeWebPack(profile, { scripts })
+    for (const [text, was] of [[pack.prompts.ship('engineer', 'lens'), before.prompts.ship('engineer', 'lens')], [pack.mandate.allowed, before.mandate.allowed]]) {
+      expect(text).toContain('`npm run lint`')
+      expect(text).not.toMatch(/typecheck/)
+      expect(text).toBe(was)
+    }
+    const pnpm = makeWebPack(profile, { scripts: { ...scripts, typecheck: 'tsc --noEmit' } }, { files: ['pnpm-lock.yaml'] }).mandate.allowed
+    expect(pnpm).toContain('`pnpm lint`')
+    expect(pnpm).not.toMatch(/typecheck|`npm run lint`/)
+  })
+  test('without a profile there are still no gates, and running the named command proves the rung', () => {
+    const pack = makeWebPack(null, { packageManager: 'pnpm@9.12.0', scripts: SCRIPTS }, { files: ['pnpm-lock.yaml'] })
+    expect(pack.gates).toEqual([])
+    expect(pack.rungGates).toEqual({})
+    for (const command of ['pnpm test', 'bun run test', 'yarn test', 'npm test', 'node --test']) {
+      expect(pack.readShell(command, fixture('node-test-pass.txt'), {}).rungs).toEqual([{ rung: 'tests', value: { state: 'pass', detail: '77 passed, 0 failed' } }])
+    }
+    expect(pack.readShell('pnpm typecheck', fixture('tsc-pass.txt'), {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['lint', 'pass']])
+    expect(pack.readShell('npx eslint .', fixture('eslint-pass.txt'), {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['lint', 'pass']])
+  })
+})

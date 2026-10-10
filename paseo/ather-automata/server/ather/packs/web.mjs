@@ -11,6 +11,7 @@ import { bareCommand, isPiped, segments, withoutHeredocs } from '../shell.mjs'
 /** @typedef {import('./index.mjs').Rung} Rung */
 /** @typedef {import('./index.mjs').Gate} Gate */
 /** @typedef {import('./index.mjs').Production} Production */
+/** @typedef {import('./index.mjs').Found} Found */
 
 export const RUNGS = /** @type {const} */ (['tests', 'lint', 'build', 'ui', 'prod'])
 const RUNG_LABELS = { tests: 'passing tests', lint: 'a clean lint and typecheck', build: 'a build that succeeded', ui: 'a passing browser check', prod: 'a healthy production deployment' }
@@ -340,11 +341,33 @@ export const productionOf = profile => {
   return { host: String(raw.host ?? ''), branch: String(raw.branch ?? 'main'), deployment: typeof raw.deployment === 'string' ? raw.deployment : '', url, expectStatus: Number(raw.probe?.expectStatus ?? raw.expectStatus ?? 200) || 200 }
 }
 
+// "pnpm@9.12.0+sha512…" and "pnpm" are pnpm; anything else is no runner.
+/** @param {unknown} value */
+const runnerNamed = value => (typeof value === 'string' ? /^(npm|pnpm|yarn|bun)(?:@|$)/.exec(value.trim())?.[1] ?? null : null)
+
+const LOCKFILES = /** @type {const} */ ([['pnpm-lock.yaml', 'pnpm'], ['yarn.lock', 'yarn'], ['bun.lock', 'bun'], ['bun.lockb', 'bun']])
+
 /**
- * The web pack for one repository, from its profile (or none) and its package.json.
- * @param {any} profile @param {any} packageJson @returns {Pack}
+ * The package manager a repository's scripts are run with: the profile's word, then package.json's, then a lockfile at the root, then npm.
+ * @param {any} profile @param {any} packageJson @param {Found} found
  */
-export const makeWebPack = (profile, packageJson) => {
+const runnerOf = (profile, packageJson, found) => {
+  const files = Array.isArray(found?.files) ? found.files : []
+  return runnerNamed(profile?.packageManager) ?? runnerNamed(packageJson?.packageManager) ?? LOCKFILES.find(([file]) => files.includes(file))?.[1] ?? 'npm'
+}
+
+// The scripts that stand in for each rung's gates, in the order they are named.
+const RUNG_SCRIPTS = /** @type {Record<string, string[]>} */ ({ tests: ['test'], lint: ['lint', 'typecheck'], build: ['build'] })
+
+// `bun test` is Bun's own test runner, not the test script: bun keeps the `run`.
+/** @param {string} runner @param {string} script */
+const scriptCommand = (runner, script) => (runner === 'npm' ? (script === 'test' ? 'npm test' : `npm run ${script}`) : runner === 'bun' ? `bun run ${script}` : `${runner} ${script}`)
+
+/**
+ * The web pack for one repository, from its profile (or none), its package.json and what else was read at its root.
+ * @param {any} profile @param {any} packageJson @param {Found} [found] @returns {Pack}
+ */
+export const makeWebPack = (profile, packageJson, found = {}) => {
   const gates = gatesOf(profile)
   const production = productionOf(profile)
   /** @type {Record<string, string>} */
@@ -352,7 +375,7 @@ export const makeWebPack = (profile, packageJson) => {
   const declared = new Set(gates.flatMap(gate => gate.proofs))
   // Without a profile, the usual scripts stand in for gates.
   if (gates.length === 0) {
-    for (const [name, rung] of /** @type {const} */ ([['test', 'tests'], ['lint', 'lint'], ['typecheck', 'lint'], ['build', 'build']])) if (scripts[name] !== undefined) declared.add(rung)
+    for (const [rung, names] of Object.entries(RUNG_SCRIPTS)) if (names.some(name => scripts[name] !== undefined)) declared.add(rung)
   }
   if (production) declared.add('prod')
   const mergePolicy = String(profile?.mergePolicy ?? profile?.merge ?? '').toLowerCase() === 'with-proof' ? 'with-proof' : 'hold'
@@ -369,12 +392,14 @@ export const makeWebPack = (profile, packageJson) => {
   /** @type {Record<string, string[]>} */
   const rungGates = {}
   for (const gate of gates) for (const rung of gate.proofs) if (rung !== 'prod') rungGates[rung] = [...new Set([...(rungGates[rung] ?? []), gateKey(gate)])]
-  // The commands that prove a rung: every gate of the profile that declares it, else the npm script.
+  const runner = runnerOf(profile, packageJson, found)
+  // The commands that prove a rung: every gate of the profile that declares it, else its scripts, run with the repository's package manager.
+  // Beside a profile's gates, a rung that no gate declares names its first script alone.
   /** @param {string} rung */
   const gatesFor = rung => {
     const named = gates.filter(gate => gate.proofs.includes(rung)).map(gate => gate.command)
     if (named.length > 0) return named
-    return rung === 'tests' && scripts.test ? ['npm test'] : rung === 'lint' && scripts.lint ? ['npm run lint'] : rung === 'build' && scripts.build ? ['npm run build'] : []
+    return (RUNG_SCRIPTS[rung] ?? []).slice(0, gates.length > 0 ? 1 : undefined).filter(name => scripts[name]).map(name => scriptCommand(runner, name))
   }
   /** @param {readonly string[]} rungs */
   const commandsFor = rungs => [...new Set(rungs.flatMap(gatesFor))].map(command => `\`${command}\``)

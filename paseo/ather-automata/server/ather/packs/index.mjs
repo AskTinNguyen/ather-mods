@@ -20,6 +20,7 @@ import { makeWebPack } from './web.mjs'
  * @typedef {{ isHeld: boolean, isFree: boolean, holder: string, until: string }} EditorState
  * @typedef {{ command: string, proofs: string[], id?: string, proves?: string, passOn?: 'exit' | 'counts' }} Gate `passOn`: how its tests and ui proofs pass, on its exit code (also without the field) or on test counts
  * @typedef {{ host: string, branch: string, deployment: string, url: string, expectStatus: number }} Production
+ * @typedef {{ files?: readonly string[] }} Found what else was read of a repository where its pack is chosen: the names of the files at its root
  * @typedef {{ pack: Pack, held: readonly string[], isProven: boolean }} HeldAt what a folder's own checkout holds, when that is not the session's
  * @typedef {{ isProven?: boolean, scripts?: Record<string, string>, at?: (folder: string | null) => HeldAt | null }} HeldContext
  * @typedef {{
@@ -75,11 +76,12 @@ export const choosePack = async (io, root) => {
   const packageJson = json(await io.read(`${root}/package.json`))
   const named = typeof profile?.pack === 'string' ? profile.pack.toLowerCase() : ''
   if (named === 'unreal') return { pack: unreal, source: 'profile', profile }
-  if (named === 'web') return { pack: makeWebPack(profile, packageJson), source: 'profile', profile }
   if (named === 'core') return { pack: core, source: 'profile', profile }
   const entries = await io.list(root).catch(() => [])
+  const found = { files: entries.filter(entry => entry.kind === 'file' && typeof entry.name === 'string').map(entry => entry.name) }
+  if (named === 'web') return { pack: makeWebPack(profile, packageJson, found), source: 'profile', profile }
   if (entries.some(entry => entry.kind === 'file' && /\.uproject$/i.test(entry.name))) return { pack: unreal, source: 'marker', profile }
-  if (packageJson || entries.some(entry => entry.kind === 'file' && /^(package\.json|pyproject\.toml)$/i.test(entry.name))) return { pack: makeWebPack(profile, packageJson), source: 'marker', profile }
+  if (packageJson || entries.some(entry => entry.kind === 'file' && /^(package\.json|pyproject\.toml)$/i.test(entry.name))) return { pack: makeWebPack(profile, packageJson, found), source: 'marker', profile }
   return { pack: core, source: 'none', profile }
 }
 

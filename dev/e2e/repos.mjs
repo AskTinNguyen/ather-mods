@@ -385,6 +385,27 @@ const writeIntent = (root, slug, text = LOGIN) => {
   expect('and fetches its one origin', fetchRuns(engine).length === 1, fetchRuns(engine).map(run => run.argv))
 }
 
+// ---------------------------------------------------------------- no profile, a pnpm lockfile
+
+{
+  const parent = fs.mkdtempSync(join(BASE, 'pnpm-'))
+  const scripts = { test: 'node --test', lint: 'eslint .', build: 'vite build' }
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, 'package.json': `${JSON.stringify({ name: 'web', scripts }, null, 2)}\n`, 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" } })
+  writeIntent(web, 'pay', '# Pay\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: it pays.\n')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0047' })
+  engine.setSurfaces(['terminal'])
+  await bash(engine, 'pnpm test', NODE_TEST_PASS)
+  expect('without a profile, a passing pnpm test records tests as passed', engine.store.get(`evidence:${sid}`)?.tests?.state === 'pass', engine.store.get(`evidence:${sid}`))
+  await engine.command('ather', 'intent pay')
+  const submits = engine.record.submits.length
+  byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')?.props.onPress()
+  await engine.flush()
+  const prove = engine.record.submits.slice(submits).join('\n')
+  expect("with a pnpm-lock.yaml and no profile, Prove names pnpm test, pnpm lint and pnpm build, and no npm command", ['`pnpm test`', '`pnpm lint`', '`pnpm build`'].every(command => prove.includes(command)) && !/`npm /.test(prove), prove)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- issues and PRs from every checkout
 
 // `gh issue list --json …` rows.
