@@ -5,7 +5,7 @@
 /** `where: 'shared'`: the rule guards the shared checkout only; a worker's own worktree is its own business. */
 export type Rule = { id: string; re: string; why: string; where?: 'shared' }
 /** What Ather has read as proof for the tracked intent (its `status` tool), or null with no intent tracked. */
-export type Proof = { intent: string; role: string; evidence: Record<string, { state: string; detail?: string }> }
+export type Proof = { intent: string; role: string; evidence: Record<string, { state: string; detail?: string }>; pack?: string; gates?: string[] }
 export type A5RConfig = {
   deny_abs_paths: string[]
   ask_abs_paths: string[]
@@ -38,6 +38,9 @@ export type Located = { root: string | null; rel: string | null }
 const READERS = new Set(['cat', 'type', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'ls', 'dir',
   'get-childitem', 'gci', 'get-content', 'gc', 'wc', 'stat', 'file', 'test-path', 'get-item', 'gi', 'resolve-path', 'echo', 'write-output', 'write-host'])
 const DELETE_VERBS = new Set(['rm', 'rmdir', 'rd', 'del', 'erase', 'remove-item', 'ri'])
+// A76: moving into a folder writes nothing; git subcommands that only read.
+const CHDIR = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir'])
+const GIT_READS = new Set(['status', 'log', 'diff', 'show', 'grep', 'rev-parse', 'ls-files', 'blame', 'branch', 'remote', 'describe', 'shortlog', 'cat-file', 'ls-tree'])
 const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
 const WRAPPERS = new Set(['&', 'sudo', 'command', 'builtin', 'exec', 'time', 'nohup', 'xargs', 'call'])
 const PS_VALUE_PARAMS = new Set(['-erroraction', '-ea', '-exclude', '-include', '-filter', '-warningaction', '-wa'])
@@ -226,9 +229,17 @@ const RUNGS: readonly [string, RegExp, string][] = [
 const REQUIRED: Record<string, string[]> = { techart: ['editor', 'pie'], engineer: ['build', 'automation'], designer: ['pie'] }
 const wordOf = (rung: string): string => RUNGS.find(r => r[0] === rung)?.[2] ?? rung
 
-/** What Ather's proof still lacks for the role (its isProven), or null once it is complete. */
+/** What Ather's proof still lacks for the role (its isProven), or null once it is complete. A77: a repository of
+ * another pack (Ather's core or web pack: `pack` in its status) with no build step among its gates is proven by tests
+ * that passed; with a build gate, by passing tests and a build that succeeded. The Unreal pack keeps its rungs. */
 export const proofGap = (proof: Proof): string | null => {
   const state = (k: string) => proof.evidence[k]?.state ?? 'none'
+  if (proof.pack && proof.pack !== 'unreal') {
+    const hasBuild = (proof.gates ?? []).some(g => /:\s*[^:]*\bbuild\b/i.test(g))
+    const need: [string, string][] = hasBuild ? [['tests', 'passing tests'], ['build', 'a build that succeeded']] : [['tests', 'passing tests']]
+    const missing = need.filter(([k]) => state(k) !== 'pass').map(([, w]) => w)
+    return missing.length ? missing.join(' and ') : null
+  }
   const required = REQUIRED[proof.role] ?? []
   const missing = required.filter(k => state(k) !== 'pass')
   const proven = required.length ? missing.length === 0 : state('pie') === 'pass' || (state('build') === 'pass' && state('automation') === 'pass')
@@ -246,12 +257,10 @@ export const proofProblems = (proof: Proof, verified: string): string[] => {
   }
   const failed = RUNGS.filter(([k]) => state(k) === 'fail').map(r => r[2])
   if (failed.length && !/fail|✗/i.test(verified)) probs.push(`D5 Ather's proof has a failed ${failed.join(', ')} -> 'Verified' must say FAILED`)
-  // Ather's isProven (packs/unreal.mjs): a role's rungs all pass; with no role, PIE, or build and tests.
-  const required = REQUIRED[proof.role] ?? []
-  const missing = required.filter(k => state(k) !== 'pass')
-  const proven = required.length ? missing.length === 0 : state('pie') === 'pass' || (state('build') === 'pass' && state('automation') === 'pass')
-  if (!proven && !NOT_YET.test(verified))
-    probs.push(`D2 ${proof.intent} is not proven yet (Ather still needs ${required.length ? missing.map(wordOf).join(' and ') : 'PIE, or build and tests'}) -> 'Verified' says "chưa: <what is still needed>"`)
+  // Ather's isProven (packs/unreal.mjs): a role's rungs all pass; with no role, PIE, or build and tests. A77: other packs by proofGap.
+  const gap = proofGap(proof)
+  if (gap && !NOT_YET.test(verified))
+    probs.push(`D2 ${proof.intent} is not proven yet (Ather still needs ${gap}) -> 'Verified' says "chưa: <what is still needed>"`)
   return probs
 }
 
@@ -295,11 +304,18 @@ export class A5R {
    * a git command that runs elsewhere (`git -C <own worktree> …`). Unknown means shared. */
   preShell(command: string, workdir = '', env: Places = {}, depth = 0, isShared: (dir: string) => boolean = () => true): Decision | null {
     let firstAsk: Decision | null = null
+    let inKit: string | null = null // A76: a `cd` into the live kit: what runs after it there may only read
     for (const raw of segments(stripHeredocs(command ?? ''))) {
       const bare = blankQuotes(raw)
       const applies = (r: Rule) => rx(r.re).test(bare) && (r.where !== 'shared' || isShared(gitTarget(raw, workdir)))
       for (const r of this.cfg.shell_deny) if (applies(r)) return decision('deny', 'D1/D5', r.why, r.id)
       const [verb, args] = commandVerb(tokenize(raw))
+      if (CHDIR.has(verb)) {
+        inKit = this.kitMentions.find(([re]) => re.test(raw.replace(/\\/g, '/').toLowerCase()))?.[1] ?? null
+        continue
+      }
+      if (inKit && !READERS.has(verb) && !(verb === 'git' && GIT_READS.has((args.find(a => !a.startsWith('-')) ?? '').toLowerCase())))
+        return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
       const hit = this.writesProtected(raw, verb)
       if (hit) return decision('deny', 'D1', `This command touches the A5R kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
       if (NESTED_SHELLS.has(verb) && depth < 2) {
@@ -365,7 +381,7 @@ export class A5R {
     if (matchRel(rel, relRaw, this.cfg.test_paths)) {
       const count = (t: string) => (t.match(new RegExp(rx(this.cfg.assert_regex).source, `g${rx(this.cfg.assert_regex).flags}`)) ?? []).length
       const [a, b] = [count(old ?? ''), count(neu ?? '')]
-      if (b < a) return decision('ask', 'D5', `Edit reduces assertions in test ${rel ?? p} (${a} -> ${b}). Weakening tests needs human approval.`, 'tests')
+      if (b < a) return decision('ask', 'D5', `Edit reduces assertions in test ${rel ?? p} (${a} -> ${b}). It runs and is recorded; A5R acceptance asks for the reason.`, 'tests')
     }
     return null
   }

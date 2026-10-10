@@ -48,32 +48,44 @@ test('/a5r on and /a5r off flip the switch every session reads', opts(), async (
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toBeUndefined()
 })
 
-test('recursive delete: free in TEMP, needs Hai elsewhere', opts(), async ($, on) => {
-  world(on)
+// Rev 27 (A73, A75), by design: these ran into a dialog or "nobody could approve it"; now they run and are recorded.
+const RECORDED = 'E:/s2/Saved/A5R/recorded'
+const recorded = (w: ReturnType<typeof world>) => w.read(`${RECORDED}/${ME.slice(0, 8)}.json`)
+
+test('A75: a recursive delete runs (in TEMP silently; elsewhere recorded for nghiệm thu)', opts(), async ($, on) => {
+  const w = world(on)
   expect(refused(await $.tool.call({ tool: 'PowerShell', command: 'Remove-Item -Recurse -Force $env:TEMP\\probe' }))).toBeUndefined()
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'rm -rf E:/Projects/s2/Saved/Logs' }))).toContain("needs Hai's approval")
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'rm -rf E:/Projects/s2/Saved/Logs' }))).toBeUndefined()
+  expect(recorded(w)).toContain('rm -rf E:/Projects/s2/Saved/Logs')
+  expect(w.seen.filter(e => e.tool === 'Bash' || e.tool === 'PowerShell').length).toBe(2)
 })
 
-test('ask mode with nobody to answer (Ather away window) refuses and says why', opts('ask'), async ($, on) => {
-  world(on)
-  on('tool.call', { tool: 'AskUserQuestion' }, async () => ({ deny: 'The user is away until 07:00 (Ather autonomy window).' }))
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('nobody could approve it')
+test('A73: ask mode in an away window gives the same answer as any mode: a clean reset --hard runs, nothing is asked', opts('ask'), async ($, on) => {
+  const w = world(on)
+  const asked: Rec[] = []
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_$: unknown, e: Rec) => {
+    asked.push(e)
+    return { deny: 'The user is away until 07:00 (Ather autonomy window).' }
+  })
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toBeUndefined()
+  expect([asked.length, w.seen.filter(e => e.tool === 'Bash').length]).toEqual([0, 1])
 })
 
-test('shared config edit in a git project needs Hai', opts(), async ($, on) => {
-  world(on)
-  expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Config/DefaultGame.ini`, content: '[x]' }))).toContain('Config/*.ini')
+test('A75: a shared config edit in a git project runs and is recorded', opts(), async ($, on) => {
+  const w = world(on)
+  expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Config/DefaultGame.ini`, content: '[x]' }))).toBeUndefined()
+  expect(recorded(w)).toContain('Config/DefaultGame.ini')
 })
 
 test('A17: no per-turn report: a turn with edits, a failed build and no report ends; the action gates still hold', opts(), async ($, on) => {
-  const w = world(on, { out: { [BAT]: 'Building...\nResult: Failed (OtherCompilationError)' } })
+  const w = world(on, { out: { [BAT]: 'Building...\nResult: Failed (OtherCompilationError)' }, git: { 'status --porcelain': { stdout: ' M Source/S2/Other.cpp\0' } } })
   w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
   await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5RTMP' })
   await $.tool.call({ tool: 'Bash', command: BAT })
   expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
   // What cannot be undone is still checked at the action (D10).
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5R · D1/D5')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain("needs Hai's approval")
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('Source/S2/Other.cpp (no session claims it)') // A74: a fact, not a dialog
   expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Source/S2/Key.cpp`, content: `k = 'ghp_${'a'.repeat(36)}'` }))).toContain('secret')
   expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toContain('mcp__a5r__editor')
 })
@@ -83,24 +95,24 @@ test('A17: no per-turn report: a turn with edits, a failed build and no report e
 const STATUS_TOOL = 'mcp__ather-automata__status'
 const status = (o: Rec) => JSON.stringify({ me: 'hai', role: 'techart', area: 'VFX', ...o })
 
-test('a worker\'s own worktree: git and repository config there are its own (the shared checkout still asks)', opts(), async ($, on) => {
-  const w = world(on)
+test('a worker\'s own worktree: git and repository config there are its own (the shared checkout is checked on facts)', opts(), async ($, on) => {
+  const w = world(on, { git: { 'status --porcelain': { stdout: ' M Config/DefaultGame.ini\0' } } })
   w.put('E:/wt/x/.git', 'gitdir: E:/proj/.git/worktrees/x')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x checkout -b HaiHuynh/tail-vfx origin/main' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x reset --hard' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Write', file_path: 'E:/wt/x/Config/DefaultGame.ini', content: '[x]' }))).toBeUndefined()
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain("needs Hai's approval")
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x add .' }))).toContain("needs Hai's approval")
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('Config/DefaultGame.ini (no session claims it)')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x add .' }))).toContain('stage exact paths')
 })
 
-test('a worker (subagent) is never put to Hai: refused at once with stop-and-report, no dialog', opts('ask'), async ($, on) => {
+test('A73: a worker (subagent) gets the main loop\'s answer: refused with the alternative, no dialog', opts('ask'), async ($, on) => {
   const w = world(on)
   const asked: Rec[] = []
   on('tool.call', { tool: 'AskUserQuestion' }, async (_$: unknown, e: Rec) => {
     asked.push(e)
     return { result: {}, text: 'Allow once' }
   })
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard', agentId: 'worker-1' } as never))).toContain('a worker does not ask Hai')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git push --force origin HaiHuynh/x', agentId: 'worker-1' } as never))).toContain('push to a new branch and open a PR')
   expect(asked.length).toBe(0)
   expect(w.seen.length).toBe(0)
 })

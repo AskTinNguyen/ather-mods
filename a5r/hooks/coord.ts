@@ -807,11 +807,16 @@ export const writesLock = (command: string): boolean =>
 export type Notice = { id: string; text: string; isActionable: boolean }
 export const noticeText = (gate: string, what: string, todo: string): string => `${MARK} ${gate} — ${what} → ${todo}`
 export const isIntentFile = (path: string): boolean => /(^|\/)docs\/intent\//i.test((path ?? '').replace(/\\/g, '/'))
-export const addsNotice = (added: readonly string[]): boolean => added.some(l => l.includes(MARK))
+/** A76: a line that IS a coordination notice: the prefix and a gate name at its start (after list or quote marks), then
+ * " — "; prose that mentions or quotes the prefix is not one. */
+export const isNoticeLine = (line: string): boolean => new RegExp(`^\\s*(?:[-*>]\\s+)*${MARK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} [^—\\n]{1,60} — `).test(line)
+export const addsNotice = (added: readonly string[]): boolean => added.some(isNoticeLine)
 /** A shell command that writes a a5r line into an intent file (a redirect, tee or a PowerShell writer, a
  * heredoc body included). Best effort, like every shell check here. */
 export const writesNoticeToIntent = (command: string): boolean =>
-  (command ?? '').includes(MARK) && /(>>?|\btee\b|Out-File|Set-Content|Add-Content)\s*(-\w+\s+)*['"]?[^|;&\n]*docs[\\/]+intent[\\/]/i.test(command ?? '')
+  // A76: only text that is a notice counts (it starts a line, or the text an echo/printf/-Value writes), not prose quoting it.
+  new RegExp(`(?:^|\\n|(?:echo|printf|Write-Output|Write-Host|-Value)\\s+['"]?)\\s*(?:[-*>]\\s+)*${MARK.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} [^—\\n]{1,60} — `).test(command ?? '') &&
+  /(>>?|\btee\b|Out-File|Set-Content|Add-Content)\s*(-\w+\s+)*['"]?[^|;&\n]*docs[\\/]+intent[\\/]/i.test(command ?? '')
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 

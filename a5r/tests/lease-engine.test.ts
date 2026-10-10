@@ -127,7 +127,7 @@ const MINE = { session: ME, id8: ME8, lane: '3️⃣-Loco-fix' }
 const OURS = 'git -C E:/s2 checkout --ours -- Source/S2/Foo.cpp'
 
 test('A15: in its frozen phase the holder\'s worker runs the sync\'s own git commands; reset --hard still stops it', opts(), async ($, on) => {
-  const w = world(on)
+  const w = world(on, { git: { 'status --porcelain': { stdout: 'UU Source/S2/Foo.cpp\0' } } }) // A74: the merge's conflicted file
   repo(w, 'E:/s2')
   w.put('E:/s2/.git/MERGE_HEAD', '1a2b3c\n')
   w.put(SYNC, JSON.stringify(newSync(T(14, 30), MINE, 'me', NOW - 30 * MIN)))
@@ -135,17 +135,17 @@ test('A15: in its frozen phase the holder\'s worker runs the sync\'s own git com
   const asWorker = (command: string) => $.tool.call({ tool: 'Bash', command, agentId: 'w-sync' } as never)
   for (const c of [OURS, 'git -C E:/s2 add -- Source/S2/Foo.cpp', 'git -C E:/s2 commit --no-edit', 'git -C E:/s2 merge --abort', 'git -C E:/s2 revert -m 1 1a2b3c4d --no-edit'])
     expect([c, refused(await asWorker(c))]).toEqual([c, undefined])
-  expect(refused(await asWorker('git -C E:/s2 reset --hard'))).toContain('a worker does not ask Hai')
-  expect(refused(await asWorker('git -C E:/s2 stash'))).toContain('a worker does not ask Hai')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 reset --hard' }))).toContain("needs Hai's approval") // the holder's own loop too
+  expect(refused(await asWorker('git -C E:/s2 reset --hard'))).toContain('Source/S2/Foo.cpp (no session claims it)')
+  expect(refused(await asWorker('git -C E:/s2 stash'))).toContain('would discard uncommitted changes')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 reset --hard' }))).toContain('would discard uncommitted changes') // the holder's own loop too
 })
 
 test('A15: before T (and for any session not holding the sync) the same commands keep A5R\'s rules and the freeze', opts(), async ($, on) => {
-  const w = world(on)
+  const w = world(on, { git: { 'status --porcelain': { stdout: ' M Source/S2/Foo.cpp\0' } } })
   repo(w, 'E:/s2')
   w.put(SYNC, JSON.stringify(newSync(T(15, 0), MINE, 'me', NOW))) // 14:40: the cutoff, not the freeze
   await $.session.start(START)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: OURS, agentId: 'w-sync' } as never))).toContain('a worker does not ask Hai')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: OURS, agentId: 'w-sync' } as never))).toContain('Source/S2/Foo.cpp (no session claims it)')
   w.put(SYNC, JSON.stringify(newSync(T(14, 30), B, PLANNED_BY_B, NOW - 30 * MIN))) // frozen, held by another session
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
   expect(refused(await $.tool.call({ tool: 'Bash', command: OURS, agentId: 'w-sync' } as never))).toContain('Sync main freeze')

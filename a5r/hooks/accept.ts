@@ -56,6 +56,9 @@ export type AcceptInput = {
   /** A42: the a5r kit's own folders in this repository (its rules/ and tests/, where the markers are defined and
    * exercised); rule 4's debug-leftover scan skips them. */
   kitDirs?: string[]
+  /** A75: actions that ran at the tool call and were recorded (kind: `tests` for removed assertions, `shared:…` for
+   * shared config, `delete`, …), with the repository-relative path and who did it when. */
+  recorded?: { kind: string; path: string; at: number; lane: string }[]
 }
 
 const lower = (s: string) => s.replace(/\\/g, '/').toLowerCase()
@@ -170,7 +173,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
       else if (!row.evidence) r2.push({ file: `docs/intent/${x.slug}/progress.md`, what: `${id} is met without evidence`, todo: 'add the command and its result line' })
     }
     const gap = x.proof ? proofGap(x.proof) : null
-    if (gap) r2.push({ what: `Ather's proof is incomplete for the role ${x.proof?.role || '(none)'}: still needs ${gap}`, todo: 'run it, or ask Hai' })
+    if (gap) r2.push({ what: `Ather's proof is incomplete for the role ${x.proof?.role || '(none)'}: still needs ${gap}`, todo: 'run it so Ather reads it' })
     for (const [f, lines] of x.added) {
       // A72: like rule 4's marker scan, the TODO scan skips docs, Markdown and the kit's rules/ and tests/ (they define it).
       if (lower(f).startsWith('docs/intent/') || isKitOrDoc(f, x.kitDirs)) continue
@@ -184,6 +187,12 @@ export const score = (x: AcceptInput): RuleScore[] => {
   const r3: Issue[] = []
   if (x.slug) {
     for (const f of x.files) if (!inScope(f, own) && !mentions(x.progress, f) && !mentions(x.findings, f)) r3.push({ file: f, what: 'outside the paths the intent names', todo: 'explain it in progress.md or findings.md, or move it to its own PR', group: 'outside the paths the intent names' })
+    // A75: shared repository config edited at the action (it ran, recorded) is named in the PR body.
+    if (x.body)
+      for (const f of x.files) {
+        const isConfig = x.cfg.ask_root_files.some(r => lower(r) === lower(f)) || x.cfg.ask_paths.some(g => globMatch(f, g) || globMatch(basename(f), g))
+        if (isConfig && !mentions(x.body, f)) r3.push({ file: f, what: 'shared repository config changed', todo: 'name it and why in the PR body' })
+      }
   } else {
     for (const f of x.files) {
       const isConfig = x.cfg.ask_root_files.some(r => lower(r) === lower(f)) || x.cfg.ask_paths.some(g => globMatch(f, g) || globMatch(basename(f), g))
@@ -220,6 +229,10 @@ export const score = (x: AcceptInput): RuleScore[] => {
     const revised = x.promptDiff.split('\n').some(l => /^\+\s*-\s*Rev:/.test(l))
     if (removed.length && !revised) r5.push({ file: `docs/intent/${x.slug}/prompt.md`, what: `acceptance rewritten without a new rev (${removed.length} row${removed.length === 1 ? '' : 's'})`, todo: 'put the old rows back, or raise a finding so the director revises the intent' })
   }
+  // A75: test assertions removed at the action (it ran, recorded) are listed with a reason in progress.md or findings.md.
+  for (const r of x.recorded ?? [])
+    if (r.kind === 'tests' && x.files.some(f => lower(f) === lower(r.path)) && !mentions(x.progress, r.path) && !mentions(x.findings, r.path))
+      r5.push({ file: r.path, what: `test assertions were removed (recorded, ${r.lane})`, todo: 'say why in progress.md or findings.md, or put them back' })
   scores.push(mk(5, r5, 'claims match the evidence'))
   return scores
 }

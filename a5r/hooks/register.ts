@@ -1,5 +1,5 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5R, gitTargets, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
+import { A5R, blankQuotes, commandVerb, gitTarget, gitTargets, newLines, norm, rx, segments, stripHeredocs, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
@@ -22,7 +22,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, ty
 // - A5R (a5r.ts, accept.ts, rules/config.json), only while `/a5r on`: the five rules (D9). At the tool call it
 //   refuses or asks only before what cannot be undone (D10); nothing per turn. Everything else is scored at
 //   acceptance (nghiệm thu A5R) over the branch, the intent's files and Ather's proof, when a PR is opened or
-//   an intent closes. Rules about the shared checkout skip a worker's own worktree; a worker never asks Hai.
+//   an intent closes. Rules about the shared checkout skip a worker's own worktree. A73: nothing asks or waits at the action.
 // - A5R's coordination (coord.ts) for the sessions sharing one S2 checkout and one machine: the Editor
 //   holder (model tool `editor`: a queue computed alike by every session from Saved/A5R files, a lease
 //   with a hard end, the lock written in the S2 standard's lines), RAM (safe cleanup before a grant, the
@@ -44,8 +44,6 @@ type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
-const ALLOW_ONCE = 'Allow once'
-const ALLOW_SESSION = 'Allow for this session'
 const ATHER_PANE = 'ather'
 const A5R_PANE = 'a5r'
 const PANE_INK = (): { ink: string; quiet: string } => ({ ink: A5R_LOOK.ivory, quiet: A5R_LOOK.quiet }) // A33/A40: the A5R pane's text and quiet grey, per theme // A29: the A5R pane's id ($.ui.open) and its render requestId
@@ -59,7 +57,6 @@ let engine: A5R | null = null
 let rulesA5R = ''
 let rulesFlow = ''
 let places: Places = {}
-const approved = new Set<string>()
 const rootOf = new Map<string, string | null>()
 const isLinked = new Map<string, boolean>() // git root -> a linked worktree (one session's own), not the shared checkout
 let wroteDirectorCall = false // this turn added an open director call to an intent's findings.md
@@ -242,7 +239,7 @@ async function sharedTest($: Engine, a5r: A5R, command: string, cwd: string): Pr
   return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? true
 }
 
-type AtherStatus = { role?: string; tracked?: { slug?: string; stage?: string; checklist?: string; directorCalls?: string[]; prs?: string[] } | null; evidence?: Proof['evidence'] }
+type AtherStatus = { role?: string; pack?: string; gates?: string[]; tracked?: { slug?: string; stage?: string; checklist?: string; directorCalls?: string[]; prs?: string[] } | null; evidence?: Proof['evidence'] }
 
 /** Ather's live state (its read-only `status` tool), or null without Ather. */
 async function atherStatus($: Engine): Promise<AtherStatus | null> {
@@ -255,7 +252,7 @@ async function atherStatus($: Engine): Promise<AtherStatus | null> {
 
 /** Ather's proof for the intent this session tracks, or null with no intent tracked. */
 const proofOf = (s: AtherStatus | null): Proof | null =>
-  s?.tracked?.slug ? { intent: s.tracked.slug, role: s.role ?? '', evidence: s.evidence ?? {} } : null
+  s?.tracked?.slug ? { intent: s.tracked.slug, role: s.role ?? '', evidence: s.evidence ?? {}, ...(s.pack ? { pack: s.pack, gates: s.gates ?? [] } : {}) } : null
 
 /** Whether an answer relays one of the tracked intent's open director calls by its id (Ather lists it under Needs you). */
 const namesDirectorCall = (s: AtherStatus | null, answer: string): boolean =>
@@ -299,24 +296,109 @@ async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Pro
   return null
 }
 
-/** An A5R 'ask': Hai answers in a dialog. Resolves 'allow' or the refusal the model reads. */
-async function askHai($: Engine, opts: Opts, d: Decision, what: string): Promise<string> {
-  const gate = gateOf(d.rule)
-  if (opts.a5rWhenPresent === 'deny') return blocked(gate, d.why, 'needs Hai\'s approval: ask Hai to run it')
-  try {
-    const answer = await $.ui.ask(`${gate}: ${d.why} Run \`${what.slice(0, 160)}\`?`, {
-      options: [ALLOW_ONCE, ALLOW_SESSION, 'No'],
-      header: `A5R ${d.rule}`,
-    })
-    if (answer === ALLOW_ONCE) return 'allow'
-    if (answer === ALLOW_SESSION) {
-      approved.add(d.key)
-      return 'allow'
+/** A73: what a rule-1 match does at the action. Nothing asks and nothing waits: a call is refused only with an alternative
+ * the agent can carry out itself (`refuse`), runs after a check of the facts (`check`, A74: git that can discard work in
+ * the shared checkout), or runs and is recorded for nghiem thu (`record`, A75: shared config, recursive deletes, removed
+ * test assertions, edits outside a scope file, global git config). The permission mode and an away window change nothing. */
+type Act = { act: 'refuse' | 'check' | 'record'; alt?: string }
+const ACTIONS: Record<string, Act> = {
+  'no-verify': { act: 'refuse', alt: 'fix what the hook reports, then commit without --no-verify' },
+  'lfs-skip-smudge': { act: 'refuse', alt: 'let LFS fetch the objects (git lfs pull), or work in a worktree of your own' },
+  'sparse-checkout': { act: 'refuse', alt: 'make a worktree of your own and set its sparse layout there' },
+  kit: { act: 'refuse', alt: 'change the mod in a worktree of its repository (D:/Projects/ather-mods-wt/<name>), never in the live plugin folder' },
+  secret: { act: 'refuse', alt: 'keep the secret in an environment variable or a config file outside the repository' },
+  'force-push': { act: 'refuse', alt: 'push to a new branch and open a PR; never rewrite shared history' },
+  'push-main': { act: 'refuse', alt: 'push your branch and open a PR' },
+  'add-all': { act: 'refuse', alt: 'stage exact paths: git add -- <path> ...' },
+  'git-switch': { act: 'refuse', alt: 'work in a worktree of your own: git worktree add <dir> <branch>' },
+  'git-discard': { act: 'check' },
+}
+const actOf = (d: Decision): Act => ACTIONS[d.key] ?? (d.kind === 'deny' ? { act: 'refuse', alt: 'do it another way' } : { act: 'record' })
+
+/** A74: git that can discard work in the shared checkout runs when the paths it touches (all of the tree when it names
+ * none) are clean, or changed only in paths this session's touch file lists; else it is refused, naming each path and
+ * its owner. A path-scoped `git status` (8 s at most). Null: it may run. */
+async function discardProblem($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<string | null> {
+  const rule = a5r.cfg.shell_ask.find(r => r.id === 'git-discard')
+  if (!rule) return null
+  const gate = gateOf('D1')
+  for (const raw of segments(stripHeredocs(command))) {
+    if (!rx(rule.re).test(blankQuotes(raw))) continue
+    const dir = norm(gitTarget(raw, cwd) || cwd, cwd)
+    const root = (await locate($, a5r, `${dir}/_`)).root
+    if (!root || !(await isSharedRoot($, root))) continue
+    const [, args] = commandVerb(tokenize(raw))
+    const rest: string[] = []
+    for (let i = 0; i < args.length; i += 1) {
+      const a = args[i] ?? ''
+      if (a === '-C' || a === '-c') i += 1
+      else rest.push(a)
     }
-    return blocked(gate, d.why, `Hai said no${answer && answer !== 'No' ? ` ("${answer}")` : ''}: do not retry it; ask Hai or do other work`)
-  } catch {
-    return blocked(gate, d.why, 'nobody could approve it now (an Ather away window, a closed dialog, or no one to ask): do not retry it; do other work, and if an away window is open set that ledger entry\'s Choice to "parked for the director"')
+    const sub = (rest.find(a => !a.startsWith('-')) ?? '').toLowerCase()
+    const after = rest.slice(rest.indexOf(rest.find(a => !a.startsWith('-')) ?? '') + 1)
+    if (sub === 'stash' && /^(drop|clear)$/i.test(after.find(a => !a.startsWith('-')) ?? '')) {
+      const list = await $.process.run(['git', '-C', dir, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
+      const n = list?.exitCode === 0 ? list.stdout.split(/\r?\n/).filter(Boolean).length : null
+      if (n === 0) continue
+      return blocked(gate, n === null ? 'git stash list could not be read' : `the shared checkout holds ${n} stash entr${n === 1 ? 'y' : 'ies'}, any of them maybe another session's`, 'leave the stash as it is; keep your own work in a commit or a worktree of your own')
+    }
+    const dash = after.indexOf('--')
+    let paths: string[] = []
+    if (dash >= 0) paths = after.slice(dash + 1)
+    else if (sub === 'checkout' && after.includes('.')) paths = ['.']
+    else if (sub === 'restore' || sub === 'rm') {
+      for (let i = 0; i < after.length; i += 1) {
+        const a = after[i] ?? ''
+        if (a === '-s' || a === '--source') i += 1
+        else if (!a.startsWith('-')) paths.push(a)
+      }
+    }
+    const ran = await $.process.run(['git', '-C', dir, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths], { timeoutMs: 8_000 }).catch(() => null)
+    if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would discard is unknown`, 'name the paths after --, or run it in a worktree of your own')
+    const changed = ran.stdout.split(/\0|\r?\n/).filter(e => /^.. \S/.test(e)).map(e => e.slice(3).trim()).filter(Boolean)
+    const now = await $.clock.now()
+    const mine = new Set([...touched].map(p => p.toLowerCase()))
+    const others = touches.filter(t => isLive(t.id8, now))
+    const foreign = changed.filter(p => !mine.has(p.toLowerCase())).map(p => {
+      const t = others.find(o => o.paths.some(x => x.toLowerCase() === p.toLowerCase()))
+      return `${p} (${t ? `${t.lane}'s, session ${t.id8}` : 'no session claims it'})`
+    })
+    if (foreign.length > 0)
+      return blocked(gate, `git ${sub} would discard uncommitted changes in the shared checkout: ${foreign.slice(0, 6).join('; ')}${foreign.length > 6 ? `; and ${foreign.length - 6} more` : ''}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
   }
+  return null
+}
+
+/** A75: one action that ran and is recorded for nghiem thu: Saved/A5R/recorded/<id8>.json, this session's file. */
+type Recorded = { at: number; id8: string; lane: string; kind: string; rule: string; path: string; root: string | null; why: string }
+async function recordAction($: Engine, opts: Opts, r: Omit<Recorded, 'at' | 'id8' | 'lane'>): Promise<void> {
+  if (!(await $.fs.exists(s2Root(opts)))) return
+  const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
+  const path = `${hfDir(opts)}/recorded/${id8}.json`
+  let entries: Recorded[] = []
+  try {
+    const v = JSON.parse((await readJson($, path)) ?? '') as { entries?: Recorded[] }
+    entries = Array.isArray(v.entries) ? v.entries : []
+  } catch {
+    entries = []
+  }
+  entries.push({ ...r, at: await $.clock.now(), id8, lane: me?.lane ?? id8 })
+  await $.fs.write(path, JSON.stringify({ v: 1, entries: entries.slice(-300) })).catch(() => undefined)
+}
+/** A75: every session's recorded actions (for nghiem thu). */
+async function readRecorded($: Engine, opts: Opts): Promise<Recorded[]> {
+  const dir = `${hfDir(opts)}/recorded`
+  const out: Recorded[] = []
+  for (const f of await $.fs.list(dir).catch(() => [])) {
+    if (f.kind !== 'file' || !f.name.endsWith('.json')) continue
+    try {
+      const v = JSON.parse((await readJson($, `${dir}/${f.name}`)) ?? '') as { entries?: Recorded[] }
+      if (Array.isArray(v.entries)) out.push(...v.entries)
+    } catch {
+      // a half-written file: the next read has it
+    }
+  }
+  return out
 }
 
 /** A tool call made by the mod itself (the desktop app's session tools); '' when refused or missing. */
@@ -1618,11 +1700,13 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
     runningAgents,
     cfg: a5r.cfg,
     kitDirs: kitDirsIn(root),
+    // A75: the actions recorded at the tool call in this repository (shared config, removed assertions, ...).
+    recorded: (await readRecorded($, opts)).filter(r => !r.root || sameRoot(r.root, root)).map(r => ({ kind: r.kind, path: r.path, at: r.at, lane: r.lane })),
   }
 }
 
 /** A18: the score at the PR-opening call (main loop or worker) or at an intent's close; a failing score refuses it
- * with the list, Hai may let this one through in the dialog, a worker is never asked. */
+ * with the list (A57: no dialog; /a5r pass lets one through); a worker gets the same answer. */
 async function acceptGate($: Engine, opts: Opts, a5r: A5R, tool: string, input: Input, agentId: string | undefined): Promise<string | null> {
   let root: string | null = null
   let slug: string | null = null
@@ -1887,6 +1971,7 @@ const A5R_HELP = [
   '/a5r status · the state as text',
   '/a5r accept · A5R acceptance now, for this session\'s repository (the full list)',
   '/a5r pass <intent slug | PR number> · lets the next PR call or close of that intent (or that PR\'s after-the-fact score) through once, even if acceptance fails; acceptance never asks',
+  'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs when no other session\'s uncommitted change is in its way (else it names the path and owner); shared config, recursive deletes and removed test assertions run and are recorded for acceptance; force push, push to main, git add ., --no-verify, GIT_LFS_SKIP_SMUDGE and sparse-checkout in the shared checkout are refused with what to do instead.',
   '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
@@ -2641,6 +2726,7 @@ export const register: Register = (on, options) => {
     let what = ''
     let parts: [string, string, string][] = []
     const locs: Located[] = []
+    let dLoc: Located | null = null // A75: the edit the decision is about
     if (SHELL_TOOLS.has(tool)) {
       what = str(input.command)
       if (isOn) {
@@ -2655,18 +2741,30 @@ export const register: Register = (on, options) => {
       for (const [path, old, neu] of parts) {
         const loc = await locate($, a5r, path)
         locs.push(loc)
-        if (isOn) d ??= a5r.preEdit(path, old, neu, loc, scope, await isSharedRoot($, loc.root))
+        if (isOn && !d) {
+          d = a5r.preEdit(path, old, neu, loc, scope, await isSharedRoot($, loc.root))
+          if (d) dLoc = loc
+        }
         what = path
       }
     }
-    if (d) count(d.rule)
-    if (d?.kind === 'deny') return { deny: blocked(gateOf(d.rule), d.why, 'not allowed under A5R: do it another way, or ask Hai to turn A5R off for it') }
-    if (d?.kind === 'ask' && !approved.has(d.key)) {
-      // A worker stops and reports on such an action (intent skill); the session that briefed it decides, or asks Hai.
-      if (e.agentId !== undefined)
-        return { deny: blocked(gateOf(d.rule), d.why, 'a worker does not ask Hai: leave it undone, stop and report it to the session that briefed you; that session decides or asks Hai') }
-      const verdict = await askHai($, opts, d, what)
-      if (verdict !== 'allow') return { deny: verdict }
+    // A73: no gate asks or waits; the same answer for the main loop, a worker, bypass mode and an away window.
+    if (d) {
+      const a = actOf(d)
+      if (a.act === 'refuse') {
+        count(d.rule)
+        return { deny: blocked(gateOf(d.rule), d.why, a.alt ?? 'do it another way') }
+      }
+      if (a.act === 'check') {
+        const problem = await discardProblem($, opts, a5r, what, await $.session.cwd())
+        if (problem) {
+          count(d.rule)
+          return { deny: problem }
+        }
+      }
+      if (a.act === 'record') {
+        await recordAction($, opts, { kind: d.key, rule: d.rule, path: SHELL_TOOLS.has(tool) ? what.slice(0, 300) : (dLoc?.rel ?? what), root: dLoc?.root ?? null, why: d.why }).catch(() => undefined)
+      }
     }
 
     const ran = await next(e)
