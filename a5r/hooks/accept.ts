@@ -97,6 +97,23 @@ export const progressRows = (progress: string): Map<string, { verdict: string; e
 }
 
 const isDoc = (f: string) => /\.(md|txt|rst)$/i.test(f) || lower(f).startsWith('docs/')
+/** A42 / A72: files that define or quote the markers and words a scan looks for: docs and Markdown, and the a5r kit's
+ * own rules/ and tests/. Rule 4's leftover scan and rule 2's TODO scan both skip them. */
+const isKitOrDoc = (f: string, kitDirs: readonly string[] | undefined): boolean => isDoc(f) || (kitDirs ?? []).some(d => lower(f).startsWith(lower(d)))
+
+/** A72: whether a met row's evidence says the work is not done. The words count only as a status: code spans
+ * (`…`) are left out, as are the file PENDING.md (and its all-caps name), a "PENDING line", and "pending" as an
+ * adjective of a noun (a pending request). "pending review", "pending Hai", "not run yet", "chưa chạy", "todo: rerun"
+ * still count. */
+export const saysNotDone = (evidence: string): boolean => {
+  const prose = evidence
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/PENDING\.md/gi, ' ')
+    .replace(/\bpending\s+lines?\b/gi, ' ')
+    .replace(/\bPENDING\b/g, ' ')
+    .replace(/\bpending\s+(requests?|grants?|notices?|asks?|prompts?|alerts?|files?|entries|entry|items?|calls?|syncs?|leases?|wakes?)\b/gi, ' ')
+  return /(^|[^\p{L}\p{N}])(chưa|not run|not yet|todo|pending)(?![\p{L}\p{N}])/iu.test(prose)
+}
 
 /** A56: whether an intent's checklist is complete: it has acceptance rows and every one is met or waived in
  * progress.md (Ather's done words count too: pass, done, ✓). */
@@ -155,7 +172,8 @@ export const score = (x: AcceptInput): RuleScore[] => {
     const gap = x.proof ? proofGap(x.proof) : null
     if (gap) r2.push({ what: `Ather's proof is incomplete for the role ${x.proof?.role || '(none)'}: still needs ${gap}`, todo: 'run it, or ask Hai' })
     for (const [f, lines] of x.added) {
-      if (lower(f).startsWith('docs/intent/')) continue
+      // A72: like rule 4's marker scan, the TODO scan skips docs, Markdown and the kit's rules/ and tests/ (they define it).
+      if (lower(f).startsWith('docs/intent/') || isKitOrDoc(f, x.kitDirs)) continue
       if (lines.some(l => rx(x.cfg.todo_regex).test(l)) && !mentions(x.progress, f) && !mentions(x.findings, f))
         r2.push({ file: f, what: 'a new TODO/FIXME is not listed in progress.md or findings.md', todo: 'list it under Open or as a finding' })
     }
@@ -180,7 +198,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
     const secret = lines.find(l => x.cfg.secret_regex.some(p => rx(p).test(l)))
     if (secret) r4.push({ file: f, what: 'a secret in the diff', todo: 'remove it and rotate it; keep secrets out of the repo' })
     // A42: Markdown, docs and the a5r kit's own rules/ and tests/ define or quote the markers; only other files can leave one.
-    if (isDoc(f) || (x.kitDirs ?? []).some(d => lower(f).startsWith(lower(d)))) continue
+    if (isKitOrDoc(f, x.kitDirs)) continue
     const debug = lines.find(l => x.cfg.forbidden_added.some(p => rx(p).test(l)))
     if (debug) r4.push({ file: f, what: `a debug leftover (${debug.trim().slice(0, 40)})`, todo: 'remove it' })
   }
@@ -197,7 +215,7 @@ export const score = (x: AcceptInput): RuleScore[] => {
     for (const p of proofProblems(x.proof, verified).filter(p => p.startsWith('D5'))) r5.push({ what: `PR body: ${p.slice(3).split(' -> ')[0]}`, todo: p.split(' -> ')[1] ?? 'claim only what was measured' })
   }
   if (x.slug) {
-    for (const [id, row] of progressRows(x.progress)) if (row.verdict === 'met' && /\b(chưa|not run|not yet|todo|pending)\b/i.test(row.evidence)) r5.push({ file: `docs/intent/${x.slug}/progress.md`, what: `${id} is met but its evidence says it is not done`, todo: 'mark it open, or put the result line in' })
+    for (const [id, row] of progressRows(x.progress)) if (row.verdict === 'met' && saysNotDone(row.evidence)) r5.push({ file: `docs/intent/${x.slug}/progress.md`, what: `${id} is met but its evidence says it is not done`, todo: 'mark it open, or put the result line in' })
     const removed = x.promptDiff.split('\n').filter(l => /^-\s*-\s+A\d+\b/.test(l))
     const revised = x.promptDiff.split('\n').some(l => /^\+\s*-\s*Rev:/.test(l))
     if (removed.length && !revised) r5.push({ file: `docs/intent/${x.slug}/prompt.md`, what: `acceptance rewritten without a new rev (${removed.length} row${removed.length === 1 ? '' : 's'})`, todo: 'put the old rows back, or raise a finding so the director revises the intent' })
