@@ -3,6 +3,7 @@
 // is any build or test run read from its own output; nothing particular is held
 // beyond merges and pushes to main. Pure: no `$`.
 
+import { commandName } from '../shell.mjs'
 import { readToolOutput, rungsOfCommand } from './web.mjs'
 
 /** @typedef {import('./index.mjs').Pack} Pack */
@@ -67,6 +68,7 @@ export const core = {
   mergePolicy: 'hold',
   isAssetSave: () => false,
   readShell,
+  checksOf: (rung, command) => (rung === 'tests' ? [{ kind: 'test', name: commandName(command) }] : rung === 'build' ? [{ kind: 'build', name: commandName(command) }] : []),
   mcpKind: () => null,
   binaryAssets: null,
   briefPaths: /[A-Za-z]:[\\/]|\b[\w.-]+\/[\w./-]+\.\w+\b|\.(js|mjs|cjs|ts|tsx|jsx|py|md|json|css|html)\b/,

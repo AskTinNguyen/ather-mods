@@ -140,6 +140,10 @@ export const readShell = (command, text, ran) => {
   return out
 }
 
+// The checks a rung is, for the claim guard (checks.mjs): only the Editor build and automation tests are rungs.
+/** @param {string} rung @returns {import('../checks.mjs').CheckOf[]} */
+export const checksOf = rung => (rung === 'build' ? [{ kind: 'build', name: 'S2Editor build' }] : rung === 'automation' ? [{ kind: 'test', name: 'automation tests' }] : [])
+
 /** @param {string} input an MCP call's arguments as text */
 export const isAssetSave = input => /save_assets|save_asset\b|save_actor|save_level|SaveAssets|SavePackage/i.test(input)
 
@@ -314,6 +318,7 @@ export const unreal = {
   mergePolicy: 'hold',
   isAssetSave,
   readShell,
+  checksOf,
   mcpKind,
   binaryAssets: /\.(uasset|umap)$/i,
   briefPaths: /[A-Za-z]:[\\/]|\b(Source|Content|Plugins|Config|docs|tools|scripts)\/|\/Game\/|\.(cpp|h|cs|py|md|uasset|umap|ini)\b/,

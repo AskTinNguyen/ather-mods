@@ -6,7 +6,7 @@
 // actions held while the person is away, known traps, and the words the
 // session is asked with. Pure: no `$`.
 
-import { bareCommand, isPiped, segments } from '../shell.mjs'
+import { bareCommand, commandName, isPiped, segments } from '../shell.mjs'
 
 /** @typedef {import('./index.mjs').Pack} Pack */
 /** @typedef {import('./index.mjs').Rung} Rung */
@@ -356,6 +356,22 @@ export const makeWebPack = (profile, packageJson) => {
     return out
   }
 
+  // The checks a rung of a command is, for the claim guard (checks.mjs). Lint and typecheck share a rung:
+  // what the command (or its npm script, one level) runs says which, or both.
+  /** @param {string} rung @param {string} command @returns {import('../checks.mjs').CheckOf[]} */
+  const checksOf = (rung, command) => {
+    const name = commandName(command)
+    if (rung === 'tests' || rung === 'ui') return [{ kind: 'test', name }]
+    if (rung === 'build') return [{ kind: 'build', name }]
+    if (rung !== 'lint') return []
+    const ran = segments(command).map(segment => scripts[scriptOf(bareCommand(segment)) ?? ''] ?? bareCommand(segment)).join(' ; ')
+    const isTypes = /\b(?:tsc|vue-tsc)\b|type-?check/i.test(ran)
+    const isLint = /\b(?:eslint|biome|next\s+lint)\b|\blint\b/i.test(ran)
+    // Neither named: a gate that proves typecheck through a build (`next build` type-checks), else lint.
+    if (!isTypes && !isLint) return [{ kind: /type|build/i.test(`${command} ${ran}`) ? 'typecheck' : 'lint', name }]
+    return [...(isTypes ? [{ kind: /** @type {const} */ ('typecheck'), name }] : []), ...(isLint ? [{ kind: /** @type {const} */ ('lint'), name }] : [])]
+  }
+
   const areas = Array.isArray(profile?.areas) && profile.areas.every((/** @type {unknown} */ one) => typeof one === 'string') ? profile.areas : DEFAULT_AREAS
   const flags = 'keep behaviour changes behind a flag that defaults to the current behaviour'
   const withProof = mergePolicy === 'with-proof'
@@ -395,6 +411,7 @@ export const makeWebPack = (profile, packageJson) => {
     mergeRungs: required,
     isAssetSave: () => false,
     readShell,
+    checksOf,
     mcpKind: () => null,
     binaryAssets: null,
     briefPaths: /[A-Za-z]:[\\/]|\b(app|src|pages|components|lib|tests?|scripts|public|docs|data|schemas|worker)\/|\.(js|mjs|cjs|ts|tsx|jsx|css|json|md|html|sql)\b/,

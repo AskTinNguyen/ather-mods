@@ -1,6 +1,6 @@
 {
   "name": "ather-automata",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Ather Automata: what needs you and what is next in every S2 session and web app repository (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
   "author": {
     "name": "Tin Nguyen"
@@ -12,6 +12,13 @@
       "description": "What happens when a worker brief lacks paths, acceptance checks or the shared-tree rule: warn adds a reminder, enforce refuses the Agent call, off does nothing. Read-only agents (Explore, Plan) are never gated.",
       "default": "warn",
       "options": ["warn", "enforce", "off"]
+    },
+    "claimGuard": {
+      "type": "string",
+      "title": "Claim guard",
+      "description": "on: a reply (or a worker's) that says a build, tests, a type check or lint pass, when the latest run of that check this session failed, ran before a later edit, or never ran, is sent back once to run it or say it is untested. off: replies are never sent back (a failing check still shows above the prompt).",
+      "default": "on",
+      "options": ["on", "off"]
     }
   }
 }

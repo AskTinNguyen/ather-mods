@@ -6,6 +6,7 @@
 // It takes an Io (closures over `$`, built in each half) because `$` itself may
 // only be passed to functions in the file that holds it.
 
+import { checksOf, claimAgainst, nextTurn, withEdit, withRuns } from './checks.mjs'
 import { isHolding, isRecordingQuestions, ledgerWithWindow, newWindow, nextLedgerId, nextParkId, offAway, pendingEntry } from './away.mjs'
 import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
 import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
@@ -30,6 +31,8 @@ const KEY = {
   pinned: (/** @type {string} */ sid) => `pinned:${sid}`,
   evidence: (/** @type {string} */ sid) => `evidence:${sid}`,
   lost: (/** @type {string} */ sid) => `lost:${sid}`,
+  // The latest result of each check this session ran, the last edit per repository, the claims sent back (checks.mjs).
+  checks: (/** @type {string} */ sid) => `checks:${sid}`,
   // The intents this session stopped tracking: a write into one does not track it again.
   untracked: (/** @type {string} */ sid) => `untracked:${sid}`,
   // A pack's roles are its own: a tech artist in S2 is not a role in a web repository. The Unreal pack's key is unprefixed.
@@ -427,6 +430,48 @@ export const noteMcp = (io, scope, kind, server, isOk) =>
     await writeEvidence(io, scope, change)
   })
 
+// ---------------------------------------------------------------- checks and claims (checks.mjs)
+
+/** @param {Io} io @returns {Promise<import('./checks.mjs').Checks>} */
+export const readChecks = async io => checksOf(await io.get(KEY.checks(await io.sessionId())))
+
+/** @param {Io} io @param {(checks: import('./checks.mjs').Checks) => import('./checks.mjs').Checks} change */
+const withChecks = async (io, change) => {
+  const key = KEY.checks(await io.sessionId())
+  const before = checksOf(await io.get(key))
+  const after = change(before)
+  if (after !== before) await io.set(key, after)
+  return after
+}
+
+/** @param {Io} io @param {import('./checks.mjs').CheckResult[]} runs */
+export const noteRuns = (io, runs) =>
+  serial(async () => {
+    await withChecks(io, checks => withRuns(checks, runs))
+    changed(io)
+  })
+
+/** @param {Io} io @param {string} repo @param {boolean} isCode @param {number} at */
+export const noteEdit = (io, repo, isCode, at) => serial(() => withChecks(io, checks => withEdit(checks, repo, isCode, at)))
+
+// The message that sends a reply back, or null; the result it names is marked sent back in the same change.
+/** @param {Io} io @param {string} loop '' the main loop, else a worker's id @param {string} reply @param {number} tz */
+export const claimAt = (io, loop, reply, tz) =>
+  serial(async () => {
+    /** @type {string | null} */
+    let block = null
+    await withChecks(io, checks => {
+      const found = claimAgainst(checks, reply, loop, tz)
+      block = found.block
+      return found.checks
+    })
+    return /** @type {string | null} */ (block)
+  })
+
+// A new prompt: the main loop's claims may be sent back again.
+/** @param {Io} io */
+export const nextClaimTurn = io => serial(() => withChecks(io, checks => (checks.sentBack.some(key => key.startsWith('#')) ? nextTurn(checks) : checks)))
+
 /** @param {Io} io @param {readonly import('./guards.mjs').Trap[]} traps traps first seen in this session */
 export const countTraps = (io, traps) =>
   serial(async () => {
@@ -563,7 +608,7 @@ export const prune = async (io, isGone) => {
   /** @type {Map<string, string[]>} */
   const bySession = new Map()
   for (const key of await io.keys()) {
-    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]
+    const sid = /^(?:away|pinned|evidence|lost|untracked|checks):(.+)$/.exec(key)?.[1]
     if (sid && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
   }
   for (const [sid, keys] of bySession) {

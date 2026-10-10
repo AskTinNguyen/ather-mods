@@ -17,6 +17,7 @@ import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCal
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { heldByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
+import { editedFile, isMarkdown, normPath, parentOf, runFolder, runsOf } from './checks.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -24,6 +25,11 @@ const IDLE_MS = 10 * 60 * 1000
 
 let cwd = ''
 let briefGate = 'warn'
+// The claim guard (checks.mjs): 'on' sends a reply back once when it claims a check passes without a passing run.
+let claimGuard = 'on'
+// The checkout each folder is in, looked up once.
+/** @type {Map<string, Promise<string>>} */
+const repos = new Map()
 // Traps already counted in this session: each counts once per session.
 const seenTraps = new Set()
 // Workers already warned about (quiet, or waiting on permission): each is warned once.
@@ -61,6 +67,7 @@ function laneOf($) {
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} options */
 export function register(on, options) {
   briefGate = String(options?.briefGate ?? 'warn')
+  claimGuard = String(options?.claimGuard ?? 'on')
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -102,7 +109,25 @@ export function register(on, options) {
     if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') lastPersonAt = Date.now()
     // Any prompt, or any tool call below, is the lane's last activity (its heartbeat says when).
     state.markActive()
+    // A new turn: a claim may be sent back again.
+    void state.nextClaimTurn(io($)).catch(() => undefined)
     return next(e)
+  })
+
+  // A reply that says a build, tests, a type check or lint pass, with no passing run behind it in this
+  // session, is sent back once to run it or say it is untested. The main loop here, a worker's below.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agent_id || result.block || e.stop_hook_active) return result
+    const block = await claimBlock($, '', e.last_assistant_message ?? '').catch(() => null)
+    return block ? { ...result, block } : result
+  })
+
+  on('classic.SubagentStop', async ($, e, next) => {
+    const result = await next(e)
+    if (result.block || e.stop_hook_active) return result
+    const block = await claimBlock($, e.agent_id, e.last_assistant_message ?? '').catch(() => null)
+    return block ? { ...result, block } : result
   })
 
   on('tool.call', { tool: 'mcp__ather-automata__status' }, async $ => ({ result: await statusText($) }))
@@ -194,6 +219,9 @@ export function register(on, options) {
     if (orchestrated && hasRun) void laneOf($).then(({ root }) => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
     if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
+    // A file edited in any loop: a check that ran before it in that checkout is stale.
+    const edited = hasRun ? editedFile(tool, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))) : null
+    if (edited) void noteEdit($, edited).catch(() => undefined)
     return ran
   })
 }
@@ -521,9 +549,10 @@ async function shell($, command, e, next) {
     const denied = await hold($, kind, command).catch(() => null)
     if (denied) return { deny: denied }
   }
+  const startedAt = Date.now()
   const ran = await next(e)
   try {
-    const context = await afterShell($, command, ran)
+    const context = await afterShell($, command, ran, startedAt)
     return context.length > 0 && ran.deny === undefined ? { ...ran, context: [...(ran.context ?? []), ...context] } : ran
   } catch {
     return ran
@@ -540,8 +569,8 @@ async function isMergeProven($, pack) {
   return rungs.length > 0 && rungs.every(rung => seen[rung]?.state === 'pass' && (seen[rung]?.at ?? 0) >= sessionStartedAt)
 }
 
-/** @param {Engine} $ @param {string} command @param {{ text?: string, deny?: string, isError?: boolean }} ran */
-async function afterShell($, command, ran) {
+/** @param {Engine} $ @param {string} command @param {{ text?: string, deny?: string, isError?: boolean }} ran @param {number} startedAt */
+async function afterShell($, command, ran, startedAt) {
   const context = []
   const text = ran.text ?? ''
   const { pack } = await laneOf($)
@@ -550,6 +579,9 @@ async function afterShell($, command, ran) {
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
   const reading = pack.readShell(command, text, ran)
   for (const one of reading.rungs) await state.setRung(io($), await scopeOf($), one.rung, one.value)
+  const runs = runsOf(pack, command, reading.rungs)
+  // A refused command never ran: it replaces no result.
+  if (runs.length > 0 && ran.deny === undefined) await noteRuns($, command, runs, startedAt)
   context.push(...reading.context)
   for (const toast of reading.toasts) $.ui.toast(toast.text, toast.timeoutMs === undefined ? undefined : { timeoutMs: toast.timeoutMs })
   for (const key of reading.bumps) void state.bump(io($), key).catch(() => undefined)
@@ -563,6 +595,50 @@ async function afterShell($, command, ran) {
     }
   }
   return context
+}
+
+// ---------------------------------------------------------------- checks and claims (checks.mjs)
+
+// The checkout a folder is in: the nearest folder up with a .git (a folder, or a worktree's file); else the
+// session's checkout.
+/** @param {Engine} $ @param {string} folder an absolute path */
+function repoOf($, folder) {
+  const start = normPath(folder)
+  const hit = repos.get(start)
+  if (hit) return hit
+  const found = (async () => {
+    for (let at = start, depth = 0; at !== '' && depth < 16; depth += 1) {
+      if (await io($).exists(`${at}/.git`)) return at
+      const parent = parentOf(at)
+      if (parent === at) break
+      at = parent
+    }
+    return normPath((await laneOf($)).root)
+  })()
+  repos.set(start, found)
+  return found
+}
+
+/** @param {Engine} $ @param {string} command @param {ReturnType<typeof runsOf>} runs @param {number} startedAt */
+async function noteRuns($, command, runs, startedAt) {
+  const folder = normPath(await fullPath($, runFolder(command) ?? (cwd || (await laneOf($)).root)))
+  const repo = await repoOf($, folder)
+  const at = Date.now()
+  await state.noteRuns(io($), runs.map(run => ({ ...run, folder, repo, summary: run.summary.slice(0, 120), startedAt, at })))
+}
+
+/** @param {Engine} $ @param {string} path */
+async function noteEdit($, path) {
+  const full = normPath(await fullPath($, path))
+  await state.noteEdit(io($), await repoOf($, parentOf(full)), !isMarkdown(full), Date.now())
+}
+
+/** @param {Engine} $ @param {string} loop @param {string} reply */
+async function claimBlock($, loop, reply) {
+  if (claimGuard === 'off' || reply.trim() === '') return null
+  const block = await state.claimAt(io($), loop, reply, await state.readTz(io($)))
+  if (block) $.ui.toast(`Ather: sent ${loop ? 'a worker' : 'the reply'} back: it claims a check passed without a passing run.`)
+  return block
 }
 
 /** @param {Engine} $ @param {string} text @param {import('./packs/index.mjs').Pack} pack */

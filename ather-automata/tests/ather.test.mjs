@@ -15,6 +15,10 @@ import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
 import { workGroups } from '../hooks/rows.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
+import { makeWebPack } from '../hooks/packs/web.mjs'
+import { core } from '../hooks/packs/core.mjs'
+import { commandName } from '../hooks/shell.mjs'
+import { NO_CHECKS, claimAgainst, claimsIn, editedFile, failingLine, isStale, nextTurn, normPath, problemFor, runFolder, runsOf, withEdit, withRuns } from '../hooks/checks.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
@@ -1714,5 +1718,153 @@ describe('decide in place (0.2.0)', () => {
     expect([call?.id, call?.answers?.explain]).toEqual(['call:spawner:F-1', 'Explain decision F-1 on spawner: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.'])
     const rule = model.items.find(one => one.kind === 'rule')
     expect([rule?.answers?.options.length, rule?.prompt]).toEqual([2, rulePrompt([{ title: 'Trap', fix: 'Fix.', count: 3 }], unreal.owners)])
+  })
+})
+
+describe('claim guard (0.2.1)', () => {
+  const REPO = 'c:/work/s2'
+  /** @param {Partial<import('../hooks/checks.mjs').CheckResult>} over @returns {import('../hooks/checks.mjs').CheckResult} */
+  const result = over => ({ kind: 'build', name: 'S2Editor build', folder: REPO, repo: REPO, state: 'pass', summary: 'Result: Succeeded', startedAt: NOON - 60000, at: NOON, ...over })
+  const TZ = 420
+
+  test('A1: each check keeps its latest result, read by the packs\' own readers; a later run of the same check replaces it', () => {
+    const build = 'Build.bat S2Editor Win64 Development'
+    const failed = runsOf(unreal, build, unreal.readShell(build, 'Result: Failed (OtherCompilationError)', {}).rungs)
+    expect(failed).toEqual([{ kind: 'build', name: 'S2Editor build', state: 'fail', summary: 'Result: Failed' }])
+    const tests = 'UnrealEditor-Cmd.exe S2.uproject -ExecCmds="Automation RunTests S2"'
+    expect(runsOf(unreal, tests, unreal.readShell(tests, 'Test Completed. Result={Success}\n12 tests passed', {}).rungs).map(one => [one.kind, one.name, one.state])).toEqual([['test', 'automation tests', 'pass']])
+    // A run whose outcome cannot be read is an unknown result, never a pass.
+    expect(runsOf(unreal, tests, unreal.readShell(tests, 'nothing to read', {}).rungs).map(one => one.state)).toEqual(['unknown'])
+    // A tool build is no S2Editor build: no check.
+    expect(runsOf(unreal, 'Build.bat ShaderCompileWorker', unreal.readShell('Build.bat ShaderCompileWorker', 'Result: Succeeded', {}).rungs)).toEqual([])
+    // Web: lint and typecheck share a rung; what the script runs says which.
+    const web = makeWebPack(null, { scripts: { lint: 'eslint . && tsc --noEmit', typecheck: 'tsc --noEmit', test: 'node --test' } })
+    expect(runsOf(web, 'npm run lint', web.readShell('npm run lint', '', {}).rungs).map(one => [one.kind, one.name, one.state])).toEqual([['typecheck', 'npm run lint', 'pass'], ['lint', 'npm run lint', 'pass']])
+    expect(runsOf(web, 'npm run typecheck', web.readShell('npm run typecheck', 'src/a.ts(3,1): error TS2322: no.\nFound 1 error', {}).rungs).map(one => [one.kind, one.state, one.summary])).toEqual([['typecheck', 'fail', '1 error']])
+    expect(runsOf(web, 'cd app && npx vitest run', web.readShell('cd app && npx vitest run', ' Tests  2 failed | 10 passed (12)', {}).rungs).map(one => [one.kind, one.name, one.state])).toEqual([['test', 'vitest run', 'fail']])
+    // A profile gate that proves typecheck through a build: `next build` type-checks.
+    const gated = makeWebPack({ version: 1, pack: 'web', gates: [{ command: 'npm run build:next', proofs: ['build', 'typecheck'] }] }, { scripts: { 'build:next': 'next build' } })
+    expect(runsOf(gated, 'npm run build:next', gated.readShell('npm run build:next', '✓ Compiled successfully', {}).rungs).map(one => [one.kind, one.state])).toEqual([['build', 'pass'], ['typecheck', 'pass']])
+    expect(runsOf(core, 'node --test', core.readShell('node --test', '# pass 4\n# fail 0', {}).rungs).map(one => [one.kind, one.state])).toEqual([['test', 'pass']])
+    // Failing, then passing: one result, the pass.
+    let checks = withRuns(NO_CHECKS, [result({ state: 'fail', summary: 'Result: Failed' })])
+    checks = withRuns(checks, [result({ at: NOON + 60000 })])
+    expect(checks.results.map(one => [one.name, one.state, one.at])).toEqual([['S2Editor build', 'pass', NOON + 60000]])
+    // Another check, or the same name in another repository, is its own.
+    checks = withRuns(checks, [result({ kind: 'test', name: 'automation tests' }), result({ repo: 'c:/work/other' })])
+    expect(checks.results).toHaveLength(3)
+    expect([runFolder('cd Plugins/X && Build.bat S2Editor'), runFolder('Build.bat S2Editor'), commandName('cd app && npx vitest run'), commandName('FOO=1 npm test')]).toEqual(['Plugins/X', null, 'vitest run', 'npm test'])
+    expect([normPath('C:\\Users\\Me\\S2\\'), normPath('/home/me/app/')]).toEqual(['c:/users/me/s2', '/home/me/app'])
+    expect([editedFile('Write', { file_path: 'a.cpp' }), editedFile('NotebookEdit', { notebook_path: 'n.ipynb' }), editedFile('Bash', { command: 'x' }), editedFile('Read', { file_path: 'a.cpp' })]).toEqual(['a.cpp', 'n.ipynb', null, null])
+  })
+
+  test('A2: stale after a later edit in its repository; a Markdown-only edit keeps a build, tests and a type check current, not lint', () => {
+    const build = result({})
+    const types = result({ kind: 'typecheck', name: 'tsc' })
+    const lint = result({ kind: 'lint', name: 'eslint .' })
+    const before = withRuns(NO_CHECKS, [build, types, lint])
+    expect([isStale(before, build), isStale(before, lint)]).toEqual([false, false])
+    const docs = withEdit(before, REPO, false, NOON + 1000)
+    expect([isStale(docs, build), isStale(docs, types), isStale(docs, lint)]).toEqual([false, false, true])
+    const code = withEdit(docs, REPO, true, NOON + 2000)
+    expect([isStale(code, build), isStale(code, types)]).toEqual([true, true])
+    // An edit while the run was going is not in it: stale. One before it began is.
+    expect(isStale(withEdit(before, REPO, true, NOON - 30000), build)).toBe(true)
+    expect(isStale(withEdit(before, REPO, true, NOON - 90000), build)).toBe(false)
+    // Another repository's edit leaves it current; a later Markdown edit does not undo a code edit.
+    expect(isStale(withEdit(before, 'c:/work/other', true, NOON + 1000), build)).toBe(false)
+    expect(isStale(withEdit(code, REPO, false, NOON + 3000), build)).toBe(true)
+    // A later run of the same check, begun after the edit, is current again.
+    const rerun = result({ startedAt: NOON + 5000, at: NOON + 9000 })
+    expect(isStale(withRuns(code, [rerun]), rerun)).toBe(false)
+  })
+
+  test('A3: claimsIn finds claims per kind in real-style replies and ignores negations, hedges, quotes, questions and code', () => {
+    const claims = [
+      ['All tests pass.', ['test']],
+      ['Build succeeded.', ['build']],
+      ['The S2Editor Development build succeeded, so the fix is in.', ['build']],
+      ['Unit 174/174 passed, e2e 334/334 passed.', ['test']],
+      ['All 12 tests passed, 0 failed.', ['test']],
+      ['Type check is clean.', ['typecheck']],
+      ['tsc passes with no errors.', ['typecheck']],
+      ['Lint passes.', ['lint']],
+      ['eslint is clean.', ['lint']],
+      ['The project compiles cleanly.', ['build']],
+      ['All green.', ['all']],
+      ['Verified.', ['all']],
+      ['**Tests pass** and the build is green.', ['test', 'build']],
+      ['- ✅ Builds clean', ['build']],
+      ['Type checks pass and all builds pass.', ['build', 'typecheck']],
+    ]
+    for (const [reply, kinds] of claims) expect([reply, claimsIn(String(reply)).map(one => one.kind)]).toEqual([reply, kinds])
+    const traps = [
+      'Tests should pass once CI runs.',
+      "I didn't run the tests.",
+      'The change is untested.',
+      'Not yet tested: the build needs the Editor closed.',
+      'If the build succeeds, merge it.',
+      'Will the tests pass?',
+      'Tests passed before my last edit, so they need a rerun.',
+      'The log line "Build succeeded" is from yesterday.',
+      'Run `npm test` to confirm tests pass.',
+      'I verified the path exists.',
+      'Lint was not run.',
+      'The guard sends back replies that say tests pass.',
+      'Add a test that passes when the flag is off.',
+      'The build step passes the environment to the script.',
+      'The type passes through to the caller.',
+      'Tests pass on main but fail on this branch.',
+      'The tests are expected to pass.',
+      'Build.cs passes the flag to UBT.',
+      'The pin cleared, the evidence build still pass, the list unchanged.',
+      'Add a lint pass for the shaders.',
+      '```\nAll tests pass\n```',
+    ]
+    for (const reply of traps) expect([reply, claimsIn(reply)]).toEqual([reply, []])
+    // Several sentences: each claim with its own sentence.
+    expect(claimsIn('Done. The build succeeded.\n\nI did not run the tests yet.').map(one => [one.kind, one.sentence])).toEqual([['build', 'The build succeeded.']])
+  })
+
+  test('A4 (pure): a contradicted claim sends the reply back once per result, naming the claim and the problem; a true claim or no claim does not', () => {
+    const failed = withRuns(NO_CHECKS, [result({ state: 'fail', summary: 'Result: Failed' })])
+    const first = claimAgainst(failed, 'Fixed it. The build succeeded.', '', TZ)
+    expect(first.block).toBe('Ather Automata: you said the build succeeded ("The build succeeded."), but the last S2Editor build failed: Result: Failed (12:00). Run it, or say plainly that it is untested.')
+    expect(claimAgainst(first.checks, 'The build succeeded.', '', TZ).block).toBe(null)
+    // The next turn, or a worker's own reply, may be sent back on the same result.
+    expect(claimAgainst(nextTurn(first.checks), 'The build succeeded.', '', TZ).block === null).toBe(false)
+    const worker = claimAgainst(first.checks, 'Build succeeded.', 'agent-1', TZ)
+    expect(worker.block === null).toBe(false)
+    expect(nextTurn(worker.checks).sentBack).toEqual([`agent-1#build|S2Editor build|${REPO}@${NOON}`])
+    // A pass backs the claim; an unclaimed reply is left alone.
+    const passed = withRuns(failed, [result({ at: NOON + 1000 })])
+    expect([claimAgainst(passed, 'The build succeeded.', '', TZ).block, claimAgainst(failed, 'I changed the spawner.', '', TZ).block]).toEqual([null, null])
+    // Stale, unread and never run.
+    expect(problemFor(withEdit(passed, REPO, true, NOON + 5000), 'build', TZ)?.text).toBe('the last S2Editor build ran at 12:00, before a later edit in s2')
+    expect(problemFor(withRuns(NO_CHECKS, [result({ kind: 'test', name: 'automation tests', state: 'unknown' })]), 'test', TZ)?.text).toBe('the result of the last automation tests (12:00) could not be read from its output')
+    expect([problemFor(passed, 'test', TZ)?.text, problemFor(NO_CHECKS, 'all', TZ)?.text]).toEqual(['no tests ran this session', 'no build, tests, type check or lint ran this session'])
+    // "All green" holds every check: one failure is enough.
+    expect(claimAgainst(withRuns(passed, [result({ kind: 'lint', name: 'eslint .', state: 'fail', summary: '2 errors' })]), 'All green.', '', TZ).block).toContain('but the last eslint . failed: 2 errors')
+  })
+
+  test('A5 (pure): the band line names the latest failing check, its time, and how many more, until it passes', () => {
+    expect(failingLine(NO_CHECKS, TZ)).toBe('')
+    const one = withRuns(NO_CHECKS, [result({ state: 'fail' })])
+    expect(failingLine(one, TZ)).toBe('✗ S2Editor build failed · 12:00')
+    expect(failingLine(withRuns(one, [result({ kind: 'test', name: 'automation tests', state: 'fail', at: NOON + 20 * 60000 })]), TZ)).toBe('✗ automation tests failed · 12:20 · +1')
+    expect(failingLine(withRuns(one, [result({ at: NOON + 60000 })]), TZ)).toBe('')
+  })
+
+  test('the store keeps the checks per session, one change at a time', async () => {
+    const store = new Map()
+    const files = /** @type {import('../hooks/state.mjs').Io} */ ({ get: async key => store.get(key), set: async (key, value) => void store.set(key, value), remove: async key => void store.delete(key), keys: async () => [...store.keys()], read: async () => null, write: async () => undefined, exists: async () => false, sessionId: async () => 'sid-claims', root: async () => 'R', gitUser: async () => 'Tin', redraw: () => undefined })
+    await Promise.all([state.noteRuns(files, [result({ state: 'fail', summary: 'Result: Failed' })]), state.noteEdit(files, REPO, true, NOON + 1), state.noteRuns(files, [result({ kind: 'test', name: 'automation tests' })])])
+    const kept = await state.readChecks(files)
+    expect([kept.results.length, kept.edits[REPO]?.code]).toEqual([2, NOON + 1])
+    expect(await state.claimAt(files, '', 'Build succeeded.', TZ)).toContain('failed: Result: Failed')
+    expect(await state.claimAt(files, '', 'Build succeeded.', TZ)).toBe(null)
+    await state.nextClaimTurn(files)
+    expect((await state.readChecks(files)).sentBack).toEqual([])
+    expect([...store.keys()]).toEqual(['checks:sid-claims'])
   })
 })

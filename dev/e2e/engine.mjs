@@ -285,6 +285,12 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),
     start: (isInteractive = true) => dispatch('session.start', { cwd: root, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
     turnEnd: () => dispatch('turn.complete', { reason: 'answer' }, () => ({ text: '' })),
+    // Claude stops with a reply, as the classic Stop hook reports it (a worker's: SubagentStop with its agent_id).
+    // `stopHookActive`: a stop after a hook already sent this turn back. The result's `block` sends Claude back.
+    stop: (reply, { agentId, stopHookActive = false } = {}) =>
+      agentId
+        ? dispatch('classic.SubagentStop', { hook_event_name: 'SubagentStop', session_id: sessionId, transcript_path: '', cwd: root, stop_hook_active: stopHookActive, agent_id: agentId, agent_transcript_path: '', agent_type: 'general-purpose', last_assistant_message: reply }, () => ({}))
+        : dispatch('classic.Stop', { hook_event_name: 'Stop', session_id: sessionId, transcript_path: '', cwd: root, stop_hook_active: stopHookActive, last_assistant_message: reply }, () => ({})),
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
     close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),
   }

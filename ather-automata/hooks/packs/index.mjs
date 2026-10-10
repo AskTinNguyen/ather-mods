@@ -37,6 +37,7 @@ import { makeWebPack } from './web.mjs'
  *   heldSegment: (segment: string, held: readonly string[], context: HeldContext) => string | null,
  *   mergePolicy: 'hold' | 'with-proof', mergeRungs?: readonly string[],
  *   isAssetSave: (input: string) => boolean, readShell: (command: string, text: string, ran: { isError?: boolean }) => ShellReading,
+ *   checksOf: (rung: string, command: string) => import('../checks.mjs').CheckOf[],
  *   mcpKind: (input: string) => 'write' | 'read' | 'pie' | null, binaryAssets: RegExp | null, briefPaths: RegExp,
  *   skillGroups: readonly { group: string, names: readonly string[] }[], createGroups: readonly { group: string, items: readonly CreateItem[] }[],
  *   createOrder: Record<string, readonly string[]>, createTitle: string, createMeta: (editor: EditorState) => string, createPrompt: (verb: string, name: string, editor: EditorState) => string,

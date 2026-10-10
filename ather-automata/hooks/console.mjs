@@ -26,6 +26,7 @@ import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, read
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
+import { failingLine } from './checks.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
@@ -212,8 +213,9 @@ export function register(on) {
     if (e.props.hasSurvey || !(await laneOf($)).isS2) return next(e)
     void wake($)
     const model = await home($)
-    const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
-    const hint = fresh.length > 0 ? `◆ Intent: ${fresh.slice(0, 2).map(one => one.text.split(' · ')[0].replace(/^./, first => first.toLowerCase())).join(' · ')}${fresh.length > 2 ? ` · +${fresh.length - 2}` : ''}` : bandHint(model)
+    const failing = failingLine(await state.readChecks(io($)), await state.readTz(io($)))
+    const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') || failing ? [] : await unseenChanges($)
+    const hint = fresh.length > 0 ? `◆ Intent: ${fresh.slice(0, 2).map(one => one.text.split(' · ')[0].replace(/^./, first => first.toLowerCase())).join(' · ')}${fresh.length > 2 ? ` · +${fresh.length - 2}` : ''}` : bandHint(model, failing)
     // Closed with ✕: stays away until there is something new to say.
     if (closedHint !== null && (hint === '' || hint === closedHint)) return next(e)
     closedHint = null
@@ -508,11 +510,12 @@ async function namedLock($, root, lock) {
   return { ...lock, holder: name ? `"${name}"` : `session ${lock.session}` }
 }
 
-/** @param {Home} model */
-function bandHint(model) {
+/** @param {Home} model @param {string} failing a failing check's line (checks.mjs), until it passes, unless a window needs you */
+function bandHint(model, failing) {
   const { header } = model
   if (header.stage === 'Away') return `🌙 Away ${header.progress} · ${header.sentence} · /ather`
   if (model.open.some(one => one.kind === 'review')) return '☀ Welcome back · review the away window · /ather'
+  if (failing) return failing
   if (model.isNewcomer) return '◆ New here? Take the tour'
   if (model.open.length > 0) return `◆ ${header.title} · ${model.open.length} need${model.open.length === 1 ? 's' : ''} you · /ather`
   return ''

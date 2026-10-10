@@ -71,6 +71,14 @@ const SEARCHERS = /^(grep|rg|ag|ack|findstr|Select-String|sls)\b/i
 /** @param {string} command */
 export const isSearchCommand = command => segments(command).every(segment => SEARCHERS.test(segment))
 
+// A command as one short name: its first segment that is not a `cd`, runners taken off ("npm test", "tsc --noEmit").
+/** @param {string} command */
+export const commandName = command => {
+  const first = segments(command).find(segment => !/^(?:cd|Set-Location|pushd)\b/i.test(segment)) ?? ''
+  const bare = bareCommand(first).replace(/\s+/g, ' ')
+  return bare.length <= 40 ? bare : `${bare.slice(0, 39)}…`
+}
+
 // A segment with leading env assignments (`FOO=1 BAR=x cmd`) and runners (`npx`, `npm exec`, `pnpm dlx`) taken off.
 /** @param {string} segment */
 export const bareCommand = segment =>

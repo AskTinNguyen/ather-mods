@@ -44,11 +44,11 @@ const sandbox = () => {
   return root
 }
 
-const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env } = {}) => {
+const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env, options = {} } = {}) => {
   const root = sandbox()
   const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues, ghPrs, env })
   for (const [key, value] of Object.entries({ tz: tzFor(hour), ...store })) engine.store.set(key, value)
-  register(engine.on, { briefGate: 'warn' })
+  register(engine.on, { briefGate: 'warn', ...options })
   await engine.start()
   // The timezone probe runs in the background; put the test's clock back afterwards.
   await new Promise(resolve => setTimeout(resolve, 1500))
@@ -1938,6 +1938,83 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   expect('A7: the Group choice is remembered across a reload, read from the store (Area here)', engine.store.get('groupBy:tinnguyen') === 'area' && /g: Group: Area/.test(afterReload) && /\n▾ Tools · \d+\n/.test(afterReload), afterReload.split('\n').filter(line => /Group|^[▸▾]/.test(line)))
   expect('no hook threw on the git checkout', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   fs.rmSync(base, { recursive: true, force: true })
+}
+
+// ---------------------------------------------------------------- claim guard (0.2.1)
+
+{
+  const { engine, root, done } = await boot()
+  const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
+  const bandText = async () => {
+    const drawn = await engine.render('AbovePrompt', props, 'band')
+    return drawn === null ? '' : check(drawn, 110).lines.join('\n')
+  }
+  const checks = () => engine.store.get('checks:harness-session-0001') ?? { results: [], edits: {}, sentBack: [] }
+  const build = { tool: 'Bash', command: 'Build.bat S2Editor Win64 Development' }
+
+  // Never ran: the claim is sent back once; the stop after it (stop_hook_active) ends the turn.
+  const none = await engine.stop('Done: the fix is in and the build succeeded.')
+  expect('A4: a build claim with no build this session is sent back, naming the claim and the problem', /you said the build succeeded \(".*"\), but no build ran this session\. Run it, or say plainly that it is untested\./.test(none.block ?? ''), none)
+  const after = await engine.stop('The build has not run; this change is untested.', { stopHookActive: true })
+  expect('A4: the stop after a send-back ends the turn', after.block === undefined, after)
+
+  // A failing build, read by the Unreal pack's reader: kept with folder, result, summary and time.
+  await engine.type('build it')
+  await engine.modelTool({ ...build, __text: 'Building S2Editor...\nResult: Failed (OtherCompilationError)' })
+  await engine.flush()
+  const failed = checks().results
+  expect('A1: the failing build is kept with its folder, result, summary and time', failed.length === 1 && failed[0].kind === 'build' && failed[0].name === 'S2Editor build' && failed[0].state === 'fail' && failed[0].summary === 'Result: Failed' && failed[0].folder.length > 0 && failed[0].repo === failed[0].folder && failed[0].at >= failed[0].startedAt, failed)
+  const band = await bandText()
+  expect('A5: the band shows the failing check with its time', /✗ S2Editor build failed · \d\d:\d\d/.test(band), band)
+  const sent = await engine.stop('Fixed the include. The build succeeded.')
+  expect('A4: a build claim against a failed build is sent back with the D4 message', /^Ather Automata: you said the build succeeded \("The build succeeded\."\), but the last S2Editor build failed: Result: Failed \(\d\d:\d\d\)\. Run it, or say plainly that it is untested\.$/.test(sent.block ?? ''), sent)
+  const again = await engine.stop('The build succeeded.')
+  expect('A4: the same result never sends a reply back twice', again.block === undefined, again)
+  const plain = await engine.stop('I changed the include order in SpawnerComponent.cpp.')
+  expect('A4: a reply that claims nothing is not sent back', plain.block === undefined, plain)
+  expect('A4: a send-back pops up once each time', engine.record.toasts.filter(text => /Ather: sent the reply back/.test(text)).length === 2, engine.record.toasts)
+  screens.push(['Claim guard: the message that sends Claude back, and the band', `${sent.block}\n\n${band}`])
+
+  // A passing run of the same check replaces it: a true claim passes, and the band clears.
+  await engine.type('build again')
+  await engine.modelTool({ ...build, __text: 'Result: Succeeded' })
+  await engine.flush()
+  expect('A1: failing then passing leaves one result, the pass', checks().results.length === 1 && checks().results[0].state === 'pass', checks().results)
+  const cleared = await bandText()
+  expect('A5: the band no longer shows the check once it passes', !/✗/.test(cleared), cleared)
+  const truthful = await engine.stop('The build succeeded.')
+  expect('A4: a true claim is not sent back', truthful.block === undefined, truthful)
+
+  // Edits: a Markdown-only edit keeps the build current; a code edit makes it stale.
+  await engine.type('document it')
+  await engine.modelTool({ tool: 'Write', file_path: path.join(root, 'docs/notes.md'), content: '# Notes\n' })
+  await engine.flush()
+  const docs = await engine.stop('The build succeeded.')
+  expect('A2: after a Markdown-only edit the build still backs the claim', docs.block === undefined, docs)
+  await engine.modelTool({ tool: 'Write', file_path: path.join(root, 'Source/S2/Spawner.cpp'), content: '// edit\n' })
+  await engine.flush()
+  const stale = await engine.stop('The build succeeded.')
+  expect('A2/A4: after a code edit the build is stale and the claim is sent back', /but the last S2Editor build ran at \d\d:\d\d, before a later edit in /.test(stale.block ?? ''), stale)
+
+  // A worker's own reply: sent back once, in its own loop.
+  await engine.spawn({ agentId: 'claims-w1', prompt: 'Edit C:/x.cpp and prove it.', description: 'claim worker' })
+  const worker = await engine.stop('All tests pass.', { agentId: 'claims-w1' })
+  expect('A4: a worker that claims tests pass with no test run is sent back', /you said the tests pass \("All tests pass\."\), but no tests ran this session/.test(worker.block ?? ''), worker)
+  const workerAgain = await engine.stop('All tests pass.', { agentId: 'claims-w1' })
+  expect('A4: the worker is not sent back twice on the same result', workerAgain.block === undefined, workerAgain)
+  expect('no hook threw in the claim guard', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  const { engine, done } = await boot({ options: { claimGuard: 'off' } })
+  await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Failed (OtherCompilationError)' })
+  await engine.flush()
+  const off = await engine.stop('The build succeeded.')
+  expect('A6: with claimGuard off a contradicted claim is not sent back', off.block === undefined, off)
+  const drawn = await engine.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band')
+  expect('A6: with the guard off the band still shows the failing check', drawn !== null && /✗ S2Editor build failed/.test(check(drawn, 110).lines.join('')), drawn)
+  done()
 }
 
 // ---------------------------------------------------------------- report
