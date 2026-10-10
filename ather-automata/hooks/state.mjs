@@ -408,11 +408,40 @@ const storedEvidence = async (io, scope) => {
 // Proof older than this no longer counts: the code has likely moved on since.
 const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
 
+// What is kept for a command that is no gate, on a rung that gates declare. No gate has this key.
+const NO_GATE = ''
+
+/**
+ * A rung that gates declare, from the result kept for each: passed when every gate passed, failed when one
+ * failed (or a command that is no gate did, since the rung's gates last ran), else not proven. A passed
+ * rung is as old as its oldest result, so proof from before a session is never taken for that session's.
+ * @param {Record<string, import('./model.mjs').Rung> | undefined} kept @param {readonly string[]} all the gates that declare the rung
+ * @returns {import('./model.mjs').Rung}
+ */
+const rungOfGates = (kept, all) => {
+  const fresh = [...all, NO_GATE].flatMap(key => {
+    const one = kept?.[key]
+    return one && Date.now() - (one.at ?? 0) < EVIDENCE_TTL_MS ? [{ key, ...one }] : []
+  })
+  const byAge = [...fresh].sort((a, b) => (a.at ?? 0) - (b.at ?? 0))
+  const stamp = (/** @type {typeof fresh[number] | undefined} */ one) => (one ? { at: one.at, by: one.by } : {})
+  const failed = byAge.filter(one => one.state === 'fail').at(-1)
+  if (failed) return { state: 'fail', detail: all.length > 1 && failed.key !== NO_GATE ? `${failed.key}: ${failed.detail}`.slice(0, 120) : failed.detail, ...stamp(failed) }
+  const passed = byAge.filter(one => one.state === 'pass' && one.key !== NO_GATE)
+  if (all.length === 1) {
+    const only = fresh.find(one => one.key !== NO_GATE)
+    return only ? { state: only.state, detail: only.detail, ...stamp(only) } : { state: 'none', detail: '' }
+  }
+  if (passed.length === all.length) return { state: 'pass', detail: `${all.length} gates passed`, ...stamp(passed[0]) }
+  return { state: 'none', detail: `${passed.length} of ${all.length} gates passed`, ...stamp(byAge.at(-1)) }
+}
+
 /** @param {Io} io @param {string} scope from evidenceScope @param {Pack} [pack] @returns {Promise<Evidence>} */
 export const readEvidence = async (io, scope, pack = unreal) => {
-  const stored = /** @type {Record<string, { state: string, detail: string, at?: number }>} */ (await storedEvidence(io, scope))
+  const stored = /** @type {Record<string, { state: string, detail: string, at?: number, gates?: Record<string, import('./model.mjs').Rung> }>} */ (await storedEvidence(io, scope))
   const fresh = Object.fromEntries(Object.entries(stored).filter(([, rung]) => Date.now() - (rung.at ?? 0) < EVIDENCE_TTL_MS))
-  return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh })
+  const gated = Object.fromEntries(Object.entries(pack.rungGates ?? {}).map(([rung, all]) => [rung, rungOfGates(stored[rung]?.gates, all)]))
+  return /** @type {Evidence} */ ({ ...emptyEvidence(pack), ...fresh, ...gated })
 }
 
 // A session as people see it named: the first 8 hex of its id, as the Editor lock and the tab list show it.
@@ -762,8 +791,20 @@ export const readPeers = async (io, root, localDir) => {
   return out
 }
 
-/** @param {Io} io @param {string} scope @param {keyof Evidence} rung @param {import('./model.mjs').Rung} value */
-export const setRung = (io, scope, rung, value) => serial(() => writeEvidence(io, scope, { [rung]: { state: value.state, detail: value.detail.slice(0, 120) } }))
+// `gates`: on a rung that gates declare, the run replaces the result of each gate it ran and no other; a
+// command that is no gate is kept beside them until one of the rung's gates is next run.
+/** @param {Io} io @param {string} scope @param {keyof Evidence} rung @param {import('./model.mjs').Rung} value @param {import('./packs/index.mjs').RungGates} [gates] */
+export const setRung = (io, scope, rung, value, gates) =>
+  serial(async () => {
+    const result = { state: value.state, detail: value.detail.slice(0, 120) }
+    if (!gates) return writeEvidence(io, scope, { [rung]: result })
+    const stored = await storedEvidence(io, scope)
+    const stamped = { ...result, at: Date.now(), by: shortSession(await io.sessionId()) }
+    const before = Object.entries(/** @type {Record<string, import('./model.mjs').Rung>} */ (stored[rung]?.gates ?? {})).filter(([key]) => key !== NO_GATE)
+    const kept = Object.fromEntries([...before, ...(gates.ran.length > 0 ? gates.ran : [NO_GATE]).map(key => /** @type {[string, import('./model.mjs').Rung]} */ ([key, stamped]))])
+    await io.set(KEY.evidence(scope), { ...stored, [rung]: { ...rungOfGates(kept, gates.all), gates: kept } })
+    changed(io)
+  })
 
 // MCP evidence: a write waits for a read back on the same server; PIE counts when it started.
 /** @param {Io} io @param {string} scope @param {'write' | 'read' | 'pie'} kind @param {string} server @param {boolean} isOk */

@@ -13,7 +13,8 @@ import { makeWebPack } from './web.mjs'
 
 /**
  * @typedef {{ state: 'none' | 'pass' | 'fail', detail: string, at?: number, by?: string }} Rung `at`, `by`: when, and by which session (its first 8 hex), the record was written
- * @typedef {{ rungs: { rung: string, value: Rung }[], context: string[], toasts: { text: string, timeoutMs?: number }[], bumps: string[] }} ShellReading
+ * @typedef {{ rungs: { rung: string, value: Rung, gates?: RungGates }[], context: string[], toasts: { text: string, timeoutMs?: number }[], bumps: string[] }} ShellReading
+ * @typedef {{ ran: string[], all: string[] }} RungGates on a rung that gates declare: the gates a command ran (none: a command that is no gate), of all that declare it
  * @typedef {{ id: string, pattern: RegExp, title: string, fix: string, rule?: { file: string, text: string } }} PackTrap
  * @typedef {{ name: string, verb: string, isGlobal?: boolean }} CreateItem
  * @typedef {{ isHeld: boolean, isFree: boolean, holder: string, until: string }} EditorState
@@ -35,7 +36,7 @@ import { makeWebPack } from './web.mjs'
  *   traps: readonly PackTrap[],
  *   held: { labels: Record<string, string>, nouns: Record<string, string>, kinds: readonly string[], defaults: readonly string[] },
  *   heldSegment: (segment: string, held: readonly string[], context: HeldContext) => string | null,
- *   mergePolicy: 'hold' | 'with-proof', mergeRungs?: readonly string[],
+ *   mergePolicy: 'hold' | 'with-proof', mergeRungs?: readonly string[], rungGates?: Readonly<Record<string, string[]>>,
  *   isAssetSave: (input: string) => boolean, readShell: (command: string, text: string, ran: { isError?: boolean }) => ShellReading,
  *   mcpKind: (input: string) => 'write' | 'read' | 'pie' | null, binaryAssets: RegExp | null, briefPaths: RegExp,
  *   skillGroups: readonly { group: string, names: readonly string[] }[], createGroups: readonly { group: string, items: readonly CreateItem[] }[],

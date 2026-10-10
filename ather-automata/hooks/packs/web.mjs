@@ -57,38 +57,52 @@ const isGate = (gate, segment) => {
 /** @param {string} segment */
 const scriptOf = segment => /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+|run-script\s+)?([\w:.-]+)/i.exec(normal(segment))?.[1] ?? null
 
+// What a gate's result is kept under: its id, or its command when it has none.
+/** @param {Gate} gate */
+const gateKey = gate => gate.id || gate.command
+
 /** @param {string} url */
 const hostOf = url => /^https?:\/\/([^/:?#\s]+)/i.exec(url)?.[1]?.toLowerCase() ?? ''
 
 /**
- * The rungs a command tries, through the profile's gates first, then the scripts in package.json
- * (one level deep), then the tools it runs.
+ * The rungs a command tries, each with the gates it ran for that rung (none: a tool or a script that is
+ * no gate): through the profile's gates first, then the scripts in package.json (one level deep), then
+ * the tools it runs.
  * @param {string} command @param {Record<string, string>} scripts @param {readonly Gate[]} gates @param {Production | null} [production] @param {number} [depth]
- * @returns {string[]}
+ * @returns {Map<string, Set<string>>}
  */
-export const rungsOfCommand = (command, scripts, gates, production = null, depth = 0) => {
-  /** @type {Set<string>} */
-  const found = new Set()
+const checksOfCommand = (command, scripts, gates, production = null, depth = 0) => {
+  /** @type {Map<string, Set<string>>} */
+  const found = new Map()
+  /** @param {string} rung @param {Iterable<string>} [ran] */
+  const add = (rung, ran = []) => found.set(rung, new Set([...(found.get(rung) ?? []), ...ran]))
   for (const segment of segments(command)) {
     const bare = bareCommand(segment)
-    const gate = gates.find(one => isGate(one.command, bare))
-    if (gate) {
-      for (const proof of gate.proofs) if (ALIASES[proof] && ALIASES[proof] !== 'prod') found.add(ALIASES[proof])
+    const ran = gates.filter(one => isGate(one.command, bare))
+    if (ran.length > 0) {
+      for (const gate of ran) for (const proof of gate.proofs) if (ALIASES[proof] && ALIASES[proof] !== 'prod') add(ALIASES[proof], [gateKey(gate)])
       continue
     }
     const script = scriptOf(bare)
     if (script && depth < 2 && /^(npm|pnpm|yarn|bun)\b/i.test(bare) && scripts[script] !== undefined) {
-      for (const rung of rungsOfCommand(scripts[script] ?? '', scripts, gates, production, depth + 1)) found.add(rung)
+      for (const [rung, inside] of checksOfCommand(scripts[script] ?? '', scripts, gates, production, depth + 1)) add(rung, inside)
       continue
     }
-    if (/^node\b.*\s--test\b/i.test(bare) || /^(vitest|jest)\b/i.test(bare)) found.add('tests')
-    else if (/^playwright\s+test\b/i.test(bare)) found.add('ui')
-    else if (/^(tsc|vue-tsc)\b/i.test(bare) || /^(eslint|next\s+lint)\b/i.test(bare)) found.add('lint')
-    else if (/^(next|vinext|vite|astro|nuxt|remix)\s+build\b/i.test(bare)) found.add('build')
-    else if (isProdCheck(bare, production)) found.add('prod')
+    if (/^node\b.*\s--test\b/i.test(bare) || /^(vitest|jest)\b/i.test(bare)) add('tests')
+    else if (/^playwright\s+test\b/i.test(bare)) add('ui')
+    else if (/^(tsc|vue-tsc)\b/i.test(bare) || /^(eslint|next\s+lint)\b/i.test(bare)) add('lint')
+    else if (/^(next|vinext|vite|astro|nuxt|remix)\s+build\b/i.test(bare)) add('build')
+    else if (isProdCheck(bare, production)) add('prod')
   }
-  return [...found]
+  return found
 }
+
+/**
+ * The rungs a command tries.
+ * @param {string} command @param {Record<string, string>} scripts @param {readonly Gate[]} gates @param {Production | null} [production]
+ * @returns {string[]}
+ */
+export const rungsOfCommand = (command, scripts, gates, production = null) => [...checksOfCommand(command, scripts, gates, production).keys()]
 
 // A check of production: the deployment's status through gh or vercel, or a probe of the public URL.
 /** @param {string} bare @param {Production | null} production */
@@ -336,11 +350,19 @@ export const makeWebPack = (profile, packageJson) => {
     const want = (wants[role] ?? wants.engineer ?? []).filter(rung => declared.has(rung))
     return want.length > 0 ? want : declared.has('build') ? ['build'] : ['tests', 'build']
   }
-  // The command that proves a rung: the profile's gate, else the npm script.
+  // The gates that declare each rung, by what their results are kept under. Production is checked after the merge, by no gate.
+  /** @type {Record<string, string[]>} */
+  const rungGates = {}
+  for (const gate of gates) for (const rung of gate.proofs) if (rung !== 'prod') rungGates[rung] = [...new Set([...(rungGates[rung] ?? []), gateKey(gate)])]
+  // The commands that prove a rung: every gate of the profile that declares it, else the npm script.
   /** @param {string} rung */
-  const gateFor = rung => gates.find(gate => gate.proofs[0] === rung)?.command ?? gates.find(gate => gate.proofs.includes(rung))?.command ??(rung === 'tests' && scripts.test ? 'npm test' : rung === 'lint' && scripts.lint ? 'npm run lint' : rung === 'build' && scripts.build ? 'npm run build' : '')
+  const gatesFor = rung => {
+    const named = gates.filter(gate => gate.proofs.includes(rung)).map(gate => gate.command)
+    if (named.length > 0) return named
+    return rung === 'tests' && scripts.test ? ['npm test'] : rung === 'lint' && scripts.lint ? ['npm run lint'] : rung === 'build' && scripts.build ? ['npm run build'] : []
+  }
   /** @param {readonly string[]} rungs */
-  const commandsFor = rungs => [...new Set(rungs.map(gateFor).filter(Boolean))].map(command => `\`${command}\``)
+  const commandsFor = rungs => [...new Set(rungs.flatMap(gatesFor))].map(command => `\`${command}\``)
   const prodCheck = production ? `the production check (${production.host ? `${production.host[0]?.toUpperCase()}${production.host.slice(1)} ` : ''}deployment for the merge commit READY${production.url ? `, then ${production.url} answers ${production.expectStatus}` : ''})` : ''
   const mergeGates = andList(commandsFor(required))
   const port = Number(profile?.devPorts?.base ?? profile?.devPortBase ?? 0)
@@ -349,10 +371,13 @@ export const makeWebPack = (profile, packageJson) => {
   const readShell = (command, text, ran) => {
     /** @type {import('./index.mjs').ShellReading} */
     const out = { rungs: [], context: [], toasts: [], bumps: [] }
-    const rungs = rungsOfCommand(command, scripts, gates, production)
+    const checks = checksOfCommand(command, scripts, gates, production)
+    const rungs = [...checks.keys()]
     for (const rung of rungs) {
       const value = readToolOutput(rung, command, text, ran, production)
-      if (value) out.rungs.push({ rung, value })
+      const all = rungGates[rung]
+      // The command has one output and one exit code: every gate in it gets this reading.
+      if (value) out.rungs.push(all ? { rung, value, gates: { ran: [...(checks.get(rung) ?? [])], all } } : { rung, value })
     }
     if (rungs.length > 0 && isPiped(command) && out.rungs.some(one => one.value.state === 'none')) {
       out.context.push('Ather Automata: this check was piped through a filter, so its exit code is the filter\'s. Read the pass and fail counts (or run it unpiped) before claiming it passed.')
@@ -397,6 +422,7 @@ export const makeWebPack = (profile, packageJson) => {
     heldSegment,
     mergePolicy,
     mergeRungs: required,
+    rungGates,
     isAssetSave: () => false,
     readShell,
     mcpKind: () => null,

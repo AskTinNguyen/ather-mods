@@ -144,6 +144,32 @@ const NODE_TEST_PASS = fs.readFileSync(new URL('../../ather-automata/tests/fixtu
   expect('and in no other scope', JSON.stringify([...engine.store.keys()].filter(key => key.startsWith('evidence:'))) === JSON.stringify([`evidence:${sid}`]), [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
 }
 
+// ---------------------------------------------------------------- two gates on one rung
+
+{
+  const parent = fs.mkdtempSync(join(BASE, 'gates-'))
+  const profile = { ...WEB_PROFILE, gates: [...WEB_PROFILE.gates, { id: 'lint', command: 'npm run lint', proofs: ['lint'] }, { id: 'typecheck', command: 'npm run typecheck', proofs: ['lint'] }], required: ['tests', 'lint'] }
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify(profile, null, 2)}\n` } })
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0046' })
+  const lint = () => engine.store.get(`evidence:${sid}`)?.lint
+  await startAway(engine)
+  await bash(engine, 'npm test', NODE_TEST_PASS)
+  await engine.modelTool({ tool: 'Bash', command: 'npm run typecheck', __text: 'src/a.ts(1,1): error TS2322: wrong\nFound 1 error.', __isError: true })
+  await bash(engine, 'npm run lint')
+  const failed = await bash(engine, 'gh pr merge 3')
+  expect("a lint gate that passed after the rung's other gate failed leaves lint failed", lint()?.state === 'fail', lint())
+  expect('and the with-proof merge is held', failed.deny !== undefined && parked(engine, sid).at(-1)?.kind === 'merge', failed.deny)
+  await bash(engine, 'npm run typecheck')
+  const proven = await bash(engine, 'gh pr merge 3')
+  expect('with both lint gates and the tests passed in this session, the merge goes through', lint()?.state === 'pass' && proven.deny === undefined, [lint(), proven.deny])
+  const record = engine.store.get(`evidence:${sid}`)
+  if (record?.lint?.gates?.lint) record.lint.gates.lint.at = Date.now() - 60 * 60 * 1000
+  const stale = await bash(engine, 'gh pr merge 3')
+  expect('a gate that passed before this session does not prove the merge, though the other passed in it', stale.deny !== undefined, [record?.lint, stale.deny])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- an intent tracked in another checkout
 
 const LOGIN = '# Login\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- [x] A1: the form posts.\n- [ ] A2: errors show.\n'

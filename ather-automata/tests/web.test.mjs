@@ -14,6 +14,7 @@ import { mandateText, newWindow, offAway } from '../hooks/away.mjs'
 import { emptyEvidence, nextStep, parseIntent } from '../hooks/model.mjs'
 import { choosePack, core, forgetPacks, makeWebPack, packFor, unreal } from '../hooks/packs/index.mjs'
 import { WEB_TRAPS } from '../hooks/packs/web.mjs'
+import * as state from '../hooks/state.mjs'
 
 /** @param {string} name */
 const fixture = name => fs.readFileSync(new URL(`./fixtures/web/${name}`, import.meta.url), 'utf8')
@@ -158,6 +159,97 @@ describe('web proof from tool output (A3)', () => {
   })
   test('the core alone reads tests and builds the same way', () => {
     expect(core.readShell('node --test', fixture('node-test-pass.txt'), {}).rungs.map(one => one.value.state)).toEqual(['pass'])
+  })
+})
+
+describe('several gates on one rung', () => {
+  const GATES = [
+    { id: 'tests', command: 'pnpm test', proofs: ['tests'] },
+    { id: 'lint', command: 'pnpm lint', proofs: ['lint'] },
+    { id: 'typecheck', command: 'pnpm typecheck', proofs: ['lint'] },
+    { id: 'build', command: 'pnpm build', proofs: ['build'] },
+    { id: 'portable-paths', command: 'pnpm check:portable-paths', proofs: ['lint'] },
+  ]
+  const pack = makeWebPack({ pack: 'web', packageManager: 'pnpm', gates: GATES, mergePolicy: 'with-proof' }, null)
+  const COMMANDS = GATES.map(gate => gate.command)
+
+  // A session's store, and a command run in it as the hook runs one: read by the pack, each reading kept, the evidence read back.
+  const session = () => {
+    const store = new Map()
+    const io = /** @type {any} */ ({
+      get: async (/** @type {string} */ key) => store.get(key),
+      set: async (/** @type {string} */ key, /** @type {unknown} */ value) => void store.set(key, JSON.parse(JSON.stringify(value))),
+      read: async () => null,
+      exists: async () => false,
+      sessionId: async () => 's1',
+      root: async () => 'R',
+      redraw: () => undefined,
+    })
+    /** @param {string} command @param {string} [text] @param {boolean} [isError] */
+    const run = async (command, text = '', isError = false) => {
+      for (const one of pack.readShell(command, text, { isError }).rungs) await state.setRung(io, 's1', one.rung, one.value, one.gates)
+      return state.readEvidence(io, 's1', pack)
+    }
+    return { store, run }
+  }
+
+  test('the prompts name every gate of the rungs they ask for', () => {
+    const prompt = `# Lens\n\n- Rev: 1\n- Status: active\n- Area: Platform\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: one\n`
+    const progress = '# p\n\n## Acceptance\n\n| Item | Verdict |\n| --- | --- |\n| A1 | met |\n'
+    const intent = parseIntent({ slug: 'lens', prompt, findings: '', progress, files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' }, pack)
+    const prove = nextStep('engineer', intent, emptyEvidence(pack), 0, 'Tin Nguyen', {}, pack)
+    expect(prove?.key).toBe('prove')
+    const proven = Object.fromEntries(['tests', 'lint', 'build'].map(rung => [rung, { state: 'pass', detail: '' }]))
+    const ship = nextStep('engineer', intent, proven, 0, 'Tin Nguyen', {}, pack)
+    expect(ship?.key).toBe('land')
+    for (const command of COMMANDS) {
+      expect(prove?.prompt ?? '').toContain(`\`${command}\``)
+      expect(ship?.prompt ?? '').toContain(`\`${command}\``)
+    }
+  })
+  test('one gate of a rung passing does not prove the rung; every gate passing does', async () => {
+    const { run } = session()
+    const one = await run('pnpm lint')
+    expect(one.lint.state).toBe('none')
+    expect(pack.isProven({ ...one, tests: { state: 'pass', detail: '' }, build: { state: 'pass', detail: '' } }, 'engineer')).toBe(false)
+    expect((await run('pnpm typecheck')).lint.state).toBe('none')
+    expect((await run('pnpm check:portable-paths')).lint.state).toBe('pass')
+  })
+  test("a later gate's pass does not hide an earlier gate's failure", async () => {
+    const { run } = session()
+    expect((await run('pnpm typecheck', fixture('tsc-fail.txt'), true)).lint.state).toBe('fail')
+    expect((await run('pnpm check:portable-paths')).lint.state).toBe('fail')
+    expect((await run('pnpm typecheck', fixture('tsc-pass.txt'))).lint.state).toBe('none')
+    expect((await run('pnpm lint')).lint.state).toBe('pass')
+  })
+  test('a failing tool run that is no gate fails the rung until one of its gates runs again', async () => {
+    const { run } = session()
+    await run('pnpm lint && pnpm typecheck')
+    expect((await run('pnpm check:portable-paths')).lint.state).toBe('pass')
+    expect((await run('npx tsc --noEmit', fixture('tsc-fail.txt'), true)).lint.state).toBe('fail')
+    expect((await run('pnpm typecheck', fixture('tsc-pass.txt'))).lint.state).toBe('pass')
+    // Passing, it proves nothing the gates have not.
+    const fresh = session()
+    expect((await fresh.run('npx tsc --noEmit', fixture('tsc-pass.txt'))).lint.state).toBe('none')
+  })
+  test("a gate's run replaces only its own result, and an unreadable run is no evidence", async () => {
+    const { run } = session()
+    await run('pnpm lint && pnpm typecheck && pnpm check:portable-paths')
+    expect((await run('pnpm lint | tail -3')).lint.state).toBe('none')
+    expect((await run('pnpm lint')).lint.state).toBe('pass')
+    // A rung with one gate reads as it always did.
+    const tests = (await run('pnpm test', fixture('node-test-pass.txt'))).tests
+    expect([tests.state, tests.detail]).toEqual(['pass', '77 passed, 0 failed'])
+    expect((await run('pnpm test', 'all good')).tests.state).toBe('none')
+    expect((await run('pnpm build')).build.state).toBe('pass')
+  })
+  test("a gate's result older than a day no longer counts", async () => {
+    const { run, store } = session()
+    await run('pnpm lint && pnpm typecheck')
+    await run('pnpm check:portable-paths')
+    const stored = store.get('evidence:s1')
+    stored.lint.gates.typecheck.at = Date.now() - 25 * 3600 * 1000
+    expect((await run('pnpm build')).lint.state).toBe('none')
   })
 })
 
