@@ -78,7 +78,7 @@ test('review 3: unit: every discarding or tree-moving git form has an act', () =
     'git apply -R p.diff': 'refuse', 'git apply --reverse p.diff': 'refuse', 'git apply --check -R p.diff': null,
     'git worktree remove --force E:/wt/x': 'refuse', 'git worktree remove E:/wt/x': null,
     'git branch -D other': 'refuse', 'git branch -d other': null, 'git submodule update --init --force': 'refuse',
-    'git stash pop': 'refuse', 'git stash drop': 'stash-drop', 'git stash list': null, 'git restore --staged a.py': null,
+    'git stash pop': 'stash-apply', 'git stash drop': 'stash-drop', 'git stash list': null, 'git restore --staged a.py': null,
   })
 })
 

@@ -7,17 +7,19 @@ export type Seg = { raw: string; dir: string; verb: string; args: string[] }
 
 const CHDIR = new Set(['cd', 'chdir', 'set-location', 'sl'])
 
-/** The command's segments, each with its working folder (relative `cd` targets resolved against the one before). */
-export const walk = (command: string, cwd: string): Seg[] => {
+/** The command's segments, each with its working folder (relative `cd` targets resolved against the one before; `~`
+ * and a bare `cd` are the user's home, rev 27 follow-up). */
+export const walk = (command: string, cwd: string, home = ''): Seg[] => {
   const out: Seg[] = []
   const stack: string[] = []
   let dir = norm(cwd)
   for (const raw of segments(stripHeredocs(command ?? ''))) {
     const [verb, args] = commandVerb(tokenize(raw))
-    const target = args.filter(a => !/^(-path|-literalpath|\/d)$/i.test(a))[0]
+    let target = args.filter(a => !/^(-path|-literalpath|\/d)$/i.test(a))[0]
     if (CHDIR.has(verb) || verb === 'pushd') {
       if (verb === 'pushd') stack.push(dir)
-      if (target && target !== '-' && !/^[$%]/.test(target)) dir = norm(target, dir)
+      if (home && (target === undefined ? verb !== 'pushd' : target === '~' || target.startsWith('~/') || target.startsWith('~\\'))) target = `${home}${(target ?? '~').slice(1)}`
+      if (target && target !== '-' && !/^[$%~]/.test(target)) dir = norm(target, dir)
       continue
     }
     if (verb === 'popd') {
@@ -33,6 +35,8 @@ export const walk = (command: string, cwd: string): Seg[] => {
  * arguments with every `-C <path>` and `-c <key=value>` removed. */
 export const gitPlace = (seg: Seg): { dir: string; args: string[] } => {
   let dir = seg.dir
+  let workTree: string | null = null
+  let gitDir: string | null = null
   const args: string[] = []
   for (let i = 0; i < seg.args.length; i += 1) {
     const a = seg.args[i] ?? ''
@@ -40,15 +44,32 @@ export const gitPlace = (seg: Seg): { dir: string; args: string[] } => {
       dir = norm(seg.args[i + 1] ?? '', dir)
       i += 1
     } else if (a === '-c') i += 1
+    // rev 27 follow-up: --work-tree / --git-dir name the tree a command acts on.
+    else if (a === '--work-tree' || a === '--git-dir') {
+      if (a === '--work-tree') workTree = norm(seg.args[i + 1] ?? '', dir)
+      else gitDir = norm(seg.args[i + 1] ?? '', dir)
+      i += 1
+    } else if (a.startsWith('--work-tree=')) workTree = norm(a.slice(12), dir)
+    else if (a.startsWith('--git-dir=')) gitDir = norm(a.slice(10), dir)
     else args.push(a)
   }
+  if (workTree) dir = workTree
+  else if (gitDir) dir = gitDir.replace(/\/\.git\/?$/i, '') || dir
   return { dir, args }
 }
 
 /** What a git command in the shared checkout needs: nothing, a refusal with its alternative, a check of the paths it
  * touches (pathspecs as written, relative to the folder; `untracked`: whether untracked files count), or a check
  * that no stash entry exists. */
-export type GitAct = null | { kind: 'refuse'; why: string; alt: string } | { kind: 'check'; sub: string; paths: string[]; untracked: boolean } | { kind: 'stash-drop' }
+export type GitAct =
+  | null
+  | { kind: 'refuse'; why: string; alt: string }
+  | { kind: 'check'; sub: string; paths: string[]; untracked: boolean }
+  | { kind: 'stash-drop' }
+  /** rev 27 follow-up: a stash comes back over exactly the paths it holds (`git stash show --name-only <ref>`). */
+  | { kind: 'stash-apply'; verb: string; ref: string }
+  /** rev 27 follow-up: `git checkout <word>`: a file (then `checkout -- <word>`) or a branch (moves the tree). */
+  | { kind: 'checkout-word'; word: string }
 
 const WORKTREE = 'a worktree of your own (git worktree add <dir> <branch>)'
 const refuse = (why: string, alt: string): GitAct => ({ kind: 'refuse', why, alt })
@@ -80,7 +101,7 @@ export const classifyGit = (args: string[]): GitAct => {
       if (has(rest, '-b', '-B', '--orphan')) return refuse('git checkout -b/-B moves the shared working tree (and -B resets a branch)', `create the branch in ${WORKTREE.replace('<branch>', '-b <name> <start>')}`)
       const dash = rest.indexOf('--')
       const words = pathsOf(rest.slice(0, dash >= 0 ? dash : rest.length))
-      if (dash < 0 && words.length === 1 && words[0] !== '.') return refuse('git checkout <branch> moves the shared working tree under every session', `work in ${WORKTREE}`)
+      if (dash < 0 && words.length === 1 && words[0] !== '.') return { kind: 'checkout-word', word: words[0] ?? '' }
       const paths = dash >= 0 ? rest.slice(dash + 1) : words.length > 1 ? words.slice(1) : words
       return { kind: 'check', sub: 'checkout', paths, untracked: false }
     }
@@ -94,7 +115,11 @@ export const classifyGit = (args: string[]): GitAct => {
       const verb = (rest.find(a => !a.startsWith('-')) ?? 'push').toLowerCase()
       if (verb === 'list' || verb === 'show' || verb === 'create') return null
       if (verb === 'drop' || verb === 'clear') return { kind: 'stash-drop' }
-      if (verb === 'pop' || verb === 'apply' || verb === 'branch') return refuse(`git stash ${verb} writes a stash over the shared working tree`, 'apply the stash in a worktree of your own (git -C <worktree> stash apply)')
+      if (verb === 'branch') return refuse('git stash branch moves the shared working tree to a new branch', 'apply the stash in a worktree of your own (git -C <worktree> stash apply)')
+      if (verb === 'pop' || verb === 'apply') {
+        const after = rest.slice(rest.findIndex(a => a.toLowerCase() === verb) + 1)
+        return { kind: 'stash-apply', verb, ref: after.find(a => !a.startsWith('-')) ?? 'stash@{0}' }
+      }
       const after = rest.slice(rest.findIndex(a => a.toLowerCase() === verb) + 1)
       // `save` takes a message, not paths; `push` (the default) takes paths after its options.
       const paths = rest.includes('--') ? rest.slice(rest.indexOf('--') + 1) : verb === 'push' ? pathsOf(after, ['-m', '--message']) : []
@@ -132,7 +157,7 @@ export const exactAlternative = (sub: string): string =>
 
 /** A pathspec resolved to the repository: its repo-relative path, or why it cannot be read on facts (a variable, a glob,
  * the repository root or a top folder, outside the repository). */
-export const repoPath = (spec: string, dir: string, root: string): { rel: string } | { why: string } => {
+export const repoPath = (spec: string, dir: string, root: string): { rel: string; top?: boolean } | { why: string } => {
   if (/[$%`]/.test(spec)) return { why: `${spec} is a variable` }
   if (/[*?[]/.test(spec) || spec.startsWith(':')) return { why: `${spec} is a pattern` }
   const abs = norm(spec.replace(/\\/g, '/'), dir)
@@ -140,7 +165,8 @@ export const repoPath = (spec: string, dir: string, root: string): { rel: string
   if (abs.toLowerCase() === r.toLowerCase()) return { why: 'the whole repository' }
   if (!abs.toLowerCase().startsWith(`${r.toLowerCase()}/`)) return { why: `${spec} is outside the repository` }
   const rel = abs.slice(r.length + 1).replace(/\/$/, '')
-  if (!rel.includes('/') && !rel.includes('.')) return { why: `${rel}/ is a whole top folder` }
+  // rev 27 follow-up: a dotless top-level name may be a file (LICENSE, Makefile): the caller checks which.
+  if (!rel.includes('/') && !rel.includes('.')) return { rel, top: true }
   return { rel }
 }
 

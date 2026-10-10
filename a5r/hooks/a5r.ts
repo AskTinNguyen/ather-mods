@@ -46,13 +46,30 @@ const FILE_WRITERS = new Set(['mv', 'move', 'move-item', 'mi', 'cp', 'copy', 'co
 const GIT_WRITES = new Set(['add', 'commit', 'checkout', 'switch', 'reset', 'restore', 'clean', 'rm', 'mv', 'stash', 'apply', 'am', 'merge', 'rebase', 'pull', 'cherry-pick', 'revert', 'init', 'clone', 'tag', 'worktree', 'submodule', 'config', 'update-index', 'sparse-checkout', 'lfs'])
 const PKG = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3'])
 const PKG_WRITES = new Set(['install', 'i', 'add', 'ci', 'update', 'upgrade', 'remove', 'rm', 'uninstall', 'un', 'link', 'init', 'create', 'unlink'])
-/** A76: whether a command segment writes files in the folder it runs in. */
-export const writesFiles = (raw: string, verb: string, args: readonly string[]): boolean => {
+/** A76: whether a command segment writes files in the folder it runs in (`isHere(target)`: whether a redirect or tee
+ * target lies there; rev 27 follow-up: a target outside it, and git's read-only sub-verbs, write nothing here). */
+export const writesFiles = (raw: string, verb: string, args: readonly string[], isHere: (target: string) => boolean = () => true): boolean => {
   const sub = (args.find(a => !a.startsWith('-')) ?? '').toLowerCase()
-  if (/(^|[^0-9&])>>?(?!>)(?!\s*(&|\/dev\/null|nul\b|\$null))/i.test(blankQuotes(raw))) return true
+  for (const m of blankQuotes(raw).matchAll(/(?:^|[^0-9&>])>>?\s*(["']?)([^\s"'|;&]+)\1/g)) {
+    const t = m[2] ?? ''
+    if (/^(&|\/dev\/null$|nul$|\$null$)/i.test(t)) continue
+    if (isHere(t)) return true
+  }
+  if (verb === 'tee' || verb === 'tee-object') return args.filter(a => !a.startsWith('-')).some(isHere)
   if (DELETE_VERBS.has(verb) || FILE_WRITERS.has(verb)) return true
   if ((verb === 'sed' || verb === 'perl') && args.some(a => /^-[a-z]*i/i.test(a))) return true
-  if (verb === 'git') return GIT_WRITES.has(sub)
+  if (verb === 'git') {
+    if (!GIT_WRITES.has(sub)) return false
+    const words = args.filter(a => !a.startsWith('-')).map(a => a.toLowerCase())
+    const next = words[words.indexOf(sub) + 1] ?? ''
+    if (sub === 'stash' && (next === 'list' || next === 'show')) return false
+    if (sub === 'worktree' && next === 'list') return false
+    if (sub === 'submodule' && (next === 'status' || next === 'summary')) return false
+    if (sub === 'lfs' && (next === 'ls-files' || next === 'status' || next === 'env')) return false
+    if (sub === 'config' && args.some(a => /^(--get|--get-all|--get-regexp|--list|-l)$/.test(a))) return false
+    if (sub === 'tag' && (words.length === 1 || args.some(a => a === '-l' || a === '--list'))) return false
+    return true
+  }
   if (PKG.has(verb)) return PKG_WRITES.has(sub)
   return false
 }
@@ -335,7 +352,8 @@ export class A5R {
         inKit = dirs.pop() ?? null
         continue
       }
-      if (inKit && writesFiles(raw, verb, args)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
+      const kitHere = (t: string) => !isAbs(t.replace(/\\/g, '/')) || this.kitMentions.some(([re]) => re.test(norm(t).toLowerCase()))
+      if (inKit && writesFiles(raw, verb, args, kitHere)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
       const hit = this.writesProtected(raw, verb)
       if (hit) return decision('deny', 'D1', `This command touches the A5R kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
       if (NESTED_SHELLS.has(verb) && depth < 2) {

@@ -331,13 +331,21 @@ const actOf = (d: Decision, command = ''): Act => {
  * the whole S2 tree takes 36-82 s). One path-scoped `git status` per segment, 8 s at most. Null: it may run. */
 async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<string | null> {
   const gate = gateOf('D1')
-  for (const seg of walk(command, cwd)) {
+  const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
+  for (const seg of walk(command, cwd, home)) {
     if (!isGit(seg)) continue
     const { dir, args } = gitPlace(seg)
-    const act = classifyGit(args)
+    let act = classifyGit(args)
     if (!act) continue
     const root = (await locate($, a5r, `${dir}/_`)).root
     if (!root || !(await isSharedRoot($, root))) continue
+    // rev 27 follow-up: `git checkout <word>` is `checkout -- <word>` when the word is an existing file and no commit.
+    if (act.kind === 'checkout-word') {
+      const word = act.word
+      const isFile = (await $.fs.stat(norm(word, dir)).catch(() => null))?.kind === 'file'
+      const isRef = isFile ? (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${word}^{commit}`], { timeoutMs: 8_000 }).catch(() => null))?.exitCode === 0 : true
+      act = isFile && !isRef ? { kind: 'check', sub: 'checkout', paths: [word], untracked: false } : { kind: 'refuse', why: 'git checkout <branch> moves the shared working tree under every session', alt: 'work in a worktree of your own (git worktree add <dir> <branch>)' }
+    }
     if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared checkout)`, act.alt)
     if (act.kind === 'stash-drop') {
       const list = await $.process.run(['git', '-C', root, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
@@ -345,15 +353,31 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
       if (n === 0) continue
       return blocked(gate, n === null ? 'git stash list could not be read' : `the shared checkout holds ${n} stash entr${n === 1 ? 'y' : 'ies'}, any of them maybe another session's`, 'leave the stash as it is; keep your own work in a commit or a worktree of your own')
     }
-    if (act.paths.length === 0) return blocked(gate, `git ${act.sub} names no paths, so it would act on the whole shared working tree`, exactAlternative(act.sub))
-    const rels: string[] = []
-    for (const spec of act.paths) {
-      const r = repoPath(spec, dir, root)
-      if ('why' in r) return blocked(gate, `git ${act.sub} on ${r.why} cannot be checked on facts in the shared checkout`, exactAlternative(act.sub))
-      rels.push(r.rel)
+    let sub: string
+    let rels: string[] = []
+    let untracked: boolean
+    if (act.kind === 'stash-apply') {
+      // rev 27 follow-up: a stash comes back over the paths it holds; they are checked like a discard's.
+      const shown = await $.process.run(['git', '-C', root, 'stash', 'show', '--name-only', '--include-untracked', act.ref], { timeoutMs: 8_000 }).catch(() => null)
+      if (!shown || shown.exitCode !== 0) return blocked(gate, `git stash show could not read ${act.ref}`, 'name a stash that exists (git stash list), or apply it in a worktree of your own')
+      rels = shown.stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+      if (rels.length === 0) continue
+      sub = `stash ${act.verb}`
+      untracked = true
+    } else {
+      sub = act.sub
+      untracked = act.untracked
+      if (act.paths.length === 0) return blocked(gate, `git ${sub} names no paths, so it would act on the whole shared working tree`, exactAlternative(sub))
+      for (const spec of act.paths) {
+        const r = repoPath(spec, dir, root)
+        if ('why' in r) return blocked(gate, `git ${sub} on ${r.why} cannot be checked on facts in the shared checkout`, exactAlternative(sub))
+        // rev 27 follow-up: a dotless top-level name is a whole folder only when it is not a file (LICENSE, Makefile).
+        if (r.top && (await $.fs.stat(`${root}/${r.rel}`).catch(() => null))?.kind !== 'file') return blocked(gate, `git ${sub} on ${r.rel}/ (a whole top folder) cannot be checked on facts in the shared checkout`, exactAlternative(sub))
+        rels.push(r.rel)
+      }
     }
-    const ran = await $.process.run(['git', '-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${act.untracked ? 'all' : 'no'}`, '--', ...rels], { timeoutMs: 8_000 }).catch(() => null)
-    if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${act.sub} would discard is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
+    const ran = await $.process.run(['git', '-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${untracked ? 'all' : 'no'}`, '--', ...rels], { timeoutMs: 8_000 }).catch(() => null)
+    if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would discard is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
     const changed = ran.stdout.split(/\0|\r?\n/).filter(e => /^.. \S/.test(e)).map(e => e.slice(3).trim()).filter(Boolean)
     const now = await $.clock.now()
     const mine = new Set([...touched].map(p => p.toLowerCase()))
@@ -366,7 +390,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
       else if (!mine.has(p.toLowerCase())) foreign.push(`${p} (no session claims it)`)
     }
     if (foreign.length > 0)
-      return blocked(gate, `git ${act.sub} would discard uncommitted changes in the shared checkout: ${foreign.slice(0, 6).join('; ')}${foreign.length > 6 ? `; and ${foreign.length - 6} more` : ''}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
+      return blocked(gate, `git ${sub} would ${sub.startsWith('stash ') ? 'write over' : 'discard'} uncommitted changes in the shared checkout: ${foreign.slice(0, 6).join('; ')}${foreign.length > 6 ? `; and ${foreign.length - 6} more` : ''}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
   }
   return null
 }
