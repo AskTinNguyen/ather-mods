@@ -2749,3 +2749,80 @@ describe('titles keep their characters (0.2.3)', () => {
     expect(selectStringPs('C:/a.jsonl', '"timestamp":"[^"]*"', { first: true })[4]).toContain('-Encoding UTF8 -List |')
   })
 })
+
+describe('a repository that gets its intents while the session runs', () => {
+  const PROFILE = '{"version":1,"pack":"web","gates":[{"id":"tests","command":"npm run zz-proof","proofs":["tests"]}],"areas":["app","api"]}'
+  /** The checkout as state.mjs reads it: `files` by path under the root, a folder there when a file is under it. @param {string} root @param {Record<string, string>} files @param {string} user */
+  const checkout = (root, files, user) =>
+    /** @type {any} */ ({
+      read: async (/** @type {string} */ path) => files[path.slice(root.length + 1)] ?? null,
+      exists: async (/** @type {string} */ path) => Object.keys(files).some(name => name === path.slice(root.length + 1) || name.startsWith(`${path.slice(root.length + 1)}/`)),
+      list: async () => Object.keys(files).filter(name => !name.includes('/')).map(name => ({ name, kind: 'file' })),
+      sessionId: async () => 'bare-session',
+      root: async () => root,
+      gitUser: async () => user,
+    })
+  /** @param {Record<string, string>} files */
+  const addIntents = files => Object.assign(files, { 'docs/intent/README.md': '# Intents\n\n## Areas\n', '.ather/profile.json': PROFILE })
+  /** @param {{ pack: import('../hooks/packs/index.mjs').Pack }} lane */
+  const gates = lane => lane.pack.gates.map(gate => gate.command)
+
+  test('with no git user name the checkout is read again each time: once the intents are there its pack is the profile\'s, and whoever asked is told once', async () => {
+    /** @type {Record<string, string>} */
+    const files = { 'package.json': '{}' }
+    const io = checkout('/bare/nameless', files, '')
+    /** @type {string[][]} */
+    const told = []
+    state.onSetUp('test', pack => void told.push([...pack.areas]))
+    const before = await state.lane(io, '/bare/nameless')
+    expect([before.isS2, gates(before)]).toEqual([false, []])
+    addIntents(files)
+    const after = await state.lane(io, '/bare/nameless')
+    expect([after.isS2, gates(after), [...after.pack.areas]]).toEqual([true, ['npm run zz-proof'], ['app', 'api']])
+    await state.lane(io, '/bare/nameless')
+    expect(told).toEqual([['app', 'api']])
+  })
+  test('a kept reading without intents is read again by laneAgain once the folder is there, and whoever asked is told the new pack once', async () => {
+    /** @type {Record<string, string>} */
+    const files = { 'package.json': '{}' }
+    const io = checkout('/bare/named', files, 'Tin Nguyen')
+    /** @type {string[][]} */
+    const told = []
+    state.onSetUp('test', pack => void told.push(pack.gates.map(gate => gate.command)))
+    expect((await state.laneAgain(io, '/bare/named')).isS2).toBe(false)
+    addIntents(files)
+    expect(gates(await state.lane(io, '/bare/named'))).toEqual([])
+    expect(gates(await state.laneAgain(io, '/bare/named'))).toEqual(['npm run zz-proof'])
+    await state.laneAgain(io, '/bare/named')
+    expect(told).toEqual([['npm run zz-proof']])
+  })
+  test('the session\'s root also kept as a workspace checkout is read again once: the reading kept by its root no longer says it has no intents', async () => {
+    /** @type {Record<string, string>} */
+    const files = { 'package.json': '{}' }
+    const io = checkout('/bare/shared', files, 'Tin Nguyen')
+    /** @type {string[][]} */
+    const told = []
+    state.onSetUp('test', pack => void told.push(pack.gates.map(gate => gate.command)))
+    // The same folder as Windows may spell it: one more kept reading, and one more kept pack.
+    const spelled = '\\bare\\shared'
+    expect([(await state.lane(io, '/bare/shared')).isS2, (await state.laneAt(io, '/bare/shared')).isS2, (await state.laneAt(io, spelled)).isS2]).toEqual([false, false, false])
+    addIntents(files)
+    expect([(await state.laneAt(io, '/bare/shared')).isS2, told]).toEqual([false, []])
+    const after = await state.laneAgain(io, '/bare/shared')
+    expect([after.isS2, gates(after)]).toEqual([true, ['npm run zz-proof']])
+    const byRoot = await state.laneAt(io, '/bare/shared')
+    expect([byRoot.isS2, gates(byRoot)]).toEqual([true, ['npm run zz-proof']])
+    const bySpelling = await state.laneAt(io, spelled)
+    expect([bySpelling.isS2, gates(bySpelling)]).toEqual([true, ['npm run zz-proof']])
+    await state.laneAgain(io, '/bare/shared')
+    await state.lane(io, '/bare/shared')
+    expect(told).toEqual([['npm run zz-proof']])
+  })
+  test('a repository that runs intents from the start is read once, and nobody is told', async () => {
+    const io = checkout('/bare/runs', addIntents({ 'package.json': '{}' }), 'Tin Nguyen')
+    let told = 0
+    state.onSetUp('test', () => void (told += 1))
+    const first = await state.lane(io, '/bare/runs')
+    expect([first.isS2, gates(first), await state.laneAgain(io, '/bare/runs') === first, told]).toEqual([true, ['npm run zz-proof'], true, 0])
+  })
+})

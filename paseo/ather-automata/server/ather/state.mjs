@@ -184,8 +184,8 @@ export const repoId = (url, root) => {
 /** @param {string} repo from repoId @param {string} root the checkout's top folder */
 export const checkoutId = (repo, root) => (repo === '' || repo.startsWith('path:') ? repo : `${repo}@${folderId(root)}`)
 
-// Roots read without intents. One that has them at a later read was set up in this session
-// (/ather setup): its profile is new, so its pack is chosen again and each half is told.
+// Roots read without intents. One that has them at a later read got them in this session:
+// its profile is new, so its pack is chosen again and each half is told.
 /** @type {Set<string>} */
 const bare = new Set()
 /** @type {Map<string, (pack: Pack) => unknown>} */
@@ -327,7 +327,7 @@ const readScoped = async (io, scoped, legacy) => {
   return value !== undefined || scoped === legacy ? value : io.get(legacy)
 }
 
-// For /ather where there were no intents: /ather setup may have added them in this session. A kept
+// For /ather where there were no intents: the person may have added them in this session. A kept
 // reading without intents is dropped once the folder is there, and the checkout read again. A lane
 // that runs intents is kept as read.
 /** @param {Io} io @param {string} cwd */

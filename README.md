@@ -16,7 +16,7 @@ claude plugin marketplace add AskTinNguyen/ather-mods
 claude plugin install ather-automata@ather --scope user
 ```
 
-Then start a new Claude Code session in your S2 checkout and type `/ather`. In a repository without intents (no `docs/intent` folder), `/ather` offers to set them up; the mod's [README](ather-automata/README.md#setting-up-a-repository) says what that adds.
+Then start a new Claude Code session in your S2 checkout and type `/ather`. Ather works where a repository has intents (a `docs/intent` folder). It does not add them: each team adds the structure to its own repository, and the mod's [README](ather-automata/README.md#a-repository-without-intents) says what Ather reads.
 
 Opening Claude Code in an S2 checkout also offers the mod, through the checkout's `.claude/settings.json`.
 

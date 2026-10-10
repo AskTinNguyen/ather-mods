@@ -28,7 +28,6 @@ import { withFolders } from './shell.mjs'
 import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
 import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
-import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from './setup.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding' | 'repos'} Mode */
@@ -353,14 +352,12 @@ export function register(on, options) {
   })
 
   on('command.run', { command: 'ather' }, async ($, e) => {
-    // Setting up is for a repository without intents too, so it is answered before the check below.
-    if (/^(setup|init)$/i.test(e.args.trim())) return { text: await setupCommand($) }
-    // So are the folders to list: one of them may be where the intents are.
+    // The folders to list are for a repository without intents too: one of them may be where the intents are.
     if (/^repos(\s|$)/i.test(e.args.trim())) return { text: await reposCommand($, e.args.trim().slice('repos'.length).trim()) }
-    // A checkout without intents is read again: /ather setup may have added them in this session. The
-    // question is for a pane that would have nothing: another workspace checkout's intents open it.
+    // A checkout without intents is read again: the person may have added them in this session. The
+    // pack's sentence is for a pane that would have nothing: another workspace checkout's intents open it.
     await state.laneAgain(io($), cwd)
-    if (!(await hasIntents($))) return { text: await setupQuestion($) }
+    if (!(await hasIntents($))) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }
@@ -480,7 +477,7 @@ async function openConsole($, folder) {
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | repos [add | remove <folder>] | setup]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | repos [add | remove <folder>]]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -1164,41 +1161,8 @@ async function skipTour($) {
   })
 }
 
-// ---------------------------------------------------------------- setting a repository up
-
-// /ather setup (setup.mjs): the session is handed the steps and what is missing here, and does the
-// writing itself. With nothing missing it answers with what the profile reads as, and sends nothing.
-/** @param {Engine} $ */
-async function setupCommand($) {
-  const { root } = await laneOf($)
-  const setup = await readSetup(io($), root)
-  if (setup.isComplete) return setupSummary(setup)
-  // The steps ship in the plugin, beside hooks/.
-  const steps = `${$.plugin.root.replace(/\\/g, '/')}/templates/intent-setup/SETUP.md`
-  const pack = suggestPack(await $.fs.list(root).catch(() => []))
-  void deliver($, setupPrompt({ root: root.replace(/\\/g, '/'), steps, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
-  return `Asked the session to set up intents here. To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
-}
-
-// /ather where there are no intents: one question, never the setup itself. Unanswered, it says where
-// Ather works and names the way in.
-/** @param {Engine} $ */
-async function setupQuestion($) {
-  const notHere = `${(await laneOf($)).pack.notHere} /ather setup adds the structure.`
-  return ask($, {
-    header: 'Intents',
-    question: 'This repository has no intents yet (no docs/intent folder). Set them up?',
-    choices: [
-      { label: 'Set up intents here', description: 'This session reads the repository, proposes areas and gates, and asks you before it writes.', run: () => setupCommand($) },
-      { label: 'Not now', description: 'Nothing changes. /ather setup does it later.', run: async () => notHere },
-    ],
-    fallback: notHere,
-    onTyped: async () => notHere,
-  })
-}
-
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'repos', 'setup', 'init']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'repos']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -1611,7 +1575,7 @@ async function applyFolders($) {
   findingShown = ''
   callsOpen.clear()
   answerState = { ...answerState, opened: '', typing: '' }
-  // A session that had no intents to show starts its work now, as after /ather setup: that reads them too.
+  // A session that had no intents to show starts its work now: that reads them too.
   if (!isWorking) {
     isAwake = null
     await wake($)

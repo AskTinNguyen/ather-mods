@@ -61,8 +61,6 @@ if (types) {
 console.log('== unit')
 const unit = path.join(WORK, 'unit')
 copy(path.join(MOD, 'hooks'), path.join(unit, 'hooks'))
-// The plugin's setup files, as they ship: tests/setup.test.mjs reads them.
-copy(path.join(MOD, 'templates'), path.join(unit, 'templates'))
 const shim = path.join(HERE, 'shim/testing.mjs').replace(/\\/g, '/')
 copy(path.join(MOD, 'tests'), path.join(unit, 'tests'), s => s.replace(/from 'claude-code\/testing'/g, `from 'file:///${shim.replace(/^\//, '')}'`))
 const tests = fs.readdirSync(path.join(MOD, 'tests')).filter(f => f.endsWith('.test.mjs'))
