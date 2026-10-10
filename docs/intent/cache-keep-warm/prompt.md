@@ -34,7 +34,7 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 - D7 (rev 2): The warm part of `session.end` is synchronous and its ledger write is not awaited (F-1).
 - D8 (rev 2): Proof of A1 comes from two live sessions driven headlessly in a Windows pseudo-console (pywinpty), their screens kept by a terminal emulator (pyte) and rendered to PNG (Pillow), and from their transcripts' per-response usage: A with `/warm on`, B with `/warm off` as the control, the same context and the same prompt at the same time ~115 minutes later. The driver strips the host session's `CLAUDE*`/`ANTHROPIC*` environment so each is a session of its own. Tools installed for it: pywinpty, pyte, Pillow (pip, user site).
 - D9 (rev 2): The repos e2e links folders as junctions (`fs.symlinkSync(…, 'junction')`): Windows refuses symbolic links without Developer Mode, and the type is ignored elsewhere.
-- D10 (rev 2): Keep-warm starts from the session's second main-thread turn (counted again after /clear); TTL calibration from its third; `/warm` shows the last read ("Last read at 01:02: 101,700 of 101,738 tokens from the cache (kept).") and the debug log records each read's usage (F-2).
+- D10 (rev 2): Keep-warm starts from the session's second main-thread turn (counted again after /clear); TTL calibration from its third; `/warm` shows the last read ("Last read at 01:02: 101,944 of 101,738 tokens from the cache (kept).") and the debug log records each read's usage (F-2).
 - D6 (rev 1): Money: a ping's real cost is the change in `$.session.usage().cost.usd` around it; the re-write it avoids is estimated as 19 times the cache-read part (2x write minus the 0.1x read the next turn still pays). Shown with "~".
 
 ## Acceptance
