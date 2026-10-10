@@ -1403,6 +1403,15 @@ const refresh = async engine => {
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 
+  // The other way round: a session in web (base main), nm beside it. What is held in nm is said with nm's base.
+  const beside = await boot({ root: web, sessionId: 'harness-session-0052', options: { repos: '../nm' } })
+  await startAway(beside.engine)
+  const there = await bash(beside.engine, 'git -C ../nm push origin develop')
+  expect("from a session on main, a push to develop in ../nm is held and the denial names develop", there.deny !== undefined && /develop/.test(there.deny), there.deny)
+  const here = await bash(beside.engine, 'git push origin main')
+  expect("a push to main in the session's own checkout is said as before", here.deny !== undefined && !/develop/.test(here.deny), here.deny)
+  await beside.engine.end('other')
+
   // rel/: the origin's default is main, the team merges into release, and the profile says so.
   const rel = makeClone(fs.mkdtempSync(join(BASE, 'work-')), 'rel', { owner: 'sipherxyz', name: 'rel', base: 'main', also: ['release'], files: { ...INTENTS, '.ather/profile.json': `${JSON.stringify({ version: 1, pack: 'core', base: 'release' })}\n` } })
   mergeIntent(rel, 'release', 'on-release')
@@ -1417,6 +1426,29 @@ const refresh = async engine => {
   expect("and reads and fetches release, never main, whatever the remote's default", refsAsked(profiled.engine).includes('origin/release^{commit}') && !refsAsked(profiled.engine).includes('origin/main^{commit}') && fetchRuns(profiled.engine).every(run => run.argv.at(-1) === '+refs/heads/release:refs/remotes/origin/release') && fetchRuns(profiled.engine).length === 1, [refsAsked(profiled.engine), fetchRuns(profiled.engine).map(run => run.argv.at(-1))])
   expect('no hook threw', profiled.engine.record.hookErrors.length === 0, profiled.engine.record.hookErrors)
   await profiled.engine.end('other')
+
+  // multi/ merges into main; its worktree beside it, multi-rel/, names release in a profile of its own.
+  const group = fs.mkdtempSync(join(BASE, 'work-'))
+  const multi = makeClone(group, 'multi', { owner: 'sipherxyz', name: 'multi', base: 'main', also: ['release'], files: { ...INTENTS } })
+  const tree = join(group, 'multi-rel')
+  git(multi, 'worktree', 'add', '-q', '-b', 'feat/rel', tree)
+  fs.mkdirSync(join(tree, '.ather'), { recursive: true })
+  fs.writeFileSync(join(tree, '.ather/profile.json'), `${JSON.stringify({ version: 1, pack: 'core', base: 'release' })}\n`)
+  mergeIntent(multi, 'main', 'on-main')
+  mergeIntent(multi, 'release', 'on-release')
+  const two = await boot({ root: multi, sessionId: 'harness-session-0053', writable: [group] })
+  two.engine.setSurfaces(['terminal'])
+  await two.engine.command('ather', 'pick')
+  await two.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  await two.engine.flush()
+  await two.engine.flush()
+  const pass = fetchRuns(two.engine).map(run => [run.argv[2], run.argv.at(-1)])
+  expect('a clone on main with a worktree on another base: one pass fetches both branches, each in its own checkout', JSON.stringify(pass) === JSON.stringify([[multi, '+refs/heads/main:refs/remotes/origin/main'], [tree, '+refs/heads/release:refs/remotes/origin/release']]), pass)
+  const drawn = await two.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const both = intentRows(drawn).map(one => one.id).sort()
+  expect("the worktree's row for its base's intent is the team's, not tagged local, beside main's", JSON.stringify(both) === JSON.stringify(['intent:multi-rel/on-release', 'intent:on-main']) && warnOf(drawn, 'intent:multi-rel/on-release') === '', [both, warnOf(drawn, 'intent:multi-rel/on-release')])
+  expect('no hook threw', two.engine.record.hookErrors.length === 0, two.engine.record.hookErrors)
+  await two.engine.end('other')
 }
 
 // ---------------------------------------------------------------- report

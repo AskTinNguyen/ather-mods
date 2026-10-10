@@ -571,7 +571,8 @@ async function readIntents($) {
   const tracked = await state.readTracked(files)
   const names = await laneNames($)
   const read = []
-  // What each clone's first pane checkout read of origin/main: its other worktrees share it, and list only their own.
+  // What each clone's first pane checkout read of origin/main: its other worktrees on the same base share it, and
+  // list only their own. A worktree whose team merges into another branch reads that branch for itself.
   /** @type {Map<string, import('./team.mjs').MainSnapshot | null>} */
   const mains = new Map()
   for (const lane of lanes) {
@@ -580,7 +581,7 @@ async function readIntents($) {
     const name = names.get(normalFolder(root)) ?? ''
     // Its intents: one tracked in another checkout is not one of them.
     const pinned = tracked && normalFolder(tracked.root) === normalFolder(root) ? tracked.slug : null
-    const clone = cloneOf(root)
+    const clone = `${cloneOf(root)}\n${base}`
     const isFirst = !mains.has(clone)
     const kept = teamCaches.get(root) ?? EMPTY_CACHE
     const team = await readTeam(repo($, root), root, { cache: isFirst ? kept : { ...kept, main: mains.get(clone) ?? kept.main }, pinned, base })
@@ -650,8 +651,8 @@ async function syncMain($, isAsked = false) {
   try {
     const lanes = await paneLanes($)
     for (const { root, base } of lanes) {
-      // A clone is fetched once, in its first pane checkout: the outcome is that of every one of them.
-      const roots = lanes.map(one => one.root).filter(one => cloneOf(one) === cloneOf(root))
+      // A clone's base is fetched once, in its first pane checkout on it: the outcome is that of every one of them.
+      const roots = lanes.filter(one => cloneOf(one.root) === cloneOf(root) && one.base === base).map(one => one.root)
       if (roots[0] !== root) continue
       const before = syncs.get(root) ?? NO_SYNC
       if (!(isAsked ? canFetchNow : isFetchDue)(before, Date.now())) continue
@@ -1059,7 +1060,7 @@ async function startIssue($, ref, isInQuestion = false) {
 async function trackSlug($, slug, at) {
   const { root } = await laneOf($)
   // An intent read from origin/main that this checkout does not have yet cannot be worked on here.
-  const listed = intents.find(one => one.slug === slug)
+  const listed = intents.find(one => one.slug === slug && normalFolder(one.root) === normalFolder(at ?? root)) ?? intents.find(one => one.slug === slug)
   if (!(await state.track(io($), at ?? root, slug, { me }))) return listed ? `${slug} is on origin/${listed.base} but not in this checkout yet: pull ${listed.base} to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
   // Its key names the checkout when it is another's: "web/login".

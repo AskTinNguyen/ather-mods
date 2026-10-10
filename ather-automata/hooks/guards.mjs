@@ -59,12 +59,19 @@ export const isMergeCommand = command => /\bgit\b(?:\s+-C\s+\S+)?\s+(merge(?![-\
  * @param {string} command @param {readonly string[]} held @param {(folder: string | null) => string} branchOf
  * @param {Pack} [pack] @param {import('./packs/index.mjs').HeldContext} [context] @returns {string | null}
  */
-export const heldShell = (command, held, branchOf, pack = unreal, context = {}) => {
+export const heldShell = (command, held, branchOf, pack = unreal, context = {}) => heldShellAt(command, held, branchOf, pack, context)?.kind ?? null
+
+// The same, with the base of the checkout the held segment ran in: what is said of it names that branch.
+/**
+ * @param {string} command @param {readonly string[]} held @param {(folder: string | null) => string} branchOf
+ * @param {Pack} [pack] @param {import('./packs/index.mjs').HeldContext} [context] @returns {{ kind: string, base: string } | null}
+ */
+export const heldShellAt = (command, held, branchOf, pack = unreal, context = {}) => {
   for (const { segment, folder } of withFolders(command)) {
     const here = context.at?.(folder) ?? null
     const judged = here ? { ...here, scripts: here.pack.scripts } : { pack, held, isProven: context.isProven === true, scripts: context.scripts ?? pack.scripts, base: context.base }
     const kind = heldSegmentIn(segment, branchOf(folder), judged)
-    if (kind) return kind
+    if (kind) return { kind, base: judged.base ?? 'main' }
   }
   return null
 }

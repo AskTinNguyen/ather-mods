@@ -9,7 +9,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
-import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
+import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldShellAt, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
 import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
@@ -451,13 +451,14 @@ async function detectTz($) {
 // ---------------------------------------------------------------- the model's tools
 
 // A held action, parked for the person's review; null when no window holds it. `heldHere`: the kinds
-// held where it runs, when that is more than the window's own.
-/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command @param {readonly string[]} [heldHere] */
-async function hold($, kind, command, heldHere) {
+// held where it runs, when that is more than the window's own. `base`: the branch the checkout it runs in
+// merges into, for what is said of it; the session's own checkout's unless given.
+/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command @param {readonly string[]} [heldHere] @param {string} [base] */
+async function hold($, kind, command, heldHere, base) {
   const held = await state.park(io($), kind, command, Date.now(), heldHere)
   if (held === null) return null
   void state.bump(io($), 'heldParked').catch(() => undefined)
-  const { base } = await laneOf($)
+  base ??= (await laneOf($)).base
   $.ui.toast(`Ather: held ${forBase(HELD_NOUNS[kind] ?? '', base)} until you review the away window (${held.parked.id}).`)
   return `Held by the Ather away window until the user reviews it: ${forBase(HELD_LABELS[kind] ?? '', base)}. Recorded as ${held.parked.id}. Do not retry it; continue with other work.`
 }
@@ -597,7 +598,7 @@ async function shell($, command, e, next) {
   const away = await state.readAway(io($)).catch(() => offAway())
   const found = isHolding(away) ? await heldIn($, command, away.held) : null
   if (found) {
-    const denied = await hold($, found.kind, command, found.held).catch(() => null)
+    const denied = await hold($, found.kind, command, found.held, found.base).catch(() => null)
     if (denied) return { deny: denied }
   }
   const ran = await next(e)
@@ -611,9 +612,9 @@ async function shell($, command, e, next) {
 
 // What the window holds in a command, each segment judged by the checkout it runs in. Another checkout
 // holds the window's kinds and its own pack's defaults, so a window never holds less there than that
-// repository would, and counts only proof this session saw in that checkout. Resolves the kind held,
-// with every kind held across the command's checkouts for parking it, or null.
-/** @param {Engine} $ @param {string} command @param {readonly string[]} held @returns {Promise<{ kind: string, held: string[] } | null>} */
+// repository would, and counts only proof this session saw in that checkout. Resolves the kind held and the
+// base of the checkout it was held in, with every kind held across the command's checkouts for parking it, or null.
+/** @param {Engine} $ @param {string} command @param {readonly string[]} held @returns {Promise<{ kind: string, base: string, held: string[] } | null>} */
 async function heldIn($, command, held) {
   const { pack, base } = await laneOf($)
   /** @type {Map<string | null, import('./packs/index.mjs').HeldAt | null>} */
@@ -624,8 +625,8 @@ async function heldIn($, command, held) {
     if (isOwn) at.set(folder, null)
     else at.set(folder, { pack: lane.pack, held: [...new Set([...held, ...lane.pack.held.defaults])], isProven: await isMergeProven($, lane.pack, await state.checkoutScope(io($), { isOwn, repo: lane.repo, root: lane.root })), base: lane.base })
   }
-  const kind = heldShell(command, held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack, await scopeOf($)), base, at: folder => at.get(folder) ?? null })
-  return kind ? { kind, held: [...new Set([...held, ...[...at.values()].flatMap(one => one?.held ?? [])])] } : null
+  const found = heldShellAt(command, held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack, await scopeOf($)), base, at: folder => at.get(folder) ?? null })
+  return found ? { ...found, held: [...new Set([...held, ...[...at.values()].flatMap(one => one?.held ?? [])])] } : null
 }
 
 // With-proof merges (D2): every rung the profile requires passed in tool output in this session, in `scope`.

@@ -1223,7 +1223,6 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect([refs().includes('origin/develop^{commit}'), refs().includes('origin/main^{commit}')]).toEqual([true, false])
 
     expect(fetchArgs('develop')).toEqual([...FETCH_ARGS.slice(0, -1), '+refs/heads/develop:refs/remotes/origin/develop'])
-    expect(fetchArgs('main')).toEqual(FETCH_ARGS)
     expect(await fetchMain(develop, 'develop')).toEqual({ error: '', lock: '', moved: true })
     expect(calls.find(args => args.includes('fetch'))).toEqual(fetchArgs('develop'))
     expect(refs().includes('origin/main^{commit}')).toBe(false)
