@@ -4,7 +4,7 @@
 import { windowDecisions } from './away.mjs'
 import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
 import { issueId, issueLabel, issuePrompt } from './issues.mjs'
-import { STAGE_LABELS, clockText, currentStage, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural } from './model.mjs'
+import { STAGE_LABELS, clockText, currentStage, cutWords, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural, prStatusList, shortTitle } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
 
@@ -69,6 +69,26 @@ export const trackConsequence = (pack = unreal) =>
 export const intentStands = (intent, stage, me, heldBy = '') =>
   `${intent.slug}: ${stage}, ${intent.acceptanceTotal > 0 ? `${intent.acceptanceDone}/${intent.acceptanceTotal} done` : 'no checklist yet'}, ${isMine(intent, me) ? 'yours' : intent.owner ? `${intent.owner}'s` : 'no owner named'}.${heldBy ? ` ${heldBy}.` : ''}`
 
+// Where an intent stands, as its own files say it: the lines under "Where it stands" in its view, and
+// the reply on a surface without a pane. All of it is read from prompt.md, progress.md and findings.md
+// when the list was read, so showing it costs the session nothing. What is met is what progress.md says.
+/** @param {Intent} intent @param {string} stage @param {string} me @param {import('./model.mjs').PrStates} [prs] */
+export const standsLines = (intent, stage, me, prs = {}) => {
+  const checklist = intent.acceptanceTotal > 0 ? `${intent.acceptanceDone}/${intent.acceptanceTotal} met` : 'no checklist yet'
+  const whose = isMine(intent, me) ? 'yours' : intent.owner ? `${intent.owner}'s` : 'no owner named'
+  const parked = intent.status === 'parked' ? ` · parked${intent.statusNote ? `: ${shortTitle(intent.statusNote, 90)}` : ''}` : ''
+  /** @param {readonly string[]} all @param {number} shown */
+  const some = (all, shown) => `${all.slice(0, shown).join(' · ')}${all.length > shown ? ` · +${all.length - shown} more` : ''}`
+  return [
+    `${stage} · ${checklist} · ${whose}${parked}`,
+    intent.currentStep ? `Now: ${intent.currentStep}` : '',
+    intent.thenStep ? `Then: ${intent.thenStep}` : '',
+    intent.openItems.length > 0 ? `Still open: ${some(intent.openItems.map(one => [one.id, one.text].filter(Boolean).join(' ')), 4)}` : '',
+    intent.findings.length > 0 ? `Open decisions: ${some(intent.findings.map(one => `${one.id} ${cutWords(one.title, 48)}${one.isBlocking ? ' (blocking)' : ''}`), 3)}` : '',
+    intent.prs.length > 0 ? `PRs: ${prStatusList(intent, prs).join(', ')}` : '',
+  ].filter(line => line !== '')
+}
+
 // What stopping tracking said: done (proof stays with the intent), nothing tracked, or refused while away.
 /** @param {{ result: 'untracked' | 'none' | 'away', slug: string }} outcome */
 export const untrackText = outcome =>
@@ -88,7 +108,8 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  */
 
 /**
- * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked' }} Next
+ * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked', isLook?: boolean, look?: string }} Next
+ * `look`: the key of the intent whose view answers a step that only reads (model.mjs's `isLook`).
  * Something to work on: an open intent to track, or an assigned GitHub issue to start an intent from.
  * An intent's `owner` is its Owner line as written (people are matched on it), `who` the name shown,
  * `stage` where it stands in the list, `source` where it was read (origin/main, or only this checkout), `key` its name
@@ -293,7 +314,7 @@ export const buildHome = input => {
   else if (isNewcomer && !intent) next = { id: 'next:tour', label: 'Take the tour', hint: 'Six short steps. Ends with your first intent started.', prompt: pack.prompts.tour, isTour: true }
   // A tech artist with PIE proven has one proof left that only they can give: their own Editor check.
   else if (intent && stage === 'prove' && own && role === own.role && evidence[own.after]?.state === 'pass' && evidence[own.rung]?.state !== 'pass') next = { id: `next:${intent.key}:checked`, label: own.label, hint: own.hint, prompt: '', action: 'checked' }
-  else if (intent && step) next = { id: `next:${intent.key}:${step.key}`, ...step }
+  else if (intent && step) next = { id: `next:${intent.key}:${step.key}`, ...step, ...(step.isLook ? { look: intent.key } : {}) }
   // Nothing tracked in this session: offer to continue the intent the person last worked on.
   else if (!intent && lastWork?.kind === 'intent') next = { id: lastWork.id, label: `Continue ${lastWork.key}`, hint: lastWork.hint, prompt: '', work: lastWork }
   else if (!intent && work[0]?.kind === 'intent') next = { id: work[0].id, label: `Pick up ${work[0].key}`, hint: work[0].hint, prompt: '', work: work[0] }
@@ -383,14 +404,24 @@ export const proofLine = (evidence, pack, mine, names = {}) =>
     })
     .join(' · ')
 
-// "Also tracked in 2 other sessions · active 4m ago": the live sessions on this checkout that track
-// the same intent, and when the latest of them last did something; '' when there are none.
+// "Also tracked in 2 other sessions": the live sessions on this checkout that track the same intent;
+// '' when there are none. This is the line the session itself is told, so it carries no age: Claude Code
+// keeps the lane section as it first read it for the whole conversation (seen on 2.1.296), where
+// "active 4m ago" would stay long after it stopped being true.
+/** @param {readonly { intent: string | null }[]} peers @param {string} slug */
+export const trackedByLine = (peers, slug) => {
+  const same = peers.filter(lane => slug !== '' && lane.intent === slug)
+  return same.length === 0 ? '' : `Also tracked in ${plural(same.length, 'other session')}`
+}
+
+// "Also tracked in 2 other sessions · active 4m ago": the same line for a person, with when the latest
+// of those sessions last did something. For the pane and the dialogs, never for the session's prompt.
 /** @param {readonly { intent: string | null, updatedAt: number, lastActiveAt?: number }[]} peers @param {string} slug @param {number} now */
 export const heldByLine = (peers, slug, now) => {
-  const same = peers.filter(lane => slug !== '' && lane.intent === slug)
-  if (same.length === 0) return ''
-  const ago = now - Math.max(...same.map(lane => Number(lane.lastActiveAt ?? lane.updatedAt) || 0))
-  return `Also tracked in ${plural(same.length, 'other session')} · ${ago < 60000 ? 'active now' : `active ${durationText(ago)} ago`}`
+  const line = trackedByLine(peers, slug)
+  if (line === '') return ''
+  const ago = now - Math.max(...peers.filter(lane => lane.intent === slug).map(lane => Number(lane.lastActiveAt ?? lane.updatedAt) || 0))
+  return `${line} · ${ago < 60000 ? 'active now' : `active ${durationText(ago)} ago`}`
 }
 
 // "build ✓ · tests ✗": the proof seen so far, so a failed test is never hidden.

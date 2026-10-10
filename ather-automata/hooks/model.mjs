@@ -395,6 +395,10 @@ export const prKey = (intent, number) => (otherRoot(intent) ? `${otherRoot(inten
  * @typedef {ReturnType<typeof parseIntent>} Intent
  */
 
+// A "- Current step:" or "- Next step:" line of progress.md, short; '' for none, a template's "<none>" or a dash.
+/** @param {string} text */
+const stepNote = text => (/^(<|none\b|n\/a\b|[-–—]\s*$)/i.test(text) ? '' : shortTitle(text, 110))
+
 /** @param {IntentFiles} input @param {Pack} [pack] */
 export const parseIntent = (input, pack = unreal) => {
   const { prompt, progress } = input
@@ -413,6 +417,12 @@ export const parseIntent = (input, pack = unreal) => {
     statusNote: field(prompt, 'Status').replace(/^[a-z]+\s*[:\-–—]?\s*/i, '').trim(),
     acceptanceDone: items.filter(item => item.isDone).length,
     acceptanceTotal: items.length,
+    // What the intent's view says of where it stands, with no prompt to the session: the items not yet
+    // met ("A2 (owed): Sand look." and "A2: (owed) Sand look." both read "Sand look"), and progress.md's own
+    // lines for the step in hand and the one after.
+    openItems: items.filter(item => !item.isDone).map(item => ({ id: item.id, text: shortTitle(item.text.replace(/^[\s:]*(?:\([^)]*\)[\s:]*)?/, ''), 90) })),
+    currentStep: stepNote(field(progress, 'Current step')),
+    thenStep: stepNote(field(progress, 'Next step')),
     prs: intentPrs(progress, prompt),
     findings: parseFindings(input.findings, prompt),
     hasReview: input.files.some(name => /review/i.test(name)) || /\b(plan|opus|design)[- ]review\b|reviewed by|after (an? )?(opus )?review/i.test(prompt + progress.slice(0, 20000)),
@@ -566,13 +576,15 @@ export const aboutIntentPrompt = (slug, fromMain, root = '', base = 'main') => {
 /**
  * The one next step for the tracked intent and the person's role.
  * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me @param {PrStates} [prs] @param {Pack} [pack]
- * @returns {{ key: string, label: string, prompt: string, hint: string, isDraft?: boolean } | undefined}
+ * `isLook`: a step that only reads where the intent stands. Its files answer it, so the pane shows the
+ * intent's view and nothing goes to the session; `prompt` is for a surface that cannot (the Paseo version).
+ * @returns {{ key: string, label: string, prompt: string, hint: string, isDraft?: boolean, isLook?: boolean } | undefined}
  */
 export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = unreal) => {
   if (!intent) return { key: 'start', label: 'Start an intent', prompt: '/intent ', hint: 'Type what you want after /intent; the intent skill takes it from there.', isDraft: true }
   const slug = intent.slug
   if (!isMine(intent, me)) {
-    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base) }
+    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: where it stands, nothing is changed.`, isLook: true, prompt: aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base) }
   }
   const stage = currentStage(intent, evidence, role, prs, pack)
   if (stage === 'close') {
@@ -592,7 +604,7 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = u
       return { key: 'review', label: 'Get the plan checked', hint: 'A second agent looks for gaps and wrong assumptions before anyone builds.', prompt: `Have an Opus agent review the plan for intent ${slug} (docs/intent/${slug}/prompt.md) against the repository before any worker starts: gaps, risks, wrong assumptions. Fold the accepted findings into the intent and show me what changed.` }
     }
     if (intent.hasWorker || workers > 0) {
-      return { key: 'progress', label: 'See how the work is going', hint: 'A five-line status against the checklist.', prompt: `Summarise intent ${slug} against its checklist: what is done with evidence, what is next, what is blocked. Five lines.` }
+      return { key: 'progress', label: 'See how the work is going', hint: 'Where it stands against its checklist.', isLook: true, prompt: `Summarise intent ${slug} against its checklist: what is done with evidence, what is next, what is blocked. Five lines.` }
     }
     return { key: 'brief', label: 'Start the work', hint: pack.prompts.briefHint, prompt: pack.prompts.brief(role, slug) }
   }

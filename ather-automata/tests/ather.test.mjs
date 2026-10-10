@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
+import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
@@ -508,6 +508,30 @@ describe('home', () => {
     const model = home({ me: 'Minh Tran', role: 'designer', pinned: 'spawner' })
     expect(model.items.filter(one => one.kind === 'call')).toHaveLength(0)
     expect(model.next?.label).toBe('See where it stands')
+    // Its files answer it: the step names the intent whose view shows it, and sends the session nothing.
+    expect(model.next?.look).toBe('spawner')
+  })
+
+  test('where an intent stands is read from its files, with no prompt to the session', () => {
+    const progress = '# P\n\n- Worker: `w`\n- Current step: S3, wiring the pool to the spawner.\n- Next step: <none>\n- PR: #7\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | t |\n| A2 | open | |\n'
+    const one = parseIntent({ slug: 'pool', prompt: prompt({ Status: 'active', Area: 'Combat', Owner: 'Tin Nguyen' }, '- A1: Pool exists. Proof: gate.\n- A2: (owed) Spawner reads the pool. Proof: gate.\n- A3: Old path removed.'), findings: FINDINGS, progress, files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' })
+    expect(one.openItems).toEqual([{ id: 'A2', text: 'Spawner reads the pool' }, { id: 'A3', text: 'Old path removed' }])
+    expect(one.currentStep).toBe('S3, wiring the pool to the spawner')
+    expect(one.thenStep).toBe('')
+    const lines = standsLines(one, 'Build', 'Tin Nguyen', { 7: 'OPEN' })
+    expect(lines[0]).toBe('Build · 1/3 met · yours')
+    expect(lines[1]).toBe('Now: S3, wiring the pool to the spawner')
+    expect(lines[2]).toBe('Still open: A2 Spawner reads the pool · A3 Old path removed')
+    expect(lines.find(line => line.startsWith('Open decisions: '))).toContain('F-3')
+    expect(lines.at(-1)).toBe('PRs: #7 OPEN')
+    // A teammate's, parked, with nothing recorded: one line, and nothing invented.
+    const theirs = intent('later', { Status: 'parked: waiting for art', Owner: 'TienPham' }, { acceptance: '' })
+    expect(standsLines(theirs, 'Plan', 'Tin Nguyen')).toEqual(["Plan · no checklist yet · TienPham's · parked: Waiting for art"])
+    // The step that only reads says so, on your own intent with a worker and on a teammate's.
+    expect(nextStep('engineer', one, emptyEvidence(), 0, 'Tin Nguyen')?.isLook).toBe(true)
+    expect(nextStep('engineer', one, emptyEvidence(), 0, 'Minh Tran')?.isLook).toBe(true)
+    // A step that asks the session to do something is no look.
+    expect(nextStep('engineer', { ...one, hasWorker: false, hasReview: true }, emptyEvidence(), 0, 'Tin Nguyen')?.isLook).toBe(undefined)
   })
 
   test('lost edits, a blocking Editor lock for a designer, and a recurring trap each wait in Needs you', () => {
@@ -892,6 +916,11 @@ describe('track guard', () => {
     expect(heldByLine([...peers, { intent: 'spawner', updatedAt: now, lastActiveAt: now - 20000 }], 'spawner', now)).toBe('Also tracked in 2 other sessions · active now')
     expect(heldByLine(peers, 'box-scale-tool', now)).toBe('')
     expect(heldByLine([{ intent: null, updatedAt: now }], '', now)).toBe('')
+    // What the session is told carries no age: it keeps that text for the whole conversation, where an age would go stale.
+    expect(trackedByLine(peers, 'spawner')).toBe('Also tracked in 1 other session')
+    expect(trackedByLine(peers.map(one => ({ ...one, lastActiveAt: now - 50 * 60000 })), 'spawner')).toBe(trackedByLine(peers, 'spawner'))
+    expect(trackedByLine(peers, 'box-scale-tool')).toBe('')
+    expect(trackedByLine([{ intent: null }], '')).toBe('')
   })
 
   test('proof attribution (A5): every record is stamped with the session that wrote it, and names it when it is not this one', async () => {

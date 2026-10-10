@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
+import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
@@ -990,6 +990,8 @@ async function doNext($, next) {
   if (next.isTour) return startTour($)
   if (next.work) return startWork($, next.work)
   if (next.action === 'checked') return atherCommand($, 'checked')
+  // A step that only reads where the intent stands: its files answer it, so nothing goes to the session.
+  if (next.look) return (await hasPane($)) ? showIntent($, next.look) : standsText($, next.look)
   if (next.isDraft) {
     fill($, next.prompt)
     return 'It is in the prompt box: finish it and press Enter.'
@@ -1105,6 +1107,19 @@ async function showIntent($, key) {
     return openPane($, 'intent')
   }
   return whereText($, key)
+}
+
+// Without a pane: where an intent stands, as its files say it, in a few lines.
+/** @param {Engine} $ @param {string} key */
+async function standsText($, key) {
+  const intent = intents.find(one => one.key === key)
+  if (!intent) return whereText($, key)
+  const files = io($)
+  const { pack: chosen } = await laneFor($, intent.root)
+  const { role } = await state.readProfile(files, me, chosen)
+  const evidence = await state.readEvidence(files, await state.intentScope(files, intent.slug, otherRoot(intent) || undefined), chosen)
+  const prs = await panePrs($)
+  return `${key}: ${standsLines(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, prs).join('. ')}.`
 }
 
 // Without a pane or a dialog: where an intent stands, and the command that works on it here.
@@ -1784,8 +1799,9 @@ let intentToday = []
 // What the Intent view shows beside the intent's files: whether this session tracks it, its proof
 // (each record another session wrote named by it), the other live sessions tracking it. `intent`: the
 // tracked intent read from its own files when its checkout is not one the pane lists.
-/** @type {{ key: string, slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string, intent: import('./model.mjs').Intent | null }} */
-let intentView = { key: '', slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '', intent: null }
+// `stands`: where it stands as its files say it (home.mjs's standsLines), drawn with no prompt to the session.
+/** @type {{ key: string, slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string, intent: import('./model.mjs').Intent | null, stands: string[] }} */
+let intentView = { key: '', slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '', intent: null, stands: [] }
 
 // The shown intent (the tracked one unless a row or words chose another): its lines since the start
 // of the person's day, newest first, with their time; and the rest of what its view shows, read in
@@ -1811,7 +1827,10 @@ async function readIntentView($) {
   // Working on it here needs its folder in its checkout; asking about it does not.
   const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
   const intent = isTracked && !shown ? await readTrackedIntent($, tracked, key) : null
-  intentView = { key, slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now), intent }
+  const read = shown ?? intent
+  const prs = await panePrs($)
+  const stands = read ? standsLines(read, STAGE_LABELS[currentStage(read, evidence, (await state.readProfile(files, me, chosen)).role, prs, chosen)], me, prs) : []
+  intentView = { key, slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now), intent, stands }
 }
 
 // The tracked intent from its own files, for a checkout outside the pane's (a write into a folder the
@@ -2016,6 +2035,16 @@ function paneView(el, $, model, columns, surface, crew = []) {
       const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackKey($, key), true) })] : []
       if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
       if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: `Not in this checkout yet: pull ${intent.base} to work on it here.` }))
+      // Where it stands, from its files: what "See how the work is going" used to ask the session for.
+      if (intentView.stands.length > 0) {
+        rows.push(
+          section(el, 'intent-stands', [
+            label(el, 'intent-stands-label', 'Where it stands', width),
+            ...intentView.stands.map((line, index) => Text({ key: `stands-${index}`, wrap: 'wrap', children: line })),
+            Text({ key: 'stands-note', color: QUIET, wrap: 'wrap', children: 'From its files; what is met is what progress.md says.' }),
+          ]),
+        )
+      }
       const today = intentToday.slice(0, 5)
       rows.push(
         section(el, 'intent-today', [
@@ -2037,7 +2066,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
               )),
         ]),
       )
-      if (isHere && model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
+      if (isHere && model.next && !model.next.look) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
       const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
       // Stop tracking keeps the view on this intent, which then offers Work on this here again.
       const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = key), untrackHere($)), true) })
@@ -2158,7 +2187,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
       borderStyle: 'round',
       borderColor: LIME,
       paddingX: 1,
-      children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })),
+      children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: next.look === undefined ? press($, () => doNext($, next), next.work?.kind === 'intent') : viewIntent($, next.look, 'home') })),
     })
     rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card]))
   }
