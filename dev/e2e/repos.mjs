@@ -1316,7 +1316,7 @@ const refresh = async engine => {
   const again = await tool(engine, { action: 'add', folder: s2 })
   const nowhere = await tool(engine, { action: 'add', folder: BASE })
   const unnamed = await tool(engine, { action: 'add' })
-  expect('a folder already listed, a path in no checkout and no folder at all store nothing and say why', JSON.stringify(engine.store.get(KEPT)) === JSON.stringify([s2]) && [again, nowhere, unnamed].every(text => text !== '' && !/^Added/.test(text)), [again, nowhere, unnamed])
+  expect('a folder already listed, a path in no checkout and no folder at all store nothing, each with a reason of its own', JSON.stringify(engine.store.get(KEPT)) === JSON.stringify([s2]) && [again, nowhere, unnamed].every(text => text !== '' && !/^Added/.test(text)) && new Set([again, nowhere, unnamed]).size === 3, [again, nowhere, unnamed])
 
   const removed = await tool(engine, { action: 'remove', folder: 's2' })
   await engine.flush()
