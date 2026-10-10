@@ -17,7 +17,7 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 | Above the prompt | One line: what needs you, a running window, or just the name; then ☾ away, ⤢ open the pane, ✕ hide it until something is new. |
 | Pop-ups | A known trap with its fix, a build that really failed, a merge that dropped your edits, a worker gone quiet, a thin worker brief. |
 
-On a PC that also runs [week-calendar](../week-calendar/README.md), the pane's line under the title adds this week's figures: PRs merged and productive agent time.
+On a machine that also runs [week-calendar](../week-calendar/README.md), the pane's line under the title adds this week's figures: PRs merged and productive agent time.
 
 ## What to work on
 
@@ -36,7 +36,7 @@ Clicking an issue opens its card: **Start an intent**, **Open on GitHub** or **C
 
 ## Proof
 
-Ather reads evidence from tool output, never from what the session says: an S2Editor build's own Result line, a test run whose tests passed (no tests, a failure or a non-zero exit is a fail), a started PIE or test simulation run, and a read-back from the server that was written to. A tech artist's own Editor check is `/ather checked`. Proof is kept with the intent for a day, so yesterday's build still counts this morning; each record names the session that produced it, and the Intent view names any other session's. Until you say your role, any role's proof counts.
+Ather reads evidence from tool output, never from what the session says: an S2Editor build's own Result line, a test run whose tests passed (no tests, a failure or a non-zero exit is a fail), a started PIE or test simulation run, and a read-back from the server that was written to. A tech artist's own Editor check is `/ather checked`. Proof is kept with the intent for a day, so yesterday's build still counts this morning; each record names the session that produced it, and the Intent view names any other session's. Until you say your role, any role's proof counts. That is S2; in any other repository proof comes from the gates in its profile (see In a repository that is not S2).
 
 ## Commands
 
@@ -47,8 +47,8 @@ Ather reads evidence from tool output, never from what the session says: an S2Ed
 | `/ather pick [words]`, `/ather intent <name>` | Everything open; an exact intent name works on it here, other words show the intent they match |
 | `/ather untrack` | Stop tracking this session's intent (not while an away window runs) |
 | `/ather issues`, `/ather issue <number>` | Your GitHub issues; start one |
-| `/ather role <in your words>` | Designer, tech artist or engineer |
-| `/ather checked` | Record your own Editor check |
+| `/ather role <in your words>` | Your role: designer, tech artist or engineer in S2; engineer, designer or product in a web repository |
+| `/ather checked` | Record your own Editor check (S2 only) |
 | `/ather repos`, `/ather repos add <folder>`, `/ather repos remove <folder or name>` | The folders Ather lists (see Several repositories); add or remove one |
 | `/ather setup` | Add the intent structure to this repository (see Setting up a repository) |
 | `/away [8h \| 30m \| until 9am \| tonight \| until done] [goal]` | Hand over while you are away |
@@ -58,7 +58,7 @@ Anything else you type after `/ather` or under Other goes to the session as a qu
 
 ## Install
 
-Claude Code 2.1.287 or later, in an S2 checkout:
+Claude Code 2.1.287 or later. The commands are the same on macOS and Windows, and the mod works in any repository, not only an S2 checkout:
 
 ```bash
 claude plugin marketplace add AskTinNguyen/ather-mods
@@ -67,11 +67,38 @@ claude plugin install ather-automata@ather --scope user
 
 Settings: `briefGate` (`warn`, `enforce` or `off`) for worker briefs that lack paths, acceptance checks or the shared-tree rule; `repos` for more checkouts this session works with (below); folders can also be added from the pane, with no setting to edit.
 
+## In a repository that is not S2
+
+A web app, a Python service, anything with a `package.json` or a `pyproject.toml`, or neither:
+
+1. Install the mod (above). Once per machine.
+2. Open a session in the repository and type `/ather setup`.
+3. The session reads the repository and proposes its areas and its gates (the commands that count as proof). Confirm or change them in one answer.
+4. Have the session commit what it added and open a pull request. Merge it.
+5. Start a new session. The profile is read when a session starts.
+6. Type `/ather`.
+
+What differs from S2:
+
+- **Roles:** Engineer (tests, lint and build), Designer (the browser check) and Product (the build and the browser check). Say yours with `/ather role`.
+- **Proof** comes only from the gates in `.ather/profile.json`, read from tool output. There is no Editor check: `/ather checked` belongs to S2.
+- **The base branch**, the one your team merges into: `base` in the profile when it is there, else the remote's default branch, else `main`. The team's intents are read from it, it is the branch fetched, and a push to it is held while you are away. Where this page says `main` or `origin/main`, read your base branch.
+
+**How a gate's command is matched.** A command proves a gate when it is the gate's command or starts with it: `npm test -- --watch=false` proves a gate written `npm test`. An environment prefix (`CI=1 npm test`) is dropped first.
+
+- When several gates match, the one with the longest command is the gate, so the order of the gates does not matter.
+- A gate whose first word is a program's name (`python3`, `pnpm`) is proved by that program wherever it runs from: `.venv/bin/python scripts/validate.py` and a Windows `python.exe` prove `python3 scripts/validate.py`. `python`, `python3` and `python3.12` are one program.
+- A gate whose first word is a path (`./scripts/check.sh`) is compared as written.
+- A gate written `cd web && pnpm test` is proved by those two commands run one after the other, joined with `&&`.
+- Anything else does not match. `pnpm --dir web test` is not `pnpm test`: when that is how you run it, write a gate for it.
+
+**On macOS.** Use the Node version the repository's `.nvmrc` names; a newer default Node can fail a test runner that passes in CI. A gate written `python3 …` is proved by the virtualenv's python too.
+
 ## Several repositories
 
 One session can work with several checkouts, its **workspace**: the checkout it is opened in, the folders the `repos` setting names (separated by `;` or new lines, absolute or relative to the session folder), and, for a session opened in a folder that is not itself a checkout, each checkout directly inside it. At most 8.
 
-Folders can also be added from the pane: **Repositories**, at the foot of Home, lists the workspace's folders and has **Add a folder** and, on those added there, **Remove** (`/ather repos`, `/ather repos add <folder>`, `/ather repos remove <folder>` do the same). The session can do it too: ask it in words ("add the lancaster repository to Ather") and it adds the folder with its `repos` tool; the pane redraws by itself. An added folder is kept for the PC, so every session there lists it, after the `repos` setting's folders and inside the same 8. A change applies at once in the session that made it; other sessions pick it up when they next start. Removing a folder deletes nothing on disk and nothing Ather kept for it.
+Folders can also be added from the pane: **Repositories**, at the foot of Home, lists the workspace's folders and has **Add a folder** and, on those added there, **Remove** (`/ather repos`, `/ather repos add <folder>`, `/ather repos remove <folder>` do the same). The session can do it too: ask it in words ("add the lancaster repository to Ather") and it adds the folder with its `repos` tool; the pane redraws by itself. An added folder is kept for the machine, so every session there lists it, after the `repos` setting's folders and inside the same 8. A change applies at once in the session that made it; other sessions pick it up when they next start. Removing a folder deletes nothing on disk and nothing Ather kept for it.
 
 The worktrees of each of those checkouts are found on their own (git is asked, nothing is searched), up to 24 checkouts in all. A checkout and its worktrees share one `origin/main`, so main's intents are listed once and main is fetched once; a worktree adds only the intents it has changed or made itself, under its folder's name.
 
@@ -151,7 +178,8 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/setup.test.mj
 
 ## Changes
 
-- **0.2.5** Several repositories. Issue lists and PR states are kept per repository (named by the origin URL), and an intent's proof, today's changes and "Continue …" per checkout (the repository and its folder), so an S2 checkout and a web repository on one PC no longer show each other's issues, mix PR numbers or share proof for an intent of the same name, and two clones of one repository each keep their own proof and "Continue …"; what was kept before carries over once. A session's workspace (its checkout, the new `repos` setting, or the checkouts inside the folder it is opened in) shows in one pane: every checkout's intents, issues and PRs, each with its repository's name. Folders can also be added from the pane (Repositories, at the foot of Home, or `/ather repos add <folder>`), or by asking the session, which has a `repos` tool: they are kept for the PC and apply at once. Two checkouts that would share a name (two clones of one repository, say) are named by their folders, and a repository's issues are listed once; a checkout that is not on GitHub simply has none. The workspace stays the one the session was opened in, wherever its shell moves, and a checkout reached through a symbolic link is the same checkout. A command is judged and proved by the checkout it runs in, with that checkout's pack, and an intent in another checkout can be tracked there. The newer views follow: a decision on another checkout's intent is answered in place and names that checkout's findings file, grouped lists and desktop rows carry the repository's name, a waiting worker's Editor lock is read in the checkout its command runs in, and the Work question lists the same intent name in two checkouts as two choices. Setting up follows too: `/ather` asks to set up intents only where no checkout in the workspace has any, and the prompt `/ather setup` hands the session names the folder it is for, the session's own. A checkout's worktrees are found on their own, up to 24 checkouts in all: main's intents are listed once and fetched once, and a worktree adds only its own, under its folder's name. The first fetch after the pane opens is no longer lost: Claude Code takes it back with the draw that started it, and it is now tried again within seconds instead of showing as a failed sync for ten minutes. One checkout looks and behaves as before; the Paseo version keeps one checkout.
+- **0.2.6** Repositories that are not S2. The branch a team merges into is read from the repository (`base` in `.ather/profile.json`, else the remote's default branch, else `main`): the team's intents, the fetch, the held push and what is said all follow it, so a team on `develop` sees its own work. A gate is matched the way people type its command: the longest matching gate wins wherever it stands in the profile, `.venv/bin/python …` proves a gate written `python3 …`, and a gate may be written `cd <folder> && <command>`. An Acceptance section written as a table is read like a list. This page and `SETUP.md` say what a person on macOS or outside S2 does, and `/ather setup` names the `.claude/skills/intent` link. A repository on `main` whose gates already matched sees no change.
+- **0.2.5** Several repositories. Issue lists and PR states are kept per repository (named by the origin URL), and an intent's proof, today's changes and "Continue …" per checkout (the repository and its folder), so an S2 checkout and a web repository on one machine no longer show each other's issues, mix PR numbers or share proof for an intent of the same name, and two clones of one repository each keep their own proof and "Continue …"; what was kept before carries over once. A session's workspace (its checkout, the new `repos` setting, or the checkouts inside the folder it is opened in) shows in one pane: every checkout's intents, issues and PRs, each with its repository's name. Folders can also be added from the pane (Repositories, at the foot of Home, or `/ather repos add <folder>`), or by asking the session, which has a `repos` tool: they are kept for the machine and apply at once. Two checkouts that would share a name (two clones of one repository, say) are named by their folders, and a repository's issues are listed once; a checkout that is not on GitHub simply has none. The workspace stays the one the session was opened in, wherever its shell moves, and a checkout reached through a symbolic link is the same checkout. A command is judged and proved by the checkout it runs in, with that checkout's pack, and an intent in another checkout can be tracked there. The newer views follow: a decision on another checkout's intent is answered in place and names that checkout's findings file, grouped lists and desktop rows carry the repository's name, a waiting worker's Editor lock is read in the checkout its command runs in, and the Work question lists the same intent name in two checkouts as two choices. Setting up follows too: `/ather` asks to set up intents only where no checkout in the workspace has any, and the prompt `/ather setup` hands the session names the folder it is for, the session's own. A checkout's worktrees are found on their own, up to 24 checkouts in all: main's intents are listed once and fetched once, and a worktree adds only its own, under its folder's name. The first fetch after the pane opens is no longer lost: Claude Code takes it back with the draw that started it, and it is now tried again within seconds instead of showing as a failed sync for ten minutes. One checkout looks and behaves as before; the Paseo version keeps one checkout.
 - **0.2.4** `/ather setup` installs from the public intent repository. The intent skill and the project contract (`docs/intent/README.md`) now come from [AskTinNguyen/intent](https://github.com/AskTinNguyen/intent), not from a zip in the plugin. The session clones that repository, copies its `skills/intent/` unchanged into `.agents/skills/intent/`, and drafts the contract (areas, proofs, merge authority) the way the skill's own setup says; the profile repeats the contract's areas and gates, and you still confirm everything in one question before anything is written. The plugin keeps only `templates/intent-setup/SETUP.md` and `profile.example.json`; the zip and the plugin's copy of the skill are gone. A repository that lacks only the profile, the ignore line or the pointer is not sent to GitHub, and an `AGENTS.md` or `CLAUDE.md` that points at `docs/intent/README.md` (the line `/intent init` adds) counts as the pointer. A repository that an earlier version set up is left as it is.
 - **0.2.3** Titles keep their characters: when the session's record is read through Windows PowerShell (no grep on the machine), emoji and dashes in a session's title came back as "?"; the search now writes and reads UTF-8.
 - **0.2.2** Set up intents in a repository. Where there is no `docs/intent` folder, `/ather` no longer only says "none here": it asks one question, Set up intents here or Not now. `/ather setup` hands the session one prompt that names `templates/intent-setup.zip` in the plugin's folder (a neutral intent skill, a `docs/intent/README.md`, an example `.ather/profile.json`, the `AGENTS.md` paragraph, and a `SETUP.md` with the steps) and the pieces missing here by path, and answers "Asked the session to set up intents here. To add: … It asks you before it writes anything." The session reads the repository, proposes areas and gates, asks you to confirm them in one question, then writes; it never overwrites a file, leaves existing intents alone and does not commit until told. A repository that has some of the pieces is handed only the others; with nothing missing the answer is "Intents are set up here: pack web, 4 gates, 9 areas. Nothing to add." and nothing is sent. Once the pieces are there, `/ather` opens the pane in the same session with the new profile's gates, and the `profile` tool lists its areas. Left unanswered, `/ather` says there are no intents here and names `/ather setup`; `/away` answers as before. The zip can be given to a repository by hand.
@@ -166,7 +194,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/setup.test.mj
 - **0.1.2** Track guard: looking at an intent never tracks it (rows and matching words open its view; Work on this here tracks it), Stop tracking and `/ather untrack` undo it with the proof kept, only a session's own orchestration tracks by writing (its main conversation writing an intent's prompt.md or log.md), a second session on an intent sees "Also tracked in …", proof names the session that produced it, and /clear or an adopted window says which intent is still tracked.
 - **0.1.1** Every worker counted, true clocks: the worker list shows every agent Claude Code lists (those another worker started too), a worker's clock ends at its turn's end, a worker running before Ather loaded takes its start and model from Claude Code's record, and a worker's kind comes from its description first.
 - **0.1.0** Web projects: one plugin with packs. S2's behaviour moved unchanged into the Unreal pack; a web pack (piloted on Thính, han-viet) reads `.ather/profile.json` gates as proof from tool output, holds production deploys, migrations, secrets, publishes and infrastructure applies while you are away, merges with proof under `with-proof`, knows nine web traps, and offers web skills under Create.
-- **0.0.7** This week's figures from week-calendar (PRs merged, productive agent time) on the pane's meta line, when that plugin runs on the PC.
+- **0.0.7** This week's figures from week-calendar (PRs merged, productive agent time) on the pane's meta line, when that plugin runs on the machine.
 - **0.0.4** ✦ Create: the skills that make content in the Unreal Editor, grouped by what is made (VFX and look, characters and animation, AI and encounters, enemies, levels and cinematics, audio), led by what they do, three per group with More for the rest, ordered by role; each asks what you want first, records an intent and respects the Editor lock.
 - **0.0.3** The intent at a glance: after a turn that changed the intent, one line above the prompt (ticked A12 · new decision F-11) with See; the Intent view lists today's changes (✓ done, ◆ yours, ✎ changed) and explains any of them on a click.
 - **0.0.2** The worker squad: each background worker with an avatar (body and colour for its kind, a ring for its state, the prop it holds for what it is doing), a trail of what finished workers did, a summary strip (checklist, workers running, decisions waiting on you) and the proof in colour.

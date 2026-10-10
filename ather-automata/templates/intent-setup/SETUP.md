@@ -73,6 +73,16 @@ line and the pointer paragraph.
      and `ui`;
    - `proves`: one line that says what the command checks.
 
+   Write each command the way people here really type it. A command proves a
+   gate when it is the gate's command or starts with it. A gate whose first
+   word is a program's name (`python3`, `pnpm`) is proved by that program
+   wherever it runs from, so `.venv/bin/python scripts/validate.py` proves
+   `python3 scripts/validate.py`. A gate whose first word is a path
+   (`./scripts/check.sh`) is compared as written. A command run from a
+   folder is written `cd <folder> && <command>`. Another spelling does not
+   match: `pnpm --dir web test` is not `pnpm test`, so write the gate the
+   way it is run.
+
 4. **Ask once.** Show what you will write and ask the person to confirm or
    change it, in one question: the gates, and for a contract you drafted, its
    short summary (areas, proofs, merge authority, and what you could not
@@ -86,6 +96,17 @@ line and the pointer paragraph.
    `../../.agents/skills/intent`. Where links do not work (Windows without
    developer mode, for example), copy the folder instead.
 
+   A link made on macOS or Linux is committed as a link. On macOS and Linux
+   a teammate needs nothing. On Windows without Developer Mode or
+   `git config core.symlinks true`, git checks it out as a text file and the
+   skill does not load: turn links on and check out again, or copy the
+   folder. Say this in your report when you made a link.
+
+   When the repository has a `skills-lock.json` (the skills CLI writes it),
+   the intent skill needs its entry there. Add it the way that file's other
+   entries were made. When you cannot, tell the person the entry is missing.
+   Do not invent a hash.
+
 6. **Write the readme.** Write the confirmed contract to
    `docs/intent/README.md`. Skip this step when the file was already there.
 
@@ -94,10 +115,13 @@ line and the pointer paragraph.
    - `version`: `1`;
    - `pack`: `unreal` when a `*.uproject` file is at the repository root,
      `web` otherwise;
-   - `gates`: the confirmed gates;
+   - `gates`: the confirmed gates, in any order: when several match a
+     command, the one with the longest command is the gate;
    - `mergePolicy`: `hold`;
    - `areas`: the area names in the contract, spelled the same;
-   - `base`: only when the team merges into a branch that is not the remote's default branch, that branch's name.
+   - `base`: the branch the team merges into, only when that is not the
+     remote's default branch. Without it Ather uses the remote's default
+     branch, and `main` when the remote names none.
 
 8. **Add the ignore line.** Add `.ather/local/` on a line of its own to
    `.gitignore`. Create the file when there is none.
@@ -115,8 +139,9 @@ line and the pointer paragraph.
    with the paragraph. A file that already points at `docs/intent/README.md`
    or at the skill needs nothing.
 
-10. **Report.** List the files you added and the lines you added to existing
-    files. Leave them uncommitted for the person to read.
+10. **Report.** List the files you added, the `.claude/skills/intent` link
+    among them (or the copy, where you made one), and the lines you added to
+    existing files. Leave them uncommitted for the person to read.
 
 ## After setup
 

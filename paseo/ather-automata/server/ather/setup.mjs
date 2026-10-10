@@ -16,7 +16,7 @@ export const INTENT_REPOSITORY = 'https://github.com/AskTinNguyen/intent'
 
 /** @type {readonly Piece[]} */
 export const SETUP_PIECES = [
-  { id: 'skill', path: '.agents/skills/intent/', from: 'repo', what: 'the intent skill: skills/intent/ of the public repository, copied unchanged' },
+  { id: 'skill', path: '.agents/skills/intent/', from: 'repo', what: 'the intent skill: skills/intent/ of the public repository, copied unchanged, with the link .claude/skills/intent that lets Claude Code load it' },
   { id: 'readme', path: 'docs/intent/README.md', from: 'repo', what: "the project contract (areas, proofs, merge authority), drafted the way the skill's references/setup.md says" },
   { id: 'profile', path: '.ather/profile.json', from: 'plugin', what: 'the pack, the gates and the areas' },
   { id: 'ignore', path: '.gitignore', from: 'plugin', what: 'the line that ignores local state' },

@@ -1592,7 +1592,7 @@ async function addFolder($, text) {
   if (named >= MAX_CHECKOUTS) return `Not added: ${MAX_CHECKOUTS} checkouts are listed already, the most one session works with.`
   await state.addTraced(files, root)
   await applyFolders($)
-  return `Added ${root}. It is listed here now, and in every session on this PC from its next start.`
+  return `Added ${root}. It is listed here now, and in every session on this machine from its next start.`
 }
 
 // Takes a kept folder out, named by its folder (any spelling that lands where it does, or a folder inside its
@@ -1649,7 +1649,7 @@ async function reposCommand($, rest) {
   if (verb === 'add') return addFolder($, folder)
   if (verb === 'remove') return removeFolder($, folder)
   if (await hasPane($)) return openPane($, 'repos')
-  return [...(await sourceLines($)), 'Add one with /ather repos add <folder>; it is kept for this PC.'].join('\n')
+  return [...(await sourceLines($)), 'Add one with /ather repos add <folder>; it is kept for this machine.'].join('\n')
 }
 
 // The folders listed, one line each, for a reply in words.
@@ -1957,7 +1957,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'repos') {
-    rows.push(masthead(el, [label(el, 'brand', 'Repositories', width), Text({ key: 'title', bold: true, children: 'Folders Ather lists' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: 'A folder you add is kept for this PC and listed at once, here and in every new session.' })], surface))
+    rows.push(masthead(el, [label(el, 'brand', 'Repositories', width), Text({ key: 'title', bold: true, children: 'Folders Ather lists' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: 'A folder you add is kept for this machine and listed at once, here and in every new session.' })], surface))
     rows.push(
       section(
         el,
