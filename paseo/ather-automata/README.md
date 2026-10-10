@@ -47,7 +47,6 @@ Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, o
 - If the plugin stops, Claude agents created with its ask rules still prompt for those commands, and the prompts wait for you.
 - "Also tracked in … · active Nm ago" can be a little off: `state.mjs` keeps one "last active" time per process, and one plugin process serves every agent.
 - A worker started by another worker is listed, but not as "started by …" (Claude Code's record has `spawnDepth` for that).
-- Setting up a repository is not offered on the Paseo panel yet: `/ather setup` works in Claude Code only, so set a repository up there, or by hand: the mod's `templates/intent-setup/SETUP.md` has the steps.
 - Not here yet: the issue card (Open on GitHub, Copy link; issues start from the Work list) and the newcomer tour toast (the tour is the Next row and `/ather tour`).
 
 ## Develop
