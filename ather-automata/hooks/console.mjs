@@ -191,6 +191,7 @@ function repo($, root) {
     read: path => $.fs.read(path).then(text => (typeof text === 'string' ? text : null), () => null),
     list: path => $.fs.list(path),
     mtime: path => $.fs.stat(path).then(stat => stat.mtimeMs, () => 0),
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
   }
 }
 

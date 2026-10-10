@@ -1123,6 +1123,16 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect(elsewhere.calls.map(args => args[0])).toEqual(['rev-parse'])
   })
 
+  test("a checkout reached through a link is still a checkout of its own: git names its real folder, the session its link", async () => {
+    // macOS: /var/folders/… is a link to /private/var/folders/…, and `git rev-parse --show-toplevel` answers with the real one.
+    const linked = fakeRepo({ top: '/private/var/x/S2', local: { 'docs/intent/a/prompt.md': '# A\n\n- Status: active\n' } })
+    const read = await readTeam({ ...linked.repo, real: async folder => (folder === '/var/x/S2' ? '/private/var/x/S2' : folder) }, '/var/x/S2', { cache: EMPTY_CACHE, pinned: null })
+    expect([read.isRepo, read.cache.main !== null]).toEqual([true, true])
+    // Without a way to resolve the folder (Paseo), the folders are compared as given, as before.
+    const unresolved = await readTeam(fakeRepo({ top: '/private/var/x/S2', local: {} }).repo, '/var/x/S2', { cache: EMPTY_CACHE, pinned: null })
+    expect(unresolved.isRepo).toBe(false)
+  })
+
   test('the fetch: narrow refspec, no tags; due when the pane is first drawn, then at most every ten minutes, one at a time (A3)', () => {
     expect(FETCH_ARGS).toEqual(['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', '+refs/heads/main:refs/remotes/origin/main'])
     expect(GIT_ENV).toEqual({ GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' })
