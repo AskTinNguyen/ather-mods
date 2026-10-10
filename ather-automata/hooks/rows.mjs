@@ -212,12 +212,13 @@ const decisionBody = (el, isClicked, one, answers, width, answer) => {
 // Needs you's rows, as decide.mjs needsView lays them out: one per thing, except an intent's several
 // decisions, which wait as one row that opens them (D7); each row "✓ Decided" in place, opened with its
 // answers, or its one line; then "▸ N decided". `key`: the next digit, shared with Needs attention.
-// `queued`: the ids handed over while a turn runs, which the session does not have yet.
+// `queued`: the ids handed over while a turn runs, which the session does not have yet. `onNow`: for such a
+// row, the press that stops the running turn so the session reads it now, where that is offered (the review).
 /**
  * @param {any} el @param {boolean} isClicked
- * @param {{ items: readonly Item[], open: readonly Item[], queued?: ReadonlySet<string>, opened: ReadonlySet<string>, width: number, key: () => string | undefined, onAct: (one: Item) => () => void, onToggle: (slug: string) => () => void, answer: Answering }} spec
+ * @param {{ items: readonly Item[], open: readonly Item[], queued?: ReadonlySet<string>, onNow?: (one: Item) => (() => void) | undefined, opened: ReadonlySet<string>, width: number, key: () => string | undefined, onAct: (one: Item) => () => void, onToggle: (slug: string) => () => void, answer: Answering }} spec
  */
-export const needsRows = (el, isClicked, { items, open, queued = new Set(), opened, width, key, onAct, onToggle, answer }) => {
+export const needsRows = (el, isClicked, { items, open, queued = new Set(), onNow, opened, width, key, onAct, onToggle, answer }) => {
   const { view } = answer
   const fresh = new Map(view.fresh.map(one => [one.id, one]))
   /** @param {Item} one @param {boolean} isFirst @param {string} [slug] */
@@ -228,7 +229,10 @@ export const needsRows = (el, isClicked, { items, open, queued = new Set(), open
     if (state === 'decided') return el.Box({ key: `row-item-${one.id}`, marginTop, children: [el.Text({ key: `item-${one.id}-done`, color: DONE, children: fit(`${decidedText(fresh.get(one.id)?.answer ?? '')} · ${answeredName(one)}${queued.has(one.id) ? ' · queued until this turn ends' : ''}`, rowWidth) })] })
     const isShown = state === 'opened' && one.answers
     const press = view.opens.has(one.id) ? answer.onOpen(isShown ? NONE_OPEN : one.id) : onAct(one)
-    return choiceRow(el, { key: `item-${one.id}`, title: slug ? one.title.replace(`${slug} · `, '') : one.label, detail: isShown ? undefined : slug ? one.detail : (one.detail ?? (one.title === one.label ? '' : one.title)), mark: slug ? '·' : '◆', marginTop, hotkey: key(), isSent: !open.includes(one), isQueued: queued.has(one.id), autoFocus: view.isFocusFree && one === open[0], width: rowWidth, onPress: press, below: isShown && one.answers ? decisionBody(el, isClicked, one, one.answers, rowWidth - 2, answer) : undefined }, isClicked)
+    // Never done for the person: stopping a turn is their own press.
+    const now = queued.has(one.id) ? onNow?.(one) : undefined
+    const sendNow = now ? el.Box({ key: `now-${one.id}`, children: [el.Button({ key: `now-${one.id}-press`, label: 'Stop the running turn and send now', onPress: now })] }) : undefined
+    return choiceRow(el, { key: `item-${one.id}`, title: slug ? one.title.replace(`${slug} · `, '') : one.label, detail: isShown ? undefined : slug ? one.detail : (one.detail ?? (one.title === one.label ? '' : one.title)), mark: slug ? '·' : '◆', marginTop, hotkey: key(), isSent: !open.includes(one), isQueued: queued.has(one.id), autoFocus: view.isFocusFree && one === open[0], width: rowWidth, onPress: press, below: isShown && one.answers ? decisionBody(el, isClicked, one, one.answers, rowWidth - 2, answer) : sendNow }, isClicked)
   }
   const rows = view.blocks.flatMap((block, at) => {
     const [only] = block.items

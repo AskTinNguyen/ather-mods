@@ -1409,6 +1409,53 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await engine.end('other')
 }
 
+{
+  // "I'm back" waits behind a turn: the pane stays and offers to stop that turn. Only that press stops it.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0022' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('away', '4h')
+  await engine.flush()
+  const running = await engine.turnStart()
+  await engine.command('ather')
+  const closesBefore = engine.record.closes.length
+  const submitsBefore = engine.record.submits.length
+  buttonOf(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'end')?.props.onPress()
+  await engine.flush()
+  const home = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const stop = nodesOf(home).find(node => node.type === 'Button' && /^now-review:\d+-press$/.test(node.props?.key ?? ''))
+  expect('queued mid-turn, the pane stays open and the review reads queued', engine.record.closes.length === closesBefore && nodesOf(home).some(node => node.type === 'Button' && /^⏳ queued · Review/.test(node.props?.label ?? '')), [engine.record.closes.length - closesBefore, nodesOf(home).filter(node => node.type === 'Button').map(node => node.props.label)])
+  expect('it offers to stop the running turn and send now; no turn is stopped unasked', stop?.props.label === 'Stop the running turn and send now' && engine.record.aborts.length === 0 && engine.store.get(`away:${sid}`)?.phase === 'review', [stop?.props.label, engine.record.aborts])
+  stop?.props.onPress()
+  await engine.flush()
+  expect('that press stops the running turn, by its id', JSON.stringify(engine.record.aborts) === JSON.stringify([running]), [engine.record.aborts, running])
+  expect('the session then gets "I am back" once, and the window closes', engine.record.submits.slice(submitsBefore).filter(text => /^I am back\./.test(text)).length === 1 && engine.queued().length === 0 && engine.store.get(`away:${sid}`) === undefined, [engine.record.submits.slice(submitsBefore), engine.store.get(`away:${sid}`)])
+  const after = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  expect('nothing offers to stop a turn once it is delivered', !nodesOf(after).some(node => /^now-/.test(node.props?.key ?? '')), nodesOf(after).filter(node => node.type === 'Button').map(node => node.props.key))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
+{
+  // With the session idle "I'm back" goes at once: the pane closes as before, and nothing offers to stop a turn.
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0023' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('away', '4h')
+  await engine.flush()
+  await engine.command('ather')
+  const closesBefore = engine.record.closes.length
+  buttonOf(await engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'end')?.props.onPress()
+  await engine.flush()
+  expect('idle: the session has "I am back" at once, the window is closed, the pane closes, no turn is stopped', /^I am back\./.test(engine.record.submits.at(-1) ?? '') && engine.store.get(`away:${sid}`) === undefined && engine.record.closes.length === closesBefore + 1 && engine.record.aborts.length === 0 && lastToast(engine) === 'Ather: Sent to the session.', [engine.record.submits.at(-1), engine.store.get(`away:${sid}`), lastToast(engine)])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

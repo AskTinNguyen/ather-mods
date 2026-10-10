@@ -458,6 +458,8 @@ export function register(on, options) {
 async function openConsole($, folder) {
   sent.clear()
   outbox.reset()
+  // No turn has been seen to start in this session yet: one already running shows a late prompt as queued (LATE_MS).
+  turnRunning = ''
   paneMode = 'home'
   isIssuesWarned = false
   isWhoWarned = false
@@ -935,9 +937,24 @@ async function act($, one) {
     // review, not at the press: a press while a turn runs waits for that turn's end, and until then the
     // session has not read "I am back", so merges stay held and its questions still go to the ledger.
     const handed = handOff($, [one.id], one.prompt, () => state.closeAway(io($)))
-    return handed === 'queued' ? 'Queued until this turn ends. The away window stays as it is until the session has it: merges are still held.' : toldText(handed, 'Sent to the session.')
+    return handed === 'queued' ? `Queued until this turn ends. The away window stays as it is until the session has it: merges are still held.${(await hasPane($)) ? ' To send it now, stop the running turn here.' : ''}` : toldText(handed, 'Sent to the session.')
   }
   return toldText(handOff($, [one.id], one.prompt, () => state.settleItem(io($), one)), 'Sent to the session.')
+}
+
+// "I'm back" waits behind a running turn: on the person's own press, and only then, that turn is stopped.
+// The engine then starts the turn of the review that already waits; nothing is submitted a second time.
+/** @param {Engine} $ */
+async function sendNow($) {
+  const turnId = turnRunning
+  if (turnId === '') return 'No turn is running now: the session gets it as it is.'
+  await $.turn.abort({ turnId })
+  return 'Stopped the running turn: the session reads "I am back" now.'
+}
+
+// The review waits behind a running turn: the pane stays, since it has the way to send it now.
+function isReviewQueued() {
+  return outbox.queued().some(id => id.startsWith('review:'))
 }
 
 // "I'm back": ends the window and hands its review to the session in one step.
@@ -1695,12 +1712,13 @@ async function openPane($, mode) {
   return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : mode === 'repos' ? 'Repositories: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
 }
 
-/** @param {Engine} $ @param {() => Promise<string>} run @param {boolean} keepOpen */
+// `keepOpen`: the pane stays after the press; a function is asked once the press has run.
+/** @param {Engine} $ @param {() => Promise<string>} run @param {boolean | (() => boolean)} keepOpen */
 function press($, run, keepOpen) {
   return () =>
     void run()
       .then(async text => {
-        if (!keepOpen) await $.ui.close({ id: PANE_ID }).catch(() => undefined)
+        if (!(typeof keepOpen === 'function' ? keepOpen() : keepOpen)) await $.ui.close({ id: PANE_ID }).catch(() => undefined)
         $.ui.toast(`Ather: ${text}`)
       })
       .catch(error => $.ui.toast(`Ather: ${String(error)}`))
@@ -1995,7 +2013,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     // Nothing is focused: one stray Enter must not end the window and lift its holds.
     const [end] = model.items
     rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: fit(header.title === 'Ather' ? 'The session is working' : header.title, width) }), Text({ key: 'status', children: fit(`🌙 ${header.progress}`, width) }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: `So far: ${header.sentence}.` })], surface))
-    if (end) rows.push(section(el, 'end', [choice(el, { key: 'end', title: end.title, hotkey: 'e', width, onPress: press($, () => act($, end), false) })]))
+    if (end) rows.push(section(el, 'end', [choice(el, { key: 'end', title: end.title, hotkey: 'e', width, onPress: press($, () => act($, end), isReviewQueued) })]))
     if (!isClicked) rows.push(section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Esc closes' })]))
     return Box({ flexDirection: 'column', children: rows })
   }
@@ -2175,7 +2193,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
     rows.push(
       section(el, 'needs', [
         label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width, LIME),
-        ...needsRows(el, isClicked, { items: model.items, open: model.open, queued: new Set(outbox.queued()), opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
+        ...needsRows(el, isClicked, { items: model.items, open: model.open, queued: new Set(outbox.queued()), onNow: one => (one.kind === 'review' ? press($, () => sendNow($), true) : undefined), opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), one.kind === 'review' ? isReviewQueued : false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
       ]),
     )
   }

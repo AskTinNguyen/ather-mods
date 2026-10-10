@@ -224,6 +224,9 @@ const el = Object.fromEntries(['Box', 'Text', 'Button', 'Input'].map(type => [ty
 /** @param {any} node @returns {string[]} */
 const labels = node => (Array.isArray(node) ? node.flatMap(labels) : !node || typeof node !== 'object' ? [] : [...(node.type === 'Button' ? [String(node.props.label)] : []), ...labels(node.props?.children), ...labels(node.props?.below)])
 
+/** @param {any} node @returns {any[]} */
+const buttons = node => (Array.isArray(node) ? node.flatMap(buttons) : !node || typeof node !== 'object' ? [] : [...(node.type === 'Button' ? [node] : []), ...buttons(node.props?.children), ...buttons(node.props?.below)])
+
 describe('a row handed over while a turn runs', () => {
   test('reads "queued", not "sent", until the session has it', () => {
     const row = { key: 'next', title: 'Prove it', width: 60, onPress: () => undefined }
@@ -243,5 +246,25 @@ describe('a row handed over while a turn runs', () => {
     const answer = { view: needsView(items, open, { ...FRESH_ANSWERS }, new Set(), 0, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined }
     const drawn = labels(needsRows(el, false, { items, open, queued: new Set(['review:1']), opened: new Set(), width: 80, key: () => undefined, onAct: press, onToggle: press, answer: /** @type {any} */ (answer) }))
     expect(drawn).toEqual(['⏳ queued · Review: 2 decisions', 'See what a merge lost'])
+  })
+
+  test('the queued review, and only it, offers to stop the running turn; nothing offers it when nothing waits', () => {
+    /** @type {any[]} */
+    const items = [
+      { kind: 'review', id: 'review:1', label: 'Review: 2 decisions', title: 'Review', question: '', prompt: 'I am back.' },
+      { kind: 'lost', id: 'lost', label: 'See what a merge lost', title: 'A merge dropped your edits', question: '', prompt: '' },
+    ]
+    const press = () => () => undefined
+    let stops = 0
+    const onNow = (/** @type {any} */ one) => (one.kind === 'review' ? () => void (stops += 1) : undefined)
+    const answer = /** @type {any} */ ({ view: needsView(items, [], { ...FRESH_ANSWERS }, new Set(), 0, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined })
+    const spec = { items, open: [], opened: new Set(), width: 80, key: () => undefined, onAct: press, onToggle: press, answer, onNow }
+    const both = needsRows(el, false, { ...spec, queued: new Set(['review:1', 'lost']) })
+    expect(labels(both)).toEqual(['⏳ queued · Review: 2 decisions', 'Stop the running turn and send now', '⏳ queued · See what a merge lost'])
+    // It is a press of its own: drawing it stops nothing.
+    expect(stops).toBe(0)
+    buttons(both).find(node => node.props.label === 'Stop the running turn and send now')?.props.onPress()
+    expect(stops).toBe(1)
+    expect(labels(needsRows(el, false, { ...spec, queued: new Set() }))).toEqual(['✓ sent · Review: 2 decisions', '✓ sent · See what a merge lost'])
   })
 })
