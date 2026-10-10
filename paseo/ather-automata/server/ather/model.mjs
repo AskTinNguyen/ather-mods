@@ -267,22 +267,24 @@ export const parseFindings = (findings, prompt) => {
 // ---------------------------------------------------------------- acceptance and PRs
 //
 // One writer per fact (.agents/skills/intent/SKILL.md): prompt.md's Acceptance lists the items
-// ("- A1: ..."), progress.md's Acceptance table says which are met, progress.md's "- PR:" line
-// names the PRs. Intents from before that rule tick "- [x]" boxes in prompt.md instead.
+// ("- A1: ...", or rows "| A1 | ... | <proof> |"), progress.md's Acceptance table says which are met,
+// progress.md's "- PR:" line names the PRs. Intents from before that rule tick "- [x]" boxes in
+// prompt.md instead.
 
 // "A1", "B3", "SL15", "A12a": an acceptance id at the start of an item or a table cell.
 const ITEM_ID = /^\**([A-Z]{1,3}[0-9]+[a-z]?)\**(?=[\s:.(]|$)/
 // A verdict that counts as met: its leading word ("met on main", "Pass", "passed", "done", "✓", "✅").
 const MET = /^(met|pass|passed|done|✓|✔|✅)(?![\p{L}\p{N}])/iu
 
+// The table rows among some lines, each as its cells: "| A1 | Snow look. | Unit. |" → ['A1', 'Snow look.', 'Unit.'].
+/** @param {readonly string[]} lines */
+const tableRows = lines => lines.filter(line => /^\s*\|/.test(line)).map(line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim()))
+
 // progress.md's Acceptance table as id → verdict, or null when it has none (or no rows yet).
 // The verdict column is the one headed Verdict, Status or Result, else the second.
 /** @param {string} progress */
 const acceptanceVerdicts = progress => {
-  const rows = section(progress, 'Acceptance')
-    .split(/\r?\n/)
-    .filter(line => /^\s*\|/.test(line))
-    .map(line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => plainText(cell)))
+  const rows = tableRows(section(progress, 'Acceptance').split(/\r?\n/)).map(row => row.map(cell => plainText(cell)))
   const header = rows[0]
   if (!header) return null
   const named = header.findIndex(cell => /^(verdict|status|result)$/i.test(cell))
@@ -305,9 +307,10 @@ const splitItem = line => {
   return { id: match?.[1] ?? '', text: match ? line.slice(match[0].length).trim() : line }
 }
 
-// The acceptance items and which are done. Ids come from prompt.md's top-level items; met-ness
-// from progress.md's table, whose rows for ids prompt.md does not list are ignored. Without a
-// table, legacy "- [x]" boxes count as before; without either, every listed item is open.
+// The acceptance items and which are done. Ids come from prompt.md's top-level items, or, in a
+// section with no list, from its table's rows (the id in the first cell, the text in the second);
+// met-ness from progress.md's table, whose rows for ids prompt.md does not list are ignored. Without
+// that table, legacy "- [x]" boxes count as before; without either, every listed item is open.
 /** @param {string} prompt @param {string} progress @returns {AcceptanceItem[]} */
 export const acceptanceItems = (prompt, progress) => {
   const lines = sections(prompt, 'Acceptance').split(/\r?\n/)
@@ -317,12 +320,18 @@ export const acceptanceItems = (prompt, progress) => {
     const item = splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')
     if (item.id !== '' && !listed.has(item.id)) listed.set(item.id, item.text)
   }
-  const verdicts = acceptanceVerdicts(progress)
-  if (verdicts && listed.size > 0) return [...listed].map(([id, text]) => ({ id, text, isDone: MET.test(verdicts.get(id) ?? '') }))
   const boxes = lines.flatMap(line => {
     const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
     return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
   })
+  if (listed.size === 0 && boxes.length === 0) {
+    for (const row of tableRows(lines)) {
+      const id = ITEM_ID.exec(row[0] ?? '')?.[1]
+      if (id && !listed.has(id)) listed.set(id, row[1] ?? '')
+    }
+  }
+  const verdicts = acceptanceVerdicts(progress)
+  if (verdicts && listed.size > 0) return [...listed].map(([id, text]) => ({ id, text, isDone: MET.test(verdicts.get(id) ?? '') }))
   if (boxes.length > 0) return boxes
   return [...listed].map(([id, text]) => ({ id, text, isDone: false }))
 }
