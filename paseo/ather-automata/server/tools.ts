@@ -2,7 +2,7 @@
 // The tools reach the agent through the MCP bridge (server/bridge.ts).
 
 import { clampHours, windowEndText } from "./ather/away.mjs";
-import { HELD_LABELS, HELD_NOUNS, heldKindsOf } from "./ather/guards.mjs";
+import { HELD_LABELS, HELD_NOUNS, heldKindsOf, heldLabel } from "./ather/guards.mjs";
 import { STAGE_LABELS, currentStage, directorCalls, prStatusList } from "./ather/model.mjs";
 import { untrackText } from "./ather/home.mjs";
 import * as state from "./ather/state.mjs";
@@ -49,7 +49,7 @@ export async function awayTool(ctx: Ctx, input: Record<string, unknown>) {
     const started = await state.startAway(io, choice as never, { root, me, tz, now: Date.now(), pack });
     if (started === null) return "An away window is already running or waiting for the user's review.";
     void note(ctx.agent.id, "info", `Away window running ${windowEndText(started, tz)}.`);
-    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map((kind: string) => HELD_LABELS[kind as keyof typeof HELD_LABELS] ?? kind).join(", ")}. Questions to the user are now recorded in the ledger instead of asked.\n\n${await laneText(ctx)}`;
+    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map((kind: string) => heldLabel(kind, pack)).join(", ")}. Questions to the user are now recorded in the ledger instead of asked.\n\n${await laneText(ctx)}`;
   }
   if (action === "end") return (await state.endAway(io)) ? "Autonomy window ended; the user reviews it with /ather." : "No autonomy window is running.";
   if (action === "close") return (await state.closeAway(io)) ? "Autonomy window closed." : "No autonomy window to close.";

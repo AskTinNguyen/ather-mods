@@ -3,7 +3,7 @@
 // its ledger text, and the mandate the session is given. Pure: no `$`; the one
 // place that changes a window is state.mjs.
 
-import { HELD_LABELS } from './guards.mjs'
+import { heldLabel } from './guards.mjs'
 import { clockText } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 
@@ -83,8 +83,8 @@ export const newWindow = (choice, now, ledgerPath, owner) => ({
   root: owner.root,
 })
 
-/** @param {Away} away */
-const heldText = away => away.held.map(kind => HELD_LABELS[/** @type {keyof typeof HELD_LABELS} */ (kind)] ?? kind).join(', ') || 'nothing'
+/** @param {Away} away @param {Pack} pack */
+const heldText = (away, pack) => away.held.map(kind => heldLabel(kind, pack)).join(', ') || 'nothing'
 
 // A ledger file with a new window appended (or started).
 /** @param {string} existing @param {Away} away @param {number} tz @param {Pack} [pack] */
@@ -96,7 +96,7 @@ export const ledgerWithWindow = (existing, away, tz, pack = unreal) =>
     '',
     `- Goal: ${away.goal || '(see the session)'}`,
     `- Allowed without asking: ${pack.mandate.allowed}`,
-    `- Held: ${heldText(away)}`,
+    `- Held: ${heldText(away, pack)}`,
     '',
     'Each decision taken for you while you were away. Entry format: Options, Choice, Why, Evidence, Revert, Status (provisional, kept, revert requested, reopened).',
     '',
@@ -105,7 +105,7 @@ export const ledgerWithWindow = (existing, away, tz, pack = unreal) =>
 /** @param {Away} away @param {number} tz @param {Pack} [pack] */
 export const mandateText = (away, tz, pack = unreal) =>
   away.phase === 'review'
-    ? `AWAY WINDOW ENDED (Ather Automata): the user has not reviewed it yet. Until they do, do not retry held actions (${heldText(away)}) and record any decision that would be theirs in ${away.ledgerPath} instead of asking.`
+    ? `AWAY WINDOW ENDED (Ather Automata): the user has not reviewed it yet. Until they do, do not retry held actions (${heldText(away, pack)}) and record any decision that would be theirs in ${away.ledgerPath} instead of asking.`
     : [
     away.untilDone
       ? `AUTONOMY WINDOW (Ather Automata): the user is away until the work is done (hard stop ${clockText(away.wakeAt, tz)} local time). When the goal is done, call the mcp__ather-automata__away tool with action "end" so the user gets the review.`
@@ -114,7 +114,7 @@ export const mandateText = (away, tz, pack = unreal) =>
     `Allowed without asking for this window: ${pack.mandate.allowed}. Use them on feature branches; ${pack.mandate.merge}.`,
     `Do not stop to ask or wait for answers. On any decision that would be the user\'s, take the recommended option, prefer the reversible one, and ${pack.mandate.flags}.`,
     `Record every such decision when you make it in ${away.ledgerPath} as "### D-<n> · <question>" with the lines Options, Choice, Why, Evidence, Revert, Status: provisional.`,
-    `Held until the user has reviewed the window (they will be refused and parked, do not retry them): ${heldText(away)}.`,
+    `Held until the user has reviewed the window (they will be refused and parked, do not retry them): ${heldText(away, pack)}.`,
     'The AGENTS.md safety contract still applies in full. When blocked on one item, move to another instead of waiting.',
   ].join(' ')
 

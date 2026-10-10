@@ -5,7 +5,7 @@
 // actions held while the person is away, known traps, and the words the
 // session is asked with. Pure: no `$`.
 
-import { bareCommand, isPiped, segments, withoutHeredocs } from '../shell.mjs'
+import { MAIN, bareCommand, isPiped, segments, withoutHeredocs } from '../shell.mjs'
 
 /** @typedef {import('./index.mjs').Pack} Pack */
 /** @typedef {import('./index.mjs').Rung} Rung */
@@ -356,6 +356,23 @@ const runnerOf = (profile, packageJson, found) => {
   return runnerNamed(profile?.packageManager) ?? runnerNamed(packageJson?.packageManager) ?? LOCKFILES.find(([file]) => files.includes(file))?.[1] ?? 'npm'
 }
 
+// A branch name as a profile or a ref gives it; '' when it does not read as one.
+/** @param {unknown} value */
+const branchNamed = value => {
+  if (typeof value !== 'string') return ''
+  const name = value.trim().replace(/^refs\/heads\//, '')
+  return name.length <= 100 && /^[A-Za-z0-9._\/-]+$/.test(name) ? name : ''
+}
+
+/**
+ * The branch pull requests go into, when it is not main or master: the profile's word, then the default branch the clone knows.
+ * @param {any} profile @param {Found} found
+ */
+const baseBranchOf = (profile, found) => {
+  const name = branchNamed(profile?.baseBranch) || branchNamed(found?.defaultBranch)
+  return MAIN.test(name) ? '' : name
+}
+
 // The scripts that stand in for each rung's gates, in the order they are named.
 const RUNG_SCRIPTS = /** @type {Record<string, string[]>} */ ({ tests: ['test'], lint: ['lint', 'typecheck'], build: ['build'] })
 
@@ -445,6 +462,8 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
   const areas = Array.isArray(profile?.areas) && profile.areas.every((/** @type {unknown} */ one) => typeof one === 'string') ? profile.areas : DEFAULT_AREAS
   const flags = 'keep behaviour changes behind a flag that defaults to the current behaviour'
   const withProof = mergePolicy === 'with-proof'
+  const baseBranch = baseBranchOf(profile, found)
+  const into = baseBranch ? ` into ${baseBranch}` : ''
   return {
     id: 'web',
     roles: ROLES,
@@ -475,9 +494,15 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
     lockRoles: [],
     ownCheck: null,
     traps: WEB_TRAPS,
-    held: { labels: HELD_LABELS, nouns: HELD_NOUNS, kinds: WEB_HELD, defaults: ['merge', 'push-main', ...WEB_HELD] },
+    held: {
+      labels: baseBranch ? { ...HELD_LABELS, 'push-main': `Pushes to ${baseBranch} and main` } : HELD_LABELS,
+      nouns: baseBranch ? { ...HELD_NOUNS, 'push-main': `a push to ${baseBranch} or main` } : HELD_NOUNS,
+      kinds: WEB_HELD,
+      defaults: ['merge', 'push-main', ...WEB_HELD],
+    },
     heldSegment,
     mergePolicy,
+    baseBranch,
     mergeRungs: required,
     rungGates,
     isAssetSave: () => false,
@@ -503,8 +528,8 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
         role === 'product'
           ? `Summarise intent ${slug} for landing: what changed, the gate that proved each checklist item, and what is still owed${prodCheck ? `; after it merges, run ${prodCheck}` : ''}.`
           : withProof
-            ? `Land intent ${slug}: open the PR from its branch, confirm ${mergeGates || 'every gate'} passed on its head in this session, then merge it (merge policy with-proof)${prodCheck ? ` and run ${prodCheck}` : ''}. If any gate has not passed, stop and tell me.`
-            : `Prepare intent ${slug} for landing: open the PR from its branch with the evidence for each checklist item, then wait for my go before merging.`,
+            ? `Land intent ${slug}: open the PR from its branch${into}, confirm ${mergeGates || 'every gate'} passed on its head in this session, then merge it (merge policy with-proof)${prodCheck ? ` and run ${prodCheck}` : ''}. If any gate has not passed, stop and tell me.`
+            : `Prepare intent ${slug} for landing: open the PR from its branch${into} with the evidence for each checklist item, then wait for my go before merging.`,
       shipHint: role => (role === 'product' ? 'Summarises the work and checks production once it lands.' : withProof ? `Merges once ${mergeGates || 'every gate'} passed; then checks production.` : 'A clean PR; nothing merges without your go.'),
       briefHint: 'A background agent does the work in its own worktree, proved with the repository gates.',
       tour: 'Give me the Ather tour for this repository: read AGENTS.md, .ather/profile.json and .agents/skills/intent/SKILL.md, then explain in six short steps how a feature runs here as an intent (Plan, Build, Prove with the gates the profile names, Ship), ending with my first intent started.',
@@ -513,7 +538,7 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
     },
     mandate: {
       flags,
-      allowed: withProof ? `push branches, open PRs, merge PRs to main once ${mergeGates || 'every gate'} passed` : 'push branches, open draft PRs, open PRs to main',
+      allowed: withProof ? `push branches, open PRs, merge PRs to ${baseBranch || 'main'} once ${mergeGates || 'every gate'} passed` : `push branches, open draft PRs, open PRs to ${baseBranch || 'main'}`,
       merge: withProof ? 'merge only when every gate the profile requires has passed in this session' : 'never merge',
       away: withProof ? 'The session may push branches, open PRs and merge with every gate passed; production deploys, migrations and secrets wait for you.' : 'The session may push branches and open PRs; nothing merges until you are back.',
       pane: 'The session keeps working; production deploys, migrations and secret changes wait for your review.',

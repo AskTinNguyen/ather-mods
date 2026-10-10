@@ -9,9 +9,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 import fs from 'fs'
 
-import { heldShell, matchGotchas, recurringGotchas, countGotcha } from '../hooks/guards.mjs'
+import { HELD_LABELS, HELD_NOUNS, heldLabel, heldNoun, heldShell, matchGotchas, recurringGotchas, countGotcha } from '../hooks/guards.mjs'
 import { buildHome } from '../hooks/home.mjs'
-import { mandateText, newWindow, offAway } from '../hooks/away.mjs'
+import { ledgerWithWindow, mandateText, newWindow, offAway } from '../hooks/away.mjs'
 import { emptyEvidence, nextStep, parseIntent } from '../hooks/model.mjs'
 import { choosePack, core, forgetPacks, makeWebPack, packFor, unreal } from '../hooks/packs/index.mjs'
 import { WEB_TRAPS, readToolOutput } from '../hooks/packs/web.mjs'
@@ -716,5 +716,186 @@ describe("without profile gates: the repository's package manager", () => {
     }
     expect(pack.readShell('pnpm typecheck', fixture('tsc-pass.txt'), {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['lint', 'pass']])
     expect(pack.readShell('npx eslint .', fixture('eslint-pass.txt'), {}).rungs.map(one => [one.rung, one.value.state])).toEqual([['lint', 'pass']])
+  })
+})
+
+describe('a base branch that is not main', () => {
+  const PLAIN = { pack: 'web', gates: [{ id: 'test', command: 'npm test', proofs: ['tests'] }] }
+  const DEVELOP = makeWebPack({ ...PLAIN, baseBranch: 'develop' }, PACKAGE)
+  const NONE = makeWebPack(PLAIN, PACKAGE)
+  const held = ['merge', 'push-main']
+  /** @param {string} branch */
+  const on = branch => () => branch
+  /** @param {import('../hooks/packs/index.mjs').Pack} pack */
+  const texts = pack => [pack.mandate.allowed, pack.held.labels['push-main'], pack.held.nouns['push-main'], pack.prompts.ship('engineer', 'lens'), pack.prompts.ship('product', 'lens')]
+
+  test('a push to it is held as push-main, however the push names it', () => {
+    for (const command of ['git push origin develop', 'git push origin HEAD:develop', 'git push origin feat/x:refs/heads/develop', 'git push origin +develop']) {
+      expect(heldShell(command, held, on('feat/x'), DEVELOP)).toBe('push-main')
+    }
+    expect(heldShell('git push', held, on('develop'), DEVELOP)).toBe('push-main')
+    const layout = (/** @type {string | null} */ folder) => (folder === 'E:/wt/dev' ? 'develop' : 'feat/x')
+    expect(heldShell('git -C E:/wt/dev push', held, layout, DEVELOP)).toBe('push-main')
+  })
+  test('a local merge while it is checked out is held as a merge', () => {
+    expect(heldShell('git merge feat/x', held, on('develop'), DEVELOP)).toBe('merge')
+  })
+  test('feature branches are ordinary work, also when their name has the base branch in it', () => {
+    expect(heldShell('git push -u origin feat/develop-menu', held, on('develop'), DEVELOP)).toBe(null)
+    expect(heldShell('git push', held, on('feat/x'), DEVELOP)).toBe(null)
+    expect(heldShell('git merge origin/develop', held, on('feat/x'), DEVELOP)).toBe(null)
+  })
+  test('main stays held, and a PR merge is held whatever branch the PR goes into', () => {
+    expect(heldShell('git push origin main', held, on('feat/x'), DEVELOP)).toBe('push-main')
+    expect(heldShell('git merge feat/x', held, on('main'), DEVELOP)).toBe('merge')
+    expect(heldShell('gh pr merge 5', held, on('feat/x'), DEVELOP)).toBe('merge')
+    expect(heldShell('gh pr merge 5', held, on('feat/x'), NONE)).toBe('merge')
+    expect(heldShell('gh pr merge 5', held, on('develop'), unreal)).toBe('merge')
+  })
+  test('with-proof frees a proven merge into the base branch, and never a push to it', () => {
+    const proven = makeWebPack({ ...PLAIN, baseBranch: 'develop', mergePolicy: 'with-proof' }, PACKAGE)
+    expect(heldShell('git merge feat/x', held, on('develop'), proven)).toBe('merge')
+    expect(heldShell('git merge feat/x', held, on('develop'), proven, { isProven: true })).toBe(null)
+    expect(heldShell('git push origin develop', held, on('feat/x'), proven, { isProven: true })).toBe('push-main')
+  })
+  test('another checkout in the command is judged by its own base branch', () => {
+    const at = (/** @type {string | null} */ folder) => (folder === '../web' ? { pack: DEVELOP, held, isProven: false } : null)
+    expect(heldShell('cd ../web && git push origin develop', held, on('feat/x'), unreal, { at })).toBe('push-main')
+    expect(heldShell('git push origin develop', held, on('feat/x'), unreal, { at })).toBe(null)
+  })
+  test('without the field, in the Unreal pack and in the core pack, develop is a branch like any other', () => {
+    for (const pack of [NONE, unreal, core]) {
+      for (const command of ['git push origin develop', 'git push origin HEAD:develop', 'git push origin feat/x:refs/heads/develop', 'git push origin +develop']) {
+        expect(heldShell(command, held, on('feat/x'), pack)).toBe(null)
+      }
+      expect(heldShell('git push', held, on('develop'), pack)).toBe(null)
+      expect(heldShell('git merge feat/x', held, on('develop'), pack)).toBe(null)
+      expect(heldShell('git push origin main', held, on('feat/x'), pack)).toBe('push-main')
+    }
+    expect(unreal.baseBranch).toBe(undefined)
+    expect(core.baseBranch).toBe(undefined)
+  })
+  test('the texts name the base branch: what is allowed, what is held, and where the PR goes', () => {
+    expect(DEVELOP.baseBranch).toBe('develop')
+    expect(DEVELOP.mandate.allowed).toContain('develop')
+    expect(DEVELOP.mandate.allowed).not.toMatch(/\bmain\b/)
+    const proven = makeWebPack({ ...PLAIN, baseBranch: 'develop', mergePolicy: 'with-proof' }, PACKAGE)
+    expect(proven.mandate.allowed).toContain('develop')
+    expect(proven.mandate.allowed).not.toMatch(/\bmain\b/)
+    for (const text of [DEVELOP.held.labels['push-main'], DEVELOP.held.nouns['push-main']]) {
+      expect(text).toContain('develop')
+      expect(text).toContain('main')
+    }
+    expect(DEVELOP.prompts.ship('engineer', 'lens')).toContain('develop')
+    expect(proven.prompts.ship('engineer', 'lens')).toContain('develop')
+  })
+  test('the mandate and the ledger of a window name the base branch among what is held', () => {
+    const away = newWindow({ hours: 8, untilDone: false, goal: '', held: [...DEVELOP.held.defaults] }, 0, 'L.md', { person: 'p', root: 'R' })
+    expect(mandateText(away, 0, DEVELOP)).toMatch(/Held until the user has reviewed the window[^:]*: [^.]*develop/)
+    expect(mandateText({ ...away, phase: 'review', endedAt: 1 }, 0, DEVELOP)).toMatch(/held actions \([^)]*develop/)
+    expect(ledgerWithWindow('', away, 0, DEVELOP)).toMatch(/- Held: .*develop/)
+    expect(heldLabel('push-main', DEVELOP)).toContain('develop')
+    expect(heldNoun('push-main', DEVELOP)).toContain('develop')
+    // A kind the pack does not word reads as every pack words it.
+    expect(heldLabel('merge', DEVELOP)).toBe(HELD_LABELS.merge)
+    expect(heldNoun('asset-save', DEVELOP)).toBe(HELD_NOUNS['asset-save'])
+  })
+  test('without a base branch every text is what it was', () => {
+    expect(NONE.baseBranch).toBe('')
+    expect(NONE.mandate.allowed).toBe('push branches, open draft PRs, open PRs to main')
+    expect(NONE.held.labels['push-main']).toBe(undefined)
+    expect(NONE.held.nouns['push-main']).toBe(undefined)
+    const away = newWindow({ hours: 8, untilDone: false, goal: '', held: [...NONE.held.defaults] }, 0, 'L.md', { person: 'p', root: 'R' })
+    expect(mandateText(away, 0, NONE)).toContain('Pushes to main')
+    expect(mandateText(away, 0, NONE)).not.toContain('develop')
+    expect(mandateText(away, 0)).toContain('Pushes to main')
+    for (const pack of [NONE, unreal, core]) {
+      expect(heldLabel('push-main', pack)).toBe('Pushes to main')
+      expect(heldNoun('push-main', pack)).toBe('a push to main')
+    }
+    expect(heldLabel('deploy-prod', unreal)).toBe(HELD_LABELS['deploy-prod'])
+  })
+  test('main, master and a value that is no branch name read as no base branch, and nothing throws', () => {
+    for (const odd of ['main', 'master', 'refs/heads/main', 42, '', '   ', 'a b', {}, ['develop'], null, 'x'.repeat(101)]) {
+      const pack = makeWebPack({ ...PLAIN, baseBranch: odd }, PACKAGE)
+      expect(pack.baseBranch).toBe('')
+      expect(texts(pack)).toEqual(texts(NONE))
+      expect(pack.held).toEqual(NONE.held)
+      expect(heldShell('git push origin develop', held, on('feat/x'), pack)).toBe(null)
+      expect(heldShell('git push origin main', held, on('feat/x'), pack)).toBe('push-main')
+    }
+    const proven = { ...PLAIN, mergePolicy: 'with-proof' }
+    expect(texts(makeWebPack({ ...proven, baseBranch: 'master' }, PACKAGE))).toEqual(texts(makeWebPack(proven, PACKAGE)))
+    expect(makeWebPack({ ...PLAIN, baseBranch: ' refs/heads/release/1.x ' }, PACKAGE).baseBranch).toBe('release/1.x')
+  })
+  test("the fallback is the clone's default branch; the profile's word wins, main included", () => {
+    expect(makeWebPack(PLAIN, PACKAGE, { defaultBranch: 'develop' }).baseBranch).toBe('develop')
+    expect(makeWebPack(null, PACKAGE, { defaultBranch: 'develop' }).baseBranch).toBe('develop')
+    expect(makeWebPack({ ...PLAIN, baseBranch: 'main' }, PACKAGE, { defaultBranch: 'develop' }).baseBranch).toBe('')
+    expect(makeWebPack({ ...PLAIN, baseBranch: 'staging' }, PACKAGE, { defaultBranch: 'develop' }).baseBranch).toBe('staging')
+    expect(makeWebPack({ ...PLAIN, baseBranch: 'a b' }, PACKAGE, { defaultBranch: 'develop' }).baseBranch).toBe('develop')
+    for (const odd of ['main', 'master', '', 'a b', 42, null]) {
+      expect(makeWebPack(PLAIN, PACKAGE, /** @type {any} */ ({ defaultBranch: odd })).baseBranch).toBe('')
+    }
+  })
+
+  const GIT = { '.git/HEAD': 'ref: refs/heads/feat/x\n' }
+  const WEB_FILES = { '.ather/profile.json': JSON.stringify(PLAIN), 'package.json': '{}' }
+  /** @param {Record<string, string>} files */
+  const chosenBase = async files => (await choosePack(fakeIo(files, ['package.json']).io, 'R')).pack.baseBranch
+  test('through choosePack: origin/HEAD names the base branch when the profile does not', async () => {
+    expect(await chosenBase({ ...WEB_FILES, ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' })).toBe('develop')
+    expect(await chosenBase({ 'package.json': '{}', ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' })).toBe('develop')
+    expect(await chosenBase({ ...WEB_FILES, ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/main\n' })).toBe('')
+    expect(await chosenBase({ ...WEB_FILES, ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/master\n' })).toBe('')
+    expect(await chosenBase({ ...WEB_FILES, ...GIT })).toBe('')
+    expect(await chosenBase(WEB_FILES)).toBe('')
+    expect(await chosenBase({ ...WEB_FILES, ...GIT, '.git/refs/remotes/origin/HEAD': '4f2a9c0d\n' })).toBe('')
+    expect(await chosenBase({ ...WEB_FILES, ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/a b\n' })).toBe('')
+  })
+  test("through choosePack: the profile's baseBranch wins over origin/HEAD, main included", async () => {
+    const origin = { ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n', 'package.json': '{}' }
+    expect(await chosenBase({ ...origin, '.ather/profile.json': JSON.stringify({ ...PLAIN, baseBranch: 'main' }) })).toBe('')
+    expect(await chosenBase({ ...origin, '.ather/profile.json': JSON.stringify({ ...PLAIN, baseBranch: 'staging' }) })).toBe('staging')
+    expect(await chosenBase({ ...origin, '.ather/profile.json': JSON.stringify({ ...PLAIN, baseBranch: 42 }) })).toBe('develop')
+  })
+  test('through choosePack: a worktree is read through to the git folder its clone shares', async () => {
+    const shared = { '/M/.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' }
+    expect(await chosenBase({ ...WEB_FILES, '.git': 'gitdir: /M/.git/worktrees/w\n', '/M/.git/worktrees/w/commondir': '../..\n', ...shared })).toBe('develop')
+    expect(await chosenBase({ ...WEB_FILES, '.git': 'gitdir: /M/.git/worktrees/w\n', '/M/.git/worktrees/w/commondir': '/M/.git\n', ...shared })).toBe('develop')
+    // A worktree whose own folder has no commondir file and no origin/HEAD has no fallback.
+    expect(await chosenBase({ ...WEB_FILES, '.git': 'gitdir: /M/.git/worktrees/w\n', ...shared })).toBe('')
+  })
+  test('through choosePack: an Io that throws on a missing file gives no fallback and still a pack', async () => {
+    const fake = fakeIo({ ...WEB_FILES, ...GIT })
+    const throwing = { ...fake.io, read: async (/** @type {string} */ path) => { if (/\.git\//.test(path)) throw new Error(`ENOENT ${path}`); return fake.io.read(path) } }
+    const chosen = await choosePack(throwing, 'R')
+    expect(chosen.pack.id).toBe('web')
+    expect(chosen.pack.baseBranch).toBe('')
+  })
+  test('through choosePack: a profile that names unreal or core reads nothing of .git', async () => {
+    for (const name of ['unreal', 'core']) {
+      const fake = fakeIo({ '.ather/profile.json': `{"pack":"${name}","baseBranch":"develop"}`, 'package.json': '{}', ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' })
+      /** @type {string[]} */
+      const asked = []
+      const chosen = await choosePack({ ...fake.io, read: async path => { asked.push(path); return fake.io.read(path) }, exists: async path => { asked.push(path); return fake.io.exists(path) } }, 'R')
+      expect(chosen.pack.id).toBe(name)
+      expect(chosen.pack.baseBranch).toBe(undefined)
+      expect(asked.filter(path => /\.git/.test(path))).toEqual([])
+      expect(heldShell('git push origin develop', held, on('feat/x'), chosen.pack)).toBe(null)
+    }
+    // A repository with a .uproject and no profile is Unreal, whatever its default branch.
+    const marker = await choosePack(fakeIo({ ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' }, ['S2.uproject']).io, 'R')
+    expect(marker.pack).toBe(unreal)
+  })
+  test('the base branch is read once per session, with the pack', async () => {
+    forgetPacks()
+    const fake = fakeIo({ ...WEB_FILES, ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' })
+    const first = await packFor(fake.io, 'R')
+    expect(first.pack.baseBranch).toBe('develop')
+    const reads = fake.reads.count
+    expect(await packFor(fake.io, 'R')).toBe(first)
+    expect(fake.reads.count).toBe(reads)
+    forgetPacks()
   })
 })
