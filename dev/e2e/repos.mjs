@@ -1543,7 +1543,7 @@ const refresh = async engine => {
   const rows = intentRows(after).map(one => one.id).sort()
   expect("the list then holds both of develop's intents and web's own, the later one not in the checkout and not tagged local", JSON.stringify(rows) === JSON.stringify(['intent:later', 'intent:merged', 'intent:web/login']) && warnOf(after, 'intent:later') === '' && !fs.existsSync(join(nm, 'docs/intent/later')), [rows, warnOf(after, 'intent:later')])
   const heads = engine.record.gitRuns.filter(run => run.argv.includes('symbolic-ref'))
-  expect("each checkout's default branch is asked once, with GIT_OPTIONAL_LOCKS=0", heads.length === 2 && heads.every(run => run.env.GIT_OPTIONAL_LOCKS === '0'), heads)
+  expect("no checkout's default branch is asked of git: it is read from the clone's files", heads.length === 0, heads)
 
   await startAway(engine)
   const toBase = await bash(engine, 'git push origin develop')
