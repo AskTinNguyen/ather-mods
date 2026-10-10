@@ -3,8 +3,8 @@
 - Working under rev: 1
 - Worker: `Claude Opus 5.5 builder for the code; Codex gpt-6.1-sol reviews; the coordinator writes the READMEs, runs the gates and the live run, and commits`
 - Current step: none
-- Next step: a PR to `main`, opened by a person; the version moves if another 0.2.6 merges first
-- PR: none yet
+- Next step: review and merge of PR #47 by a person; the version moves if another 0.2.6 merges first
+- PR: #47
 
 ## Acceptance
 
