@@ -1,0 +1,55 @@
+# Ather Automata cache keep-warm
+
+- Rev: 1
+- Status: in progress
+- Area: ather-automata
+- Owner: Tin Nguyen
+- Skill: `plugin-authoring`
+- Branch: `intent/cache-keep-warm`
+- Started: 2026-10-10
+
+## Goal
+
+A session's prompt cache lives for one hour after its last read (five minutes in usage overage). A person who steps away for longer comes back to a first turn that re-writes the whole context at twice the input price, and is slow. Offer, opt-in, to keep the cache warm while the person is idle: shortly before it would lapse, read it once more with a tool-less fork of the session's own last request, which costs a tenth of the input price and resets the hour. Within a cap, and never when it cannot pay off.
+
+## Non-Goals
+
+- On by default. It spends money with nobody watching.
+- Re-warming a cache that has already lapsed: that is the full re-write it exists to avoid.
+- Keeping workers' (subagents') caches warm.
+- A five-minute keep-warm: at 15 pings an hour it rarely pays off; on the five-minute TTL the feature pauses.
+
+## Sources
+
+- The design agreed in conversation on 2026-10-10 (L-1, L-2): cost model, engine primitives, guards.
+- Engine API (Claude Code 2.1.293 plugin types): `$.model.fork` ("Runs one tool-less completion over the session's OWN transcript as the main thread last sent it, so the API serves that prefix from its cache"; `usage.cache_read_input_tokens` near zero when the entry lapsed), `turn.complete`'s `usage`, `$.session.usage()` (`context.tokens`, `rateLimits`, `cost.usd`), `$.clock.after`. The live TTL is not exposed to plugins (only to the Pre/PostModelSwitch settings hooks).
+
+## Decisions
+
+- D1 (rev 1): The ping is `$.model.fork`, never a prompt into the session: it adds nothing to the transcript, runs no tools, and its usage says whether the cache was hit.
+- D2 (rev 1): Its own half, `hooks/warmth.mjs`, beside watch and console, with its pure rules in `hooks/warm.mjs`; stored values through `state.mjs`. Not wired into watch.mjs (the design's first sketch): the feature applies in every repository, also where Ather has no intents, and a failure in it must not touch the other halves.
+- D3 (rev 1): Its command is `/warm`, not `/ather warm`: `/ather` answers only where there are intents.
+- D4 (rev 1): `ask` mode is one toast per session at the first idle period that could use it, naming `/warm on`; no dialog, which would wait on a person who has just walked away.
+- D5 (rev 1): The TTL is learned, not read: assume one hour; a main-thread turn that re-wrote at least 80% of the context after a gap of 5 to 55 minutes means the five-minute TTL (or a changed prefix), and the session pauses keep-warm with one toast.
+- D6 (rev 1): Money: a ping's real cost is the change in `$.session.usage().cost.usd` around it; the re-write it avoids is estimated as 19 times the cache-read part (2x write minus the 0.1x read the next turn still pays). Shown with "~".
+
+## Acceptance
+
+- A1: Verify the premise: a fork at about 55 minutes keeps the main thread's one-hour entry, so that a real turn at about 110 minutes reads the context from the cache. The ledger records, for each return after pings, whether the person's first turn hit (`returnsWarm`) or re-wrote (`returnsCold`); `/warm` shows both. Proof: a live session with `/warm on`, idle for two hours, then one prompt; `/warm` reads "1 return warm".
+- A2: Options: `cacheKeepWarm` (`off` default, `ask`, `on`) and `cacheKeepWarmHours` (default 3) in the manifest; `/warm on | off | <n>h` overrides them for the session (kept across /clear and reloads); `/warm` alone says the state, the next ping's time and the ledger. Proof: gate: plugin test.
+- A3: Timing: each main-thread `turn.complete` re-arms one timer for TTL − 5 minutes after it; a prompt cancels it; a ping that hit re-arms from its own time; a timer that fires at or past the TTL (the machine slept) does nothing. Proof: gate: unit tests and plugin test on the mocked clock.
+- A4: Guards: no ping when off, paused, a turn is running, the context is under 30,000 tokens, the cap (`floor(hours × 60 / 55)` pings per idle period) is reached, an away window runs that ends after the cap or is "until done", any rate-limit window is over 85%, the session is not interactive, or the fork answers `nothing-to-fork`. Proof: gate: unit tests.
+- A5: A ping that misses (cache read under 90% of the context) stops keep-warm for that idle period and counts as `missed` in the ledger. Proof: gate: plugin test.
+- A6: TTL calibration per D5. Proof: gate: unit test and plugin test.
+- A7: Showing it: the status line reads `◔ warm 2/3 · next 14:55` while armed and is cleared otherwise; the ledger (`$.store`, machine-wide) counts pings, misses, wasted pings (an idle period that ended without the person's return: next session start or a lapse), returns warm and cold, ping dollars and estimated dollars avoided. Proof: gate: unit test of the text, plugin test.
+- A8: No regression: `node dev/test-all.mjs` passes as on `main`; `claude plugin validate ather-automata` and `claude plugin test ather-automata` pass. Proof: gate.
+- A9: Release: 0.3.0 in both manifests, a Changes line and a README section. Proof: review (Tin).
+
+## Constraints
+
+- Keep Ather's conventions: pure rules without `$`, stored values only through `state.mjs`, hooks never block or fail the calls they watch, plain short wording.
+- No push, no PR without the owner's go.
+
+## Changelog
+
+- rev 1 (2026-10-10): created from L-1 and L-2.

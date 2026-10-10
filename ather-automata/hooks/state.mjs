@@ -15,6 +15,7 @@ import { unreal } from './packs/unreal.mjs'
 import { baseOf } from './team.mjs'
 import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
+import { addLedger, emptyLedger } from './warm.mjs'
 
 /**
  * @typedef {{
@@ -53,6 +54,8 @@ const KEY = {
   lost: (/** @type {string} */ sid) => `lost:${sid}`,
   // The intents this session stopped tracking: a write into one does not track it again.
   untracked: (/** @type {string} */ sid) => `untracked:${sid}`,
+  // This session's keep-warm choice (/warm) and the TTL it learned.
+  warm: (/** @type {string} */ sid) => `warm:${sid}`,
   // A pack's roles are its own: a tech artist in S2 is not a role in a web repository. The Unreal pack's key is unprefixed.
   role: (/** @type {string} */ me, /** @type {string} */ prefix = '') => `role:${prefix}${personId(me)}`,
   area: (/** @type {string} */ me) => `area:${personId(me)}`,
@@ -76,9 +79,11 @@ const KEY = {
   hits: 'gotchaHits',
   ruled: 'gotchaRuled',
   score: 'score',
+  // What keeping the cache warm did on this machine.
+  warmLedger: 'warmLedger',
 }
 // What belongs to this lane and follows it to a new session id after /clear.
-const LANE_KEYS = [KEY.away, KEY.pinned, KEY.evidence, KEY.lost, KEY.untracked]
+const LANE_KEYS = [KEY.away, KEY.pinned, KEY.evidence, KEY.lost, KEY.untracked, KEY.warm]
 
 let queue = Promise.resolve()
 /** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
@@ -843,6 +848,30 @@ export const flagLost = (io, paths) =>
     changed(io)
   })
 
+/**
+ * This session's keep-warm choice and learned TTL; each field absent until set.
+ * @typedef {{ mode?: 'on' | 'off', hours?: number, ttl?: import('./warm.mjs').Ttl }} WarmChoice
+ */
+/** @param {Io} io @returns {Promise<WarmChoice>} */
+export const readWarm = async io => /** @type {WarmChoice} */ ((await io.get(KEY.warm(await io.sessionId()))) ?? {})
+
+/** @param {Io} io @param {WarmChoice} fields */
+export const setWarm = (io, fields) =>
+  serial(async () => {
+    const key = KEY.warm(await io.sessionId())
+    await io.set(key, { .../** @type {object} */ ((await io.get(key)) ?? {}), ...fields })
+  })
+
+/** @param {Io} io @returns {Promise<import('./warm.mjs').Ledger>} */
+export const readWarmLedger = async io => ({ ...emptyLedger(), .../** @type {object} */ ((await io.get(KEY.warmLedger)) ?? {}) })
+
+/** @param {Io} io @param {import('./warm.mjs').LedgerChange} change */
+export const noteWarm = (io, change) =>
+  serial(async () => {
+    if (Object.keys(change).length === 0) return
+    await io.set(KEY.warmLedger, addLedger(await readWarmLedger(io), change))
+  })
+
 /** @param {Io} io @param {string} key */
 export const bump = (io, key) =>
   serial(async () => {
@@ -969,7 +998,7 @@ export const prune = async (io, isGone) => {
   for (const key of await io.keys()) {
     // `<sid>|<checkout id>` is a session's proof in another checkout and goes with it; `<checkout id>|<slug>` is
     // an intent's (a checkout id has a / or a :) and belongs to no session.
-    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]?.split('|')[0]
+    const sid = /^(?:away|pinned|evidence|lost|untracked|warm):(.+)$/.exec(key)?.[1]?.split('|')[0]
     if (sid && !/[/:]/.test(sid) && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
   }
   for (const [sid, keys] of bySession) {

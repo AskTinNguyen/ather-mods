@@ -1,6 +1,6 @@
 {
   "name": "ather-automata",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "Ather Automata: what needs you and what is next in every S2 session and web app repository (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
   "author": {
     "name": "Tin Nguyen"
@@ -18,6 +18,20 @@
       "title": "Other repositories",
       "description": "More checkouts this session works with, besides the one it is opened in: folders separated by ; or new lines, absolute or relative to the session folder. A folder that is not in a git checkout is skipped. A session opened in a folder holding several checkouts finds them on its own.",
       "default": ""
+    },
+    "cacheKeepWarm": {
+      "type": "string",
+      "title": "Keep the prompt cache warm",
+      "description": "While you are idle, read the session's cached context once shortly before it would lapse (an hour after the last read), so your next turn does not re-write the whole context at twice the price. off never does; ask suggests /warm on once per session; on does it within the cap below. /warm changes it for one session.",
+      "default": "off",
+      "options": ["off", "ask", "on"]
+    },
+    "cacheKeepWarmHours": {
+      "type": "string",
+      "title": "Keep warm for at most",
+      "description": "Hours of idle time to keep the cache warm for (one read each 55 minutes). Past it, the cache lapses as usual.",
+      "default": "3",
+      "options": ["1", "2", "3", "4", "6"]
     }
   }
 }
