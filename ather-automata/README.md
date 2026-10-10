@@ -16,6 +16,7 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 | Terminal | `/ather` opens one pane: where your work is (Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○) and the proof so far, what needs you, then Next, then other work you could pick up. Enter hands a row to the session; a decision opens in place with its options as buttons, so you answer it where it is shown. |
 | Desktop app | `/ather` opens the same pane in the side panel; click a row to hand it to the session. |
 | Above the prompt | One line: what needs you, a running window, or just the name; then ☾ away, ⤢ open the pane, ✕ hide it until something is new. |
+| Status line | With `/warm on` and you idle: `◔ warm 1/3 · next 14:55`, when the cache is read next and how many reads of the cap are done. |
 | Pop-ups | A known trap with its fix, a build that really failed, a merge that dropped your edits, a worker gone quiet, a thin worker brief. |
 
 On a machine that also runs [week-calendar](../week-calendar/README.md), the pane's line under the title adds this week's figures: PRs merged and productive agent time.

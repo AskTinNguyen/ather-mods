@@ -137,7 +137,7 @@ const pressIn = (tree, label) => {
 
 {
   const { engine, done } = await boot()
-  expect('two commands: /ather and /away', engine.record.commands.join(',') === 'ather,away', engine.record.commands)
+  expect('three commands: /ather, /away and /warm', engine.record.commands.join(',') === 'ather,away,warm', engine.record.commands)
   expect('four model tools: status, away, profile, repos', engine.record.registeredTools.join(',') === 'status,away,profile,repos', engine.record.registeredTools)
   done()
   const quiet = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen' })
@@ -147,7 +147,7 @@ const pressIn = (tree, label) => {
   // there at once, and the console's reading starts the first time it is drawn, never before.
   const quietReads = () => quiet.record.logs.length + quiet.record.invalidations
   const before = quietReads()
-  expect('a session the desktop app starts (not interactive) still gets /ather and /away, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away' && quiet.record.registeredTools.join(',') === 'status,away,profile,repos' && quietReads() === before, quiet.record.commands)
+  expect('a session the desktop app starts (not interactive) still gets /ather, /away and /warm, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away,warm' && quiet.record.registeredTools.join(',') === 'status,away,profile,repos' && quietReads() === before, quiet.record.commands)
   const desk = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen', ghIssues: [{ number: 28887, title: '[BUG][GAS] Dodge cancels the wrong montage', url: 'https://github.com/sipherxyz/s2/issues/28887', labels: [{ name: 'combat' }], updatedAt: new Date().toISOString() }] })
   register(desk.on, {})
   await desk.start(false)
