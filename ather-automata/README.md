@@ -36,7 +36,7 @@ Clicking an issue opens its card: **Start an intent**, **Open on GitHub** or **C
 
 ## Proof
 
-Ather reads evidence from tool output, never from what the session says: an S2Editor build's own Result line, a test run whose tests passed (no tests, a failure or a non-zero exit is a fail), a started PIE or test simulation run, and a read-back from the server that was written to. A tech artist's own Editor check is `/ather checked`. Proof is kept with the intent for a day, so yesterday's build still counts this morning; each record names the session that produced it, and the Intent view names any other session's. Until you say your role, any role's proof counts. That is S2; in any other repository proof comes from the gates in its profile (see In a repository that is not S2).
+Ather reads evidence from tool output, never from what the session says: an S2Editor build's own Result line, a test run whose tests passed (no tests, a failure or a non-zero exit is a fail), a started PIE or test simulation run, and a read-back from the server that was written to. A tech artist's own Editor check is `/ather checked`. Proof is kept with the intent for a day, so yesterday's build still counts this morning; each record names the session that produced it, and the Intent view names any other session's. Until you say your role, any role's proof counts. That is S2; in any other repository proof comes from the gates in its profile and the tools the web pack knows (see In a repository that is not S2).
 
 ## Commands
 
@@ -81,7 +81,7 @@ A web app, a Python service, anything with a `package.json` or a `pyproject.toml
 What differs from S2:
 
 - **Roles:** Engineer (tests, lint and build), Designer (the browser check) and Product (the build and the browser check). Say yours with `/ather role`.
-- **Proof** comes only from the gates in `.ather/profile.json`, read from tool output. There is no Editor check: `/ather checked` belongs to S2.
+- **Proof** is read from tool output. The gates in `.ather/profile.json` say which commands count and what each proves; a test runner, a linter, a type check or a build the web pack knows on sight counts too, also when it is not a gate, so a pass of one test file can stand as test proof. When that is not enough for you, name the full command as a gate and ask for it. There is no Editor check: `/ather checked` belongs to S2.
 - **The base branch**, the one your team merges into: `base` in the profile when it is there, else the remote's default branch, else `main`. The team's intents are read from it, it is the branch fetched, and a push to it is held while you are away. Where this page says `main` or `origin/main`, read your base branch.
 
 **How a gate's command is matched.** A command proves a gate when it is the gate's command or starts with it: `npm test -- --watch=false` proves a gate written `npm test`. An environment prefix (`CI=1 npm test`) is dropped first.
