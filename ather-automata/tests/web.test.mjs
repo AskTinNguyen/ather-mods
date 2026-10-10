@@ -3,7 +3,8 @@
 // actions (A4), traps (A5) and words (A6). Tool outputs under fixtures/web were
 // captured from runs in a scratch checkout of AskTinNguyen/han-viet (machine paths
 // stripped); han-viet-profile.json and han-viet-package.json are its .ather/profile.json
-// and package.json scripts on main.
+// and package.json scripts on main. pnpm-recursive-*.txt are `pnpm test` in a scratch
+// pnpm workspace of two packages.
 import { describe, expect, test } from 'claude-code/testing'
 import fs from 'fs'
 
@@ -132,6 +133,17 @@ describe('web proof from tool output (A3)', () => {
     expect(read('npx jest', 'Tests:       12 passed, 12 total\n')).toEqual({ tests: 'pass' })
     expect(read('npx jest', 'Tests:       1 failed, 11 passed, 12 total\n', true)).toEqual({ tests: 'fail' })
     expect(read('npx vitest run', 'No test files found, exiting with code 1\n', true)).toEqual({ tests: 'fail' })
+  })
+  test('pnpm -r: the counts of every workspace package are read behind its prefix, even piped', () => {
+    const pnpm = makeWebPack({ pack: 'web', packageManager: 'pnpm', gates: [{ id: 'test', command: 'pnpm test', proofs: ['tests'] }] }, null)
+    /** @param {string} command @param {string} text @param {boolean} [isError] */
+    const tests = (command, text, isError = false) => pnpm.readShell(command, text, { isError }).rungs.find(one => one.rung === 'tests')?.value
+    // Three root runs (3, 2 and 2 tests), then packages/contracts (4) and packages/web (6).
+    expect(tests('pnpm test', fixture('pnpm-recursive-pass.txt'))).toEqual({ state: 'pass', detail: '17 passed, 0 failed' })
+    expect(tests('pnpm test | tail -40', fixture('pnpm-recursive-fail.txt'))?.state).toBe('fail')
+    expect(tests('pnpm test', fixture('pnpm-recursive-fail.txt'), true)?.state).toBe('fail')
+    // Text that only holds a count is still no summary line.
+    expect(tests('pnpm test', 'the last run said: ℹ pass 3\nsee the note: pass 3\n')?.state).toBe('none')
   })
   test('production: the commit status through gh, and a probe of the public URL', () => {
     expect(read('gh api repos/AskTinNguyen/han-viet/commits/5b71d7f/status', '{"state":"success","statuses":[]}')).toEqual({ prod: 'pass' })

@@ -115,9 +115,13 @@ export const exitOf = (command, text, ran) => {
 /** @param {RegExpMatchArray[]} matches @param {number} group */
 const sum = (matches, group) => matches.reduce((total, match) => total + Number(match[group] ?? 0), 0)
 
+// What a workspace runner puts before every line of a package's output: pnpm "packages/web test: ", turbo "web:test: ".
+const RUNNER_PREFIX = /^[\w@./-]+[ :][\w:.#-]+: /gm
+
 // Pass and fail counts from every runner whose summary is in the output, added up.
-/** @param {string} text */
-export const testCounts = text => {
+/** @param {string} raw */
+export const testCounts = raw => {
+  const text = raw.replace(RUNNER_PREFIX, '')
   const nodePass = [...text.matchAll(/^\s*[#ℹ]\s*pass\s+(\d+)\s*$/gmu)]
   const nodeFail = [...text.matchAll(/^\s*[#ℹ]\s*fail\s+(\d+)\s*$/gmu)]
   const nodeCancelled = [...text.matchAll(/^\s*[#ℹ]\s*cancelled\s+(\d+)\s*$/gmu)]
