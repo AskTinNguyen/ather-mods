@@ -1,7 +1,7 @@
 // @ts-check
 import { describe, expect, test } from 'claude-code/testing'
 
-import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
+import { awayReason, isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
@@ -270,6 +270,20 @@ describe('away windows', () => {
     expect(mandateText(away, 420)).toContain('never merge')
     expect(windowDecisions(`${text}\n### D-1 · new one\n`)).toEqual([{ id: 'D-1', question: 'new one' }])
     expect(isEvening(EVENING, 420)).toBe(true)
+  })
+
+  test('a window with no set end reads "until the work is done": its 24-hour limit is never the time the person is back', () => {
+    const owner = { person: 'tinnguyen', root: 'R' }
+    const open = newWindow({ hours: 24, untilDone: true, goal: '' }, NOON, 'L.md', owner)
+    const timed = newWindow({ hours: 8, untilDone: false, goal: '' }, NOON, 'L.md', owner)
+    // What a question is refused with while the person is away (watch.mjs): at 15:02 it said "away until 13:45".
+    expect(awayReason(open, 420)).toBe('The user is away until the work is done (hard stop 12:00 local time)')
+    expect(awayReason(open, 420)).not.toMatch(/away until \d/)
+    expect(awayReason(timed, 420)).toBe('The user is away until 20:00 local time')
+    expect(awayReason({ ...open, phase: 'review' }, 420)).toBe('The user has not reviewed the away window yet')
+    // The mandate says it in the same words.
+    expect(mandateText(open, 420)).toContain('the user is away until the work is done (hard stop 12:00 local time). When the goal is done, call the mcp__ather-automata__away tool')
+    expect(mandateText(timed, 420)).toContain('the user is away until 20:00 local time. Goal: continue the active work.')
   })
 })
 
