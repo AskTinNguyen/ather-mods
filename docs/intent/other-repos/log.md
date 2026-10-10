@@ -13,3 +13,12 @@ This session checked the main points against `main` (the constant in `team.mjs`,
 > merge pr 36 đi, rồi làm cả bốn đề xuất
 
 - Classified as a new intent, rev 1. `pnpm --dir web test` is left as it is (a gate can be written for it); the Node trap and the skill's contract template are Non-Goals.
+
+## 2026-10-10, built while the owner was away
+
+- The owner opened an autonomy window from the pane ("away until done, continue the active work"). The four slices were built by Claude Opus 5.5 builders and reviewed by Codex (gpt-6.1-sol), each to APPROVED after its fixes. The decisions taken for the owner are in the window's ledger (`docs/intent/multi-repo/decisions.md` in the session's checkout, not committed).
+- Rev 2 came from the first two reviews: Acceptance sections are read one by one, and only a gate that names a bare program is matched by that program at any path.
+- The window held one command of this session: a push to `main` of a throwaway origin made for a live check. It was not run again; the fixture was built with `develop` only.
+- PR 44 was opened at the owner's press of Create PR, before the last slices; it now holds all four.
+- Open for the owner: the texts a team on another base reads ("pushes to <base> or main", "PRs to <base>"); three limits left as they are (only a `cd` right before the command counts for a `cd` gate; a quoted program path with a space does not match; `pnpm --dir web test` is not `pnpm test`).
+
