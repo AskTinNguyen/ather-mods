@@ -50,6 +50,8 @@ const KEY = {
   lost: (/** @type {string} */ sid) => `lost:${sid}`,
   // The intents this session stopped tracking: a write into one does not track it again.
   untracked: (/** @type {string} */ sid) => `untracked:${sid}`,
+  // This session's keep-warm choice (/warm) and the TTL it learned.
+  warm: (/** @type {string} */ sid) => `warm:${sid}`,
   // A pack's roles are its own: a tech artist in S2 is not a role in a web repository. The Unreal pack's key is unprefixed.
   role: (/** @type {string} */ me, /** @type {string} */ prefix = '') => `role:${prefix}${personId(me)}`,
   area: (/** @type {string} */ me) => `area:${personId(me)}`,
@@ -73,13 +75,18 @@ const KEY = {
   hits: 'gotchaHits',
   ruled: 'gotchaRuled',
   score: 'score',
+  // What keeping the cache warm did on this machine.
+  warmLedger: 'warmLedger',
 }
 // What belongs to this lane and follows it to a new session id after /clear.
-const LANE_KEYS = [KEY.away, KEY.pinned, KEY.evidence, KEY.lost, KEY.untracked]
+const LANE_KEYS = [KEY.away, KEY.pinned, KEY.evidence, KEY.lost, KEY.untracked, KEY.warm]
+// Keep-warm's keys, for warm-store.mjs: the session's choice moves with its lane, the ledger is the machine's.
+export const WARM_KEYS = { choice: KEY.warm, ledger: KEY.warmLedger }
 
 let queue = Promise.resolve()
+// The one change queue: exported for warm-store.mjs, whose writes take their turn with every other change.
 /** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
-const serial = task => {
+export const serial = task => {
   const run = queue.then(task)
   queue = run.then(
     () => undefined,
@@ -964,7 +971,7 @@ export const prune = async (io, isGone) => {
   for (const key of await io.keys()) {
     // `<sid>|<checkout id>` is a session's proof in another checkout and goes with it; `<checkout id>|<slug>` is
     // an intent's (a checkout id has a / or a :) and belongs to no session.
-    const sid = /^(?:away|pinned|evidence|lost|untracked):(.+)$/.exec(key)?.[1]?.split('|')[0]
+    const sid = /^(?:away|pinned|evidence|lost|untracked|warm):(.+)$/.exec(key)?.[1]?.split('|')[0]
     if (sid && !/[/:]/.test(sid) && sid !== current) bySession.set(sid, [...(bySession.get(sid) ?? []), key])
   }
   for (const [sid, keys] of bySession) {
