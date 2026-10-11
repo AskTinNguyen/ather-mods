@@ -138,7 +138,8 @@ export const addLedger = (ledger, change) => {
 // "/warm", "/warm on", "/warm off", "/warm 2h", "/warm on 90m": null when the words are none of these.
 /** @param {string} args @returns {{ mode?: 'on' | 'off', hours?: number } | null} */
 export const parseWarmArgs = args => {
-  const words = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  // "10 hours" and "90 min" read as "10hours" and "90min": a number and its unit are one word.
+  const words = args.trim().toLowerCase().replace(/(\d)\s+(?=(?:h|hrs?|hours?|m|mins?|minutes?)\b)/g, '$1').split(/\s+/).filter(Boolean)
   /** @type {{ mode?: 'on' | 'off', hours?: number }} */
   const choice = {}
   for (const word of words) {

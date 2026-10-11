@@ -120,6 +120,12 @@ describe('keep warm: settings and /warm (A2)', () => {
     expect(parseWarmArgs('2h')).toEqual({ hours: 2, mode: 'on' })
     expect(parseWarmArgs('on 90m')).toEqual({ mode: 'on', hours: 1.5 })
     expect(parseWarmArgs('off 2h')).toEqual({ mode: 'off', hours: 2 })
+    // A space before the unit, as people type it; 12 hours at most.
+    expect(parseWarmArgs('10 hours')).toEqual({ hours: 10, mode: 'on' })
+    expect(parseWarmArgs('on 10 h')).toEqual({ mode: 'on', hours: 10 })
+    expect(parseWarmArgs('90 min')).toEqual({ hours: 1.5, mode: 'on' })
+    expect(parseWarmArgs('20 hours')).toEqual({ hours: 12, mode: 'on' })
+    expect(parseWarmArgs('10 apples')).toBe(null)
     expect(parseWarmArgs('please')).toBe(null)
   })
 })

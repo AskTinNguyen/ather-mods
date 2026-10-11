@@ -1,6 +1,6 @@
 {
   "name": "ather-automata",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Ather Automata: what needs you and what is next in every S2 session and web app repository (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
   "author": {
     "name": "Tin Nguyen"
@@ -23,9 +23,9 @@
     "cacheKeepWarmHours": {
       "type": "string",
       "title": "Keep warm for at most",
-      "description": "Hours of idle time to keep the cache warm for (one read each 55 minutes). Past it, the cache lapses as usual.",
+      "description": "Hours of idle time to keep the cache warm for (one read each 55 minutes), up to 12. Past it, the cache lapses as usual. Longer pays off only if you come back to the session: each read costs a tenth of the context, the re-write it saves twice it.",
       "default": "3",
-      "options": ["1", "2", "3", "4", "6"]
+      "options": ["1", "2", "3", "4", "6", "8", "10", "12"]
     }
   }
 }
