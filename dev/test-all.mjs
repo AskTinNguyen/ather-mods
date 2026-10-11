@@ -75,7 +75,7 @@ copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
 
 // Several real git checkouts under the temp folder: needs no S2 checkout.
 console.log('== repos e2e')
-sh(`node repos.mjs "${path.join(WORK, 'repos-report.md')}"`, e2e)
+sh(`node repos.mjs "${path.join(WORK, 'checkouts-report.md')}"`, e2e)
 
 console.log('== e2e')
 // The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for
