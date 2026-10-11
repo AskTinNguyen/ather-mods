@@ -52,6 +52,7 @@ function io($) {
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
     gitUser: async root => ((await $.process.run(['git', 'config', 'user.name'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitEmail: async root => ((await $.process.run(['git', 'config', 'user.email'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
     origin: root => readOrigin($, root),

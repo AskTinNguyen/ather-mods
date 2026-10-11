@@ -169,6 +169,7 @@ function io($) {
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
     gitUser: async root => ((await $.process.run(['git', 'config', 'user.name'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitEmail: async root => ((await $.process.run(['git', 'config', 'user.email'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
     origin: root => readOrigin($, root),
@@ -1190,8 +1191,11 @@ async function trackSlug($, slug, at) {
   const listed = intents.find(one => one.slug === slug && normalFolder(one.root) === normalFolder(at ?? root)) ?? intents.find(one => one.slug === slug)
   if (!(await state.track(io($), at ?? root, slug, { me }))) return listed ? `${slug} is on origin/${listed.base} but not in this checkout yet: pull ${listed.base} to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
-  // Its key names the checkout when it is another's: "web/login".
-  return `Now tracking ${(await trackedKey($)) || slug}.`
+  // Its key names the checkout when it is another's: "web/login". Tracking sends nothing to the session,
+  // so the reply says what comes next.
+  const { next } = await home($)
+  const then = next && !next.isTour && !next.work ? ` Next: ${next.label}.` : ''
+  return `Now tracking ${(await trackedKey($)) || slug}.${then}`
 }
 
 // Tracks a listed intent by its key, in its own checkout.
@@ -2195,7 +2199,12 @@ function paneView(el, $, model, columns, surface, crew = []) {
               )),
         ]),
       )
-      if (isHere && model.next && !model.next.look) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
+      // The tracked intent's next step, pressed here as on home. A step that only looks at it is this view, so no card.
+      const next = model.next
+      if (isHere && next && !next.look) {
+        const card = Box({ key: 'intent-next-card', flexDirection: 'column', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [choice(el, { key: 'intent-next-step', title: next.label, detail: next.hint, hotkey: 'n', isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id), width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })] })
+        rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), card]))
+      }
       const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
       // Stop tracking keeps the view on this intent, which then offers Work on this here again.
       const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = key), untrackHere($)), true) })

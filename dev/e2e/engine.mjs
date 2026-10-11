@@ -166,6 +166,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     process: {
       run: async (argv, init = {}) => {
         if (user !== undefined && argv.join(' ') === 'git config user.name') return { exitCode: 0, stdout: `${user}\n`, stderr: '' }
+        // The person the test names has no email: the real one (or a fixture repository's) would name someone else.
+        if (user !== undefined && argv.join(' ') === 'git config user.email') return { exitCode: 1, stdout: '', stderr: '' }
         if (aborts.times > 0 && aborts.argv !== '' && argv.join(' ').startsWith(aborts.argv)) {
           aborts.times -= 1
           throw new Error(`$.process.run(${argv[0]}) aborted`)
