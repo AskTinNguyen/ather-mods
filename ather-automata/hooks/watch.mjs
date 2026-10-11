@@ -28,8 +28,6 @@ const IDLE_MS = 10 * 60 * 1000
 
 let cwd = ''
 let briefGate = 'warn'
-// The `repos` option: more checkouts this session works with.
-let repos = ''
 // Traps already counted in this session: each counts once per session.
 const seenTraps = new Set()
 // Workers already warned about (quiet, or waiting on permission): each is warned once.
@@ -92,7 +90,6 @@ function laneOf($) {
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} options */
 export function register(on, options) {
   briefGate = String(options?.briefGate ?? 'warn')
-  repos = String(options?.repos ?? '')
   warm = initialWarm(options?.cacheKeepWarm, options?.cacheKeepWarmHours)
 
   on('session.start', async ($, e, next) => {
@@ -113,7 +110,7 @@ export function register(on, options) {
       // same names, which replaces them, so they carry its areas, roles and held kinds.
       state.onSetUp('watch', setUp => registerTools($, setUp))
       // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
-      void state.workspace(io($), root || cwd, repos, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
+      void state.workspace(io($), root || cwd, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
@@ -592,19 +589,6 @@ async function registerTools($, pack) {
         track: { type: 'string', description: 'The folder name of an intent under docs/intent for this session to track, or "none" to stop tracking.' },
         folder: { type: 'string', description: 'With track: another checkout holding that docs/intent, absolute or relative to the session folder. Default: this checkout.' },
       },
-    },
-  })
-  await $.tool.register({
-    name: 'repos',
-    description:
-      'Ather Automata: the folders Ather lists besides this session\'s own checkout; their intents, issues and PRs show in the Ather pane. Use it when the user asks to add, remove or show a repository or folder in Ather ("add the lancaster repository to Ather"). "add" keeps the folder\'s git checkout for this machine and lists it at once: the pane redraws by itself, with that checkout\'s worktrees too, and no restart or command is needed. "remove" takes a kept folder out. "list" shows every folder listed and where it comes from. Nothing on disk changes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['list', 'add', 'remove'] },
-        folder: { type: 'string', description: 'With add or remove: the folder, absolute, ~/…, or relative to the session folder. With remove it may also be the checkout\'s name as the pane shows it.' },
-      },
-      required: ['action'],
     },
   })
 }

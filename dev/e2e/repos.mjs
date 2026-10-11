@@ -1,6 +1,6 @@
-// End-to-end run of the Ather Automata hooks module over several real git checkouts: a parent
-// folder holding an S2 checkout and a web checkout, each with a local bare origin, driven
-// through the stand-in engine. Needs no S2_ROOT. `node repos.mjs [report.md]`.
+// End-to-end run of the Ather Automata hooks module over several real git checkouts: an S2
+// checkout and a web checkout side by side, each with a local bare origin, some with worktrees,
+// driven through the stand-in engine. Needs no S2_ROOT. `node repos.mjs [report.md]`.
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -14,7 +14,7 @@ const { register } = await import('./out/hooks/ather.mjs')
 // Folders with forward slashes, as the hooks name a checkout: on Windows path.join and the temporary folder give backslashes.
 const join = (...parts) => path.join(...parts).split(path.sep).join('/')
 // The folder's real path: git names a checkout by it (macOS's temporary folder is behind a link).
-const BASE = join(fs.realpathSync(fs.mkdtempSync(join(os.tmpdir(), 'ather-repos-'))))
+const BASE = join(fs.realpathSync(fs.mkdtempSync(join(os.tmpdir(), 'ather-checkouts-'))))
 fs.writeFileSync(join(BASE, 'gitconfig'), '')
 process.env.GIT_CONFIG_GLOBAL = join(BASE, 'gitconfig')
 process.env.GIT_CONFIG_NOSYSTEM = '1'
@@ -74,11 +74,18 @@ const makeWorkspace = () => {
   return { parent, s2, web }
 }
 
+// A worktree of `root` at <its parent>/<folder>, on a new branch of that name.
+const addTree = (root, folder) => {
+  const tree = join(path.dirname(root), folder)
+  git(root, 'worktree', 'add', '-q', '-b', folder, tree)
+  return tree
+}
+
 // A session opened in `root`, started as the app starts it.
-const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', options = {}, writable, ghAt, kept, cwd }) => {
+const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', writable, ghAt, kept, cwd }) => {
   const engine = createEngine({ root, surfaces: [], user, writable, ghAt, kept })
   engine.setSessionId(sessionId)
-  register(engine.on, { briefGate: 'warn', ...options })
+  register(engine.on, { briefGate: 'warn' })
   await engine.start(true, cwd)
   // The timezone probe and the workspace read run in the background.
   await new Promise(resolve => setTimeout(resolve, 500))
@@ -213,7 +220,7 @@ const readJson = file => {
   expect("the status tool names login with web's files", status.tracked?.slug === 'login' && status.tracked.checkout === web && status.tracked.checklist === '1/2', status.tracked)
   expect("… and the gates that prove it are web's, though the session is in s2", status.pack === 'web' && status.mergePolicy === 'with-proof' && status.gates.some(gate => gate.startsWith('npm test')), [status.pack, status.gates, status.mergePolicy])
 
-  // web is not in this session's workspace (s2 is a checkout, no repos option): its view still draws.
+  // web is not in this session's workspace (s2 is a checkout, web is beside it): its view still draws.
   engine.setSurfaces(['terminal'])
   await engine.modelTool({ tool: 'Edit', file_path: '../web/docs/intent/login/prompt.md', old_string: '- [ ] A2', new_string: '- [x] A2' })
   await engine.flush()
@@ -273,13 +280,14 @@ const readJson = file => {
 }
 
 {
-  // /ather intent <name>: a name only another workspace checkout has is tracked there.
-  const { s2, web } = makeWorkspace()
-  fs.mkdirSync(join(web, 'docs/intent/search'), { recursive: true })
-  fs.writeFileSync(join(web, 'docs/intent/search/prompt.md'), LOGIN)
-  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0005', options: { repos: '../web' } })
+  // /ather intent <name>: a name only a worktree of the session's clone has is tracked there.
+  const { s2 } = makeWorkspace()
+  const tree = addTree(s2, 's2-x')
+  fs.mkdirSync(join(tree, 'docs/intent/search'), { recursive: true })
+  fs.writeFileSync(join(tree, 'docs/intent/search/prompt.md'), LOGIN)
+  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0005' })
   await engine.command('ather', 'intent search')
-  expect('/ather intent search tracks it in web, the workspace checkout that has it', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'search', root: web }), engine.store.get(`pinned:${sid}`))
+  expect('/ather intent search tracks it in the worktree that has it', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'search', root: tree }), engine.store.get(`pinned:${sid}`))
 }
 
 // ---------------------------------------------------------------- one pane over the workspace
@@ -300,75 +308,70 @@ const writeIntent = (root, slug, text = LOGIN) => {
 }
 
 {
-  // A session opened in the parent folder over s2/ and web/, both with intents, `login` in both.
+  // A session in s2/, which has a worktree s2-x/ beside it, with web/ beside both: `login` in all three.
   const { parent, s2, web } = makeWorkspace()
+  const tree = addTree(s2, 's2-x')
   writeIntent(s2, 'login')
+  writeIntent(tree, 'login', LOGIN.replace('- [ ] A2', '- [x] A2'))
+  writeIntent(tree, 'draft', LOGIN.replace('# Login', '# Draft'))
   writeIntent(web, 'login')
-  // web's login is the later of the two by a clear second: Home offers the newer one to the next session,
-  // and two files written within one tick of the clock carry one time on Windows.
-  const earlier = new Date(Date.now() - 1000)
-  fs.utimesSync(join(s2, 'docs/intent/login/prompt.md'), earlier, earlier)
   writeIntent(web, 'search', LOGIN.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
+  // The worktree's login is the latest by a clear second: Home offers the newest to the next session.
+  const earlier = new Date(Date.now() - 1000)
+  for (const file of [join(s2, 'docs/intent/login/prompt.md'), join(tree, 'docs/intent/draft/prompt.md')]) fs.utimesSync(file, earlier, earlier)
   const ahead = { s2: advanceOrigin(s2), web: advanceOrigin(web) }
-  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0006' })
+  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0006' })
   engine.setSurfaces(['terminal'])
   await engine.command('ather', 'pick')
   const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
   const pick = await pane()
   const rows = intentRows(pick)
   const ids = rows.map(one => one.id).sort()
-  expect("Everything open lists both checkouts' intents by key", JSON.stringify(ids) === JSON.stringify(['intent:s2/login', 'intent:web/login', 'intent:web/search']), ids)
-  expect('the same slug in both checkouts is two rows', rows.filter(one => /\/login$/.test(one.id)).length === 2, rows.map(one => one.id))
-  expect('each row carries its repository\'s name', rows.length === 3 && rows.every(one => one.repo === one.id.slice('intent:'.length).split('/')[0]), rows.map(one => [one.id, one.repo]))
+  expect("Everything open lists the session's intents and its worktree's, by key, and nothing of web beside it", JSON.stringify(ids) === JSON.stringify(['intent:login', 'intent:s2-x/draft', 'intent:s2-x/login']), ids)
+  expect("each row carries its checkout's name: s2's own, and the worktree's folder's", rows.length === 3 && rows.every(one => one.repo === (one.id.startsWith('intent:s2-x/') ? 's2-x' : 's2')), rows.map(one => [one.id, one.repo]))
 
-  // The first draw fetches each checkout's origin, one after the other.
+  // The first draw fetches the session's origin alone.
   await engine.flush()
   await engine.flush()
   const fetches = fetchRuns(engine).map(run => run.argv[2])
-  expect('the first draw fetches both origins, one at a time, in workspace order', JSON.stringify(fetches) === JSON.stringify([s2, web]), fetches)
+  expect("the first draw fetches the session's checkout only", JSON.stringify(fetches) === JSON.stringify([s2]), fetches)
   const mains = { s2: git(s2, 'rev-parse', 'origin/main'), web: git(web, 'rev-parse', 'origin/main') }
-  expect("after it, each checkout's origin/main is at what its origin holds", mains.s2 === ahead.s2 && mains.web === ahead.web, { mains, ahead })
-  const synced = byKey(await pane(), 'sync')
-  // ↻ fetches every checkout that may fetch now.
-  synced?.props.onPress()
+  expect("after it, s2's origin/main is at what its origin holds, and web's was not fetched", mains.s2 === ahead.s2 && mains.web !== ahead.web, { mains, ahead })
+  byKey(await pane(), 'sync')?.props.onPress()
   await engine.flush()
   await engine.flush()
-  expect('↻ fetches both checkouts again', fetchRuns(engine).length === 4, fetchRuns(engine).map(run => run.argv[2]))
+  expect("↻ fetches the session's checkout again, and web still not", JSON.stringify(fetchRuns(engine).map(run => run.argv[2])) === JSON.stringify([s2, s2]), fetchRuns(engine).map(run => run.argv[2]))
 
-  // Work on this here on web's login tracks it in web.
-  rows.find(one => one.id === 'intent:web/login')?.press()
-  const view = await pane()
-  byKey(view, 'intent-work')?.props.onPress()
+  // Work on this here on the worktree's login tracks it there.
+  rows.find(one => one.id === 'intent:s2-x/login')?.press()
+  byKey(await pane(), 'intent-work')?.props.onPress()
   await engine.flush()
-  expect("Work on this here on web/login tracks { slug: 'login', root: web }", JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: web }), engine.store.get(`pinned:${sid}`))
-
-  // A parent-folder session still writes its heartbeat (to web only) and tells the model about the intent.
+  expect("Work on this here on s2-x/login tracks { slug: 'login', root: the worktree }", JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: tree }), engine.store.get(`pinned:${sid}`))
   await engine.timers()
-  const webBeat = readJson(join(web, '.ather/local/lanes', `${sid}.json`))
-  expect("the heartbeat lands in web's lanes, naming login", webBeat?.intent === 'login', webBeat)
-  expect('and nowhere in the parent folder or s2', !fs.existsSync(join(parent, '.ather')) && !fs.existsSync(join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`)), fs.readdirSync(parent))
-  const composed = await engine.compose()
-  expect('the lane text reaches the model', composed.sections.some(one => one.id === 'ather-automata:lane'), composed.sections.map(one => one.id))
+  const treeBeat = readJson(join(tree, 'Saved/AtherAutomata/lanes', `${sid}.json`))
+  expect("the heartbeat lands in the worktree's lanes, naming login, and none in web", treeBeat?.intent === 'login' && !fs.existsSync(join(web, '.ather/local/lanes', `${sid}.json`)), treeBeat)
 
   await engine.command('ather', 'untrack')
   expect('/ather untrack clears it', !engine.store.has(`pinned:${sid}`), engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'intent login')
+  expect("/ather intent login tracks the session's own login", engine.store.get(`pinned:${sid}`) === 'login', engine.store.get(`pinned:${sid}`))
   await engine.command('ather', 'intent web/login')
-  expect('/ather intent web/login tracks it in web', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: web }), engine.store.get(`pinned:${sid}`))
-  await engine.command('ather', 'intent s2/login')
-  expect('/ather intent s2/login tracks the other one, in s2', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: s2 }), engine.store.get(`pinned:${sid}`))
-  await engine.command('ather', 'intent web/login')
+  expect('/ather intent web/login tracks nothing: web is no checkout of the pane', engine.store.get(`pinned:${sid}`) === 'login', engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'intent s2-x/login')
+  expect('/ather intent s2-x/login tracks it in the worktree', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: tree }), engine.store.get(`pinned:${sid}`))
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
-  expect("on session end the parent-folder session's heartbeat in web says ended", readJson(join(web, '.ather/local/lanes', `${sid}.json`))?.hasEnded === true, readJson(join(web, '.ather/local/lanes', `${sid}.json`)))
+  expect("on session end the heartbeat in the worktree says ended", readJson(join(tree, 'Saved/AtherAutomata/lanes', `${sid}.json`))?.hasEnded === true, readJson(join(tree, 'Saved/AtherAutomata/lanes', `${sid}.json`)))
 
-  // The next session in the parent folder offers to continue web's login, and Next tracks it there.
-  const next = await boot({ root: parent, sessionId: 'harness-session-0007' })
+  // The next session in s2 offers to continue the worktree's login, and Next tracks it there.
+  const next = await boot({ root: s2, sessionId: 'harness-session-0007' })
   next.engine.setSurfaces(['terminal'])
   await next.engine.command('ather', '')
   const home = await next.engine.render('Pane', { bodyColumns: 110 }, 'ather')
   byKey(home, 'next')?.props.onPress()
   await next.engine.flush()
-  expect('Continue on Home tracks the intent in web', JSON.stringify(next.engine.store.get(`pinned:${next.sessionId}`)) === JSON.stringify({ slug: 'login', root: web }), next.engine.store.get(`pinned:${next.sessionId}`))
+  expect('Continue on Home tracks the intent in the worktree', JSON.stringify(next.engine.store.get(`pinned:${next.sessionId}`)) === JSON.stringify({ slug: 'login', root: tree }), next.engine.store.get(`pinned:${next.sessionId}`))
+  expect("and the parent folder holds nothing of Ather's", !fs.existsSync(join(parent, '.ather')) && !fs.existsSync(join(parent, 'Saved')), fs.readdirSync(parent))
 }
 
 {
@@ -496,7 +499,7 @@ const writeIntent = (root, slug, text = LOGIN) => {
   }
 }
 
-// ---------------------------------------------------------------- issues and PRs from every checkout
+// ---------------------------------------------------------------- issues and PRs of the session's repository
 
 // `gh issue list --json …` rows.
 const issue = (number, title, repo = 'x/y') => ({ number, title, url: `https://github.com/${repo}/issues/${number}`, labels: [], updatedAt: '2026-10-01T00:00:00Z' })
@@ -521,61 +524,53 @@ const issueRows = tree =>
 const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button' && [`pick-${id}`, `work-${id}`].includes(node.props?.key))?.props.label ?? '').trim().charAt(0)
 
 {
-  // A parent-folder session over s2/ and web/: each has its own issues and its own PR #12.
-  const { parent, s2, web } = makeWorkspace()
+  // A session in s2/, with a worktree, and web/ beside it: each repository has its own issues and its own PR #12.
+  const { s2, web } = makeWorkspace()
+  addTree(s2, 's2-x')
   withPr(s2, 'pay')
   withPr(web, 'pay')
   const ghAt = { [s2]: { issues: [issue(7, 'Boss shield'), issue(3, 'Rain')], prs: { 12: 'OPEN' } }, [web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')], prs: { 12: 'MERGED' } } }
-  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0009', ghAt })
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0009', ghAt })
   engine.setSurfaces(['terminal'])
-  await issuesRead(engine, ghAt)
+  await issuesRead(engine, { [s2]: {} })
+  await engine.flush()
   const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
-  expect('gh issue list runs once in each checkout, with the same argv', JSON.stringify(lists) === JSON.stringify([s2, web]), engine.record.ghAt)
-  expect('each list is kept under its repository', engine.store.get('issues:sipher/s2|tinnguyen')?.list?.length === 2 && engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 1, [...engine.store.keys()].filter(key => key.startsWith('issues')))
+  expect("gh issue list runs once, in the session's checkout, and never in web beside it", JSON.stringify(lists) === JSON.stringify([s2]), engine.record.ghAt)
+  expect("only s2's list is kept", JSON.stringify([...engine.store.keys()].filter(key => key.startsWith('issues:'))) === JSON.stringify(['issues:sipher/s2|tinnguyen']), [...engine.store.keys()].filter(key => key.startsWith('issues')))
 
   await engine.command('ather', 'pick')
   const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
   const rows = issueRows(await pane())
-  const ids = rows.map(one => one.id).sort()
-  expect('both lists show, #7 in both as two rows', JSON.stringify(ids) === JSON.stringify(['issue:s2#3', 'issue:s2#7', 'issue:web#7']), ids)
-  expect("each issue row carries its repository's name", rows.length === 3 && rows.every(one => one.repo === one.id.slice('issue:'.length).split('#')[0]), rows.map(one => [one.id, one.repo]))
+  expect("s2's issues show by their bare numbers, with no repository name, and web's #7 does not", JSON.stringify(rows.map(one => [one.id, one.repo]).sort()) === JSON.stringify([['issue:3', ''], ['issue:7', '']]), rows.map(one => [one.id, one.repo]))
 
-  // PRs: each checkout's #12 read with gh there and kept under its repository; each intent's stage follows its own.
+  // PRs: s2's #12 read with gh there; web's never asked.
   await engine.flush()
-  const prViews = engine.record.ghAt.filter(run => run.argv.startsWith('gh pr view 12 ')).map(run => run.cwd).sort()
-  expect("gh pr view 12 runs in each intent's checkout", JSON.stringify(prViews) === JSON.stringify([s2, web].sort()), engine.record.ghAt.filter(run => run.argv.startsWith('gh pr')))
-  expect("web's #12 is MERGED and s2's OPEN, each under its repository", engine.store.get('prStates:asktinnguyen/web')?.[12]?.state === 'MERGED' && engine.store.get('prStates:sipher/s2')?.[12]?.state === 'OPEN', [engine.store.get('prStates:asktinnguyen/web'), engine.store.get('prStates:sipher/s2')])
+  const prViews = engine.record.ghAt.filter(run => run.argv.startsWith('gh pr view 12 ')).map(run => run.cwd)
+  expect("gh pr view 12 runs in s2 only", prViews.length > 0 && prViews.every(cwd => cwd === s2), engine.record.ghAt.filter(run => run.argv.startsWith('gh pr')))
+  expect("s2's #12 is kept OPEN, and nothing of web's", engine.store.get('prStates:sipher/s2')?.[12]?.state === 'OPEN' && !engine.store.has('prStates:asktinnguyen/web'), [engine.store.get('prStates:sipher/s2'), engine.store.get('prStates:asktinnguyen/web')])
   const staged = await pane()
-  expect("web/pay is ready to close on web's merged #12; s2/pay still waits on s2's open #12", glyphOf(staged, 'intent:web/pay') === '✓' && glyphOf(staged, 'intent:s2/pay') === '◐', [glyphOf(staged, 'intent:web/pay'), glyphOf(staged, 'intent:s2/pay')])
+  expect("s2's pay waits on its open #12, and web's pay is not listed", glyphOf(staged, 'intent:pay') === '◐' && !intentRows(staged).some(one => one.id !== 'intent:pay'), [glyphOf(staged, 'intent:pay'), intentRows(staged).map(one => one.id)])
 
-  // Start an intent on web#7: the session is told to create it under web's docs/intent.
-  rows.find(one => one.id === 'issue:web#7')?.press()
+  // Open on GitHub and Copy link on #7 are s2's.
+  rows.find(one => one.id === 'issue:7')?.press()
   const card = await pane()
-  // Open on GitHub runs gh in web; Copy link copies web#7's address.
   byKey(card, 'issue-open')?.props.onPress()
   await engine.flush()
   const opened = engine.record.ghAt.filter(run => run.argv === 'gh issue view 7 --web')
-  expect("Open on GitHub on web#7 runs gh issue view 7 --web in web's root", opened.length === 1 && opened[0].cwd === web, opened)
+  expect("Open on GitHub on #7 runs gh issue view 7 --web in s2", opened.length === 1 && opened[0].cwd === s2, opened)
   byKey(card, 'issue-copy')?.props.onPress({})
   await engine.flush()
-  expect("Copy link on web#7 copies web's issue URL", engine.record.copies.at(-1) === 'https://github.com/AskTinNguyen/web/issues/7', engine.record.copies)
-  byKey(card, 'issue-start')?.props.onPress()
-  await engine.flush()
-  const sent = engine.record.submits.at(-1) ?? ''
-  const text = typeof sent === 'string' ? sent : (sent.text ?? '')
-  expect("Start an intent on web#7 names web's docs/intent", text.includes(`${web}/docs/intent`) && text.includes('#7'), text)
+  expect("Copy link on #7 copies s2's issue URL", engine.record.copies.at(-1) === 'https://github.com/x/y/issues/7', engine.record.copies)
 
-  // /ather issue: s2's #3 alone; web#7 exactly.
-  await engine.command('ather', 'issue 3')
+  // /ather issue 7 is s2's #7; web#7 names no checkout of the pane and starts nothing.
+  await engine.command('ather', 'issue 7')
   await engine.flush()
-  const three = engine.record.submits.at(-1)
-  const threeText = typeof three === 'string' ? three : (three?.text ?? '')
-  expect('/ather issue 3 starts the first checkout that has it (s2)', threeText.includes(`${s2}/docs/intent`), threeText)
+  const own = String(engine.record.submits.at(-1) ?? '')
+  expect("/ather issue 7 starts s2's #7", own.includes('Boss shield'), own)
+  const before = engine.record.submits.length
   await engine.command('ather', 'issue web#7')
   await engine.flush()
-  const seven = engine.record.submits.at(-1)
-  const sevenText = typeof seven === 'string' ? seven : (seven?.text ?? '')
-  expect('/ather issue web#7 picks web', sevenText.includes(`${web}/docs/intent`), sevenText)
+  expect('/ather issue web#7 starts nothing', engine.record.submits.length === before, engine.record.submits.slice(before))
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
 }
 
@@ -594,45 +589,7 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
   expect('its issue is issue:7, with no repository name', JSON.stringify(rows.map(one => [one.id, one.repo])) === JSON.stringify([['issue:7', '']]), rows.map(one => [one.id, one.repo]))
 }
 
-{
-  // A session in s2/ with web/ as well: /ather issue 7 is s2's own #7 (as before); web#7 is web's.
-  const { s2, web } = makeWorkspace()
-  writeIntent(s2, 'login')
-  writeIntent(web, 'search')
-  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(7, 'Login form')] } }
-  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0011', options: { repos: '../web' }, ghAt })
-  await issuesRead(engine, ghAt)
-  await engine.command('ather', 'issue 7')
-  await engine.flush()
-  const own = String(engine.record.submits.at(-1) ?? '')
-  expect("/ather issue 7 prefers the session checkout's #7", own.includes('Boss shield') && !own.includes(`${web}/docs/intent`), own)
-  await engine.command('ather', 'issue #7')
-  await engine.flush()
-  expect('#7 is the same issue', String(engine.record.submits.at(-1) ?? '') === own, engine.record.submits.at(-1))
-  await engine.command('ather', 'issue web#7')
-  await engine.flush()
-  const other = String(engine.record.submits.at(-1) ?? '')
-  expect('/ather issue web#7 is web\'s', other.includes('Login form') && other.includes(`${web}/docs/intent`), other)
-}
-
-{
-  // A session in s2/ with web/ (repos) that has no docs/intent yet: web's issues are still read and listed.
-  const { s2, web } = makeWorkspace()
-  writeIntent(s2, 'login')
-  fs.rmSync(join(web, 'docs'), { recursive: true, force: true })
-  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(5, 'Login form', 'AskTinNguyen/web')] } }
-  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0012', options: { repos: '../web' }, ghAt })
-  engine.setSurfaces(['terminal'])
-  await issuesRead(engine, ghAt)
-  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
-  expect('gh issue list runs in s2 and in web, which has no intents', JSON.stringify(lists) === JSON.stringify([s2, web]), engine.record.ghAt)
-  await engine.command('ather', 'pick')
-  const rows = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
-  expect("web's issue is listed with its name, s2's as issue:7", JSON.stringify(rows.map(one => [one.id, one.repo]).sort()) === JSON.stringify([['issue:7', 's2'], ['issue:web#5', 'web']]), rows.map(one => [one.id, one.repo]))
-  expect('and no PR or intent read runs in web', !engine.record.ghAt.some(run => run.cwd === web && run.argv.startsWith('gh pr')), engine.record.ghAt)
-}
-
-// ---------------------------------------------------------------- deciding in place and grouping, over the workspace
+// ---------------------------------------------------------------- deciding in place and grouping, over a checkout and its worktree
 
 const DECISION = '# Findings\n\n## F-1 (2026-10-01, rev 1) | blocking: yes | status: open (director)\n\nOne page or two?\n\n**Options:**\n- A (recommended): one page\n- B: two pages\n'
 const writeFindings = (root, slug, text = DECISION) => fs.writeFileSync(join(root, 'docs/intent', slug, 'findings.md'), text)
@@ -642,50 +599,54 @@ const lastSubmit = engine => {
 }
 
 {
-  // A parent-folder session over s2/ and web/: `login` is yours in both, each with an open decision; `board` is a teammate's in both.
-  const { parent, s2, web } = makeWorkspace()
-  for (const root of [s2, web]) {
-    writeIntent(root, 'login')
+  // A session in s2/ with a worktree s2-x/: `login` is yours in both, each with an open decision; `board` is a teammate's in both.
+  const { s2 } = makeWorkspace()
+  const tree = addTree(s2, 's2-x')
+  for (const [root, text] of [[s2, LOGIN], [tree, LOGIN.replace('- [ ] A2', '- [x] A2')]]) {
+    writeIntent(root, 'login', text)
     writeFindings(root, 'login')
-    writeIntent(root, 'board', LOGIN.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
+    writeIntent(root, 'board', text.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
   }
-  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0013' })
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [tree]: { issues: [issue(7, 'Boss shield')] } }
+  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0013', ghAt })
   engine.setSurfaces(['terminal'])
+  await issuesRead(engine, { [s2]: {} })
+  await engine.flush()
   await engine.command('ather', '')
   const pane = (surface = 'terminal') => engine.render('Pane', { bodyColumns: 110 }, 'ather', surface)
   const keys = tree => nodesOf(tree).map(node => node.props?.key).filter(key => typeof key === 'string')
-  const WEB_CALL = 'call:web/login:F-1'
-  const S2_CALL = 'call:s2/login:F-1'
+  const TREE_CALL = 'call:s2-x/login:F-1'
+  const OWN_CALL = 'call:login:F-1'
   let home = await pane()
-  expect("Needs you lists both checkouts' decisions, each by its intent's key", [WEB_CALL, S2_CALL].every(id => keys(home).includes(`item-${id}`)), keys(home).filter(key => key.startsWith('item-')))
+  expect("Needs you lists both checkouts' decisions, each by its intent's key", [TREE_CALL, OWN_CALL].every(id => keys(home).includes(`item-${id}`)), keys(home).filter(key => key.startsWith('item-')))
   const desk = keys(await pane('desktop'))
-  expect('on the desktop too: both decisions, and no element key drawn twice', [WEB_CALL, S2_CALL].every(id => desk.includes(`item-${id}`)) && desk.every((key, at, list) => list.indexOf(key) === at), desk.filter(key => /call:/.test(key)))
+  expect('on the desktop too: both decisions, and no element key drawn twice', [TREE_CALL, OWN_CALL].every(id => desk.includes(`item-${id}`)) && desk.every((key, at, list) => list.indexOf(key) === at), desk.filter(key => /call:/.test(key)))
   home = await pane()
-  // Open web's decision if the other is the one opened, then answer A.
-  if (!byKey(home, `option-${WEB_CALL}-A`)) {
-    byKey(home, `item-${WEB_CALL}`)?.props.onPress()
+  // Open the worktree's decision if the other is the one opened, then answer A.
+  if (!byKey(home, `option-${TREE_CALL}-A`)) {
+    byKey(home, `item-${TREE_CALL}`)?.props.onPress()
     home = await pane()
   }
   const before = engine.record.submits.length
-  byKey(home, `option-${WEB_CALL}-A`)?.props.onPress()
+  byKey(home, `option-${TREE_CALL}-A`)?.props.onPress()
   await engine.flush()
   const answer = engine.record.submits.length > before ? lastSubmit(engine) : ''
-  expect("answering A on web's decision hands the session web/login and web's findings file", answer.includes('F-1 on web/login') && answer.includes(`${web}/docs/intent/login/findings.md`) && !answer.includes(s2), answer)
+  expect("answering A on the worktree's decision hands the session s2-x/login and the worktree's findings file", answer.includes('F-1 on s2-x/login') && answer.includes(`${tree}/docs/intent/login/findings.md`) && !answer.includes(`${s2}/docs`), answer)
   const answered = await pane()
-  expect("web's row reads decided; s2's same-slug decision still waits, with its answers", keys(answered).includes(`item-${WEB_CALL}-done`) && !keys(answered).includes(`item-${S2_CALL}-done`) && Boolean(byKey(answered, `option-${S2_CALL}-A`)), keys(answered).filter(key => /call:/.test(key)))
-  byKey(answered, `explain-${S2_CALL}`)?.props.onPress()
+  expect("the worktree's row reads decided; s2's same-slug decision still waits, with its answers", keys(answered).includes(`item-${TREE_CALL}-done`) && !keys(answered).includes(`item-${OWN_CALL}-done`) && Boolean(byKey(answered, `option-${OWN_CALL}-A`)), keys(answered).filter(key => /call:/.test(key)))
+  byKey(answered, `explain-${OWN_CALL}`)?.props.onPress()
   await engine.flush()
-  expect("Explain on s2's decision names s2/login and s2's findings file", lastSubmit(engine).includes('F-1 on s2/login') && lastSubmit(engine).includes(`${s2}/docs/intent/login/findings.md`), lastSubmit(engine))
-  byKey(answered, `findings-${S2_CALL}`)?.props.onPress()
+  expect("Explain on s2's decision names its plain slug and nothing of the worktree", lastSubmit(engine).includes('F-1 on login') && !lastSubmit(engine).includes(tree), lastSubmit(engine))
+  byKey(answered, `findings-${OWN_CALL}`)?.props.onPress()
   const finding = await pane()
-  expect("Open findings on s2's decision shows that finding", textIn(byKey(finding, 'title')).includes('s2/login') && byKey(finding, 'finding-markdown')?.props.text.startsWith('## F-1'), textIn(byKey(finding, 'title')))
+  expect("Open findings on s2's decision shows that finding", textIn(byKey(finding, 'title')).includes('login') && !textIn(byKey(finding, 'title')).includes('s2-x') && byKey(finding, 'finding-markdown')?.props.text.startsWith('## F-1'), textIn(byKey(finding, 'title')))
   nodesOf(finding).find(node => node.type === 'Button' && node.props.key === 'finding-back')?.props.onPress()
-  // The session records the answer in web's findings: read again, web's decision is gone and s2's is still there.
-  writeFindings(web, 'login', `${DECISION}\n**Resolution:** accepted A.\n`)
+  // The session records the answer in the worktree's findings: read again, its decision is gone and s2's is still there.
+  writeFindings(tree, 'login', `${DECISION}\n**Resolution:** accepted A.\n`)
   await engine.turnEnd()
   await engine.flush()
   const settled = keys(await pane())
-  expect("once web's findings read resolved, its decision leaves Needs you and s2's stays", !settled.some(key => key.includes(WEB_CALL)) && settled.includes(`item-${S2_CALL}`), settled.filter(key => /call:/.test(key)))
+  expect("once the worktree's findings read resolved, its decision leaves Needs you and s2's stays", !settled.some(key => key.includes(TREE_CALL)) && settled.includes(`item-${OWN_CALL}`), settled.filter(key => /call:/.test(key)))
 
   // Everything open, grouped by Person (the default): both checkouts' rows, the teammate's two under one head, on either surface.
   await engine.command('ather', 'pick')
@@ -693,23 +654,37 @@ const lastSubmit = engine => {
     const pick = await pane(surface)
     const rows = intentRows(pick)
     const ids = rows.map(one => one.id).sort()
-    expect(`Everything open (${surface}) lists each checkout's rows once, the same slugs twice`, JSON.stringify(ids) === JSON.stringify(['intent:s2/board', 'intent:s2/login', 'intent:web/board', 'intent:web/login']), ids)
-    expect(`each row (${surface}) carries its repository's name`, rows.length === 4 && rows.every(one => one.repo === one.id.slice('intent:'.length).split('/')[0]), rows.map(one => [one.id, one.repo]))
+    expect(`Everything open (${surface}) lists each checkout's rows once, the same slugs twice`, JSON.stringify(ids) === JSON.stringify(['intent:board', 'intent:login', 'intent:s2-x/board', 'intent:s2-x/login']), ids)
+    expect(`each row (${surface}) carries its checkout's name`, rows.length === 4 && rows.every(one => one.repo === (one.id.startsWith('intent:s2-x/') ? 's2-x' : 's2')), rows.map(one => [one.id, one.repo]))
     const heads = nodesOf(pick).filter(node => /^sub-others-\d+-text$/.test(node.props?.key ?? '')).map(textIn)
     expect(`grouped by Person (${surface}), the teammate's intents from both checkouts are one group of 2`, heads.length === 1 && / · 2$/.test(heads[0]), heads)
     expect(`no element key is drawn twice (${surface})`, keys(pick).every((key, at, list) => list.indexOf(key) === at), keys(pick).filter((key, at, list) => list.indexOf(key) !== at))
+    const issues = issueRows(pick)
+    expect(`the repository's assigned issue is listed once (${surface}), by its bare number under the session's checkout`, JSON.stringify(issues.map(one => [one.id, one.repo])) === JSON.stringify([['issue:7', 's2']]), issues.map(one => [one.id, one.repo]))
   }
+  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
+  expect("gh issue list runs for the repository in the session's checkout only", lists.length > 0 && lists.every(cwd => cwd === s2), engine.record.ghAt)
 
-  // Without a pane, the Work question names each intent by its key: choosing the second works on that one.
+  // /ather issue s2-x#7: the repository's issue, started in the worktree named.
+  await engine.command('ather', 'issue s2-x#7')
+  await engine.flush()
+  expect('/ather issue s2-x#7 starts the assigned issue in the worktree', lastSubmit(engine).includes('Boss shield') && lastSubmit(engine).includes(`${tree}/docs/intent`), lastSubmit(engine))
+  await engine.command('ather', 'intent s2-x/login')
+  expect('/ather intent s2-x/login tracks it in the worktree', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: tree }), engine.store.get(`pinned:${sid}`))
+  await engine.command('ather', 'untrack')
+
+  // Without a pane, /ather find names each match by its key, and the Work question names each intent by its key: choosing the second works on that one.
   engine.setSurfaces([])
+  const found = String((await engine.command('ather', 'find login'))?.text ?? '')
+  expect("/ather find login without a pane names both checkouts' intents by key", found.includes('s2-x/login') && found.replace(/s2-x\/login/g, '').includes('login'), found)
   engine.script.push(question => question.options[1].label)
   await engine.command('ather', 'pick')
   await engine.flush()
   const asked = engine.record.dialogs.at(-1)
   const labels = (asked?.options ?? []).map(option => option.label)
-  expect('the Work question lists the same slug in two checkouts as two different choices', labels.includes('s2/login') && labels.includes('web/login'), labels)
-  const chosen = { 's2/login': s2, 'web/login': web }[asked?.answer]
-  expect('choosing one of them tracks it in its own checkout', chosen !== undefined && JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: chosen }), [asked?.answer, engine.store.get(`pinned:${sid}`)])
+  expect('the Work question lists the same slug in two checkouts as two different choices', labels.includes('login') && labels.includes('s2-x/login'), labels)
+  const chosen = { login: 'login', 's2-x/login': { slug: 'login', root: tree } }[asked?.answer]
+  expect('choosing one of them tracks it in its own checkout', chosen !== undefined && JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify(chosen), [asked?.answer, engine.store.get(`pinned:${sid}`)])
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
 }
 
@@ -727,183 +702,82 @@ const lastSubmit = engine => {
   expect('a session in s2 alone: the answer names the plain slug and no path', lastSubmit(engine).includes('F-1 on login:') && !lastSubmit(engine).includes('findings.md'), lastSubmit(engine))
 }
 
-// ---------------------------------------------------------------- two checkouts of one repository
-
-{
-  // A parent folder holding two clones of one origin, s2/ and s2-b/: `login` is yours in both, each with an open decision.
-  const { parent, s2 } = makeWorkspace()
-  fs.rmSync(join(parent, 'web'), { recursive: true, force: true })
-  const second = join(parent, 's2-b')
-  git(parent, 'clone', '-q', git(s2, 'remote', 'get-url', 'origin'), second)
-  git(second, 'config', 'user.name', 'Tin Nguyen')
-  git(second, 'config', 'user.email', 'tin@example.com')
-  for (const root of [s2, second]) {
-    writeIntent(root, 'login')
-    writeFindings(root, 'login')
-  }
-  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [second]: { issues: [issue(7, 'Boss shield')] } }
-  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0015', ghAt })
-  engine.setSurfaces(['terminal'])
-  await issuesRead(engine, { [s2]: {} })
-  await engine.flush()
-  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
-  expect("gh issue list runs once for the repository, in its first checkout", JSON.stringify(lists) === JSON.stringify([s2]), engine.record.ghAt)
-
-  const pane = (surface = 'terminal') => engine.render('Pane', { bodyColumns: 110 }, 'ather', surface)
-  const keys = tree => nodesOf(tree).map(node => node.props?.key).filter(key => typeof key === 'string')
-  const twice = tree => keys(tree).filter((key, at, list) => list.indexOf(key) !== at)
-  await engine.command('ather', 'pick')
-  for (const surface of ['terminal', 'desktop']) {
-    const pick = await pane(surface)
-    const rows = intentRows(pick)
-    expect(`two clones of one repository (${surface}): login is two rows with different keys`, JSON.stringify(rows.map(one => one.id).sort()) === JSON.stringify(['intent:s2-b/login', 'intent:s2/login']), rows.map(one => one.id))
-    expect(`each row (${surface}) carries its own checkout's name`, JSON.stringify(rows.map(one => one.repo).sort()) === JSON.stringify(['s2', 's2-b']), rows.map(one => [one.id, one.repo]))
-    expect(`no element key is drawn twice (${surface})`, twice(pick).length === 0, twice(pick))
-    const issues = issueRows(pick)
-    expect(`the repository's assigned issue is listed once (${surface}), under its first checkout`, JSON.stringify(issues.map(one => [one.id, one.repo])) === JSON.stringify([['issue:s2#7', 's2']]), issues.map(one => [one.id, one.repo]))
-  }
-
-  await engine.command('ather', 'intent s2-b/login')
-  expect('/ather intent s2-b/login tracks it in its own folder', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: second }), engine.store.get(`pinned:${sid}`))
-  await engine.command('ather', 'intent s2/login')
-  expect('/ather intent s2/login tracks the first clone', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: s2 }), engine.store.get(`pinned:${sid}`))
-  await engine.command('ather', 'untrack')
-
-  // Both decisions wait, each under its own key; answering one leaves the other waiting.
-  await engine.command('ather', '')
-  const FIRST_CALL = 'call:s2/login:F-1'
-  const SECOND_CALL = 'call:s2-b/login:F-1'
-  let home = await pane()
-  expect("Needs you lists both clones' decisions, each by its own key", [FIRST_CALL, SECOND_CALL].every(id => keys(home).includes(`item-${id}`)), keys(home).filter(key => key.startsWith('item-')))
-  const desk = await pane('desktop')
-  expect('on the desktop too: both decisions, and no element key drawn twice', [FIRST_CALL, SECOND_CALL].every(id => keys(desk).includes(`item-${id}`)) && twice(desk).length === 0, twice(desk))
-  home = await pane()
-  if (!byKey(home, `option-${SECOND_CALL}-A`)) {
-    byKey(home, `item-${SECOND_CALL}`)?.props.onPress()
-    home = await pane()
-  }
-  const before = engine.record.submits.length
-  byKey(home, `option-${SECOND_CALL}-A`)?.props.onPress()
-  await engine.flush()
-  const answer = engine.record.submits.length > before ? lastSubmit(engine) : ''
-  expect("answering the second clone's decision hands the session its findings file, not the first's", answer.includes(`${second}/docs/intent/login/findings.md`) && !answer.includes(`${s2}/docs`), answer)
-  const answered = await pane()
-  expect("the second clone's row reads decided; the first's still waits, with its answers", keys(answered).includes(`item-${SECOND_CALL}-done`) && !keys(answered).includes(`item-${FIRST_CALL}-done`) && Boolean(byKey(answered, `option-${FIRST_CALL}-A`)), keys(answered).filter(key => /call:/.test(key)))
-  writeFindings(second, 'login', `${DECISION}\n**Resolution:** accepted A.\n`)
-  await engine.turnEnd()
-  await engine.flush()
-  const settled = keys(await pane())
-  expect("once the second clone's findings read resolved, its decision leaves and the first's stays", !settled.some(key => key.includes(SECOND_CALL)) && settled.includes(`item-${FIRST_CALL}`), settled.filter(key => /call:/.test(key)))
-
-  // /ather issue s2-b#7: the repository's issue, started in the checkout named.
-  await engine.command('ather', 'issue s2-b#7')
-  await engine.flush()
-  expect('/ather issue s2-b#7 starts the assigned issue in the second clone', lastSubmit(engine).includes('Boss shield') && lastSubmit(engine).includes(`${second}/docs/intent`), lastSubmit(engine))
-  // Without a pane, /ather find names each match by its key.
-  engine.setSurfaces([])
-  const found = String((await engine.command('ather', 'find login'))?.text ?? '')
-  expect('/ather find login without a pane names both clones\' intents by key', found.includes('s2/login') && found.includes('s2-b/login'), found)
-  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
-}
-
-{
-  // A session in s2/ with a second clone named by the repos option: its own rows stay bare, the clone's carry its folder's name.
-  const { parent, s2 } = makeWorkspace()
-  const second = join(parent, 's2-b')
-  git(parent, 'clone', '-q', git(s2, 'remote', 'get-url', 'origin'), second)
-  writeIntent(s2, 'login')
-  writeIntent(second, 'login')
-  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [second]: { issues: [issue(7, 'Boss shield')] } }
-  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0016', options: { repos: '../s2-b' }, ghAt })
-  engine.setSurfaces(['terminal'])
-  await issuesRead(engine, { [s2]: {} })
-  await engine.flush()
-  expect("gh issue list runs once, in the session's own checkout", JSON.stringify(engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)) === JSON.stringify([s2]), engine.record.ghAt)
-  await engine.command('ather', 'pick')
-  const pick = await engine.render('Pane', { bodyColumns: 110 }, 'ather')
-  expect("the session's own login keeps its bare slug; the clone's is s2-b/login", JSON.stringify(intentRows(pick).map(one => one.id).sort()) === JSON.stringify(['intent:login', 'intent:s2-b/login']), intentRows(pick).map(one => one.id))
-  expect("the issue is listed once, under the session's own checkout, by its bare number", JSON.stringify(issueRows(pick).map(one => one.id)) === JSON.stringify(['issue:7']), issueRows(pick).map(one => one.id))
-}
-
 // ---------------------------------------------------------------- proof, changes and Continue per checkout
 
 {
-  // A parent folder holding two clones of one with-proof repository, web/ and web-b/, `login` yours in both.
+  // A with-proof web checkout and its worktree web-b/ beside it, `login` yours in both; the session is in web/.
   const parent = fs.mkdtempSync(join(BASE, 'work-'))
   const web = makeCheckout(parent, 'web', {
     owner: 'AskTinNguyen',
     name: 'web',
     files: { ...INTENTS, 'package.json': `${JSON.stringify({ name: 'web', scripts: { test: 'node --test' } }, null, 2)}\n`, '.ather/profile.json': `${JSON.stringify(WEB_PROFILE, null, 2)}\n` },
   })
-  const webB = join(parent, 'web-b')
-  git(parent, 'clone', '-q', git(web, 'remote', 'get-url', 'origin'), webB)
-  git(webB, 'config', 'user.name', 'Tin Nguyen')
-  git(webB, 'config', 'user.email', 'tin@example.com')
-  for (const root of [web, webB]) writeIntent(root, 'login')
+  const webB = addTree(web, 'web-b')
+  writeIntent(web, 'login')
+  writeIntent(webB, 'login', LOGIN.replace('- [x] A1', '- [ ] A1'))
   const ids = { web: checkoutId('asktinnguyen/web', web), webB: checkoutId('asktinnguyen/web', webB) }
   const kept = (engine, prefix) => [...engine.store.keys()].filter(key => key.startsWith(prefix))
   const ghAt = { [web]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] }, [webB]: { issues: [issue(7, 'Login form', 'AskTinNguyen/web')] } }
-  const { engine, sessionId: sid } = await boot({ root: parent, sessionId: 'harness-session-0017', writable: [parent], ghAt })
+  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0017', writable: [parent], ghAt })
   engine.setSurfaces(['terminal'])
   await issuesRead(engine, { [web]: {} })
   await engine.flush()
 
-  // Nothing tracked: this session's proof in one clone is not its proof in the other.
+  // Nothing tracked: this session's proof in its checkout is not its proof in the worktree.
   await startAway(engine)
-  expect('the away window runs in the parent folder', engine.store.get(`away:${sid}`)?.phase === 'running', engine.store.get(`away:${sid}`))
-  await bash(engine, 'cd web && npm test', NODE_TEST_PASS)
-  expect("a passing npm test in web/ is this session's proof in web/ only", engine.store.get(`evidence:${sid}|${ids.web}`)?.tests?.state === 'pass' && kept(engine, 'evidence:').length === 1, kept(engine, 'evidence:'))
-  const otherMerge = await bash(engine, 'cd web-b && gh pr merge 3')
-  expect("web/'s proof does not allow a with-proof merge in web-b/", otherMerge.deny !== undefined && parked(engine, sid).at(-1)?.command === 'cd web-b && gh pr merge 3', { deny: otherMerge.deny, parked: parked(engine, sid) })
-  const sameMerge = await bash(engine, 'cd web && gh pr merge 3')
+  await bash(engine, 'npm test', NODE_TEST_PASS)
+  expect("a passing npm test in web/ is this session's proof in web/ only", engine.store.get(`evidence:${sid}`)?.tests?.state === 'pass' && kept(engine, 'evidence:').length === 1, kept(engine, 'evidence:'))
+  const otherMerge = await bash(engine, 'cd ../web-b && gh pr merge 3')
+  expect("web/'s proof does not allow a with-proof merge in the worktree", otherMerge.deny !== undefined && parked(engine, sid).at(-1)?.command === 'cd ../web-b && gh pr merge 3', { deny: otherMerge.deny, parked: parked(engine, sid) })
+  const sameMerge = await bash(engine, 'gh pr merge 3')
   expect('it allows the merge in web/ itself', sameMerge.deny === undefined, sameMerge.deny)
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
 
   // web/login tracked and proved, then edited: neither its proof nor its changes are web-b/login's.
-  await engine.command('ather', 'intent web/login')
-  expect('/ather intent web/login tracks it in web/', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: web }), engine.store.get(`pinned:${sid}`))
-  await bash(engine, 'cd web && npm test', NODE_TEST_PASS)
+  await engine.command('ather', 'intent login')
+  expect('/ather intent login tracks it in web/', engine.store.get(`pinned:${sid}`) === 'login', engine.store.get(`pinned:${sid}`))
+  await bash(engine, 'npm test', NODE_TEST_PASS)
   expect("npm test in web/ proves web/'s login", engine.store.get(`evidence:${ids.web}|login`)?.tests?.state === 'pass', kept(engine, 'evidence:'))
   expect("and records nothing for web-b/'s login", !engine.store.has(`evidence:${ids.webB}|login`), kept(engine, 'evidence:'))
-  await engine.modelTool({ tool: 'Edit', file_path: 'web/docs/intent/login/prompt.md', old_string: '- [ ] A2', new_string: '- [x] A2' })
+  await engine.modelTool({ tool: 'Edit', file_path: 'docs/intent/login/prompt.md', old_string: '- [ ] A2', new_string: '- [x] A2' })
   await engine.flush()
   expect("an edit to web/'s login records its change for web/ only", engine.store.get(`changes:${ids.web}|login`)?.length === 1 && kept(engine, 'changes:').length === 1, kept(engine, 'changes:'))
 
-  // The other clone's login tracked: its own Continue, and the first clone's proof does not count for it.
+  // The worktree's login tracked: its own Continue, and web/'s proof does not count for it.
   await engine.command('ather', 'intent web-b/login')
   expect('/ather intent web-b/login tracks it in web-b/', JSON.stringify(engine.store.get(`pinned:${sid}`)) === JSON.stringify({ slug: 'login', root: webB }), engine.store.get(`pinned:${sid}`))
-  expect('each clone keeps its own Continue', engine.store.get(`last:${ids.web}|tinnguyen`) === 'login' && engine.store.get(`last:${ids.webB}|tinnguyen`) === 'login' && kept(engine, 'last:').length === 2, kept(engine, 'last:'))
+  expect('each checkout keeps its own Continue', engine.store.get(`last:${ids.web}|tinnguyen`) === 'login' && engine.store.get(`last:${ids.webB}|tinnguyen`) === 'login' && kept(engine, 'last:').length === 2, kept(engine, 'last:'))
   const status = JSON.parse((await engine.modelTool({ tool: 'mcp__ather-automata__status' })).result)
   expect("web-b/'s login has no proof from web/'s test run", status.tracked?.checkout === webB && status.evidence?.tests?.state !== 'pass', [status.tracked, status.evidence])
   await startAway(engine)
-  const intentMerge = await bash(engine, 'cd web-b && gh pr merge 3')
+  const intentMerge = await bash(engine, 'cd ../web-b && gh pr merge 3')
   expect("web/login's proof does not allow web-b/login's merge", intentMerge.deny !== undefined, intentMerge.deny)
-  await bash(engine, 'cd web-b && npm test', NODE_TEST_PASS)
-  const proved = await bash(engine, 'cd web-b && gh pr merge 3')
+  await bash(engine, 'cd ../web-b && npm test', NODE_TEST_PASS)
+  const proved = await bash(engine, 'cd ../web-b && gh pr merge 3')
   expect("web-b/'s own passing test run does", proved.deny === undefined && engine.store.get(`evidence:${ids.webB}|login`)?.tests?.state === 'pass', [proved.deny, kept(engine, 'evidence:')])
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
 
   // The repository's issue is GitHub's: read once, listed once.
   const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
-  expect('gh issue list still runs once for the repository', JSON.stringify(lists) === JSON.stringify([web]), engine.record.ghAt)
+  expect('gh issue list runs once for the repository, in the session checkout', lists.length > 0 && lists.every(cwd => cwd === web), engine.record.ghAt)
   expect('and its list is kept under the repository', kept(engine, 'issues:').length === 1 && engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 1, kept(engine, 'issues:'))
   await engine.command('ather', 'pick')
   const issues = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
-  expect("the repository's assigned issue is listed once", JSON.stringify(issues.map(one => one.id)) === JSON.stringify(['issue:web#7']), issues.map(one => one.id))
+  expect("the repository's assigned issue is listed once", JSON.stringify(issues.map(one => one.id)) === JSON.stringify(['issue:7']), issues.map(one => one.id))
 
   // Untracking web-b/login takes web-b/'s Continue only: the next session continues web/'s.
   await engine.command('ather', 'untrack')
   expect("untracking web-b/login leaves web/'s Continue", engine.store.get(`last:${ids.web}|tinnguyen`) === 'login' && kept(engine, 'last:').length === 1, kept(engine, 'last:'))
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
-  const next = await boot({ root: parent, sessionId: 'harness-session-0018' })
+  const next = await boot({ root: web, sessionId: 'harness-session-0018' })
   next.engine.setSurfaces(['terminal'])
   await next.engine.command('ather', '')
   byKey(await next.engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'next')?.props.onPress()
   await next.engine.flush()
-  expect("Continue on Home tracks web/'s login, not web-b/'s", JSON.stringify(next.engine.store.get(`pinned:${next.sessionId}`)) === JSON.stringify({ slug: 'login', root: web }), next.engine.store.get(`pinned:${next.sessionId}`))
+  expect("Continue on Home tracks web/'s login, not web-b/'s", next.engine.store.get(`pinned:${next.sessionId}`) === 'login', next.engine.store.get(`pinned:${next.sessionId}`))
 }
 
 // ---------------------------------------------------------------- one id through a symbolic link
@@ -941,14 +815,15 @@ const lastSubmit = engine => {
   expect('it keeps one Continue and one proof record', kept(next.engine, 'last:').length === 1 && kept(next.engine, 'evidence:').length === 1, [...kept(next.engine, 'last:'), ...kept(next.engine, 'evidence:')])
   await next.engine.end('other')
 
-  // The parent folder through a link: web/ is another checkout there, with the same id.
+  // s2/ beside it, opened through a link to their parent folder: web/ is another checkout there, with the same id.
   const linkParent = join(BASE, 'link-work')
   fs.symlinkSync(parent, linkParent, 'junction')
-  const above = await boot({ root: linkParent, sessionId: 'harness-session-0021', kept: engine.store })
-  await bash(above.engine, 'cd web && npm test', NODE_TEST_PASS)
-  expect("a session in the linked parent folder keeps its proof in web/ under web's real folder", above.engine.store.get(`evidence:${above.sessionId}|${id}`)?.tests?.state === 'pass', kept(above.engine, 'evidence:'))
-  await above.engine.command('ather', 'intent web/pay')
-  expect('and tracking web/pay moves the one Continue', JSON.stringify(above.engine.store.get(`pinned:${above.sessionId}`)) === JSON.stringify({ slug: 'pay', root: `${linkParent}/web` }) && above.engine.store.get(`last:${id}|tinnguyen`) === 'pay' && kept(above.engine, 'last:').length === 1, [above.engine.store.get(`pinned:${above.sessionId}`), ...kept(above.engine, 'last:')])
+  const above = await boot({ root: `${linkParent}/s2`, sessionId: 'harness-session-0021', kept: engine.store, writable: [linkParent] })
+  await bash(above.engine, 'cd ../web && npm test', NODE_TEST_PASS)
+  expect("a session in s2 through the linked parent keeps its proof in ../web under web's real folder", above.engine.store.get(`evidence:${above.sessionId}|${id}`)?.tests?.state === 'pass', kept(above.engine, 'evidence:'))
+  await above.engine.modelTool({ tool: 'Edit', file_path: '../web/docs/intent/pay/prompt.md', old_string: '- [ ] A2', new_string: '- [x] A2' })
+  await above.engine.flush()
+  expect("and an edit to pay in ../web tracks it there, its change kept under web's real folder", JSON.stringify(above.engine.store.get(`pinned:${above.sessionId}`)) === JSON.stringify({ slug: 'pay', root: `${linkParent}/web` }) && above.engine.store.get(`changes:${id}|pay`)?.length === 1 && kept(above.engine, 'changes:').every(key => key.startsWith(`changes:${id}|`)) && kept(above.engine, 'last:').length === 1, [above.engine.store.get(`pinned:${above.sessionId}`), ...kept(above.engine, 'changes:'), ...kept(above.engine, 'last:')])
   expect('no hook threw', next.engine.record.hookErrors.length === 0 && above.engine.record.hookErrors.length === 0, [...next.engine.record.hookErrors, ...above.engine.record.hookErrors])
   await above.engine.end('other')
 }
@@ -966,35 +841,7 @@ const refresh = async engine => {
 }
 
 {
-  // A parent folder over s2/ (on GitHub, one issue) and web/ (its remotes are not on GitHub).
-  const { parent, s2, web } = makeWorkspace()
-  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { fails: NOT_ON_GITHUB } }
-  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0022', ghAt })
-  engine.setSurfaces(['terminal'])
-  await issuesRead(engine, ghAt)
-  await engine.flush()
-  expect('reading issues at the start schedules no retry for the checkout that is not on GitHub', !engine.record.afters.includes(60000), engine.record.afters)
-  const quiet = await refresh(engine)
-  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
-  expect('gh issue list ran in both checkouts', lists.includes(s2) && lists.includes(web), lists)
-  expect('a refresh reports no failure for the checkout that is not on GitHub', quiet.said !== '' && !quiet.said.includes('none of the git remotes') && !quiet.said.includes(web), quiet.said)
-  expect('and schedules no retry', quiet.retries === 0, quiet)
-  expect("the GitHub checkout's issue is kept, and an empty list for the other", engine.store.get('issues:sipher/s2|tinnguyen')?.list?.length === 1 && engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 0, [...engine.store.keys()].filter(key => key.startsWith('issues')))
-  const rows = issueRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather'))
-  expect("the GitHub checkout's issue is listed", JSON.stringify(rows.map(one => one.id)) === JSON.stringify(['issue:s2#7']), rows.map(one => one.id))
-
-  // A real failure in s2/ is one: named by the checkout's short name, and tried again.
-  ghAt[s2] = { fails: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' }
-  const failed = await refresh(engine)
-  expect("a real failure is reported with its checkout's short name, not its folder", failed.said.includes('s2') && failed.said.includes('HTTP 502') && !failed.said.includes(s2) && !failed.said.includes(parent), failed.said)
-  expect('and says nothing of the checkout that is not on GitHub', !failed.said.includes('none of the git remotes') && !failed.said.includes('web'), failed.said)
-  expect('and is tried again', failed.retries === 1, failed)
-  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
-  await engine.end('other')
-}
-
-{
-  // One checkout whose remotes are not on GitHub: a failure, as before.
+  // A checkout whose remotes are not on GitHub: a failure.
   const { web } = makeWorkspace()
   const ghAt = { [web]: { fails: NOT_ON_GITHUB } }
   const { engine } = await boot({ root: web, sessionId: 'harness-session-0023', ghAt })
@@ -1009,48 +856,26 @@ const refresh = async engine => {
   await engine.end('other')
 }
 
-{
-  // Two clones of one repository whose remotes are not on GitHub: several checkouts, one gh call.
-  const parent = fs.mkdtempSync(join(BASE, 'work-'))
-  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: INTENTS })
-  const webB = join(parent, 'web-b')
-  git(parent, 'clone', '-q', git(web, 'remote', 'get-url', 'origin'), webB)
-  const ghAt = { [web]: { fails: NOT_ON_GITHUB }, [webB]: { fails: NOT_ON_GITHUB } }
-  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0024', ghAt })
-  engine.setSurfaces(['terminal'])
-  await issuesRead(engine, { [web]: {} })
-  await engine.flush()
-  const both = await refresh(engine)
-  const lists = engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
-  expect('two clones of a repository that is not on GitHub are asked once each time, in the first', lists.length > 0 && lists.every(cwd => cwd === web), lists)
-  expect('and no retry is scheduled, at the start or on a refresh', !engine.record.afters.includes(60000), engine.record.afters)
-  // What a refresh that worked and found nothing says is what was said of them.
-  ghAt[web] = { issues: [] }
-  const empty = await refresh(engine)
-  expect('and are no failure: an empty list is kept, and the refresh says what one with no issues says', engine.store.get('issues:asktinnguyen/web|tinnguyen')?.list?.length === 0 && both.said !== '' && both.said === empty.said, [both.said, empty.said])
-  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
-  await engine.end('other')
-}
-
 // ---------------------------------------------------------------- the workspace stays with the session's root
 
 {
-  // A session opened in the parent folder starts again (a resume, a reload) after the shell moved into web/.
-  const { parent, s2, web } = makeWorkspace()
+  // A session opened in s2/ starts again (a resume, a reload) after the shell moved into web/ beside it.
+  const { s2, web } = makeWorkspace()
   writeIntent(s2, 'login')
   writeIntent(web, 'login')
-  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0025', cwd: web })
+  writeIntent(web, 'search')
+  const { engine } = await boot({ root: s2, sessionId: 'harness-session-0025', cwd: web })
   engine.setSurfaces(['terminal'])
   await engine.command('ather', 'pick')
   const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id).sort()
-  expect("a session started with the shell in web/ still lists both checkouts' intents by key", JSON.stringify(ids) === JSON.stringify(['intent:s2/login', 'intent:web/login']), ids)
-  await engine.command('ather', 'intent s2/login')
-  expect('and tracks s2/login by its key', JSON.stringify(engine.store.get('pinned:harness-session-0025')) === JSON.stringify({ slug: 'login', root: s2 }), engine.store.get('pinned:harness-session-0025'))
+  expect("a session started with the shell in web/ still lists s2's intents alone", JSON.stringify(ids) === JSON.stringify(['intent:login']), ids)
+  await engine.command('ather', 'intent login')
+  expect("and tracks s2's login", engine.store.get('pinned:harness-session-0025') === 'login', engine.store.get('pinned:harness-session-0025'))
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 }
 
-// ---------------------------------------------------------------- no intents, in a workspace
+// ---------------------------------------------------------------- no intents, and a parent folder
 
 {
   const PACKAGE = { 'package.json': `${JSON.stringify({ name: 'app' }, null, 2)}\n` }
@@ -1063,16 +888,15 @@ const refresh = async engine => {
     return { out: out.text, dialogs: engine.record.dialogs.slice(dialogs), sent: engine.record.submits.slice(submits) }
   }
 
-  // The session's own checkout has no intents; web/, beside it, has one.
+  // The session's own checkout has no intents; web/, beside it, has one: the session has no pane.
   const parent = fs.mkdtempSync(join(BASE, 'work-'))
   const app = makeCheckout(parent, 'app', { owner: 'AskTinNguyen', name: 'app', files: PACKAGE })
   const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, ...PACKAGE } })
   writeIntent(web, 'login')
-  const { engine } = await boot({ root: app, sessionId: 'harness-session-0026', options: { repos: '../web' } })
+  const { engine } = await boot({ root: app, sessionId: 'harness-session-0026' })
   engine.setSurfaces(['terminal'])
   const opened = await run(engine, 'pick')
-  const ids = intentRows(await engine.render('Pane', { bodyColumns: 110 }, 'ather')).map(one => one.id)
-  expect("a session whose own checkout has no intents opens the pane on the other checkout's, and is asked nothing", opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather') && JSON.stringify(ids) === JSON.stringify(['intent:web/login']), [opened, ids])
+  expect("a session whose own checkout has no intents opens no pane on the checkout beside it, and is asked nothing", opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.length === 0, [opened, engine.record.opens])
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 
@@ -1086,6 +910,33 @@ const refresh = async engine => {
   expect('a parent folder whose checkouts have no intents: /ather asks nothing, submits nothing and opens no pane', asked.dialogs.length === 0 && asked.sent.length === 0 && none.engine.record.opens.length === 0, [asked, none.engine.record.opens])
   expect('no hook threw', none.engine.record.hookErrors.length === 0, none.engine.record.hookErrors)
   await none.engine.end('other')
+}
+
+{
+  // A session opened in the parent folder of s2/ and web/, both with intents: it is in no checkout, so it has no pane,
+  // even with a docs/intent of its own left there.
+  const { parent, s2, web } = makeWorkspace()
+  writeIntent(s2, 'login')
+  writeIntent(web, 'login')
+  writeIntent(parent, 'leftover')
+  const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(5, 'Login form', 'AskTinNguyen/web')] } }
+  const said = async one => [String((await one.command('ather', ''))?.text ?? ''), String((await one.command('ather', 'pick'))?.text ?? ''), String((await one.command('away', '2h nap'))?.text ?? '')]
+  // Each session is asked before the next one starts: the hooks keep one session's folder at a time.
+  const { engine } = await boot({ root: parent, sessionId: 'harness-session-0060', ghAt })
+  engine.setSurfaces(['terminal'])
+  const parentSaid = await said(engine)
+  await engine.flush()
+  // A checkout with nothing that makes a pack of it, and no docs/intent: a repository without intents.
+  const empty = makeCheckout(fs.mkdtempSync(join(BASE, 'plain-')), 'plain', { owner: 'AskTinNguyen', name: 'plain', files: { 'notes.txt': 'notes\n' } })
+  const without = await boot({ root: empty, sessionId: 'harness-session-0061' })
+  without.engine.setSurfaces(['terminal'])
+  const withoutSaid = await said(without.engine)
+  expect('a parent-folder session: /ather and /away answer as in a repository without intents', parentSaid[0] !== '' && JSON.stringify(parentSaid) === JSON.stringify(withoutSaid), [parentSaid, withoutSaid])
+  expect('and open no pane, ask nothing and send nothing', engine.record.opens.length === 0 && engine.record.dialogs.length === 0 && engine.record.submits.length === 0, [engine.record.opens, engine.record.dialogs, engine.record.submits])
+  expect("and read neither checkout's issues nor fetch either origin", engine.record.ghAt.length === 0 && fetchRuns(engine).length === 0, [engine.record.ghAt, fetchRuns(engine).map(run => run.argv)])
+  expect('no hook threw', engine.record.hookErrors.length === 0 && without.engine.record.hookErrors.length === 0, [...engine.record.hookErrors, ...without.engine.record.hookErrors])
+  await engine.end('other')
+  await without.engine.end('other')
 }
 
 // ---------------------------------------------------------------- a clone's worktrees
@@ -1228,12 +1079,12 @@ const refresh = async engine => {
 {
   // web/ beside s2/, which has a worktree nested inside it with an intent of its own.
   const nested = () => {
-    const { parent, s2, web } = makeWorkspace()
+    const { s2, web } = makeWorkspace()
     const x = join(s2, '.claude/worktrees/x')
     git(s2, 'worktree', 'add', '-q', '-b', 'x', x)
     writeIntent(web, 'login')
     writeIntent(x, 'draft')
-    return { parent, s2, web, x }
+    return { s2, web, x }
   }
   const idsOf = async engine => {
     engine.setSurfaces(['terminal'])
@@ -1244,19 +1095,19 @@ const refresh = async engine => {
     return ids
   }
 
-  const above = nested()
-  const first = await boot({ root: above.parent, sessionId: 'harness-session-0032' })
+  const inS2 = nested()
+  const first = await boot({ root: inS2.s2, sessionId: 'harness-session-0032' })
   const ids = await idsOf(first.engine)
-  expect("a parent-folder session finds the worktree nested in one of its checkouts", JSON.stringify(ids) === JSON.stringify(['intent:web/login', 'intent:x/draft']), ids)
-  expect('and fetches twice in a pass, once for each clone', JSON.stringify(fetchRuns(first.engine).map(run => run.argv[2])) === JSON.stringify([above.s2, above.web]), fetchRuns(first.engine).map(run => run.argv[2]))
+  expect('a session in s2 finds the worktree nested in it, and lists nothing of web beside it', JSON.stringify(ids) === JSON.stringify(['intent:x/draft']), ids)
+  expect('and fetches once in a pass, for its clone', JSON.stringify(fetchRuns(first.engine).map(run => run.argv[2])) === JSON.stringify([inS2.s2]), fetchRuns(first.engine).map(run => run.argv[2]))
   expect('no hook threw', first.engine.record.hookErrors.length === 0, first.engine.record.hookErrors)
   await first.engine.end('other')
 
-  const named = nested()
-  const second = await boot({ root: named.web, sessionId: 'harness-session-0033', options: { repos: '../s2' } })
+  const inWeb = nested()
+  const second = await boot({ root: inWeb.web, sessionId: 'harness-session-0033' })
   const found = await idsOf(second.engine)
-  expect("a session in web whose repos option names the clone finds its worktree", JSON.stringify(found) === JSON.stringify(['intent:login', 'intent:x/draft']), found)
-  expect('and fetches twice in a pass, once for each clone', JSON.stringify(fetchRuns(second.engine).map(run => run.argv[2])) === JSON.stringify([named.web, named.s2]), fetchRuns(second.engine).map(run => run.argv[2]))
+  expect("a session in web lists its own intent, and not the worktree of s2 beside it", JSON.stringify(found) === JSON.stringify(['intent:login']), found)
+  expect('and fetches once in a pass, for its clone', JSON.stringify(fetchRuns(second.engine).map(run => run.argv[2])) === JSON.stringify([inWeb.web]), fetchRuns(second.engine).map(run => run.argv[2]))
   expect('no hook threw', second.engine.record.hookErrors.length === 0, second.engine.record.hookErrors)
   await second.engine.end('other')
 }
@@ -1283,203 +1134,6 @@ const refresh = async engine => {
   expect('a checkout with no origin and a worktree: gh issue list runs once a read, in the checkout', JSON.stringify(withTree.lists) === JSON.stringify(alone.lists.map(() => withTree.web)) && alone.lists.length === 2, [alone.lists, withTree.lists])
   expect('and Refresh reports what it reports without the worktree', withTree.said !== '' && withTree.said === alone.said, [alone.said, withTree.said])
   expect('no hook threw', alone.errors.length === 0 && withTree.errors.length === 0, [...alone.errors, ...withTree.errors])
-}
-
-// ---------------------------------------------------------------- the traced folders
-
-{
-  const KEPT = 'tracedFolders'
-  const kept = engine => engine.store.get(KEPT) ?? []
-  // Wide enough that no folder is cut short.
-  const pane = engine => engine.render('Pane', { bodyColumns: 400 }, 'ather')
-  const idsOf = async engine => {
-    await engine.command('ather', 'pick')
-    return intentRows(await pane(engine)).map(one => one.id).sort()
-  }
-  // The Repositories view, opened from its row at the foot of Home.
-  const reposView = async engine => {
-    await engine.command('ather', '')
-    byKey(await pane(engine), 'home-repos')?.props.onPress()
-    return pane(engine)
-  }
-  // The folders the view lists, in order (each row's second line begins with the whole path), and whether each has Remove.
-  const sources = tree => nodesOf(tree).filter(node => /^repos-path-\d+$/.test(node.props?.key ?? '')).map(node => ({ folder: textIn(node).split(' · ')[0].trim(), hasRemove: Boolean(byKey(tree, node.props.key.replace('path', 'remove'))) }))
-  // A press there, until the pane says what came of it; the issues are then read in the background.
-  const said = async (engine, press) => {
-    const before = engine.record.toasts.length
-    press()
-    for (let tries = 0; tries < 100 && engine.record.toasts.length === before; tries += 1) await engine.flush()
-    await engine.flush()
-    return engine.record.toasts.slice(before).join('\n')
-  }
-  // Add a folder: its field, then the path typed into it.
-  const add = async (engine, folder) => {
-    byKey(await reposView(engine), 'repos-add')?.props.onPress()
-    const field = byKey(await pane(engine), 'repos-add-field')
-    return said(engine, () => field?.props.onSubmit(folder))
-  }
-  const threw = engine => [...engine.record.hookErrors, ...engine.record.toasts.filter(text => /Error/.test(text))]
-
-  // web/ beside s2/, which has a worktree with an intent of its own; app/ is a third checkout.
-  const { parent, s2, web } = makeWorkspace()
-  const tree = join(parent, 's2-x')
-  git(s2, 'worktree', 'add', '-q', '-b', 'x', tree)
-  const app = makeCheckout(parent, 'app', { owner: 'AskTinNguyen', name: 'app', files: INTENTS })
-  writeIntent(web, 'login')
-  writeIntent(s2, 'boss')
-  writeIntent(tree, 'draft')
-  const ghAt = { [web]: { issues: [] }, [s2]: { issues: [issue(7, 'Boss shield')] }, [app]: { issues: [] } }
-  const { engine, sessionId: sid } = await boot({ root: web, sessionId: 'harness-session-0040', ghAt })
-  engine.setSurfaces(['terminal'])
-  await issuesRead(engine, { [web]: {} })
-  const lists = () => engine.record.ghAt.filter(run => run.argv === LIST).map(run => run.cwd)
-  expect("a session in web lists web's intents alone, and its view its own checkout, without Remove", JSON.stringify(await idsOf(engine)) === JSON.stringify(['intent:login']) && JSON.stringify(sources(await reposView(engine))) === JSON.stringify([{ folder: web, hasRemove: false }]) && !lists().includes(s2), [await idsOf(engine), sources(await reposView(engine)), lists()])
-
-  expect('Everything open has no Repositories row', (await engine.command('ather', 'pick'), !nodesOf(await pane(engine)).some(node => /repos/.test(node.props?.key ?? ''))), nodesOf(await pane(engine)).map(node => node.props?.key).filter(key => /repos/.test(key ?? '')))
-  nodesOf(await reposView(engine)).find(node => node.type === 'Button' && node.props?.key === 'repos-back')?.props.onPress()
-  expect('Back in the view returns to Home', Boolean(byKey(await pane(engine), 'home-repos')) && !byKey(await pane(engine), 'repos-add'), nodesOf(await pane(engine)).map(node => node.props?.key).filter(Boolean))
-  expect('on the desktop Home draws the row too', Boolean(byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather', 'desktop'), 'home-repos')))
-
-  const added = await add(engine, '../s2')
-  expect("Add a folder with ../s2 keeps s2's folder for the machine", added !== '' && JSON.stringify(kept(engine)) === JSON.stringify([s2]), [added, kept(engine)])
-  expect('the view lists it after the session checkout, with Remove', JSON.stringify(sources(await pane(engine))) === JSON.stringify([{ folder: web, hasRemove: false }, { folder: s2, hasRemove: true }]), sources(await pane(engine)))
-  const ids = await idsOf(engine)
-  expect("without a restart the pane lists s2's intents and its worktree's", JSON.stringify(ids) === JSON.stringify(['intent:login', 'intent:s2-x/draft', 'intent:s2/boss']), ids)
-  expect('and gh issue list has run in s2', lists().includes(s2), engine.record.ghAt)
-
-  // Proof this session saw in s2 is kept for that checkout.
-  await bash(engine, 'cd ../s2 && Build.bat S2Editor Win64 Development', 'Result: Succeeded')
-  const proof = `evidence:${sid}|${checkoutId('sipher/s2', s2)}`
-  expect("a build in ../s2 is kept under s2's checkout", engine.store.get(proof)?.build?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
-  const store = new Map(engine.store)
-
-  const view = await reposView(engine)
-  const gone = await said(engine, () => byKey(view, 'repos-remove-1')?.props.onPress())
-  const after = await idsOf(engine)
-  expect("Remove takes s2's intents and its worktree's out of the pane, and the folder out of the list", gone !== '' && JSON.stringify(after) === JSON.stringify(['intent:login']) && kept(engine).length === 0, [gone, after, kept(engine)])
-  expect("the proof kept for s2's checkout is still in the store", engine.store.get(proof)?.build?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
-
-  const loose = fs.mkdtempSync(join(BASE, 'loose-'))
-  const nowhere = await add(engine, loose)
-  expect('a path in no checkout stores nothing and says why', nowhere !== '' && kept(engine).length === 0, [nowhere, kept(engine)])
-  const own = await add(engine, join(web, 'docs'))
-  expect("the session's own checkout again stores nothing and says why", own !== '' && own !== nowhere && kept(engine).length === 0, [own, kept(engine)])
-  expect('no hook threw', threw(engine).length === 0, threw(engine))
-  await engine.end('other')
-
-  // A second session, in app/, on the machine as it was while s2 was kept.
-  const second = await boot({ root: app, sessionId: 'harness-session-0041', ghAt, kept: store })
-  second.engine.setSurfaces(['terminal'])
-  const fromStart = await idsOf(second.engine)
-  expect("a second session in another folder, with the same store, lists s2's intents from its start", JSON.stringify(fromStart) === JSON.stringify(['intent:s2-x/draft', 'intent:s2/boss']), fromStart)
-  expect('no hook threw', threw(second.engine).length === 0, threw(second.engine))
-  await second.engine.end('other')
-
-  // Eight checkouts: the session's and seven the setting names. A ninth is not added.
-  const full = fs.mkdtempSync(join(BASE, 'full-'))
-  const nine = [makeCheckout(full, 'c1', { owner: 'AskTinNguyen', name: 'c1', files: INTENTS })]
-  for (const name of ['c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9']) {
-    fs.mkdirSync(join(full, name))
-    git(join(full, name), 'init', '-q', '-b', 'main')
-    nine.push(join(full, name))
-  }
-  const eight = await boot({ root: nine[0], sessionId: 'harness-session-0042', options: { repos: nine.slice(1, 8).map(one => `../${path.basename(one)}`).join(';') } })
-  eight.engine.setSurfaces(['terminal'])
-  const ninth = await add(eight.engine, nine[8])
-  expect('a ninth checkout stores nothing and says why', ninth !== '' && ninth !== own && ninth !== nowhere && kept(eight.engine).length === 0, [ninth, kept(eight.engine)])
-  expect('no hook threw', threw(eight.engine).length === 0, threw(eight.engine))
-  await eight.engine.end('other')
-
-  // The same by command, in a session that draws no pane.
-  const typed = await boot({ root: web, sessionId: 'harness-session-0043', ghAt })
-  const run = async args => {
-    const out = await typed.engine.command('ather', args)
-    await typed.engine.flush()
-    return out.text
-  }
-  const addedBy = await run('repos add ../s2')
-  expect('/ather repos add ../s2 keeps s2 and replies', addedBy !== '' && JSON.stringify(kept(typed.engine)) === JSON.stringify([s2]), [addedBy, kept(typed.engine)])
-  const again = await run(`repos add ${tree}`)
-  expect("/ather repos add of s2's worktree, already in the workspace, stores nothing more", again !== addedBy && JSON.stringify(kept(typed.engine)) === JSON.stringify([s2]), [again, kept(typed.engine)])
-  const listed = await run('repos')
-  expect('/ather repos without a pane replies with the folders, and opens nothing', listed.includes(web) && listed.includes(s2) && typed.engine.record.opens.length === 0 && typed.engine.record.dialogs.length === 0, [listed, typed.engine.record.opens])
-  await run('intent s2/boss')
-  expect('the added checkout is worked with at once: /ather intent s2/boss tracks it there', JSON.stringify(typed.engine.store.get('pinned:harness-session-0043')) === JSON.stringify({ slug: 'boss', root: s2 }), typed.engine.store.get('pinned:harness-session-0043'))
-  const removedBy = await run('repos remove s2')
-  expect('/ather repos remove s2, its name in the pane, takes it out', removedBy !== '' && kept(typed.engine).length === 0, [removedBy, kept(typed.engine)])
-  await run('repos add ../s2')
-  await run('repos remove ../s2')
-  expect('/ather repos remove ../s2, its folder, takes it out too', kept(typed.engine).length === 0, kept(typed.engine))
-  // Kept through a link to s2/, removed by its real path: one folder under two spellings.
-  const link = join(BASE, 'link-s2')
-  fs.symlinkSync(s2, link, 'junction')
-  await run(`repos add ${link}`)
-  const through = kept(typed.engine)
-  await run('repos remove ../s2')
-  expect('a folder kept through a link is removed by its real path', JSON.stringify(through) === JSON.stringify([link]) && kept(typed.engine).length === 0, [through, kept(typed.engine)])
-  const unknown = await run('repos remove ../app')
-  expect('/ather repos remove of a folder that was not added says so and changes nothing', unknown !== removedBy && kept(typed.engine).length === 0, [unknown, kept(typed.engine)])
-  expect('no hook threw', threw(typed.engine).length === 0, threw(typed.engine))
-  await typed.engine.end('other')
-
-  // A session in a repository with no docs/intent adds the folder that has intents.
-  const plain = makeCheckout(parent, 'plain', { owner: 'AskTinNguyen', name: 'plain', files: { 'package.json': '{ "name": "plain" }\n' } })
-  const none = await boot({ root: plain, sessionId: 'harness-session-0044', ghAt })
-  none.engine.setSurfaces(['terminal'])
-  const dialogs = none.engine.record.dialogs.length
-  const first = (await none.engine.command('ather', 'repos add ../s2')).text
-  await none.engine.flush()
-  const found = await idsOf(none.engine)
-  expect("in a repository with no intents, /ather repos add ../s2 asks nothing and the pane then lists s2's intents", first !== '' && none.engine.record.dialogs.length === dialogs && JSON.stringify(kept(none.engine)) === JSON.stringify([s2]) && JSON.stringify(found) === JSON.stringify(['intent:s2-x/draft', 'intent:s2/boss']), [first, none.engine.record.dialogs.slice(dialogs), kept(none.engine), found])
-  expect('no hook threw', threw(none.engine).length === 0, threw(none.engine))
-  await none.engine.end('other')
-}
-
-// ---------------------------------------------------------------- the traced folders, set by the session
-
-{
-  // The model's own tool: asked in words ("add s2 to Ather"), the session adds the folder itself.
-  const KEPT = 'tracedFolders'
-  const tool = (engine, input) => engine.modelTool({ tool: 'mcp__ather-automata__repos', ...input }).then(answer => String(answer?.result ?? ''))
-  const pane = engine => engine.render('Pane', { bodyColumns: 400 }, 'ather')
-  const ids = async engine => intentRows(await pane(engine)).map(one => one.id).sort()
-  const { parent, s2, web } = makeWorkspace()
-  const tree = join(parent, 's2-x')
-  git(s2, 'worktree', 'add', '-q', '-b', 'x', tree)
-  writeIntent(web, 'login')
-  writeIntent(s2, 'boss')
-  writeIntent(tree, 'draft')
-  const ghAt = { [web]: { issues: [] }, [s2]: { issues: [issue(7, 'Boss shield')] } }
-  const { engine } = await boot({ root: web, sessionId: 'harness-session-0045', ghAt })
-  engine.setSurfaces(['terminal'])
-  await issuesRead(engine, { [web]: {} })
-  expect('the session is given a repos tool beside status, away and profile', engine.record.registeredTools.includes('repos'), engine.record.registeredTools)
-  // The pane is open on Everything open, and stays there: the person watches it change.
-  await engine.command('ather', 'pick')
-  expect("before, the open pane lists web's intent alone", JSON.stringify(await ids(engine)) === JSON.stringify(['intent:login']), await ids(engine))
-  const listed = await tool(engine, { action: 'list' })
-  expect('list names the session folder and nothing kept', listed.includes(web) && !listed.includes(s2), listed)
-
-  const invalidations = engine.record.invalidations
-  const added = await tool(engine, { action: 'add', folder: '../s2' })
-  await engine.flush()
-  expect("add with ../s2 keeps s2's folder for the machine and says so", JSON.stringify(engine.store.get(KEPT) ?? []) === JSON.stringify([s2]) && added.includes(s2), [added, engine.store.get(KEPT)])
-  expect("the open pane is asked to redraw and, with no command and no restart, lists s2's intents and its worktree's", engine.record.invalidations > invalidations && JSON.stringify(await ids(engine)) === JSON.stringify(['intent:login', 'intent:s2-x/draft', 'intent:s2/boss']), await ids(engine))
-  const after = await tool(engine, { action: 'list' })
-  expect('list then names both folders', after.includes(web) && after.includes(s2), after)
-
-  const again = await tool(engine, { action: 'add', folder: s2 })
-  const nowhere = await tool(engine, { action: 'add', folder: BASE })
-  const unnamed = await tool(engine, { action: 'add' })
-  expect('a folder already listed, a path in no checkout and no folder at all store nothing, each with a reason of its own', JSON.stringify(engine.store.get(KEPT)) === JSON.stringify([s2]) && [again, nowhere, unnamed].every(text => text !== '' && !/^Added/.test(text)) && new Set([again, nowhere, unnamed]).size === 3, [again, nowhere, unnamed])
-
-  const removed = await tool(engine, { action: 'remove', folder: 's2' })
-  await engine.flush()
-  expect("remove by the checkout's name takes it out, and the open pane is back to web's intent", (engine.store.get(KEPT) ?? []).length === 0 && removed.includes(s2) && JSON.stringify(await ids(engine)) === JSON.stringify(['intent:login']), [removed, await ids(engine)])
-  const odd = await tool(engine, { action: 'sweep' })
-  expect('an action the tool does not have changes nothing and names the three it has', (engine.store.get(KEPT) ?? []).length === 0 && /list/.test(odd) && /add/.test(odd) && /remove/.test(odd), odd)
-  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
-  await engine.end('other')
 }
 
 // ---------------------------------------------------------------- a team that merges into another branch
@@ -1528,7 +1182,7 @@ const refresh = async engine => {
   mergeIntent(nm, 'develop', 'merged')
   git(nm, 'pull', '-q', '--ff-only', 'origin', 'develop')
   const later = mergeIntent(nm, 'develop', 'later')
-  const { engine, sessionId: sid } = await boot({ root: nm, sessionId: 'harness-session-0050', options: { repos: '../web' } })
+  const { engine, sessionId: sid } = await boot({ root: nm, sessionId: 'harness-session-0050' })
   engine.setSurfaces(['terminal'])
   await engine.command('ather', 'pick')
   const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
@@ -1538,11 +1192,11 @@ const refresh = async engine => {
   await engine.flush()
   const fetches = fetchRuns(engine).map(run => run.argv.slice(2))
   expect('its fetch names develop in both halves of the refspec', fetches.some(argv => argv[0] === nm && argv.at(-1) === '+refs/heads/develop:refs/remotes/origin/develop'), fetches)
-  expect('the checkout on main beside it still fetches main', fetches.some(argv => argv[0] === web && argv.at(-1) === '+refs/heads/main:refs/remotes/origin/main') && fetches.length === 2, fetches)
+  expect('the checkout on main beside it is not fetched', fetches.every(argv => argv[0] === nm) && fetches.length === 1, fetches)
   expect("after it, origin/develop is at what the teammate merged, and origin/main was not asked for in nm", git(nm, 'rev-parse', 'origin/develop') === later && !engine.record.gitRuns.some(run => run.argv[2] === nm && run.argv.at(-1) === 'origin/main^{commit}'), engine.record.gitRuns.filter(run => run.argv[2] === nm).map(run => run.argv.slice(3).join(' ')))
   const after = await pane()
   const rows = intentRows(after).map(one => one.id).sort()
-  expect("the list then holds both of develop's intents and web's own, the later one not in the checkout and not tagged local", JSON.stringify(rows) === JSON.stringify(['intent:later', 'intent:merged', 'intent:web/login']) && warnOf(after, 'intent:later') === '' && !fs.existsSync(join(nm, 'docs/intent/later')), [rows, warnOf(after, 'intent:later')])
+  expect("the list then holds both of develop's intents and nothing of web beside it, the later one not in the checkout and not tagged local", JSON.stringify(rows) === JSON.stringify(['intent:later', 'intent:merged']) && warnOf(after, 'intent:later') === '' && !fs.existsSync(join(nm, 'docs/intent/later')), [rows, warnOf(after, 'intent:later')])
   const heads = engine.record.gitRuns.filter(run => run.argv.includes('symbolic-ref'))
   expect("no checkout's default branch is asked of git: it is read from the clone's files", heads.length === 0, heads)
 
@@ -1559,7 +1213,7 @@ const refresh = async engine => {
   await engine.end('other')
 
   // The other way round: a session in web (base main), nm beside it. What is held in nm is said with nm's base.
-  const beside = await boot({ root: web, sessionId: 'harness-session-0052', options: { repos: '../nm' } })
+  const beside = await boot({ root: web, sessionId: 'harness-session-0052' })
   await startAway(beside.engine)
   const there = await bash(beside.engine, 'git -C ../nm push origin develop')
   expect("from a session on main, a push to develop in ../nm is held and the denial names develop", there.deny !== undefined && /develop/.test(there.deny), there.deny)
