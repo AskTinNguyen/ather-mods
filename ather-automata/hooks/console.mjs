@@ -116,9 +116,6 @@ let checkouts = []
 // in full is not kept, so the next one asks again.
 /** @type {Promise<string[]> | null} */
 let otherRoots = null
-// Which clone each workspace checkout is of, by its folder, read with them: a checkout and its worktrees share one.
-/** @type {Map<string, string>} */
-let clones = new Map()
 // The read running now, and whether another was asked for while it ran.
 /** @type {Promise<void> | null} */
 let reading = null
@@ -223,17 +220,10 @@ function laneOf($) {
 }
 
 // The pane's checkouts: the workspace checkouts that have intents, in workspace order, the session's own
-// (its lane) first. A session opened in a parent folder has none of its own.
+// (its lane) first.
 /** @param {Engine} $ @returns {Promise<import('./state.mjs').Checkout[]>} */
 async function paneLanes($) {
-  const session = await laneOf($)
-  if (!otherRoots) otherRoots = readOtherRoots($, session.root)
-  const others = []
-  for (const root of await otherRoots) {
-    const lane = await state.laneAt(io($), root)
-    if (lane.isS2) others.push(lane)
-  }
-  return session.isS2 ? [session, ...others] : others
+  return (await workspaceLanes($)).filter(lane => lane.isS2)
 }
 
 /** @param {Engine} $ @param {string} root the session lane's root */
@@ -241,18 +231,10 @@ async function readOtherRoots($, root) {
   const files = io($)
   const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
   // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
-  const { roots, clones: found, isSure } = await state.workspaceClones(files, root || cwd, line => $.ui.log(line, { to: 'debug' }))
-  // The session's lane is its folder's, which may be inside its checkout.
-  for (const one of own) if (found.has(one)) found.set(normalFolder(root), found.get(one) ?? one)
-  clones = found
+  const { roots, isSure } = await state.workspace(files, root || cwd, line => $.ui.log(line, { to: 'debug' }))
   if (!isSure) otherRoots = null
+  // The session's lane is its folder's, which may be inside its checkout.
   return roots.filter(one => !own.has(normalFolder(one)))
-}
-
-// The clone a checkout is of: its own folder when it has no other worktree in the workspace.
-/** @param {string} root */
-function cloneOf(root) {
-  return clones.get(normalFolder(root)) ?? normalFolder(root)
 }
 
 // The lane an intent's checkout has in the pane (the session's for its own).
@@ -294,13 +276,10 @@ function keyOf(name, isOwn, slug) {
 // the workspace's never change in a session, whatever is tracked, so a key built earlier still names its intent.
 /** @param {Engine} $ @returns {Promise<Map<string, string>>} */
 async function laneNames($) {
-  const session = await laneOf($)
-  const listed = await issueLanes($)
-  // A session folder with intents that is no checkout is in the pane, though no issues are read there.
-  const lanes = session.isS2 && !listed.some(one => normalFolder(one.root) === normalFolder(session.root)) ? [session, ...listed] : [...listed]
+  const lanes = await workspaceLanes($)
   const tracked = await state.trackedLane(io($), cwd)
   const outside = tracked && !lanes.some(one => normalFolder(one.root) === normalFolder(tracked.lane.root)) ? [tracked.lane] : []
-  const names = checkoutNames(lanes.map(lane => ({ root: lane.root, repo: lane.repo, clone: cloneOf(lane.root) })), outside)
+  const names = checkoutNames(lanes, outside)
   return new Map([...lanes, ...outside].map((lane, at) => [normalFolder(lane.root), names[at] ?? '']))
 }
 
@@ -488,7 +467,6 @@ async function openConsole($, folder) {
   isSyncing = false
   checkouts = []
   otherRoots = null
-  clones = new Map()
   fetchesEnded = 0
   isDrawn = false
   createOpen.clear()
@@ -573,7 +551,7 @@ async function readIntents($) {
   const tracked = await state.readTracked(files)
   const names = await laneNames($)
   const read = []
-  // What each clone's first pane checkout read of origin/main: its other worktrees on the same base share it, and
+  // What the first pane checkout on each base read of it: the other worktrees on the same base share it, and
   // list only their own. A worktree whose team merges into another branch reads that branch for itself.
   /** @type {Map<string, import('./team.mjs').MainSnapshot | null>} */
   const mains = new Map()
@@ -583,11 +561,10 @@ async function readIntents($) {
     const name = names.get(normalFolder(root)) ?? ''
     // Its intents: one tracked in another checkout is not one of them.
     const pinned = tracked && normalFolder(tracked.root) === normalFolder(root) ? tracked.slug : null
-    const clone = `${cloneOf(root)}\n${base}`
-    const isFirst = !mains.has(clone)
+    const isFirst = !mains.has(base)
     const kept = teamCaches.get(root) ?? EMPTY_CACHE
-    const team = await readTeam(repo($, root), root, { cache: isFirst ? kept : { ...kept, main: mains.get(clone) ?? kept.main }, pinned, base })
-    if (isFirst) mains.set(clone, team.cache.main)
+    const team = await readTeam(repo($, root), root, { cache: isFirst ? kept : { ...kept, main: mains.get(base) ?? kept.main }, pinned, base })
+    if (isFirst) mains.set(base, team.cache.main)
     const tag = { root, repo: lane.repo, repoName: name, base }
     for (const one of isFirst ? team.intents : team.intents.filter(listed => listed.source === 'local')) read.push(parseIntent({ ...one, ...tag, key: keyOf(name, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
     const ended = fetched.get(root)
@@ -642,7 +619,7 @@ async function refreshPrs($) {
   }
 }
 
-// Fetches each pane clone's origin main (its base, where the team merges into another branch) in the background (D2): once the pane is drawn, then at most
+// Fetches the pane's origin main (its base, where the team merges into another branch) in the background (D2): once the pane is drawn, then at most
 // every ten minutes, or at once from ↻ (after a git lock, only at the next due time); one fetch at a time
 // over every checkout. The sync line says synced once the read after the fetch has landed; a failure keeps
 // the last list and says so. A fetch the app took back is no try: the sync stands as it stood and stays due.
@@ -653,8 +630,8 @@ async function syncMain($, isAsked = false) {
   try {
     const lanes = await paneLanes($)
     for (const { root, base } of lanes) {
-      // A clone's base is fetched once, in its first pane checkout on it: the outcome is that of every one of them.
-      const roots = lanes.filter(one => cloneOf(one.root) === cloneOf(root) && one.base === base).map(one => one.root)
+      // A base is fetched once, in the first pane checkout on it: the outcome is that of every one of them.
+      const roots = lanes.filter(one => one.base === base).map(one => one.root)
       if (roots[0] !== root) continue
       const before = syncs.get(root) ?? NO_SYNC
       if (!(isAsked ? canFetchNow : isFetchDue)(before, Date.now())) continue
@@ -701,53 +678,37 @@ function stale() {
 
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
-// The repository is read once, in its first checkout, and its list kept under it.
-/** @param {Engine} $ @returns {Promise<string>} why a read failed, or '' when every one worked */
+// The repository is read in the session's checkout, and its list kept under it.
+/** @param {Engine} $ @returns {Promise<string>} why the read failed, or '' when it worked */
 async function refreshIssues($) {
-  const lanes = oncePerRepo(await issueLanes($))
-  const failures = []
-  for (const { root, repo: scope } of lanes) {
-    const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
-    if (run && run.exitCode === 0) {
-      await state.setIssues(io($), me, parseIssues(run.stdout), scope)
-      continue
-    }
-    // Signed out: the last list may be stale, so none is shown.
-    if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [], scope)
-    if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
-    isIssuesWarned = true
-    const failure = (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
-    failures.push(failure)
-  }
-  if (failures.length === 0) {
+  const { root, repo: scope } = await laneOf($)
+  const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
+  if (run && run.exitCode === 0) {
+    await state.setIssues(io($), me, parseIssues(run.stdout), scope)
     issueRetries = 0
     return ''
   }
+  // Signed out: the last list may be stale, so none is shown.
+  if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [], scope)
+  if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
+  isIssuesWarned = true
   // A slow first start or a network blip is tried again in a minute, three times at most:
   // without gh at all, the 15-minute refresh is enough.
   if (issueRetries < 3) {
     issueRetries += 1
     $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
   }
-  return failures.join('; ')
+  return (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
 }
 
-// The checkouts whose issues are read: every workspace checkout, intents or not, the session's own first.
+// Every workspace checkout's lane, intents or not, the session's own first.
 /** @param {Engine} $ */
-async function issueLanes($) {
+async function workspaceLanes($) {
   const session = await laneOf($)
   if (!otherRoots) otherRoots = readOtherRoots($, session.root)
   const others = []
   for (const root of await otherRoots) others.push(await state.laneAt(io($), root))
   return [session, ...others]
-}
-
-// One checkout for each repository: the first in order, so the session's own when it is one of them. A
-// repository's issues are the same in every checkout of it. A clone without an origin is a repository for
-// each of its worktrees (its folder), and is still asked once.
-/** @param {import('./state.mjs').Checkout[]} lanes */
-function oncePerRepo(lanes) {
-  return lanes.filter((lane, at) => lanes.findIndex(one => one.repo === lane.repo || cloneOf(one.root) === cloneOf(lane.root)) === at)
 }
 
 // An issue as a checkout lists it: its key is its number in the session's own checkout and `<short name>#<number>` in another.
@@ -756,17 +717,12 @@ function issueAt(issue, lane, name, isOwn) {
   return { ...issue, root: lane.root, repo: lane.repo, repoName: name, key: isOwn ? String(issue.number) : `${name}#${issue.number}` }
 }
 
-// The assigned issues of every workspace repository, in workspace order, each tagged with the checkout that lists it.
+// The assigned issues of the workspace's repository, each tagged with the session's checkout, which lists them.
 /** @param {Engine} $ @returns {Promise<import('./issues.mjs').Issue[]>} */
 async function paneIssues($) {
   const session = await laneOf($)
-  const names = await laneNames($)
-  const read = []
-  for (const lane of oncePerRepo(await issueLanes($))) {
-    const isOwn = normalFolder(lane.root) === normalFolder(session.root)
-    for (const issue of await state.readIssues(io($), me, lane.repo)) read.push(issueAt(issue, lane, names.get(normalFolder(lane.root)) ?? '', isOwn))
-  }
-  return read
+  const name = await shortName($, session)
+  return (await state.readIssues(io($), me, session.repo)).map(issue => issueAt(issue, session, name, true))
 }
 
 // Every pane checkout's PR states in one map: the session's own by number, another's by `<root>#<number>` (prKey).
@@ -1130,7 +1086,7 @@ async function startIssue($, ref, isInQuestion = false) {
   const number = Number(digits)
   const session = await laneOf($)
   const names = await laneNames($)
-  const lane = name ? (await issueLanes($)).find(one => names.get(normalFolder(one.root)) === name) : undefined
+  const lane = name ? (await workspaceLanes($)).find(one => names.get(normalFolder(one.root)) === name) : undefined
   if (name && !lane) return `No checkout here is named ${name}.`
   const isOwn = lane !== undefined && normalFolder(lane.root) === normalFolder(session.root)
   const listed = (await paneIssues($)).filter(one => one.number === number)
@@ -1185,7 +1141,7 @@ async function pickIntent($, text) {
   const { root } = await laneOf($)
   if (intents.some(one => one.key === text)) return trackKey($, text)
   if (intents.some(one => one.slug === text && otherRoot(one) === '') || (await state.hasIntentFolder(io($), root, text))) return trackSlug($, text)
-  for (const other of await state.workspace(io($), root || cwd)) {
+  for (const other of (await state.workspace(io($), root || cwd)).roots) {
     if (await state.hasIntentFolder(io($), other, text)) return trackSlug($, text, other)
   }
   // Only on origin/main: tracking says it is not here yet.

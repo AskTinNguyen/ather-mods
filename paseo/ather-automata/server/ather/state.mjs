@@ -264,7 +264,7 @@ export const folderLane = async (io, session, folder) => {
   return { lane: await laneAt(io, root), isOwn: false }
 }
 
-/** @typedef {{ roots: string[], clones: string[], left: string[], isSure: boolean }} Workspace */
+/** @typedef {{ roots: string[], left: string[], isSure: boolean }} Workspace */
 /** @type {Map<string, Promise<Workspace>>} */
 const workspaces = new Map()
 // What the debug log last heard of each workspace: a read that finds the same is not said again.
@@ -281,7 +281,7 @@ const readWorkspaceOnce = (io, folder, log) => {
   const { real, worktrees } = io
   const files = { read: io.read, exists: io.exists, ...(worktrees ? { worktrees } : {}), ...(real ? { real: (/** @type {string} */ one) => realFolder(io, one) } : {}) }
   const reading = readWorkspace(files, folder)
-    .catch(() => /** @type {Workspace} */ ({ roots: [], clones: [], left: [], isSure: true }))
+    .catch(() => /** @type {Workspace} */ ({ roots: [], left: [], isSure: true }))
     .then(found => {
       if (!found.isSure && workspaces.get(key) === reading) workspaces.delete(key)
       const lines = [`Ather: workspace ${found.roots.join(', ') || '(no checkout)'}`, ...(found.left.length > 0 ? [`Ather: workspace is full; left out ${found.left.join(', ')}`] : [])]
@@ -293,16 +293,11 @@ const readWorkspaceOnce = (io, folder, log) => {
   return reading
 }
 
-// The session's checkout and its clone's worktrees after it, shared by both halves. `log` hears what the
-// workspace holds and what the limit left out, once per read that finds something new.
-/** @param {Io} io @param {string} folder the session folder @param {(line: string) => void} [log] */
-export const workspace = (io, folder, log = () => undefined) => readWorkspaceOnce(io, folder, log).then(found => found.roots)
-
-// The same read with which clone each checkout is of, by its folder (normalFolder): a checkout and its worktrees
-// share one. `isSure` false: git could not list the worktrees, and the next call reads again.
-/** @param {Io} io @param {string} folder the session folder @param {(line: string) => void} [log] @returns {Promise<{ roots: string[], clones: Map<string, string>, isSure: boolean }>} */
-export const workspaceClones = (io, folder, log = () => undefined) =>
-  readWorkspaceOnce(io, folder, log).then(found => ({ roots: found.roots, clones: new Map(found.roots.map((root, at) => [normalFolder(root), found.clones[at] ?? root])), isSure: found.isSure }))
+// The session's checkout and its clone's worktrees after it (`roots`), shared by both halves. `isSure` false: git
+// could not list the worktrees, and the next call reads again. `log` hears what the workspace holds and what
+// the limit left out, once per read that finds something new.
+/** @param {Io} io @param {string} folder the session folder @param {(line: string) => void} [log] @returns {Promise<{ roots: string[], isSure: boolean }>} */
+export const workspace = (io, folder, log = () => undefined) => readWorkspaceOnce(io, folder, log).then(({ roots, isSure }) => ({ roots, isSure }))
 
 /** @param {Io} io */
 const repoOf = io => (io.repo ? io.repo().catch(() => '') : Promise.resolve(''))

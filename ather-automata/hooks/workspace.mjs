@@ -57,80 +57,62 @@ export const checkoutOf = async (files, folder) => {
 }
 
 // `git worktree list --porcelain`: a block per worktree (`worktree <folder>`, then HEAD, `branch` or `detached`,
-// and `bare`, `locked` or `prunable` when it is). `main`: the first one's folder, the clone's main worktree
-// (or its bare repository). `folders`: those that are checkouts, in git's order: not bare, not prunable.
-/** @param {string} text @returns {{ main: string, folders: string[] }} */
-export const parseWorktrees = text => {
-  const blocks = text
+// and `bare`, `locked` or `prunable` when it is). The folders of those that are checkouts, in git's order: not
+// bare, not prunable.
+/** @param {string} text @returns {string[]} */
+export const parseWorktrees = text =>
+  text
     .replace(/\r\n/g, '\n')
     .split(/\n{2,}/)
     .map(block => block.split('\n'))
-    .filter(lines => lines[0]?.startsWith('worktree '))
-  /** @param {string[]} lines */
-  const folderOf = lines => (lines[0] ?? '').slice('worktree '.length)
-  return {
-    main: blocks[0] ? folderOf(blocks[0]) : '',
-    folders: blocks.filter(lines => !lines.some(line => /^(bare|prunable)( |$)/.test(line))).map(folderOf),
-  }
-}
+    .filter(lines => lines[0]?.startsWith('worktree ') && !lines.some(line => /^(bare|prunable)( |$)/.test(line)))
+    .map(lines => (lines[0] ?? '').slice('worktree '.length))
 
 /**
  * The session's checkouts, in order and each once: the one holding the session folder (none when it is in
  * no checkout), then the worktrees git names in its clone (parseWorktrees) that are still checkouts. A
  * checkout is the same one by the folder its path really lands in, under its first name: git names real
  * paths, the session folder may be a link.
- * `clones`: for each root, its clone's main folder, the same for a checkout and its worktrees. `left`: the
- * worktrees the limit left out. `isSure` false: git could not say (`worktrees` gave null), so worktrees may
- * be missing: worth reading again.
+ * `left`: the worktrees the limit left out. `isSure` false: git could not say (`worktrees` gave null), so
+ * worktrees may be missing: worth reading again.
  * @param {Files} files @param {string} sessionFolder
- * @returns {Promise<{ roots: string[], clones: string[], left: string[], isSure: boolean }>}
+ * @returns {Promise<{ roots: string[], left: string[], isSure: boolean }>}
  */
 export const readWorkspace = async (files, sessionFolder) => {
   const own = await checkoutOf(files, sessionFolder)
-  if (own === null) return { roots: [], clones: [], left: [], isSure: true }
+  if (own === null) return { roots: [], left: [], isSure: true }
   // A folder as two names for it compare: where it really lands, whatever the case.
   /** @param {string} folder */
   const landing = async folder => normalFolder(files.real ? await files.real(folder).catch(() => folder) : folder).toLowerCase()
-  /** @type {Map<string, string>} each checkout as first named → where it lands */
-  const lands = new Map([[own, await landing(own)]])
+  // Where each checkout found so far lands.
+  const lands = new Set([await landing(own)])
   const roots = [own]
   /** @type {string[]} */
   const left = []
-  /** @type {Map<string, string>} where a folder lands → its clone */
-  const cloneOf = new Map()
   let isSure = true
   if (files.worktrees) {
     const text = await files.worktrees(own).catch(() => null)
     if (text === null) isSure = false
-    const { main, folders } = parseWorktrees(text ?? '')
-    if (main !== '') {
-      const clone = normalFolder(main)
-      cloneOf.set(lands.get(own) ?? '', clone)
-      for (const listed of folders) {
-        const folder = normalFolder(listed)
-        const at = await landing(folder)
-        cloneOf.set(at, clone)
-        if ([...lands.values()].includes(at) || !(await gitDirOf(files, folder))) continue
-        lands.set(folder, at)
-        if (roots.length < MAX_WITH_WORKTREES) roots.push(folder)
-        else left.push(folder)
-      }
+    for (const listed of parseWorktrees(text ?? '')) {
+      const folder = normalFolder(listed)
+      const at = await landing(folder)
+      if (lands.has(at) || !(await gitDirOf(files, folder))) continue
+      lands.add(at)
+      if (roots.length < MAX_WITH_WORKTREES) roots.push(folder)
+      else left.push(folder)
     }
   }
-  const clones = roots.map(root => cloneOf.get(lands.get(root) ?? '') ?? root)
-  return { roots, clones, left, isSure }
+  return { roots, left, isSure }
 }
 
 /**
- * Each checkout's short name, in the order given and each different: the last part of its repository's id
- * ("han-viet"), else of its folder. Those that would share one (two clones of one repository, `a/web` beside
- * `b/web`) are named by their folders instead, and a name already taken gets `-2`, `-3`, … in order. A name
- * holds only what `<name>#<number>` is read with (letters, digits, `_`, `.`, `-`): anything else becomes `-`.
- * `clone`: which clone a checkout is of (readWorkspace). A clone's first checkout is named as if its other
- * worktrees were not there, and each of those after it by its folder, numbered when taken.
+ * Each checkout's short name, in the order given and each different: the first (the session's checkout) by the
+ * last part of its repository's id ("han-viet"), else of its folder; each after it (a worktree of its clone) by
+ * its folder. A name already taken gets `-2`, `-3`, … in order. A name holds only what `<name>#<number>` is read
+ * with (letters, digits, `_`, `.`, `-`): anything else becomes `-`.
  * `outside`: checkouts named after those, each taking a name none has (its repository's, else its folder's,
  * else numbered) and renaming none, so the names of `checkouts` do not depend on them.
- * @param {{ root: string, repo: string, clone?: string }[]} checkouts @param {{ root: string, repo: string }[]} [outside] @returns {string[]}
+ * @param {{ root: string, repo: string }[]} checkouts @param {{ root: string, repo: string }[]} [outside] @returns {string[]}
  */
 export const checkoutNames = (checkouts, outside = []) => {
   /** @param {string} text */
@@ -148,11 +130,5 @@ export const checkoutNames = (checkouts, outside = []) => {
     taken.add(unique)
     return unique
   }
-  const isFirst = checkouts.map((one, at) => one.clone === undefined || checkouts.findIndex(other => other.clone === one.clone) === at)
-  const short = checkouts.filter((_, at) => isFirst[at]).map(shortOf)
-  /** @type {string[]} */
-  const names = []
-  for (const [at, one] of checkouts.entries()) if (isFirst[at]) names[at] = free(short.indexOf(shortOf(one)) === short.lastIndexOf(shortOf(one)) ? shortOf(one) : folderOf(one))
-  for (const [at, one] of checkouts.entries()) if (!isFirst[at]) names[at] = free(folderOf(one))
-  return [...names, ...outside.map(one => free(taken.has(shortOf(one)) ? folderOf(one) : shortOf(one)))]
+  return [...checkouts.map((one, at) => free(at === 0 ? shortOf(one) : folderOf(one))), ...outside.map(one => free(taken.has(shortOf(one)) ? folderOf(one) : shortOf(one)))]
 }
