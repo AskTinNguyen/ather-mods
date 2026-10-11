@@ -25,6 +25,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   const store = new Map(kept)
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
+  // The plugin's panes that are up, by id, as $.ui.panes() reports them: each one shown.
+  const panesUp = new Set()
   const hooks = []
   const timers = []
   const record = { sends: [], aborts: [], ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], forks: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
@@ -224,10 +226,14 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
       },
       open: async pane => {
         record.opens.push(pane)
+        panesUp.add(pane.id)
         return { isPlaced }
       },
-      close: async pane => void record.closes.push(pane),
-      panes: async () => [],
+      close: async pane => {
+        record.closes.push(pane)
+        panesUp.delete(pane.id)
+      },
+      panes: async () => [...panesUp].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced })),
       // The engine's own dialog: a tool.call of AskUserQuestion through the hooks (the plugin's own see it, origin the
       // plugin), labels only, fewer than two padded with Yes/No. Resolves to the answer; rejects when there is none.
       ask: async (question, options = {}) => {
@@ -381,6 +387,12 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
       sendResult = value
     },
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
-    close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),
+    // Whether the plugin's matchers on `event` may select `e`: the instances its $.ui.invalidate draws again.
+    selects: (event, e) => hooks.some(one => one.event === event && matches(one.matcher, e)),
+    close: id =>
+      dispatch('ui.close', { id, origin: { kind: 'person' } }, () => {
+        panesUp.delete(id)
+        return { value: undefined, closed: true }
+      }),
   }
 }

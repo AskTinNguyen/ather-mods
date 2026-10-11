@@ -519,11 +519,15 @@ export const readScore = async io => /** @type {Record<string, number>} */ ((awa
 
 // ---------------------------------------------------------------- changing
 
+// A setter whose write shows nothing new (the same issues read again, the same PR states) stamps its time and
+// draws nothing again: a redraw can lose a press on the desktop (console.mjs, redrawAged).
+
 /** @param {Io} io @param {string} me @param {import('./issues.mjs').Issue[]} issues @param {string} [repo] */
 export const setIssues = (io, me, issues, repo) =>
   serial(async () => {
+    const shown = await readIssues(io, me, repo)
     await io.set(KEY.issues(me, repo ?? (await repoOf(io))), { at: Date.now(), list: issues })
-    changed(io)
+    if (JSON.stringify(issues) !== JSON.stringify(shown)) changed(io)
   })
 
 // A PR record not read again for this long is dropped: its intent has closed or moved on.
@@ -535,9 +539,10 @@ export const setPrStates = (io, states, at, repo) =>
   serial(async () => {
     if (Object.keys(states).length === 0) return
     const scope = repo ?? (await repoOf(io))
-    const kept = Object.entries(await readPrRecords(io, scope)).filter(([, record]) => at - record.at < PRS_TTL_MS)
+    const records = await readPrRecords(io, scope)
+    const kept = Object.entries(records).filter(([, record]) => at - record.at < PRS_TTL_MS)
     await io.set(KEY.prs(scope), { ...Object.fromEntries(kept), ...Object.fromEntries(Object.entries(states).map(([number, value]) => [number, { state: value, at }])) })
-    changed(io)
+    if (kept.length < Object.keys(records).length || Object.entries(states).some(([number, value]) => records[number]?.state !== value)) changed(io)
   })
 
 const CHANGES_KEPT = 20
