@@ -16,7 +16,7 @@
 | A4 | met | The multi-repo A3 and A4 e2e rows (a `cd ../web` command held and proved by web's pack; a write into web's intent tracks it there) pass in `dev/e2e/repos.mjs`. |
 | A5 | met | `node dev/test-all.mjs` with a sparse S2 clone, after main (0.3.0) was merged in and on ed7f30a: unit 349/349, checkouts e2e 257/257, e2e 360/360, no FAIL line; 987bcc6 had none either. Re-run by the coordinator. |
 | A6 | met | Version 0.3.1 in both manifests, a Changes line, the README's "One repository, its worktrees, and other checkouts", Commands and Install (ff0bd61). Paseo `npm run sync`, `sync:check` and `typecheck` clean (bf0b0fa). Codex review: one Major (README), fixed in ff0bd61, verify APPROVED. |
-| A7 | met | Live in Claude Code (tmux, `--plugin-dir`, 2026-10-11): a session in `app` with worktree `app-feat` and sibling `web` (intent `billing`) lists app's and app-feat's intents and nothing of web; Home has no Repositories row; `/ather repos` is no command (the words go to the session as a question). Scratch checkouts with no origin. |
+| A7 | met | Live in Claude Code (tmux, `--plugin-dir`, 2026-10-11): a session in `app` with worktree `app-feat` and sibling `web` (intent `billing`) lists app's and app-feat's intents and nothing of web; Home has no Repositories row; `/ather repos` is no command (the words go to the session as a question). Scratch checkouts with no origin. Claude desktop (2026-10-11, the plugin at 82c5c5d loaded through `CLAUDE_CODE_PLUGIN_DIRS`, driven with agent-desktop): a session in ather-mods opens the pane with ather-mods' intents only and no Repositories row; a No folder session and a session in `~/SIPHER` (no checkout, children apt-ui and ather-mods with intents) answer "none here". |
 
 ## Thermo-nuclear review (AGENTS.md)
 
