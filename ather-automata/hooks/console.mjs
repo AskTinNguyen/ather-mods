@@ -116,8 +116,8 @@ let checkouts = []
 // no checkout, so there is no workspace): a read git could not answer in full is not kept, so the next one asks again.
 /** @type {Promise<string[] | null> | null} */
 let otherRoots = null
-// The read running now, and whether another was asked for while it ran.
-/** @type {Promise<void> | null} */
+// The read running now (resolving whether it drew again), and whether another was asked for while it ran.
+/** @type {Promise<boolean> | null} */
 let reading = null
 let isRereadAsked = false
 // The pane has been drawn: from then on the fetch runs on its own, at most every ten minutes.
@@ -135,9 +135,15 @@ let isPrsReading = false
 let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
 let isAwake = null
-/** @type {{ version: number, at: number, model: Home | null }} */
-let view = { version: -1, at: 0, model: null }
-// How many times the view was marked stale: one built while that happened is not kept as fresh.
+// The view model (home), built or being built, by the state version and stale count it was begun at.
+/** @type {{ key: string, at: number, model: Promise<Home> } | null} */
+let view = null
+// What the last read of the intents found (readIntents), as text: a read that finds the same draws nothing again.
+let readPrint = ''
+// The band's hint as last drawn (bandOf); null while the band is not Ather's to draw (a survey shows).
+/** @type {string | null} */
+let bandDrawn = null
+// How many times the view was marked stale: a view begun before is built again.
 let staled = 0
 // The pack whose words the pane uses (packs/index.mjs, wordsLane); set whenever the view is rebuilt.
 /** @type {import('./packs/index.mjs').Pack} */
@@ -375,50 +381,12 @@ export function register(on) {
     return ran
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !(await hasIntents($))) return next(e)
-    void wake($)
-    const model = await home($)
-    const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
-    const hint = fresh.length > 0 ? `◆ Intent: ${fresh.slice(0, 2).map(one => one.text.split(' · ')[0].replace(/^./, first => first.toLowerCase())).join(' · ')}${fresh.length > 2 ? ` · +${fresh.length - 2}` : ''}` : bandHint(model)
-    // Closed with ✕: stays away until there is something new to say.
-    if (closedHint !== null && (hint === '' || hint === closedHint)) return next(e)
-    closedHint = null
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const isAway = model.header.stage === 'Away'
-    const warm = warmBadge(warmStore.readWarmView())
-    return Box({
-      flexDirection: 'row',
-      gap: 2,
-      children: [
-        Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: hint ? undefined : true, wrap: 'truncate', children: hint || '◆ Ather Automata' })] }),
-        ...(fresh.length > 0 ? [Button({ key: 'ather-intent-see', label: 'See', plain: true, onPress: () => void seeIntent($) })] : []),
-        Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
-        // Keep the prompt cache warm while idle: on or off for this session; the count of reads, in amber, while one is due.
-        Box({ key: 'ather-warm', flexDirection: 'row', gap: 1, children: [
-          Button({ key: 'ather-warm-toggle', label: warm.label, plain: true, dimColor: warm.isDim ? true : undefined, onPress: () => void pressWarm($) }),
-          ...(warm.count ? [Box({ key: 'ather-warm-count', children: [Text({ color: 'yellow', children: warm.count })] })] : []),
-        ] }),
-        Button({ key: 'ather-open', label: '⤢', plain: true, dimColor: true, onPress: () => void openPane($, 'home') }),
-        Button({ key: 'ather-close', label: '✕', plain: true, dimColor: true, role: 'dismiss', onPress: () => {
-          closedHint = hint
-          intentSeenAt = Date.now()
-          $.ui.invalidate('ui.render')
-          $.ui.toast('Ather hidden until something needs you. /ather brings it back.')
-        } }),
-      ],
-    })
-  })
+  // Drawings of one site leave their hook in the order they were asked for (inOrder).
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => inOrder(e, next.signal, drawBand($, e).then(tree => tree ?? next(e))))
 
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== PANE_ID) return next(e)
-    void wake($)
-    isDrawn = true
-    void syncMain($)
-    if (paneMode === 'intent') await readIntentView($)
-    if (paneMode === 'pick' && !isGroupRead) await readGroup($)
-    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
-  })
+  // Ather's own pane only (PANE_ID): a matcher without it would have every invalidate of Ather's redraw every
+  // plugin's pane, and lose the presses on its way there (see redrawAged).
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async ($, e, next) => inOrder(e, next.signal, drawPane($, e)))
 
   on('ui.close', ($, e, next) => {
     if (e.id === PANE_ID) {
@@ -429,6 +397,80 @@ export function register(on) {
     }
     return next(e)
   })
+}
+
+// ---------------------------------------------------------------- drawing
+
+// Each drawing of a site (the band, the pane) leaves its hook in the order it was asked for. Claude Code stamps a
+// drawing's press handles as it leaves the hook and retires the ones before them, while a surface shows the drawing
+// it asked for last. Drawings run side by side: one that read more (the Intent view's files) could leave after a
+// newer one, and then the only live handles would be in a drawing no surface shows, and every press there is lost.
+/** @type {Map<string, Promise<unknown>>} */
+const drawings = new Map()
+
+// `signal`: the hook's own (next.signal), aborted once the engine goes on without it.
+/** @template T @param {{ component: string, requestId: string }} e @param {AbortSignal} signal @param {Promise<T>} drawing @returns {Promise<T>} */
+function inOrder(e, signal, drawing) {
+  const site = `${e.component}:${e.requestId}`
+  const before = drawings.get(site) ?? Promise.resolve()
+  // Its turn is over once it ends, either way, or once the engine has gone on without it: watched from now on, so
+  // one that fails while it waits is never an unhandled rejection, and one given up on holds up none after it.
+  const done = new Promise(resolve => {
+    void drawing.then(resolve, resolve)
+    if (signal.aborted) resolve(undefined)
+    else signal.addEventListener('abort', () => resolve(undefined), { once: true })
+  })
+  drawings.set(site, before.then(() => done))
+  return before.then(() => drawing)
+}
+
+// The band above the prompt; null when it is not Ather's to draw (a survey shows, no intents, closed with ✕).
+/** @param {Engine} $ @param {import('claude-code').Frozen<import('claude-code').RenderInput<'AbovePrompt'>>} e */
+async function drawBand($, e) {
+  if (e.props.hasSurvey || !(await hasIntents($))) {
+    bandDrawn = null
+    return null
+  }
+  void wake($)
+  const { model, fresh, hint } = await bandOf($)
+  bandDrawn = hint
+  // Closed with ✕: stays away until there is something new to say.
+  if (closedHint !== null && (hint === '' || hint === closedHint)) return null
+  closedHint = null
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const isAway = model.header.stage === 'Away'
+  const warm = warmBadge(warmStore.readWarmView())
+  return Box({
+    flexDirection: 'row',
+    gap: 2,
+    children: [
+      Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: hint ? undefined : true, wrap: 'truncate', children: hint || '◆ Ather Automata' })] }),
+      ...(fresh.length > 0 ? [Button({ key: 'ather-intent-see', label: 'See', plain: true, onPress: () => void seeIntent($) })] : []),
+      Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
+      // Keep the prompt cache warm while idle: on or off for this session; the count of reads, in amber, while one is due.
+      Box({ key: 'ather-warm', flexDirection: 'row', gap: 1, children: [
+        Button({ key: 'ather-warm-toggle', label: warm.label, plain: true, dimColor: warm.isDim ? true : undefined, onPress: () => void pressWarm($) }),
+        ...(warm.count ? [Box({ key: 'ather-warm-count', children: [Text({ color: 'yellow', children: warm.count })] })] : []),
+      ] }),
+      Button({ key: 'ather-open', label: '⤢', plain: true, dimColor: true, onPress: () => void openPane($, 'home') }),
+      Button({ key: 'ather-close', label: '✕', plain: true, dimColor: true, role: 'dismiss', onPress: () => {
+        closedHint = hint
+        intentSeenAt = Date.now()
+        $.ui.invalidate('ui.render')
+        $.ui.toast('Ather hidden until something needs you. /ather brings it back.')
+      } }),
+    ],
+  })
+}
+
+/** @param {Engine} $ @param {import('claude-code').Frozen<import('claude-code').RenderInput<'Pane'>>} e */
+async function drawPane($, e) {
+  void wake($)
+  isDrawn = true
+  void syncMain($)
+  if (paneMode === 'intent') await readIntentView($)
+  if (paneMode === 'pick' && !isGroupRead) await readGroup($)
+  return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
 }
 
 // ---------------------------------------------------------------- starting
@@ -446,7 +488,9 @@ async function openConsole($, folder) {
   issueRetries = 0
   resetTranscripts()
   isAwake = null
-  view = { version: -1, at: 0, model: null }
+  view = null
+  readPrint = ''
+  bandDrawn = null
   closedHint = null
   intentSeenAt = Date.now()
   intentShown = ''
@@ -496,12 +540,13 @@ async function startConsoleWork($) {
   paneBase = lane.base
   if (!(await hasIntents($))) return
   await refresh($)
-  $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
-  // A running worker's clock: redrawn every five seconds while one runs, never otherwise. And the fetches
-  // still due while the pane is drawn: one the app took back with the draw that started it is asked again here.
+  // The minute's read; when it drew nothing again, what time alone changed.
+  $.clock.every(60000, () => void refresh($).then(drew => (drew ? undefined : redrawAged($))).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
+  // The worker clock, and the fetches still due once the pane has been drawn: one the app took back with the draw
+  // that started it is asked again here.
   $.clock.every(5000, () => {
     if (isDrawn) void syncMain($).catch(() => undefined)
-    void $.agent.list().then(agents => agents.some(agent => agent.status === 'running') && $.ui.invalidate('ui.render')).catch(() => undefined)
+    void redrawWorkers($).catch(() => undefined)
   })
   // watch.mjs may pick up last night's window just after this; show it.
   $.clock.after(1500, () => void refresh($).catch(() => undefined))
@@ -517,27 +562,29 @@ async function startConsoleWork($) {
 
 // Re-reads the intents (origin/main's and this checkout's, team.mjs), one read at a time: a call while
 // one runs asks for one more after it and waits for that, so the last read to land is the newest.
-// The rest comes from shared state when the view is rebuilt.
-/** @param {Engine} $ @returns {Promise<void>} */
+// The rest comes from shared state when the view is rebuilt. Resolves whether a read drew again.
+/** @param {Engine} $ @returns {Promise<boolean>} */
 function refresh($) {
   if (reading) {
     isRereadAsked = true
     return reading
   }
   reading = (async () => {
+    let drew = false
     try {
       do {
         isRereadAsked = false
-        await readIntents($)
+        drew = (await readIntents($)) || drew
       } while (isRereadAsked)
     } finally {
       reading = null
     }
+    return drew
   })()
   return reading
 }
 
-/** @param {Engine} $ */
+/** @param {Engine} $ @returns {Promise<boolean>} whether it drew again */
 async function readIntents($) {
   // Only a fetch that ended before this read began is applied with what this read finds.
   const seen = fetchesEnded
@@ -589,9 +636,15 @@ async function readIntents($) {
     found.push({ name, description: /^(.+?[.!?])(\s|$)/.exec(description)?.[1] ?? description })
   }
   skills = found
+  void refreshPrs($).catch(() => undefined)
+  // Drawn again only when the read found something new (see redrawAged): all a read sets that a drawing shows (the
+  // pack, the base and the checkouts follow from the intents and who is reading).
+  const print = JSON.stringify([me, intents, skills, syncShown()])
+  if (print === readPrint) return false
+  readPrint = print
   stale()
   $.ui.invalidate('ui.render')
-  void refreshPrs($).catch(() => undefined)
+  return true
 }
 
 // Whether the PRs of intents with every item met are merged, read with gh in the background.
@@ -671,7 +724,6 @@ function syncShown() {
 
 function stale() {
   staled += 1
-  view = { ...view, version: -1 }
 }
 
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
@@ -739,10 +791,22 @@ async function panePrs($) {
   return all
 }
 
+// The view model, kept while shared state stands where it was when its build began and for VIEW_TTL_MS at most:
+// the drawings of one redraw (the band's, the pane's) share one build. A build that failed is not kept.
 /** @param {Engine} $ @returns {Promise<Home>} */
-async function home($) {
-  const version = state.stateVersion()
-  if (view.model && view.version === version && Date.now() - view.at < VIEW_TTL_MS) return view.model
+function home($) {
+  const key = `${state.stateVersion()}:${staled}`
+  if (view?.key === key && Date.now() - view.at < VIEW_TTL_MS) return view.model
+  const kept = { key, at: Date.now(), model: buildView($) }
+  view = kept
+  kept.model.catch(() => {
+    if (view === kept) view = null
+  })
+  return kept.model
+}
+
+/** @param {Engine} $ @returns {Promise<Home>} */
+async function buildView($) {
   const files = io($)
   const { me: who } = await laneOf($)
   // The tracked intent's checkout gives the stage its pack, the role and the Editor lock.
@@ -757,9 +821,7 @@ async function home($) {
   const profile = await state.readProfile(files, me, chosen)
   // The week-calendar plugin keeps this week's figures in ~/.calendar/latest.json.
   const userHome = await homeDir(host($))
-  // The list and its sync line are taken together: a read that lands while the rest is awaited marks
-  // the view stale, so this one is drawn once and not kept.
-  const seen = staled
+  // The list and its sync line are taken together.
   const sync = syncShown()
   const built = buildHome({
     intents,
@@ -783,9 +845,7 @@ async function home($) {
     tz,
     pack: chosen,
   })
-  const model = { ...built, sync }
-  view = { version: seen === staled ? version : -1, at: now, model }
-  return model
+  return { ...built, sync }
 }
 
 // The intent the person last worked on, by key: the "Continue …" kept for each pane checkout,
@@ -809,6 +869,39 @@ async function namedLock($, root, lock) {
   const name = await sessionName(host($), root, lock.session).catch(() => '')
   return { ...lock, holder: name ? `"${name}"` : `session ${lock.session}` }
 }
+
+// What the band above the prompt says: the tracked intent's changes this session has not shown, else what needs
+// you ('' for nothing). The hint is all it draws that changes with them (an away window's words say it is away).
+/** @param {Engine} $ */
+async function bandOf($) {
+  const model = await home($)
+  const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
+  const hint = fresh.length > 0 ? `◆ Intent: ${fresh.slice(0, 2).map(one => one.text.split(' · ')[0].replace(/^./, first => first.toLowerCase())).join(' · ')}${fresh.length > 2 ? ` · +${fresh.length - 2}` : ''}` : bandHint(model)
+  return { model, fresh, hint }
+}
+
+// Claude Code gives each control a press handle per drawing, and a redraw hands out new ones: a desktop press
+// that names an older handle is answered "not handled" and lost. So Ather draws again only what changed: a read
+// that found something new (readIntents), a change to shared state (state.mjs), and the clocks below.
+
+// Once a minute, what time alone changes (ages such as "3m" and "synced 4 min ago", an Editor lock that lapsed),
+// read afresh: the pane is drawn again while it is up, the band only when its hint changed.
+/** @param {Engine} $ */
+async function redrawAged($) {
+  stale()
+  if (isPaneUp(await $.ui.panes()) || (bandDrawn !== null && (await bandOf($)).hint !== bandDrawn)) $.ui.invalidate('ui.render')
+}
+
+// A running worker's clock, every five seconds while Home shows it in the pane (the other views draw no workers).
+/** @param {Engine} $ */
+async function redrawWorkers($) {
+  const [panes, agents] = await Promise.all([$.ui.panes(), $.agent.list()])
+  // Asked after the reads: a press may have left Home meanwhile.
+  if (paneMode === 'home' && isPaneUp(panes) && agents.some(agent => agent.status === 'running')) $.ui.invalidate('ui.render')
+}
+
+/** @param {readonly import('claude-code').UiPane[]} panes */
+const isPaneUp = panes => panes.some(pane => pane.id === PANE_ID && pane.isShown)
 
 /** @param {Home} model */
 function bandHint(model) {

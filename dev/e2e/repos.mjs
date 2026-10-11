@@ -1460,6 +1460,66 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- redraws: Ather's own pane, and only for what changed
+
+{
+  // A redraw hands out new press handles, and Claude Code answers a desktop press that names an older one
+  // `handled: false`: the press is lost. So the console draws again only its own pane, and only when what it
+  // shows has changed (time alone: once a minute while the pane is up).
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0040' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'pick')
+  const pane = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  await pane()
+  await engine.flush()
+  await engine.flush()
+  expect("Ather's redraws select its own pane and never another plugin's", engine.selects('ui.render', { component: 'Pane', requestId: 'ather' }) && !engine.selects('ui.render', { component: 'Pane', requestId: 'review-debate' }))
+  // The clocks' turn: the minute's read and check, the five seconds' worker clock.
+  const tick = async () => {
+    const before = engine.record.invalidations
+    await engine.timers()
+    await engine.flush()
+    return engine.record.invalidations - before
+  }
+  const up = await tick()
+  expect('with the pane up, its ages are drawn again once a minute', up === 1, up)
+  await engine.close('ather')
+  await engine.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band')
+  const down = await tick()
+  expect('with the pane closed, a read that finds nothing new and a band whose words stand draw nothing again', down === 0, down)
+  writeIntent(web, 'search', LOGIN.replace('# Login', '# Search'))
+  const found = await tick()
+  expect('a read that finds a new intent draws again', found > 0, found)
+  engine.addAgent({ id: 'worker-1', description: 'a worker' })
+  const closedWorker = await tick()
+  expect('with the pane closed, a running worker draws nothing again', closedWorker === 0, closedWorker)
+  await engine.command('ather', 'pick')
+  await pane()
+  const pickWorker = await tick()
+  await engine.command('ather')
+  await pane()
+  const homeWorker = await tick()
+  expect("a running worker's clock draws the pane again on Home, which shows it, and not on Everything open", pickWorker === 1 && homeWorker === 2, [pickWorker, homeWorker])
+  await engine.command('ather', 'pick')
+  expect('the pane lists the new intent', intentRows(await pane()).some(one => one.id === 'intent:search'))
+  // Back from an Intent view while it is still drawn: that drawing reads the intent's files, so it would end after
+  // the list's. Claude Code keeps the press handles of the drawing that left the hook last and the surface shows the
+  // one it asked for last: they must be one drawing, or every press on the list is lost.
+  byKey(await pane(), 'pick-intent:login')?.props.onPress()
+  const view = await pane()
+  const left = []
+  const slow = pane().then(() => left.push('older'))
+  // The section around Back shares its key: the press is on the Button inside.
+  nodesOf(view).find(node => node.type === 'Button' && node.props?.key === 'intent-back')?.props.onPress()
+  const fast = pane().then(() => left.push('newer'))
+  await Promise.all([slow, fast])
+  expect('drawings of the pane leave the hook in the order they were asked for', JSON.stringify(left) === JSON.stringify(['older', 'newer']), left)
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })
