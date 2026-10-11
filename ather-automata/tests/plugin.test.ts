@@ -83,12 +83,13 @@ test('keep warm on: a ping each 55 minutes up to the cap, then a warm return is 
   await clock.advance(55 * MINUTE)
   expect(world.forks.length).toBe(3)
   expect(world.status.at(-1)).toBe(undefined)
-  // The person is back within the hour of the last ping, and the turn read the cache.
-  await $.prompt.submit({ text: 'back' })
+  // A plugin's own prompt (as an away window's work) is not the person coming back: the reads are counted, no return.
+  // A person's return is warm.test.mjs's ("a person's return after reads is counted warm"): the kit's prompts are a plugin's.
+  await $.prompt.submit({ text: 'work' })
   await endTurn($)
   await clock.settle()
   const report = (await $.command.run({ command: 'warm', args: '' })).text ?? ''
-  expect(report).toMatch(/3 pings · 1 return warm, 0 cold · \$0\.2[23] spent, ~\$1\.4[23] re-write avoided/)
+  expect(report).toMatch(/3 pings · 0 returns warm, 0 cold · \$0\.2[23] spent/)
 })
 
 test('after the first turn alone, no read: its cache is never read again', { options: { cacheKeepWarm: 'on' } }, async ($, on) => {

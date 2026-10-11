@@ -1,6 +1,6 @@
 # cache-keep-warm: Progress
 
-- Working under rev: 3
+- Working under rev: 4
 - Worker: the orchestrating session itself (no background worker: the intent skill is not on this branch, L-2)
 - Current step: S5, the PR
 - Next step: review (Tin)
@@ -34,4 +34,5 @@
 - S4 (rev 2, 2026-10-11): A1 live, sessions A and B on the frozen a7704de, 00:06 to 02:02. Evidence: [proof/](proof/README.md), transcripts' usage in proof/transcript-usage.txt. Acceptance: A1.
 - S5 (rev 2, 2026-10-11): PR #51 to main for review. Acceptance: A9 (review half open).
 - S6 (rev 3, 2026-10-11): the row's ◔, Home's Stepping out? (`w`), away windows hand keep-warm over (D11-D13); the stand-in engine answers `session.usage` and `model.fork` and sets `isAborted` on `turn.complete`. Evidence: commit 35f27b2; `S2_ROOT=E:/S2_ node dev/test-all.mjs` (CLAUDE_CODE_TYPES set) → type-check clean, `328/328 passed`, `292/292 passed`, `359/359 passed`; `claude plugin test` 8 pass; live session E ([proof](proof/README.md)). One run read `/away tonight runs until 09:00` as 09:12: the e2e pins the clock at a block's boot, and a slow run reached 08:57 (shortest window, 15 minutes); the rerun passed 359/359. Acceptance: A10, A11.
+- S7 (rev 4, 2026-10-11): the thermo-nuclear review's restructuring (D14, D15) and F-3. Evidence: `S2_ROOT=E:/S2_ node dev/test-all.mjs` (CLAUDE_CODE_TYPES set) → type-check clean, `335/335 passed` (seven state-machine tests new), `292/292 passed`, `359/359 passed`; `claude plugin validate` passed; `claude plugin test` 8 pass (the return there is now a plugin's prompt, not counted, D15; a person's return is the unit test's). The thermo-nuclear review run again on the new diff: see the PR.
 

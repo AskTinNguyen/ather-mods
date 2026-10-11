@@ -15,7 +15,6 @@ import { unreal } from './packs/unreal.mjs'
 import { baseOf } from './team.mjs'
 import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
-import { OFF_VIEW, addLedger, emptyLedger } from './warm.mjs'
 
 /**
  * @typedef {{
@@ -84,10 +83,13 @@ const KEY = {
 }
 // What belongs to this lane and follows it to a new session id after /clear.
 const LANE_KEYS = [KEY.away, KEY.pinned, KEY.evidence, KEY.lost, KEY.untracked, KEY.warm]
+// Keep-warm's keys, for warm-store.mjs: the session's choice moves with its lane, the ledger is the machine's.
+export const WARM_KEYS = { choice: KEY.warm, ledger: KEY.warmLedger }
 
 let queue = Promise.resolve()
+// The one change queue: exported for warm-store.mjs, whose writes take their turn with every other change.
 /** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
-const serial = task => {
+export const serial = task => {
   const run = queue.then(task)
   queue = run.then(
     () => undefined,
@@ -847,50 +849,6 @@ export const flagLost = (io, paths) =>
     await io.set(KEY.lost(await io.sessionId()), { paths, isDisclosed: false })
     changed(io)
   })
-
-/**
- * This session's keep-warm choice and learned TTL; each field absent until set.
- * @typedef {{ mode?: 'on' | 'off', hours?: number, ttl?: import('./warm.mjs').Ttl }} WarmChoice
- */
-/** @param {Io} io @returns {Promise<WarmChoice>} */
-export const readWarm = async io => /** @type {WarmChoice} */ ((await io.get(KEY.warm(await io.sessionId()))) ?? {})
-
-/** @param {Io} io @param {WarmChoice} fields */
-export const setWarm = (io, fields) =>
-  serial(async () => {
-    const key = KEY.warm(await io.sessionId())
-    await io.set(key, { .../** @type {object} */ ((await io.get(key)) ?? {}), ...fields })
-  })
-
-/** @param {Io} io @returns {Promise<import('./warm.mjs').Ledger>} */
-export const readWarmLedger = async io => ({ ...emptyLedger(), .../** @type {object} */ ((await io.get(KEY.warmLedger)) ?? {}) })
-
-/** @param {Io} io @param {import('./warm.mjs').LedgerChange} change */
-export const noteWarm = (io, change) =>
-  serial(async () => {
-    if (Object.keys(change).length === 0) return
-    await io.set(KEY.warmLedger, addLedger(await readWarmLedger(io), change))
-  })
-
-// What keep-warm is doing now, as watch.mjs last said, for the row above the prompt (console.mjs). In memory only:
-// it is this session's, and redrawing for it never bumps the version, so the console's model is not read again.
-let warmView = OFF_VIEW
-export const readWarmView = () => warmView
-
-/** @param {Io} io @param {import('./warm.mjs').WarmView} view */
-export const showWarm = (io, view) => {
-  if (JSON.stringify(view) === JSON.stringify(warmView)) return
-  warmView = view
-  io.redraw()
-}
-
-// The row's button turns keep-warm on or off through the half that runs its timer; that half answers with what to say.
-/** @type {((isOn: boolean) => Promise<string>) | null} */
-let warmToggle = null
-/** @param {(isOn: boolean) => Promise<string>} handler */
-export const onWarmToggle = handler => void (warmToggle = handler)
-/** @param {boolean} isOn @returns {Promise<string>} */
-export const toggleWarm = async isOn => (warmToggle ? warmToggle(isOn) : '')
 
 /** @param {Io} io @param {string} key */
 export const bump = (io, key) =>

@@ -1,6 +1,6 @@
 # Ather Automata cache keep-warm
 
-- Rev: 3
+- Rev: 4
 - Status: in progress
 - Area: ather-automata
 - Owner: Tin Nguyen
@@ -38,6 +38,8 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 - D11 (rev 3): A ◔ in the row above the prompt (console.mjs), between ☾ and ⤢: dim when off, at full strength when on, `1/3` in amber beside it while a read is due, `◔ –` dim where the cache lives five minutes. A press toggles it for the session, as `/warm on|off`, and says so in a toast. Only where the row is drawn (repositories with intents, L-4 option A); elsewhere `/warm` and the status line. The halves meet in state.mjs: watch.mjs publishes what keep-warm is doing (`showWarm`, a redraw without a version bump) and answers the toggle (`onWarmToggle`, as `onSetUp`).
 - D12 (rev 3): Home has a **Stepping out?** section right after Heading off?, at any hour (not only in the evening as Heading off? is): one line on what keep-warm is doing and a button, Keep the cache warm or Stop keeping warm, hotkey `w` (`k` is taken by the list rows' `PICK_KEYS`) (L-5).
 - D13 (rev 3): An away window with an end hands keep-warm over: on, its cap the window's length plus an hour (at most 17 hours, 18 reads, under the 19 a re-write costs), from its start until the person has reviewed it, unless they said `/warm off` in that session; the start's reply says so. Until done hands nothing over (L-6).
+- D14 (rev 4): After the thermo-nuclear review (L-7, L-8), keep-warm is a pure state machine: `stepWarm(state, event, env)` in warm.mjs returns the next state, the effects (arm, cancel, fork, status, view, toast, note, save) and the reply; watch.mjs keeps one state, reads the step's environment once (`Promise.all`), and carries out the effects. Its storage and the view/toggle hand-off move to warm-store.mjs (state.mjs exports its change queue), so state.mjs is back under 1,000 lines (990) and watch.mjs is 828 (937 before). The away policy is warm.mjs's `factsOf`; skip reasons are a typed union; the row's toggle rejects when keep-warm has not started instead of answering ''. Replaces D2's wiring and D7's mechanism, not their rules.
+- D15 (rev 4): One definition of the person: `isPersonOrigin` (model.mjs), a prompt typed at the terminal or the desktop (`composer`) or sent over Remote Control (`bridge`), for both the away window's "back" and keep-warm's returns. A plugin's own prompt (an away window's work, the test kit's) is not a return and does not reset the count of reads.
 - D6 (rev 1): Money: a ping's real cost is the change in `$.session.usage().cost.usd` around it; the re-write it avoids is estimated as 19 times the cache-read part (2x write minus the 0.1x read the next turn still pays). Shown with "~".
 
 ## Acceptance
@@ -62,5 +64,6 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 ## Changelog
 
 - rev 1 (2026-10-10): created from L-1 and L-2.
+- rev 4 (2026-10-11): L-7, L-8; D14, D15, F-3.
 - rev 3 (2026-10-11): L-4 to L-6; D11-D13, A10, A11.
 - rev 2 (2026-10-10): L-3 (autonomy while away); D2 revised, D7-D9 added; constraint on pushing lifted.

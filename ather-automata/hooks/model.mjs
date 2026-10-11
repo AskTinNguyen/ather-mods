@@ -487,6 +487,11 @@ export const clockText = (ms, tz) => {
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
 }
 
+// A prompt the person sent: typed at the terminal or the desktop (`composer`), or from a phone over Remote Control
+// (`bridge`). Not a schedule, a wakeup, a task's notice, another session, or a plugin's own prompt (an away window's work).
+/** @param {{ kind: string } | undefined} origin */
+export const isPersonOrigin = origin => origin?.kind === 'composer' || origin?.kind === 'bridge'
+
 /** @param {number} ms */
 export const durationText = ms => {
   const total = Math.max(0, Math.round(ms / 60000))

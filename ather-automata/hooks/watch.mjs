@@ -10,7 +10,7 @@
 
 import { clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
 import { briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldLabel, heldNoun, heldShellAt, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
-import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
+import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, isPersonOrigin, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
@@ -19,7 +19,8 @@ import { heldByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
 import { withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
-import { hoursOf, isHit, learnTtl, modeOf, newPeriod, nextPingAt, parseWarmArgs, returnChange, skipReason, statusText as warmStatus, toggleText, viewOf, warmReport, awayHours } from './warm.mjs'
+import { IDLE_ENV, PING_PROMPT, initialWarm, stepWarm } from './warm.mjs'
+import * as warmStore from './warm-store.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -39,30 +40,10 @@ let lastPersonAt = 0
 // A hot reload starts it again, which only makes the rule stricter.
 let sessionStartedAt = Date.now()
 
-// Keeping the prompt cache warm (warm.mjs has the rules): the plugin settings, whether a person can come back to
-// this session, whether a main-thread turn runs, the idle period since the last one, and its timer.
-let warmMode = /** @type {import('./warm.mjs').WarmMode} */ ('off')
-let warmHours = 3
-let isWarmAttended = false
-let isTurnRunning = false
-// Main-thread turns since the session (or /clear) began: the first one's cache is never read again.
-let warmTurns = 0
-/** @type {import('./warm.mjs').Period | null} */
-let warmPeriod = null
+// Keeping the prompt cache warm: its state (warm.mjs's stepWarm moves it on) and the timer it armed.
+let warm = initialWarm('off', 3)
 /** @type {import('claude-code').Timer | null} */
 let warmTimer = null
-// The turn the session is in: the idle period it ended, when it began, and whether the person started it.
-/** @type {{ period: import('./warm.mjs').Period, at: number, isPerson: boolean } | null} */
-let warmTurn = null
-let isWarmAsked = false
-// What the last read in this session did, for /warm.
-/** @type {import('./warm.mjs').LastRead | null} */
-let lastRead = null
-let isShortTold = false
-// The one user message a ping sends: it asks for the shortest reply, since a fork takes no output cap.
-export const PING_PROMPT = 'Keep-alive check from a plugin; nothing to do. Reply with a single period.'
-// Turns the person did not start: a schedule, a wakeup, a task's notice, another session.
-const UNATTENDED_ORIGINS = ['task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay']
 
 // The store, files and session as closures: `$` cannot be handed to state.mjs itself.
 /** @param {Engine} $ @returns {import('./state.mjs').Io} */
@@ -121,8 +102,7 @@ function laneOf($) {
 export function register(on, options) {
   briefGate = String(options?.briefGate ?? 'warn')
   repos = String(options?.repos ?? '')
-  warmMode = modeOf(options?.cacheKeepWarm)
-  warmHours = hoursOf(options?.cacheKeepWarmHours)
+  warm = initialWarm(options?.cacheKeepWarm, options?.cacheKeepWarmHours)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -167,35 +147,26 @@ export function register(on, options) {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    // Typed at the terminal or the desktop, or sent from a phone over Remote Control: the person is back.
-    if (e.origin?.kind === 'composer' || e.origin?.kind === 'bridge') lastPersonAt = Date.now()
+    // The person is back (isPersonOrigin says who that is).
+    if (isPersonOrigin(e.origin)) lastPersonAt = Date.now()
     // Any prompt, or any tool call below, is the lane's last activity (its heartbeat says when).
     state.markActive()
     // Delivered into a running turn, it starts none.
-    if (e.turnId === undefined) await startTurn($, !UNATTENDED_ORIGINS.includes(e.origin?.kind ?? '')).catch(() => undefined)
+    if (e.turnId === undefined) await warmDispatch($, { type: 'turnStart', isPerson: isPersonOrigin(e.origin) }).catch(() => '')
     return next(e)
   })
 
   // A drawing client attached: the desktop app's sessions start as the SDK's do, with no surface yet.
   on('session.attach', async ($, e, next) => {
-    isWarmAttended = true
+    await warmDispatch($, { type: 'attach' }).catch(() => '')
     return next(e)
   })
 
-  // Two matchers, every turn between them: console.mjs holds the event's unmatched hook.
-  on('turn.complete', { isAborted: false }, async ($, e, next) => {
-    const result = await next(e)
-    // A worker's turn reads its own cache, not the session's.
-    if (e.agentId === undefined) void endTurn($, e.usage).catch(error => $.ui.log(`Ather warm: ${String(error)}`, { to: 'debug' }))
-    return result
-  })
-  on('turn.complete', { isAborted: true }, async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId === undefined) void endTurn($, e.usage).catch(error => $.ui.log(`Ather warm: ${String(error)}`, { to: 'debug' }))
-    return result
-  })
+  // Under two matchers that cover every turn: console.mjs holds the event's unmatched hook.
+  on('turn.complete', { isAborted: false }, turnEnded)
+  on('turn.complete', { isAborted: true }, turnEnded)
 
-  on('command.run', { command: 'warm' }, async ($, e) => ({ text: await warmCommand($, e.args) }))
+  on('command.run', { command: 'warm' }, async ($, e) => ({ text: await warmDispatch($, { type: 'command', args: e.args, ledger: await warmStore.readWarmLedger(io($)) }).catch(error => `Keep-warm could not answer: ${String(error)}`) }))
 
   on('tool.call', { tool: 'mcp__ather-automata__status' }, async $ => ({ result: await statusText($) }))
   on('tool.call', { tool: 'mcp__ather-automata__away' }, async ($, e) => ({ result: await awayTool($, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))) }))
@@ -767,171 +738,91 @@ async function auditMerge($, root, pack) {
 }
 
 // ---------------------------------------------------------------- keeping the prompt cache warm
+// warm.mjs decides (stepWarm); this section reads what each step needs and carries out what it returns.
 
-/** @param {Engine} $ @param {boolean} isAttended */
-async function startWarm($, isAttended) {
-  isWarmAttended = isAttended
-  isTurnRunning = false
-  warmTurns = 0
-  warmPeriod = null
-  warmTurn = null
-  isWarmAsked = false
-  isShortTold = false
-  lastRead = null
-  cancelWarm($)
-  // The row above the prompt (console.mjs) turns it on and off through here, where the timer runs.
-  state.onWarmToggle(isOn => toggleWarm($, isOn))
+// A main-thread turn ended (a worker's reads its own cache, not the session's).
+/** @type {import('claude-code').Hook<'turn.complete'>} */
+async function turnEnded($, e, next) {
+  const result = await next(e)
+  if (e.agentId === undefined) void warmDispatch($, { type: 'turnEnd', usage: e.usage ?? null }).catch(() => '')
+  return result
+}
+
+/** @param {Engine} $ @param {boolean} attended */
+async function startWarm($, attended) {
+  await warmDispatch($, { type: 'start', attended, choice: await warmStore.readWarm(io($)) })
+  // The row's ◔ and the pane's button (console.mjs) turn it on and off through here, where it runs.
+  warmStore.onWarmToggle(isOn => warmDispatch($, { type: 'toggle', isOn }))
   await $.command.register({ name: 'warm', description: 'Ather Automata: keep the prompt cache warm while you are idle', argumentHint: '[on | off | <n>h]' })
 }
 
-// Never awaited: the session's end must not wait on the ledger.
+// At the session's end, without waiting on anything (F-1): its step needs nothing read, and its effects run behind it.
 /** @param {Engine} $ */
 function endWarm($) {
-  // Pings the person never came back to.
-  if (warmPeriod && warmPeriod.pings > 0) void state.noteWarm(io($), { wasted: warmPeriod.pings }).catch(() => undefined)
-  warmPeriod = null
-  warmTurn = null
-  // After /clear the session goes on under a new id with no session.start: its next turn is a first turn again.
-  warmTurns = 0
-  try {
-    cancelWarm($)
-  } catch {
-    // The status line may already be gone with the session.
-  }
+  const { state: next, effects } = stepWarm(warm, { type: 'end' }, IDLE_ENV)
+  warm = next
+  for (const effect of effects) void runWarm($, effect).catch(() => undefined)
 }
 
-/** @param {Engine} $ @param {boolean} isPerson */
-async function startTurn($, isPerson) {
-  isTurnRunning = true
-  // Someone typed: a person can come back to this session.
-  if (isPerson) isWarmAttended = true
-  cancelWarm($)
-  warmTurn = warmPeriod ? { period: warmPeriod, at: await $.clock.now(), isPerson } : null
-}
-
-/** @param {Engine} $ */
-function cancelWarm($) {
-  warmTimer?.cancel()
-  warmTimer = null
-  $.ui.status(undefined)
-  void publishWarm($).catch(() => undefined)
-}
-
-// Tells the row above the prompt what keep-warm is doing now; it redraws only when that changed.
-/** @param {Engine} $ */
-async function publishWarm($) {
-  const facts = await warmFacts($)
-  state.showWarm(io($), viewOf(warmPeriod, facts, skipReason(warmPeriod, await $.clock.now(), facts), await state.readTz(io($))))
-}
-
-// The row's button: on or off for this session, as /warm on and /warm off; never on where the cache lives five minutes.
-/** @param {Engine} $ @param {boolean} isOn @returns {Promise<string>} */
-async function toggleWarm($, isOn) {
-  if (isOn && (await warmFacts($)).ttl === '5m') return toggleText(true, 'short-ttl', warmPeriod, await warmFacts($), 0)
-  await state.setWarm(io($), { mode: isOn ? 'on' : 'off' })
-  await armWarm($)
-  const facts = await warmFacts($)
-  return toggleText(isOn, skipReason(warmPeriod, await $.clock.now(), facts), warmPeriod, facts, await state.readTz(io($)))
-}
-
-/** @param {Engine} $ @returns {Promise<import('./warm.mjs').Facts>} */
-async function warmFacts($) {
-  const choice = await state.readWarm(io($))
-  const away = await state.readAway(io($)).catch(() => null)
-  const usage = await $.session.usage().catch(() => null)
-  const window = { phase: away?.phase ?? 'off', untilDone: away?.untilDone ?? false, startedAt: away?.startedAt ?? 0, wakeAt: away?.wakeAt ?? 0 }
-  // An away window turns it on for its length, unless the person said /warm off in this session.
-  const byAway = awayHours(window) > 0 && choice.mode !== 'off'
+// What the session tells each step, read at once.
+/** @param {Engine} $ @returns {Promise<import('./warm.mjs').WarmEnv>} */
+async function warmEnv($) {
+  const [now, tz, away, usage] = await Promise.all([$.clock.now(), state.readTz(io($)), state.readAway(io($)).catch(() => null), $.session.usage().catch(() => null)])
   return {
-    mode: byAway ? 'on' : (choice.mode ?? (warmMode === 'on' ? 'on' : 'off')),
-    hours: byAway ? Math.max(choice.hours ?? warmHours, awayHours(window)) : (choice.hours ?? warmHours),
-    byAway,
-    ttl: choice.ttl ?? '1h',
-    isBusy: isTurnRunning,
-    isInteractive: isWarmAttended,
-    turns: warmTurns,
-    away: window,
+    now,
+    tz,
+    away: { phase: away?.phase ?? 'off', untilDone: away?.untilDone ?? false, startedAt: away?.startedAt ?? 0, wakeAt: away?.wakeAt ?? 0 },
     quota: Math.max(0, ...(usage?.rateLimits ?? []).map(one => one.percentUsed)),
+    context: usage?.context.tokens ?? 0,
   }
 }
 
-// A main-thread turn ended: what it says of the TTL and of the idle period before it, then a new idle period.
-/** @param {Engine} $ @param {import('claude-code').TurnUsage | undefined} usage */
-async function endTurn($, usage) {
-  isTurnRunning = false
-  warmTurns += 1
-  const now = await $.clock.now()
-  const context = (await $.session.usage().catch(() => null))?.context.tokens ?? 0
-  const from = warmTurn
-  warmTurn = null
-  // A second turn always writes the first one's part again (F-2): only later turns say anything of the TTL.
-  if (from && usage && warmTurns > 2 && learnTtl(from.at - from.period.lastAt, usage, from.period.context) === '5m' && (await state.readWarm(io($))).ttl !== '5m') {
-    await state.setWarm(io($), { ttl: '5m' })
-    if (!isShortTold && (await warmFacts($)).mode === 'on') $.ui.toast('Ather: the prompt cache lives five minutes in this session, too short to keep warm. Paused; /warm says more.', { timeoutMs: 10000 })
-    isShortTold = true
-  }
-  if (from && usage && from.isPerson) await state.noteWarm(io($), returnChange(from.period, from.at, usage, (await warmFacts($)).ttl))
-  // A turn the person did not start (a schedule, a wakeup) read the cache too, but the cap counts from their last turn.
-  warmPeriod = { ...newPeriod(now, context), pings: from && !from.isPerson ? from.period.pings : 0 }
-  await armWarm($)
+// One event: the step decides, its effects are carried out in order, and its reply is what /warm and the ◔ say.
+/** @param {Engine} $ @param {import('./warm.mjs').WarmEvent} event @returns {Promise<string>} */
+async function warmDispatch($, event) {
+  const env = await warmEnv($)
+  const { state: next, effects, reply } = stepWarm(warm, event, env)
+  warm = next
+  for (const effect of effects) await runWarm($, effect).catch(error => $.ui.log(`Ather warm: ${effect.type}: ${String(error)}`, { to: 'debug' }))
+  return reply
 }
 
-/** @param {Engine} $ */
-async function armWarm($) {
-  cancelWarm($)
-  if (!warmPeriod) return
-  const facts = await warmFacts($)
-  const now = await $.clock.now()
-  // Suggested once per session, and only where the person has not said on or off here.
-  if (warmMode === 'ask' && !isWarmAsked && (await state.readWarm(io($))).mode === undefined && skipReason(warmPeriod, now, { ...facts, mode: 'on' }) === '') {
-    isWarmAsked = true
-    $.ui.toast(`Ather: this session holds ${Math.round(warmPeriod.context / 1000)}k tokens in its prompt cache. Stepping away? /warm on keeps it warm for up to ${facts.hours} hours.`, { timeoutMs: 12000 })
+/** @param {Engine} $ @param {import('./warm.mjs').WarmEffect} effect */
+async function runWarm($, effect) {
+  switch (effect.type) {
+    case 'cancel':
+      warmTimer?.cancel()
+      warmTimer = null
+      return
+    case 'arm':
+      warmTimer = $.clock.after(effect.delay, () => void warmDispatch($, { type: 'fire', id: effect.id }).catch(() => ''))
+      return
+    case 'fork':
+      // Not awaited: a read takes seconds, and the session's next event must not wait on it.
+      void readCache($, effect.id, effect.context).catch(error => $.ui.log(`Ather warm: read failed: ${String(error)}`, { to: 'debug' }))
+      return
+    case 'status':
+      return $.ui.status(effect.text)
+    case 'view':
+      return warmStore.showWarm(io($), effect.view)
+    case 'toast':
+      return $.ui.toast(`Ather: ${effect.text}`, { timeoutMs: effect.ms })
+    case 'note':
+      return warmStore.noteWarm(io($), effect.change)
+    case 'save':
+      return warmStore.setWarm(io($), effect.fields)
   }
-  if (skipReason(warmPeriod, now, facts) !== '') return
-  const at = warmPeriod
-  warmTimer = $.clock.after(Math.max(0, nextPingAt(at, facts.ttl) - now), () => void pingWarm($, at).catch(error => $.ui.log(`Ather warm: ${String(error)}`, { to: 'debug' })))
-  $.ui.status(warmStatus(at, facts, await state.readTz(io($))))
-  await publishWarm($)
 }
 
-// Reads the cache once with a tool-less fork of the session's last request, which starts its hour again.
-/** @param {Engine} $ @param {import('./warm.mjs').Period} at */
-async function pingWarm($, at) {
-  warmTimer = null
-  // A turn started or ended since: that idle period is over.
-  if (warmPeriod !== at) return
-  if (skipReason(at, await $.clock.now(), await warmFacts($)) !== '') return cancelWarm($)
+// Reads the cache once with a tool-less fork of the session's last request, which starts its hour again; what it cost
+// is the change in the session's cost around it.
+/** @param {Engine} $ @param {number} id @param {number} context */
+async function readCache($, id, context) {
   const before = (await $.session.usage().catch(() => null))?.cost?.usd ?? 0
   const reply = await $.model.fork({ prompt: PING_PROMPT })
   const usd = Math.max(0, ((await $.session.usage().catch(() => null))?.cost?.usd ?? before) - before)
   const usage = 'usage' in reply ? reply.usage : null
-  lastRead = { at: await $.clock.now(), read: usage?.cache_read_input_tokens ?? 0, written: usage?.cache_creation_input_tokens ?? 0, context: at.context, reason: reply.isAnswered ? '' : reply.reason }
-  $.ui.log(`Ather warm: read ${JSON.stringify({ ...usage, context: at.context, usd, reason: lastRead.reason })}`, { to: 'debug' })
-  if (warmPeriod !== at) return
-  if (!reply.isAnswered && reply.reason === 'nothing-to-fork') return cancelWarm($)
-  if (reply.isAnswered && isHit(reply.usage, at.context)) {
-    warmPeriod = { ...at, lastAt: await $.clock.now(), pings: at.pings + 1, lastPingUsd: usd }
-    await state.noteWarm(io($), { pings: 1, pingUsd: usd })
-    return armWarm($)
-  }
-  // The cache was not there to keep (a changed prefix, an API error): this idle period stops.
-  warmPeriod = { ...at, isStopped: true }
-  await state.noteWarm(io($), { missed: 1, pingUsd: usd })
-  cancelWarm($)
-}
-
-/** @param {Engine} $ @param {string} args */
-async function warmCommand($, args) {
-  const choice = parseWarmArgs(args)
-  if (choice === null) return 'Usage: /warm, /warm on, /warm off, /warm 2h (keep it warm for at most two hours of idle time).'
-  if (choice.mode !== undefined || choice.hours !== undefined) {
-    await state.setWarm(io($), choice)
-    // Turned on, off or re-capped: the idle period is timed again from here.
-    await armWarm($)
-  }
-  const facts = await warmFacts($)
-  const stored = await state.readWarm(io($))
-  const source = facts.byAway ? 'with your away window, until you have reviewed it' : stored.mode !== undefined || stored.hours !== undefined ? 'set for this session' : 'from the plugin settings'
-  const reason = skipReason(warmPeriod, await $.clock.now(), facts)
-  return warmReport({ reason, period: warmPeriod, facts, tz: await state.readTz(io($)), ledger: await state.readWarmLedger(io($)), source, last: lastRead })
+  const reason = reply.isAnswered ? '' : reply.reason
+  $.ui.log(`Ather warm: read ${JSON.stringify({ ...usage, context, usd, reason })}`, { to: 'debug' })
+  await warmDispatch($, { type: 'read', id, context, usage, reason, usd })
 }

@@ -17,6 +17,7 @@ import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, 
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { awayHours, warmBadge, warmPaneText } from './warm.mjs'
+import * as warmStore from './warm-store.mjs'
 import { crewOf } from './crew.mjs'
 import { crewSections } from './crew-rows.mjs'
 import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
@@ -408,7 +409,7 @@ export function register(on, options) {
     closedHint = null
     const { Box, Text, Button } = $.ui.resolve(e)
     const isAway = model.header.stage === 'Away'
-    const warm = warmBadge(state.readWarmView())
+    const warm = warmBadge(warmStore.readWarmView())
     return Box({
       flexDirection: 'row',
       gap: 2,
@@ -1152,7 +1153,7 @@ async function startAway($, choice) {
   const ledger = away.ledgerPath.startsWith(root) ? away.ledgerPath.slice(root.length + 1) : away.ledgerPath
   handOff($, ['away-start'], `I am away ${windowEndText(away, tz)}. Goal: ${choice.goal || 'continue the active work'}. Work through it without waiting for me and record every decision you take for me in ${ledger}.`)
   // The prompt cache comes with the handover (watch.mjs keeps it), unless /warm off was said here or there is no end.
-  const warm = awayHours(away) > 0 && (await state.readWarm(io($))).mode !== 'off' ? ' The prompt cache is kept warm until you are back; /warm off stops it.' : ''
+  const warm = awayHours(away) > 0 && (await warmStore.readWarm(io($))).mode !== 'off' ? ' The prompt cache is kept warm until you are back; /warm off stops it.' : ''
   return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}${warm}`
 }
 
@@ -1858,7 +1859,7 @@ async function unseenChanges($) {
 // The row's ◔: keep-warm on or off for this session, said in a toast (watch.mjs runs the timer and answers).
 /** @param {Engine} $ */
 async function pressWarm($) {
-  const text = await state.toggleWarm(!state.readWarmView().isOn).catch(error => `Keep-warm could not change: ${String(error)}`)
+  const text = await warmStore.toggleWarm(!warmStore.readWarmView().isOn).catch(error => `Keep-warm could not change: ${String(error)}`)
   if (text) $.ui.toast(`Ather: ${text}`, { timeoutMs: 8000 })
 }
 
@@ -2189,7 +2190,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   // Beside Heading off? and at any hour: keep the prompt cache warm while the person steps out, as the row's ◔ does.
-  const warm = warmPaneText(state.readWarmView())
+  const warm = warmPaneText(warmStore.readWarmView())
   rows.push(section(el, 'warm', [label(el, 'warm-label', 'Stepping out?', width), Text({ key: 'warm-pitch', color: warm.action === 'Stop keeping warm' ? undefined : QUIET, wrap: 'wrap', children: warm.text }), ...(warm.action ? [Button({ key: 'warm-toggle', label: warm.action, hotkey: hotkeyFor('w'), plain: isClicked ? undefined : true, onPress: () => void pressWarm($) })] : [])]))
 
   // The folders Ather lists, and adding one: a quiet way in at the foot.

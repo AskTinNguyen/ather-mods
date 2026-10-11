@@ -22,3 +22,9 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 **Proposed amendment:** no read before the session's second main-thread turn (a single-request first turn is the common case of the effect, and the guard costs one idle period at most); TTL calibration ignores the second turn, which re-writes that first entry; `/warm` shows the last read's figures, so a person sees a miss for what it is.
 **Resolution:** D10, rev 2.
 
+## F-3 (2026-10-11, rev 4) | blocking: no | status: accepted (engineering)
+
+**Found:** The state machine's tests showed `maxPings(hours, '5m')` dividing by zero (the five-minute TTL less the five-minute margin): the cap was Infinity, and the view sent `cap: null` while keep-warm was paused for the short TTL.
+**Proposed amendment:** no reads where the TTL is no longer than the margin: the cap is 0.
+**Resolution:** fixed with D14; unit `maxPings(3, '5m')` is 0, and the paused view's cap is 0.
+

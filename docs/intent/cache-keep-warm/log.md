@@ -40,3 +40,19 @@ The proposal: ◔ between ☾ and ⤢ in the row above the prompt, a toggle for 
 
 > When user selects away for 8 hours, will the warm feature automatically get switch on as.part of the delegation? I think it should
 
+## L-7 (2026-10-11) | class: review | -> rev 4
+
+> https://github.com/cursor/plugins/blob/main/cursor-team-kit/skills/thermo-nuclear-code-quality-review/SKILL.md
+>
+> Install original skill into the Ather mods repo and invoke that instead.
+
+Installed unchanged on `chore/thermo-nuclear-review-skill` (with AGENTS.md, L-9). Verdict on this branch: not approvable: state.mjs past 1,000 lines, keep-warm threaded through unrelated hooks with eleven mutable variables, repeated sequential reads and a racing publish, the away policy in the wrong layer, string-typed reasons, a silent toggle fallback, two definitions of the person.
+
+## L-8 (2026-10-11) | class: decision | -> rev 4
+
+> Agree, proceed
+
+## L-9 (2026-10-11) | class: intent | -> skill branch
+
+> while working on that, create a AGENTS.md for our ather-mods repo, to enforce the strict anytime there's a code change, the thermo-nuclear skill must be invoked and all critical findings must pass
+

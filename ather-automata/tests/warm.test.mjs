@@ -1,7 +1,7 @@
 // @ts-check
 import { describe, expect, test } from 'claude-code/testing'
 
-import { AVOIDED_PER_PING, MAX_AWAY_HOURS, MIN_CONTEXT_TOKENS, awayHours, OFF_VIEW, WARM_MARGIN_MS, addLedger, emptyLedger, hoursOf, isHit, isRewrite, learnTtl, maxPings, modeOf, newPeriod, nextPingAt, parseWarmArgs, returnChange, skipReason, statusText, toggleText, ttlMs, viewOf, warmBadge, warmPaneText, warmReport } from '../hooks/warm.mjs'
+import { AVOIDED_PER_PING, IDLE_ENV, MAX_AWAY_HOURS, MIN_CONTEXT_TOKENS, awayHours, OFF_VIEW, initialWarm, stepWarm, WARM_MARGIN_MS, addLedger, emptyLedger, hoursOf, isHit, isRewrite, learnTtl, maxPings, modeOf, newPeriod, nextPingAt, parseWarmArgs, returnChange, skipReason, statusText, toggleText, ttlMs, viewOf, warmBadge, warmPaneText, warmReport } from '../hooks/warm.mjs'
 
 const MIN = 60 * 1000
 const HOUR = 60 * MIN
@@ -17,6 +17,7 @@ describe('keep warm: timing (A3)', () => {
     expect(maxPings(3, '1h')).toBe(3)
     expect(maxPings(1, '1h')).toBe(1)
     expect(maxPings(6, '1h')).toBe(6)
+    expect(maxPings(3, '5m')).toBe(0)
     expect(ttlMs('5m')).toBe(5 * MIN)
   })
 
@@ -175,6 +176,116 @@ describe('keep warm: an away window hands it over', () => {
     expect(skipReason(period, 2 * HOUR + 55 * MIN, during)).toBe('')
     // Seven reads in, the window has ended (it waits for review) and the eighth is still due: the person is due back.
     expect(skipReason({ ...period, lastAt: 8 * HOUR + 25 * MIN, pings: 7 }, 9 * HOUR + 20 * MIN, { ...during, away: window(8, { phase: 'review' }) })).toBe('')
+  })
+})
+
+describe('keep warm: the state machine (stepWarm)', () => {
+  /** @param {number} now @param {Partial<import('../hooks/warm.mjs').WarmEnv>} [fields] */
+  const env = (now, fields = {}) => ({ ...IDLE_ENV, now, context: CONTEXT, ...fields })
+  const hitUsage = { cache_read_input_tokens: CONTEXT, cache_creation_input_tokens: 0 }
+  /** @param {import('../hooks/warm.mjs').WarmEffect[]} effects @param {string} type */
+  const of = (effects, type) => effects.filter(one => one.type === type)
+  // Runs events in order from a state, collecting every effect; each event at its own time.
+  /** @param {import('../hooks/warm.mjs').WarmState} from @param {[import('../hooks/warm.mjs').WarmEvent, number][]} events */
+  const run = (from, events) => {
+    let state = from
+    /** @type {import('../hooks/warm.mjs').WarmEffect[]} */
+    const effects = []
+    let reply = ''
+    for (const [event, now] of events) {
+      const step = stepWarm(state, event, env(now))
+      state = step.state
+      effects.push(...step.effects)
+      reply = step.reply
+    }
+    return { state, effects, reply }
+  }
+  /** @param {boolean} isPerson @returns {[import('../hooks/warm.mjs').WarmEvent, number][]} */
+  const turn = (isPerson, at, usage = hitUsage) => [[{ type: 'turnStart', isPerson }, at], [{ type: 'turnEnd', usage }, at]]
+  // A session with keep-warm on, past its second turn at minute 0.
+  const warmed = () => run(initialWarm('on', 3), [[{ type: 'start', attended: true, choice: {} }, 0], ...turn(true, 0), ...turn(true, 0)])
+
+  test('past the second turn a read is armed 55 minutes out, and the status line and the view say so', () => {
+    const { state, effects } = warmed()
+    const arm = of(effects, 'arm').at(-1)
+    expect(arm).toEqual({ type: 'arm', id: state.period?.id ?? -1, delay: 55 * MIN })
+    expect(of(effects, 'view').at(-1)).toEqual({ type: 'view', view: { isOn: true, pings: 0, cap: 3, reason: '', next: '00:55' } })
+    expect(of(run(initialWarm('on', 3), [[{ type: 'start', attended: true, choice: {} }, 0], ...turn(true, 0)]).effects, 'arm').length).toBe(0)
+  })
+
+  test('a timer fires a fork; a kept read counts a ping and arms the next; a stale timer or read changes nothing but the last read', () => {
+    const { state } = warmed()
+    const id = state.period?.id ?? -1
+    const fired = stepWarm(state, { type: 'fire', id }, env(55 * MIN))
+    expect(fired.effects).toEqual([{ type: 'fork', id, context: CONTEXT }])
+    const read = stepWarm(fired.state, { type: 'read', id, context: CONTEXT, usage: hitUsage, reason: '', usd: 0.02 }, env(55 * MIN))
+    expect(read.state.period?.pings).toBe(1)
+    expect(of(read.effects, 'note')).toEqual([{ type: 'note', change: { pings: 1, pingUsd: 0.02 } }])
+    expect(of(read.effects, 'arm').at(-1)?.delay).toBe(55 * MIN)
+    expect(stepWarm(state, { type: 'fire', id: id + 7 }, env(55 * MIN)).effects).toEqual([])
+    const stale = stepWarm(state, { type: 'read', id: id + 7, context: CONTEXT, usage: hitUsage, reason: '', usd: 0 }, env(55 * MIN))
+    expect(stale.effects).toEqual([])
+    expect(stale.state.lastRead?.read).toBe(CONTEXT)
+  })
+
+  test('a read that misses stops the idle period, counted missed', () => {
+    const { state } = warmed()
+    const id = state.period?.id ?? -1
+    const missed = stepWarm(state, { type: 'read', id, context: CONTEXT, usage: { cache_read_input_tokens: 30000, cache_creation_input_tokens: 120000 }, reason: '', usd: 0.08 }, env(55 * MIN))
+    expect(missed.state.period?.isStopped).toBe(true)
+    expect(of(missed.effects, 'note')).toEqual([{ type: 'note', change: { missed: 1, pingUsd: 0.08 } }])
+    expect(of(missed.effects, 'arm')).toEqual([])
+  })
+
+  test("a person's return after reads is counted warm; a plugin's turn is not a return and keeps the count", () => {
+    const { state } = warmed()
+    const id = state.period?.id ?? -1
+    const afterRead = stepWarm(state, { type: 'read', id, context: CONTEXT, usage: hitUsage, reason: '', usd: 0.02 }, env(55 * MIN)).state
+    const plugin = run(afterRead, turn(false, 70 * MIN))
+    expect(of(plugin.effects, 'note')).toEqual([])
+    expect(plugin.state.period?.pings).toBe(1)
+    const person = run(afterRead, turn(true, 70 * MIN))
+    expect(of(person.effects, 'note')).toEqual([{ type: 'note', change: { returnsWarm: 1, avoidedUsd: 0.02 * AVOIDED_PER_PING } }])
+    expect(person.state.period?.pings).toBe(0)
+  })
+
+  test('a re-write after 20 minutes from the third turn on learns the five-minute TTL: stored, said once, keep-warm paused', () => {
+    const { state } = warmed()
+    const third = run(state, turn(true, 20 * MIN, { cache_read_input_tokens: 0, cache_creation_input_tokens: CONTEXT }))
+    expect(of(third.effects, 'save')).toEqual([{ type: 'save', fields: { ttl: '5m' } }])
+    expect(of(third.effects, 'toast').length).toBe(1)
+    expect(of(third.effects, 'arm')).toEqual([])
+    expect(of(third.effects, 'view').at(-1)).toEqual({ type: 'view', view: { isOn: true, pings: 0, cap: 0, reason: 'short-ttl', next: '' } })
+    const toggled = stepWarm(third.state, { type: 'toggle', isOn: true }, env(21 * MIN))
+    expect(toggled.effects).toEqual([])
+    expect(toggled.reply).toMatch(/^The cache lives five minutes in this session/)
+  })
+
+  test('the toggle and /warm store the choice; /warm answers with the ledger; the end counts reads never come back to', () => {
+    const off = run(initialWarm('off', 3), [[{ type: 'start', attended: true, choice: {} }, 0], ...turn(true, 0), ...turn(true, 0)])
+    expect(of(off.effects, 'arm')).toEqual([])
+    const on = stepWarm(off.state, { type: 'toggle', isOn: true }, env(MIN))
+    expect(of(on.effects, 'save')).toEqual([{ type: 'save', fields: { mode: 'on' } }])
+    expect(on.reply).toBe('Keep-warm on for this session: the cache is read at 00:55, for up to 3 hours. /warm 2h changes the cap.')
+    const report = stepWarm(on.state, { type: 'command', args: '', ledger: emptyLedger() }, env(MIN))
+    expect(report.reply).toMatch(/^Keep the cache warm: on; next read at 00:55 \(0 of 3 this idle period\)\. Cap 3 hours, set for this session\./)
+    expect(stepWarm(on.state, { type: 'command', args: 'please', ledger: emptyLedger() }, env(MIN)).reply).toMatch(/^Usage: \/warm/)
+    const id = on.state.period?.id ?? -1
+    const pinged = stepWarm(on.state, { type: 'read', id, context: CONTEXT, usage: hitUsage, reason: '', usd: 0.02 }, env(55 * MIN)).state
+    const ended = stepWarm(pinged, { type: 'end' }, IDLE_ENV)
+    expect(ended.effects).toEqual([{ type: 'note', change: { wasted: 1 } }, { type: 'cancel' }, { type: 'status', text: undefined }, { type: 'view', view: OFF_VIEW }])
+    expect(ended.state.turns).toBe(0)
+  })
+
+  test('an away window with an end turns it on; /warm off in the session wins; ask mode suggests it once', () => {
+    const away = { phase: 'running', untilDone: false, startedAt: 0, wakeAt: 8 * HOUR }
+    const start = /** @type {[import('../hooks/warm.mjs').WarmEvent, number][]} */ ([[{ type: 'start', attended: true, choice: {} }, 0]])
+    const byAway = stepWarm(run(initialWarm('off', 3), [...start, ...turn(true, 0)]).state, { type: 'turnEnd', usage: hitUsage }, env(0, { away }))
+    expect(of(byAway.effects, 'view').at(-1)).toEqual({ type: 'view', view: { isOn: true, pings: 0, cap: 9, reason: '', next: '00:55' } })
+    const said = run(initialWarm('off', 3), [[{ type: 'start', attended: true, choice: { mode: 'off' } }, 0], ...turn(true, 0)]).state
+    expect(of(stepWarm(said, { type: 'turnEnd', usage: hitUsage }, env(0, { away })).effects, 'arm')).toEqual([])
+    const asked = run(initialWarm('ask', 3), [...start, ...turn(true, 0), ...turn(true, 0), ...turn(true, 5 * MIN)])
+    expect(of(asked.effects, 'toast').length).toBe(1)
   })
 })
 
