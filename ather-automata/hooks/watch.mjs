@@ -19,7 +19,7 @@ import { heldByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
 import { withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
-import { hoursOf, isHit, learnTtl, modeOf, newPeriod, nextPingAt, parseWarmArgs, returnChange, skipReason, statusText as warmStatus, warmReport } from './warm.mjs'
+import { hoursOf, isHit, learnTtl, modeOf, newPeriod, nextPingAt, parseWarmArgs, returnChange, skipReason, statusText as warmStatus, toggleText, viewOf, warmReport, awayHours } from './warm.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -779,6 +779,8 @@ async function startWarm($, isAttended) {
   isShortTold = false
   lastRead = null
   cancelWarm($)
+  // The row above the prompt (console.mjs) turns it on and off through here, where the timer runs.
+  state.onWarmToggle(isOn => toggleWarm($, isOn))
   await $.command.register({ name: 'warm', description: 'Ather Automata: keep the prompt cache warm while you are idle', argumentHint: '[on | off | <n>h]' })
 }
 
@@ -812,6 +814,24 @@ function cancelWarm($) {
   warmTimer?.cancel()
   warmTimer = null
   $.ui.status(undefined)
+  void publishWarm($).catch(() => undefined)
+}
+
+// Tells the row above the prompt what keep-warm is doing now; it redraws only when that changed.
+/** @param {Engine} $ */
+async function publishWarm($) {
+  const facts = await warmFacts($)
+  state.showWarm(io($), viewOf(warmPeriod, facts, skipReason(warmPeriod, await $.clock.now(), facts), await state.readTz(io($))))
+}
+
+// The row's button: on or off for this session, as /warm on and /warm off; never on where the cache lives five minutes.
+/** @param {Engine} $ @param {boolean} isOn @returns {Promise<string>} */
+async function toggleWarm($, isOn) {
+  if (isOn && (await warmFacts($)).ttl === '5m') return toggleText(true, 'short-ttl', warmPeriod, await warmFacts($), 0)
+  await state.setWarm(io($), { mode: isOn ? 'on' : 'off' })
+  await armWarm($)
+  const facts = await warmFacts($)
+  return toggleText(isOn, skipReason(warmPeriod, await $.clock.now(), facts), warmPeriod, facts, await state.readTz(io($)))
 }
 
 /** @param {Engine} $ @returns {Promise<import('./warm.mjs').Facts>} */
@@ -819,14 +839,18 @@ async function warmFacts($) {
   const choice = await state.readWarm(io($))
   const away = await state.readAway(io($)).catch(() => null)
   const usage = await $.session.usage().catch(() => null)
+  const window = { phase: away?.phase ?? 'off', untilDone: away?.untilDone ?? false, startedAt: away?.startedAt ?? 0, wakeAt: away?.wakeAt ?? 0 }
+  // An away window turns it on for its length, unless the person said /warm off in this session.
+  const byAway = awayHours(window) > 0 && choice.mode !== 'off'
   return {
-    mode: choice.mode ?? (warmMode === 'on' ? 'on' : 'off'),
-    hours: choice.hours ?? warmHours,
+    mode: byAway ? 'on' : (choice.mode ?? (warmMode === 'on' ? 'on' : 'off')),
+    hours: byAway ? Math.max(choice.hours ?? warmHours, awayHours(window)) : (choice.hours ?? warmHours),
+    byAway,
     ttl: choice.ttl ?? '1h',
     isBusy: isTurnRunning,
     isInteractive: isWarmAttended,
     turns: warmTurns,
-    away: { phase: away?.phase ?? 'off', untilDone: away?.untilDone ?? false, wakeAt: away?.wakeAt ?? 0 },
+    away: window,
     quota: Math.max(0, ...(usage?.rateLimits ?? []).map(one => one.percentUsed)),
   }
 }
@@ -867,6 +891,7 @@ async function armWarm($) {
   const at = warmPeriod
   warmTimer = $.clock.after(Math.max(0, nextPingAt(at, facts.ttl) - now), () => void pingWarm($, at).catch(error => $.ui.log(`Ather warm: ${String(error)}`, { to: 'debug' })))
   $.ui.status(warmStatus(at, facts, await state.readTz(io($))))
+  await publishWarm($)
 }
 
 // Reads the cache once with a tool-less fork of the session's last request, which starts its hour again.
@@ -906,7 +931,7 @@ async function warmCommand($, args) {
   }
   const facts = await warmFacts($)
   const stored = await state.readWarm(io($))
-  const source = stored.mode !== undefined || stored.hours !== undefined ? 'set for this session' : 'from the plugin settings'
+  const source = facts.byAway ? 'with your away window, until you have reviewed it' : stored.mode !== undefined || stored.hours !== undefined ? 'set for this session' : 'from the plugin settings'
   const reason = skipReason(warmPeriod, await $.clock.now(), facts)
   return warmReport({ reason, period: warmPeriod, facts, tz: await state.readTz(io($)), ledger: await state.readWarmLedger(io($)), source, last: lastRead })
 }

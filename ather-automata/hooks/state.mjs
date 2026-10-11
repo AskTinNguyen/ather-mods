@@ -15,7 +15,7 @@ import { unreal } from './packs/unreal.mjs'
 import { baseOf } from './team.mjs'
 import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
-import { addLedger, emptyLedger } from './warm.mjs'
+import { OFF_VIEW, addLedger, emptyLedger } from './warm.mjs'
 
 /**
  * @typedef {{
@@ -871,6 +871,26 @@ export const noteWarm = (io, change) =>
     if (Object.keys(change).length === 0) return
     await io.set(KEY.warmLedger, addLedger(await readWarmLedger(io), change))
   })
+
+// What keep-warm is doing now, as watch.mjs last said, for the row above the prompt (console.mjs). In memory only:
+// it is this session's, and redrawing for it never bumps the version, so the console's model is not read again.
+let warmView = OFF_VIEW
+export const readWarmView = () => warmView
+
+/** @param {Io} io @param {import('./warm.mjs').WarmView} view */
+export const showWarm = (io, view) => {
+  if (JSON.stringify(view) === JSON.stringify(warmView)) return
+  warmView = view
+  io.redraw()
+}
+
+// The row's button turns keep-warm on or off through the half that runs its timer; that half answers with what to say.
+/** @type {((isOn: boolean) => Promise<string>) | null} */
+let warmToggle = null
+/** @param {(isOn: boolean) => Promise<string>} handler */
+export const onWarmToggle = handler => void (warmToggle = handler)
+/** @param {boolean} isOn @returns {Promise<string>} */
+export const toggleWarm = async isOn => (warmToggle ? warmToggle(isOn) : '')
 
 /** @param {Io} io @param {string} key */
 export const bump = (io, key) =>

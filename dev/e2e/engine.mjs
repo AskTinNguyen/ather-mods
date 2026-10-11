@@ -27,7 +27,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   const agents = []
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
+  const record = { ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], forks: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -167,6 +167,15 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
       root: async () => root,
       cwd: async () => root,
       surfaces: async () => surfaces.slice(),
+      // The status line's figures: a context large enough to keep warm, no rate limits, no cost.
+      usage: async () => ({ startedAt: 0, context: { tokens: 120000, window: 200000 }, rateLimits: [], cost: { usd: 0 } }),
+    },
+    model: {
+      // A fork reads the whole context from the cache, as a session's does past its first request.
+      fork: async ({ prompt }) => {
+        record.forks.push(prompt)
+        return { isAnswered: true, text: '.', usage: { input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 120000, cache_creation_input_tokens: 0 } }
+      },
     },
     ui: {
       resolve: e => (e?.surface === 'mobile' ? MOBILE : ELEMENTS),
@@ -281,7 +290,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     // A worker already running when the plugin loaded: listed, but no spawn event was seen.
     addAgent: agent => void agents.push({ status: 'running', type: 'general-purpose', ...agent }),
     // A worker's own turn ends (its answer), as Claude Code reports it.
-    agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', agentId }, () => ({ text: '' })),
+    agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', isAborted: false, agentId }, () => ({ text: '' })),
     agentTool: (agentId, input) => dispatch('tool.call', { ...input, agentId }, toolBottom, 'engine'),
     // A tool call held in flight: it reaches the tool (`reached`) and stays there until released (it runs),
     // refused (the tool answers with a deny) or failed (the tool throws). `agentId` undefined: the main loop.
@@ -320,7 +329,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),
     // `cwd`: the shell's folder as the session starts (a resume after a `cd`), when it is not the session's root.
     start: (isInteractive = true, cwd = root) => dispatch('session.start', { cwd, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
-    turnEnd: () => dispatch('turn.complete', { reason: 'answer' }, () => ({ text: '' })),
+    turnEnd: () => dispatch('turn.complete', { reason: 'answer', isAborted: false }, () => ({ text: '' })),
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
     close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),
   }

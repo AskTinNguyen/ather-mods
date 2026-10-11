@@ -23,3 +23,20 @@ The intent skill is not on this branch (`.agents/skills/intent/SKILL.md` missing
 > Ill be away from computer for the next 8 hours, so do not stop to get my permission, and just proceed throughout until the plan is thoroughly complete and validated with visual proofs. If there are any areas that you think should be added to make better and richer, any tools that should be installed to do your job better, feel free to do it and record your decision. You have full computer use autonomy,
 
 Taken as: finish every acceptance item, including A1's live two-hour check in a real session with screenshots; record each decision here and in prompt.md; push the branch and open a PR to `main` for review (the Constraints' "no push without the owner's go" is lifted by this message); never merge.
+
+## L-4 (2026-10-11) | class: intent | -> rev 3
+
+> Great, in addition to the command slash warm, can you make a button for it in the mods row panel? Propose
+
+> A
+
+The proposal: ◔ between ☾ and ⤢ in the row above the prompt, a toggle for the session; option A, only where the row is already drawn.
+
+## L-5 (2026-10-11) | class: intent | -> rev 3
+
+> I think button should also appear in Arher Automata side panel, near the Heading to Bed section
+
+## L-6 (2026-10-11) | class: decision | -> rev 3
+
+> When user selects away for 8 hours, will the warm feature automatically get switch on as.part of the delegation? I think it should
+

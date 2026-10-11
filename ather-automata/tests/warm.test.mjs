@@ -1,14 +1,14 @@
 // @ts-check
 import { describe, expect, test } from 'claude-code/testing'
 
-import { AVOIDED_PER_PING, MIN_CONTEXT_TOKENS, WARM_MARGIN_MS, addLedger, emptyLedger, hoursOf, isHit, isRewrite, learnTtl, maxPings, modeOf, newPeriod, nextPingAt, parseWarmArgs, returnChange, skipReason, statusText, ttlMs, warmReport } from '../hooks/warm.mjs'
+import { AVOIDED_PER_PING, MAX_AWAY_HOURS, MIN_CONTEXT_TOKENS, awayHours, OFF_VIEW, WARM_MARGIN_MS, addLedger, emptyLedger, hoursOf, isHit, isRewrite, learnTtl, maxPings, modeOf, newPeriod, nextPingAt, parseWarmArgs, returnChange, skipReason, statusText, toggleText, ttlMs, viewOf, warmBadge, warmPaneText, warmReport } from '../hooks/warm.mjs'
 
 const MIN = 60 * 1000
 const HOUR = 60 * MIN
 const CONTEXT = 150000
 
 /** @param {Partial<import('../hooks/warm.mjs').Facts>} [fields] @returns {import('../hooks/warm.mjs').Facts} */
-const facts = (fields = {}) => ({ mode: 'on', hours: 3, ttl: '1h', isBusy: false, isInteractive: true, turns: 4, away: { phase: 'off', untilDone: false, wakeAt: 0 }, quota: 0, ...fields })
+const facts = (fields = {}) => ({ mode: 'on', hours: 3, ttl: '1h', isBusy: false, isInteractive: true, turns: 4, away: { phase: 'off', untilDone: false, startedAt: 0, wakeAt: 0 }, quota: 0, byAway: false, ...fields })
 const usage = (read = 0, written = 0) => ({ input_tokens: 10, output_tokens: 2, cache_read_input_tokens: read, cache_creation_input_tokens: written })
 
 describe('keep warm: timing (A3)', () => {
@@ -48,11 +48,11 @@ describe('keep warm: guards (A4)', () => {
   })
 
   test('an away window: until done never pings; a window ending within the cap does, one ending after it does not', () => {
-    expect(skipReason(period, at, facts({ away: { phase: 'running', untilDone: true, wakeAt: 0 } }))).toBe('away')
-    expect(skipReason(period, at, facts({ away: { phase: 'running', untilDone: false, wakeAt: 2 * HOUR } }))).toBe('')
-    expect(skipReason(period, at, facts({ away: { phase: 'running', untilDone: false, wakeAt: 9 * HOUR } }))).toBe('away')
+    expect(skipReason(period, at, facts({ away: { phase: 'running', untilDone: true, startedAt: 0, wakeAt: 0 } }))).toBe('away')
+    expect(skipReason(period, at, facts({ away: { phase: 'running', untilDone: false, startedAt: 0, wakeAt: 2 * HOUR } }))).toBe('')
+    expect(skipReason(period, at, facts({ away: { phase: 'running', untilDone: false, startedAt: 0, wakeAt: 9 * HOUR } }))).toBe('away')
     // A window under review: the person may be back any moment.
-    expect(skipReason(period, at, facts({ away: { phase: 'review', untilDone: false, wakeAt: 9 * HOUR } }))).toBe('')
+    expect(skipReason(period, at, facts({ away: { phase: 'review', untilDone: false, startedAt: 0, wakeAt: 9 * HOUR } }))).toBe('')
   })
 })
 
@@ -122,3 +122,59 @@ describe('keep warm: settings and /warm (A2)', () => {
     expect(parseWarmArgs('please')).toBe(null)
   })
 })
+
+describe('keep warm: the row above the prompt and the pane', () => {
+  const at = Date.UTC(2026, 9, 10, 14, 0) // 21:00 at UTC+7
+  const armed = viewOf({ ...newPeriod(at, CONTEXT), pings: 1 }, facts(), '', 7 * 60)
+
+  test('the view says on, reads of the cap and the next read', () => {
+    expect(armed).toEqual({ isOn: true, pings: 1, cap: 3, reason: '', next: '21:55' })
+    expect(viewOf(null, facts({ mode: 'off' }), 'off', 0)).toEqual({ ...OFF_VIEW, cap: 3 })
+  })
+
+  test('the row: a dim ◔ when off or paused, the count in amber while a read is due', () => {
+    expect(warmBadge(OFF_VIEW)).toEqual({ label: '◔', isDim: true, count: '' })
+    expect(warmBadge(armed)).toEqual({ label: '◔', isDim: false, count: '1/3' })
+    expect(warmBadge({ ...armed, reason: 'busy', next: '' })).toEqual({ label: '◔', isDim: false, count: '' })
+    expect(warmBadge({ ...armed, reason: 'short-ttl', next: '' })).toEqual({ label: '◔ –', isDim: true, count: '' })
+  })
+
+  test('a press says what it did', () => {
+    const period = newPeriod(at, CONTEXT)
+    expect(toggleText(true, '', period, facts(), 7 * 60)).toBe('Keep-warm on for this session: the cache is read at 21:55, for up to 3 hours. /warm 2h changes the cap.')
+    expect(toggleText(true, 'first-turn', period, facts({ hours: 1 }), 0)).toBe("Keep-warm on for this session, for up to 1 hour: from your second turn (a session's first turn leaves nothing the next one reads).")
+    expect(toggleText(false, 'off', period, facts(), 0)).toBe('Keep-warm off. The cache lapses an hour after your last turn.')
+    expect(toggleText(true, 'short-ttl', period, facts({ ttl: '5m' }), 0)).toMatch(/^The cache lives five minutes in this session/)
+  })
+
+  test("the pane's Stepping out? line and button", () => {
+    expect(warmPaneText(OFF_VIEW).action).toBe('Keep the cache warm')
+    expect(warmPaneText(armed)).toEqual({ text: 'Kept warm: 1 of 3 reads done, the next at 21:55.', action: 'Stop keeping warm' })
+    expect(warmPaneText({ ...armed, reason: 'busy', next: '' })).toEqual({ text: 'Keep-warm is on; a turn is running.', action: 'Stop keeping warm' })
+    expect(warmPaneText({ ...armed, reason: 'short-ttl', next: '' }).action).toBe('')
+  })
+})
+
+describe('keep warm: an away window hands it over', () => {
+  const window = (hours, fields = {}) => ({ phase: 'running', untilDone: false, startedAt: 0, wakeAt: hours * HOUR, ...fields })
+
+  test('a window of so many hours keeps it warm one hour past its end, up to 17; until done and no window give none', () => {
+    expect(awayHours(window(8))).toBe(9)
+    expect(awayHours(window(4))).toBe(5)
+    expect(awayHours(window(0.5))).toBe(2)
+    expect(awayHours(window(16))).toBe(MAX_AWAY_HOURS)
+    expect(awayHours(window(8, { phase: 'review' }))).toBe(9)
+    expect(awayHours(window(24, { untilDone: true }))).toBe(0)
+    expect(awayHours({ phase: 'off', untilDone: false, startedAt: 0, wakeAt: 0 })).toBe(0)
+  })
+
+  test("with the window's cap, reads go on while it runs: idle from hour 2 of an 8-hour window, the reads reach past its end", () => {
+    const period = newPeriod(2 * HOUR, CONTEXT)
+    const during = facts({ hours: awayHours(window(8)), byAway: true, away: window(8) })
+    expect(maxPings(during.hours, '1h')).toBe(9)
+    expect(skipReason(period, 2 * HOUR + 55 * MIN, during)).toBe('')
+    // Seven reads in, the window has ended (it waits for review) and the eighth is still due: the person is due back.
+    expect(skipReason({ ...period, lastAt: 8 * HOUR + 25 * MIN, pings: 7 }, 9 * HOUR + 20 * MIN, { ...during, away: window(8, { phase: 'review' }) })).toBe('')
+  })
+})
+

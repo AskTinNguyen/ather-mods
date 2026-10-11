@@ -16,13 +16,16 @@ import { clockText } from './model.mjs'
  * One idle period: from the last response (or the last ping that hit) until the session's next turn.
  * @typedef {{ lastAt: number, context: number, pings: number, lastPingUsd: number, isStopped: boolean }} Period
  * What the guards read besides the period.
- * @typedef {{ mode: WarmMode, hours: number, ttl: Ttl, isBusy: boolean, isInteractive: boolean, turns: number, away: { phase: string, untilDone: boolean, wakeAt: number }, quota: number }} Facts
+ * @typedef {{ mode: WarmMode, hours: number, ttl: Ttl, isBusy: boolean, isInteractive: boolean, turns: number, away: { phase: string, untilDone: boolean, startedAt: number, wakeAt: number }, quota: number, byAway: boolean }} Facts
  * Kept for the machine: what keeping warm did and what it came to.
  * @typedef {{ pings: number, missed: number, wasted: number, returnsWarm: number, returnsCold: number, pingUsd: number, avoidedUsd: number }} Ledger
  * The ledger's numbers are summed, so a change is any subset of them.
  * @typedef {Partial<Ledger>} LedgerChange
  * What the last read did: when, the tokens the cache served and wrote, and the context it was to keep; `reason` when no reply came.
  * @typedef {{ at: number, read: number, written: number, context: number, reason: string }} LastRead
+ * What the row above the prompt and the pane show: on or off, reads done of the cap, why no read is due ('' while
+ * one is), and the next read's clock time ('' when none is due).
+ * @typedef {{ isOn: boolean, pings: number, cap: number, reason: string, next: string }} WarmView
  */
 
 // A ping this long before the TTL: the fork takes seconds, and a timer can fire late on a busy machine.
@@ -38,6 +41,13 @@ export const REWRITE_SHARE = 0.8
 // A re-write costs 2x and the turn after a ping still reads at 0.1x: a return to a warm cache saves 1.9x, 19 pings' worth.
 export const AVOIDED_PER_PING = 19
 export const DEFAULT_HOURS = 3
+// The longest cap an away window gives: 18 reads, still under the 19 a re-write costs.
+export const MAX_AWAY_HOURS = 17
+
+// An away window hands keep-warm over with the rest of the session: on, its cap stretched over the window, until the
+// person has reviewed it. Not for "until done": the return is unknown, and a day of reads costs more than the re-write.
+/** @param {{ phase: string, untilDone: boolean, startedAt: number, wakeAt: number }} away @returns {number} the hours, 0 for none */
+export const awayHours = away => (away.phase === 'off' || away.untilDone || away.wakeAt <= away.startedAt ? 0 : Math.min(MAX_AWAY_HOURS, Math.ceil((away.wakeAt - away.startedAt) / 3600000) + 1))
 
 /** @returns {Ledger} */
 export const emptyLedger = () => ({ pings: 0, missed: 0, wasted: 0, returnsWarm: 0, returnsCold: 0, pingUsd: 0, avoidedUsd: 0 })
@@ -187,3 +197,37 @@ export const warmReport = ({ reason, period, facts, tz, ledger, source, last = n
   }
   return lines.join('\n')
 }
+
+/** @type {WarmView} */
+export const OFF_VIEW = { isOn: false, pings: 0, cap: 0, reason: 'off', next: '' }
+
+/** @param {Period | null} period @param {Facts} facts @param {string} reason @param {number} tz @returns {WarmView} */
+export const viewOf = (period, facts, reason, tz) => ({ isOn: facts.mode === 'on', pings: period?.pings ?? 0, cap: maxPings(facts.hours, facts.ttl), reason, next: reason === '' && period ? clockText(nextPingAt(period, facts.ttl), tz) : '' })
+
+// The row's button: its glyph, whether it is dim, and the count drawn beside it in amber while a read is due.
+/** @param {WarmView} view @returns {{ label: string, isDim: boolean, count: string }} */
+export const warmBadge = view => {
+  if (view.reason === 'short-ttl') return { label: '◔ –', isDim: true, count: '' }
+  if (!view.isOn) return { label: '◔', isDim: true, count: '' }
+  return { label: '◔', isDim: false, count: view.reason === '' ? `${view.pings}/${view.cap}` : '' }
+}
+
+// What a press on the row's button says once it has turned keep-warm on or off (or could not).
+/** @param {boolean} isOn @param {string} reason @param {Period | null} period @param {Facts} facts @param {number} tz */
+export const toggleText = (isOn, reason, period, facts, tz) => {
+  if (!isOn) return 'Keep-warm off. The cache lapses an hour after your last turn.'
+  if (facts.ttl === '5m') return 'The cache lives five minutes in this session, too short to keep warm. Keep-warm stays off.'
+  const cap = `${facts.hours} hour${facts.hours === 1 ? '' : 's'}`
+  if (reason === '' && period) return `Keep-warm on for this session: the cache is read at ${clockText(nextPingAt(period, facts.ttl), tz)}, for up to ${cap}. /warm 2h changes the cap.`
+  return `Keep-warm on for this session, for up to ${cap}: ${reasonText(reason).replace(/^on; /, '')}.`
+}
+
+// The pane's "Stepping out?" section: one line on what keep-warm is doing, and its button's label ('' for none).
+/** @param {WarmView} view @returns {{ text: string, action: string }} */
+export const warmPaneText = view => {
+  if (view.reason === 'short-ttl') return { text: 'The cache lives five minutes in this session, too short to keep warm.', action: '' }
+  if (!view.isOn) return { text: 'Keep the prompt cache warm while you are away from the keyboard, so your next turn reads the context instead of paying to write it again.', action: 'Keep the cache warm' }
+  if (view.reason === '') return { text: `Kept warm: ${view.pings} of ${view.cap} reads done, the next at ${view.next}.`, action: 'Stop keeping warm' }
+  return { text: `Keep-warm is on; ${reasonText(view.reason).replace(/^on; /, '')}.`, action: 'Stop keeping warm' }
+}
+

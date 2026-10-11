@@ -1,6 +1,6 @@
 # Ather Automata cache keep-warm
 
-- Rev: 2
+- Rev: 3
 - Status: in progress
 - Area: ather-automata
 - Owner: Tin Nguyen
@@ -35,6 +35,9 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 - D8 (rev 2): Proof of A1 comes from two live sessions driven headlessly in a Windows pseudo-console (pywinpty), their screens kept by a terminal emulator (pyte) and rendered to PNG (Pillow), and from their transcripts' per-response usage: A with `/warm on`, B with `/warm off` as the control, the same context and the same prompt at the same time ~115 minutes later. The driver strips the host session's `CLAUDE*`/`ANTHROPIC*` environment so each is a session of its own. Tools installed for it: pywinpty, pyte, Pillow (pip, user site).
 - D9 (rev 2): The repos e2e links folders as junctions (`fs.symlinkSync(…, 'junction')`): Windows refuses symbolic links without Developer Mode, and the type is ignored elsewhere.
 - D10 (rev 2): Keep-warm starts from the session's second main-thread turn (counted again after /clear); TTL calibration from its third; `/warm` shows the last read ("Last read at 01:02: 101,944 of 101,738 tokens from the cache (kept).") and the debug log records each read's usage (F-2).
+- D11 (rev 3): A ◔ in the row above the prompt (console.mjs), between ☾ and ⤢: dim when off, at full strength when on, `1/3` in amber beside it while a read is due, `◔ –` dim where the cache lives five minutes. A press toggles it for the session, as `/warm on|off`, and says so in a toast. Only where the row is drawn (repositories with intents, L-4 option A); elsewhere `/warm` and the status line. The halves meet in state.mjs: watch.mjs publishes what keep-warm is doing (`showWarm`, a redraw without a version bump) and answers the toggle (`onWarmToggle`, as `onSetUp`).
+- D12 (rev 3): Home has a **Stepping out?** section right after Heading off?, at any hour (not only in the evening as Heading off? is): one line on what keep-warm is doing and a button, Keep the cache warm or Stop keeping warm, hotkey `w` (`k` is taken by the list rows' `PICK_KEYS`) (L-5).
+- D13 (rev 3): An away window with an end hands keep-warm over: on, its cap the window's length plus an hour (at most 17 hours, 18 reads, under the 19 a re-write costs), from its start until the person has reviewed it, unless they said `/warm off` in that session; the start's reply says so. Until done hands nothing over (L-6).
 - D6 (rev 1): Money: a ping's real cost is the change in `$.session.usage().cost.usd` around it; the re-write it avoids is estimated as 19 times the cache-read part (2x write minus the 0.1x read the next turn still pays). Shown with "~".
 
 ## Acceptance
@@ -47,6 +50,8 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 - A6: TTL calibration per D5. Proof: gate: unit test and plugin test.
 - A7: Showing it: the status line reads `◔ warm 2/3 · next 14:55` while armed and is cleared otherwise; the ledger (`$.store`, machine-wide) counts pings, misses, wasted pings (an idle period that ended without the person's return: next session start or a lapse), returns warm and cold, ping dollars and estimated dollars avoided. Proof: gate: unit test of the text, plugin test.
 - A8: No regression: `node dev/test-all.mjs` passes as on `main`; `claude plugin validate ather-automata` and `claude plugin test ather-automata` pass. Proof: gate.
+- A10: The row's ◔ and Home's Stepping out? turn keep-warm on and off for the session, each with its toast; ◔ shows `0/3` in amber once a read is due; the pane says "Kept warm: 0 of 3 reads done, the next at HH:MM." Proof: gate: S2 e2e block "Keep-warm from the band's ◔ and from the pane's Stepping out?", unit tests of the badge, toast and pane text.
+- A11: `/away 8h` turns it on with a cap of 9 hours and says so; `/away until done` leaves it off. Proof: gate: S2 e2e blocks, unit "an away window hands it over".
 - A9: Release: 0.3.0 in both manifests, a Changes line and a README section. Proof: review (Tin).
 
 ## Constraints
@@ -57,4 +62,5 @@ A session's prompt cache lives for one hour after its last read (five minutes in
 ## Changelog
 
 - rev 1 (2026-10-10): created from L-1 and L-2.
+- rev 3 (2026-10-11): L-4 to L-6; D11-D13, A10, A11.
 - rev 2 (2026-10-10): L-3 (autonomy while away); D2 revised, D7-D9 added; constraint on pushing lifted.
