@@ -736,7 +736,8 @@ describe("without profile gates: the repository's package manager", () => {
       const chosen = await choosePack({ ...fake.io, list: async () => { lists += 1; return [] } }, 'R')
       expect(chosen.pack).toBe(pack)
       expect(lists).toBe(0)
-      expect(fake.reads.count).toBe(2)
+      // The profile, package.json, and the .git that would name the clone's default branch.
+      expect(fake.reads.count).toBe(3)
     }
   })
 
@@ -931,15 +932,13 @@ describe('a base branch that is not main', () => {
     expect(chosen.pack.id).toBe('web')
     expect(chosen.pack.baseBranch).toBe('')
   })
-  test('through choosePack: a profile that names unreal or core reads nothing of .git', async () => {
+  test('through choosePack: a profile that names unreal or core gets no base branch in its pack, and the default branch beside it', async () => {
     for (const name of ['unreal', 'core']) {
       const fake = fakeIo({ '.ather/profile.json': `{"pack":"${name}","baseBranch":"develop"}`, 'package.json': '{}', ...GIT, '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' })
-      /** @type {string[]} */
-      const asked = []
-      const chosen = await choosePack({ ...fake.io, read: async path => { asked.push(path); return fake.io.read(path) }, exists: async path => { asked.push(path); return fake.io.exists(path) } }, 'R')
+      const chosen = await choosePack(fake.io, 'R')
       expect(chosen.pack.id).toBe(name)
       expect(chosen.pack.baseBranch).toBe(undefined)
-      expect(asked.filter(path => /\.git/.test(path))).toEqual([])
+      expect(chosen.defaultBranch).toBe('develop')
       expect(heldShell('git push origin develop', held, on('feat/x'), chosen.pack)).toBe(null)
     }
     // A repository with a .uproject and no profile is Unreal, whatever its default branch.
@@ -977,25 +976,35 @@ describe('gate matching, a result per gate and the base branch, together', () =>
     expect(tests('cd app; python3 -m unittest discover -s tests')).toEqual([])
   })
   test('one key names the base branch for the pack and for the checkout, and a value that is no branch name is no value for either', async () => {
-    const remote = async () => 'origin/main'
     for (const [value, base] of /** @type {const} */ ([['develop', 'develop'], ['refs/heads/release', 'release'], ['two words', 'main'], [7, 'main']])) {
       const profile = { pack: 'web', baseBranch: value }
-      expect(await baseOf(profile, remote)).toBe(base)
+      expect(baseOf(profile, 'main')).toBe(base)
       expect(makeWebPack(profile, null).baseBranch || 'main').toBe(base)
     }
     // The key as it was first proposed is not read.
-    expect(await baseOf({ pack: 'web', base: 'develop' }, remote)).toBe('main')
+    expect(baseOf({ pack: 'web', base: 'develop' }, 'main')).toBe('main')
   })
   test("what is held is worded once: the pack's own word where it has one, else the shared one for the checkout's base", () => {
     const develop = makeWebPack({ pack: 'web', baseBranch: 'develop' }, null)
     expect(heldLabel('push-main', develop, 'develop')).toBe('Pushes to develop and main')
     expect(heldNoun('push-main', develop, 'develop')).toBe('a push to develop or main')
-    expect(heldLabel('push-main', unreal, 'develop')).toBe('Pushes to develop or main')
+    expect(heldLabel('push-main', unreal, 'develop')).toBe('Pushes to develop and main')
+    expect(heldNoun('push-main', unreal, 'develop')).toBe('a push to develop or main')
     expect(heldLabel('push-main', makeWebPack({ pack: 'web' }, null), 'main')).toBe('Pushes to main')
     const away = newWindow({ hours: 8, untilDone: false, goal: '', held: ['merge', 'push-main'] }, 0, 'L', { person: 'p', root: 'R' })
     expect(mandateText(away, 0, develop, 'develop')).toContain('open PRs to develop')
     expect(mandateText(away, 0, develop, 'develop')).not.toContain('develop or develop')
-    expect(mandateText(away, 0, unreal, 'develop')).toContain('Pushes to develop or main')
+    expect(mandateText(away, 0, unreal, 'develop')).toContain('Pushes to develop and main')
+  })
+  test("a checkout whose profile names another pack than web takes its base from the clone's origin/HEAD file", async () => {
+    forgetPacks()
+    for (const name of ['core', 'unreal']) {
+      const fake = fakeIo({ '.ather/profile.json': `{"pack":"${name}"}`, '.git/HEAD': 'ref: refs/heads/feat/x\n', '.git/refs/remotes/origin/HEAD': 'ref: refs/remotes/origin/develop\n' })
+      const io = /** @type {any} */ ({ ...fake.io, sessionId: async () => `base-${name}`, root: async () => 'R', gitUser: async () => 'Tin Nguyen' })
+      const lane = await state.lane(io, `cwd-base-${name}`)
+      expect([lane.pack.id, lane.base]).toEqual([name, 'develop'])
+    }
+    forgetPacks()
   })
   test('a push to the base branch is held whichever of the two names it: the pack or the checkout', () => {
     const held = ['merge', 'push-main']

@@ -1,9 +1,9 @@
 // @ts-check
 import { describe, expect, test } from 'claude-code/testing'
 
-import { isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
+import { awayReason, isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, trackConsequence, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
+import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
@@ -271,6 +271,20 @@ describe('away windows', () => {
     expect(windowDecisions(`${text}\n### D-1 · new one\n`)).toEqual([{ id: 'D-1', question: 'new one' }])
     expect(isEvening(EVENING, 420)).toBe(true)
   })
+
+  test('a window with no set end reads "until the work is done": its 24-hour limit is never the time the person is back', () => {
+    const owner = { person: 'tinnguyen', root: 'R' }
+    const open = newWindow({ hours: 24, untilDone: true, goal: '' }, NOON, 'L.md', owner)
+    const timed = newWindow({ hours: 8, untilDone: false, goal: '' }, NOON, 'L.md', owner)
+    // What a question is refused with while the person is away (watch.mjs): at 15:02 it said "away until 13:45".
+    expect(awayReason(open, 420)).toBe('The user is away until the work is done (hard stop 12:00 local time)')
+    expect(awayReason(open, 420)).not.toMatch(/away until \d/)
+    expect(awayReason(timed, 420)).toBe('The user is away until 20:00 local time')
+    expect(awayReason({ ...open, phase: 'review' }, 420)).toBe('The user has not reviewed the away window yet')
+    // The mandate says it in the same words.
+    expect(mandateText(open, 420)).toContain('the user is away until the work is done (hard stop 12:00 local time). When the goal is done, call the mcp__ather-automata__away tool')
+    expect(mandateText(timed, 420)).toContain('the user is away until 20:00 local time. Goal: continue the active work.')
+  })
 })
 
 describe('shared state: one owner, one change at a time', () => {
@@ -508,6 +522,30 @@ describe('home', () => {
     const model = home({ me: 'Minh Tran', role: 'designer', pinned: 'spawner' })
     expect(model.items.filter(one => one.kind === 'call')).toHaveLength(0)
     expect(model.next?.label).toBe('See where it stands')
+    // Its files answer it: the step names the intent whose view shows it, and sends the session nothing.
+    expect(model.next?.look).toBe('spawner')
+  })
+
+  test('where an intent stands is read from its files, with no prompt to the session', () => {
+    const progress = '# P\n\n- Worker: `w`\n- Current step: S3, wiring the pool to the spawner.\n- Next step: <none>\n- PR: #7\n\n## Acceptance\n\n| Item | Verdict | Evidence |\n| --- | --- | --- |\n| A1 | met | t |\n| A2 | open | |\n'
+    const one = parseIntent({ slug: 'pool', prompt: prompt({ Status: 'active', Area: 'Combat', Owner: 'Tin Nguyen' }, '- A1: Pool exists. Proof: gate.\n- A2: (owed) Spawner reads the pool. Proof: gate.\n- A3: Old path removed.'), findings: FINDINGS, progress, files: [], hasDebrief: false, updatedAt: 1, source: 'local', firstAuthor: '' })
+    expect(one.openItems).toEqual([{ id: 'A2', text: 'Spawner reads the pool' }, { id: 'A3', text: 'Old path removed' }])
+    expect(one.currentStep).toBe('S3, wiring the pool to the spawner')
+    expect(one.thenStep).toBe('')
+    const lines = standsLines(one, 'Build', 'Tin Nguyen', { 7: 'OPEN' })
+    expect(lines[0]).toBe('Build · 1/3 met · yours')
+    expect(lines[1]).toBe('Now: S3, wiring the pool to the spawner')
+    expect(lines[2]).toBe('Still open: A2 Spawner reads the pool · A3 Old path removed')
+    expect(lines.find(line => line.startsWith('Open decisions: '))).toContain('F-3')
+    expect(lines.at(-1)).toBe('PRs: #7 OPEN')
+    // A teammate's, parked, with nothing recorded: one line, and nothing invented.
+    const theirs = intent('later', { Status: 'parked: waiting for art', Owner: 'TienPham' }, { acceptance: '' })
+    expect(standsLines(theirs, 'Plan', 'Tin Nguyen')).toEqual(["Plan · no checklist yet · TienPham's · parked: Waiting for art"])
+    // The step that only reads says so, on your own intent with a worker and on a teammate's.
+    expect(nextStep('engineer', one, emptyEvidence(), 0, 'Tin Nguyen')?.isLook).toBe(true)
+    expect(nextStep('engineer', one, emptyEvidence(), 0, 'Minh Tran')?.isLook).toBe(true)
+    // A step that asks the session to do something is no look.
+    expect(nextStep('engineer', { ...one, hasWorker: false, hasReview: true }, emptyEvidence(), 0, 'Tin Nguyen')?.isLook).toBe(undefined)
   })
 
   test('lost edits, a blocking Editor lock for a designer, and a recurring trap each wait in Needs you', () => {
@@ -892,6 +930,11 @@ describe('track guard', () => {
     expect(heldByLine([...peers, { intent: 'spawner', updatedAt: now, lastActiveAt: now - 20000 }], 'spawner', now)).toBe('Also tracked in 2 other sessions · active now')
     expect(heldByLine(peers, 'box-scale-tool', now)).toBe('')
     expect(heldByLine([{ intent: null, updatedAt: now }], '', now)).toBe('')
+    // What the session is told carries no age: it keeps that text for the whole conversation, where an age would go stale.
+    expect(trackedByLine(peers, 'spawner')).toBe('Also tracked in 1 other session')
+    expect(trackedByLine(peers.map(one => ({ ...one, lastActiveAt: now - 50 * 60000 })), 'spawner')).toBe(trackedByLine(peers, 'spawner'))
+    expect(trackedByLine(peers, 'box-scale-tool')).toBe('')
+    expect(trackedByLine([{ intent: null }], '')).toBe('')
   })
 
   test('proof attribution (A5): every record is stamped with the session that wrote it, and names it when it is not this one', async () => {
@@ -1180,33 +1223,26 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect([late.isAborted === true, late.error, late.lock]).toEqual([false, 'Error: timed out after 600000 ms', ''])
   })
 
-  test("the branch a team merges into: the profile's base, then the remote's default, then main; a git that could not say is not taken for main", async () => {
-    const asked = /** @type {(string | null)[]} */ ([])
-    const remote = (/** @type {string | null} */ answer) => async () => (asked.push(answer), answer)
-    expect(await baseOf({ baseBranch: 'release' }, remote('origin/develop'))).toBe('release')
-    // A profile that names it needs no git.
-    expect(asked).toEqual([])
-    expect(await baseOf({ baseBranch: '  ' }, remote('origin/develop'))).toBe('develop')
-    expect(await baseOf(null, remote('origin/develop'))).toBe('develop')
-    expect(await baseOf({ base: 7 }, remote(''))).toBe('main')
-    // An Io that cannot ask git (Paseo).
-    expect(await baseOf(null)).toBe('main')
-    expect(await baseOf(null, remote(null))).toBe(null)
-    expect(await baseOf(null, async () => Promise.reject(new Error('aborted')))).toBe(null)
+  test("the branch a team merges into: the profile's base, then the clone's default branch, then main", async () => {
+    expect(baseOf({ baseBranch: 'release' }, 'develop')).toBe('release')
+    expect(baseOf({ baseBranch: '  ' }, 'develop')).toBe('develop')
+    expect(baseOf(null, 'develop')).toBe('develop')
+    expect(baseOf(null, 'master')).toBe('master')
+    expect(baseOf({ base: 7 }, '')).toBe('main')
+    expect(baseOf(null, 'two words')).toBe('main')
 
-    // The lane carries it, read once; one git could not say is asked again, never kept as main.
-    const { io, files } = memoryIo()
-    let head = /** @type {string | null} */ (null)
-    let reads = 0
-    const withGit = { ...io, origin: async () => 'git@github.com:sipherxyz/ninetails-monitoring.git', base: async () => ((reads += 1), head) }
-    expect((await state.laneAt(withGit, '/base/nm')).isSure).toBe(false)
-    await new Promise(resolve => setTimeout(resolve, 5))
-    head = 'origin/develop'
-    expect((await state.laneAt(withGit, '/base/nm')).base).toBe('develop')
-    expect((await state.laneAt(withGit, '/base/nm')).base).toBe('develop')
-    expect(reads).toBe(2)
+    // The lane carries it, read with the pack from the clone's files.
+    const { io, files } = memoryIo('base-branch')
+    const withOrigin = { ...io, origin: async () => 'git@github.com:sipherxyz/ninetails-monitoring.git' }
+    for (const root of ['/base/nm', '/base/rel']) {
+      files.set(`${root}/.git/HEAD`, 'ref: refs/heads/feat/x\n')
+      files.set(`${root}/.git/refs/remotes/origin/HEAD`, 'ref: refs/remotes/origin/develop\n')
+    }
+    const nm = await state.laneAt(withOrigin, '/base/nm')
+    expect([nm.base, nm.isSure]).toEqual(['develop', true])
     files.set('/base/rel/.ather/profile.json', '{"pack":"core","baseBranch":"release"}')
-    expect((await state.laneAt(withGit, '/base/rel')).base).toBe('release')
+    expect((await state.laneAt(withOrigin, '/base/rel')).base).toBe('release')
+    // A folder whose clone names no default branch.
     expect((await state.laneAt(io, '/base/paseo')).base).toBe('main')
   })
 

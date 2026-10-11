@@ -43,18 +43,10 @@ export const FETCH_EVERY_MS = 10 * 60 * 1000
 export const FETCH_TIMEOUT_MS = 10 * 60 * 1000
 export const EMPTY_CACHE = /** @type {TeamCache} */ ({ main: null, local: null })
 
-// The branch a checkout's team merges into: `baseBranch` in its .ather/profile.json when it reads as a branch name, else the remote's default
-// branch (`remote`: what `git symbolic-ref --short refs/remotes/origin/HEAD` says, "origin/develop"; '' when
-// the remote names none; null when git could not say), else main. Without a way to ask git, main.
-// null: git could not say, so the caller asks again rather than settle on main.
-/** @param {Record<string, any> | null} profile @param {() => Promise<string | null>} [remote] @returns {Promise<string | null>} */
-export const baseOf = async (profile, remote) => {
-  const named = branchNamed(profile?.baseBranch)
-  if (named) return named
-  if (!remote) return 'main'
-  const head = await remote().catch(() => null)
-  return head === null ? null : head.trim().replace(/^origin\//, '') || 'main'
-}
+// The branch a checkout's team merges into: `baseBranch` in its .ather/profile.json when it reads as a branch name, else the default
+// branch its clone knows (`defaultBranch`: packs/index.mjs choosePack; '' when it cannot be told), else main.
+/** @param {Record<string, any> | null} profile @param {string} defaultBranch */
+export const baseOf = (profile, defaultBranch) => branchNamed(profile?.baseBranch) || branchNamed(defaultBranch) || 'main'
 
 /** @param {string} text */
 const lf = text => text.replace(/\r\n/g, '\n')
