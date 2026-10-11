@@ -1,6 +1,6 @@
 # cache-keep-warm: Progress
 
-- Working under rev: 2
+- Working under rev: 3
 - Worker: the orchestrating session itself (no background worker: the intent skill is not on this branch, L-2)
 - Current step: S5, the PR
 - Next step: review (Tin)
@@ -20,6 +20,8 @@
 | A6 | met | S1. Unit "the TTL is five minutes when a turn re-wrote…"; plugin test "a re-write after 20 idle minutes…" → no fork, `/warm` "paused: the cache lives five minutes". |
 | A7 | met | S1. Unit "the status line and /warm say…" (`◔ warm 1/3 · next 21:55`); plugin test ledger line "3 pings · 1 return warm, 0 cold · $0.22 spent, ~$1.42 re-write avoided"; live: session A's status line `◔ warm 0/3 · next 00:27` (out/A-after-first-turn.png). |
 | A8 | met | S2, S3: `S2_ROOT=E:/S2_ node dev/test-all.mjs --layouts …` (CLAUDE_CODE_TYPES set) → type-check clean, `322/322 passed`, `292/292 passed`, `348/348 passed` (main: 292/292, 348/348); layouts identical to main's but for the S2 intents' ages (an hour later); `claude plugin validate ather-automata` → `✔ Validation passed`; `claude plugin test ather-automata` → `8 pass 0 fail`. |
+| A10 | met | S6. S2 e2e block "Keep-warm from the band's ◔ and from the pane's Stepping out?" (on by ◔ with its toast; `0/3` in amber after two turns; the status line; the pane's "Kept warm: 0 of 3 reads done, the next at HH:MM." with Stop keeping warm on `w`; off by the pane's button) in `359/359 passed`; live: session E, [proof](proof/README.md#the--and-stepping-out-a10). |
+| A11 | met | S6. S2 e2e: `/away 8h` → "The prompt cache is kept warm until you are back; /warm off stops it.", `/warm` "(0 of 9 this idle period). Cap 9 hours, with your away window, until you have reviewed it.", the row's `0/9`; `/away until done` leaves it off. Unit "an away window hands it over". |
 | A9 | open | 0.3.0 in both manifests, README section, Changes line; review half with the PR. |
 
 ## Steps
@@ -31,4 +33,5 @@
 - S3 (rev 2, 2026-10-11): F-2 found live (sessions C, D) and fixed (D10: from the second turn; calibration from the third; `/warm` shows the last read); the e2e's command list now has /warm. Evidence: commits a7704de, d41002f; the full suite as in A8.
 - S4 (rev 2, 2026-10-11): A1 live, sessions A and B on the frozen a7704de, 00:06 to 02:02. Evidence: [proof/](proof/README.md), transcripts' usage in proof/transcript-usage.txt. Acceptance: A1.
 - S5 (rev 2, 2026-10-11): PR #51 to main for review. Acceptance: A9 (review half open).
+- S6 (rev 3, 2026-10-11): the row's ◔, Home's Stepping out? (`w`), away windows hand keep-warm over (D11-D13); the stand-in engine answers `session.usage` and `model.fork` and sets `isAborted` on `turn.complete`. Evidence: commit 35f27b2; `S2_ROOT=E:/S2_ node dev/test-all.mjs` (CLAUDE_CODE_TYPES set) → type-check clean, `328/328 passed`, `292/292 passed`, `359/359 passed`; `claude plugin test` 8 pass; live session E ([proof](proof/README.md)). One run read `/away tonight runs until 09:00` as 09:12: the e2e pins the clock at a block's boot, and a slow run reached 08:57 (shortest window, 15 minutes); the rerun passed 359/359. Acceptance: A10, A11.
 

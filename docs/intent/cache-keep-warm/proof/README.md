@@ -31,3 +31,17 @@ Before this run, sessions C and D (a copy of the plugin whose margin was 58.5 mi
 ![D: a read after the first turn alone](d-first-turn-not-kept.png)
 
 ![C: a read after the second turn](c-second-turn-kept.png)
+
+## The ◔ and Stepping out? (A10)
+
+Session E (Claude Code 2.1.295) ran the plugin at 35f27b2's code in a scratch git checkout holding two intents, so the row above the prompt and the pane are drawn. After two short turns, `/ather` opened the pane: Stepping out? offers **w: Keep the cache warm**, and the row's ◔ is dim.
+
+![E: before](e-pane-off.png)
+
+`w` pressed in the pane: the toast "Keep-warm on for this session: the cache is read at 10:12, for up to 3 hours. /warm 2h changes the cap.", the pane's "Kept warm: 0 of 3 reads done, the next at 10:12." with **w: Stop keeping warm**, the row's ◔ with **0/3** in amber, and the status line `◔ warm 0/3 · next 10:12`.
+
+![E: on](e-pressed-on.png)
+
+`w` again: "Keep-warm off. The cache lapses an hour after your last turn.", the ◔ dim without a count, the status line cleared.
+
+![E: off](e-pressed-off.png)
