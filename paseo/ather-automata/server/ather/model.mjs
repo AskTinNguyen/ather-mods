@@ -20,15 +20,34 @@ const issueNumber = text => {
 /** @param {string} text @param {Pack} [pack] */
 export const normalizeArea = (text, pack = unreal) => pack.normalizeArea(text)
 
+// The key a person's stored records are filed under (personId). It drops accented letters ("Hoàng Vũ" is
+// "hongv"); kept so, since changing it would lose those records.
 /** @param {string} name */
 const personKey = name => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 
-// "Tin Nguyen" matches "TinNguyen"; "TienPham" matches "TienPhamProducerAther".
+// The key two names are compared by: accents dropped, the letters kept ("Hoàng Vũ" is "hoangvu").
+/** @param {string} name */
+const matchKey = name => personKey(name.normalize('NFD').replace(/\p{M}/gu, '').replace(/[đĐ]/g, 'd'))
+
+// Other names a person goes by, by match key: git's email name ("vu.le" for "Hoàng Vũ"), learnt from the checkout.
+/** @type {Map<string, Set<string>>} */
+const aliases = new Map()
+
+/** @param {string} name @param {string} alias */
+export const addPersonAlias = (name, alias) => {
+  const key = matchKey(name)
+  const other = matchKey(alias)
+  if (key === '' || other === '' || key === other) return
+  aliases.set(key, new Set([...(aliases.get(key) ?? []), other]))
+}
+
+// "Tin Nguyen" matches "TinNguyen"; "TienPham" matches "TienPhamProducerAther"; "Hoàng Vũ" matches "Hoang Vu",
+// and "vu.le" once git's email says vu.le@… is Hoàng Vũ. An email name matches only whole: "tin@…" is not Tin Nguyen.
 /** @param {string} a @param {string} b */
 export const isSamePerson = (a, b) => {
-  const x = personKey(a)
-  const y = personKey(b)
-  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x))
+  const x = matchKey(a)
+  const y = matchKey(b)
+  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x) || Boolean(aliases.get(x)?.has(y)) || Boolean(aliases.get(y)?.has(x)))
 }
 
 // "a", "a and b", "a, b and c".

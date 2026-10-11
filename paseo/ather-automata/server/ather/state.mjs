@@ -8,7 +8,7 @@
 
 import { isHolding, isRecordingQuestions, ledgerWithWindow, newWindow, nextLedgerId, nextParkId, offAway, pendingEntry } from './away.mjs'
 import { countGotcha, recurringGotchas, writtenRuleOf } from './guards.mjs'
-import { emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
+import { addPersonAlias, emptyEvidence, intentOwner, isSamePerson, personId } from './model.mjs'
 import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { baseOf } from './team.mjs'
@@ -23,8 +23,10 @@ import { groupByOf } from './worklist.mjs'
  *   list?: (path: string) => Promise<{ name: string, kind: string, mtimeMs?: number }[]>,
  *   origin?: (root: string) => Promise<string | null>, repo?: () => Promise<string>,
  *   real?: (folder: string) => Promise<string>,
- *   worktrees?: (root: string) => Promise<string | null>
+ *   worktrees?: (root: string) => Promise<string | null>, gitEmail?: (root?: string) => Promise<string>
  * }} Io `gitUser`: git's user.name in the checkout at `root` (a repository may set its own), else in the session folder.
+ *   `gitEmail`: git's user.email there, the same way; its name before @ is another name the person goes by
+ *   (an intent's Owner may say "vu.le" for "Hoàng Vũ").
  *   `origin`: the remote.origin.url of the checkout at `root`, '' when it has none, null when git could not say.
  *   `repo`: the lane's repository id (repoId), which scopes what is kept per repository and, with the lane's folder,
  *   per checkout (checkoutId); without it the keys are unscoped (as before 0.2.5, and as the Paseo version still keeps them).
@@ -211,6 +213,8 @@ const readCheckout = async (io, root, userRoot) => {
   const { pack, profile, defaultBranch } = await packFor({ read: io.read, exists: io.exists, list, sessionId: io.sessionId }, root).catch(() => ({ pack: unreal, profile: null, defaultBranch: '' }))
   const origin = io.origin ? await io.origin(root).catch(() => null) : ''
   const me = await (userRoot === undefined ? io.gitUser() : io.gitUser(userRoot)).catch(() => '')
+  const email = io.gitEmail ? await (userRoot === undefined ? io.gitEmail() : io.gitEmail(userRoot)).catch(() => '') : ''
+  if (me !== '' && email.includes('@')) addPersonAlias(me, email.split('@')[0] ?? '')
   return { root, repo: io.origin ? repoId(origin ?? '', await realFolder(io, root)) : '', isS2: await io.exists(`${root}/docs/intent`), me, pack, base: baseOf(profile, defaultBranch), isSure: me !== '' && origin !== null }
 }
 

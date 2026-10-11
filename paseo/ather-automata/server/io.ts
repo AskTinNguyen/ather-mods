@@ -176,6 +176,7 @@ export type Io = {
   sessionId: () => Promise<string>;
   root: () => Promise<string>;
   gitUser: () => Promise<string>;
+  gitEmail: () => Promise<string>;
   redraw: () => void;
   list: (path: string) => Promise<Entry[]>;
 };
@@ -193,6 +194,8 @@ export function ioFor(agentId: string, cwd: string): Io {
     sessionId: async () => agentId,
     root: () => rootOf(cwd),
     gitUser: () => gitUserOf(cwd),
+    // Its name before @ is another name the person goes by ("vu.le" for "Hoàng Vũ"): state.mjs reads it with the name.
+    gitEmail: () => run(["git", "config", "user.email"], { cwd, timeoutMs: 10000 }).then((r) => r.stdout.trim()),
     redraw: () => undefined,
     list,
   };

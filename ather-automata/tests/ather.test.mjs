@@ -5,7 +5,7 @@ import { awayReason, isStopWord, ledgerWithWindow, mandateText, newWindow, nextL
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { aboutIntentPrompt, closestWord, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
 import { checkoutNames, checkoutOf, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
@@ -130,6 +130,23 @@ describe('intents', () => {
     expect(closestWord('tuor', ['tour', 'role', 'issue'])).toBe('tour')
     expect(closestWord('isue', ['tour', 'role', 'issue'])).toBe('issue')
     expect(closestWord('banana', ['tour', 'role', 'issue'])).toBe(null)
+  })
+
+  test('a name with accents, and the name before @ in git\'s email, are the same person', async () => {
+    expect(isSamePerson('Hoàng Vũ', 'Hoang Vu')).toBe(true)
+    expect(isSamePerson('Đặng Minh', 'Dang Minh')).toBe(true)
+    expect(isSamePerson('vu.le', 'Hoàng Vũ')).toBe(false)
+    expect(personId('Hoàng Vũ')).toBe('hongv')
+    const { io } = memoryIo()
+    const withEmail = { ...io, gitUser: async () => 'Hoàng Vũ', gitEmail: async () => 'vu.le@sipher.xyz' }
+    expect((await state.laneAt(withEmail, '/alias/vu')).me).toBe('Hoàng Vũ')
+    expect(isSamePerson('vu.le', 'Hoàng Vũ')).toBe(true)
+    expect(isSamePerson('Vu Le', 'Hoàng Vũ')).toBe(true)
+    expect(isSamePerson('Tin Nguyen', 'Hoàng Vũ')).toBe(false)
+    // An email name matches only whole: "tin@…" does not make Minh Tran the owner of Tin Nguyen's intents.
+    await state.laneAt({ ...io, gitUser: async () => 'Minh Tran', gitEmail: async () => 'tin@example.com' }, '/alias/minh')
+    expect(isSamePerson('Tin', 'Minh Tran')).toBe(true)
+    expect(isSamePerson('Tin Nguyen', 'Minh Tran')).toBe(false)
   })
 })
 
