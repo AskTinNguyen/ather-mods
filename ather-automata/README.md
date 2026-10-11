@@ -54,7 +54,6 @@ Ather reads evidence from tool output, never from what the session says: an S2Ed
 | `/ather issues`, `/ather issue <number>` | Your GitHub issues; start one |
 | `/ather role <in your words>` | Your role: designer, tech artist or engineer in S2; engineer, designer or product in a web repository |
 | `/ather checked` | Record your own Editor check (S2 only) |
-| `/ather repos`, `/ather repos add <folder>`, `/ather repos remove <folder or name>` | The folders Ather lists (see Several repositories); add or remove one |
 | `/away [8h \| 30m \| until 9am \| tonight \| until done] [goal]` | Hand over while you are away |
 | `/away stop` (or "I'm back") | End the window |
 
@@ -69,7 +68,7 @@ claude plugin marketplace add AskTinNguyen/ather-mods
 claude plugin install ather-automata@ather --scope user
 ```
 
-Settings: `briefGate` (`warn`, `enforce` or `off`) for worker briefs that lack paths, acceptance checks or the shared-tree rule; `repos` for more checkouts this session works with (below); folders can also be added from the pane, with no setting to edit.
+Settings: `briefGate` (`warn`, `enforce` or `off`) for worker briefs that lack paths, acceptance checks or the shared-tree rule.
 
 ## In a repository that is not S2
 
@@ -97,19 +96,15 @@ What differs from S2:
 
 **On macOS.** Use the Node version the repository's `.nvmrc` names; a newer default Node can fail a test runner that passes in CI. A gate written `python3 …` is proved by the virtualenv's python too.
 
-## Several repositories
+## One repository, its worktrees, and other checkouts
 
-One session can work with several checkouts, its **workspace**: the checkout it is opened in, the folders the `repos` setting names (separated by `;` or new lines, absolute or relative to the session folder), and, for a session opened in a folder that is not itself a checkout, each checkout directly inside it. At most 8.
+The pane shows the repository the session is opened in: the checkout holding the session folder and that clone's worktrees (git is asked, nothing is searched; up to 24). There is nothing to set up, and a sibling checkout beside it is not listed. A session opened in a folder that is in no checkout, such as a folder holding several checkouts, has no pane: open the session in the checkout you want to see.
 
-Folders can also be added from the pane: **Repositories**, at the foot of Home, lists the workspace's folders and has **Add a folder** and, on those added there, **Remove** (`/ather repos`, `/ather repos add <folder>`, `/ather repos remove <folder>` do the same). The session can do it too: ask it in words ("add the lancaster repository to Ather") and it adds the folder with its `repos` tool; the pane redraws by itself. An added folder is kept for the machine, so every session there lists it, after the `repos` setting's folders and inside the same 8. A change applies at once in the session that made it; other sessions pick it up when they next start. Removing a folder deletes nothing on disk and nothing Ather kept for it.
+A checkout and its worktrees share one `origin/main`, so main's intents are listed once and main is fetched once; a worktree adds only the intents it has changed or made itself, under its folder's name (`/ather intent <folder>/login` names one exactly).
 
-The worktrees of each of those checkouts are found on their own (git is asked, nothing is searched), up to 24 checkouts in all. A checkout and its worktrees share one `origin/main`, so main's intents are listed once and main is fetched once; a worktree adds only the intents it has changed or made itself, under its folder's name.
-
-- **One pane.** Everything open lists the intents, assigned issues and PRs of every workspace checkout that has `docs/intent`, each row with its repository's name, dimmed after the title, once there is more than one. The same slug in two repositories is two rows: `login` here, `web/login` there; `/ather intent web/login` and `/ather issue web#7` name one exactly. Each checkout's main is fetched in turn; the sync line shows the least recently synced.
 - **Commands by checkout.** `cd ../web && npm test`, or `git -C ../web …`, is read with web's pack: its proof counts for web, and while you are away it is held by web's rules as well as the window's (a production deploy in web is held even from an S2 session).
-- **Tracking anywhere.** Work on this here on another checkout's intent, or writing its `prompt.md` or `log.md`, tracks it there: its view, proof, PRs, away ledger and peers come from that checkout, and the session shows as live there too.
-- **Kept per repository** (named by the origin URL, so every worktree of a repository shares them): issue lists, PR states, an intent's proof, today's changes and "Continue …".
-- With one checkout, nothing changes.
+- **Tracking anywhere.** Writing another checkout's intent `prompt.md` or `log.md` tracks it there: its view, proof, PRs, away ledger and peers come from that checkout, and the session shows as live there too.
+- **Kept per checkout:** an intent's proof, today's changes and "Continue …". Issue lists and PR states are kept per repository.
 
 ## A repository without intents
 
@@ -162,7 +157,7 @@ The same mod runs in web app repositories (Node and TypeScript first), piloted o
 
 - Where a surface has no pane (the mobile app), `/ather` asks one question instead; option descriptions may not show there, so labels stand alone.
 - Your role, the tour, trap counts and the issue list are kept on your machine, not shared across the team.
-- Several repositories are the Claude Code mod's for now: the Paseo version still works with one checkout.
+- Worktrees, other checkouts' commands and tracking across checkouts are the Claude Code mod's for now: the Paseo version works with one checkout.
 - It never merges, commits or pushes on its own. It is a safety net, not a permission system, and it does not stop tree-rewriting git in the shared checkout (`deny_root_paths.py` does that, outside this plugin).
 
 ## For maintainers
@@ -175,6 +170,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/handoff.test.
 
 ## Changes
 
+- **0.2.9** The pane shows the repository the session is in. It lists the intents, issues and PRs of the checkout the session is opened in and of that clone's worktrees, and nothing from other checkouts. Nothing is set up any more: the `repos` setting, the folders kept for the machine, **Repositories** on Home, `/ather repos` and the session's `repos` tool are gone. A session opened in a folder holding several checkouts has no pane; open it in the checkout you want. A command run in another checkout is still judged and proved by that checkout, and an intent written there is still tracked there.
 - **0.2.8** A press says what really happened to it. Claude Code starts a pane prompt's turn only once the session is idle, so a press while a turn ran said "Sent to the session." and then waited minutes. Now it says "Queued until this turn ends", its row reads ⏳ queued (the line above the prompt says so too), and a pop-up says "Sent" with how long it waited when the session has it; a prompt not delivered after three seconds is shown as queued even when no turn was seen to start. Pressing something that already waits sends nothing more, so one press is one prompt. (Should a prompt still wait ten seconds after a turn has ended, the engine may have dropped it, and it can be pressed again.) "I'm back" closes the away window when the session has the review, not at the press: while it waits, merges stay held and the session's questions still go to the ledger; the pane stays open and offers **Stop the running turn and send now**, the only thing that stops a turn. A press about an intent this session does not track, while another live session does (a decision, its answer, Explain, Ask about it), asks **Send where?**: that session, by its id, or here; closed, nothing is sent. A question asked during a window started "until done" is refused with "away until the work is done", no longer with the window's 24-hour limit as a time of day (the Paseo version too; the rest is the Claude Code mod's). Press and delivery times go to the debug log (`claude --debug`, lines starting "Ather hand-off:"). Fewer tokens for what the files already say. "See how the work is going" and a teammate's "See where it stands" no longer ask the session for a summary: they open the intent's view, which now has **Where it stands**, read from the intent's own files when the list was read: its stage, how many items are met and whose it is, the step in hand and the one after (progress.md's `Current step` and `Next step`), the items still open, the open decisions and the PRs. Nothing is sent, so the session reads no intent file and makes no request for it; what is met is what progress.md says, and the view says so. Without a pane the same lines are the reply. **Ask about it** still asks the session, when you want its words. The line the session is told about other sessions on its intent ("Also tracked in 1 other session") no longer carries "active 4m ago": Claude Code keeps what a session is told about its lane as it first read it for the whole conversation (seen on 2.1.296), so the age stayed in the prompt long after it was wrong. The pane and the dialogs still show the age. The base branch is read in one place: the default branch the clone knows comes from the clone's files for every kind of repository, with no git call (a clone that does not have it reads as `main` until the profile names `baseBranch`), and the hold reads "Pushes to develop and main" everywhere.
 - **0.2.7** Repositories that are not S2, and what counts as proof in a web repository. The branch a team merges into is read from the repository (`baseBranch` in `.ather/profile.json`, else the remote's default branch, else `main`): the team's intents, the fetch, the held push and what is said all follow it, so a team on `develop` sees its own work, a push to `develop` is held while its owner is away, and the session is told to open PRs to `develop`. A gate is matched the way people type its command: the longest matching gate wins wherever it stands in the profile, `.venv/bin/python …` proves a gate written `python3 …`, and a gate may be written `cd <folder> && <command>`. Each gate keeps its own result: a rung that several gates declare passes only when every one of them has passed, and a later gate's pass no longer hides an earlier failure. A gate can say how it passes `tests` and `ui` (`"passOn": "exit"` or `"counts"`), so `go test`, `cargo test` and `pytest` gates pass on their exit code. Test counts behind a workspace runner's line prefix (`pnpm -r`, turbo) are read, so a failing package no longer reads as a pass. Without profile gates the stand-in scripts are named with the repository's own package manager (pnpm, yarn, bun), and `typecheck` is named after `lint`. An Acceptance section written as a table is read like a list. This page says what a person on macOS or outside S2 does. A repository on `main` whose gates already matched sees no change.
 - **0.2.6** Ather no longer sets a repository up. `/ather setup` (and `init`), the question `/ather` asked where there were no intents (Set up intents here or Not now) and the plugin's `templates/intent-setup/` folder are gone. Each team adds the intent structure to its own repository; the README's "A repository without intents" says what Ather reads, and the intent skill with its own `/intent init` is in [AskTinNguyen/intent](https://github.com/AskTinNguyen/intent). In a repository without a `docs/intent` folder, `/ather` now answers as `/away` does ("… none here.") and asks nothing. Once the folder is there, `/ather` still opens the pane in the same session.
