@@ -33,7 +33,7 @@ The Ather pane of a session shows the intents, issues, PRs and worktrees of one 
 - A3: no code, test, setting or README names the removed pieces (D3): `rg -n "readTraced|addTraced|removeTraced|tracedFolders|parseRepos|repos-|/ather repos|'repos'"` over `ather-automata`, `paseo/ather-automata`, `dev` finds nothing. Proof: the search; `claude plugin validate ather-automata`.
 - A4: a command in another checkout is still held and proved by that checkout's pack, and a write into another checkout's intent still tracks it there. Proof: the existing e2e rows for multi-repo A3 and A4, kept passing.
 - A5: a session in one checkout without worktrees sees what it saw on 0.2.8 apart from the Repositories row. Proof: `node dev/test-all.mjs` against a sparse S2 clone has no FAIL line that the base commit does not have.
-- A6: release 0.2.9: both manifests, a Changes line, the mod's README (Several repositories, Commands, Install's settings) and the Paseo sync. Proof: `claude plugin validate ather-automata`; `npm run sync:check` and `npm run typecheck` in `paseo/ather-automata`.
+- A6: release 0.3.1: both manifests, a Changes line, the mod's README (Several repositories, Commands, Install's settings) and the Paseo sync. Proof: `claude plugin validate ather-automata`; `npm run sync:check` and `npm run typecheck` in `paseo/ather-automata`.
 - A7: live in Claude Code: a checkout with a worktree, and a sibling checkout with intents, show only the session's repository. Proof: the live run's notes.
 
 ## Constraints
