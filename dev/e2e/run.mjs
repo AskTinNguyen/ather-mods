@@ -137,8 +137,8 @@ const pressIn = (tree, label) => {
 
 {
   const { engine, done } = await boot()
-  expect('two commands: /ather and /away', engine.record.commands.join(',') === 'ather,away', engine.record.commands)
-  expect('four model tools: status, away, profile, repos', engine.record.registeredTools.join(',') === 'status,away,profile,repos', engine.record.registeredTools)
+  expect('three commands: /ather, /away and /warm', engine.record.commands.join(',') === 'ather,away,warm', engine.record.commands)
+  expect('three model tools: status, away, profile', engine.record.registeredTools.join(',') === 'status,away,profile', engine.record.registeredTools)
   done()
   const quiet = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen' })
   register(quiet.on, {})
@@ -147,7 +147,7 @@ const pressIn = (tree, label) => {
   // there at once, and the console's reading starts the first time it is drawn, never before.
   const quietReads = () => quiet.record.logs.length + quiet.record.invalidations
   const before = quietReads()
-  expect('a session the desktop app starts (not interactive) still gets /ather and /away, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away' && quiet.record.registeredTools.join(',') === 'status,away,profile,repos' && quietReads() === before, quiet.record.commands)
+  expect('a session the desktop app starts (not interactive) still gets /ather, /away and /warm, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away,warm' && quiet.record.registeredTools.join(',') === 'status,away,profile' && quietReads() === before, quiet.record.commands)
   const desk = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen', ghIssues: [{ number: 28887, title: '[BUG][GAS] Dodge cancels the wrong montage', url: 'https://github.com/sipherxyz/s2/issues/28887', labels: [{ name: 'combat' }], updatedAt: new Date().toISOString() }] })
   register(desk.on, {})
   await desk.start(false)
@@ -1193,9 +1193,9 @@ const hasFocus = tree => {
   const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
   const band = await engine.render('AbovePrompt', props, 'band')
   const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
-  const icons = ['ather-away', 'ather-open', 'ather-close'].map(key => find(band, key))
-  expect('the band carries three icons, away, open and close, and nothing more', icons.every(Boolean) && icons.map(one => one.props.label).join('') === '☾⤢✕' && icons[2].props.role === 'dismiss' && check(band, 110).problems.length === 0, icons.map(one => one?.props.label))
-  icons[2].props.onPress({})
+  const icons = ['ather-away', 'ather-warm-toggle', 'ather-open', 'ather-close'].map(key => find(band, key))
+  expect('the band carries four icons, away, keep-warm, open and close, and nothing more', icons.every(Boolean) && icons.map(one => one.props.label).join('') === '☾◔⤢✕' && icons[3].props.role === 'dismiss' && icons[1].props.dimColor === true && check(band, 110).problems.length === 0, icons.map(one => one?.props.label))
+  icons[3].props.onPress({})
   expect('✕ hides the band while it has nothing new to say', (await engine.render('AbovePrompt', props, 'band')) === null)
   engine.setSurfaces?.(['desktop'])
   const reopened = await run(engine, [], 'ather')
@@ -1206,6 +1206,77 @@ const hasFocus = tree => {
   const away = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · the band ☾ opens the away choices (72 columns)', away.lines.join('\n')])
   expect('☾ opens the pane on the away choices', engine.record.opens.some(one => one.id === 'ather') && /Heading off\?/.test(away.lines.join('\n')) && /Until done/.test(away.lines.join('\n')) && /8 hours/.test(away.lines.join('\n')) && away.problems.length === 0, away.lines)
+  done()
+}
+
+{
+  // Keep-warm from the band's ◔ and from the pane's Stepping out?: on and off for this session, the count while a read is due.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
+  const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
+  const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
+  // A press, until its toast is up; the redraw it asked for has happened by then.
+  const said = async element => {
+    const before = engine.record.toasts.length
+    element?.props.onPress({})
+    for (let tries = 0; tries < 50 && engine.record.toasts.length === before; tries += 1) await engine.flush()
+    await engine.flush()
+    return engine.record.toasts.slice(before).join('\n')
+  }
+  const home = async () => {
+    await engine.command('ather', '')
+    return engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  }
+
+  const off = await home()
+  expect("the pane's Stepping out? offers to keep the cache warm, at any hour", /S T E P P I N G {3}O U T \?/.test(check(off, 72).lines.join('\n')) && find(off, 'warm-toggle')?.props.label === 'Keep the cache warm' && check(off, 72).problems.length === 0, check(off, 72).lines)
+
+  const turnedOn = await said(find(await engine.render('AbovePrompt', props, 'band'), 'ather-warm-toggle'))
+  expect("the band's ◔ turns keep-warm on for the session and says so", /Keep-warm on for this session, for up to 3 hours: waiting for the first turn to end\./.test(turnedOn) && engine.store.get('warm:harness-session-0001')?.mode === 'on', [turnedOn, engine.store.get('warm:harness-session-0001')])
+
+  // Two turns end: past the session's first turn, a read is due 55 minutes after the last.
+  await engine.turnEnd()
+  await engine.turnEnd()
+  for (let tries = 0; tries < 20; tries += 1) await engine.flush()
+  const armed = await engine.render('AbovePrompt', props, 'band')
+  expect('once a read is due, ◔ is at full strength with the count in amber beside it', find(armed, 'ather-warm-toggle')?.props.dimColor === undefined && find(armed, 'ather-warm-count')?.children?.[0]?.props.children === '0/3' && find(armed, 'ather-warm-count')?.children?.[0]?.props.color === 'yellow' && check(armed, 110).problems.length === 0, check(armed, 110).lines)
+  expect('the status line names the next read', /^◔ warm 0\/3 · next \d\d:\d\d$/.test(engine.record.status.filter(Boolean).at(-1) ?? ''), engine.record.status)
+  const pane = await home()
+  const paneText = check(pane, 72)
+  screens.push(['Terminal · Home with keep-warm on (72 columns)', paneText.lines.join('\n')])
+  expect("the pane says what is kept and when it is read next, with Stop keeping warm", /Kept warm: 0 of 3 reads done, the next at \d\d:\d\d\./.test(paneText.lines.join(' ')) && find(pane, 'warm-toggle')?.props.label === 'Stop keeping warm' && find(pane, 'warm-toggle')?.props.hotkey === 'w' && paneText.problems.length === 0, paneText.lines)
+
+  const turnedOff = await said(find(pane, 'warm-toggle'))
+  const after = await engine.render('AbovePrompt', props, 'band')
+  expect("the pane's button turns it off: the toast, the dim ◔ without a count, the status line cleared", /Keep-warm off\. The cache lapses an hour after your last turn\./.test(turnedOff) && engine.store.get('warm:harness-session-0001')?.mode === 'off' && find(after, 'ather-warm-toggle')?.props.dimColor === true && !find(after, 'ather-warm-count') && engine.record.status.at(-1) === undefined, [turnedOff, engine.record.status.slice(-2)])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  // An away window of so many hours hands keep-warm over with the session: on, its cap stretched over the window.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
+  const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
+  const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
+  const started = await engine.command('away', '8h')
+  expect('/away 8h says the prompt cache is kept warm until you are back', /The prompt cache is kept warm until you are back; \/warm off stops it\./.test(started.text ?? ''), started.text)
+  await engine.turnEnd()
+  await engine.turnEnd()
+  for (let tries = 0; tries < 20; tries += 1) await engine.flush()
+  const report = (await engine.command('warm', '')).text ?? ''
+  expect('/warm says it is on with the away window, nine reads at most (the window and an hour)', /^Keep the cache warm: on; next read at \d\d:\d\d \(0 of 9 this idle period\)\. Cap 9 hours, with your away window, until you have reviewed it\./.test(report), report)
+  expect("the band's ◔ shows it, the count of nine", find(await engine.render('AbovePrompt', props, 'band'), 'ather-warm-count')?.children?.[0]?.props.children === '0/9')
+  done()
+}
+
+{
+  // Until done hands nothing over: the return is unknown, and a day of reads costs more than the re-write it saves.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
+  const started = await engine.command('away', 'until done')
+  await engine.turnEnd()
+  await engine.turnEnd()
+  for (let tries = 0; tries < 20; tries += 1) await engine.flush()
+  const report = (await engine.command('warm', '')).text ?? ''
+  expect('/away until done leaves keep-warm as it was (off), and says nothing of it', !/kept warm/.test(started.text ?? '') && /^Keep the cache warm: off\./.test(report), [started.text, report])
   done()
 }
 
@@ -1628,7 +1699,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   write(root)
   const opened = await run(engine, [])
   expect('no intents: with the structure added by hand, /ather in the same session opens Home, asks nothing and submits nothing', opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather'), [opened, engine.record.opens])
-  expect("no intents: the profile tool is registered again with the new profile's areas (app, api), which it did not list before", toolAreas(engine).join(',') === 'app,api' && areasBefore.join(',') !== 'app,api' && engine.record.registeredTools.join(',') === 'status,away,profile,repos,status,away,profile,repos', [areasBefore, toolAreas(engine), engine.record.registeredTools])
+  expect("no intents: the profile tool is registered again with the new profile's areas (app, api), which it did not list before", toolAreas(engine).join(',') === 'app,api' && areasBefore.join(',') !== 'app,api' && engine.record.registeredTools.join(',') === 'status,away,profile,status,away,profile', [areasBefore, toolAreas(engine), engine.record.registeredTools])
   const tree = JSON.stringify(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), (key, value) => (typeof value === 'function' ? undefined : value))
   expect('no intents: Home is drawn for the repository, with the tour as the next step', /tour/i.test(tree), tree.slice(0, 600))
   const role = await run(engine, [], 'ather', 'skip')

@@ -10,7 +10,7 @@
 
 import { awayReason, clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
 import { briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldLabel, heldNoun, heldShellAt, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
-import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
+import { STAGE_LABELS, andList, currentStage, directorCalls, isPersonOrigin, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
@@ -19,6 +19,8 @@ import { trackedByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
 import { withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
+import { IDLE_ENV, PING_PROMPT, initialWarm, stepWarm } from './warm.mjs'
+import * as warmStore from './warm-store.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -26,8 +28,6 @@ const IDLE_MS = 10 * 60 * 1000
 
 let cwd = ''
 let briefGate = 'warn'
-// The `repos` option: more checkouts this session works with.
-let repos = ''
 // Traps already counted in this session: each counts once per session.
 const seenTraps = new Set()
 // Workers already warned about (quiet, or waiting on permission): each is warned once.
@@ -37,6 +37,11 @@ let lastPersonAt = 0
 // When this session started: a with-proof merge counts only proof seen since (D2: "passed in tool output this session").
 // A hot reload starts it again, which only makes the rule stricter.
 let sessionStartedAt = Date.now()
+
+// Keeping the prompt cache warm: its state (warm.mjs's stepWarm moves it on) and the timer it armed.
+let warm = initialWarm('off', 3)
+/** @type {import('claude-code').Timer | null} */
+let warmTimer = null
 
 // The store, files and session as closures: `$` cannot be handed to state.mjs itself.
 /** @param {Engine} $ @returns {import('./state.mjs').Io} */
@@ -86,10 +91,11 @@ function laneOf($) {
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} options */
 export function register(on, options) {
   briefGate = String(options?.briefGate ?? 'warn')
-  repos = String(options?.repos ?? '')
+  warm = initialWarm(options?.cacheKeepWarm, options?.cacheKeepWarmHours)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    await startWarm($, e.isInteractive || e.surface !== null).catch(error => $.ui.log(`Ather warm: start failed: ${String(error)}`, { to: 'debug' }))
     seenTraps.clear()
     idleWarned.clear()
     resetWorkers()
@@ -105,7 +111,7 @@ export function register(on, options) {
       // same names, which replaces them, so they carry its areas, roles and held kinds.
       state.onSetUp('watch', setUp => registerTools($, setUp))
       // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
-      void state.workspace(io($), root || cwd, repos, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
+      void state.workspace(io($), root || cwd, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
@@ -124,17 +130,32 @@ export function register(on, options) {
   // the process goes on under a new session id (no session.start fires): the lane moves to it.
   on('session.end', async ($, e, next) => {
     await heartbeat($, true).catch(() => undefined)
+    endWarm($)
     if (e.reason === 'clear') followClear($, e.sessionId, 25)
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
-    // Typed at the terminal or the desktop, or sent from a phone over Remote Control: the person is back.
-    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') lastPersonAt = Date.now()
+    // The person is back (isPersonOrigin says who that is).
+    if (isPersonOrigin(e.origin)) lastPersonAt = Date.now()
     // Any prompt, or any tool call below, is the lane's last activity (its heartbeat says when).
     state.markActive()
+    // Delivered into a running turn, it starts none.
+    if (e.turnId === undefined) await warmDispatch($, { type: 'turnStart', isPerson: isPersonOrigin(e.origin) }).catch(() => '')
     return next(e)
   })
+
+  // A drawing client attached: the desktop app's sessions start as the SDK's do, with no surface yet.
+  on('session.attach', async ($, e, next) => {
+    await warmDispatch($, { type: 'attach' }).catch(() => '')
+    return next(e)
+  })
+
+  // Under two matchers that cover every turn: console.mjs holds the event's unmatched hook.
+  on('turn.complete', { isAborted: false }, turnEnded)
+  on('turn.complete', { isAborted: true }, turnEnded)
+
+  on('command.run', { command: 'warm' }, async ($, e) => ({ text: await warmDispatch($, { type: 'command', args: e.args, ledger: await warmStore.readWarmLedger(io($)) }).catch(error => `Keep-warm could not answer: ${String(error)}`) }))
 
   on('tool.call', { tool: 'mcp__ather-automata__status' }, async $ => ({ result: await statusText($) }))
   on('tool.call', { tool: 'mcp__ather-automata__away' }, async ($, e) => ({ result: await awayTool($, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))) }))
@@ -571,19 +592,6 @@ async function registerTools($, pack) {
       },
     },
   })
-  await $.tool.register({
-    name: 'repos',
-    description:
-      'Ather Automata: the folders Ather lists besides this session\'s own checkout; their intents, issues and PRs show in the Ather pane. Use it when the user asks to add, remove or show a repository or folder in Ather ("add the lancaster repository to Ather"). "add" keeps the folder\'s git checkout for this machine and lists it at once: the pane redraws by itself, with that checkout\'s worktrees too, and no restart or command is needed. "remove" takes a kept folder out. "list" shows every folder listed and where it comes from. Nothing on disk changes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['list', 'add', 'remove'] },
-        folder: { type: 'string', description: 'With add or remove: the folder, absolute, ~/…, or relative to the session folder. With remove it may also be the checkout\'s name as the pane shows it.' },
-      },
-      required: ['action'],
-    },
-  })
 }
 
 // ---------------------------------------------------------------- shell and MCP calls
@@ -705,4 +713,94 @@ async function auditMerge($, root, pack) {
   }
   const [merged, mine, other] = await Promise.all([blobs('HEAD'), blobs(ours), blobs(theirs)])
   return touched.filter(path => merged.get(path) !== undefined && merged.get(path) === other.get(path) && merged.get(path) !== mine.get(path))
+}
+
+// ---------------------------------------------------------------- keeping the prompt cache warm
+// warm.mjs decides (stepWarm); this section reads what each step needs and carries out what it returns.
+
+// A main-thread turn ended (a worker's reads its own cache, not the session's).
+/** @type {import('claude-code').Hook<'turn.complete'>} */
+async function turnEnded($, e, next) {
+  const result = await next(e)
+  if (e.agentId === undefined) void warmDispatch($, { type: 'turnEnd', usage: e.usage ?? null }).catch(() => '')
+  return result
+}
+
+/** @param {Engine} $ @param {boolean} attended */
+async function startWarm($, attended) {
+  await warmDispatch($, { type: 'start', attended, choice: await warmStore.readWarm(io($)) })
+  // The row's ◔ and the pane's button (console.mjs) turn it on and off through here, where it runs.
+  warmStore.onWarmToggle(isOn => warmDispatch($, { type: 'toggle', isOn }))
+  await $.command.register({ name: 'warm', description: 'Ather Automata: keep the prompt cache warm while you are idle', argumentHint: '[on | off | <n>h]' })
+}
+
+// At the session's end, without waiting on anything (F-1): its step needs nothing read, and its effects run behind it.
+/** @param {Engine} $ */
+function endWarm($) {
+  const { state: next, effects } = stepWarm(warm, { type: 'end' }, IDLE_ENV)
+  warm = next
+  for (const effect of effects) void runWarm($, effect).catch(() => undefined)
+}
+
+// What the session tells each step, read at once.
+/** @param {Engine} $ @returns {Promise<import('./warm.mjs').WarmEnv>} */
+async function warmEnv($) {
+  const [now, tz, away, usage] = await Promise.all([$.clock.now(), state.readTz(io($)), state.readAway(io($)).catch(() => null), $.session.usage().catch(() => null)])
+  return {
+    now,
+    tz,
+    away: { phase: away?.phase ?? 'off', untilDone: away?.untilDone ?? false, startedAt: away?.startedAt ?? 0, wakeAt: away?.wakeAt ?? 0 },
+    quota: Math.max(0, ...(usage?.rateLimits ?? []).map(one => one.percentUsed)),
+    context: usage?.context.tokens ?? 0,
+  }
+}
+
+// One event: the step decides, its effects are carried out in order, and its reply is what /warm and the ◔ say.
+/** @param {Engine} $ @param {import('./warm.mjs').WarmEvent} event @returns {Promise<string>} */
+async function warmDispatch($, event) {
+  const env = await warmEnv($)
+  const { state: next, effects, reply } = stepWarm(warm, event, env)
+  warm = next
+  for (const effect of effects) await runWarm($, effect).catch(error => $.ui.log(`Ather warm: ${effect.type}: ${String(error)}`, { to: 'debug' }))
+  return reply
+}
+
+/** @param {Engine} $ @param {import('./warm.mjs').WarmEffect} effect */
+async function runWarm($, effect) {
+  switch (effect.type) {
+    case 'cancel':
+      warmTimer?.cancel()
+      warmTimer = null
+      return
+    case 'arm':
+      warmTimer = $.clock.after(effect.delay, () => void warmDispatch($, { type: 'fire', id: effect.id }).catch(() => ''))
+      return
+    case 'fork':
+      // Not awaited: a read takes seconds, and the session's next event must not wait on it.
+      void readCache($, effect.id, effect.context).catch(error => $.ui.log(`Ather warm: read failed: ${String(error)}`, { to: 'debug' }))
+      return
+    case 'status':
+      return $.ui.status(effect.text)
+    case 'view':
+      return warmStore.showWarm(io($), effect.view)
+    case 'toast':
+      return $.ui.toast(`Ather: ${effect.text}`, { timeoutMs: effect.ms })
+    case 'note':
+      return warmStore.noteWarm(io($), effect.change)
+    case 'save':
+      return warmStore.setWarm(io($), effect.fields)
+  }
+}
+
+// Reads the cache once with a tool-less fork of the session's last request, which starts its hour again; what it cost
+// is the change in the session's cost around it.
+/** @param {Engine} $ @param {number} id @param {number} context */
+async function readCache($, id, context) {
+  const before = (await $.session.usage().catch(() => null))?.cost?.usd ?? 0
+  const reply = await $.model.fork({ prompt: PING_PROMPT })
+  const usd = Math.max(0, ((await $.session.usage().catch(() => null))?.cost?.usd ?? before) - before)
+  const usage = 'usage' in reply ? reply.usage : null
+  const reason = reply.isAnswered ? '' : reply.reason
+  $.ui.log(`Ather warm: read ${JSON.stringify({ ...usage, context, usd, reason })}`, { to: 'debug' })
+  await warmDispatch($, { type: 'read', id, context, usage, reason, usd })
 }

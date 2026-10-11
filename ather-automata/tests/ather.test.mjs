@@ -8,7 +8,7 @@ import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePr
 import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
-import { checkoutNames, checkoutOf, parseRepos, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
+import { checkoutNames, checkoutOf, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
 import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
@@ -1750,10 +1750,6 @@ describe('the workspace', () => {
       files,
       read: async (/** @type {string} */ path) => files.get(path) ?? null,
       exists: async (/** @type {string} */ path) => has(path),
-      list: async (/** @type {string} */ dir) => {
-        const names = new Set([...files.keys()].filter(path => path.startsWith(`${dir}/`)).map(path => path.slice(dir.length + 1).split('/')[0]))
-        return [...names].map(name => ({ name, kind: files.has(`${dir}/${name}`) ? 'file' : 'dir' }))
-      },
     }
   }
   const HEAD = 'ref: refs/heads/main\n'
@@ -1767,27 +1763,21 @@ describe('the workspace', () => {
     expect(await checkoutOf(files, '/w/loose')).toBe(null)
   })
 
-  test('the repos option splits on ; and new lines, drops blanks, and takes relative folders from the session folder', () => {
-    expect(parseRepos(' ../web ;\n\n/abs/game\r\nC:\\Work\\S2\\ ; ', '/w/s2')).toEqual(['/w/web', '/abs/game', 'C:/Work/S2'])
-    expect(parseRepos('', '/w/s2')).toEqual([])
+  test('the workspace is the checkout holding the session folder; a checkout beside it is not in it', async () => {
+    const files = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/Source/a.cpp': '', '/w/web/.git/HEAD': HEAD, '/w/other/.git/HEAD': HEAD })
+    const found = await readWorkspace(files, '/w/s2/Source')
+    expect(found.roots).toEqual(['/w/s2'])
   })
 
-  test('the workspace lists the session checkout first, then option folders, each once; a folder in no checkout is skipped', async () => {
-    const files = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/Source/a.cpp': '', '/w/web/.git/HEAD': HEAD, '/w/loose/a.txt': '', '/w/other/.git/HEAD': HEAD })
-    const found = await readWorkspace(files, '/w/s2/Source', '../../web; /w/s2/; Source; ../../loose')
-    expect(found.roots).toEqual(['/w/s2', '/w/web'])
-    expect(found.skipped).toEqual(['/w/loose'])
-  })
-
-  test("a session folder in no checkout adds its child checkouts by name, after the option's, at most 8 in all", async () => {
-    /** @type {Record<string, string>} */
-    const paths = { '/w/notes/a.md': '', '/w/x/.git/HEAD': HEAD, '/w/b/.git': 'gitdir: /w/x/.git/worktrees/b\n' }
-    for (const name of ['c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']) paths[`/w/${name}/.git/HEAD`] = HEAD
-    const found = await readWorkspace(disk(paths), '/w', 'x')
-    expect(found.roots).toEqual(['/w/x', '/w/b', '/w/c', '/w/d', '/w/e', '/w/f', '/w/g', '/w/h'])
-    // Inside a checkout, the children are not looked at.
+  test('a session folder in no checkout has no workspace, whatever checkouts are inside it', async () => {
+    const paths = { '/w/notes/a.md': '', '/w/x/.git/HEAD': HEAD, '/w/b/.git': 'gitdir: /w/x/.git/worktrees/b\n', '/w/c/.git/HEAD': HEAD }
+    const asked = /** @type {string[]} */ ([])
+    const found = await readWorkspace({ ...disk(paths), worktrees: async (/** @type {string} */ root) => (asked.push(root), '') }, '/w')
+    expect(found).toEqual({ roots: [], left: [], isSure: true })
+    expect(asked).toEqual([])
+    // Inside a checkout, a checkout below the session folder is not looked at either.
     const inside = disk({ '/w/s2/.git/HEAD': HEAD, '/w/s2/sub/.git/HEAD': HEAD })
-    expect((await readWorkspace(inside, '/w/s2', '')).roots).toEqual(['/w/s2'])
+    expect((await readWorkspace(inside, '/w/s2')).roots).toEqual(['/w/s2'])
   })
 
   // `git worktree list --porcelain`: one block per worktree.
@@ -1797,13 +1787,13 @@ describe('the workspace', () => {
 
   test('the worktree list parsed: the main worktree, a linked one and a detached one; bare and prunable left out', () => {
     const found = parseWorktrees(listed(tree('/w/s2'), tree('/w/s2/.claude/worktrees/x', 'branch refs/heads/feat/x', 'locked being built'), tree('/w/loose head', 'detached'), tree('/w/gone', 'branch refs/heads/gone', 'prunable gitdir file points to non-existent location')))
-    expect(found).toEqual({ main: '/w/s2', folders: ['/w/s2', '/w/s2/.claude/worktrees/x', '/w/loose head'] })
-    // A bare repository is the clone, though no checkout; git on Windows ends its lines its own way.
-    expect(parseWorktrees('worktree C:/Mirrors/s2.git\r\nbare\r\n\r\nworktree C:/Work/s2\r\nHEAD 1f2e\r\nbranch refs/heads/main\r\n\r\n')).toEqual({ main: 'C:/Mirrors/s2.git', folders: ['C:/Work/s2'] })
-    expect(parseWorktrees('')).toEqual({ main: '', folders: [] })
+    expect(found).toEqual(['/w/s2', '/w/s2/.claude/worktrees/x', '/w/loose head'])
+    // A bare repository is no checkout; git on Windows ends its lines its own way.
+    expect(parseWorktrees('worktree C:/Mirrors/s2.git\r\nbare\r\n\r\nworktree C:/Work/s2\r\nHEAD 1f2e\r\nbranch refs/heads/main\r\n\r\n')).toEqual(['C:/Work/s2'])
+    expect(parseWorktrees('')).toEqual([])
   })
 
-  test("the workspace adds each checkout's worktrees after the checkouts, in git's order, each once", async () => {
+  test("the workspace adds its clone's worktrees after the session's checkout, in git's order, each once; a sibling clone's are not in it", async () => {
     const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/s2-x/.git': LINK, '/w/s2-z/.git': LINK, '/w/web/.claude/worktrees/y/.git': LINK }
     /** @type {Record<string, string>} */
     const lists = {
@@ -1814,19 +1804,15 @@ describe('the workspace', () => {
     }
     const asked = /** @type {string[]} */ ([])
     const files = { ...disk(paths), worktrees: async (/** @type {string} */ root) => (asked.push(root), lists[root] ?? '') }
-    // The `repos` option names a worktree of the session's clone: it keeps its place and is not added again.
-    const found = await readWorkspace(files, '/w/s2', '../web;../s2-x')
-    expect(found.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x', '/w/s2-z', '/w/web/.claude/worktrees/y'])
-    expect(asked).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
-    // Which checkouts are one clone.
-    expect(found.clones).toEqual(['/w/s2', '/w/web', '/w/s2', '/w/s2', '/w/web'])
-    // An Io that cannot ask git gives what it gave before.
-    const before = await readWorkspace(disk(paths), '/w/s2', '../web;../s2-x')
-    expect(before.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
-    expect(before.skipped).toEqual([])
-    // Git failing in a checkout adds nothing.
+    const found = await readWorkspace(files, '/w/s2')
+    expect(found.roots).toEqual(['/w/s2', '/w/s2-z', '/w/s2-x'])
+    expect(asked).toEqual(['/w/s2'])
+    // A session in a worktree has its clone's main checkout and the other worktrees.
+    expect((await readWorkspace(files, '/w/s2-x')).roots).toEqual(['/w/s2-x', '/w/s2', '/w/s2-z'])
+    // An Io that cannot ask git, or git failing, gives the session's checkout alone.
+    expect((await readWorkspace(disk(paths), '/w/s2')).roots).toEqual(['/w/s2'])
     const failing = { ...disk(paths), worktrees: async () => Promise.reject(new Error('git')) }
-    expect((await readWorkspace(failing, '/w/s2', '../web;../s2-x')).roots).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
+    expect((await readWorkspace(failing, '/w/s2')).roots).toEqual(['/w/s2'])
   })
 
   test('a session folder that is a link and the real path git names for it are one checkout', async () => {
@@ -1835,25 +1821,19 @@ describe('the workspace', () => {
       real: async (/** @type {string} */ folder) => folder.replace(/^\/tmp\//, '/private/tmp/'),
       worktrees: async () => listed(tree('/private/tmp/s2'), tree('/private/tmp/s2-x')),
     }
-    const found = await readWorkspace(files, '/tmp/s2', '')
+    const found = await readWorkspace(files, '/tmp/s2')
     expect(found.roots).toEqual(['/tmp/s2', '/private/tmp/s2-x'])
-    expect(found.clones).toEqual(['/private/tmp/s2', '/private/tmp/s2'])
   })
 
-  test('a worktree list git could not give makes the read unsure, with the checkouts and the worktrees that were found', async () => {
-    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/s2-x/.git': LINK, '/w/web-y/.git': LINK }
-    /** @type {Record<string, string>} */
-    const lists = { '/w/s2': listed(tree('/w/s2'), tree('/w/s2-x')), '/w/web': listed(tree('/w/web'), tree('/w/web-y')) }
-    const files = (/** @type {string[]} */ ...silent) => ({ ...disk(paths), worktrees: async (/** @type {string} */ root) => (silent.includes(root) ? null : (lists[root] ?? '')) })
-    const unsure = await readWorkspace(files('/w/web'), '/w/s2', '../web')
-    expect(unsure.isSure).toBe(false)
-    expect(unsure.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x'])
-    expect((await readWorkspace(files('/w/s2', '/w/web'), '/w/s2', '../web')).roots).toEqual(['/w/s2', '/w/web'])
+  test('a worktree list git could not give makes the read unsure, with the session checkout found', async () => {
+    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/s2-x/.git': LINK }
+    const files = (/** @type {boolean} */ isSilent) => ({ ...disk(paths), worktrees: async () => (isSilent ? null : listed(tree('/w/s2'), tree('/w/s2-x'))) })
+    const unsure = await readWorkspace(files(true), '/w/s2')
+    expect([unsure.isSure, unsure.roots]).toEqual([false, ['/w/s2']])
     // Git answering, whatever it says, is sure; so is an Io that cannot ask.
-    const sure = await readWorkspace(files(), '/w/s2', '../web')
-    expect(sure.isSure).toBe(true)
-    expect(sure.roots).toEqual(['/w/s2', '/w/web', '/w/s2-x', '/w/web-y'])
-    expect((await readWorkspace(disk(paths), '/w/s2', '../web')).isSure).toBe(true)
+    const sure = await readWorkspace(files(false), '/w/s2')
+    expect([sure.isSure, sure.roots]).toEqual([true, ['/w/s2', '/w/s2-x']])
+    expect((await readWorkspace(disk(paths), '/w/s2')).isSure).toBe(true)
   })
 
   test('an unsure workspace is read again, a sure one is kept, and the log says each answer once', async () => {
@@ -1867,35 +1847,26 @@ describe('the workspace', () => {
     const lines = /** @type {string[]} */ ([])
     const log = (/** @type {string} */ line) => void lines.push(line)
     // Callers at the same time share one read.
-    expect(await Promise.all([state.workspace(io, '/ws3/a', '', log), state.workspace(io, '/ws3/a', '', log)])).toEqual([['/ws3/a'], ['/ws3/a']])
+    const unsure = { roots: ['/ws3/a'], isSure: false }
+    expect(await Promise.all([state.workspace(io, '/ws3/a', log), state.workspace(io, '/ws3/a', log)])).toEqual([unsure, unsure])
     expect(asked).toBe(1)
-    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a'])
+    expect(await state.workspace(io, '/ws3/a', log)).toEqual(unsure)
     expect(asked).toBe(2)
-    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a', '/ws3/a-x'])
-    expect(await state.workspace(io, '/ws3/a', '', log)).toEqual(['/ws3/a', '/ws3/a-x'])
+    expect(await state.workspace(io, '/ws3/a', log)).toEqual({ roots: ['/ws3/a', '/ws3/a-x'], isSure: true })
+    expect(await state.workspace(io, '/ws3/a', log)).toEqual({ roots: ['/ws3/a', '/ws3/a-x'], isSure: true })
     expect(asked).toBe(3)
     expect(lines).toHaveLength(2)
   })
 
-  test('a session folder that is a link and the same checkout named by its real path in the repos option are one checkout', async () => {
-    const paths = { '/tmp/s2/.git/HEAD': HEAD, '/private/tmp/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD }
-    const real = async (/** @type {string} */ folder) => folder.replace(/^\/tmp\//, '/private/tmp/')
-    // The first spelling of a folder is kept: the session's own as it was given.
-    expect((await readWorkspace({ ...disk(paths), real }, '/tmp/s2', '/private/tmp/s2;/w/web')).roots).toEqual(['/tmp/s2', '/w/web'])
-    // An Io that cannot say where a folder lands compares the folders as given.
-    expect((await readWorkspace(disk(paths), '/tmp/s2', '/private/tmp/s2;/w/web')).roots).toEqual(['/tmp/s2', '/private/tmp/s2', '/w/web'])
-  })
-
-  test('worktrees fill the workspace to 24 and never cut one of the 8 checkouts', async () => {
+  test('worktrees fill the workspace to 24, the session checkout first', async () => {
     /** @type {Record<string, string>} */
-    const paths = { '/w/notes/a.md': '' }
-    for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']) paths[`/w/${name}/.git/HEAD`] = HEAD
-    const trees = Array.from({ length: 20 }, (_, at) => `/t/n${String(at + 1).padStart(2, '0')}`)
+    const paths = { '/w/a/.git/HEAD': HEAD }
+    const trees = Array.from({ length: 30 }, (_, at) => `/t/n${String(at + 1).padStart(2, '0')}`)
     for (const folder of trees) paths[`${folder}/.git`] = LINK
-    const files = { ...disk(paths), worktrees: async (/** @type {string} */ root) => (root === '/w/a' ? listed(tree('/w/a'), ...trees.map(folder => tree(folder))) : listed(tree(root))) }
-    const found = await readWorkspace(files, '/w', '')
-    expect(found.roots).toEqual([...['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(name => `/w/${name}`), ...trees.slice(0, 16)])
-    expect(found.left).toEqual(['/w/i', ...trees.slice(16)])
+    const files = { ...disk(paths), worktrees: async () => listed(tree('/w/a'), ...trees.map(folder => tree(folder))) }
+    const found = await readWorkspace(files, '/w/a')
+    expect(found.roots).toEqual(['/w/a', ...trees.slice(0, 23)])
+    expect(found.left).toEqual(trees.slice(23))
   })
 
   test('each checkout gets its own lane: repository and pack', async () => {
@@ -1916,109 +1887,41 @@ describe('the workspace', () => {
     expect((await state.lane(withOrigin, 'cwd-own-user-test')).me).toBe('Tin Nguyen')
   })
 
-  test('the workspace is read once per session folder and option, and the session lane is its root', async () => {
+  test('the workspace is read once per session folder, and the session lane is its root', async () => {
     const memory = memoryIo()
     memory.files.set('/ws2/a/.git/HEAD', HEAD)
-    memory.files.set('/ws2/web/.git/HEAD', HEAD)
+    memory.files.set('/ws2/a-x/.git', LINK)
+    memory.files.set('/ws2/a-y/.git', LINK)
+    let list = listed(tree('/ws2/a'), tree('/ws2/a-x'))
+    const io = { ...memory.io, worktrees: async () => list }
     const lines = /** @type {string[]} */ ([])
-    const first = await state.workspace(memory.io, '/ws2/a', '../web;../none', line => lines.push(line))
-    memory.files.set('/ws2/none/.git/HEAD', HEAD)
-    expect(await state.workspace(memory.io, '/ws2/a', '../web;../none', line => lines.push(line))).toEqual(first)
-    expect(first).toEqual(['/ws2/a', '/ws2/web'])
-    expect(lines).toHaveLength(2)
+    const first = await state.workspace(io, '/ws2/a', line => lines.push(line))
+    list = listed(tree('/ws2/a'), tree('/ws2/a-x'), tree('/ws2/a-y'))
+    expect(await state.workspace(io, '/ws2/a/', line => lines.push(line))).toEqual(first)
+    expect(first.roots).toEqual(['/ws2/a', '/ws2/a-x'])
+    expect(lines).toHaveLength(1)
     expect((await state.lane(memory.io, 'cwd-workspace-test')).root).toBe('R')
   })
 
-  test('the kept folders are read, added to and removed from under one key for the machine, each once', async () => {
-    const { io, store } = memoryIo()
-    expect(await state.readTraced(io)).toEqual([])
-    await state.addTraced(io, '/w/web')
-    await state.addTraced(io, '/w/s2/')
-    await state.addTraced(io, '/w/web')
-    expect(await state.readTraced(io)).toEqual(['/w/web', '/w/s2'])
-    // One key, with no repository, person or session in it.
-    expect([...store.keys()]).toEqual(['tracedFolders'])
-    await state.removeTraced(io, '/w/web')
-    expect(await state.readTraced(io)).toEqual(['/w/s2'])
-    expect([...store.keys()]).toEqual(['tracedFolders'])
-  })
-
-  test("the workspace takes the kept folders after the setting's, before any worktree, inside the limit of 8", async () => {
-    const paths = { '/w/s2/.git/HEAD': HEAD, '/w/web/.git/HEAD': HEAD, '/w/kept/.git/HEAD': HEAD, '/w/kept-x/.git': LINK, '/w/s2-x/.git': LINK }
-    /** @type {Record<string, string>} */
-    const lists = { '/w/s2': listed(tree('/w/s2'), tree('/w/s2-x')), '/w/kept': listed(tree('/w/kept'), tree('/w/kept-x')) }
-    const files = { ...disk(paths), worktrees: async (/** @type {string} */ root) => lists[root] ?? '' }
-    // A kept folder the setting names too is in once, at the setting's place.
-    const found = await readWorkspace(files, '/w/s2', '../web', ['/w/kept', '/w/web'])
-    expect(found.roots).toEqual(['/w/s2', '/w/web', '/w/kept', '/w/s2-x', '/w/kept-x'])
-    expect(found.named).toBe(3)
-    // Nine checkouts: the session's, four of the setting's and four kept; the last kept one is left out.
-    /** @type {Record<string, string>} */
-    const many = { '/m/own/.git/HEAD': HEAD }
-    for (const name of ['a', 'b', 'c', 'd', 'k1', 'k2', 'k3', 'k4']) many[`/m/${name}/.git/HEAD`] = HEAD
-    const full = await readWorkspace(disk(many), '/m/own', '../a;../b;../c;/m/d', ['/m/k1', '/m/k2', '/m/k3', '/m/k4'])
-    expect(full.roots).toEqual(['/m/own', '/m/a', '/m/b', '/m/c', '/m/d', '/m/k1', '/m/k2', '/m/k3'])
-    expect(full.left).toEqual(['/m/k4'])
-    expect(full.named).toBe(8)
-  })
-
-  test('a kept folder that is no checkout is skipped by the workspace and stays in the list; a changed list is read again', async () => {
-    const memory = memoryIo()
-    memory.files.set('/ws4/a/.git/HEAD', HEAD)
-    memory.files.set('/ws4/web/.git/HEAD', HEAD)
-    await state.addTraced(memory.io, '/ws4/gone')
-    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a'])
-    expect(await state.readTraced(memory.io)).toEqual(['/ws4/gone'])
-    // The same list is the same read, whatever the disk now holds.
-    memory.files.set('/ws4/gone/.git/HEAD', HEAD)
-    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a'])
-    await state.addTraced(memory.io, '/ws4/web')
-    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a', '/ws4/gone', '/ws4/web'])
-    await state.removeTraced(memory.io, '/ws4/gone')
-    expect(await state.workspace(memory.io, '/ws4/a', '')).toEqual(['/ws4/a', '/ws4/web'])
-  })
-
-  test('each checkout is named by its repository, and only those that would share a name by their folder', () => {
+  test("the session's checkout is named by its repository, each worktree after it by its folder, numbered when taken", () => {
     const at = (/** @type {string} */ root, /** @type {string} */ repo) => ({ root, repo })
-    // One checkout, and names that already differ: as before.
-    expect(checkoutNames([at('/w/s2', 'sipher/s2')])).toEqual(['s2'])
-    expect(checkoutNames([at('/w/game', 'sipher/s2'), at('/w/site', 'asktinnguyen/web')])).toEqual(['s2', 'web'])
-    // Two clones of one repository.
-    expect(checkoutNames([at('/w/s2', 'sipher/s2'), at('/w/s2-b', 'sipher/s2')])).toEqual(['s2', 's2-b'])
-    // a/web beside b/web.
-    expect(checkoutNames([at('/w/front', 'a/web'), at('/w/back', 'b/web')])).toEqual(['front', 'back'])
-    // The same folder name twice, and three times: numbered in order.
-    expect(checkoutNames([at('/a/web', 'a/web'), at('/b/web', 'b/web')])).toEqual(['web', 'web-2'])
-    expect(checkoutNames([at('/a/s2', 'sipher/s2'), at('/b/s2', 'sipher/s2'), at('/c/s2', 'sipher/s2')])).toEqual(['s2', 's2-2', 's2-3'])
-    // A mix: only the clashing ones change.
-    expect(checkoutNames([at('/w/game', 'sipher/s2'), at('/w/site', 'asktinnguyen/web'), at('/w/game-b', 'sipher/s2'), at('/w/docs', 'sipher/handbook')])).toEqual(['game', 'web', 'game-b', 'handbook'])
-    // Without an origin a checkout is its folder; a folder name another checkout already has is numbered.
-    expect(checkoutNames([at('/w/web', 'path:/w/web'), at('/w/x', 'a/tool'), at('/w/web-2', 'b/tool'), at('C:\\Work\\web\\', 'path:c:/work/web')])).toEqual(['web', 'x', 'web-2', 'web-3'])
-    const names = checkoutNames([at('/a/web', 'a/web'), at('/b/web', 'b/web'), at('/c/web-2', 'c/web-2')])
-    expect(new Set(names).size).toBe(3)
+    expect(checkoutNames([at('/w/game', 'sipher/s2')])).toEqual(['s2'])
+    // Without an origin a checkout is its folder.
+    expect(checkoutNames([at('C:\\Work\\web\\', 'path:c:/work/web')])).toEqual(['web'])
+    expect(checkoutNames([at('/w/s2', 'sipher/s2'), at('/w/s2/.claude/worktrees/x', 'sipher/s2'), at('/w/fix', 'sipher/s2')])).toEqual(['s2', 'x', 'fix'])
+    // The session in a worktree: it keeps the repository's name, the main checkout is named by its folder.
+    expect(checkoutNames([at('/w/s2/.claude/worktrees/x', 'sipher/s2'), at('/w/s2', 'sipher/s2')])).toEqual(['s2', 's2-2'])
+    // Worktrees in folders of one name.
+    expect(checkoutNames([at('/w/s2', 'sipher/s2'), at('/a/fix', 'sipher/s2'), at('/b/fix', 'sipher/s2'), at('/c/fix', 'sipher/s2')])).toEqual(['s2', 'fix', 'fix-2', 'fix-3'])
     expect(checkoutNames([])).toEqual([])
-  })
-
-  test("a clone's first checkout is named as if its other worktrees were not there, and each of those by its folder", () => {
-    const at = (/** @type {string} */ root, /** @type {string} */ repo, /** @type {string} */ clone) => ({ root, repo, clone })
-    const s2 = [at('/w/s2', 'sipher/s2', '/w/s2'), at('/w/s2/.claude/worktrees/x', 'sipher/s2', '/w/s2'), at('/w/fix', 'sipher/s2', '/w/s2')]
-    // Alone: the first keeps the repository's short name.
-    expect(checkoutNames(s2)).toEqual(['s2', 'x', 'fix'])
-    // Beside another repository, whatever the order; a worktree's folder that is taken is numbered.
-    expect(checkoutNames([...s2, at('/w/site', 'asktinnguyen/web', '/w/site')])).toEqual(['s2', 'x', 'fix', 'web'])
-    expect(checkoutNames([s2[0], at('/w/site', 'asktinnguyen/web', '/w/site'), at('/w/web', 'sipher/s2', '/w/s2'), at('/t/s2', 'sipher/s2', '/w/s2')])).toEqual(['s2', 'web', 'web-2', 's2-2'])
-    // The session in a worktree: it is the clone's first, the main checkout is named by its folder.
-    expect(checkoutNames([at('/w/s2/.claude/worktrees/x', 'sipher/s2', '/w/s2'), at('/w/s2', 'sipher/s2', '/w/s2')])).toEqual(['s2', 's2-2'])
-    // Two clones of one repository are named as they were, each with its worktrees after.
-    expect(checkoutNames([at('/w/s2', 'sipher/s2', '/w/s2'), at('/w/s2-b', 'sipher/s2', '/w/s2-b'), at('/w/x', 'sipher/s2', '/w/s2-b')])).toEqual(['s2', 's2-b', 'x'])
-    expect(checkoutNames([{ root: '/w/s2', repo: 'sipher/s2' }, { root: '/w/s2-b', repo: 'sipher/s2' }])).toEqual(['s2', 's2-b'])
   })
 
   test('a checkout outside the workspace takes a name that is left and renames none; a name holds only what <name>#<n> reads', () => {
     const at = (/** @type {string} */ root, /** @type {string} */ repo) => ({ root, repo })
-    const inside = [at('/w/tools', 'sipher/tools'), at('/w/web', 'asktinnguyen/web')]
+    const inside = [at('/w/tools', 'sipher/tools'), at('/w/tools/.claude/worktrees/web', 'sipher/tools')]
     const alone = checkoutNames(inside)
-    // Another clone of a workspace repository, and a folder named as a workspace checkout is.
+    expect(alone).toEqual(['tools', 'web'])
+    // Another clone of the workspace's repository, a folder named as a workspace checkout is, another repository.
     for (const outside of [at('/x/tools-b', 'sipher/tools'), at('/x/tools', 'sipher/tools'), at('/x/web', 'other/site'), at('/x/tools', 'path:/x/tools')]) {
       const names = checkoutNames(inside, [outside])
       expect(names.slice(0, 2)).toEqual(alone)
@@ -2027,9 +1930,9 @@ describe('the workspace', () => {
     expect(checkoutNames(inside, [at('/x/tools-b', 'sipher/tools')])).toEqual(['tools', 'web', 'tools-b'])
     expect(checkoutNames(inside, [at('/x/tools', 'sipher/tools')])).toEqual(['tools', 'web', 'tools-2'])
     expect(checkoutNames(inside, [at('/x/docs', 'sipher/handbook')])).toEqual(['tools', 'web', 'handbook'])
-    // Two clones in folders with a space: different names that /ather issue <name>#<n> reads.
-    const spaced = checkoutNames([at('/w/S2 clone', 'sipher/s2'), at('/w/S2 other', 'sipher/s2'), at('/w/Trò chơi', 'path:/w/trò chơi')])
-    expect(new Set(spaced).size).toBe(3)
+    // Worktrees in folders with a space or other letters: different names that /ather issue <name>#<n> reads.
+    const spaced = checkoutNames([at('/w/S2 main', 'sipher/s2'), at('/w/S2 other', 'sipher/s2'), at('/w/Trò chơi', 'sipher/s2')], [at('/x/S2 other', 'path:/x/s2 other')])
+    expect(new Set(spaced).size).toBe(4)
     for (const name of spaced) expect(/^[\w.-]+$/.test(name)).toBe(true)
   })
 })
