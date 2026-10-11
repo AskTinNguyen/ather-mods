@@ -1,7 +1,7 @@
 # Ather Automata: the pane shows the repository it is in
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Hoàng Vũ
 - Skill: `plugin-authoring`
@@ -44,3 +44,4 @@ The Ather pane of a session shows the intents, issues, PRs and worktrees of one 
 ## Changelog
 
 - rev 1 (2026-10-11): created from L-1, Q-1 and Q-2.
+- completed (2026-10-11): every acceptance item is met (bf0b0fa, ff0bd61); not yet on main.
