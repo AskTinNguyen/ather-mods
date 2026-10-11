@@ -9,7 +9,7 @@
 // The host reads on(...) and $.noun.method(...) from source, so they are
 // spelled literally, and helpers that take $ are top-level functions.
 
-import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
+import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
 import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
@@ -135,8 +135,6 @@ let isPrsReading = false
 let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
 let isAwake = null
-// The console's timers run: its work began in a session that had intents to show.
-let isWorking = false
 /** @type {{ version: number, at: number, model: Home | null }} */
 let view = { version: -1, at: 0, model: null }
 // How many times the view was marked stale: one built while that happened is not kept as fresh.
@@ -447,7 +445,6 @@ async function openConsole($, folder) {
   issueRetries = 0
   resetTranscripts()
   isAwake = null
-  isWorking = false
   view = { version: -1, at: 0, model: null }
   closedHint = null
   intentSeenAt = Date.now()
@@ -497,7 +494,6 @@ async function startConsoleWork($) {
   pack = lane.pack
   paneBase = lane.base
   if (!(await hasIntents($))) return
-  isWorking = true
   await refresh($)
   $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
   // A running worker's clock: redrawn every five seconds while one runs, never otherwise. And the fetches

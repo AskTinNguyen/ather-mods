@@ -35,7 +35,6 @@ export const AWAY_PRESETS = [
   { label: '8 hours', hotkey: 'o', choice: { hours: 8, untilDone: false } },
   { label: '4 hours', hotkey: 'h', choice: { hours: 4, untilDone: false } },
 ]
-export const ALLOWED_TEXT = 'push branches, open draft PRs, open PRs to main'
 
 /** @param {number} hours */
 export const clampHours = hours => Math.min(16, Math.max(0.25, hours))
