@@ -787,7 +787,8 @@ const lastSubmit = engine => {
   const { parent, web } = makeWorkspace()
   for (const slug of ['login', 'pay']) writeIntent(web, slug)
   const link = join(BASE, 'link-web')
-  fs.symlinkSync(web, link)
+  // A junction on Windows, which needs no Developer Mode; elsewhere the type is ignored and this is a symbolic link.
+  fs.symlinkSync(web, link, 'junction')
   const id = checkoutId('asktinnguyen/web', web)
   const kept = (engine, prefix) => [...engine.store.keys()].filter(key => key.startsWith(prefix))
   const { engine, sessionId: sid } = await boot({ root: link, sessionId: 'harness-session-0019', writable: [link] })
@@ -816,7 +817,7 @@ const lastSubmit = engine => {
 
   // s2/ beside it, opened through a link to their parent folder: web/ is another checkout there, with the same id.
   const linkParent = join(BASE, 'link-work')
-  fs.symlinkSync(parent, linkParent)
+  fs.symlinkSync(parent, linkParent, 'junction')
   const above = await boot({ root: `${linkParent}/s2`, sessionId: 'harness-session-0021', kept: engine.store, writable: [linkParent] })
   await bash(above.engine, 'cd ../web && npm test', NODE_TEST_PASS)
   expect("a session in s2 through the linked parent keeps its proof in ../web under web's real folder", above.engine.store.get(`evidence:${above.sessionId}|${id}`)?.tests?.state === 'pass', kept(above.engine, 'evidence:'))

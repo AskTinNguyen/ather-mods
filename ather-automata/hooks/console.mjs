@@ -16,6 +16,8 @@ import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
+import { awayHours, warmBadge, warmPaneText } from './warm.mjs'
+import * as warmStore from './warm-store.mjs'
 import { crewOf } from './crew.mjs'
 import { crewSections } from './crew-rows.mjs'
 import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
@@ -405,6 +407,7 @@ export function register(on) {
     closedHint = null
     const { Box, Text, Button } = $.ui.resolve(e)
     const isAway = model.header.stage === 'Away'
+    const warm = warmBadge(warmStore.readWarmView())
     return Box({
       flexDirection: 'row',
       gap: 2,
@@ -412,6 +415,11 @@ export function register(on) {
         Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: hint ? undefined : true, wrap: 'truncate', children: hint || '◆ Ather Automata' })] }),
         ...(fresh.length > 0 ? [Button({ key: 'ather-intent-see', label: 'See', plain: true, onPress: () => void seeIntent($) })] : []),
         Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
+        // Keep the prompt cache warm while idle: on or off for this session; the count of reads, in amber, while one is due.
+        Box({ key: 'ather-warm', flexDirection: 'row', gap: 1, children: [
+          Button({ key: 'ather-warm-toggle', label: warm.label, plain: true, dimColor: warm.isDim ? true : undefined, onPress: () => void pressWarm($) }),
+          ...(warm.count ? [Box({ key: 'ather-warm-count', children: [Text({ color: 'yellow', children: warm.count })] })] : []),
+        ] }),
         Button({ key: 'ather-open', label: '⤢', plain: true, dimColor: true, onPress: () => void openPane($, 'home') }),
         Button({ key: 'ather-close', label: '✕', plain: true, dimColor: true, role: 'dismiss', onPress: () => {
           closedHint = hint
@@ -1257,7 +1265,9 @@ async function startAway($, choice) {
   const ledger = away.ledgerPath.startsWith(root) ? away.ledgerPath.slice(root.length + 1) : away.ledgerPath
   // The window holds from now; what the session is told may wait for its turn to end.
   const handed = handOff($, ['away-start'], `I am away ${windowEndText(away, tz)}. Goal: ${choice.goal || 'continue the active work'}. Work through it without waiting for me and record every decision you take for me in ${ledger}.`)
-  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}${handed === 'queued' ? ' The session is told when this turn ends.' : ''}`
+  // The prompt cache comes with the handover (watch.mjs keeps it), unless /warm off was said here or there is no end.
+  const warm = awayHours(away) > 0 && (await warmStore.readWarm(io($))).mode !== 'off' ? ' The prompt cache is kept warm until you are back; /warm off stops it.' : ''
+  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}${handed === 'queued' ? ' The session is told when this turn ends.' : ''}${warm}`
 }
 
 // Text typed instead of picking: an intent, a question for the session, or nothing.
@@ -1810,6 +1820,13 @@ async function unseenChanges($) {
   return tracked ? state.readChanges(io($), tracked.slug, intentSeenAt + 1, tracked.lane.root) : []
 }
 
+// The row's ◔: keep-warm on or off for this session, said in a toast (watch.mjs runs the timer and answers).
+/** @param {Engine} $ */
+async function pressWarm($) {
+  const text = await warmStore.toggleWarm(!warmStore.readWarmView().isOn).catch(error => `Keep-warm could not change: ${String(error)}`)
+  if (text) $.ui.toast(`Ather: ${text}`, { timeoutMs: 8000 })
+}
+
 /** @param {Engine} $ */
 async function seeIntent($) {
   intentSeenAt = Date.now()
@@ -2111,6 +2128,10 @@ function paneView(el, $, model, columns, surface, crew = []) {
     const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: isClicked ? undefined : true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
     rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
   }
+
+  // Beside Heading off? and at any hour: keep the prompt cache warm while the person steps out, as the row's ◔ does.
+  const warm = warmPaneText(warmStore.readWarmView())
+  rows.push(section(el, 'warm', [label(el, 'warm-label', 'Stepping out?', width), Text({ key: 'warm-pitch', color: warm.action === 'Stop keeping warm' ? undefined : QUIET, wrap: 'wrap', children: warm.text }), ...(warm.action ? [Button({ key: 'warm-toggle', label: warm.action, hotkey: hotkeyFor('w'), plain: isClicked ? undefined : true, onPress: () => void pressWarm($) })] : [])]))
 
   rows.push(...foot)
   return Box({ flexDirection: 'column', children: rows })
