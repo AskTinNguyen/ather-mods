@@ -10,7 +10,7 @@
 
 import { awayReason, clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
 import { briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldLabel, heldNoun, heldShellAt, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
-import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, isPersonOrigin, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
+import { STAGE_LABELS, andList, currentStage, directorCalls, isPersonOrigin, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'

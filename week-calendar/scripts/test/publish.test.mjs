@@ -53,11 +53,11 @@ function fixture() {
     L({ type: 'user', timestamp: new Date(T0 + 5 * MIN + 3000).toISOString(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '' }] } }),
     L({ type: 'assistant', timestamp: new Date(T0 + 6 * MIN).toISOString(), message: { role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }] } }),
   ].join('\n'))
-  return { home, repo, hash }
+  return { home, hash }
 }
 
 test('a merged PR is credited when it carries a commit this machine made', () => {
-  const { home, repo, hash } = fixture()
+  const { home, hash } = fixture()
   const git = createGit()
   // The repo has no hosted remote, so pretend GitHub knows it as acme/game.
   const real = git.repoOf
@@ -116,7 +116,7 @@ test('publish writes the redacted report into the reports repo and pushes it', (
 })
 
 test('merged PRs: yours by GitHub login, and a session that fed several PRs splits its hours between them', () => {
-  const { home, repo, hash } = fixture()
+  const { home, hash } = fixture()
   const git = createGit()
   const real = git.repoOf
   git.repoOf = d => { const r = real(d); if (r) r.github = 'acme/game'; return r }
