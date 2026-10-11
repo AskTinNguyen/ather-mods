@@ -913,20 +913,24 @@ const refresh = async engine => {
 }
 
 {
-  // A session opened in the parent folder of s2/ and web/, both with intents: it is in no checkout, so it has no pane.
+  // A session opened in the parent folder of s2/ and web/, both with intents: it is in no checkout, so it has no pane,
+  // even with a docs/intent of its own left there.
   const { parent, s2, web } = makeWorkspace()
   writeIntent(s2, 'login')
   writeIntent(web, 'login')
+  writeIntent(parent, 'leftover')
   const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [web]: { issues: [issue(5, 'Login form', 'AskTinNguyen/web')] } }
+  const said = async one => [String((await one.command('ather', ''))?.text ?? ''), String((await one.command('ather', 'pick'))?.text ?? ''), String((await one.command('away', '2h nap'))?.text ?? '')]
+  // Each session is asked before the next one starts: the hooks keep one session's folder at a time.
   const { engine } = await boot({ root: parent, sessionId: 'harness-session-0060', ghAt })
+  engine.setSurfaces(['terminal'])
+  const parentSaid = await said(engine)
+  await engine.flush()
   // A checkout with nothing that makes a pack of it, and no docs/intent: a repository without intents.
   const empty = makeCheckout(fs.mkdtempSync(join(BASE, 'plain-')), 'plain', { owner: 'AskTinNguyen', name: 'plain', files: { 'notes.txt': 'notes\n' } })
   const without = await boot({ root: empty, sessionId: 'harness-session-0061' })
-  for (const one of [engine, without.engine]) one.setSurfaces(['terminal'])
-  const said = async one => [String((await one.command('ather', ''))?.text ?? ''), String((await one.command('ather', 'pick'))?.text ?? ''), String((await one.command('away', '2h nap'))?.text ?? '')]
-  const parentSaid = await said(engine)
+  without.engine.setSurfaces(['terminal'])
   const withoutSaid = await said(without.engine)
-  await engine.flush()
   expect('a parent-folder session: /ather and /away answer as in a repository without intents', parentSaid[0] !== '' && JSON.stringify(parentSaid) === JSON.stringify(withoutSaid), [parentSaid, withoutSaid])
   expect('and open no pane, ask nothing and send nothing', engine.record.opens.length === 0 && engine.record.dialogs.length === 0 && engine.record.submits.length === 0, [engine.record.opens, engine.record.dialogs, engine.record.submits])
   expect("and read neither checkout's issues nor fetch either origin", engine.record.ghAt.length === 0 && fetchRuns(engine).length === 0, [engine.record.ghAt, fetchRuns(engine).map(run => run.argv)])

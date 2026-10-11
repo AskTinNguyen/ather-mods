@@ -112,9 +112,9 @@ let isSyncing = false
 // The pane's checkouts, as last read (paneLanes): the workspace checkouts that have intents.
 /** @type {import('./state.mjs').Checkout[]} */
 let checkouts = []
-// The workspace checkouts other than the session's own, read once per session: a read git could not answer
-// in full is not kept, so the next one asks again.
-/** @type {Promise<string[]> | null} */
+// The workspace checkouts other than the session's own, read once per session (null: the session folder is in
+// no checkout, so there is no workspace): a read git could not answer in full is not kept, so the next one asks again.
+/** @type {Promise<string[] | null> | null} */
 let otherRoots = null
 // The read running now, and whether another was asked for while it ran.
 /** @type {Promise<void> | null} */
@@ -226,13 +226,14 @@ async function paneLanes($) {
   return (await workspaceLanes($)).filter(lane => lane.isS2)
 }
 
-/** @param {Engine} $ @param {string} root the session lane's root */
+/** @param {Engine} $ @param {string} root the session lane's root @returns {Promise<string[] | null>} */
 async function readOtherRoots($, root) {
   const files = io($)
   const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
   // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
   const { roots, isSure } = await state.workspace(files, root || cwd, line => $.ui.log(line, { to: 'debug' }))
   if (!isSure) otherRoots = null
+  if (roots.length === 0) return null
   // The session's lane is its folder's, which may be inside its checkout.
   return roots.filter(one => !own.has(normalFolder(one)))
 }
@@ -701,13 +702,16 @@ async function refreshIssues($) {
   return (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
 }
 
-// Every workspace checkout's lane, intents or not, the session's own first.
+// Every workspace checkout's lane, intents or not, the session's own first. A session folder in no checkout has
+// no workspace, whatever docs/intent it holds: no lane.
 /** @param {Engine} $ */
 async function workspaceLanes($) {
   const session = await laneOf($)
   if (!otherRoots) otherRoots = readOtherRoots($, session.root)
+  const roots = await otherRoots
+  if (roots === null) return []
   const others = []
-  for (const root of await otherRoots) others.push(await state.laneAt(io($), root))
+  for (const root of roots) others.push(await state.laneAt(io($), root))
   return [session, ...others]
 }
 
@@ -1077,9 +1081,8 @@ async function startWork($, work) {
   return toldText(handOff($, [work.id], work.prompt), `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
 }
 
-// An issue by number, from the assigned list or not: `7` or `#7` the session checkout's issue 7, else the first
-// pane checkout's; `web#7` the one in the checkout named web, which starts it there even when another checkout
-// of its repository lists it.
+// An issue by number, from the assigned list or not: `7` or `#7` the repository's issue 7, started in the session's
+// checkout; `wt#7` the same issue started in the worktree named wt.
 /** @param {Engine} $ @param {string} ref @param {boolean} [isInQuestion] */
 async function startIssue($, ref, isInQuestion = false) {
   const [, name, digits] = /^(?:([\w.-]+)#|#)?(\d+)$/.exec(ref.trim()) ?? []
@@ -1089,8 +1092,7 @@ async function startIssue($, ref, isInQuestion = false) {
   const lane = name ? (await workspaceLanes($)).find(one => names.get(normalFolder(one.root)) === name) : undefined
   if (name && !lane) return `No checkout here is named ${name}.`
   const isOwn = lane !== undefined && normalFolder(lane.root) === normalFolder(session.root)
-  const listed = (await paneIssues($)).filter(one => one.number === number)
-  const found = lane ? listed.find(one => one.repo === lane.repo) : (listed.find(one => one.key === String(number)) ?? listed[0])
+  const found = (await paneIssues($)).find(one => one.number === number)
   const assigned = found && lane ? issueAt(found, lane, name ?? '', isOwn) : found
   if (assigned) {
     return toldText(handOff($, [issueId(assigned)], issuePrompt(assigned, me)), `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
