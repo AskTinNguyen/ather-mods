@@ -2,9 +2,9 @@
 
 - Working under rev: 1
 - Worker: Claude Code (cloud session), alone, while the owner is away
-- Current step: S6, the PR
+- Current step: none (PR open, waiting on the owner)
 - Next step: the owner reviews the PR and answers F-1 and F-2 (they reach the desk once this is on main)
-- PR: none yet
+- PR: https://github.com/AskTinNguyen/ather-mods/pull/62
 
 ## Acceptance
 
