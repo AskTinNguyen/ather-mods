@@ -4,9 +4,10 @@
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
 import { NEW_INTENT_PROMPT, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, skillFolder, standsLines, untrackText } from "./ather/home.mjs";
+import { DECIDED_SHOWN_MS, NONE_OPEN, callId, decidedText, needsView, pruneDecided, withDecided } from "./ather/decide.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
-import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, directorCalls, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
 import * as state from "./ather/state.mjs";
 import type { HomeView } from "../shared/contracts";
 import { knownAgents, note, send } from "./agents";
@@ -40,6 +41,10 @@ const viewingIssue = new Map<string, number>();
 const issuesAt = new Map<string, number>();
 let prsReading = false;
 const views = new Map<string, { version: number; at: number; model: Any }>();
+// Answering in place (0.2.0, decide.mjs AnswerState), per agent: the decision pressed open ('' the first that
+// waits, NONE_OPEN none), the intents whose several decisions are unfolded, and this agent's answers.
+type Answering = { opened: string; blocks: Set<string>; decided: { id: string; answer: string; at: number }[] };
+const answering = new Map<string, Answering>();
 
 const sentOf = (agentId: string) => {
   let set = sentBy.get(agentId);
@@ -47,6 +52,11 @@ const sentOf = (agentId: string) => {
   return set;
 };
 const stale = (agentId: string) => views.delete(agentId);
+const answeringOf = (agentId: string) => {
+  let one = answering.get(agentId);
+  if (!one) answering.set(agentId, (one = { opened: "", blocks: new Set(), decided: [] }));
+  return one;
+};
 
 // ---------------------------------------------------------------- reading the checkout
 
@@ -222,6 +232,11 @@ async function model(ctx: Ctx, force = false) {
     pack,
   } as Any);
   views.set(ctx.agent.id, { version, at: now, model: built });
+  // This agent's answers to decisions are kept until the files read them resolved; an answer to anything
+  // else (a rule) has no file to settle it, so it stays.
+  const waiting = new Set(cache.intents.flatMap((one: Any) => directorCalls(one).map((finding: Any) => callId(one.key ?? one.slug, finding.id))));
+  const answers = answeringOf(ctx.agent.id);
+  answers.decided = pruneDecided(answers.decided, (id: string) => waiting.has(id) || !id.startsWith("call:"), now);
   return built;
 }
 
@@ -251,6 +266,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     total: 0,
     away: { phase: "off", until: "", ledger: "", parked: [] },
     items: [],
+    needs: { blocks: [], folded: [] },
     next: null,
     work: [],
     actions: [],
@@ -295,7 +311,8 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     done: built.header.done,
     total: built.header.total,
     away: { phase: away.phase, until: away.phase === "off" ? "" : windowEndText(away, tz), ledger, parked: away.parked.map((one: Any) => `${one.id}: ${one.command}`) },
-    items: built.items.map((one: Any) => ({ id: one.id, label: one.title || one.label, hint: one.label, detail: one.detail, kind: one.kind })),
+    items: built.items.map(itemRow),
+    needs: needsOf(agentId, built),
     next: next
       ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isTour ? "tour" : next.work ? "work" : next.action ?? "step" }
       : null,
@@ -324,6 +341,61 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     intentView: await intentViewOf(ctx, built, slug),
     issueView: await issueViewOf(ctx),
   };
+}
+
+// A Needs you item as the panel draws it.
+const itemRow = (one: Any) => ({ id: one.id, label: one.title || one.label, hint: one.label, detail: one.detail, kind: one.kind });
+
+// What an item is called once answered: "F-10 on fluid-snow-sand-look", or its label.
+const answeredName = (one: Any) => String(one.kind === "call" ? (one.question.split(":")[0] ?? one.label) : one.label);
+
+// Needs you as decide.mjs lays it out for this agent. The panel has a text field, so typing is its own.
+function needsOf(agentId: string, built: Any): HomeView["needs"] {
+  const answers = answeringOf(agentId);
+  const laid = needsView(built.items, built.open, { opened: answers.opened, typing: "", isFoldOpen: false, decided: answers.decided }, answers.blocks, Date.now(), false);
+  const fresh = new Map(laid.fresh.map((one: Any) => [one.id, one.answer]));
+  const names = new Map<string, string>(built.items.map((one: Any) => [one.id, answeredName(one)]));
+  return {
+    blocks: laid.blocks.map((block: Any) => ({
+      slug: block.slug,
+      isOpen: answers.blocks.has(block.slug),
+      items: block.items.map((one: Any) => {
+        const state = laid.states[one.id] ?? "line";
+        return {
+          ...itemRow(one),
+          state,
+          opens: laid.opens.has(one.id),
+          decided: state === "decided" ? `${decidedText(fresh.get(one.id) ?? "")} · ${answeredName(one)}` : "",
+          answers:
+            state === "opened" && one.answers
+              ? { options: one.answers.options.map((option: Any) => ({ letter: option.letter, label: option.label, text: option.text, isRecommended: option.isRecommended === true })), source: String(one.answers.source ?? "") }
+              : null,
+        };
+      }),
+    })),
+    folded: laid.folded.map((one: Any) => ({ id: one.id, text: `✓ ${names.get(one.id) ?? one.id}: ${one.answer}` })),
+  };
+}
+
+// An answer given in place: the row shows "✓ Decided" a while, then folds. The agent gets `prompt` ('' gives it
+// nothing: the press only closes the item); the item settles once the row has shown.
+async function answerItem(ctx: Ctx, one: Any, answer: string, prompt: string) {
+  const sent = sentOf(ctx.agent.id);
+  if (sent.has(one.id)) return `Already answered: ${answer}.`;
+  const answers = answeringOf(ctx.agent.id);
+  answers.opened = "";
+  answers.decided = withDecided(answers.decided, { id: one.id, answer, at: Date.now() });
+  const settle = () => void setTimeout(() => void state.settleItem(ctx.io as never, one).catch(() => undefined), DECIDED_SHOWN_MS);
+  if (!prompt) {
+    sent.add(one.id);
+    stale(ctx.agent.id);
+    settle();
+    return `Closed: ${answer}.`;
+  }
+  await handOff(ctx, [one.id], prompt, async () => settle(), async () => {
+    answers.decided = answers.decided.filter((each) => each.id !== one.id);
+  });
+  return `Sent your answer to the agent: ${answer}.`;
 }
 
 // The open intent's view: where it stands, its proof by session, who else tracks it, today's lines.
@@ -693,6 +765,28 @@ export async function act(agentId: string, cwd: string, kind: string, id: string
     stale(ctx.agent.id);
   } else if (kind === "track") {
     message = await track(ctx, id);
+  } else if (kind === "open") {
+    answeringOf(ctx.agent.id).opened = id || NONE_OPEN;
+    stale(ctx.agent.id);
+  } else if (kind === "calls") {
+    const { blocks } = answeringOf(ctx.agent.id);
+    if (!blocks.delete(id)) blocks.add(id);
+    stale(ctx.agent.id);
+  } else if (kind === "answer" || kind === "explain" || kind === "typed") {
+    const one = built.items.find((item: Any) => item.id === id);
+    if (!one?.answers) throw new Error("That decision is no longer waiting.");
+    if (kind === "explain") {
+      await handOff(ctx, [], one.answers.explain);
+      message = "Asked the agent to explain it; nothing is decided.";
+    } else if (kind === "typed") {
+      const words = text?.trim() ?? "";
+      if (!words) throw new Error("Nothing answered.");
+      message = await answerItem(ctx, one, words, one.answers.typed(words));
+    } else {
+      const option = one.answers.options.find((each: Any) => each.letter === text);
+      if (!option) throw new Error(`No option ${text ?? ""} on that decision.`);
+      message = await answerItem(ctx, one, option.letter, option.prompt);
+    }
   } else if (kind === "ask") {
     message = await askAbout(ctx, id, text);
   } else if (kind === "untrack") {

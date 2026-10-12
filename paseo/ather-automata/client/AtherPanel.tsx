@@ -7,6 +7,7 @@ import { type ActKind, atherAct, atherHome, type HomeView } from "../shared/cont
 import { Art } from "./art";
 import { IntentScreen } from "./IntentScreen";
 import { IssueScreen } from "./IssueScreen";
+import { NeedsYou } from "./NeedsYou";
 import { WorkSection } from "./WorkSection";
 import { Beacon, Bob, Button, CHANGE_ICONS, FadeIn, FillBar, GrowLine, isLight, type Kit, Pop, Pulse, Row, SectionLabel, useKit, WhoLine } from "./ui";
 
@@ -171,33 +172,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {view.items.length > 0 ? (
-        <FadeIn delay={40} style={s.section}>
-          <SectionLabel kit={kit} text="Needs you" count={open_.length || undefined} />
-          {view.items.map((one, index) => (
-            <Row
-              key={one.id}
-              kit={kit}
-              index={index}
-              pulse={!isSent(one.id)}
-              icon={isSent(one.id) ? "Check" : "Diamond"}
-              iconColor={isSent(one.id) ? c.foregroundMuted : c.accent}
-              quiet={isSent(one.id)}
-              title={one.label}
-              hint={one.hint}
-              detail={one.detail}
-              accessibilityLabel={isSent(one.id) ? `${one.label}, sent` : one.label}
-              disabled={busy}
-              onPress={() => run("item", one.id)}
-            />
-          ))}
-          {open_.length > 1 ? (
-            <View style={[s.buttons, { marginTop: 6 }]}>
-              <Button kit={kit} icon="ListChecks" label={`Go through all ${open_.length}, one at a time`} full={layout.compact} disabled={busy} onPress={() => run("all", "all")} />
-            </View>
-          ) : null}
-        </FadeIn>
-      ) : null}
+      {view.items.length > 0 ? <NeedsYou kit={kit} needs={view.needs} open={open_.length} busy={busy} isSent={isSent} run={run} /> : null}
 
       {next ? (
         <FadeIn delay={80} style={s.section}>

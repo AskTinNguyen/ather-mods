@@ -38,6 +38,32 @@ export const homeView = z.object({
     parked: z.array(z.string()),
   }),
   items: z.array(row),
+  // Needs you as decide.mjs needsView lays it out (0.2.0): an intent's several decisions wait as one block, a
+  // decision opens in place with its options as buttons, an answer shows "✓ Decided" a while, then folds.
+  needs: z.object({
+    blocks: z.array(
+      z.object({
+        slug: z.string(),
+        isOpen: z.boolean(),
+        items: z.array(
+          row.extend({
+            state: z.enum(["decided", "opened", "line"]),
+            // A press opens (or closes) it instead of handing it over.
+            opens: z.boolean(),
+            decided: z.string(),
+            answers: z
+              .object({
+                options: z.array(z.object({ letter: z.string(), label: z.string(), text: z.string(), isRecommended: z.boolean() })),
+                // The finding as written ('' none), for Open findings.
+                source: z.string(),
+              })
+              .nullable(),
+          }),
+        ),
+      }),
+    ),
+    folded: z.array(z.object({ id: z.string(), text: z.string() })),
+  }),
   next: row.nullable(),
   // What to work on, with where each row comes from (mine: your intents, issues: your assigned GitHub
   // issues with no intent yet, others: teammates' intents) and when it last changed (ms; 0 unknown).
@@ -118,7 +144,7 @@ export const atherHome = defineRpc({
   output: homeView,
 });
 
-const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask"]);
+const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask", "open", "calls", "answer", "explain", "typed"]);
 export type ActKind = z.infer<typeof actKind>;
 
 export const atherAct = defineRpc({
@@ -128,7 +154,9 @@ export const atherAct = defineRpc({
     cwd: z.string(),
     // item: something that needs you; next; work: an intent or issue; action/skill/create: quick actions;
     // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send;
-    // ask: a question about intent `id` (Ask about it), or about its change of today number `text`.
+    // ask: a question about intent `id` (Ask about it), or about its change of today number `text`;
+    // open: the decision `id` opened in place ("-" none); calls: an intent's block of decisions folded or not;
+    // answer: decision `id` answered with option `text`; explain: asked about, nothing decided; typed: answered in words `text`.
     kind: actKind,
     id: z.string(),
     text: z.string().optional(),
