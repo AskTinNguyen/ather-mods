@@ -1,6 +1,4 @@
 import type { PluginBeforeRequests } from "@getpaseo/plugin/server";
-// A JSON value, as Paseo's protocol defines it (only host modules may be imported, types included).
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 import { existsSync } from "node:fs";
 import { choosePack } from "./ather/packs/index.mjs";
 import { BRIDGE_SCRIPT, MCP_NAME } from "./bridge";
@@ -9,7 +7,8 @@ import { askRules, heldPrefixes } from "./rules";
 import { settings } from "./settingsState";
 
 type CreateRequest = PluginBeforeRequests["agent.create"];
-type JsonObject = { [key: string]: JsonValue };
+// Paseo's providerOptions (only host modules may be imported, types included).
+type JsonObject = Record<string, unknown>;
 
 const TOOLS = ["status", "away", "profile"];
 
@@ -20,8 +19,8 @@ const SYSTEM_NOTE = [
   "While an away window runs, held actions (merges into main, pushes to main and the like) are refused and parked for the user's review, and questions to the user go to the decision ledger instead of waiting: take the recommended option, record it there, and continue.",
 ].join(" ");
 
-const isObject = (value: JsonValue | undefined): value is JsonObject => typeof value === "object" && value !== null && !Array.isArray(value);
-const strings = (value: JsonValue | undefined) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+const isObject = (value: unknown): value is JsonObject => typeof value === "object" && value !== null && !Array.isArray(value);
+const strings = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
 
 // Adds ask rules to providerOptions.settings.permissions.ask (Paseo hands it to Claude as --settings).
 // Null when the settings are not an inline object and cannot be merged.

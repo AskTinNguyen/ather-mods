@@ -1,8 +1,9 @@
 // Dev only: copies the Claude Code mod's pure modules (../../ather-automata/hooks) into server/ather/,
 // where the Paseo bundler can reach them. They are the same code; only the `// @ts-check` line is
 // dropped (the plugin's typecheck does not check plain JS). Never edit server/ather/ by hand.
-//   npm run sync          copy them
-//   npm run sync:check    fail if any copy differs (dev/test-all.mjs runs this)
+// It also gives package.json the mod's version, so the plugin's version names the release it matches.
+//   npm run sync          copy them, take the version
+//   npm run sync:check    fail if any copy or the version differs (dev/test-all.mjs runs this)
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,8 +49,26 @@ for (const dir of ["", "packs"]) {
   }
 }
 
+// The plugin's version is the mod's: package.json carries the ather-automata release its copies match
+// (paseo-plugin.json is strict and has no version field).
+const modVersion = JSON.parse(fs.readFileSync(path.resolve(from, "../.claude-plugin/plugin.json"), "utf8")).version;
+const packagePath = path.resolve(here, "../package.json");
+const packageText = fs.readFileSync(packagePath, "utf8");
+const pkg = JSON.parse(packageText);
+if (pkg.version !== modVersion) {
+  if (isCheck) drift.push(`package.json version ${pkg.version} (the mod is ${modVersion})`);
+  else {
+    fs.writeFileSync(packagePath, packageText.replace(`"version": "${pkg.version}"`, `"version": "${modVersion}"`));
+    const lockPath = path.resolve(here, "../package-lock.json");
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+    lock.version = lock.packages[""].version = modVersion;
+    fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+    console.log(`version ${pkg.version} -> ${modVersion}`);
+  }
+}
+
 if (isCheck && drift.length > 0) {
-  console.error(`paseo/ather-automata/server/ather is out of step with ather-automata/hooks: ${drift.join(", ")}. Run npm run sync in paseo/ather-automata.`);
+  console.error(`paseo/ather-automata is out of step with ather-automata: ${drift.join(", ")}. Run npm run sync in paseo/ather-automata.`);
   process.exit(1);
 }
 console.log(isCheck ? "paseo/ather-automata: shared modules in step" : `paseo/ather-automata: ${files.length} shared modules`);
