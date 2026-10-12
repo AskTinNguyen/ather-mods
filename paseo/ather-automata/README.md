@@ -50,6 +50,7 @@ Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, o
 - Not here yet: the newcomer tour toast (the tour is the Next row and `/ather tour`).
 - Shared with 0.3.3 but not wired into the Paseo screens yet: intents read from `origin/main` with the "synced N min ago ↻" header (0.1.5; the list reads the checkout's own `docs/intent`), Sort, Needs attention and tidied owner names (0.1.5), Ask about it (0.1.6), the worker tree, in-flight calls and Group by Person, Area or Stage (0.1.9), deciding in place with option buttons (0.2.0), Where it stands read from the intent's files and Send where? (0.2.8), and "Now tracking X. Next: …" (0.3.3).
 - The base branch (0.2.7) is not passed on yet: holds, the mandate and their wording assume `main`, so a repository that merges into `develop` does not have pushes to `develop` held.
+- A press that hands the agent a prompt while a turn runs interrupts that turn (Paseo's default for a send); the Claude Code mod queues it until the turn ends (0.2.8).
 - Keep the prompt cache warm (0.3.0) is not offered: Paseo's plugin API has no way to read an idle agent's cache without adding a turn to its conversation.
 
 ## Develop
