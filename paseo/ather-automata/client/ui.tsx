@@ -520,3 +520,21 @@ export function isLight(theme: Theme) {
   const [r = 0, g = 0, b = 0] = rgb;
   return 0.299 * r + 0.587 * g + 0.114 * b > 150;
 }
+
+// Each change's icon in the day's lines: done, yours, changed.
+export const CHANGE_ICONS = { done: "Check", yours: "Diamond", changed: "Pencil" } as const;
+
+// Which agent and checkout a pane speaks for. Every screen shows it: each button here sends to this agent, and
+// the tab itself can only say "Ather" (the host labels a tab from the plugin's fixed title).
+export function WhoLine({ kit, who }: { kit: Kit; who: string }) {
+  const { s, c } = kit;
+  if (!who) return null;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
+      <Icon name="Bot" size={12} color={c.foregroundMuted} />
+      <Text style={[s.hint, { flexShrink: 1 }]} numberOfLines={1}>
+        {who}
+      </Text>
+    </View>
+  );
+}

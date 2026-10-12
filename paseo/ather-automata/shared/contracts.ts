@@ -115,6 +115,9 @@ export const atherHome = defineRpc({
   output: homeView,
 });
 
+const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start"]);
+export type ActKind = z.infer<typeof actKind>;
+
 export const atherAct = defineRpc({
   name: "ather.act",
   input: z.object({
@@ -122,7 +125,7 @@ export const atherAct = defineRpc({
     cwd: z.string(),
     // item: something that needs you; next; work: an intent or issue; action/skill/create: quick actions;
     // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send.
-    kind: z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start"]),
+    kind: actKind,
     id: z.string(),
     text: z.string().optional(),
   }),
