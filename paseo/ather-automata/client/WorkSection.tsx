@@ -17,7 +17,7 @@ const SEARCH_MS = 300;
 
 // What to work on, as server/worklist.ts lays it out: by where it comes from, searched, sorted, the teammates'
 // intents grouped by person, area or stage, parked intents folded at each group's end.
-export function WorkSection({ kit, view, busy, isSent, run, light }: { kit: Kit; view: HomeView; busy: boolean; isSent: (id: string) => boolean; run: Run; light: boolean }) {
+export function WorkSection({ kit, view, busy, isSent, run, search: send, light }: { kit: Kit; view: HomeView; busy: boolean; isSent: (id: string) => boolean; run: Run; search: (text: string) => void; light: boolean }) {
   const { c, s, compact } = kit;
   const list = view.workList;
   const [query, setQuery] = useState(list.query);
@@ -30,7 +30,7 @@ export function WorkSection({ kit, view, busy, isSent, run, light }: { kit: Kit;
   const search = (text: string) => {
     setQuery(text);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => run("find", "", text), SEARCH_MS);
+    timer.current = setTimeout(() => send(text), SEARCH_MS);
   };
   const colourOf = (key: string) => (key === "mine" ? c.accent : key === "issues" ? c.statusWarning : c.statusSuccess);
   // One colour per teammate, from everyone listed (not only what shows), so it holds while searching.

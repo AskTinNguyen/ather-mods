@@ -52,18 +52,21 @@ for (const dir of ["", "packs"]) {
 // The plugin's version is the mod's: package.json carries the ather-automata release its copies match
 // (paseo-plugin.json is strict and has no version field).
 const modVersion = JSON.parse(fs.readFileSync(path.resolve(from, "../.claude-plugin/plugin.json"), "utf8")).version;
-const packagePath = path.resolve(here, "../package.json");
-const packageText = fs.readFileSync(packagePath, "utf8");
-const pkg = JSON.parse(packageText);
-if (pkg.version !== modVersion) {
-  if (isCheck) drift.push(`package.json version ${pkg.version} (the mod is ${modVersion})`);
+// package.json and its lockfile both carry it; each is written back as npm writes it (two spaces, a final newline).
+const versioned = [
+  { name: "package.json", versions: (json) => [json.version], set: (json) => void (json.version = modVersion) },
+  { name: "package-lock.json", versions: (json) => [json.version, json.packages?.[""]?.version], set: (json) => void (json.version = json.packages[""].version = modVersion) },
+];
+for (const { name, versions, set } of versioned) {
+  const file = path.resolve(here, "..", name);
+  const json = JSON.parse(fs.readFileSync(file, "utf8"));
+  const was = versions(json);
+  if (was.every((one) => one === modVersion)) continue;
+  if (isCheck) drift.push(`${name} version ${was.join("/")} (the mod is ${modVersion})`);
   else {
-    fs.writeFileSync(packagePath, packageText.replace(`"version": "${pkg.version}"`, `"version": "${modVersion}"`));
-    const lockPath = path.resolve(here, "../package-lock.json");
-    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-    lock.version = lock.packages[""].version = modVersion;
-    fs.writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
-    console.log(`version ${pkg.version} -> ${modVersion}`);
+    set(json);
+    fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+    console.log(`${name}: version ${was.join("/")} -> ${modVersion}`);
   }
 }
 

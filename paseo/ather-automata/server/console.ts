@@ -4,16 +4,16 @@
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
 import { NEW_INTENT_PROMPT, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, skillFolder, standsLines, untrackText } from "./ather/home.mjs";
-import { DECIDED_SHOWN_MS, NONE_OPEN, callId, decidedText, needsView, pruneDecided, withDecided } from "./ather/decide.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
-import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, directorCalls, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
 import * as state from "./ather/state.mjs";
-import type { HomeView } from "../shared/contracts";
+import type { ActKind, HomeView } from "../shared/contracts";
 import { knownAgents, note, send } from "./agents";
 import { governedRoot } from "./agentConfig";
 import { USER_HOME, list, readText, run } from "./io";
 import { ctxOf, laneOf, peers, readLock, type Ctx, type Pack } from "./lane";
+import { needsOf, openDecision, recordAnswer, toggleBlock } from "./needs";
 import { crewOf, githubLogin } from "./squad";
 import { readTeamIntents, syncLine, syncMain } from "./team";
 import { cycleGroup, cycleSort, setSearch, workListOf } from "./worklist";
@@ -43,10 +43,6 @@ const viewingIssue = new Map<string, number>();
 const issuesAt = new Map<string, number>();
 let prsReading = false;
 const views = new Map<string, { version: number; at: number; model: Any }>();
-// Answering in place (0.2.0, decide.mjs AnswerState), per agent: the decision pressed open ('' the first that
-// waits, NONE_OPEN none), the intents whose several decisions are unfolded, and this agent's answers.
-type Answering = { opened: string; blocks: Set<string>; decided: { id: string; answer: string; at: number }[] };
-const answering = new Map<string, Answering>();
 
 const sentOf = (agentId: string) => {
   let set = sentBy.get(agentId);
@@ -54,11 +50,6 @@ const sentOf = (agentId: string) => {
   return set;
 };
 const stale = (agentId: string) => views.delete(agentId);
-const answeringOf = (agentId: string) => {
-  let one = answering.get(agentId);
-  if (!one) answering.set(agentId, (one = { opened: "", blocks: new Set(), decided: [] }));
-  return one;
-};
 
 // ---------------------------------------------------------------- reading the checkout
 
@@ -67,7 +58,9 @@ async function readIntents(root: string, pinned: string | null, pack: Pack, base
   const read: Any[] = [];
   for (const files of await readTeamIntents(root, pinned, base)) {
     const hasDebrief = files.slug === pinned && (await readText(`${root}/${pack.debriefPath(files.slug)}`)) !== null;
-    read.push(parseIntent({ ...files, hasDebrief }, pack));
+    // One only on origin/<base> (this checkout has no folder for it yet) can be asked about, not worked on here.
+    const inCheckout = files.source === "local" || (await readText(`${root}/docs/intent/${files.slug}/prompt.md`)) !== null;
+    read.push({ ...parseIntent({ ...files, hasDebrief }, pack), inCheckout });
   }
   return read.sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -180,13 +173,14 @@ async function proofOf(ctx: Ctx, slug: string) {
 
 // ---------------------------------------------------------------- the model
 
-async function model(ctx: Ctx, force = false) {
+// `force`: read the files again; `fetchNow`: also fetch origin now (only Refresh and the sync line ask).
+async function model(ctx: Ctx, force = false, fetchNow = false) {
   const version = state.stateVersion();
   const hit = views.get(ctx.agent.id);
   if (!force && hit && hit.version === version && Date.now() - hit.at < VIEW_TTL_MS) return hit.model;
   const io = ctx.io as never;
   const { root, me, pack } = await laneOf(ctx);
-  const cache = await refreshRoot(ctx, force, force);
+  const cache = await refreshRoot(ctx, force, fetchNow);
   void refreshIssues(ctx).catch(() => undefined);
   const tz = await state.readTz(io);
   const now = Date.now();
@@ -216,11 +210,6 @@ async function model(ctx: Ctx, force = false) {
     pack,
   } as Any);
   views.set(ctx.agent.id, { version, at: now, model: built });
-  // This agent's answers to decisions are kept until the files read them resolved; an answer to anything
-  // else (a rule) has no file to settle it, so it stays.
-  const waiting = new Set(cache.intents.flatMap((one: Any) => directorCalls(one).map((finding: Any) => callId(one.key ?? one.slug, finding.id))));
-  const answers = answeringOf(ctx.agent.id);
-  answers.decided = pruneDecided(answers.decided, (id: string) => waiting.has(id) || !id.startsWith("call:"), now);
   return built;
 }
 
@@ -243,8 +232,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     done: 0,
     total: 0,
     away: { phase: "off", until: "", ledger: "", parked: [] },
-    items: [],
-    needs: { blocks: [], folded: [] },
+    needs: { open: 0, blocks: [], folded: [] },
     next: null,
     workList: { total: 0, shown: 0, query: "", sort: "", groupBy: "", legend: "", people: [], groups: [] },
     attention: [],
@@ -266,12 +254,12 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
   const lane = (await governedRoot(cwd)) ? await laneOf(ctx) : null;
   if (!lane?.isS2) return { ...empty, notHere: lane?.pack.notHere ?? "Ather Automata works in checkouts that run intents (a docs/intent folder); none here." };
   const io = ctx.io as never;
-  const built = await model(ctx, force);
+  const built = await model(ctx, force, force);
   const tz = await state.readTz(io);
   const away = await state.readAway(io);
   const slug = await state.readPinned(io);
   const now = Date.now();
-  const changes = slug ? ((await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[]) : [];
+  const changes = slug ? await changesToday(ctx, slug) : [];
   const next = built.next;
   const ledger = away.ledgerPath && away.ledgerPath.startsWith(lane.root) ? away.ledgerPath.slice(lane.root.length + 1) : away.ledgerPath;
   return {
@@ -291,7 +279,6 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     done: built.header.done,
     total: built.header.total,
     away: { phase: away.phase, until: away.phase === "off" ? "" : windowEndText(away, tz), ledger, parked: away.parked.map((one: Any) => `${one.id}: ${one.command}`) },
-    items: built.items.map(itemRow),
     needs: needsOf(agentId, built),
     next: next
       ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isTour ? "tour" : next.work ? "work" : next.action ?? "step" }
@@ -313,45 +300,9 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     isNewcomer: built.isNewcomer,
     sent: [...sentOf(agentId)],
     githubLogin: await githubLogin().catch(() => ""),
-    ...(await crewOf(agentId)
-      .then(({ crew, ...tree }) => ({ crew, crewTree: tree }))
-      .catch(() => ({ crew: [], crewTree: { heading: "", live: [], done: [] } }))),
+    ...(await crewOf(agentId).catch(() => ({ crew: [], crewTree: { heading: "", live: [], done: [] } }))),
     intentView: await intentViewOf(ctx, built, slug),
     issueView: await issueViewOf(ctx),
-  };
-}
-
-// A Needs you item as the panel draws it.
-const itemRow = (one: Any) => ({ id: one.id, label: one.title || one.label, hint: one.label, detail: one.detail, kind: one.kind });
-
-// What an item is called once answered: "F-10 on fluid-snow-sand-look", or its label.
-const answeredName = (one: Any) => String(one.kind === "call" ? (one.question.split(":")[0] ?? one.label) : one.label);
-
-// Needs you as decide.mjs lays it out for this agent. The panel has a text field, so typing is its own.
-function needsOf(agentId: string, built: Any): HomeView["needs"] {
-  const answers = answeringOf(agentId);
-  const laid = needsView(built.items, built.open, { opened: answers.opened, typing: "", isFoldOpen: false, decided: answers.decided }, answers.blocks, Date.now(), false);
-  const fresh = new Map(laid.fresh.map((one: Any) => [one.id, one.answer]));
-  const names = new Map<string, string>(built.items.map((one: Any) => [one.id, answeredName(one)]));
-  return {
-    blocks: laid.blocks.map((block: Any) => ({
-      slug: block.slug,
-      isOpen: answers.blocks.has(block.slug),
-      items: block.items.map((one: Any) => {
-        const state = laid.states[one.id] ?? "line";
-        return {
-          ...itemRow(one),
-          state,
-          opens: laid.opens.has(one.id),
-          decided: state === "decided" ? `${decidedText(fresh.get(one.id) ?? "")} · ${answeredName(one)}` : "",
-          answers:
-            state === "opened" && one.answers
-              ? { options: one.answers.options.map((option: Any) => ({ letter: option.letter, label: option.label, text: option.text, isRecommended: option.isRecommended === true })), source: String(one.answers.source ?? "") }
-              : null,
-        };
-      }),
-    })),
-    folded: laid.folded.map((one: Any) => ({ id: one.id, text: `✓ ${names.get(one.id) ?? one.id}: ${one.answer}` })),
   };
 }
 
@@ -360,19 +311,13 @@ function needsOf(agentId: string, built: Any): HomeView["needs"] {
 async function answerItem(ctx: Ctx, one: Any, answer: string, prompt: string) {
   const sent = sentOf(ctx.agent.id);
   if (sent.has(one.id)) return `Already answered: ${answer}.`;
-  const answers = answeringOf(ctx.agent.id);
-  answers.opened = "";
-  answers.decided = withDecided(answers.decided, { id: one.id, answer, at: Date.now() });
-  const settle = () => void setTimeout(() => void state.settleItem(ctx.io as never, one).catch(() => undefined), DECIDED_SHOWN_MS);
+  const { settle, unanswer } = recordAnswer(ctx.agent.id, ctx.io, one, answer);
   if (!prompt) {
     sent.add(one.id);
-    stale(ctx.agent.id);
-    settle();
+    await settle();
     return `Closed: ${answer}.`;
   }
-  await handOff(ctx, [one.id], prompt, async () => settle(), async () => {
-    answers.decided = answers.decided.filter((each) => each.id !== one.id);
-  });
+  await handOff(ctx, [one.id], prompt, settle, unanswer);
   return `Sent your answer to the agent: ${answer}.`;
 }
 
@@ -382,7 +327,7 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   const slug = viewing.get(ctx.agent.id) ?? "";
   if (!slug) return null;
   const io = ctx.io as never;
-  const { root, me, pack, base } = await laneOf(ctx);
+  const { me, pack, base } = await laneOf(ctx);
   const cache = await refreshRoot(ctx);
   const intent = cache.intents.find((one: Any) => one.slug === slug);
   if (!intent) {
@@ -397,8 +342,6 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   const stage = STAGE_LABELS[currentStage(intent, evidence, role, prs, pack) as keyof typeof STAGE_LABELS];
   const today = await todayOf(ctx, slug);
   const isHere = slug === pinned;
-  // An intent read from origin/<base> that this checkout does not have yet can be asked about, not worked on here.
-  const inCheckout = await ctx.io.exists(`${root}/docs/intent/${slug}/prompt.md`);
   // A step that only looks at the intent is this view, so it has no card.
   const next = isHere && built.next && !built.next.look ? built.next : null;
   return {
@@ -410,7 +353,7 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
     proof: await proofOf(ctx, slug),
     heldBy: heldByLine(await peers(ctx), slug, now),
     isHere,
-    inCheckout,
+    inCheckout: intent.inCheckout === true,
     base,
     stands: standsLines(intent, stage, me, prs) as string[],
     next: next ? { id: next.id, label: next.label, hint: next.hint } : null,
@@ -418,18 +361,21 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   };
 }
 
-// An intent's changes today, as its view lists them (the first eight).
-async function todayOf(ctx: Ctx, slug: string): Promise<Any[]> {
+// An intent's changes since local midnight, newest first.
+async function changesToday(ctx: Ctx, slug: string): Promise<Any[]> {
   const io = ctx.io as never;
   const now = Date.now();
-  const tz = await state.readTz(io);
-  return ((await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[]).slice(0, 8);
+  return (await state.readChanges(io, slug, now - localMinutes(now, await state.readTz(io)) * 60000)) as Any[];
 }
+
+// What an intent's view lists of today (the first eight); a press on one asks about it by its place here.
+const todayOf = async (ctx: Ctx, slug: string) => (await changesToday(ctx, slug)).slice(0, 8);
 
 // Ask about it, and a press on one of today's changes: a question for the agent; nothing is decided or tracked.
 async function askAbout(ctx: Ctx, slug: string, change?: string) {
   if (change === undefined) {
-    // One only on origin/<base>, or newer there, is read from there with git show; nothing is fetched or changed.
+    // Its text is read where the list read it: from origin/<base> with git show when that copy is the one listed
+    // (this checkout may lack it or be behind), else from the folder here. Nothing is fetched or changed.
     const intent = (await refreshRoot(ctx)).intents.find((one: Any) => one.slug === slug);
     await handOff(ctx, [], aboutIntentPrompt(slug, intent?.source === "main", "", (await laneOf(ctx)).base));
     return `Asked the agent about ${slug}.`;
@@ -494,7 +440,7 @@ async function actItem(ctx: Ctx, one: Any): Promise<string> {
 async function comeBack(ctx: Ctx) {
   await state.endAway(ctx.io as never);
   stale(ctx.agent.id);
-  const review = (await model(ctx, true)).open.find((one: Any) => one.kind === "review");
+  const review = (await model(ctx)).open.find((one: Any) => one.kind === "review");
   return review ? actItem(ctx, review) : "No away window is running.";
 }
 
@@ -600,14 +546,13 @@ async function track(ctx: Ctx, text: string) {
   const matches = searchIntents(intents, text) as Any[];
   const slug = intents.some((one: Any) => one.slug === text) ? text : matches.length === 1 && matches[0] ? matches[0].slug : null;
   if (slug === null) return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map((one) => one.slug).join(", ")}.` : `No open intent matches "${text}".`;
-  if (!(await state.track(ctx.io as never, root, slug, { me })))
-    return intents.some((one: Any) => one.slug === slug)
-      ? `${slug} is on origin/${base} but not in this checkout yet: pull ${base} to work on it here, or use Ask about it in its view to hear where it stands.`
-      : `No intent named "${slug}" in docs/intent.`;
+  if (intents.find((one: Any) => one.slug === slug)?.inCheckout === false)
+    return `${slug} is on origin/${base} but not in this checkout yet: pull ${base} to work on it here, or use Ask about it in its view to hear where it stands.`;
+  if (!(await state.track(ctx.io as never, root, slug, { me }))) return `No intent named "${slug}" in docs/intent.`;
   await refreshRoot(ctx, true);
   // Tracking sends nothing to the agent, so the reply says what comes next.
   stale(ctx.agent.id);
-  const { next } = await model(ctx, true);
+  const { next } = await model(ctx);
   return `Now tracking ${slug}.${next && !next.isTour && !next.work ? ` Next: ${next.label}.` : ""}`;
 }
 
@@ -717,104 +662,100 @@ export async function runCommand(agentId: string, cwd: string, command: "ather" 
   return remember(ctx, message);
 }
 
-export async function act(agentId: string, cwd: string, kind: string, id: string, text?: string) {
-  const ctx = await governed(agentId, cwd);
-  const built = await model(ctx);
-  let message = "";
-  if (kind === "item") {
-    const one = built.items.find((item: Any) => item.id === id);
-    if (!one) throw new Error("That item is no longer waiting.");
-    message = await actItem(ctx, one);
-  } else if (kind === "all") {
+type Built = Awaited<ReturnType<typeof model>>;
+// What a press does, by kind; each returns what is said of it. `id` and `text` are as shared/contracts.ts says per kind.
+type Act = (ctx: Ctx, built: Built, id: string, text: string | undefined) => Promise<string> | string;
+
+const found = <T>(one: T | undefined, missing: string): T => {
+  if (one === undefined) throw new Error(missing);
+  return one;
+};
+const decision = (built: Built, id: string): Any => {
+  const one = built.items.find((item: Any) => item.id === id);
+  if (!one?.answers) throw new Error("That decision is no longer waiting.");
+  return one;
+};
+const sendIt = async (ctx: Ctx, id: string, prompt: string, said: string) => {
+  await handOff(ctx, [id], prompt);
+  return said;
+};
+
+const ACTS: Record<ActKind, Act> = {
+  item: (ctx, built, id) => actItem(ctx, found(built.items.find((item: Any) => item.id === id), "That item is no longer waiting.")),
+  all: async (ctx, built) => {
     const open = built.open.filter((one: Any) => one.kind !== "away-end");
     if (open.length === 0) throw new Error("Nothing is waiting on you.");
     await handOff(ctx, open.map((one: Any) => one.id), batchPrompt(open), async () => {
       for (const one of open) await state.settleItem(ctx.io as never, one);
     });
-    message = `Sent ${open.length} things to the agent; it takes you through them one at a time.`;
-  } else if (kind === "next") {
+    return `Sent ${open.length} things to the agent; it takes you through them one at a time.`;
+  },
+  next: (ctx, built, id) => {
     if (!built.next || built.next.id !== id) throw new Error("Next has changed; look again.");
-    message = await doNext(ctx, built.next);
-  } else if (kind === "work") {
-    const one = built.work.find((item: Any) => item.id === id);
-    if (!one) throw new Error("That work is no longer listed.");
-    message = one.kind === "intent" ? view(ctx, one.slug) : viewIssue(ctx, one.issue.number);
-  } else if (kind === "start") {
-    // The one press that hands an issue to the agent: from the issue's card.
-    const one = built.work.find((item: Any) => item.id === id);
-    if (!one || one.kind !== "issue") throw new Error("That issue is no longer listed.");
-    message = await startWork(ctx, one);
-  } else if (kind === "view") {
-    message = view(ctx, id);
-  } else if (kind === "back") {
+    return doNext(ctx, built.next);
+  },
+  work: (ctx, built, id) => {
+    const one = found(built.work.find((item: Any) => item.id === id), "That work is no longer listed.");
+    return one.kind === "intent" ? view(ctx, one.slug) : viewIssue(ctx, one.issue.number);
+  },
+  // The one press that hands an issue to the agent: from the issue's card.
+  start: (ctx, built, id) => startWork(ctx, found(built.work.find((item: Any) => item.id === id && item.kind === "issue"), "That issue is no longer listed.")),
+  view: (ctx, _built, id) => view(ctx, id),
+  back: (ctx) => {
     viewing.delete(ctx.agent.id);
     viewingIssue.delete(ctx.agent.id);
-    stale(ctx.agent.id);
-  } else if (kind === "track") {
-    message = await track(ctx, id);
-  } else if (kind === "open") {
-    answeringOf(ctx.agent.id).opened = id || NONE_OPEN;
-    stale(ctx.agent.id);
-  } else if (kind === "calls") {
-    const { blocks } = answeringOf(ctx.agent.id);
-    if (!blocks.delete(id)) blocks.add(id);
-    stale(ctx.agent.id);
-  } else if (kind === "answer" || kind === "explain" || kind === "typed") {
-    const one = built.items.find((item: Any) => item.id === id);
-    if (!one?.answers) throw new Error("That decision is no longer waiting.");
-    if (kind === "explain") {
-      await handOff(ctx, [], one.answers.explain);
-      message = "Asked the agent to explain it; nothing is decided.";
-    } else if (kind === "typed") {
-      const words = text?.trim() ?? "";
-      if (!words) throw new Error("Nothing answered.");
-      message = await answerItem(ctx, one, words, one.answers.typed(words));
-    } else {
-      const option = one.answers.options.find((each: Any) => each.letter === text);
-      if (!option) throw new Error(`No option ${text ?? ""} on that decision.`);
-      message = await answerItem(ctx, one, option.letter, option.prompt);
-    }
-  } else if (kind === "find") {
-    message = setSearch(ctx.agent.id, text ?? "");
-    stale(ctx.agent.id);
-  } else if (kind === "sort") {
-    message = cycleSort(ctx.agent.id);
-    stale(ctx.agent.id);
-  } else if (kind === "group") {
-    message = await cycleGroup(ctx, (await laneOf(ctx)).me);
-    stale(ctx.agent.id);
-  } else if (kind === "ask") {
-    message = await askAbout(ctx, id, text);
-  } else if (kind === "untrack") {
-    message = await untrackHere(ctx);
-  } else if (kind === "action") {
+    return "";
+  },
+  track: (ctx, _built, id) => track(ctx, id),
+  untrack: (ctx) => untrackHere(ctx),
+  ask: (ctx, _built, id, text) => askAbout(ctx, id, text),
+  open: (ctx, _built, id) => (openDecision(ctx.agent.id, id), ""),
+  calls: (ctx, _built, id) => (toggleBlock(ctx.agent.id, id), ""),
+  answer: (ctx, built, id, text) => {
+    const one = decision(built, id);
+    const option = found(one.answers.options.find((each: Any) => each.letter === text), `No option ${text ?? ""} on that decision.`);
+    return answerItem(ctx, one, option.letter, option.prompt);
+  },
+  typed: (ctx, built, id, text) => {
+    const words = text?.trim() ?? "";
+    if (!words) throw new Error("Nothing answered.");
+    const one = decision(built, id);
+    return answerItem(ctx, one, words, one.answers.typed(words));
+  },
+  explain: async (ctx, built, id) => {
+    await handOff(ctx, [], decision(built, id).answers.explain);
+    return "Asked the agent to explain it; nothing is decided.";
+  },
+  find: (ctx, _built, _id, text) => setSearch(ctx.agent.id, text ?? ""),
+  sort: (ctx) => cycleSort(ctx.agent.id),
+  group: async (ctx) => cycleGroup(ctx, (await laneOf(ctx)).me),
+  action: (ctx, _built, id) => {
     if (id !== "action:new-intent") throw new Error(`Unknown action ${id}.`);
-    await handOff(ctx, [id], NEW_INTENT_PROMPT);
-    message = "Sent to the agent: it interviews you first.";
-  } else if (kind === "skill") {
-    const one = built.skills.find((item: Any) => item.id === id);
-    if (!one) throw new Error("That skill is not in this checkout.");
-    await handOff(ctx, [id], one.prompt);
-    message = `Sent ${one.name} to the agent.`;
-  } else if (kind === "create") {
-    const one = built.create.flatMap((group: Any) => group.items).find((item: Any) => item.id === id);
-    if (!one) throw new Error("That is not in this checkout.");
-    await handOff(ctx, [id], one.prompt);
-    message = `Sent to the agent: ${one.verb}.`;
-  } else if (kind === "away") {
-    if (id === "stop") message = await awayCommand(ctx, "stop");
-    else if (id === "back") message = await comeBack(ctx);
-    else {
-      const preset = AWAY_PRESETS[Number(id)];
-      if (!preset) throw new Error(`Unknown away preset ${id}.`);
-      message = await startAway(ctx, { ...preset.choice, goal: text ?? "" });
-    }
-  } else if (kind === "draft") {
+    return sendIt(ctx, id, NEW_INTENT_PROMPT, "Sent to the agent: it interviews you first.");
+  },
+  skill: (ctx, built, id) => {
+    const one = found(built.skills.find((item: Any) => item.id === id), "That skill is not in this checkout.");
+    return sendIt(ctx, id, one.prompt, `Sent ${one.name} to the agent.`);
+  },
+  create: (ctx, built, id) => {
+    const one = found(built.create.flatMap((group: Any) => group.items).find((item: Any) => item.id === id), "That is not in this checkout.");
+    return sendIt(ctx, id, one.prompt, `Sent to the agent: ${one.verb}.`);
+  },
+  away: (ctx, _built, id, text) => {
+    if (id === "stop") return awayCommand(ctx, "stop");
+    if (id === "back") return comeBack(ctx);
+    const preset = found(AWAY_PRESETS[Number(id)], `Unknown away preset ${id}.`);
+    return startAway(ctx, { ...preset.choice, goal: text ?? "" });
+  },
+  draft: (ctx, _built, id, text) => {
     if (!text?.trim()) throw new Error("Nothing to send.");
-    await handOff(ctx, [id], text.trim());
-    message = "Sent to the agent.";
-  }
-  return remember(ctx, message);
+    return sendIt(ctx, id, text.trim(), "Sent to the agent.");
+  },
+};
+
+export async function act(agentId: string, cwd: string, kind: ActKind, id: string, text?: string) {
+  const ctx = await governed(agentId, cwd);
+  return remember(ctx, await ACTS[kind](ctx, await model(ctx), id, text));
 }
 
 export const AWAY_CHOICES = AWAY_PRESETS.map((preset: Any, index: number) => ({ id: String(index), label: preset.label }));

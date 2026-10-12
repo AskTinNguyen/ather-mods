@@ -39,10 +39,11 @@ export const homeView = z.object({
     ledger: z.string(),
     parked: z.array(z.string()),
   }),
-  items: z.array(row),
   // Needs you as decide.mjs needsView lays it out (0.2.0): an intent's several decisions wait as one block, a
   // decision opens in place with its options as buttons, an answer shows "✓ Decided" a while, then folds.
   needs: z.object({
+    // How many things wait on the person (the away window's own end is not one).
+    open: z.number(),
     blocks: z.array(
       z.object({
         slug: z.string(),
@@ -139,8 +140,6 @@ export const homeView = z.object({
       // What came of it: the first sentence of its report.
       outcome: z.string(),
       source: z.enum(["worker", "agent"]),
-      parentId: z.string(),
-      via: z.string(),
     }),
   ),
   // The workers as drawn (crew.mjs crewTree): each under the worker that started it, the live ones then the last

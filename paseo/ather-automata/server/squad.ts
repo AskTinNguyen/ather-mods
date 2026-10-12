@@ -9,6 +9,7 @@ import { crewHeading, crewTree } from "./ather/crew.mjs";
 import { KINDS, PROP_WORDS, classifyWorker, isLive, propForTool, workerState } from "./ather/squad.mjs";
 import { knownAgents, paseo } from "./agents";
 import { ART } from "./art.generated";
+import type { HomeView } from "../shared/contracts";
 import { run } from "./io";
 import { workersOf, type WorkerRecord } from "./transcripts";
 
@@ -32,18 +33,14 @@ export type Crew = {
   via: string;
 };
 
-// The workers as the panel draws them (crew.mjs crewTree): each under the worker that started it, the live
-// ones first, then the last few finished; a parent's finished workers past three fold into "+N finished".
-// A line is a worker (`fold` 0) or a fold (`fold`: how many, `id` its key).
-export type CrewLine = { id: string; depth: number; via: string; fold: number };
-export type CrewView = { crew: Crew[]; heading: string; live: CrewLine[]; done: CrewLine[] };
+// The workers as the panel draws them (crew.mjs crewTree, as the mod draws them): each under the worker that
+// started it, the live ones first, then the last three finished; a parent's finished workers past three fold into
+// "+N finished". A line is a worker (`fold` 0) or a fold (`fold`: how many, `id` its key).
+type CrewView = { crew: Crew[]; crewTree: HomeView["crewTree"] };
+type TreeLine = ReturnType<typeof crewTree>["live"][number];
 
-// Finished workers kept for the Done list, each with the workers it started (the panel shows three and folds the rest).
-const DONE_KEPT = 8;
 const CACHE_MS = 4000;
 const cache = new Map<string, { at: number; view: CrewView }>();
-
-type Line = { kind: "worker"; one: Crew; depth: number } | { kind: "fold"; key: string; depth: number; count: number };
 type SubAgent = { type: "sub_agent"; subAgentType?: string; description?: string; log: string; actions?: { toolName: string }[] };
 
 const kindWord = (kind: string) => (KINDS[kind as keyof typeof KINDS] ?? KINDS.general).word;
@@ -116,11 +113,10 @@ export async function crewOf(agentId: string): Promise<CrewView> {
     // crew.mjs's Crew has the watch half's fields too; the tree reads id, state, parentId, via and wait. Paseo sees no
     // worker's calls in flight, so none says what it waits on.
     crew.sort((a, b) => b.startedAt - a.startedAt).map((one) => ({ ...one, wait: "" })) as never,
-    { doneShown: DONE_KEPT },
-  ) as { live: Line[]; done: Line[]; running: number; queued: number; waitingOn: number };
-  const lineOf = (line: Line): CrewLine => (line.kind === "fold" ? { id: line.key, depth: line.depth, via: "", fold: line.count } : { id: line.one.id, depth: line.depth, via: line.one.via, fold: 0 });
+  );
+  const lineOf = (line: TreeLine) => (line.kind === "fold" ? { id: line.key, depth: line.depth, via: "", fold: line.count } : { id: line.one.id, depth: line.depth, via: line.one.via, fold: 0 });
   const drawn = new Set([...tree.live, ...tree.done].flatMap((line) => (line.kind === "worker" ? [line.one.id] : [])));
-  const view = { crew: crew.filter((one) => drawn.has(one.id)), heading: crewHeading(tree) as string, live: tree.live.map(lineOf), done: tree.done.map(lineOf) };
+  const view = { crew: crew.filter((one) => drawn.has(one.id)), crewTree: { heading: crewHeading(tree), live: tree.live.map(lineOf), done: tree.done.map(lineOf) } };
   cache.set(agentId, { at: Date.now(), view });
   return view;
 }

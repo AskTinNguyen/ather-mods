@@ -5,15 +5,15 @@ import { type ReactNode, useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { type ActKind, atherAct, atherHome, type HomeView } from "../shared/contracts";
 import { Art } from "./art";
+import { CrewSection } from "./CrewSection";
 import { IntentScreen } from "./IntentScreen";
 import { IssueScreen } from "./IssueScreen";
 import { NeedsYou } from "./NeedsYou";
 import { WorkSection } from "./WorkSection";
-import { Beacon, Bob, Button, CHANGE_ICONS, FadeIn, FillBar, GrowLine, isLight, type Kit, Pop, Pulse, Row, SectionLabel, useKit, WhoLine } from "./ui";
+import { Beacon, Button, ChangeLine, FadeIn, FillBar, GrowLine, isLight, type Kit, NextRow, Pop, Pulse, Row, SectionLabel, useKit, WhoLine } from "./ui";
 
 
 const REFRESH_MS = 5000;
-const DONE_SHOWN = 3;
 
 // The Ather pane for one agent: where the work is, what needs you, Next, other work, away.
 export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
@@ -63,6 +63,11 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   }
 
   const busy = action.isPending;
+  // A search is no press: it goes even while one is in flight, keeps the rows enabled and says nothing.
+  const search = (text: string) =>
+    void actRpc({ agentId, cwd, kind: "find", id: "", text })
+      .then(() => queryClient.invalidateQueries({ queryKey: key }))
+      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
   const run = (kind: ActKind, id: string, text?: string) => {
     if (!busy) action.mutate({ kind, id, text });
   };
@@ -76,12 +81,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
     ) : null;
 
   const next = view.next;
-  const workers = new Map(view.crew.map((one) => [one.id, one]));
-  // The finished workers' lines, a few roots with what each started, the rest on request.
-  const doneRoots = view.crewTree.done.filter((line) => line.depth === 0).length;
-  const doneShown = open.done ? view.crewTree.done : view.crewTree.done.slice(0, nthRoot(view.crewTree.done, DONE_SHOWN));
   const meta = [view.role, view.lock, view.week].filter(Boolean).join(" · ");
-  const open_ = view.items.filter((one) => one.kind !== "away-end" && !isSent(one.id));
 
   if (view.intentView) {
     return <IntentScreen kit={kit} who={who} intent={view.intentView} busy={busy} isSent={isSent} run={run} />;
@@ -180,7 +180,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {view.items.length > 0 ? <NeedsYou kit={kit} needs={view.needs} open={open_.length} busy={busy} isSent={isSent} run={run} /> : null}
+      {view.needs.blocks.length > 0 || view.needs.folded.length > 0 ? <NeedsYou kit={kit} needs={view.needs} busy={busy} isSent={isSent} run={run} /> : null}
 
       {/* Your own intents that want a press: every item met, or parked with no reason. A press opens the intent. */}
       {view.attention.length > 0 ? (
@@ -226,17 +226,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
                 </View>
               </>
             ) : (
-              <Row
-                kit={kit}
-                icon={isSent(next.id) ? "Check" : "ArrowRight"}
-                iconColor={isSent(next.id) ? c.foregroundMuted : c.accent}
-                quiet={isSent(next.id)}
-                title={next.label}
-                hint={next.hint}
-                accessibilityLabel={isSent(next.id) ? `${next.label}, sent` : next.label}
-                disabled={busy}
-                onPress={() => run("next", next.id)}
-              />
+              <NextRow kit={kit} step={next} isSent={isSent(next.id)} busy={busy} onPress={() => run("next", next.id)} />
             )}
           </View>
         </FadeIn>
@@ -244,47 +234,18 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
 
       {view.stages.length > 0 || view.crew.length > 0 ? <SummaryStrip kit={kit} view={view} /> : null}
 
-      {view.crewTree.live.length > 0 ? (
-        <FadeIn delay={60} style={s.section}>
-          <SectionLabel kit={kit} text={view.crewTree.heading} />
-          {view.crewTree.live.map((line, index) => (
-            <CrewLine key={line.id} kit={kit} line={line} one={workers.get(line.id)} index={index} now={now} isLightTheme={isLight(theme)} />
-          ))}
-        </FadeIn>
-      ) : null}
-
-      {view.crewTree.done.length > 0 ? (
-        <FadeIn delay={90} style={s.section}>
-          <SectionLabel kit={kit} text={`Done ${doneRoots}`}>
-            <View style={{ flex: 1 }} />
-            {doneRoots > DONE_SHOWN ? (
-              <Button kit={kit} variant="ghost" icon={open.done ? "ChevronUp" : "ChevronDown"} label={open.done ? "fold" : `all ${doneRoots}`} onPress={() => toggle("done")} />
-            ) : null}
-          </SectionLabel>
-          {doneShown.map((line, index) => (
-            <CrewLine key={line.id} kit={kit} line={line} one={workers.get(line.id)} index={index} now={now} isLightTheme={isLight(theme)} />
-          ))}
-        </FadeIn>
-      ) : null}
+      <CrewSection kit={kit} view={view} now={now} isLightTheme={isLight(theme)} />
 
       {view.changes.length > 0 ? (
         <FadeIn delay={120} style={s.section}>
           <SectionLabel kit={kit} text="Today in the intent" />
           {view.changes.map((one, index) => (
-            <FadeIn key={`${index}-${one.time}`} delay={Math.min(index, 10) * 30}>
-            <View style={{ flexDirection: "row", gap: 10, alignItems: "flex-start", paddingVertical: 4, paddingHorizontal: 8 }}>
-              <View style={{ marginTop: 3 }}>
-                <Icon name={CHANGE_ICONS[one.kind]} size={12} color={one.kind === "done" ? c.statusSuccess : one.kind === "yours" ? c.accent : c.foregroundMuted} />
-              </View>
-              <Text style={[s.body, { flex: 1, fontSize: 13, lineHeight: 18 }]}>{one.text}</Text>
-              <Text style={[s.hint, { fontVariant: ["tabular-nums"] }]}>{one.time}</Text>
-            </View>
-            </FadeIn>
+            <ChangeLine key={`${index}-${one.time}`} kit={kit} one={one} index={index} />
           ))}
         </FadeIn>
       ) : null}
 
-      {view.workList.total > 0 ? <WorkSection kit={kit} view={view} busy={busy} isSent={isSent} run={run} light={isLight(theme)} /> : null}
+      {view.workList.total > 0 ? <WorkSection kit={kit} view={view} busy={busy} isSent={isSent} run={run} search={search} light={isLight(theme)} /> : null}
 
       <FadeIn delay={200} style={s.section}>
         <SectionLabel kit={kit} text="Start" />
@@ -418,9 +379,6 @@ function Proof({ kit, proof }: { kit: Kit; proof: string }) {
   );
 }
 
-// The kinds' own colours (squad.mjs), for the kind word beside each avatar on dark themes.
-const KIND_COLOURS: Record<string, string> = { editor: "#f08a3c", builder: "#2f8cf0", tester: "#2fbfa8", scout: "#c9b3ee", reviewer: "#f2d27a", general: "#ec5fa4" };
-
 function useNow(active: boolean) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -431,20 +389,11 @@ function useNow(active: boolean) {
   return now;
 }
 
-// 3:21, or 1:02:09 past an hour.
-function clock(ms: number) {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const sec = String(total % 60).padStart(2, "0");
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
-}
-
 // Checklist, workers, decisions: the three numbers that say how the work stands.
 function SummaryStrip({ kit, view }: { kit: Kit; view: HomeView }) {
   const { c, compact } = kit;
   const running = view.crew.filter((one) => one.state === "running").length;
-  const decisions = view.items.filter((one) => one.kind === "call").length;
+  const decisions = view.needs.blocks.flatMap((block) => block.items).filter((one) => one.kind === "call").length;
   const tile = (key: string, label: string, body: ReactNode, highlight = false, delay = 0) => (
     <FadeIn key={key} delay={delay} style={{ flexBasis: compact ? "30%" : "28%", flexGrow: 1 }}>
       <View style={{ padding: 12, gap: 6, borderRadius: 10, backgroundColor: c.surface1, borderWidth: 1, borderColor: highlight ? c.accent : c.border, minHeight: 78 }}>
@@ -474,94 +423,3 @@ function SummaryStrip({ kit, view }: { kit: Kit; view: HomeView }) {
     </View>
   );
 }
-
-// One worker, as the original drew it: its avatar (a body for its kind, holding what it is doing)
-// in a ring for its state, floating while it runs; what it is, on which model, doing what; how long
-// and how many tool calls. A finished one shows its steps and what came of it.
-// Where the lines of the nth finished root begin: the first `count` roots are drawn with what they started.
-function nthRoot(lines: HomeView["crewTree"]["done"], count: number) {
-  let seen = 0;
-  const at = lines.findIndex((line) => line.depth === 0 && ++seen > count);
-  return at < 0 ? lines.length : at;
-}
-
-// One line of the workers tree: a worker indented under the one that started it ("started by …" when that one
-// is not right above), or a parent's finished workers past the first few, as "+N finished".
-function CrewLine({ kit, line, one, index, now, isLightTheme }: { kit: Kit; line: HomeView["crewTree"]["live"][number]; one: HomeView["crew"][number] | undefined; index: number; now: number; isLightTheme: boolean }) {
-  const { s } = kit;
-  const indent = { marginLeft: Math.min(line.depth, 4) * 20 };
-  if (line.fold > 0) return <Text style={[s.hint, indent, { paddingVertical: 6, paddingHorizontal: 8 }]}>{`+${line.fold} finished`}</Text>;
-  if (!one) return null;
-  return (
-    <View style={indent}>
-      {line.via ? <Text style={[s.hint, { paddingHorizontal: 8, paddingTop: 6, fontSize: 12 }]}>{`started by ${line.via}`}</Text> : null}
-      <CrewRow kit={kit} one={one} index={index} now={now} isLightTheme={isLightTheme} />
-    </View>
-  );
-}
-
-function CrewRow({ kit, one, index, now, isLightTheme }: { kit: Kit; one: HomeView["crew"][number]; index: number; now: number; isLightTheme: boolean }) {
-  const { c, s } = kit;
-  const isEnded = one.state === "done" || one.state === "failed";
-  const ring = one.state === "running" ? c.accent : one.state === "done" ? c.statusSuccess : one.state === "failed" ? c.statusDanger : c.statusWarning;
-  const kindColour = isLightTheme ? c.foreground : (KIND_COLOURS[one.kind] ?? c.foreground);
-  const doing = isEnded ? one.outcome || one.propWord : one.propWord;
-  const calls = one.toolCalls > 0 ? `${one.toolCalls} tool call${one.toolCalls === 1 ? "" : "s"}` : "";
-  const timing =
-    one.state === "running" && one.startedAt
-      ? `running ${clock(now - one.startedAt)}`
-      : one.state === "waiting" && one.endedAt
-        ? `quiet for ${clock(now - one.endedAt)}`
-        : one.state === "done" && one.startedAt
-          ? `took ${clock(one.endedAt - one.startedAt)}`
-          : one.state === "failed" && one.startedAt
-            ? `stopped at ${clock(one.endedAt - one.startedAt)}`
-            : "";
-  const stats = [timing, calls, one.source === "agent" ? "Paseo agent" : ""].filter(Boolean).join(" · ");
-  const mark = one.state === "done" ? "Check" : one.state === "failed" ? "X" : null;
-  const held = one.prop ?? (isEnded ? (one.props[one.props.length - 1] ?? "none") : "none");
-  return (
-    <FadeIn delay={Math.min(index, 10) * 40}>
-      <View
-        accessibilityLabel={`${one.title}: ${one.kindWord}${one.model ? ` on ${one.model}` : ""}, ${doing}. ${stats}`}
-        style={{ flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 10, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: c.border }}
-      >
-        <Bob active={one.state === "running"}>
-          <View style={{ width: 48, height: 48, borderRadius: 24, borderWidth: 3, borderColor: ring, alignItems: "center", justifyContent: "center" }}>
-            <Art artKey={`avatar:${one.kind}:${held}`} size={38} round />
-          </View>
-        </Bob>
-        <View style={{ flex: 1, gap: 3 }}>
-          <Text style={[s.rowTitle, { fontSize: 15 }, isEnded ? { color: c.foregroundMuted } : null]} numberOfLines={1}>
-            {one.title}
-          </Text>
-          <Text style={s.hint} numberOfLines={2}>
-            <Text style={{ color: kindColour, fontWeight: "700" }}>{one.kindWord}</Text>
-            {one.model ? <Text style={{ color: c.foreground }}>{` ${one.model}`}</Text> : null}
-            {` · ${doing}`}
-          </Text>
-          {isEnded && (one.props.length > 0 || stats) ? (
-            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
-              {one.props.map((prop, at) => [
-                at > 0 ? <Icon key={`arrow-${at}`} name="ArrowRight" size={10} color={c.foregroundMuted} /> : null,
-                <Art key={`${prop}-${at}`} artKey={`prop:${prop}`} size={18} label={prop} />,
-              ])}
-              {mark ? <Icon name={mark} size={13} color={ring} /> : null}
-              {stats ? <Text style={[s.hint, { fontSize: 12 }]}>{`${one.props.length > 0 || mark ? " · " : ""}${stats}`}</Text> : null}
-            </View>
-          ) : stats ? (
-            <Text style={[s.hint, { fontSize: 12, fontVariant: ["tabular-nums"] }]}>{stats}</Text>
-          ) : null}
-        </View>
-        {mark ? (
-          <Icon name={mark} size={16} color={ring} />
-        ) : (
-          <Pulse>
-            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: ring }} />
-          </Pulse>
-        )}
-      </View>
-    </FadeIn>
-  );
-}
-

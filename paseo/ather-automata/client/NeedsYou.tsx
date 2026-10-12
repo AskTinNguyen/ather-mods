@@ -11,8 +11,9 @@ type Run = (kind: ActKind, id: string, text?: string) => void;
 // Needs you, answered in place (0.2.0): the server lays it out (decide.mjs needsView); this draws it. A decision
 // opens under its row with its whole question, its options as buttons (the recommended one primary), Explain,
 // Type an answer and Open findings; an answer shows "✓ Decided" a while, then folds into "▸ N decided".
-export function NeedsYou({ kit, needs, open, busy, isSent, run }: { kit: Kit; needs: Needs; open: number; busy: boolean; isSent: (id: string) => boolean; run: Run }) {
+export function NeedsYou({ kit, needs, busy, isSent, run }: { kit: Kit; needs: Needs; busy: boolean; isSent: (id: string) => boolean; run: Run }) {
   const { s, c, compact } = kit;
+  const { open } = needs;
   const [isFoldOpen, setFoldOpen] = useState(false);
   let index = 0;
   return (
