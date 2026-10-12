@@ -1,0 +1,372 @@
+<title>Decision Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,600&display=swap">
+<style>
+/* The Drawing Set (apmos-wiki DESIGN.md), light only by that system's rule: the desk is a drawing register.
+   One sheet per page; each decision is a register row with its options as answer buttons. Seal red marks
+   what stops work (a blocking finding) and nothing else. */
+:root {
+  --paper: #F4F2EC; --sheet: #FAF8F3; --grid: #ECE8DD;
+  --ink: #26241F; --ink-2: #55524A; --ink-3: #6A675E; --ink-quiet: #8B8779;
+  --line: #D8D4C8; --line-2: #B9B4A4;
+  --field: #FFFFFF; --seal: #A63A2E; --done: #2F5D46; --done-bg: #E6EDE6;
+  --serif: "Source Serif 4", "New York", Georgia, serif;
+  --sans: "Source Sans 3", "SF Pro Text", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box }
+html { -webkit-text-size-adjust: 100% }
+body {
+  margin: 0; color: var(--ink); font: 16px/1.5 var(--sans);
+  background-color: var(--paper);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  padding-inline: 16px; padding-block: 20px 48px;
+}
+.sheet { max-width: 880px; margin: 0 auto; background: var(--sheet); border: 1px solid var(--line-2); position: relative }
+.sheet::before, .sheet::after { content: ""; position: absolute; width: 14px; height: 14px; border: 0 solid var(--ink) }
+.sheet::before { top: -6px; left: -6px; border-top-width: 2px; border-left-width: 2px }
+.sheet::after { bottom: -6px; right: -6px; border-bottom-width: 2px; border-right-width: 2px }
+.mono, .label { font-family: var(--mono); font-variant-numeric: tabular-nums }
+.label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3) }
+a { color: var(--ink); text-decoration-thickness: 1px; text-underline-offset: 3px }
+button, textarea { font: inherit; color: inherit }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px }
+
+/* Head of the sheet */
+header { padding: 24px 24px 18px; display: grid; gap: 6px }
+h1 { font: 600 clamp(28px, 6vw, 40px)/1.1 var(--serif); margin: 0; text-wrap: balance; letter-spacing: -.01em }
+.lede { color: var(--ink-2); margin: 0; max-width: 62ch }
+
+/* Title block: the desk's identity and its trust statement in one strip */
+.titleblock { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; border-top: 2px solid var(--ink); border-bottom: 1px solid var(--line-2) }
+.titleblock > div { padding: 8px 12px; border-left: 1px solid var(--line-2); min-width: 0 }
+.titleblock > div:first-child { border-left: 0 }
+.titleblock .value { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere }
+.titleblock .big { font-size: 22px; font-weight: 600 }
+@media (max-width: 640px) {
+  .titleblock { grid-template-columns: repeat(3, 1fr) }
+  .titleblock > div:first-child { grid-column: 1 / -1; border-bottom: 1px solid var(--line-2) }
+  .titleblock > div:nth-child(2) { border-left: 0 }
+}
+
+/* Filters */
+.controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--line) }
+.seg { display: flex; flex-wrap: wrap; gap: 6px }
+.chip { font: 12px/1 var(--mono); letter-spacing: .04em; text-transform: uppercase; padding: 8px 10px; border: 1px solid var(--line-2); background: transparent; cursor: pointer; min-height: 32px }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--sheet); border-color: var(--ink) }
+.notice { margin: 0; padding: 10px 24px; font-size: 14px; color: var(--ink-2); border-bottom: 1px solid var(--line); background: var(--paper) }
+
+/* Register: one decision per row */
+.register { list-style: none; margin: 0; padding: 0 }
+.item { padding: 20px 24px 22px; border-bottom: 1px solid var(--line); display: grid; gap: 10px }
+.item.blocking { background-image: repeating-linear-gradient(135deg, transparent 0 9px, rgba(166, 58, 46, .07) 9px 10px) }
+.ref { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px }
+.ref .id { font: 600 12px var(--mono); letter-spacing: .04em }
+.ref .meta { margin-left: auto }
+.stamp { font: 600 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; padding: 4px 6px; border: 1.5px solid currentColor; white-space: nowrap }
+.stamp.stop { color: var(--seal) }
+.stamp.ok { color: var(--done); background: var(--done-bg) }
+.stamp.wait { color: var(--ink-3); border-style: dashed }
+.intent { margin: 0; color: var(--ink-3); font-size: 14px }
+.question { margin: 0; font-size: 17px; line-height: 1.45; max-width: 68ch; overflow-wrap: anywhere }
+.options { display: grid; gap: 8px; margin: 4px 0 0; padding: 0; list-style: none }
+.option { width: 100%; display: grid; grid-template-columns: 32px 1fr; gap: 2px 12px; text-align: left; padding: 10px 12px; background: var(--sheet); border: 1px solid var(--line-2); cursor: pointer; min-height: 44px }
+.option:hover { background: var(--paper) }
+.option.rec { border: 1.5px solid var(--ink) }
+.letter { grid-row: span 2; font: 600 15px/30px var(--mono); text-align: center; width: 30px; height: 30px; border: 1px solid var(--ink) }
+.option.rec .letter { background: var(--ink); color: var(--sheet) }
+.option .head { font-weight: 600; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline }
+.option .head .label { color: var(--ink) }
+.option .text { color: var(--ink-2); font-size: 14px; overflow-wrap: anywhere }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+.btn { font: 600 14px/1 var(--sans); padding: 10px 14px; min-height: 40px; border: 1px solid var(--ink); background: var(--sheet); cursor: pointer }
+.btn.primary { background: var(--ink); color: var(--sheet) }
+.btn.quiet { border-color: var(--line-2); font-weight: 400 }
+.btn[disabled] { opacity: .5; cursor: default }
+.link { font-size: 14px }
+.own { display: grid; gap: 8px }
+.own textarea { width: 100%; min-height: 84px; padding: 10px; border: 1px solid var(--line-2); background: var(--field); resize: vertical }
+.explain { border-left: 2px solid var(--ink); padding: 4px 0 4px 14px; color: var(--ink-2); white-space: pre-wrap; max-width: 68ch; font-size: 15px }
+.explain .label { display: block; margin-bottom: 4px }
+details.source summary { cursor: pointer; font-size: 14px; color: var(--ink-2); width: fit-content }
+details.source pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(--mono); color: var(--ink-2); background: var(--paper); border: 1px dashed var(--line-2); padding: 12px; margin: 8px 0 0; max-height: 420px; overflow: auto }
+.answered { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--line-2); background: var(--paper) }
+.answered .what { font-weight: 600; overflow-wrap: anywhere }
+.answered .when { font-size: 14px; color: var(--ink-2) }
+.empty { padding: 32px 24px; color: var(--ink-2) }
+.empty strong { display: block; font: 600 20px var(--serif); color: var(--ink); margin-bottom: 4px }
+h2 { font: 600 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; margin: 0; padding: 18px 24px 8px; color: var(--ink-3); border-bottom: 1px solid var(--line) }
+.howto { padding: 16px 24px 22px; border-top: 1px dashed var(--line-2); display: grid; gap: 6px; font-size: 14px; color: var(--ink-2) }
+.howto p { margin: 0; max-width: 72ch }
+.toast { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--ink); color: var(--sheet); padding: 10px 16px; font-size: 14px; max-width: calc(100% - 32px) }
+@media (max-width: 640px) {
+  header, .controls, .item, h2, .howto { padding-inline: 16px }
+  .notice { padding-inline: 16px }
+  .ref .meta { margin-left: 0; width: 100% }
+}
+@media (prefers-reduced-motion: no-preference) { .option, .btn, .chip { transition: background-color .12s } }
+</style>
+
+<div class="sheet">
+  <header>
+    <span class="label">Ather · Decision desk</span>
+    <h1 id="title">What waits on you</h1>
+    <p class="lede" id="lede">The open calls in your intents' findings, read from each repository's base branch.</p>
+  </header>
+  <div class="titleblock" id="titleblock"></div>
+  <div class="controls" id="controls"></div>
+  <p class="notice" id="notice" hidden></p>
+  <main id="register"></main>
+  <div class="howto">
+    <span class="label">How an answer reaches the repository</span>
+    <p>Your answer is kept on this page. A Claude session running the desk skill records it in the intent's findings the intent skill's way, one pull request per repository, and marks it Recorded here. Once that pull request is merged, the next read of the desk shows it settled. You can change an answer until it is recorded.</p>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="application/json" id="desk-data">null</script>
+<script>
+(() => {
+  const DESK = JSON.parse(document.getElementById('desk-data').textContent || 'null')
+  const ITEMS = DESK ? DESK.items : []
+  const byId = new Map(ITEMS.map(item => [item.id, item]))
+  const state = {
+    answers: new Map(), // id → answer document
+    canWrite: false, hasDb: false, ready: false, sample: null, db: null, me: null,
+    filter: 'decide', repo: 'all', typing: new Set(), drafts: new Map(), explaining: new Map(), changing: new Set(),
+  }
+
+  // ---------------------------------------------------------------- little helpers
+  const h = (tag, props, ...kids) => {
+    const el = document.createElement(tag)
+    for (const [key, value] of Object.entries(props || {})) {
+      if (value === undefined || value === null || value === false) continue
+      if (key.startsWith('on')) el.addEventListener(key.slice(2), value)
+      else if (key === 'class') el.className = value
+      else el.setAttribute(key, value === true ? '' : value)
+    }
+    for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : String(kid))
+    return el
+  }
+  const docId = id => id.replace(/\//g, '~')
+  const pad = n => String(n).padStart(2, '0')
+  const stamp = ms => { const d = new Date(ms); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}` }
+  const ago = ms => {
+    const minutes = Math.max(0, Math.round((Date.now() - ms) / 60000))
+    if (minutes < 60) return `${minutes} min ago`
+    const hours = Math.round(minutes / 60)
+    return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`
+  }
+  let toastTimer = 0
+  const toast = text => {
+    const el = document.getElementById('toast')
+    el.textContent = text; el.hidden = false
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true }, 3200)
+  }
+  // Where an item stands: waiting (no answer, or a withdrawn one), answered, recorded.
+  const standing = item => {
+    const answer = state.answers.get(item.id)
+    return !answer || answer.state === 'withdrawn' ? 'waiting' : answer.state
+  }
+  const answerText = answer => {
+    if (!answer) return ''
+    const item = byId.get(answer.id)
+    const option = item && answer.choice ? item.options.find(one => one.letter === answer.choice) : null
+    return answer.choice ? `${answer.choice}: ${option ? option.label : (answer.label || '')}` : `“${answer.words}”`
+  }
+
+  // ---------------------------------------------------------------- writing answers
+  const save = async (item, choice, words) => {
+    if (!state.canWrite) return
+    const option = choice ? item.options.find(one => one.letter === choice) : null
+    const doc = {
+      id: item.id, repo: item.repo, slug: item.slug, finding: item.finding, intent: item.intent,
+      question: item.question.slice(0, 400), choice: choice || '', label: option ? option.label : '', words: words || '',
+      state: 'answered', at: Date.now(), by: state.me || '',
+    }
+    state.answers.set(item.id, doc)
+    state.typing.delete(item.id); state.changing.delete(item.id); state.drafts.delete(item.id)
+    render()
+    try {
+      await state.db.collection('answers').doc(docId(item.id)).set(doc)
+      toast(`Saved ${item.finding}: ${answerText(doc)}`)
+    } catch (error) {
+      state.answers.delete(item.id)
+      render()
+      toast(error && error.code === 'not_granted' ? 'Not saved: this view may not write answers.' : `Not saved: ${error && error.message ? error.message : 'the desk could not be reached'}. Try again.`)
+    }
+  }
+  const withdraw = async item => {
+    const answer = state.answers.get(item.id)
+    if (!answer || !state.canWrite) return
+    const doc = { ...answer, state: 'withdrawn', at: Date.now(), by: state.me || '' }
+    state.answers.set(item.id, doc); state.changing.delete(item.id)
+    render()
+    try { await state.db.collection('answers').doc(docId(item.id)).set(doc); toast(`Withdrew the answer to ${item.finding}.`) } catch (error) { state.answers.set(item.id, answer); render(); toast('Not withdrawn: the desk could not be reached. Try again.') }
+  }
+
+  // ---------------------------------------------------------------- Explain, through Claude
+  const explain = async item => {
+    if (!state.sample || state.explaining.get(item.id)?.busy) return
+    state.explaining.set(item.id, { text: '', busy: true })
+    render()
+    const input = [
+      'You explain one decision that waits on the owner of a software project. In plain words and under 180 words, say what the decision is about, what each option would mean in practice, and why the finding recommends the one it recommends, if it does.',
+      'Do not choose for the owner. Use only what the finding says; where it does not say something, say so.',
+      '', `Repository: ${item.repo}`, `Intent: ${item.intent} (${item.slug})`, '', 'The finding as written:', item.source,
+    ].join('\n')
+    try {
+      const result = await state.sample(input, { onText: update => { state.explaining.set(item.id, { text: update.text, busy: true }); renderItem(item) } })
+      state.explaining.set(item.id, { text: result.text, busy: false })
+    } catch (error) {
+      state.explaining.set(item.id, { text: error && error.code === 'rate_limited' ? 'Claude is busy. Try Explain again in a minute.' : 'Claude could not explain this here. Read the finding below.', busy: false, failed: true })
+    }
+    renderItem(item)
+  }
+
+  // ---------------------------------------------------------------- drawing
+  const titleBlock = () => {
+    const el = document.getElementById('titleblock')
+    const counts = { waiting: 0, answered: 0, recorded: 0 }
+    for (const item of ITEMS) counts[standing(item)] += 1
+    const repos = DESK ? DESK.repos.map(repo => `${repo.name} ${repo.sha.slice(0, 7)}`).join(' · ') : '—'
+    el.replaceChildren(
+      h('div', {}, h('span', { class: 'label' }, 'Read from the base branches'), h('div', { class: 'value' }, repos), h('div', { class: 'value', style: 'color:var(--ink-3)' }, DESK ? `${stamp(DESK.at)} · ${ago(DESK.at)}` : '')),
+      h('div', {}, h('span', { class: 'label' }, 'To decide'), h('div', { class: 'value big', 'data-count': 'waiting' }, counts.waiting)),
+      h('div', {}, h('span', { class: 'label' }, 'Answered'), h('div', { class: 'value big', 'data-count': 'answered' }, counts.answered)),
+      h('div', {}, h('span', { class: 'label' }, 'Recorded'), h('div', { class: 'value big', 'data-count': 'recorded' }, counts.recorded)),
+    )
+  }
+
+  const controls = () => {
+    const el = document.getElementById('controls')
+    const tab = (value, text) => h('button', { class: 'chip', type: 'button', 'aria-pressed': String(state.filter === value), onclick: () => { state.filter = value; render() } }, text)
+    const repo = (value, text) => h('button', { class: 'chip', type: 'button', 'aria-pressed': String(state.repo === value), onclick: () => { state.repo = value; render() } }, text)
+    const repos = DESK ? DESK.repos : []
+    el.replaceChildren(
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Show' }, tab('decide', 'To decide'), tab('answered', 'Answered'), tab('all', 'All')),
+      repos.length > 1 ? h('div', { class: 'seg', role: 'group', 'aria-label': 'Repository' }, repo('all', 'Every repository'), ...repos.map(one => repo(one.name, `${one.name} · ${one.waiting}`))) : null,
+    )
+  }
+
+  const notice = () => {
+    const el = document.getElementById('notice')
+    let text = ''
+    if (!DESK) text = 'This page has no desk data yet. A session writes it with the desk skill’s collect step.'
+    else if (state.ready && !state.hasDb) text = 'Answers cannot be kept in this view. Open the desk on claude.ai, signed in, to answer.'
+    else if (state.ready && !state.canWrite) text = 'You can read this desk. Only its owner and editors answer.'
+    el.textContent = text
+    el.hidden = text === ''
+  }
+
+  const optionButton = (item, option) =>
+    h('li', {},
+      h('button', { class: `option${option.isRecommended ? ' rec' : ''}`, type: 'button', disabled: !state.canWrite, 'data-letter': option.letter, onclick: () => save(item, option.letter, '') },
+        h('span', { class: 'letter', 'aria-hidden': 'true' }, option.letter),
+        h('span', { class: 'head' }, h('span', {}, option.label), option.isRecommended ? h('span', { class: 'label' }, '◆ Recommended') : null),
+        h('span', { class: 'text' }, option.text)))
+
+  const ownAnswer = item => {
+    // The words typed so far outlive a redraw (another device's answer arriving, say).
+    const field = h('textarea', { id: `own-${docId(item.id)}`, 'aria-label': `Your own answer to ${item.finding}`, placeholder: 'Say what you decide, in your words', oninput: event => state.drafts.set(item.id, event.target.value) })
+    const saved = state.answers.get(item.id)
+    field.value = state.drafts.get(item.id) ?? (saved && !saved.choice && state.changing.has(item.id) ? saved.words : '')
+    return h('div', { class: 'own' }, field,
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn primary', type: 'button', onclick: () => { const words = field.value.trim(); if (words) save(item, '', words); else field.focus() } }, 'Save my answer'),
+        h('button', { class: 'btn quiet', type: 'button', onclick: () => { state.typing.delete(item.id); renderItem(item) } }, 'Cancel')))
+  }
+
+  const itemNode = item => {
+    const where = standing(item)
+    const answer = state.answers.get(item.id)
+    const isOpen = where === 'waiting' || state.changing.has(item.id)
+    const explained = state.explaining.get(item.id)
+    const stampFor = where === 'recorded' ? h('span', { class: 'stamp ok' }, 'Recorded') : where === 'answered' ? h('span', { class: 'stamp wait' }, 'Answered') : null
+    return h('li', { class: `item${item.isBlocking ? ' blocking' : ''}`, id: `item-${docId(item.id)}`, 'data-id': item.id, 'data-state': where },
+      h('div', { class: 'ref' },
+        h('span', { class: 'id' }, `${item.repo.toUpperCase()} · ${item.finding}`),
+        item.isBlocking ? h('span', { class: 'stamp stop' }, 'Blocking') : null,
+        stampFor,
+        item.owner ? h('span', { class: 'label meta' }, item.owner) : null),
+      h('p', { class: 'intent' }, `${item.intent} `, h('span', { class: 'mono', style: 'font-size:12px' }, `(${item.slug})`)),
+      h('p', { class: 'question' }, item.question),
+      !isOpen && answer ? h('div', { class: 'answered' },
+        h('span', { class: 'label' }, where === 'recorded' ? 'Recorded' : 'Your answer'),
+        h('span', { class: 'what' }, answerText(answer)),
+        h('span', { class: 'when' }, where === 'recorded'
+          ? (answer.pr ? h('a', { href: answer.pr, target: '_blank', rel: 'noopener' }, `In pull request ${answer.pr.replace(/^.*\/pull\//, '#')} ↗`) : 'In a pull request')
+          : `Saved ${ago(answer.at)}. A session records it next.`),
+        where === 'answered' && state.canWrite ? h('div', { class: 'actions', style: 'margin-top:6px' },
+          h('button', { class: 'btn quiet', type: 'button', onclick: () => { state.changing.add(item.id); renderItem(item) } }, 'Change answer'),
+          h('button', { class: 'btn quiet', type: 'button', onclick: () => withdraw(item) }, 'Withdraw')) : null) : null,
+      isOpen && item.options.length ? h('ul', { class: 'options', 'aria-label': `Options for ${item.finding}` }, item.options.map(option => optionButton(item, option))) : null,
+      isOpen && state.typing.has(item.id) ? ownAnswer(item) : null,
+      explained ? h('div', { class: 'explain', 'aria-live': 'polite' }, h('span', { class: 'label' }, explained.busy ? 'Claude is explaining…' : 'Explained by Claude · it does not decide'), explained.text || '…') : null,
+      h('div', { class: 'actions' },
+        isOpen && state.canWrite && !state.typing.has(item.id) ? h('button', { class: `btn${item.options.length ? ' quiet' : ' primary'}`, type: 'button', onclick: () => { state.typing.add(item.id); renderItem(item); document.getElementById(`own-${docId(item.id)}`)?.focus() } }, item.options.length ? 'Answer in my words' : 'Answer') : null,
+        isOpen && state.changing.has(item.id) ? h('button', { class: 'btn quiet', type: 'button', onclick: () => { state.changing.delete(item.id); state.typing.delete(item.id); renderItem(item) } }, 'Keep my answer') : null,
+        state.sample ? h('button', { class: 'btn quiet', type: 'button', disabled: explained?.busy, onclick: () => explain(item) }, explained && !explained.busy ? 'Explain again' : 'Explain') : null,
+        item.link ? h('a', { class: 'link', href: item.link, target: '_blank', rel: 'noopener' }, 'Open on GitHub ↗') : null),
+      h('details', { class: 'source' }, h('summary', {}, 'Read the finding as written'), h('pre', {}, item.source)))
+  }
+
+  const renderItem = item => {
+    const old = document.getElementById(`item-${docId(item.id)}`)
+    if (old) old.replaceWith(itemNode(item))
+    titleBlock()
+  }
+
+  // Answers whose finding the last read no longer lists: the base branch reads them closed.
+  const settled = () => [...state.answers.values()].filter(answer => !byId.has(answer.id) && answer.state !== 'withdrawn')
+
+  const register = () => {
+    const el = document.getElementById('register')
+    if (!DESK) { el.replaceChildren(); return }
+    const shown = ITEMS.filter(item => (state.repo === 'all' || item.repo === state.repo) && (state.filter === 'all' || (state.filter === 'decide' ? standing(item) === 'waiting' : standing(item) !== 'waiting')))
+    const nodes = []
+    if (shown.length) nodes.push(h('ol', { class: 'register' }, shown.map(itemNode)))
+    else nodes.push(h('div', { class: 'empty' },
+      h('strong', {}, state.filter === 'decide' ? 'Nothing waits on you here.' : state.filter === 'answered' ? 'No answers yet.' : 'No open calls.'),
+      state.filter === 'decide' && ITEMS.length ? 'Every call on this desk has an answer. A session records them next.' : 'When a finding asks for your call, it shows here after the next read.'))
+    const done = state.filter !== 'decide' ? settled().filter(answer => state.repo === 'all' || answer.repo === state.repo) : []
+    if (done.length) nodes.push(h('h2', {}, `Settled since · ${done.length}`), h('ol', { class: 'register' }, done.map(answer =>
+      h('li', { class: 'item', 'data-id': answer.id, 'data-state': 'settled' },
+        h('div', { class: 'ref' }, h('span', { class: 'id' }, `${answer.repo.toUpperCase()} · ${answer.finding}`), h('span', { class: 'stamp ok' }, 'Settled')),
+        h('p', { class: 'intent' }, `${answer.intent || answer.slug} `, h('span', { class: 'mono', style: 'font-size:12px' }, `(${answer.slug})`)),
+        h('p', { class: 'question' }, answer.question),
+        h('div', { class: 'answered' }, h('span', { class: 'label' }, 'Decided'), h('span', { class: 'what' }, answerText(answer)), h('span', { class: 'when' }, 'The base branch reads it closed.'))))))
+    el.replaceChildren(...nodes)
+  }
+
+  const render = () => {
+    const waiting = ITEMS.filter(item => standing(item) === 'waiting').length
+    document.getElementById('title').textContent = !DESK ? 'Decision desk' : waiting ? `${waiting} ${waiting === 1 ? 'call waits' : 'calls wait'} on you` : 'Nothing waits on you'
+    titleBlock(); controls(); notice(); register()
+  }
+
+  // ---------------------------------------------------------------- capabilities
+  const connect = async () => {
+    const use = name => (window.claude && typeof window.claude.use === 'function' ? window.claude.use(name).catch(() => null) : Promise.resolve(null))
+    const [db, user, sample] = await Promise.all([use('db'), use('user'), use('sample')])
+    state.db = db; state.hasDb = Boolean(db); state.sample = sample
+    if (user) {
+      state.me = await user.id().catch(() => null)
+      const canEdit = await user.canEdit().catch(() => false)
+      state.canWrite = Boolean(db) && canEdit
+    }
+    state.ready = true
+    render()
+    if (db) db.collection('answers').onSnapshot(snap => {
+      state.answers = new Map(snap.docs.map(doc => doc.data()).filter(doc => doc && typeof doc.id === 'string').map(doc => [doc.id, doc]))
+      render()
+    }, () => toast('Answers could not be read. Reload to try again.'))
+  }
+
+  render()
+  connect()
+})()
+</script>

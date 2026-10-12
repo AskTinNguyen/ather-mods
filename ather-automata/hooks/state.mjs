@@ -168,23 +168,27 @@ const realFolder = (io, folder) => {
   return reading
 }
 
-// A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
-// clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
-//   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → asktinnguyen/han-viet
-//   D:\Mirrors\Sipher\S2.git (a local origin, as Windows writes it) → sipher/s2
-/** @param {string} url @param {string} root */
-export const repoId = (url, root) => {
-  const path = url
+// An origin URL's owner and repository as written, whatever the protocol; '' when it names fewer than two parts.
+//   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → AskTinNguyen/han-viet
+//   D:\Mirrors\Sipher\S2.git (a local origin, as Windows writes it) → Sipher/S2
+/** @param {string} url */
+export const originPath = url => {
+  const parts = url
     .trim()
     .replace(/\\/g, '/')
     .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\//i, '')
     .replace(/^[^@/\s]+@[^:/\s]+:/, '')
     .replace(/\.git\/?$/i, '')
     .replace(/\/+$/, '')
-  const parts = path.split('/').filter(Boolean)
-  if (parts.length >= 2) return parts.slice(-2).join('/').toLowerCase()
-  return `path:${folderId(root)}`
+    .split('/')
+    .filter(Boolean)
+  return parts.length >= 2 ? parts.slice(-2).join('/') : ''
 }
+
+// A repository's id from its origin URL: owner/repo (originPath), lowercased, so every clone and worktree
+// of one repository shares what is kept for it. Without an origin, the checkout's folder.
+/** @param {string} url @param {string} root */
+export const repoId = (url, root) => originPath(url).toLowerCase() || `path:${folderId(root)}`
 
 // A checkout's id: its repository's and its folder, so two clones or worktrees of one repository keep their
 // own proof, changes and "Continue …". Without an origin the repository's id is the folder already; without

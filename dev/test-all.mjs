@@ -49,18 +49,32 @@ for (const plugin of ['ather-automata', 'week-calendar']) {
 console.log('== type-check')
 const types = process.env.CLAUDE_CODE_TYPES ?? [path.join(MOD, '.claude-plugin/types/claude-code/index.d.ts')].find(f => fs.existsSync(f))
 if (types) {
-  const config = path.join(WORK, 'tsconfig.json')
-  fs.writeFileSync(config, JSON.stringify({
-    compilerOptions: { target: 'es2023', lib: ['es2023'], types: [], module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
-    // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
-    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs')).map(f => f.replace(/\\/g, '/')),
-  }))
-  sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
+  // One run per environment: the hooks module and the pure modules have no Node (the engine's API only);
+  // the desk's command line runs under Node, so it is checked with Node's types and nothing else changes.
+  const check = (name, files, nodeTypes = '') => {
+    const config = path.join(WORK, `tsconfig.${name}.json`)
+    fs.writeFileSync(config, JSON.stringify({
+      compilerOptions: { target: 'es2023', lib: ['es2023'], types: nodeTypes ? ['node'] : [], ...(nodeTypes ? { typeRoots: [nodeTypes] } : {}), module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
+      // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
+      include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(files).map(f => f.replace(/\\/g, '/')),
+    }))
+    sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
+  }
+  check('engine', [path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs'), path.join(MOD, 'desk/model.mjs')])
+  // Node's types come from npm, as the TypeScript above does; where npm cannot be reached, said and skipped.
+  const node = path.join(WORK, 'node')
+  try {
+    execSync(`npm install --prefix "${node}" --no-save --no-audit --no-fund --loglevel=error @types/node@22.19.19`, { cwd: WORK, stdio: 'pipe' })
+  } catch {
+    console.log('skipped: the desk command line was not type-checked (npm could not install @types/node)')
+  }
+  if (fs.existsSync(path.join(node, 'node_modules/@types/node'))) check('node', [path.join(MOD, 'desk/desk.mjs')], path.join(node, 'node_modules/@types'))
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')
 
 console.log('== unit')
 const unit = path.join(WORK, 'unit')
 copy(path.join(MOD, 'hooks'), path.join(unit, 'hooks'))
+copy(path.join(MOD, 'desk'), path.join(unit, 'desk'))
 // This repository's own intents, where the tests look for them (../../docs/intent from tests/): tests/acceptance.test.mjs reads four.
 copy(path.resolve(HERE, '../docs/intent'), path.join(WORK, 'docs/intent'))
 const shim = path.join(HERE, 'shim/testing.mjs').replace(/\\/g, '/')
@@ -76,6 +90,10 @@ copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
 // Several real git checkouts under the temp folder: needs no S2 checkout.
 console.log('== repos e2e')
 sh(`node repos.mjs "${path.join(WORK, 'checkouts-report.md')}"`, e2e)
+
+// The desk's page in a browser: skipped, and said so, where Playwright is not installed.
+console.log('== desk page')
+sh('node desk.mjs', e2e)
 
 console.log('== e2e')
 // The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for

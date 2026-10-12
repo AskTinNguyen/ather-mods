@@ -1,0 +1,33 @@
+# decision-desk: Progress
+
+- Working under rev: 1
+- Worker: Claude Code (cloud session), alone, while the owner is away
+- Current step: none (PR open, waiting on the owner)
+- Next step: the owner reviews the PR and answers F-1 and F-2 (they reach the desk once this is on main)
+- PR: https://github.com/AskTinNguyen/ather-mods/pull/62
+
+## Acceptance
+
+<!-- One row per acceptance id in prompt.md, same order. Verdict is exactly met or open; met needs evidence (commit / command and its result line). -->
+
+| Item | Verdict | Evidence |
+| --- | --- | --- |
+| A1 | met | S1, S4 (06be491, dae606c). Unit `tests/desk.test.mjs` "collect (A1)" over real git clones of bare origins: the base branch's open director calls with options and the recommended one, blocking first; a completed intent, a finding with a filled Resolution and a working-tree-only finding are left out; `baseBranch: develop` from the profile; checkouts in the order named; no checkout / no origin/<base> say so; GitHub links only for a GitHub origin; the page's data slot cannot be closed by a finding's text. Live: `desk.mjs collect /home/user/storey /home/user/ather-mods --fetch` → `storey: 19 waiting in 39 open intents (origin/main def6eff)`, `ather-mods: 0 waiting in 2 open intents (origin/main 546cfc0)`, the same 19 the pane's `directorCalls` gives in a probe. |
+| A2 | met | S2 (adecdd3). `node dev/e2e/desk.mjs` in Chromium with a stand-in viewer → `25/25 passed` (waiting, blocking first, recommended marked, answer in words, Explain sends the finding and "Do not choose for the owner", answer / change / withdraw writes `answers/<repo>~<slug>~<finding>`, recorded with its PR and no Change, settled, read-only viewer, no viewer, failed write, empty desk, markup in a finding drawn as text, no sideways scroll at 390). Screenshots in `proof/` at 390 and 1280 px (light only, D6). |
+| A3 | met | S1, S4. Unit "plan (A3)": options hand `decidePrompt` with the option's text, words hand `ownWords`; recorded wait, withdrawn are skipped, a closed finding is settled; a letter no longer offered and an empty answer are asked again; a repository missing from the desk throws; only an ArtifactData list's rows are read. |
+| A4 | met | S3, S4. `claude plugin validate ather-automata` → `Validation passed` with `skills/desk/SKILL.md`. Dry run of step 3.3 by a separate agent on a scratch clone of storey at def6eff (no push): two stand-in answers (an option, and words) recorded in log.md, findings.md and prompt.md (Rev 2, D2) with the tracker regenerated (`npx -y tsx scripts/tracker.ts` → `rewrote intents, waiting`), committed locally. Its nine points of doubt were folded into the skill (S4). |
+| A5 | met | S5. https://claude.ai/artifact/V2NurbBKHKubKLv9xhac9f, published with `db` (rule: answers read view, write admin), `user`, `sample`. A probe answer written by this session, then `ArtifactData list answers` at `as_level: view` → 1 document; an update at `as_level: interact` → refused by the rules; `plan` over the live rows → `Nothing to record.`; the probe deleted. |
+| A6 | met | S4. `CLAUDE_CODE_TYPES=<2.1.296 types> node dev/test-all.mjs` → Paseo copies in step and Paseo type-check clean, type-check clean (engine run and the new Node run for desk.mjs), unit `365/365 passed`, repos e2e `266/266 passed`, desk page `25/25 passed`, S2 e2e skipped (no S2 checkout). `claude plugin validate ather-automata` → passed; `claude plugin test ather-automata` → `8 pass, 0 fail`. README, manifests and Paseo package at 0.4.0. |
+| A7 | met | S4, S6. Thermo-nuclear review by a separate reviewing agent, following `.agents/skills/thermo-nuclear-code-quality-review/SKILL.md` on `git diff main...intent/decision-desk`: first pass BLOCK (C1 critical; M1-M3, m1-m2), fixed in dae606c; second pass PASS, no critical finding (M4, m3-m5 left), M4, m3 and m4 fixed in S6; m5 (`originPath` beside its other user `repoId` in state.mjs) and m2 kept, with reasons in S4 and S6. |
+
+## Steps
+
+<!-- S<n> (rev <r>, <YYYY-MM-DD>): <what was done>. Evidence: <commit / command and result line / PR>. Acceptance: <A-ids moved>. -->
+
+- S0 (rev 1, 2026-10-12): baseline on `main` 546cfc0 before any change: `node dev/test-all.mjs` with the 2.1.296 types → type-check clean, unit 354/354, repos e2e 266/266, S2 e2e skipped (no S2 checkout here).
+- S1 (rev 1, 2026-10-12): `desk/model.mjs` (deskOf, planOf, planText) and `desk/desk.mjs` (collect, plan), with `tests/desk.test.mjs`; test-all copies `desk/` for the unit run. Evidence: 06be491; unit 364/364. Acceptance: A1, A3.
+- S2 (rev 1, 2026-10-12): `desk/page.html` and `dev/e2e/desk.mjs`; test-all runs the page checks where Playwright is (skipped and said otherwise). D6 amended: light only, as The Drawing Set rules. Findings F-1 (registers) and F-2 (Record now from the page) raised for the owner. Evidence: adecdd3; desk page 25/25. Acceptance: A2.
+- S3 (rev 1, 2026-10-12): the desk skill, README (The decision desk, the command, Limits, maintainers, Changes 0.4.0), manifests and Paseo package at 0.4.0; `npm ci` in `paseo/ather-automata` so its type-check runs here (a tool install, recorded). Evidence: f1e29e1.
+- S4 (rev 1, 2026-10-12): thermo-nuclear review, first pass BLOCK: C1 the desk copied readTeam's mapping of origin/main folders into parseIntent's input → `team.mjs` `mainIntents`, used by both; M1 a second origin URL parser → `state.mjs` `originPath`, with `repoId` on it; M2 `answersFrom` guessed shapes → only an ArtifactData list's rows; M3 `desk.mjs` not type-checked → a second tsc run with Node's types, which caught two contract slips (a readonly list given as PackIo, an optional stderr); m1 silent defaults in planOf → an error. m2 (the page and planOf each word an answer) left: the page's inline script cannot import the model. The skill's record step rewritten from the dry run. Evidence: dae606c; test-all green as in A6. Acceptance: A4, A6.
+- S5 (rev 1, 2026-10-12): the live desk published and its rules checked (A5); republished as version 2 with the final page over storey 642a91a (18 calls).
+- S6 (rev 1, 2026-10-12): review second pass PASS. M4: the Node type-check skips, and says so, when npm cannot install `@types/node` (pinned 22.19.19). m3: desk.mjs's usage names the one answers shape. m4: the GitHub link and name read from https and ssh origins with mixed case. m5 kept: `originPath` lives beside `repoId`, its other user. `npm ci` in `paseo/week-calendar` too, so no type-check is skipped here. Gates: test-all with no skip but S2 (365/365, 266/266, 25/25), validate passed, plugin test 8/8. Proof screenshots in `proof/` (the full-page captures of the real desk, 3 MB each, are kept out of git). Acceptance: A7.
