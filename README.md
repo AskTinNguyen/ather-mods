@@ -4,7 +4,7 @@ Claude Code mods for the S2 team. This repository is the `ather` plugin marketpl
 
 | Mod | What it does |
 |---|---|
-| [ather-automata](ather-automata/README.md) | Type `/ather` to see what needs you and what to do next. New here? `/ather tour`. Leaving? `/away tonight`. |
+| [ather-automata](ather-automata/README.md) | Type `/ather` to see what needs you and what to do next. New here? `/ather tour`. Leaving? `/away tonight`. Decisions waiting in several repositories? `/ather-automata:desk` puts them on one page you answer from your phone. |
 | [week-calendar](week-calendar/README.md) | For agent PCs: a weekly calendar of every session and a weekly report (PRs merged, productive agent time) pushed to the team's agent-reports repo. Install it only where sessions should be reported. |
 
 ## Install (once)

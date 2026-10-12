@@ -7,6 +7,7 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 - **Type `/ather`** whenever you wonder what to do. What needs you comes first, then the next step for your work, ready to send.
 - **New here?** `/ather tour` walks you through it in six short steps and ends with your first piece of work started. In a hurry, skip it; Ather just asks your role.
 - **Leaving?** `/away tonight` (or `8h`, `until 9am`, `until done`). The session keeps working; merges wait for you. When you are back, `/ather` → **I'm back: see what happened**.
+- **Decisions waiting in several repositories?** Ask for the decision desk (`/ather-automata:desk`): one private page with every call that waits on you, answered from your phone, then recorded in each repository by a pull request.
 - **Stepping out for a meeting?** `/warm on` keeps the session's prompt cache warm while you are idle, so your next turn reads the context instead of paying to write it again. Off unless you turn it on.
 
 ## What you see
@@ -59,6 +60,17 @@ With keep-warm on, Ather reads the cache once just before it would lapse, 55 min
 
 Ather reads evidence from tool output, never from what the session says: an S2Editor build's own Result line, a test run whose tests passed (no tests, a failure or a non-zero exit is a fail), a started PIE or test simulation run, and a read-back from the server that was written to. A tech artist's own Editor check is `/ather checked`. Proof is kept with the intent for a day, so yesterday's build still counts this morning; each record names the session that produced it, and the Intent view names any other session's. Until you say your role, any role's proof counts. That is S2; in any other repository proof comes from the gates in its profile and the tools the web pack knows (see In a repository that is not S2).
 
+## The decision desk
+
+The pane shows the repository it is in. The desk is the one place where several meet: a private claude.ai page with every decision that waits on you in the repositories you name, which you answer from a phone or the desktop.
+
+- **What is on it:** each open director call that the pane would list under Needs you, read from each repository's base branch (never a working tree), blocking ones first. Its options are buttons with the recommended one marked, as in the pane. **Answer in my words** takes your own answer, **Explain** asks Claude what the call is about without deciding, and **Read the finding as written** shows the text.
+- **Your answers** are kept with the page. You can change or withdraw one until it is recorded. Only you and the page's editors can answer; anyone you share it with can read it.
+- **Recording.** Ask a session to record your desk answers. It reads them, checks them against today's base branches, and in each repository records every answer the intent skill's way (the same prompt a press in the pane sends) on a branch, with one pull request per repository. The page then shows each answer as Recorded with its pull request, and as Settled once the base branch reads it closed. An answer whose option no longer exists is asked again, not guessed.
+- **Nothing is set up.** Each run names its checkouts: "put the decisions in ~/storey and ~/ather-mods on my desk". Without names, the session's own checkout.
+
+The skill is `skills/desk/SKILL.md`; the session runs `desk/desk.mjs` (`collect <checkout>... [--fetch] [--out <dir>]`, `plan <desk.json> <answers.json>`). The page follows The Drawing Set, light only.
+
 ## Commands
 
 | Command | Does |
@@ -73,6 +85,7 @@ Ather reads evidence from tool output, never from what the session says: an S2Ed
 | `/away [8h \| 30m \| until 9am \| tonight \| until done] [goal]` | Hand over while you are away |
 | `/away stop` (or "I'm back") | End the window |
 | `/warm [on \| off \| <n>h]` | Keep the prompt cache warm while you are idle (see Keeping the cache warm); alone, what it is doing |
+| `/ather-automata:desk [checkouts]` | The decision desk: put every call that waits on you in those checkouts on one page, or record its answers (see The decision desk) |
 
 Anything else you type after `/ather` or under Other goes to the session as a question.
 
@@ -174,19 +187,22 @@ The same mod runs in web app repositories (Node and TypeScript first), piloted o
 
 - Where a surface has no pane (the mobile app), `/ather` asks one question instead; option descriptions may not show there, so labels stand alone.
 - Your role, the tour, trap counts and the issue list are kept on your machine, not shared across the team.
-- Worktrees, other checkouts' commands and tracking across checkouts are the Claude Code mod's for now: the Paseo version works with one checkout.
+- Worktrees, other checkouts' commands and tracking across checkouts are the Claude Code mod's for now: the Paseo version works with one checkout. So is the decision desk.
 - It never merges, commits or pushes on its own. It is a safety net, not a permission system, and it does not stop tree-rewriting git in the shared checkout (`deny_root_paths.py` does that, outside this plugin).
 
 ## For maintainers
 
 One hooks module (`hooks/ather.mjs`) made of two halves. `watch.mjs` protects work and has no interface beyond pop-ups; `console.mjs` draws. They share state only through `state.mjs`, the one owner of every stored value, which applies changes one at a time. The pure logic is split by concern: `model.mjs` (intents, stages, next step), `guards.mjs` (shell and MCP checks, traps), `away.mjs` (window rules), `issues.mjs` (GitHub issues), `home.mjs` (what the console shows), `decide.mjs` (answering a decision in place: its answers, what each hands the session, this session's answers), `handoff.mjs` (a prompt between the press and the session: queued or sent, one press one prompt, and which session a press about an intent is for), `team.mjs` (the team's intents from `origin/main` and the background fetch), `worklist.mjs` (sort, stage blocks, Needs attention, owner names, row cells), `rows.mjs` (the pane's look, and the lists it draws: Needs you, Everything open, Home's preview), `workers.mjs` and `inflight.mjs` (the workers the watch half saw, and every tool call in flight, per loop), `crew.mjs` (the workers as listed, and the tree they are drawn in), `crew-rows.mjs` (the workers drawn). `workspace.mjs` finds a session's checkouts; `state.laneAt` gives each its own pack and repository, and the store keys that belong to a repository carry its id, those that belong to a working tree its checkout's (`state.checkoutId`). Background hooks never get in the way of the calls they watch; the mod shows state and routes, and the session does the talking.
 
+The decision desk (`desk/`) is not part of the hooks module: `model.mjs` is pure (what the page lists, `deskOf`, and what a session records, `planOf`) and reuses `directorCalls` and `findingAnswers`; `desk.mjs` is the Node command line that reads each checkout's base branch through `team.mjs` `readMain` and its pack's `parseIntent`; `page.html` is the page, with its data in one script slot.
+
 Packs (`hooks/packs/`): `unreal.mjs` (S2), `web.mjs` and `core.mjs`, chosen by `packs/index.mjs`, which also reads the default branch the clone knows, for every pack (`team.mjs` `baseOf` makes the checkout's base of it); `shell.mjs` reads command lines for all of them. A pack is a plain object; the pure modules take it as their last parameter, defaulting to the Unreal pack.
 
-Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/handoff.test.mjs` and `tests/web.test.mjs` (with outputs captured from han-viet under `tests/fixtures/web/`) run under `node --test` once `dev/test-all.mjs` has linked the test kit; `tests/plugin.test.ts` runs under `claude plugin test ather-automata`. `dev/e2e/repos.mjs` drives the module over real git checkouts (a parent folder with an Unreal and a web checkout, local bare origins) and needs nothing else. An end-to-end run in the marketplace repo (`dev/test-all.mjs`) drives the real code against a stand-in engine that answers dialogs the way the app does and lays out every pane at 72 and 110 columns; with `HANVIET_ROOT` set to a han-viet checkout it lays out the web pane too, and `--layouts <dir>` writes every layout for a diff.
+Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/handoff.test.mjs`, `tests/web.test.mjs` and `tests/desk.test.mjs` (with outputs captured from han-viet under `tests/fixtures/web/`) run under `node --test` once `dev/test-all.mjs` has linked the test kit; `tests/plugin.test.ts` runs under `claude plugin test ather-automata`. `dev/e2e/repos.mjs` drives the module over real git checkouts (a parent folder with an Unreal and a web checkout, local bare origins) and needs nothing else. An end-to-end run in the marketplace repo (`dev/test-all.mjs`) drives the real code against a stand-in engine that answers dialogs the way the app does and lays out every pane at 72 and 110 columns; with `HANVIET_ROOT` set to a han-viet checkout it lays out the web pane too, and `--layouts <dir>` writes every layout for a diff. `dev/e2e/desk.mjs` drives the desk's page in Chromium with a stand-in viewer (skipped without Playwright); `--shots <dir> --desk <desk.json>` also writes screenshots.
 
 ## Changes
 
+- **0.4.0** The decision desk. Every call that waits on you in the repositories you name, on one private claude.ai page you answer from a phone: the options as buttons with the recommended one marked, your own words, and Explain, which asks Claude about the call without deciding. A session records the answers in each repository the intent skill's way, one pull request per repository, and the page shows each one as answered, recorded (with its pull request) and settled. Ask for it with `/ather-automata:desk`. The pane is unchanged.
 - **0.3.4** A narrow terminal pane (about 40 columns) keeps each work row on one line. A title keeps at least 16 cells: the right-hand columns give way first (count, then age, then owner, then the bar), the same for every row of a list so they stay aligned, and a warning or a worktree's name is cut or left out rather than wrapped. A failed sync shows git's own error under `sync failed ↻`, so the cause can be read in the pane.
 - **0.3.2** Longer keep-warm caps from settings: `cacheKeepWarmHours` now offers 8, 10 and 12 hours (as `/warm` already allowed). `/warm 10 hours` and `/warm 90 min` work as `/warm 10h` and `/warm 90m` do; before, a space before the unit gave the usage message.
 - **0.3.1** The pane shows the repository the session is in. It lists the intents, issues and PRs of the checkout the session is opened in and of that clone's worktrees, and nothing from other checkouts. Nothing is set up any more: the `repos` setting, the folders kept for the machine, **Repositories** on Home, `/ather repos` and the session's `repos` tool are gone. A session opened in a folder holding several checkouts has no pane; open it in the checkout you want. A command run in another checkout is still judged and proved by that checkout, and an intent written there is still tracked there.
