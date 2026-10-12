@@ -5,9 +5,9 @@
 //     Reads each checkout's base branch (origin/<base>, never the working tree) and writes <dir>/desk.json
 //     and <dir>/index.html, the page with that data in it (default dir: ./desk-out). --fetch fetches
 //     the base branch first, the way the pane does.
-//   node desk.mjs plan <desk.json> <answers.json>
-//     What a session records: per repository, each answered decision and its prompt. answers.json is
-//     the page's `answers` collection as a list of documents (an ArtifactData list's rows, or their data).
+//   node desk.mjs plan <desk.json> <answers.json> [--json]
+//     What a session records: per repository, each answered decision and its prompt. answers.json is the
+//     page's `answers` collection as an ArtifactData list prints it: a JSON array of { id, data } rows.
 // Nothing here writes to a checkout.
 
 import { spawnSync } from 'node:child_process'

@@ -109,6 +109,8 @@ describe('decision desk: collect (A1)', () => {
     git(clone, 'remote', 'set-url', 'origin', 'git@github.com:AskTinNguyen/Storey.git')
     const read = await desk.readCheckout(clone)
     expect([read.name, read.url]).toEqual(['Storey', 'https://github.com/AskTinNguyen/Storey'])
+    git(clone, 'remote', 'set-url', 'origin', 'https://github.com/AskTinNguyen/Ather-Mods.git/')
+    expect((await desk.readCheckout(clone)).url).toBe('https://github.com/AskTinNguyen/Ather-Mods')
     const intent = { slug: 'retention', title: 'R', owner: 'Tin', status: 'active', updatedAt: 1, findings: [{ id: 'F-1', title: 'q', full: 'q', isBlocking: true, isDirectorCall: true, options: [], source: '## F-1' }] }
     const page = model.deskOf([{ name: 'storey', url: 'https://github.com/AskTinNguyen/storey', base: 'main', sha: 'abc', intents: [/** @type {any} */ (intent)] }], 1)
     expect(page.items[0]?.link).toBe('https://github.com/AskTinNguyen/storey/blob/main/docs/intent/retention/findings.md')

@@ -61,9 +61,14 @@ if (types) {
     sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
   }
   check('engine', [path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs'), path.join(MOD, 'desk/model.mjs')])
+  // Node's types come from npm, as the TypeScript above does; where npm cannot be reached, said and skipped.
   const node = path.join(WORK, 'node')
-  sh(`npm install --prefix "${node}" --no-save --no-audit --no-fund --loglevel=error @types/node@22`, WORK)
-  check('node', [path.join(MOD, 'desk/desk.mjs')], path.join(node, 'node_modules/@types'))
+  try {
+    execSync(`npm install --prefix "${node}" --no-save --no-audit --no-fund --loglevel=error @types/node@22.19.19`, { cwd: WORK, stdio: 'pipe' })
+  } catch {
+    console.log('skipped: the desk command line was not type-checked (npm could not install @types/node)')
+  }
+  if (fs.existsSync(path.join(node, 'node_modules/@types/node'))) check('node', [path.join(MOD, 'desk/desk.mjs')], path.join(node, 'node_modules/@types'))
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')
 
 console.log('== unit')
