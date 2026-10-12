@@ -524,9 +524,9 @@ async function track(ctx: Ctx, text: string) {
 
 async function startAway(ctx: Ctx, choice: { hours: number; untilDone: boolean; goal?: string }) {
   const io = ctx.io as never;
-  const { root, me, pack } = await laneOf(ctx);
+  const { root, me, pack, base } = await laneOf(ctx);
   const tz = await state.readTz(io);
-  const away = await state.startAway(io, { ...choice, goal: choice.goal ?? "" } as never, { root, me, tz, now: Date.now(), pack });
+  const away = await state.startAway(io, { ...choice, goal: choice.goal ?? "" } as never, { root, me, tz, now: Date.now(), pack, base });
   if (away === null) return "An away window is already running or waiting for your review: the Ather panel shows it.";
   const ledger = away.ledgerPath.startsWith(root) ? away.ledgerPath.slice(root.length + 1) : away.ledgerPath;
   await handOff(

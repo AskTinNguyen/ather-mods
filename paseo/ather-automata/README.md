@@ -49,7 +49,6 @@ Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, o
 - A worker started by another worker is listed, but not as "started by …" (Claude Code's record has `spawnDepth` for that).
 - Not here yet: the newcomer tour toast (the tour is the Next row and `/ather tour`).
 - Shared with 0.3.3 but not wired into the Paseo screens yet: intents read from `origin/main` with the "synced N min ago ↻" header (0.1.5; the list reads the checkout's own `docs/intent`), Sort, Needs attention and tidied owner names (0.1.5), Ask about it (0.1.6), the worker tree, in-flight calls and Group by Person, Area or Stage (0.1.9), deciding in place with option buttons (0.2.0), Where it stands read from the intent's files and Send where? (0.2.8), and "Now tracking X. Next: …" (0.3.3).
-- The base branch (0.2.7) is not passed on yet: holds, the mandate and their wording assume `main`, so a repository that merges into `develop` does not have pushes to `develop` held.
 - A press that hands the agent a prompt while a turn runs interrupts that turn (Paseo's default for a send); the Claude Code mod queues it until the turn ends (0.2.8).
 - Keep the prompt cache warm (0.3.0) is not offered: Paseo's plugin API has no way to read an idle agent's cache without adding a turn to its conversation.
 
@@ -69,5 +68,5 @@ paseo plugin logs ather-automata
 
 ## Changes
 
-- **0.3.3** Shared code at ather-automata 0.3.3 (origin/main 2968ed8), and the version now names it: `npm run sync` takes the mod's version and `sync:check` fails while they differ. Needs Paseo 0.11.1 (below 0.12). The Paseo screens are unchanged; see Limits for what is not wired yet.
+- **0.3.3** Shared code at ather-automata 0.3.3 (origin/main 2968ed8), and the version now names it: `npm run sync` takes the mod's version and `sync:check` fails while they differ. Needs Paseo 0.11.1 (below 0.12). The base branch (0.2.7) is passed on: a core or Unreal checkout whose team merges into `develop` (its profile's `baseBranch`, else the remote's default branch) now has pushes to `develop` held while away, and the held labels, the mandate and the away start name it. The web pack already held it. The Paseo screens are otherwise unchanged; see Limits for what is not wired yet.
 - **0.1.2** First release, matching ather-automata 0.1.2: the panel, pill, commands, intent view and squad; holds, the decision ledger and the brief gate through Claude ask rules and permission requests; proof, traps, merge audit and tracking read from each turn; the `status`, `away` and `profile` tools over MCP.

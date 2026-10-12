@@ -64,7 +64,7 @@ export async function onPermission(event: PermissionEvent, context: PluginHookCo
       console.log(`[ather] ${event.agent.id}: request ${request.id} was already answered (${String(error)})`);
     }
   };
-  const { pack } = await laneOf(ctx);
+  const { pack, base } = await laneOf(ctx);
   const io = ctx.io as never;
   const input = (request.input ?? {}) as Record<string, unknown>;
 
@@ -120,7 +120,7 @@ export async function onPermission(event: PermissionEvent, context: PluginHookCo
   const command = shellOf(request);
   if (command === null) return;
   if (isHolding(away)) {
-    const kind = heldShell(command, away.held, await branchesFor(ctx, command), pack, { isProven: await isMergeProven(ctx, pack) });
+    const kind = heldShell(command, away.held, await branchesFor(ctx, command), pack, { isProven: await isMergeProven(ctx, pack), base });
     if (kind) {
       const denied = await hold(ctx, kind, command).catch(() => null);
       if (denied) {
