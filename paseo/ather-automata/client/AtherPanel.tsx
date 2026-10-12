@@ -81,7 +81,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   const open_ = view.items.filter((one) => one.kind !== "away-end" && !isSent(one.id));
 
   if (view.intentView) {
-    return <IntentScreen kit={kit} who={who} intent={view.intentView} busy={busy} run={run} />;
+    return <IntentScreen kit={kit} who={who} intent={view.intentView} busy={busy} isSent={isSent} run={run} />;
   }
   if (view.issueView) {
     return <IssueScreen kit={kit} who={who} issue={view.issueView} busy={busy} run={run} now={now} />;

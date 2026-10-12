@@ -3,10 +3,10 @@
 // as a message. Where the original asked a question dialog, the panel lists the choices.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
-import { NEW_INTENT_PROMPT, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, skillFolder, untrackText } from "./ather/home.mjs";
+import { NEW_INTENT_PROMPT, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, skillFolder, standsLines, untrackText } from "./ather/home.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
-import { STAGE_LABELS, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
 import * as state from "./ather/state.mjs";
 import type { HomeView } from "../shared/contracts";
 import { knownAgents, note, send } from "./agents";
@@ -343,9 +343,12 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   const now = Date.now();
   const { role } = await state.readProfile(io, me, pack);
   const evidence = await state.readEvidence(io, slug, pack);
-  const stage = STAGE_LABELS[currentStage(intent, evidence, role, await state.readPrStates(io), pack) as keyof typeof STAGE_LABELS];
-  const today = (await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[];
+  const prs = await state.readPrStates(io);
+  const stage = STAGE_LABELS[currentStage(intent, evidence, role, prs, pack) as keyof typeof STAGE_LABELS];
+  const today = await todayOf(ctx, slug);
   const isHere = slug === pinned;
+  // A step that only looks at the intent is this view, so it has no card.
+  const next = isHere && built.next && !built.next.look ? built.next : null;
   return {
     slug,
     goal: String(intent.goal ?? ""),
@@ -355,9 +358,31 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
     proof: await proofOf(ctx, slug),
     heldBy: heldByLine(await peers(ctx), slug, now),
     isHere,
-    next: isHere && built.next ? String(built.next.label) : "",
-    today: today.slice(0, 8).map((one) => ({ kind: one.kind, time: clockText(one.at, tz), text: one.text })),
+    stands: standsLines(intent, stage, me, prs) as string[],
+    next: next ? { id: next.id, label: next.label, hint: next.hint } : null,
+    today: today.map((one) => ({ kind: one.kind, time: clockText(one.at, tz), text: one.text })),
   };
+}
+
+// An intent's changes today, as its view lists them (the first eight).
+async function todayOf(ctx: Ctx, slug: string): Promise<Any[]> {
+  const io = ctx.io as never;
+  const now = Date.now();
+  const tz = await state.readTz(io);
+  return ((await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[]).slice(0, 8);
+}
+
+// Ask about it, and a press on one of today's changes: a question for the agent; nothing is decided or tracked.
+async function askAbout(ctx: Ctx, slug: string, change?: string) {
+  if (change === undefined) {
+    await handOff(ctx, [], aboutIntentPrompt(slug, false));
+    return `Asked the agent about ${slug}.`;
+  }
+  const one = (await todayOf(ctx, slug))[Number(change)];
+  if (!one) throw new Error("That change is no longer listed.");
+  const time = clockText(one.at, await state.readTz(ctx.io as never));
+  await handOff(ctx, [], `In intent ${slug}, explain in at most four lines what "${one.text}" (${time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`);
+  return "Asked the agent about that change.";
 }
 
 // The composer pill: what needs the person, a running window, or nothing.
@@ -430,6 +455,8 @@ async function doNext(ctx: Ctx, next: Any): Promise<string> {
     return "Starting the Ather tour.";
   }
   if (next.work) return startWork(ctx, next.work);
+  // A step that only reads where the intent stands: its view answers it, from its files (0.2.8).
+  if (next.look) return view(ctx, next.look);
   if (next.action === "checked") return atherCommand(ctx, "checked");
   await handOff(ctx, [next.id], next.prompt);
   return "Sent to the agent.";
@@ -519,7 +546,10 @@ async function track(ctx: Ctx, text: string) {
   if (slug === null) return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map((one) => one.slug).join(", ")}.` : `No open intent matches "${text}".`;
   if (!(await state.track(ctx.io as never, root, slug, { me }))) return `No intent named "${slug}" in docs/intent.`;
   await refreshRoot(ctx, true);
-  return `Now tracking ${slug}.`;
+  // Tracking sends nothing to the agent, so the reply says what comes next.
+  stale(ctx.agent.id);
+  const { next } = await model(ctx, true);
+  return `Now tracking ${slug}.${next && !next.isTour && !next.work ? ` Next: ${next.label}.` : ""}`;
 }
 
 async function startAway(ctx: Ctx, choice: { hours: number; untilDone: boolean; goal?: string }) {
@@ -663,6 +693,8 @@ export async function act(agentId: string, cwd: string, kind: string, id: string
     stale(ctx.agent.id);
   } else if (kind === "track") {
     message = await track(ctx, id);
+  } else if (kind === "ask") {
+    message = await askAbout(ctx, id, text);
   } else if (kind === "untrack") {
     message = await untrackHere(ctx);
   } else if (kind === "action") {

@@ -85,7 +85,10 @@ export const homeView = z.object({
       heldBy: z.string(),
       // Whether this agent tracks it: Stop tracking instead of Work on this here.
       isHere: z.boolean(),
-      next: z.string(),
+      // Where it stands, as its own files say it (home.mjs standsLines): shown, nothing asked of the agent.
+      stands: z.array(z.string()),
+      // The tracked intent's next step, pressed here as on home; null when untracked or the step only looks.
+      next: row.nullable(),
       today: z.array(z.object({ kind: z.enum(["done", "yours", "changed"]), time: z.string(), text: z.string() })),
     })
     .nullable(),
@@ -115,7 +118,7 @@ export const atherHome = defineRpc({
   output: homeView,
 });
 
-const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start"]);
+const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask"]);
 export type ActKind = z.infer<typeof actKind>;
 
 export const atherAct = defineRpc({
@@ -124,7 +127,8 @@ export const atherAct = defineRpc({
     agentId: z.string(),
     cwd: z.string(),
     // item: something that needs you; next; work: an intent or issue; action/skill/create: quick actions;
-    // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send.
+    // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send;
+    // ask: a question about intent `id` (Ask about it), or about its change of today number `text`.
     kind: actKind,
     id: z.string(),
     text: z.string().optional(),
