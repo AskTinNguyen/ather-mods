@@ -232,7 +232,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     done: 0,
     total: 0,
     away: { phase: "off", until: "", ledger: "", parked: [] },
-    needs: { open: 0, blocks: [], folded: [] },
+    needs: { open: 0, decisions: 0, blocks: [], folded: [] },
     next: null,
     workList: { total: 0, shown: 0, query: "", sort: "", groupBy: "", legend: "", people: [], groups: [] },
     attention: [],
@@ -546,7 +546,8 @@ async function track(ctx: Ctx, text: string) {
   const matches = searchIntents(intents, text) as Any[];
   const slug = intents.some((one: Any) => one.slug === text) ? text : matches.length === 1 && matches[0] ? matches[0].slug : null;
   if (slug === null) return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map((one) => one.slug).join(", ")}.` : `No open intent matches "${text}".`;
-  if (intents.find((one: Any) => one.slug === slug)?.inCheckout === false)
+  // A folder pulled since the list was read counts: the list is read again before saying it is missing.
+  if (intents.find((one: Any) => one.slug === slug)?.inCheckout === false && (await refreshRoot(ctx, true)).intents.find((one: Any) => one.slug === slug)?.inCheckout === false)
     return `${slug} is on origin/${base} but not in this checkout yet: pull ${base} to work on it here, or use Ask about it in its view to hear where it stands.`;
   if (!(await state.track(ctx.io as never, root, slug, { me }))) return `No intent named "${slug}" in docs/intent.`;
   await refreshRoot(ctx, true);

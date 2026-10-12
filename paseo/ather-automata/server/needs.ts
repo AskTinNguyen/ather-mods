@@ -52,12 +52,14 @@ export function recordAnswer(agentId: string, io: Io, one: Any, answer: string) 
 export function needsOf(agentId: string, built: Any): HomeView["needs"] {
   const answers = answeringOf(agentId);
   const listed = new Set<string>(built.items.map((one: Any) => one.id));
+  // The mod prunes against the intent files; the listed items are read from them, so a call no longer listed is resolved.
   answers.decided = pruneDecided(answers.decided, (id: string) => listed.has(id) || !id.startsWith("call:"), Date.now());
   const laid = needsView(built.items, built.open, { opened: answers.opened, typing: "", isFoldOpen: false, decided: answers.decided }, answers.blocks, Date.now(), false);
   const fresh = new Map(laid.fresh.map((one: Any) => [one.id, one.answer]));
   const names = new Map<string, string>(built.items.map((one: Any) => [one.id, answeredName(one)]));
   return {
     open: built.open.filter((one: Any) => one.kind !== "away-end").length,
+    decisions: built.open.filter((one: Any) => one.kind === "call").length,
     blocks: laid.blocks.map((block: Any) => ({
       slug: block.slug,
       isOpen: answers.blocks.has(block.slug),

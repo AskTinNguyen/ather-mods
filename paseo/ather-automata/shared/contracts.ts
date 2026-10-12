@@ -44,6 +44,8 @@ export const homeView = z.object({
   needs: z.object({
     // How many things wait on the person (the away window's own end is not one).
     open: z.number(),
+    // How many of them are decisions on an intent.
+    decisions: z.number(),
     blocks: z.array(
       z.object({
         slug: z.string(),

@@ -393,7 +393,7 @@ function useNow(active: boolean) {
 function SummaryStrip({ kit, view }: { kit: Kit; view: HomeView }) {
   const { c, compact } = kit;
   const running = view.crew.filter((one) => one.state === "running").length;
-  const decisions = view.needs.blocks.flatMap((block) => block.items).filter((one) => one.kind === "call").length;
+  const decisions = view.needs.decisions;
   const tile = (key: string, label: string, body: ReactNode, highlight = false, delay = 0) => (
     <FadeIn key={key} delay={delay} style={{ flexBasis: compact ? "30%" : "28%", flexGrow: 1 }}>
       <View style={{ padding: 12, gap: 6, borderRadius: 10, backgroundColor: c.surface1, borderWidth: 1, borderColor: highlight ? c.accent : c.border, minHeight: 78 }}>
