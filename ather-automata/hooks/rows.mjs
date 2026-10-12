@@ -144,17 +144,23 @@ const deskLine = (el, row) => {
 }
 
 // The header's one status line: where things stand, and at its right how fresh the team's list is
-// (`fresh`, a press that fetches now); without it, the words alone.
-/** @param {any} el @param {{ text: string, fresh: string, width: number, hotkey?: string, onPress: () => void }} line */
-export const statusLine = (el, { text, fresh, width, hotkey, onPress }) => {
-  if (!fresh) return text ? el.Text({ key: 'status', children: fit(text, width) }) : null
-  return el.Box({
-    key: 'status',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    children: [el.Text({ key: 'status-words', children: fit(text, Math.max(1, width - fresh.length - 6)) }), el.Button({ key: 'sync', label: fresh, hotkey, plain: true, dimColor: true, onPress })],
-  })
+// (`fresh`, a press that fetches now); without it, the words alone. A failed sync's `error` (git's own
+// words) is drawn under it, cut to two lines of the width (the desktop's width leaves it whole).
+/** @param {any} el @param {{ text: string, fresh: string, width: number, hotkey?: string, onPress: () => void, error?: string }} line */
+export const statusLine = (el, { text, fresh, width, hotkey, onPress, error = '' }) => {
+  const line = fresh
+    ? el.Box({
+        key: 'status',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        width: '100%',
+        children: [el.Text({ key: 'status-words', children: fit(text, Math.max(1, width - fresh.length - 6)) }), el.Button({ key: 'sync', label: fresh, hotkey, plain: true, dimColor: true, onPress })],
+      })
+    : text
+      ? el.Text({ key: 'status', children: fit(text, width) })
+      : null
+  if (!error) return line
+  return el.Box({ key: 'status-lines', flexDirection: 'column', width: '100%', children: [line, el.Text({ key: 'status-error', color: QUIET, wrap: 'wrap', children: fit(error, 2 * width) })] })
 }
 
 /**

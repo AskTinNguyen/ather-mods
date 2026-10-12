@@ -13,12 +13,12 @@ import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, prop
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
 import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
-import { needsRows, workGroups, workLine } from '../hooks/rows.mjs'
+import { QUIET, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
 import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
-import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
+import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncError, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
@@ -1218,6 +1218,16 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect(syncText({ ...at, fetchedAt: NOON - 4 * MIN, failedAt: NOON, lock: 'refs/remotes/origin/main.lock' }, NOON)).toBe('sync waits on refs/remotes/origin/main.lock · synced 4 min ago ↻')
   })
 
+  test("a failed sync gives git's error: not while fetching, not once synced again, not when a lock is named", () => {
+    const at = { ...NO_SYNC, isRepo: true, hasMain: true, fetchedAt: NOON - 4 * MIN, error: 'fatal: unable to access the remote' }
+    expect(syncError({ ...at, error: '' })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON - 5 * MIN })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON, isFetching: true })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON })).toBe('fatal: unable to access the remote')
+    expect(syncError({ ...at, failedAt: NOON, lock: 'refs/remotes/origin/main.lock' })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON, error: '' })).toBe('')
+  })
+
   test('a fetch is synced when git says so and origin/main resolves; one that ran into a git lock names it and waits for its next due time (A3)', async () => {
     const moved = fakeRepo({ after: 'beef' })
     expect(await fetchMain(moved.repo)).toEqual({ error: '', lock: '', moved: true })
@@ -2012,6 +2022,20 @@ describe('one pane over the workspace', () => {
   const keysOf = (/** @type {any} */ tree) => all({ children: tree }, one => typeof one.props?.key === 'string').map(one => one.props.key)
   const repeated = (/** @type {string[]} */ keys) => keys.filter((key, at) => keys.indexOf(key) !== at)
   const look = (/** @type {boolean} */ isClicked) => ({ isClicked, width: 100, now: NOON, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined })
+
+  test("the status line draws git's error under it only when given one, cut to two lines in a terminal", () => {
+    const line = { text: 'Build · 2/5', fresh: 'sync failed ↻', width: 40, onPress: () => undefined }
+    const plain = statusLine(el, line)
+    expect([plain.props.key, keysOf([plain])]).toEqual(['status', ['status', 'status-words', 'sync']])
+    expect(statusLine(el, { ...line, error: '' })).toEqual(plain)
+    const error = `fatal: ${'x'.repeat(200)}`
+    const drawn = statusLine(el, { ...line, error })
+    expect(keysOf([drawn]).slice(1)).toEqual(['status', 'status-words', 'sync', 'status-error'])
+    expect(drawn.children[0]).toEqual(plain)
+    const under = drawn.children[1]
+    expect([under.props.color, under.props.wrap, textOf(under)]).toEqual([QUIET, 'wrap', `${error.slice(0, 79)}…`])
+    expect(textOf(statusLine(el, { ...line, width: 1000, error }).children[1])).toBe(error)
+  })
 
   test('a desktop row draws its repository after the title, as a terminal row does; without one it is drawn as before', () => {
     const [named, plain] = workList([from('/ws/web', 'web', 'login', false, { Status: 'parked' }), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON).map(one => ({ ...one, repoName: one.key === 'board' ? '' : one.repoName }))
