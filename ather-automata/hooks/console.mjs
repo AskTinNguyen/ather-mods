@@ -24,7 +24,7 @@ import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
 import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
 import { changeGlyph } from './changes.mjs'
-import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncSummary, syncText } from './team.mjs'
+import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncError, syncSummary, syncText } from './team.mjs'
 import { checkoutNames, checkoutOf, normalFolder } from './workspace.mjs'
 import { forBase } from './guards.mjs'
 import { withFolders } from './shell.mjs'
@@ -1794,7 +1794,7 @@ function lookOf($, width, back) {
 // The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
 /** @param {any} el @param {Engine} $ @param {import('./team.mjs').Sync} sync @param {string} text @param {number} width */
 function headerLine(el, $, sync, text, width) {
-  return statusLine(el, { text, fresh: syncText(sync, Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
+  return statusLine(el, { text, fresh: syncText(sync, Date.now()), error: syncError(sync), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
 }
 
 // ---------------------------------------------------------------- what the intent recorded

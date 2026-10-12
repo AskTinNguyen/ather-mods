@@ -299,3 +299,7 @@ export const syncText = (sync, now) => {
   if (synced) return `${synced} ↻`
   return sync.hasMain ? 'not synced yet ↻' : `no ${refOf(sync.base ?? 'main')} ↻`
 }
+
+// What git said when the last fetch failed, for the line under "sync failed"; a named lock says enough on its own line.
+/** @param {Sync} sync */
+export const syncError = sync => (sync.failedAt > sync.fetchedAt && !sync.isFetching && !sync.lock ? sync.error : '')

@@ -13,12 +13,12 @@ import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, prop
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
 import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
-import { needsRows, workGroups, workLine } from '../hooks/rows.mjs'
+import { QUIET, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
 import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
-import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncSummary, syncText } from '../hooks/team.mjs'
+import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncError, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
@@ -1218,6 +1218,16 @@ describe("the team's real state: origin/main, commit dates, sort, attention, nam
     expect(syncText({ ...at, fetchedAt: NOON - 4 * MIN, failedAt: NOON, lock: 'refs/remotes/origin/main.lock' }, NOON)).toBe('sync waits on refs/remotes/origin/main.lock · synced 4 min ago ↻')
   })
 
+  test("a failed sync gives git's error: not while fetching, not once synced again, not when a lock is named", () => {
+    const at = { ...NO_SYNC, isRepo: true, hasMain: true, fetchedAt: NOON - 4 * MIN, error: 'fatal: unable to access the remote' }
+    expect(syncError({ ...at, error: '' })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON - 5 * MIN })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON, isFetching: true })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON })).toBe('fatal: unable to access the remote')
+    expect(syncError({ ...at, failedAt: NOON, lock: 'refs/remotes/origin/main.lock' })).toBe('')
+    expect(syncError({ ...at, failedAt: NOON, error: '' })).toBe('')
+  })
+
   test('a fetch is synced when git says so and origin/main resolves; one that ran into a git lock names it and waits for its next due time (A3)', async () => {
     const moved = fakeRepo({ after: 'beef' })
     expect(await fetchMain(moved.repo)).toEqual({ error: '', lock: '', moved: true })
@@ -2013,6 +2023,19 @@ describe('one pane over the workspace', () => {
   const repeated = (/** @type {string[]} */ keys) => keys.filter((key, at) => keys.indexOf(key) !== at)
   const look = (/** @type {boolean} */ isClicked) => ({ isClicked, width: 100, now: NOON, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined })
 
+  test("the status line draws git's error under it only when given one, cut to two lines in a terminal", () => {
+    const line = { text: 'Build · 2/5', fresh: 'sync failed ↻', width: 40, onPress: () => undefined }
+    const plain = statusLine(el, line)
+    expect(plain.props.key).toBe('status')
+    expect(statusLine(el, { ...line, error: '' })).toEqual(plain)
+    const error = `fatal: ${'x'.repeat(200)}`
+    const drawn = statusLine(el, { ...line, error })
+    expect(drawn.children[0]).toEqual(plain)
+    const under = drawn.children[1]
+    expect([under.props.key, under.props.color, under.props.wrap, textOf(under)]).toEqual(['status-error', QUIET, 'wrap', `${error.slice(0, 79)}…`])
+    expect(textOf(statusLine(el, { ...line, width: 1000, error }).children[1])).toBe(error)
+  })
+
   test('a desktop row draws its repository after the title, as a terminal row does; without one it is drawn as before', () => {
     const [named, plain] = workList([from('/ws/web', 'web', 'login', false, { Status: 'parked' }), from('/ws/s2', 's2', 'board', true)], [], 'Tin Nguyen', '', NOON).map(one => ({ ...one, repoName: one.key === 'board' ? '' : one.repoName }))
     const cols = { count: 3, age: 2, owner: 0 }
@@ -2039,6 +2062,45 @@ describe('one pane over the workspace', () => {
       expect([name.length <= 16, name.startsWith('automata-multi-'), name.endsWith('…')]).toEqual([true, true, true])
       expect(all(mainOf(row), one => one.props?.key === `pick-${long.id}`)[0].props.label).toContain('multi-repo')
     }
+  })
+
+  // A terminal row's drawn cells: a hotkey's 3, the title, its warning and name, and each column with the 2 before it.
+  const mainOf = (/** @type {any} */ row) => all(row, one => /-main$/.test(one.props?.key ?? ''))[0]
+  const columnsOf = (/** @type {any} */ row) => all(row, one => /-cols$/.test(one.props?.key ?? ''))[0].children
+  const drawnCells = (/** @type {any} */ row) => 3 + mainOf(row).children.reduce((/** @type {number} */ sum, /** @type {any} */ one) => sum + (one.props.label ?? textOf(one)).length, 0) + columnsOf(row).reduce((/** @type {number} */ sum, /** @type {any} */ one) => sum + one.props.width + 2, 0)
+  const NARROW = { glyph: '◐', title: 'ability-system-rework', warn: '', repo: '', bar: '▰▰▱▱▱', count: '12/20', age: '14d', owner: 'Tin Nguyen QA' }
+  const narrowLine = (/** @type {number} */ width, /** @type {any} */ cells = {}, /** @type {any} */ cols = { count: 5, age: 3, owner: 12 }, /** @type {boolean} */ hasKey = true) => workLine(el, { key: 'pick-a', cells: { ...NARROW, ...cells }, cols, width, ownerColour: '#ffffff', hotkey: hasKey ? '1' : undefined, onPress: () => undefined })
+
+  test('a narrow terminal row leaves out count, age, owner, then the bar, so that the title keeps its cells; a wide one draws them all', () => {
+    const drawn = (/** @type {number} */ width, /** @type {boolean} */ hasKey = true) => columnsOf(narrowLine(width, {}, undefined, hasKey)).map((/** @type {any} */ one) => one.props.key.replace('pick-a-', ''))
+    expect([100, 60, 52, 51, 44, 41, 36, 20].map(width => drawn(width))).toEqual([['bar', 'count', 'age', 'owner'], ['bar', 'count', 'age', 'owner'], ['bar', 'count', 'age', 'owner'], ['bar', 'age', 'owner'], ['bar', 'owner'], ['bar', 'owner'], ['bar'], []])
+    // A row without a hotkey leaves out the same columns, so a list's columns stay aligned.
+    expect(mainOf(narrowLine(41, {}, undefined, false)).children[0].props.hotkey).toBe(undefined)
+    for (const width of [60, 51, 41, 36]) expect(drawn(width, false)).toEqual(drawn(width))
+    for (const width of [36, 41, 60]) {
+      for (const cells of [{}, { warn: 'local' }, { repo: 'web-checkout1' }, { warn: 'local', repo: 'web-checkout1' }]) {
+        const row = narrowLine(width, cells)
+        const { label } = mainOf(row).children[0].props
+        expect([drawnCells(row) <= width, label.length >= 16, label.startsWith('◐ ability-syste')]).toEqual([true, true, true])
+      }
+    }
+    expect(mainOf(narrowLine(41)).children[0].props.label).toBe('◐ ability-system…')
+    const wide = narrowLine(100, { warn: 'local', repo: 'web-checkout1' })
+    expect(mainOf(wide).children.map((/** @type {any} */ one) => one.props.label ?? textOf(one))).toEqual(['◐ ability-system-rework', ' local', ' web-checkout1'])
+  })
+
+  test("a worktree's row at 41 stays within the width: its name is cut, or left out with the warning when the title needs the cells", () => {
+    const worktree = { repo: 'automata-multi-repo-support-bbfecb' }
+    const partsOf = (/** @type {any} */ row) => Object.fromEntries(mainOf(row).children.map((/** @type {any} */ one) => [one.props.key.replace(/^pick-a-?/, '') || 'title', one.props.label ?? textOf(one)]))
+    for (const cols of [{ count: 5, age: 3, owner: 12 }, { count: 5, age: 3, owner: 0 }]) for (const cells of [worktree, { ...worktree, warn: 'local' }, { ...worktree, title: 'multi-repo' }, { ...worktree, title: 'multi-repo', warn: 'local' }]) expect(drawnCells(narrowLine(41, cells, cols)) <= 41).toBe(true)
+    // A long title takes the line: neither the warning nor the name is drawn.
+    const long = partsOf(narrowLine(41, { ...worktree, warn: 'local' }, { count: 5, age: 3, owner: 0 }))
+    expect([Object.keys(long), long.title.length >= 16]).toEqual([['title'], true])
+    // A short title is whole; the name takes what is left, cut.
+    const short = partsOf(narrowLine(41, { ...worktree, title: 'multi-repo' }, { count: 5, age: 3, owner: 0 }))
+    expect([short.title, short.repo.startsWith(' auto'), short.repo.endsWith('…'), short.repo.length < 17]).toEqual(['◐ multi-repo', true, true, true])
+    // The warning comes before the name: with both, the name is the one left out.
+    expect(Object.keys(partsOf(narrowLine(41, { ...worktree, title: 'multi-repo', warn: 'local' }, { count: 5, age: 3, owner: 0 })))).toEqual(['title', 'warn'])
   })
 
   const CALLS = `# Findings\n\n## F-1 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nDrops only, or a full respawn?\n\n**Options:**\n- A (recommended): drops only\n- B: a full respawn\n\n## F-2 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nWhich pool size?\n`
