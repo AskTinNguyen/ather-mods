@@ -2041,6 +2041,44 @@ describe('one pane over the workspace', () => {
     }
   })
 
+  // A terminal row's drawn cells: a hotkey's 3, the title, its warning and name, and each column with the 2 before it.
+  const mainOf = (/** @type {any} */ row) => all(row, one => /-main$/.test(one.props?.key ?? ''))[0]
+  const columnsOf = (/** @type {any} */ row) => all(row, one => /-cols$/.test(one.props?.key ?? ''))[0].children
+  const drawnCells = (/** @type {any} */ row) => 3 + mainOf(row).children.reduce((/** @type {number} */ sum, /** @type {any} */ one) => sum + (one.props.label ?? textOf(one)).length, 0) + columnsOf(row).reduce((/** @type {number} */ sum, /** @type {any} */ one) => sum + one.props.width + 2, 0)
+  const NARROW = { glyph: '◐', title: 'ability-system-rework', warn: '', repo: '', bar: '▰▰▱▱▱', count: '12/20', age: '14d', owner: 'Tin Nguyen QA' }
+  const narrowLine = (/** @type {number} */ width, /** @type {any} */ cells = {}, /** @type {any} */ cols = { count: 5, age: 3, owner: 12 }, /** @type {string | undefined} */ hotkey = '1') => workLine(el, { key: 'pick-a', cells: { ...NARROW, ...cells }, cols, width, ownerColour: '#ffffff', hotkey, onPress: () => undefined })
+
+  test('a narrow terminal row leaves out count, age, owner, then the bar, so that the title keeps its cells; a wide one draws them all', () => {
+    const drawn = (/** @type {number} */ width, /** @type {string | undefined} */ hotkey = '1') => columnsOf(narrowLine(width, {}, undefined, hotkey)).map((/** @type {any} */ one) => one.props.key.replace('pick-a-', ''))
+    expect([100, 60, 52, 51, 44, 41, 36, 20].map(width => drawn(width))).toEqual([['bar', 'count', 'age', 'owner'], ['bar', 'count', 'age', 'owner'], ['bar', 'count', 'age', 'owner'], ['bar', 'age', 'owner'], ['bar', 'owner'], ['bar', 'owner'], ['bar'], []])
+    // A row without a hotkey leaves out the same columns, so a list's columns stay aligned.
+    for (const width of [60, 51, 41, 36]) expect(drawn(width, undefined)).toEqual(drawn(width))
+    for (const width of [36, 41, 60]) {
+      for (const cells of [{}, { warn: 'local' }, { repo: 'web-checkout1' }, { warn: 'local', repo: 'web-checkout1' }]) {
+        const row = narrowLine(width, cells)
+        const { label } = mainOf(row).children[0].props
+        expect([drawnCells(row) <= width, label.length >= 16, label.startsWith('◐ ability-syste')]).toEqual([true, true, true])
+      }
+    }
+    expect(mainOf(narrowLine(41)).children[0].props.label).toBe('◐ ability-system…')
+    const wide = narrowLine(100, { warn: 'local', repo: 'web-checkout1' })
+    expect(mainOf(wide).children.map((/** @type {any} */ one) => one.props.label ?? textOf(one))).toEqual(['◐ ability-system-rework', ' local', ' web-checkout1'])
+  })
+
+  test("a worktree's row at 41 stays within the width: its name is cut, or left out with the warning when the title needs the cells", () => {
+    const worktree = { repo: 'automata-multi-repo-support-bbfecb' }
+    const partsOf = (/** @type {any} */ row) => Object.fromEntries(mainOf(row).children.map((/** @type {any} */ one) => [one.props.key.replace(/^pick-a-?/, '') || 'title', one.props.label ?? textOf(one)]))
+    for (const cols of [{ count: 5, age: 3, owner: 12 }, { count: 5, age: 3, owner: 0 }]) for (const cells of [worktree, { ...worktree, warn: 'local' }, { ...worktree, title: 'multi-repo' }, { ...worktree, title: 'multi-repo', warn: 'local' }]) expect(drawnCells(narrowLine(41, cells, cols)) <= 41).toBe(true)
+    // A long title takes the line: neither the warning nor the name is drawn.
+    const long = partsOf(narrowLine(41, { ...worktree, warn: 'local' }, { count: 5, age: 3, owner: 0 }))
+    expect([Object.keys(long), long.title.length >= 16]).toEqual([['title'], true])
+    // A short title is whole; the name takes what is left, cut.
+    const short = partsOf(narrowLine(41, { ...worktree, title: 'multi-repo' }, { count: 5, age: 3, owner: 0 }))
+    expect([short.title, short.repo.startsWith(' auto'), short.repo.endsWith('…'), short.repo.length < 17]).toEqual(['◐ multi-repo', true, true, true])
+    // The warning comes before the name: with both, the name is the one left out.
+    expect(Object.keys(partsOf(narrowLine(41, { ...worktree, title: 'multi-repo', warn: 'local' }, { count: 5, age: 3, owner: 0 })))).toEqual(['title', 'warn'])
+  })
+
   const CALLS = `# Findings\n\n## F-1 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nDrops only, or a full respawn?\n\n**Options:**\n- A (recommended): drops only\n- B: a full respawn\n\n## F-2 (2026-10-01, rev 3) | blocking: yes | status: open (director)\n\nWhich pool size?\n`
 
   test("a decision on another checkout's intent: its id and answers name the key and its findings file; the session's own as with one checkout", () => {
