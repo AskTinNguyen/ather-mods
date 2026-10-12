@@ -1,17 +1,19 @@
 import { type PluginAgentPanelProps, useAgent, useRpc } from "@getpaseo/plugin/client";
-import { Icon, ScrollView, TextInput, copyText, useToast } from "@getpaseo/plugin/client/react-native";
+import { Icon, ScrollView, TextInput, useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useState } from "react";
-import { Linking, Pressable, Text, View } from "react-native";
-import { atherAct, atherHome, type HomeView } from "../shared/contracts";
+import { Pressable, Text, View } from "react-native";
+import { type ActKind, atherAct, atherHome, type HomeView } from "../shared/contracts";
 import { Art } from "./art";
-import { Beacon, Bob, Button, FadeIn, FillBar, GrowLine, HoverCard, isLight, type Kit, PersonName, Pop, Pulse, Row, SectionLabel, personColours, useKit } from "./ui";
+import { CrewSection } from "./CrewSection";
+import { IntentScreen } from "./IntentScreen";
+import { IssueScreen } from "./IssueScreen";
+import { NeedsYou } from "./NeedsYou";
+import { WorkSection } from "./WorkSection";
+import { Beacon, Button, ChangeLine, FadeIn, FillBar, GrowLine, isLight, type Kit, NextRow, Pop, Pulse, Row, SectionLabel, useKit, WhoLine } from "./ui";
 
-type ActKind = "item" | "next" | "work" | "action" | "skill" | "create" | "all" | "away" | "draft" | "view" | "back" | "track" | "untrack" | "start";
 
 const REFRESH_MS = 5000;
-const DONE_SHOWN = 3;
-const CHANGE_ICONS = { done: "Check", yours: "Diamond", changed: "Pencil" } as const;
 
 // The Ather pane for one agent: where the work is, what needs you, Next, other work, away.
 export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
@@ -35,13 +37,11 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
       if (message) toast.show(message, { variant: "success" });
       void queryClient.invalidateQueries({ queryKey: key });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
-  });
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)) });
   const refresh = useMutation({
     mutationFn: () => home({ agentId, cwd, refresh: true }),
     onSuccess: (view) => queryClient.setQueryData(key, view),
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
-  });
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)) });
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [goal, setGoal] = useState("");
   const [draft, setDraft] = useState<string | null>(null);
@@ -63,6 +63,11 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
   }
 
   const busy = action.isPending;
+  // A search is no press: it goes even while one is in flight, keeps the rows enabled and says nothing.
+  const search = (text: string) =>
+    void actRpc({ agentId, cwd, kind: "find", id: "", text })
+      .then(() => queryClient.invalidateQueries({ queryKey: key }))
+      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
   const run = (kind: ActKind, id: string, text?: string) => {
     if (!busy) action.mutate({ kind, id, text });
   };
@@ -76,13 +81,10 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
     ) : null;
 
   const next = view.next;
-  const live = view.crew.filter((one) => one.state === "running" || one.state === "waiting");
-  const ended = view.crew.filter((one) => one.state === "done" || one.state === "failed");
   const meta = [view.role, view.lock, view.week].filter(Boolean).join(" · ");
-  const open_ = view.items.filter((one) => one.kind !== "away-end" && !isSent(one.id));
 
   if (view.intentView) {
-    return <IntentScreen kit={kit} who={who} intent={view.intentView} busy={busy} run={run} />;
+    return <IntentScreen kit={kit} who={who} intent={view.intentView} busy={busy} isSent={isSent} run={run} />;
   }
   if (view.issueView) {
     return <IssueScreen kit={kit} who={who} issue={view.issueView} busy={busy} run={run} now={now} />;
@@ -133,6 +135,12 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         {[view.progress, view.sentence].filter(Boolean).length > 0 ? <Text style={s.body}>{[view.progress, view.sentence].filter(Boolean).join(" · ")}</Text> : null}
         {view.proof ? <Proof kit={kit} proof={view.proof} /> : null}
         {meta ? <Text style={s.hint}>{meta}</Text> : null}
+        {/* How fresh the team's intents are; pressing it fetches origin now (the header's Refresh does too). */}
+        {view.sync ? (
+          <Pressable accessibilityRole="button" accessibilityLabel={`${view.sync.replace(" ↻", "")}. Sync now`} disabled={refresh.isPending} onPress={() => refresh.mutate()} style={({ pressed }) => ({ alignSelf: "flex-start", opacity: pressed ? 0.6 : 1 })}>
+            <Text style={s.hint}>{view.sync}</Text>
+          </Pressable>
+        ) : null}
         {view.heldBy ? (
           <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
             <Icon name="Users" size={14} color={c.statusWarning} />
@@ -172,31 +180,15 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {view.items.length > 0 ? (
-        <FadeIn delay={40} style={s.section}>
-          <SectionLabel kit={kit} text="Needs you" count={open_.length || undefined} />
-          {view.items.map((one, index) => (
-            <Row
-              key={one.id}
-              kit={kit}
-              index={index}
-              pulse={!isSent(one.id)}
-              icon={isSent(one.id) ? "Check" : "Diamond"}
-              iconColor={isSent(one.id) ? c.foregroundMuted : c.accent}
-              quiet={isSent(one.id)}
-              title={one.label}
-              hint={one.hint}
-              detail={one.detail}
-              accessibilityLabel={isSent(one.id) ? `${one.label}, sent` : one.label}
-              disabled={busy}
-              onPress={() => run("item", one.id)}
-            />
+      {view.needs.blocks.length > 0 || view.needs.folded.length > 0 ? <NeedsYou kit={kit} needs={view.needs} busy={busy} isSent={isSent} run={run} /> : null}
+
+      {/* Your own intents that want a press: every item met, or parked with no reason. A press opens the intent. */}
+      {view.attention.length > 0 ? (
+        <FadeIn delay={60} style={s.section}>
+          <SectionLabel kit={kit} text="Needs attention" count={view.attention.length} />
+          {view.attention.map((one, index) => (
+            <Row key={one.id} kit={kit} index={index} icon={one.kind === "close" ? "CircleCheck" : "Pause"} iconColor={c.accent} title={`${one.title} · ${one.ask}`} disabled={busy} onPress={() => run("view", one.slug)} />
           ))}
-          {open_.length > 1 ? (
-            <View style={[s.buttons, { marginTop: 6 }]}>
-              <Button kit={kit} icon="ListChecks" label={`Go through all ${open_.length}, one at a time`} full={layout.compact} disabled={busy} onPress={() => run("all", "all")} />
-            </View>
-          ) : null}
         </FadeIn>
       ) : null}
 
@@ -227,25 +219,14 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
                     padding: 10,
                     fontSize: 14,
                     lineHeight: 20,
-                    textAlignVertical: "top",
-                  }}
+                    textAlignVertical: "top" }}
                 />
                 <View style={s.buttons}>
                   <Button kit={kit} variant="primary" icon="Send" label="Send to the agent" full={layout.compact} disabled={busy} onPress={() => run("draft", next.id, draft ?? next.draft)} />
                 </View>
               </>
             ) : (
-              <Row
-                kit={kit}
-                icon={isSent(next.id) ? "Check" : "ArrowRight"}
-                iconColor={isSent(next.id) ? c.foregroundMuted : c.accent}
-                quiet={isSent(next.id)}
-                title={next.label}
-                hint={next.hint}
-                accessibilityLabel={isSent(next.id) ? `${next.label}, sent` : next.label}
-                disabled={busy}
-                onPress={() => run("next", next.id)}
-              />
+              <NextRow kit={kit} step={next} isSent={isSent(next.id)} busy={busy} onPress={() => run("next", next.id)} />
             )}
           </View>
         </FadeIn>
@@ -253,47 +234,18 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
 
       {view.stages.length > 0 || view.crew.length > 0 ? <SummaryStrip kit={kit} view={view} /> : null}
 
-      {live.length > 0 ? (
-        <FadeIn delay={60} style={s.section}>
-          <SectionLabel kit={kit} text={`Workers · running ${live.filter((one) => one.state === "running").length}`} />
-          {live.map((one, index) => (
-            <CrewRow key={one.id} kit={kit} one={one} index={index} now={now} isLightTheme={isLight(theme)} />
-          ))}
-        </FadeIn>
-      ) : null}
-
-      {ended.length > 0 ? (
-        <FadeIn delay={90} style={s.section}>
-          <SectionLabel kit={kit} text={`Done ${ended.length}`}>
-            <View style={{ flex: 1 }} />
-            {ended.length > DONE_SHOWN ? (
-              <Button kit={kit} variant="ghost" icon={open.done ? "ChevronUp" : "ChevronDown"} label={open.done ? "fold" : `all ${ended.length}`} onPress={() => toggle("done")} />
-            ) : null}
-          </SectionLabel>
-          {(open.done ? ended : ended.slice(0, DONE_SHOWN)).map((one, index) => (
-            <CrewRow key={one.id} kit={kit} one={one} index={index} now={now} isLightTheme={isLight(theme)} />
-          ))}
-        </FadeIn>
-      ) : null}
+      <CrewSection kit={kit} view={view} now={now} isLightTheme={isLight(theme)} />
 
       {view.changes.length > 0 ? (
         <FadeIn delay={120} style={s.section}>
           <SectionLabel kit={kit} text="Today in the intent" />
           {view.changes.map((one, index) => (
-            <FadeIn key={`${index}-${one.time}`} delay={Math.min(index, 10) * 30}>
-            <View style={{ flexDirection: "row", gap: 10, alignItems: "flex-start", paddingVertical: 4, paddingHorizontal: 8 }}>
-              <View style={{ marginTop: 3 }}>
-                <Icon name={CHANGE_ICONS[one.kind]} size={12} color={one.kind === "done" ? c.statusSuccess : one.kind === "yours" ? c.accent : c.foregroundMuted} />
-              </View>
-              <Text style={[s.body, { flex: 1, fontSize: 13, lineHeight: 18 }]}>{one.text}</Text>
-              <Text style={[s.hint, { fontVariant: ["tabular-nums"] }]}>{one.time}</Text>
-            </View>
-            </FadeIn>
+            <ChangeLine key={`${index}-${one.time}`} kit={kit} one={one} index={index} />
           ))}
         </FadeIn>
       ) : null}
 
-      {view.work.length > 0 ? <WorkSection kit={kit} view={view} now={now} busy={busy} isSent={isSent} run={run} light={isLight(theme)} /> : null}
+      {view.workList.total > 0 ? <WorkSection kit={kit} view={view} busy={busy} isSent={isSent} run={run} search={search} light={isLight(theme)} /> : null}
 
       <FadeIn delay={200} style={s.section}>
         <SectionLabel kit={kit} text="Start" />
@@ -427,9 +379,6 @@ function Proof({ kit, proof }: { kit: Kit; proof: string }) {
   );
 }
 
-// The kinds' own colours (squad.mjs), for the kind word beside each avatar on dark themes.
-const KIND_COLOURS: Record<string, string> = { editor: "#f08a3c", builder: "#2f8cf0", tester: "#2fbfa8", scout: "#c9b3ee", reviewer: "#f2d27a", general: "#ec5fa4" };
-
 function useNow(active: boolean) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -440,20 +389,11 @@ function useNow(active: boolean) {
   return now;
 }
 
-// 3:21, or 1:02:09 past an hour.
-function clock(ms: number) {
-  const total = Math.max(0, Math.round(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const sec = String(total % 60).padStart(2, "0");
-  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
-}
-
 // Checklist, workers, decisions: the three numbers that say how the work stands.
 function SummaryStrip({ kit, view }: { kit: Kit; view: HomeView }) {
   const { c, compact } = kit;
   const running = view.crew.filter((one) => one.state === "running").length;
-  const decisions = view.items.filter((one) => one.kind === "call").length;
+  const decisions = view.needs.decisions;
   const tile = (key: string, label: string, body: ReactNode, highlight = false, delay = 0) => (
     <FadeIn key={key} delay={delay} style={{ flexBasis: compact ? "30%" : "28%", flexGrow: 1 }}>
       <View style={{ padding: 12, gap: 6, borderRadius: 10, backgroundColor: c.surface1, borderWidth: 1, borderColor: highlight ? c.accent : c.border, minHeight: 78 }}>
@@ -481,393 +421,5 @@ function SummaryStrip({ kit, view }: { kit: Kit; view: HomeView }) {
       {tile("workers", "Workers", big(String(running), "running"), false, 50)}
       {tile("decisions", "Decisions", big(String(decisions), "waiting", decisions > 0 ? c.accent : undefined), decisions > 0, 100)}
     </View>
-  );
-}
-
-// One worker, as the original drew it: its avatar (a body for its kind, holding what it is doing)
-// in a ring for its state, floating while it runs; what it is, on which model, doing what; how long
-// and how many tool calls. A finished one shows its steps and what came of it.
-function CrewRow({ kit, one, index, now, isLightTheme }: { kit: Kit; one: HomeView["crew"][number]; index: number; now: number; isLightTheme: boolean }) {
-  const { c, s } = kit;
-  const isEnded = one.state === "done" || one.state === "failed";
-  const ring = one.state === "running" ? c.accent : one.state === "done" ? c.statusSuccess : one.state === "failed" ? c.statusDanger : c.statusWarning;
-  const kindColour = isLightTheme ? c.foreground : (KIND_COLOURS[one.kind] ?? c.foreground);
-  const doing = isEnded ? one.outcome || one.propWord : one.propWord;
-  const calls = one.toolCalls > 0 ? `${one.toolCalls} tool call${one.toolCalls === 1 ? "" : "s"}` : "";
-  const timing =
-    one.state === "running" && one.startedAt
-      ? `running ${clock(now - one.startedAt)}`
-      : one.state === "waiting" && one.endedAt
-        ? `quiet for ${clock(now - one.endedAt)}`
-        : one.state === "done" && one.startedAt
-          ? `took ${clock(one.endedAt - one.startedAt)}`
-          : one.state === "failed" && one.startedAt
-            ? `stopped at ${clock(one.endedAt - one.startedAt)}`
-            : "";
-  const stats = [timing, calls, one.source === "agent" ? "Paseo agent" : ""].filter(Boolean).join(" · ");
-  const mark = one.state === "done" ? "Check" : one.state === "failed" ? "X" : null;
-  const held = one.prop ?? (isEnded ? (one.props[one.props.length - 1] ?? "none") : "none");
-  return (
-    <FadeIn delay={Math.min(index, 10) * 40}>
-      <View
-        accessibilityLabel={`${one.title}: ${one.kindWord}${one.model ? ` on ${one.model}` : ""}, ${doing}. ${stats}`}
-        style={{ flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 10, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: c.border }}
-      >
-        <Bob active={one.state === "running"}>
-          <View style={{ width: 48, height: 48, borderRadius: 24, borderWidth: 3, borderColor: ring, alignItems: "center", justifyContent: "center" }}>
-            <Art artKey={`avatar:${one.kind}:${held}`} size={38} round />
-          </View>
-        </Bob>
-        <View style={{ flex: 1, gap: 3 }}>
-          <Text style={[s.rowTitle, { fontSize: 15 }, isEnded ? { color: c.foregroundMuted } : null]} numberOfLines={1}>
-            {one.title}
-          </Text>
-          <Text style={s.hint} numberOfLines={2}>
-            <Text style={{ color: kindColour, fontWeight: "700" }}>{one.kindWord}</Text>
-            {one.model ? <Text style={{ color: c.foreground }}>{` ${one.model}`}</Text> : null}
-            {` · ${doing}`}
-          </Text>
-          {isEnded && (one.props.length > 0 || stats) ? (
-            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
-              {one.props.map((prop, at) => [
-                at > 0 ? <Icon key={`arrow-${at}`} name="ArrowRight" size={10} color={c.foregroundMuted} /> : null,
-                <Art key={`${prop}-${at}`} artKey={`prop:${prop}`} size={18} label={prop} />,
-              ])}
-              {mark ? <Icon name={mark} size={13} color={ring} /> : null}
-              {stats ? <Text style={[s.hint, { fontSize: 12 }]}>{`${one.props.length > 0 || mark ? " · " : ""}${stats}`}</Text> : null}
-            </View>
-          ) : stats ? (
-            <Text style={[s.hint, { fontSize: 12, fontVariant: ["tabular-nums"] }]}>{stats}</Text>
-          ) : null}
-        </View>
-        {mark ? (
-          <Icon name={mark} size={16} color={ring} />
-        ) : (
-          <Pulse>
-            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: ring }} />
-          </Pulse>
-        )}
-      </View>
-    </FadeIn>
-  );
-}
-
-// Which agent and checkout a pane speaks for. Every screen shows it: each button here sends to this agent, and
-// the tab itself can only say "Ather" (the host labels a tab from the plugin's fixed title).
-function WhoLine({ kit, who }: { kit: Kit; who: string }) {
-  const { s, c } = kit;
-  if (!who) return null;
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
-      <Icon name="Bot" size={12} color={c.foregroundMuted} />
-      <Text style={[s.hint, { flexShrink: 1 }]} numberOfLines={1}>
-        {who}
-      </Text>
-    </View>
-  );
-}
-
-// An intent opened to look at: where it stands, its proof (by session), who else tracks it, and today's
-// lines. Looking never tracks it; Work on this here does, and the tracked one offers Stop tracking.
-function IntentScreen({ kit, who, intent, busy, run }: { kit: Kit; who: string; intent: NonNullable<HomeView["intentView"]>; busy: boolean; run: (kind: ActKind, id: string) => void }) {
-  const { s, c, compact } = kit;
-  return (
-    <ScrollView style={s.screen}>
-      <View style={s.content}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Button kit={kit} variant="ghost" icon="ArrowLeft" accessibilityLabel="Back" onPress={() => run("back", "")} />
-          <Text style={s.brand}>INTENT</Text>
-        </View>
-        <WhoLine kit={kit} who={who} />
-        <FadeIn>
-          <Text style={[s.title, { marginTop: 8 }]}>{intent.slug}</Text>
-          <Text style={[s.hint, { marginTop: 4 }]}>{[intent.stage, intent.progress, intent.owner].filter(Boolean).join(" · ")}</Text>
-          {intent.goal ? <Text style={[s.body, { marginTop: 10 }]}>{intent.goal}</Text> : null}
-          {intent.proof ? <Text style={[s.hint, { marginTop: 8 }]}>{`Proof: ${intent.proof}`}</Text> : null}
-          {intent.heldBy ? (
-            <View style={{ flexDirection: "row", gap: 8, alignItems: "center", marginTop: 6 }}>
-              <Icon name="Users" size={14} color={c.statusWarning} />
-              <Text style={[s.hint, { color: c.statusWarning, flex: 1 }]}>{intent.heldBy}</Text>
-            </View>
-          ) : null}
-        </FadeIn>
-
-        <FadeIn delay={60} style={[s.buttons, { marginTop: 16 }]}>
-          {intent.isHere ? (
-            <Button kit={kit} icon="CircleStop" label="Stop tracking" full={compact} disabled={busy} onPress={() => run("untrack", "")} />
-          ) : (
-            <Button kit={kit} variant="primary" icon="Play" label="Work on this here" full={compact} disabled={busy} onPress={() => run("track", intent.slug)} />
-          )}
-        </FadeIn>
-        {!intent.isHere ? (
-          <Text style={[s.hint, { marginTop: 8 }]}>This agent gets its next step, its proof counts for the intent, and other sessions see you on it. /ather untrack undoes it.</Text>
-        ) : null}
-
-        {intent.isHere && intent.next ? (
-          <FadeIn delay={90} style={s.section}>
-            <SectionLabel kit={kit} text="Next" />
-            <View style={[s.card, { borderColor: c.accent }]}>
-              <Text style={s.rowTitle}>{intent.next}</Text>
-            </View>
-          </FadeIn>
-        ) : null}
-
-        <FadeIn delay={120} style={s.section}>
-          <SectionLabel kit={kit} text="Today" />
-          {intent.today.length === 0 ? (
-            <Text style={[s.hint, { paddingHorizontal: 8 }]}>Nothing recorded yet today.</Text>
-          ) : (
-            intent.today.map((one, index) => (
-              <FadeIn key={`${index}-${one.time}`} delay={Math.min(index, 10) * 30}>
-                <View style={{ flexDirection: "row", gap: 10, alignItems: "flex-start", paddingVertical: 4, paddingHorizontal: 8 }}>
-                  <View style={{ marginTop: 3 }}>
-                    <Icon name={CHANGE_ICONS[one.kind]} size={12} color={one.kind === "done" ? c.statusSuccess : one.kind === "yours" ? c.accent : c.foregroundMuted} />
-                  </View>
-                  <Text style={[s.body, { flex: 1, fontSize: 13, lineHeight: 18 }]}>{one.text}</Text>
-                  <Text style={[s.hint, { fontVariant: ["tabular-nums"] }]}>{one.time}</Text>
-                </View>
-              </FadeIn>
-            ))
-          )}
-        </FadeIn>
-      </View>
-    </ScrollView>
-  );
-}
-
-// What to work on: grouped by where it comes from, searchable, and filtered by when it last moved.
-const GROUPS = [
-  { key: "mine", title: "Your intents", icon: "User" },
-  { key: "issues", title: "Assigned issues", icon: "CircleDot" },
-  { key: "others", title: "Teammates' intents", icon: "Users" },
-] as const;
-const RANGES = [
-  { days: 0, label: "Any time" },
-  { days: 7, label: "7 days" },
-  { days: 30, label: "30 days" },
-  { days: 90, label: "90 days" },
-] as const;
-const GROUP_SHOWN = 4;
-const DAY_MS = 86400000;
-
-function WorkSection({ kit, view, now, busy, isSent, run, light }: { kit: Kit; view: HomeView; now: number; busy: boolean; isSent: (id: string) => boolean; run: (kind: ActKind, id: string) => void; light: boolean }) {
-  const { c, s, compact } = kit;
-  const [query, setQuery] = useState("");
-  const [days, setDays] = useState<number>(0);
-  const [focused, setFocused] = useState(false);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  // Folded groups keep their heading and count; a group's colour is a theme colour, so it holds in light and dark.
-  const [folded, setFolded] = useState<Record<string, boolean>>({});
-  const colourOf = (key: string) => (key === "mine" ? c.accent : key === "issues" ? c.statusWarning : c.statusSuccess);
-  // One colour per teammate, chosen from everyone in the list (not just what is showing), so it holds while filtering.
-  const peopleColours = personColours(view.work.map((one) => one.owner).filter(Boolean), light);
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const isFiltering = words.length > 0 || days > 0;
-
-  // A row matches when every word is in its title or its detail, and (with a range) it moved in that many days.
-  // A row with no known date is kept: hiding it would say it is old when nobody knows.
-  const matches = (one: HomeView["work"][number]) => {
-    const text = `${one.label} ${one.hint ?? ""} ${one.owner}`.toLowerCase();
-    if (!words.every((word) => text.includes(word))) return false;
-    return days === 0 || one.updatedAt === 0 || now - one.updatedAt <= days * DAY_MS;
-  };
-  const shown = view.work.filter(matches);
-  const total = view.work.length;
-  const title = view.title === "Ather" ? "Pick something" : "Other work";
-
-  return (
-    <FadeIn delay={160} style={s.section}>
-      <SectionLabel kit={kit} text={title} count={total} />
-
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: c.surface2, borderColor: focused ? c.accent : c.border, borderWidth: 1, borderRadius: 8, paddingLeft: 10, minHeight: compact ? 40 : 36 }}>
-        <Icon name="Search" size={14} color={c.foregroundMuted} />
-        <TextInput
-          accessibilityLabel="Search intents and issues"
-          placeholder="Search by title, number, area or owner"
-          placeholderTextColor={c.foregroundMuted}
-          value={query}
-          onChangeText={setQuery}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={[{ flex: 1, color: c.foreground, fontSize: 14, paddingVertical: 8 }, { outlineStyle: "none" } as object]}
-        />
-        {query ? <Button kit={kit} variant="ghost" icon="X" accessibilityLabel="Clear search" onPress={() => setQuery("")} /> : null}
-      </View>
-
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 8, marginBottom: 4 }}>
-        <Icon name="CalendarRange" size={14} color={c.foregroundMuted} />
-        {RANGES.map((range) => {
-          const on = days === range.days;
-          return (
-            <Pressable
-              key={range.days}
-              accessibilityRole="button"
-              accessibilityState={{ selected: on }}
-              accessibilityLabel={range.days === 0 ? "Any time" : `Changed in the last ${range.days} days`}
-              onPress={() => setDays(range.days)}
-              style={({ pressed }) => [
-                { paddingVertical: 5, paddingHorizontal: 10, borderRadius: 14, borderWidth: 1, borderColor: on ? c.accent : c.border, backgroundColor: on ? c.accent : "transparent" },
-                pressed && !on ? { backgroundColor: c.surface1 } : null,
-              ]}
-            >
-              <Text style={{ fontSize: 12, fontWeight: on ? "700" : "500", color: on ? c.accentForeground : c.foregroundMuted }}>{range.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {isFiltering ? <Text style={[s.hint, { paddingHorizontal: 2 }]}>{shown.length === 0 ? "Nothing matches." : `${shown.length} of ${total}`}</Text> : null}
-
-      {GROUPS.map((group) => {
-        const rows = shown.filter((one) => one.group === group.key);
-        if (rows.length === 0) return null;
-        const colour = colourOf(group.key);
-        const isFolded = folded[group.key] === true;
-        // While searching or filtering every match shows; otherwise a few, and the rest on request.
-        const isOpen = isFiltering || expanded[group.key] === true;
-        const visible = isOpen ? rows : rows.slice(0, GROUP_SHOWN);
-        return (
-          <View key={group.key} style={{ marginTop: 12 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`${group.title}, ${rows.length}`}
-              accessibilityState={{ expanded: !isFolded }}
-              onPress={() => setFolded((prev) => ({ ...prev, [group.key]: !prev[group.key] }))}
-              style={({ pressed }) => [
-                { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, paddingHorizontal: 8, borderRadius: 8, minHeight: compact ? 40 : 34 },
-                pressed ? { backgroundColor: c.surface1 } : null,
-              ]}
-            >
-              <Icon name={isFolded ? "ChevronRight" : "ChevronDown"} size={14} color={colour} />
-              <Icon name={group.icon} size={14} color={colour} />
-              <Text style={{ flex: 1, color: colour, fontSize: 12, fontWeight: "700", letterSpacing: 1 }}>{group.title.toUpperCase()}</Text>
-              {/* The count on a tinted pill: the colour at low strength behind its own number. */}
-              <View style={{ minWidth: 26, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, alignItems: "center", overflow: "hidden" }}>
-                <View pointerEvents="none" style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colour, opacity: 0.18 }} />
-                <Text style={{ color: colour, fontSize: 12, fontWeight: "700", fontVariant: ["tabular-nums"] }}>{rows.length}</Text>
-              </View>
-            </Pressable>
-            {!isFolded ? (
-              <FadeIn>
-                {visible.map((one, index) => (
-                  <View key={one.id} style={{ borderLeftWidth: 2, borderLeftColor: colour, marginLeft: 14, borderRadius: 1 }}>
-                    <Row
-                      kit={kit}
-                      index={index}
-                      title={one.label}
-                      hint={one.hint}
-                      quiet={isSent(one.id)}
-                      disabled={busy}
-                      aside={one.owner ? <PersonName name={one.owner} colour={peopleColours[one.owner] ?? c.accent} onPress={() => setQuery(one.owner)} /> : undefined}
-                      onPress={() => run("work", one.id)}
-                    />
-                  </View>
-                ))}
-                {!isFiltering && rows.length > GROUP_SHOWN ? (
-                  <View style={{ alignItems: "flex-start", marginLeft: 14 }}>
-                    <Button
-                      kit={kit}
-                      variant="ghost"
-                      icon={isOpen ? "ChevronUp" : "ChevronDown"}
-                      label={isOpen ? "Fewer" : `More (${rows.length - GROUP_SHOWN})`}
-                      onPress={() => setExpanded((prev) => ({ ...prev, [group.key]: !prev[group.key] }))}
-                    />
-                  </View>
-                ) : null}
-              </FadeIn>
-            ) : null}
-          </View>
-        );
-      })}
-
-      {shown.length === 0 && isFiltering ? (
-        <View style={{ alignItems: "flex-start", marginTop: 4 }}>
-          <Button
-            kit={kit}
-            variant="ghost"
-            icon="FilterX"
-            label="Clear filters"
-            onPress={() => {
-              setQuery("");
-              setDays(0);
-            }}
-          />
-        </View>
-      ) : null}
-    </FadeIn>
-  );
-}
-
-// An assigned issue opened to look at, as the Claude Code pane's issue card: Start an intent, Open on GitHub,
-// Copy link. Pressing an issue row only opens this; nothing goes to the agent until Start an intent.
-function IssueScreen({ kit, who, issue, busy, run, now }: { kit: Kit; who: string; issue: NonNullable<HomeView["issueView"]>; busy: boolean; run: (kind: ActKind, id: string) => void; now: number }) {
-  const { s, c, compact } = kit;
-  const toast = useToast();
-  // A link the app may open: https, printable characters only, of a sane length.
-  const link = /^https:\/\/[\x21-\x7e]+$/.test(issue.url) && issue.url.length <= 2048 ? issue.url : "";
-  const days = issue.updatedAt ? Math.floor((now - issue.updatedAt) / 86400000) : -1;
-  const when = days < 0 ? "" : days >= 60 ? `${Math.floor(days / 30)} months ago` : days >= 2 ? `${days} days ago` : days === 1 ? "yesterday" : "today";
-  const meta = [issue.isUrgent ? "High priority" : "", issue.area === "Unsorted" ? "" : issue.area, when ? `updated ${when}` : ""].filter(Boolean).join(" · ");
-  return (
-    <ScrollView style={s.screen}>
-      <View style={s.content}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Button kit={kit} variant="ghost" icon="ArrowLeft" accessibilityLabel="Back" onPress={() => run("back", "")} />
-          <Text style={s.brand}>{`ISSUE #${issue.number}`}</Text>
-        </View>
-        <WhoLine kit={kit} who={who} />
-        <FadeIn>
-          <Text style={[s.title, { marginTop: 8 }]}>{issue.name || issue.title}</Text>
-          {issue.name && issue.name !== issue.title ? <Text style={[s.hint, { marginTop: 4 }]}>{issue.title}</Text> : null}
-          {meta ? <Text style={[s.hint, { marginTop: 6 }]}>{meta}</Text> : null}
-          {issue.labels.length > 0 ? (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-              {issue.labels.slice(0, 8).map((label) => (
-                <View key={label} style={{ paddingVertical: 2, paddingHorizontal: 8, borderRadius: 10, backgroundColor: c.surface1, borderWidth: 1, borderColor: c.border }}>
-                  <Text style={{ color: c.foregroundMuted, fontSize: 12 }}>{label}</Text>
-                </View>
-              ))}
-            </View>
-          ) : null}
-        </FadeIn>
-
-        <FadeIn delay={60}>
-          <HoverCard kit={kit} style={{ marginTop: 16, gap: 12 }}>
-            <Text style={s.rowTitle}>{issue.sent ? "Sent to the agent" : "Start an intent from this issue"}</Text>
-            <Text style={s.hint}>
-              The agent checks for overlapping work first (the issue preflight), then drafts an intent with you and shows you its prompt.md before anything is built. Ather reads your issues with gh and never writes to GitHub.
-            </Text>
-            <View style={s.buttons}>
-              <Button kit={kit} variant="primary" icon="Play" label={issue.sent ? "Start again" : "Start an intent"} full={compact} disabled={busy} onPress={() => run("start", `issue:${issue.number}`)} />
-              {link ? (
-                <Button
-                  kit={kit}
-                  icon="ExternalLink"
-                  label="Open on GitHub"
-                  full={compact}
-                  onPress={() => void Linking.openURL(link).catch(() => toast.error("Could not open the browser."))}
-                />
-              ) : null}
-              {link ? (
-                <Button
-                  kit={kit}
-                  icon="Copy"
-                  label="Copy link"
-                  full={compact}
-                  onPress={() =>
-                    void copyText(link).then(
-                      () => toast.show("Issue link copied.", { variant: "success" }),
-                      () => toast.error("Could not copy the link."),
-                    )
-                  }
-                />
-              ) : null}
-            </View>
-          </HoverCard>
-        </FadeIn>
-      </View>
-    </ScrollView>
   );
 }

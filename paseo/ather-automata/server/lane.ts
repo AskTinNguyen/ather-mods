@@ -11,7 +11,8 @@ import { lastActiveOf, type AgentInfo } from "./agents";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Pack = any;
-export type Lane = { root: string; isS2: boolean; me: string; pack: Pack };
+// `base`: the branch the checkout's team merges into (team.mjs baseOf); holds and their words follow it.
+export type Lane = { root: string; isS2: boolean; me: string; pack: Pack; base: string };
 
 export type Ctx = { agent: AgentInfo; io: Io };
 
@@ -108,7 +109,7 @@ export async function readLock(ctx: Ctx) {
 // What the session is told about its lane: the tracked intent, the Editor lock, live peers, the window's mandate.
 // The original put it in every prompt; here it is the status tool's text and the away hand-over.
 export async function laneText(ctx: Ctx) {
-  const { me, pack } = await laneOf(ctx);
+  const { me, pack, base } = await laneOf(ctx);
   const io = ctx.io as never;
   const lines: string[] = [];
   const live = await peers(ctx);
@@ -129,6 +130,6 @@ export async function laneText(ctx: Ctx) {
   if (lock.state === "held") lines.push(`Editor owner lock: held by ${lock.holder || "another lane"}${lock.until ? ` until ${lock.until}` : ""}.`);
   if (live.length > 0) lines.push(`Live peer lanes on this checkout: ${live.map((lane) => `${lane.intent ?? "no intent"} on ${lane.branch}`).join("; ")}.`);
   const away = await state.readAway(io);
-  if (isHolding(away)) lines.push(mandateText(away, tz, pack));
+  if (isHolding(away)) lines.push(mandateText(away, tz, pack, base));
   return lines.length > 0 ? `Ather Automata lane state (live, read-only):\n${lines.join("\n")}` : "";
 }

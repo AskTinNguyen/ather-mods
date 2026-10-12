@@ -520,3 +520,65 @@ export function isLight(theme: Theme) {
   const [r = 0, g = 0, b = 0] = rgb;
   return 0.299 * r + 0.587 * g + 0.114 * b > 150;
 }
+
+// Each change's icon in the day's lines: done, yours, changed.
+export const CHANGE_ICONS = { done: "Check", yours: "Diamond", changed: "Pencil" } as const;
+
+// Which agent and checkout a pane speaks for. Every screen shows it: each button here sends to this agent, and
+// the tab itself can only say "Ather" (the host labels a tab from the plugin's fixed title).
+export function WhoLine({ kit, who }: { kit: Kit; who: string }) {
+  const { s, c } = kit;
+  if (!who) return null;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
+      <Icon name="Bot" size={12} color={c.foregroundMuted} />
+      <Text style={[s.hint, { flexShrink: 1 }]} numberOfLines={1}>
+        {who}
+      </Text>
+    </View>
+  );
+}
+
+// A Next step as a row: an arrow while it waits, a tick once the agent has it.
+export function NextRow({ kit, step, isSent, busy, onPress }: { kit: Kit; step: { id: string; label: string; hint?: string }; isSent: boolean; busy: boolean; onPress: () => void }) {
+  const { c } = kit;
+  return (
+    <Row
+      kit={kit}
+      icon={isSent ? "Check" : "ArrowRight"}
+      iconColor={isSent ? c.foregroundMuted : c.accent}
+      quiet={isSent}
+      title={step.label}
+      hint={step.hint}
+      accessibilityLabel={isSent ? `${step.label}, sent` : step.label}
+      disabled={busy}
+      onPress={onPress}
+    />
+  );
+}
+
+// One of the day's lines in an intent: done, yours or changed, what, and when. With `onPress`, a press asks about it.
+export function ChangeLine({ kit, one, index, busy = false, onPress }: { kit: Kit; one: { kind: keyof typeof CHANGE_ICONS; time: string; text: string }; index: number; busy?: boolean; onPress?: () => void }) {
+  const { s, c } = kit;
+  const body = (
+    <>
+      <View style={{ marginTop: 3 }}>
+        <Icon name={CHANGE_ICONS[one.kind]} size={12} color={one.kind === "done" ? c.statusSuccess : one.kind === "yours" ? c.accent : c.foregroundMuted} />
+      </View>
+      <Text style={[s.body, { flex: 1, fontSize: 13, lineHeight: 18 }]}>{one.text}</Text>
+      <Text style={[s.hint, { fontVariant: ["tabular-nums"] }]}>{one.time}</Text>
+    </>
+  );
+  const line = { flexDirection: "row" as const, gap: 10, alignItems: "flex-start" as const, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 };
+  return (
+    <FadeIn delay={Math.min(index, 10) * 30}>
+      {onPress ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={`Ask about: ${one.text}`} disabled={busy} onPress={onPress} style={({ pressed }) => [line, { opacity: pressed ? 0.6 : 1 }]}>
+          {body}
+        </Pressable>
+      ) : (
+        <View style={line}>{body}</View>
+      )}
+    </FadeIn>
+  );
+}
