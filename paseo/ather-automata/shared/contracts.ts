@@ -19,6 +19,8 @@ export const homeView = z.object({
   isHere: z.boolean(),
   notHere: z.string(),
   title: z.string(),
+  // "synced 4 min ago ↻": how fresh the team's intents are (origin/<base>, fetched in the background); '' outside git.
+  sync: z.string(),
   stage: z.string(),
   progress: z.string(),
   stages: z.array(z.object({ label: z.string(), state: z.enum(["done", "now", "todo"]) })),
@@ -161,6 +163,9 @@ export const homeView = z.object({
       heldBy: z.string(),
       // Whether this agent tracks it: Stop tracking instead of Work on this here.
       isHere: z.boolean(),
+      // Whether this checkout has its folder: one only on origin/<base> is asked about, not worked on here (pull first).
+      inCheckout: z.boolean(),
+      base: z.string(),
       // Where it stands, as its own files say it (home.mjs standsLines): shown, nothing asked of the agent.
       stands: z.array(z.string()),
       // The tracked intent's next step, pressed here as on home; null when untracked or the step only looks.

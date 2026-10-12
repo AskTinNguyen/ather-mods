@@ -2,7 +2,7 @@ import { type PluginAgentPanelProps, useAgent, useRpc } from "@getpaseo/plugin/c
 import { Icon, ScrollView, TextInput, useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { type ActKind, atherAct, atherHome, type HomeView } from "../shared/contracts";
 import { Art } from "./art";
 import { IntentScreen } from "./IntentScreen";
@@ -135,6 +135,12 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         {[view.progress, view.sentence].filter(Boolean).length > 0 ? <Text style={s.body}>{[view.progress, view.sentence].filter(Boolean).join(" · ")}</Text> : null}
         {view.proof ? <Proof kit={kit} proof={view.proof} /> : null}
         {meta ? <Text style={s.hint}>{meta}</Text> : null}
+        {/* How fresh the team's intents are; pressing it fetches origin now (the header's Refresh does too). */}
+        {view.sync ? (
+          <Pressable accessibilityRole="button" accessibilityLabel={`${view.sync.replace(" ↻", "")}. Sync now`} disabled={refresh.isPending} onPress={() => refresh.mutate()} style={({ pressed }) => ({ alignSelf: "flex-start", opacity: pressed ? 0.6 : 1 })}>
+            <Text style={s.hint}>{view.sync}</Text>
+          </Pressable>
+        ) : null}
         {view.heldBy ? (
           <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
             <Icon name="Users" size={14} color={c.statusWarning} />

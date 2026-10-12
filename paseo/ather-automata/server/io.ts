@@ -109,10 +109,11 @@ export async function mtime(path: string): Promise<number> {
 
 export type Run = { exitCode: number; stdout: string; stderr: string };
 
-export function run(argv: string[], options: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {}): Promise<Run> {
+// `stdin`: written to the process and closed (git cat-file --batch reads its paths there).
+export function run(argv: string[], options: { cwd?: string; timeoutMs?: number; env?: Record<string, string>; stdin?: string } = {}): Promise<Run> {
   const [file, ...args] = argv;
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       file ?? "",
       args,
       {
@@ -128,6 +129,7 @@ export function run(argv: string[], options: { cwd?: string; timeoutMs?: number;
         resolve({ exitCode: code, stdout: String(stdout ?? ""), stderr: String(stderr || (error ? error.message : "")) });
       },
     );
+    if (options.stdin !== undefined) child.stdin?.end(options.stdin);
   });
 }
 

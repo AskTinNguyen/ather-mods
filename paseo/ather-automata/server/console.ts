@@ -12,9 +12,10 @@ import * as state from "./ather/state.mjs";
 import type { HomeView } from "../shared/contracts";
 import { knownAgents, note, send } from "./agents";
 import { governedRoot } from "./agentConfig";
-import { USER_HOME, list, mtime, readText, run } from "./io";
+import { USER_HOME, list, readText, run } from "./io";
 import { ctxOf, laneOf, peers, readLock, type Ctx, type Pack } from "./lane";
 import { crewOf, githubLogin } from "./squad";
+import { readTeamIntents, syncLine, syncMain } from "./team";
 import { cycleGroup, cycleSort, setSearch, workListOf } from "./worklist";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -61,32 +62,12 @@ const answeringOf = (agentId: string) => {
 
 // ---------------------------------------------------------------- reading the checkout
 
-async function readIntents(root: string, pinned: string | null, pack: Pack) {
+// The team's intents (origin/<base>, server/team.ts) with the checkout's own folders; the tracked one from the checkout.
+async function readIntents(root: string, pinned: string | null, pack: Pack, base: string) {
   const read: Any[] = [];
-  for (const entry of await list(`${root}/docs/intent`).catch(() => [])) {
-    if (entry.kind !== "dir") continue;
-    const dir = `${root}/docs/intent/${entry.name}`;
-    const prompt = await readText(`${dir}/prompt.md`);
-    if (prompt === null) continue;
-    const isOpen = !/^\s*-\s*Status:\s*completed/im.test(prompt);
-    const isPinned = entry.name === pinned;
-    const stats = await Promise.all(["prompt.md", "progress.md", "log.md"].map((name) => mtime(`${dir}/${name}`)));
-    read.push(
-      parseIntent(
-        {
-          slug: entry.name,
-          prompt,
-          findings: isOpen ? ((await readText(`${dir}/findings.md`)) ?? "") : "",
-          progress: isOpen || isPinned ? ((await readText(`${dir}/progress.md`)) ?? "") : "",
-          files: isPinned ? (await list(dir).catch(() => [])).map((one) => one.name) : [],
-          hasDebrief: isPinned && (await readText(`${root}/${pack.debriefPath(entry.name)}`)) !== null,
-          updatedAt: Math.max(...stats),
-          source: "local",
-          firstAuthor: "",
-        },
-        pack,
-      ),
-    );
+  for (const files of await readTeamIntents(root, pinned, base)) {
+    const hasDebrief = files.slug === pinned && (await readText(`${root}/${pack.debriefPath(files.slug)}`)) !== null;
+    read.push(parseIntent({ ...files, hasDebrief }, pack));
   }
   return read.sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -106,16 +87,17 @@ async function readSkills(root: string, pack: Pack) {
   return found;
 }
 
-// Intents and skills for a checkout, read again at most once a minute (or when asked).
-async function refreshRoot(ctx: Ctx, force = false) {
-  const { root, pack } = await laneOf(ctx);
+// Intents and skills for a checkout, read again at most once a minute (or when asked). Once read, origin/<base>
+// is fetched in the background when that is due (or at once, `fetchNow`: ↻), and read again when it lands.
+async function refreshRoot(ctx: Ctx, force = false, fetchNow = false) {
+  const { root, pack, base } = await laneOf(ctx);
   const cache = roots.get(root) ?? { at: 0, intents: [], skills: [], reading: null };
   roots.set(root, cache);
   if (!force && Date.now() - cache.at < INTENTS_TTL_MS) return cache;
   if (!cache.reading) {
     cache.reading = (async () => {
       const pinned = await state.readPinned(ctx.io as never);
-      cache.intents = await readIntents(root, pinned, pack);
+      cache.intents = await readIntents(root, pinned, pack, base);
       cache.skills = await readSkills(root, pack);
       cache.at = Date.now();
       for (const agent of knownAgents()) stale(agent.id);
@@ -125,6 +107,7 @@ async function refreshRoot(ctx: Ctx, force = false) {
   }
   await cache.reading;
   void refreshPrs(ctx, cache.intents).catch(() => undefined);
+  if (syncMain(root, base, () => refreshRoot(ctx, true), fetchNow)) for (const agent of knownAgents()) stale(agent.id);
   return cache;
 }
 
@@ -203,7 +186,7 @@ async function model(ctx: Ctx, force = false) {
   if (!force && hit && hit.version === version && Date.now() - hit.at < VIEW_TTL_MS) return hit.model;
   const io = ctx.io as never;
   const { root, me, pack } = await laneOf(ctx);
-  const cache = await refreshRoot(ctx, force);
+  const cache = await refreshRoot(ctx, force, force);
   void refreshIssues(ctx).catch(() => undefined);
   const tz = await state.readTz(io);
   const now = Date.now();
@@ -247,6 +230,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     isHere: false,
     notHere: "",
     title: "Ather",
+    sync: "",
     stage: "",
     progress: "",
     stages: [],
@@ -294,6 +278,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     ...empty,
     isHere: true,
     title: built.header.title,
+    sync: syncLine(lane.root),
     stage: built.header.stage,
     progress: built.header.progress,
     stages: built.header.stages,
@@ -397,7 +382,7 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   const slug = viewing.get(ctx.agent.id) ?? "";
   if (!slug) return null;
   const io = ctx.io as never;
-  const { me, pack } = await laneOf(ctx);
+  const { root, me, pack, base } = await laneOf(ctx);
   const cache = await refreshRoot(ctx);
   const intent = cache.intents.find((one: Any) => one.slug === slug);
   if (!intent) {
@@ -412,6 +397,8 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   const stage = STAGE_LABELS[currentStage(intent, evidence, role, prs, pack) as keyof typeof STAGE_LABELS];
   const today = await todayOf(ctx, slug);
   const isHere = slug === pinned;
+  // An intent read from origin/<base> that this checkout does not have yet can be asked about, not worked on here.
+  const inCheckout = await ctx.io.exists(`${root}/docs/intent/${slug}/prompt.md`);
   // A step that only looks at the intent is this view, so it has no card.
   const next = isHere && built.next && !built.next.look ? built.next : null;
   return {
@@ -423,6 +410,8 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
     proof: await proofOf(ctx, slug),
     heldBy: heldByLine(await peers(ctx), slug, now),
     isHere,
+    inCheckout,
+    base,
     stands: standsLines(intent, stage, me, prs) as string[],
     next: next ? { id: next.id, label: next.label, hint: next.hint } : null,
     today: today.map((one) => ({ kind: one.kind, time: clockText(one.at, tz), text: one.text })),
@@ -440,7 +429,9 @@ async function todayOf(ctx: Ctx, slug: string): Promise<Any[]> {
 // Ask about it, and a press on one of today's changes: a question for the agent; nothing is decided or tracked.
 async function askAbout(ctx: Ctx, slug: string, change?: string) {
   if (change === undefined) {
-    await handOff(ctx, [], aboutIntentPrompt(slug, false));
+    // One only on origin/<base>, or newer there, is read from there with git show; nothing is fetched or changed.
+    const intent = (await refreshRoot(ctx)).intents.find((one: Any) => one.slug === slug);
+    await handOff(ctx, [], aboutIntentPrompt(slug, intent?.source === "main", "", (await laneOf(ctx)).base));
     return `Asked the agent about ${slug}.`;
   }
   const one = (await todayOf(ctx, slug))[Number(change)];
@@ -604,12 +595,15 @@ async function untrackHere(ctx: Ctx) {
 
 // Tracks an intent by its folder name: the deliberate act (Work on this here, Next, /ather intent <name>).
 async function track(ctx: Ctx, text: string) {
-  const { root, me } = await laneOf(ctx);
+  const { root, me, base } = await laneOf(ctx);
   const { intents } = await refreshRoot(ctx);
   const matches = searchIntents(intents, text) as Any[];
   const slug = intents.some((one: Any) => one.slug === text) ? text : matches.length === 1 && matches[0] ? matches[0].slug : null;
   if (slug === null) return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map((one) => one.slug).join(", ")}.` : `No open intent matches "${text}".`;
-  if (!(await state.track(ctx.io as never, root, slug, { me }))) return `No intent named "${slug}" in docs/intent.`;
+  if (!(await state.track(ctx.io as never, root, slug, { me })))
+    return intents.some((one: Any) => one.slug === slug)
+      ? `${slug} is on origin/${base} but not in this checkout yet: pull ${base} to work on it here, or use Ask about it in its view to hear where it stands.`
+      : `No intent named "${slug}" in docs/intent.`;
   await refreshRoot(ctx, true);
   // Tracking sends nothing to the agent, so the reply says what comes next.
   stale(ctx.agent.id);

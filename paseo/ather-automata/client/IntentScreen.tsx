@@ -32,12 +32,14 @@ export function IntentScreen({ kit, who, intent, busy, isSent, run }: { kit: Kit
         <FadeIn delay={60} style={[s.buttons, { marginTop: 16 }]}>
           {intent.isHere ? (
             <Button kit={kit} icon="CircleStop" label="Stop tracking" full={compact} disabled={busy} onPress={() => run("untrack", "")} />
-          ) : (
+          ) : intent.inCheckout ? (
             <Button kit={kit} variant="primary" icon="Play" label="Work on this here" full={compact} disabled={busy} onPress={() => run("track", intent.slug)} />
-          )}
-          <Button kit={kit} icon="MessageCircle" label="Ask about it" full={compact} disabled={busy} onPress={() => run("ask", intent.slug)} />
+          ) : null}
+          {/* Asking never needs the folder here: the agent reads it from origin if it must. */}
+          <Button kit={kit} variant={intent.inCheckout ? "secondary" : "primary"} icon="MessageCircle" label="Ask about it" full={compact} disabled={busy} onPress={() => run("ask", intent.slug)} />
         </FadeIn>
-        {!intent.isHere ? (
+        {!intent.isHere && !intent.inCheckout ? <Text style={[s.hint, { marginTop: 8 }]}>{`Not in this checkout yet: pull ${intent.base} to work on it here.`}</Text> : null}
+        {!intent.isHere && intent.inCheckout ? (
           <Text style={[s.hint, { marginTop: 8 }]}>This agent gets its next step, its proof counts for the intent, and other sessions see you on it. /ather untrack undoes it.</Text>
         ) : null}
 
