@@ -15,6 +15,7 @@ import { governedRoot } from "./agentConfig";
 import { USER_HOME, list, mtime, readText, run } from "./io";
 import { ctxOf, laneOf, peers, readLock, type Ctx, type Pack } from "./lane";
 import { crewOf, githubLogin } from "./squad";
+import { cycleGroup, cycleSort, setSearch, workListOf } from "./worklist";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -240,13 +241,6 @@ async function model(ctx: Ctx, force = false) {
   return built;
 }
 
-const workTitle = (one: Any) => (one.kind === "intent" ? one.slug : one.label);
-const workDetail = (one: Any) => {
-  const detail = one.kind === "intent" ? String(one.hint).replace(`${one.slug} · `, "") : one.hint;
-  // A teammate's intent names its owner at the end of the line; the owner is sent on its own (drawn as a name chip).
-  return one.kind === "intent" && !one.isMine && one.owner ? String(detail).replace(` · ${one.owner}`, "") : detail;
-};
-
 export async function homeView(agentId: string, cwd: string, force = false): Promise<HomeView> {
   const ctx = ctxOf((knownAgents().find((one) => one.id === agentId) ?? { id: agentId, cwd, provider: "", workspaceId: null, parentAgentId: null, title: null }));
   const empty: HomeView = {
@@ -268,7 +262,8 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     items: [],
     needs: { blocks: [], folded: [] },
     next: null,
-    work: [],
+    workList: { total: 0, shown: 0, query: "", sort: "", groupBy: "", legend: "", people: [], groups: [] },
+    attention: [],
     actions: [],
     skills: [],
     create: [],
@@ -293,7 +288,6 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
   const now = Date.now();
   const changes = slug ? ((await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[]) : [];
   const next = built.next;
-  const intentsBySlug = new Map<string, Any>(((await refreshRoot(ctx)).intents as Any[]).map((one) => [one.slug, one]));
   const ledger = away.ledgerPath && away.ledgerPath.startsWith(lane.root) ? away.ledgerPath.slice(lane.root.length + 1) : away.ledgerPath;
   return {
     ...empty,
@@ -317,18 +311,14 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
       ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isTour ? "tour" : next.work ? "work" : next.action ?? "step" }
       : null,
     // Other work: never the intent already tracked, nor the one Next already offers.
-    work: built.work
-      .filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug))
-      .slice(0, 300)
-      .map((one: Any) => ({
-        id: one.id,
-        label: workTitle(one),
-        hint: workDetail(one),
-        kind: one.kind,
-        group: one.kind === "issue" ? ("issues" as const) : one.isMine ? ("mine" as const) : ("others" as const),
-        owner: one.kind === "intent" && !one.isMine ? String(one.owner ?? "") : "",
-        updatedAt: one.kind === "issue" ? Number(one.issue.updatedAt) || 0 : Number(intentsBySlug.get(one.slug)?.updatedAt) || 0,
-      })),
+    workList: await workListOf(
+      ctx,
+      lane.me,
+      lane.pack,
+      built.work.filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug)).slice(0, 300),
+      now,
+    ),
+    attention: built.attention.map((one: Any) => ({ id: one.id, slug: one.slug, title: one.title, ask: one.ask, kind: one.kind })),
     actions: built.actions.filter((one: Any) => one.prompt).map((one: Any) => ({ id: one.id, label: one.label })),
     skills: built.skills.map((one: Any) => ({ id: one.id, label: one.name, hint: one.description, group: one.group })),
     create: built.create.map((group: Any) => ({ group: group.group, items: group.items.map((item: Any) => ({ id: item.id, label: item.verb, hint: item.description || item.name })) })),
@@ -787,6 +777,15 @@ export async function act(agentId: string, cwd: string, kind: string, id: string
       if (!option) throw new Error(`No option ${text ?? ""} on that decision.`);
       message = await answerItem(ctx, one, option.letter, option.prompt);
     }
+  } else if (kind === "find") {
+    message = setSearch(ctx.agent.id, text ?? "");
+    stale(ctx.agent.id);
+  } else if (kind === "sort") {
+    message = cycleSort(ctx.agent.id);
+    stale(ctx.agent.id);
+  } else if (kind === "group") {
+    message = await cycleGroup(ctx, (await laneOf(ctx)).me);
+    stale(ctx.agent.id);
   } else if (kind === "ask") {
     message = await askAbout(ctx, id, text);
   } else if (kind === "untrack") {

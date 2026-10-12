@@ -65,9 +65,49 @@ export const homeView = z.object({
     folded: z.array(z.object({ id: z.string(), text: z.string() })),
   }),
   next: row.nullable(),
-  // What to work on, with where each row comes from (mine: your intents, issues: your assigned GitHub
-  // issues with no intent yet, others: teammates' intents) and when it last changed (ms; 0 unknown).
-  work: z.array(row.extend({ group: z.enum(["mine", "issues", "others"]), updatedAt: z.number(), owner: z.string() })),
+  // What to work on (server/worklist.ts): by where it comes from (mine: your intents, issues: your assigned GitHub
+  // issues with no intent yet, others: teammates' intents), searched, sorted, the teammates' intents sub-grouped,
+  // parked intents in a folded block at each group's end. Counts read "2 of 5" while searching.
+  workList: z.object({
+    total: z.number(),
+    shown: z.number(),
+    query: z.string(),
+    sort: z.string(),
+    groupBy: z.string(),
+    legend: z.string(),
+    people: z.array(z.string()),
+    groups: z.array(
+      z.object({
+        key: z.enum(["mine", "issues", "others"]),
+        title: z.string(),
+        count: z.string(),
+        blocks: z.array(
+          z.object({
+            // What a press on its head folds (a sub-group, a stage block, Parked); a plain block has no head.
+            key: z.string(),
+            title: z.string(),
+            kind: z.enum(["sub", "stage", "plain"]),
+            count: z.string(),
+            startsFolded: z.boolean(),
+            items: z.array(
+              row.extend({
+                glyph: z.string(),
+                stage: z.string(),
+                done: z.number(),
+                total: z.number(),
+                age: z.string(),
+                // A teammate's intent: its owner, as people know them ('' otherwise).
+                who: z.string(),
+                warn: z.string(),
+              }),
+            ),
+          }),
+        ),
+      }),
+    ),
+  }),
+  // Your own intents that want a press: every item met (Close it?), or parked with no reason (Add one?).
+  attention: z.array(z.object({ id: z.string(), slug: z.string(), title: z.string(), ask: z.string(), kind: z.enum(["close", "reason"]) })),
   actions: z.array(row),
   skills: z.array(row.extend({ group: z.string() })),
   create: z.array(z.object({ group: z.string(), items: z.array(row) })),
@@ -144,7 +184,7 @@ export const atherHome = defineRpc({
   output: homeView,
 });
 
-const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask", "open", "calls", "answer", "explain", "typed"]);
+const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask", "open", "calls", "answer", "explain", "typed", "find", "sort", "group"]);
 export type ActKind = z.infer<typeof actKind>;
 
 export const atherAct = defineRpc({
@@ -156,7 +196,8 @@ export const atherAct = defineRpc({
     // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send;
     // ask: a question about intent `id` (Ask about it), or about its change of today number `text`;
     // open: the decision `id` opened in place ("-" none); calls: an intent's block of decisions folded or not;
-    // answer: decision `id` answered with option `text`; explain: asked about, nothing decided; typed: answered in words `text`.
+    // answer: decision `id` answered with option `text`; explain: asked about, nothing decided; typed: answered in words `text`;
+    // find: the work list searched for `text`; sort and group: the next sort, the next grouping.
     kind: actKind,
     id: z.string(),
     text: z.string().optional(),

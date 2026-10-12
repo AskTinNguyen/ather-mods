@@ -174,6 +174,16 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
 
       {view.items.length > 0 ? <NeedsYou kit={kit} needs={view.needs} open={open_.length} busy={busy} isSent={isSent} run={run} /> : null}
 
+      {/* Your own intents that want a press: every item met, or parked with no reason. A press opens the intent. */}
+      {view.attention.length > 0 ? (
+        <FadeIn delay={60} style={s.section}>
+          <SectionLabel kit={kit} text="Needs attention" count={view.attention.length} />
+          {view.attention.map((one, index) => (
+            <Row key={one.id} kit={kit} index={index} icon={one.kind === "close" ? "CircleCheck" : "Pause"} iconColor={c.accent} title={`${one.title} · ${one.ask}`} disabled={busy} onPress={() => run("view", one.slug)} />
+          ))}
+        </FadeIn>
+      ) : null}
+
       {next ? (
         <FadeIn delay={80} style={s.section}>
           <SectionLabel kit={kit} text="Next" />
@@ -266,7 +276,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {view.work.length > 0 ? <WorkSection kit={kit} view={view} now={now} busy={busy} isSent={isSent} run={run} light={isLight(theme)} /> : null}
+      {view.workList.total > 0 ? <WorkSection kit={kit} view={view} busy={busy} isSent={isSent} run={run} light={isLight(theme)} /> : null}
 
       <FadeIn delay={200} style={s.section}>
         <SectionLabel kit={kit} text="Start" />
