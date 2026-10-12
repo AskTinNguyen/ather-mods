@@ -38,11 +38,15 @@ When the person asks to record, or a scheduled run finds answers:
    ```bash
    node "$DESK" plan <scratch>/desk/desk.json <scratch>/desk/answers.json
    ```
+   `answers.json` is a JSON array of the list's rows, each `{ "id": …, "data": { …the answer… } }`; `plan` refuses anything else.
    It lists, per repository, each decision to record and its **Prompt**; under **Ask again**, answers it will not guess at (a letter the finding no longer offers); and the answers already recorded or settled.
 3. For each repository in the plan, in its checkout:
    - Start a branch `desk/decisions-<YYYY-MM-DD>` from `origin/<base>` (a worktree when the checkout has other work in it).
-   - Do what each **Prompt** says, as if the owner had typed it: the intent skill's decision step (mark the finding, fill its Resolution with the answer, the date and "by the owner, from the decision desk"; fold an accepted amendment into `prompt.md` with a Rev bump and a Decisions entry). Follow the repository's own `AGENTS.md`: Storey regenerates its tracker (`npm run tracker`) after any intent change.
-   - Run the gates that repository asks for on a change to its intents, commit, push the branch and open a pull request into the base branch. Its body lists each decision (id, the answer, the finding's link).
+   - Treat each **Prompt** as the owner's own message and follow the repository's intent skill (`.agents/skills/intent/SKILL.md`, or the one its `AGENTS.md` names) the way it handles one: capture it in the intent's `log.md` (the Prompt verbatim, as a decision), then its decision step: set the finding's status, fill its Resolution in the finding's own layout (the answer, the date, "by the owner, from the decision desk"), and fold the accepted change into `prompt.md` as a Decisions entry with a Rev bump and a Changelog line. Where the finding has no proposed amendment, the Decisions entry states the answer.
+   - Record what the owner said and nothing more. An answer in words that covers only part of a proposed amendment folds only that part; an answer that seems to settle another open finding too does not close it. Name both in the pull request under "For the owner" instead.
+   - Follow the repository's `AGENTS.md` for every file that mirrors an intent: Storey regenerates its tracker (`npm run tracker`, or `npx -y tsx scripts/tracker.ts` without `node_modules`) and keeps `docs/ROADMAP-DECISIONS.md` "Waiting on a person" current.
+   - Decisions change the intent's spec, not its code: a change the decision calls for is the intent worker's next step, named in the pull request under "Follow-ups".
+   - Run the gates the repository's `AGENTS.md` asks for on any change (install its dependencies first when they are missing), commit, push the branch and open a pull request into the base branch. Its body lists each decision (id, the answer, the finding's link), then "For the owner" and "Follow-ups" when they have entries.
    - `ArtifactData` `update` each recorded answer's document (`answers/<repo>~<slug>~<finding>`): `state: "recorded"`, `pr: <the pull request's URL>`.
 4. Tell the person, in one short list: per repository, the pull request and what it records; then anything under **Ask again**.
 

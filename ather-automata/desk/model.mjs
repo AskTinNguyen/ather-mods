@@ -65,7 +65,7 @@ export const deskOf = (checkouts, at) => {
 
 /**
  * @typedef {{ id: string, slug: string, finding: string, answer: string, prompt: string }} ToRecord `answer`: what was chosen, as the PR names it
- * @typedef {{ repo: string, url: string, base: string, decisions: ToRecord[] }} RepoPlan
+ * @typedef {{ repo: string, base: string, decisions: ToRecord[] }} RepoPlan
  * @typedef {{ id: string, why: string }} Skipped
  * @typedef {{ record: RepoPlan[], settled: string[], waiting: string[], ask: Skipped[] }} Plan
  * `record`: what a session records now, per repository; `settled`: answered or recorded, and the base branch reads the finding
@@ -79,6 +79,7 @@ export const deskOf = (checkouts, at) => {
 /** @param {Desk} desk @param {readonly Answer[]} answers @returns {Plan} */
 export const planOf = (desk, answers) => {
   const items = new Map(desk.items.map(item => [item.id, item]))
+  const bases = new Map(desk.repos.map(repo => [repo.name, repo.base]))
   /** @type {Map<string, RepoPlan>} */
   const record = new Map()
   /** @type {Plan} */
@@ -105,8 +106,9 @@ export const planOf = (desk, answers) => {
       plan.ask.push({ id: answer.id, why: 'the answer names no option and has no words' })
       continue
     }
-    const repo = desk.repos.find(one => one.name === item.repo)
-    const entry = record.get(item.repo) ?? { repo: item.repo, url: repo?.url ?? '', base: repo?.base ?? 'main', decisions: [] }
+    const base = bases.get(item.repo)
+    if (base === undefined) throw new Error(`desk: ${item.id} names a repository the desk does not list`)
+    const entry = record.get(item.repo) ?? { repo: item.repo, base, decisions: [] }
     entry.decisions.push({ id: item.id, slug: item.slug, finding: item.finding, answer: option ? `${option.letter}: ${option.label}` : `"${words}"`, prompt: option ? option.prompt : offered.typed(words) })
     record.set(item.repo, entry)
   }

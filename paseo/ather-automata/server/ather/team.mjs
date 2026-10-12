@@ -169,6 +169,11 @@ export const readMain = async (repo, previous, base = 'main') => {
   return { sha, folders }
 }
 
+// What origin/main holds, as the intents' files the model parses (parseIntent): one per folder, read from main.
+/** @param {MainSnapshot} main @returns {IntentFiles[]} */
+export const mainIntents = main =>
+  [...main.folders].map(([slug, folder]) => ({ slug, prompt: folder.prompt, progress: folder.progress, findings: folder.findings, files: folder.files, hasDebrief: false, updatedAt: folder.at, source: 'main', firstAuthor: folder.firstAuthor }))
+
 // Which local folders are uncommitted, and which this branch committed since main. Both calls load
 // the whole index of a large checkout, so readTeam asks only when `key` (main, HEAD and the intent
 // files' times) moved.
@@ -215,10 +220,7 @@ export const readTeam = async (repo, root, { cache, pinned, base = 'main' }) => 
   const key = main ? [main.sha, await shaOf(repo, 'HEAD'), ...folders.map(one => `${one.slug}:${one.times.join(',')}`)].join('|') : ''
   const local = !main ? null : cache.local?.key === key ? cache.local : await readLocal(repo, main.sha, key)
   /** @type {Map<string, IntentFiles>} */
-  const out = new Map()
-  for (const [slug, folder] of main?.folders ?? []) {
-    out.set(slug, { slug, prompt: folder.prompt, progress: folder.progress, findings: folder.findings, files: folder.files, hasDebrief: false, updatedAt: folder.at, source: 'main', firstAuthor: folder.firstAuthor })
-  }
+  const out = new Map((main ? mainIntents(main) : []).map(files => [files.slug, files]))
   for (const { slug, dir, text, times } of folders) {
     const onMain = main?.folders.get(slug)
     if (onMain && slug !== pinned && !localWins(text, onMain, Boolean(local && (local.dirty.has(slug) || local.committed.has(slug))))) continue

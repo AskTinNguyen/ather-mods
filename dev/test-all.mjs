@@ -49,13 +49,21 @@ for (const plugin of ['ather-automata', 'week-calendar']) {
 console.log('== type-check')
 const types = process.env.CLAUDE_CODE_TYPES ?? [path.join(MOD, '.claude-plugin/types/claude-code/index.d.ts')].find(f => fs.existsSync(f))
 if (types) {
-  const config = path.join(WORK, 'tsconfig.json')
-  fs.writeFileSync(config, JSON.stringify({
-    compilerOptions: { target: 'es2023', lib: ['es2023'], types: [], module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
-    // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
-    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs'), path.join(MOD, 'desk/model.mjs')).map(f => f.replace(/\\/g, '/')),
-  }))
-  sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
+  // One run per environment: the hooks module and the pure modules have no Node (the engine's API only);
+  // the desk's command line runs under Node, so it is checked with Node's types and nothing else changes.
+  const check = (name, files, nodeTypes = '') => {
+    const config = path.join(WORK, `tsconfig.${name}.json`)
+    fs.writeFileSync(config, JSON.stringify({
+      compilerOptions: { target: 'es2023', lib: ['es2023'], types: nodeTypes ? ['node'] : [], ...(nodeTypes ? { typeRoots: [nodeTypes] } : {}), module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
+      // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
+      include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(files).map(f => f.replace(/\\/g, '/')),
+    }))
+    sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
+  }
+  check('engine', [path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs'), path.join(MOD, 'desk/model.mjs')])
+  const node = path.join(WORK, 'node')
+  sh(`npm install --prefix "${node}" --no-save --no-audit --no-fund --loglevel=error @types/node@22`, WORK)
+  check('node', [path.join(MOD, 'desk/desk.mjs')], path.join(node, 'node_modules/@types'))
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')
 
 console.log('== unit')

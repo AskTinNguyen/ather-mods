@@ -17,34 +17,32 @@ import { fileURLToPath } from 'node:url'
 
 import { parseIntent } from '../hooks/model.mjs'
 import { choosePack } from '../hooks/packs/index.mjs'
-import { baseOf, fetchArgs, GIT_ENV, readMain } from '../hooks/team.mjs'
+import { originPath } from '../hooks/state.mjs'
+import { baseOf, fetchArgs, GIT_ENV, mainIntents, readMain } from '../hooks/team.mjs'
 import { deskOf, planOf, planText } from './model.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
+// The files as the pack chooser reads them (PackIo), from the disk.
+/** @type {import('../hooks/packs/index.mjs').PackIo} */
+const files = {
+  read: async file => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null),
+  exists: async file => fs.existsSync(file),
+  list: async folder => fs.readdirSync(folder, { withFileTypes: true }).map(entry => ({ name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file' })),
+  sessionId: async () => 'desk',
+}
+
+// A checkout as team.mjs reads it (Repo): git run in it, never asking for a password or taking the index lock.
 /** @param {string} root @returns {import('../hooks/team.mjs').Repo} */
 const repoAt = root => ({
   git: async (args, options = {}) => {
     const ran = spawnSync('git', [...args], { cwd: root, input: options.stdin, env: { ...process.env, ...GIT_ENV }, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: options.timeoutMs })
     return { exitCode: ran.status ?? -1, stdout: ran.stdout ?? '', stderr: ran.stderr ?? String(ran.error ?? '') }
   },
-  read: async file => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null),
-  list: async folder => fs.readdirSync(folder, { withFileTypes: true }).map(entry => ({ name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file' })),
+  read: files.read,
+  list: files.list,
   mtime: async file => fs.statSync(file).mtimeMs,
 })
-
-/** @param {string} folder */
-const packIo = folder => {
-  const repo = repoAt(folder)
-  return { read: repo.read, list: repo.list, exists: async (/** @type {string} */ file) => fs.existsSync(file), sessionId: async () => 'desk' }
-}
-
-// origin's web address, for links: "git@github.com:Owner/repo.git" and "https://…/repo.git" read as "https://github.com/Owner/repo".
-/** @param {string} remote */
-export const webUrl = remote => {
-  const github = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(remote.trim())
-  return github ? `https://github.com/${github[1]}/${github[2]}` : ''
-}
 
 /** @param {string} folder @param {{ fetch?: boolean }} [options] @returns {Promise<import('./model.mjs').Checkout>} */
 export const readCheckout = async (folder, options = {}) => {
@@ -52,19 +50,19 @@ export const readCheckout = async (folder, options = {}) => {
   if (top.exitCode !== 0) throw new Error(`${folder}: not a git checkout`)
   const root = top.stdout.trim()
   const repo = repoAt(root)
-  const { pack, profile, defaultBranch } = await choosePack(packIo(root), root)
+  const { pack, profile, defaultBranch } = await choosePack(files, root)
   const base = baseOf(profile, defaultBranch)
   if (options.fetch) {
     const fetched = await repo.git(fetchArgs(base))
-    if (fetched.exitCode !== 0) throw new Error(`${root}: git fetch of ${base} failed: ${fetched.stderr.trim()}`)
+    if (fetched.exitCode !== 0) throw new Error(`${root}: git fetch of ${base} failed: ${(fetched.stderr ?? '').trim()}`)
   }
   const main = await readMain(repo, null, base)
   if (!main) throw new Error(`${root}: no origin/${base} to read (fetch it, or run with --fetch)`)
-  const url = webUrl((await repo.git(['remote', 'get-url', 'origin'])).stdout)
-  const intents = [...main.folders].map(([slug, folder]) =>
-    parseIntent({ slug, prompt: folder.prompt, progress: folder.progress, findings: folder.findings, files: folder.files, hasDebrief: false, updatedAt: folder.at, source: 'main', firstAuthor: folder.firstAuthor }, pack),
-  )
-  return { name: url ? url.split('/').pop() ?? path.basename(root) : path.basename(root), url, base, sha: main.sha, intents }
+  const origin = (await repo.git(['remote', 'get-url', 'origin'])).stdout
+  const named = originPath(origin)
+  // Links only where the findings can be opened on the web: an origin on GitHub.
+  const url = named && /github\.com[:/]/i.test(origin) ? `https://github.com/${named}` : ''
+  return { name: named.split('/')[1] ?? path.basename(root), url, base, sha: main.sha, intents: mainIntents(main).map(files => parseIntent(files, pack)) }
 }
 
 // The page with the desk's data in it. `<` is escaped so no text in a finding can close the script.
@@ -77,11 +75,16 @@ export const pageWith = desk => {
   return page.replace(slot, () => `<script type="application/json" id="desk-data">${data}</script>`)
 }
 
-// An ArtifactData list's rows ({ id, data }) or the documents themselves.
-/** @param {unknown} json @returns {import('./model.mjs').Answer[]} */
-export const answersFrom = json => {
-  const rows = Array.isArray(json) ? json : Array.isArray(/** @type {any} */ (json)?.docs) ? /** @type {any} */ (json).docs : []
-  return rows.map(row => (row && typeof row === 'object' && 'data' in row ? row.data : row)).filter(doc => doc && typeof doc.id === 'string')
+// The page's answers as the desk skill saves them: the rows of an ArtifactData list of `answers`, each
+// `{ id, data }` with the answer document in `data`. Anything else is refused, not guessed at.
+/** @param {unknown} rows @returns {import('./model.mjs').Answer[]} */
+export const answersFrom = rows => {
+  if (!Array.isArray(rows)) throw new Error('answers: expected the rows of an ArtifactData list of answers, a JSON array of { id, data }')
+  return rows.map((row, index) => {
+    const doc = row?.data
+    if (typeof doc?.id !== 'string' || typeof doc?.state !== 'string') throw new Error(`answers: row ${index + 1} (${row?.id ?? 'no id'}) holds no answer document`)
+    return doc
+  })
 }
 
 /** @param {string[]} argv */

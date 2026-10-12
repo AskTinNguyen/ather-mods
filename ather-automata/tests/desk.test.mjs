@@ -103,10 +103,12 @@ describe('decision desk: collect (A1)', () => {
     expect(noBase).toContain('no origin/main to read')
   })
 
-  test("origin's address reads as a GitHub link, and findings link to their file on the base branch", () => {
-    expect(desk.webUrl('git@github.com:AskTinNguyen/storey.git')).toBe('https://github.com/AskTinNguyen/storey')
-    expect(desk.webUrl('https://github.com/AskTinNguyen/ather-mods\n')).toBe('https://github.com/AskTinNguyen/ather-mods')
-    expect(desk.webUrl('/srv/git/storey.git')).toBe('')
+  test("a finding links to its file on the base branch where origin is on GitHub, and nowhere else", async () => {
+    const clone = checkout('storey', { 'docs/intent/a/prompt.md': prompt('A'), 'docs/intent/a/progress.md': PROGRESS, 'docs/intent/a/findings.md': CALL('F-1') })
+    expect((await desk.readCheckout(clone)).url).toBe('')
+    git(clone, 'remote', 'set-url', 'origin', 'git@github.com:AskTinNguyen/Storey.git')
+    const read = await desk.readCheckout(clone)
+    expect([read.name, read.url]).toEqual(['Storey', 'https://github.com/AskTinNguyen/Storey'])
     const intent = { slug: 'retention', title: 'R', owner: 'Tin', status: 'active', updatedAt: 1, findings: [{ id: 'F-1', title: 'q', full: 'q', isBlocking: true, isDirectorCall: true, options: [], source: '## F-1' }] }
     const page = model.deskOf([{ name: 'storey', url: 'https://github.com/AskTinNguyen/storey', base: 'main', sha: 'abc', intents: [/** @type {any} */ (intent)] }], 1)
     expect(page.items[0]?.link).toBe('https://github.com/AskTinNguyen/storey/blob/main/docs/intent/retention/findings.md')
@@ -170,10 +172,31 @@ describe('decision desk: plan (A3)', () => {
     expect(text).toBe(`## web (into develop)\n\n- web/login/F-4: A: Yes\n  Prompt: ${decidePrompt('login', 'F-4', 'A — Yes')}`)
   })
 
-  test("answers come from an ArtifactData list's rows or from the documents themselves", () => {
+  test("answers are read from an ArtifactData list's rows, and anything else is refused", () => {
     const doc = answer({ id: 'web/login/F-4', choice: 'A' })
-    expect(desk.answersFrom({ docs: [{ id: 'web~login~F-4', data: doc }] })).toEqual([doc])
-    expect(desk.answersFrom([doc, { nothing: true }])).toEqual([doc])
-    expect(desk.answersFrom('nonsense')).toEqual([])
+    expect(desk.answersFrom([{ id: 'web~login~F-4', data: doc }])).toEqual([doc])
+    const refused = (/** @type {unknown} */ rows) => {
+      try {
+        desk.answersFrom(rows)
+        return ''
+      } catch (error) {
+        return error instanceof Error ? error.message : ''
+      }
+    }
+    expect(refused([doc])).toBe('answers: row 1 (web/login/F-4) holds no answer document')
+    expect(refused({ docs: [] })).toContain('expected the rows of an ArtifactData list')
+  })
+
+  test('an answer for a repository the desk does not list is a broken desk, not a silent default', () => {
+    const broken = { ...DESK, repos: DESK.repos.slice(1) }
+    const message = (() => {
+      try {
+        model.planOf(broken, [answer({ id: 'storey/retention/F-1', choice: 'A' })])
+        return ''
+      } catch (error) {
+        return error instanceof Error ? error.message : ''
+      }
+    })()
+    expect(message).toBe('desk: storey/retention/F-1 names a repository the desk does not list')
   })
 })
