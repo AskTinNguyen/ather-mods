@@ -53,7 +53,7 @@ if (types) {
   fs.writeFileSync(config, JSON.stringify({
     compilerOptions: { target: 'es2023', lib: ['es2023'], types: [], module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
     // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
-    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs')).map(f => f.replace(/\\/g, '/')),
+    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs'), path.join(MOD, 'desk/model.mjs')).map(f => f.replace(/\\/g, '/')),
   }))
   sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')
@@ -61,6 +61,7 @@ if (types) {
 console.log('== unit')
 const unit = path.join(WORK, 'unit')
 copy(path.join(MOD, 'hooks'), path.join(unit, 'hooks'))
+copy(path.join(MOD, 'desk'), path.join(unit, 'desk'))
 // This repository's own intents, where the tests look for them (../../docs/intent from tests/): tests/acceptance.test.mjs reads four.
 copy(path.resolve(HERE, '../docs/intent'), path.join(WORK, 'docs/intent'))
 const shim = path.join(HERE, 'shim/testing.mjs').replace(/\\/g, '/')
