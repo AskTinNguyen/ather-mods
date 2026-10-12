@@ -1,7 +1,7 @@
 # Ather Automata: several repositories
 
 - Rev: 10
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Hoàng Vũ
 - Skill: `plugin-authoring`
@@ -79,3 +79,7 @@ Ather Automata assumes one session is one checkout: one root from `$.session.roo
 | S12 | D15: the traced folders kept on the machine and set from the pane; a change applies at once. | S11 |
 | S13 | D16: a fetch the app rejected is tried again from the console's timers. | S12 |
 | S14 | D17: a `repos` tool for the session. | S12 |
+
+## Changelog
+
+- completed (2026-10-12): every acceptance item (A1 to A15) is met and PR #19 is merged (cb468a2, 0.2.5). Its workspace pane over several checkouts (D2, D7, D15, D17) was later replaced by one-repo-pane (0.2.9).
