@@ -78,6 +78,10 @@ copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
 console.log('== repos e2e')
 sh(`node repos.mjs "${path.join(WORK, 'checkouts-report.md')}"`, e2e)
 
+// The desk's page in a browser: skipped, and said so, where Playwright is not installed.
+console.log('== desk page')
+sh('node desk.mjs', e2e)
+
 console.log('== e2e')
 // The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for
 // people who do not work on the game (web, tools) and have no S2 checkout on their PC. A S2_ROOT that is

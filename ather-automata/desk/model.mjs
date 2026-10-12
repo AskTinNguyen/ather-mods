@@ -13,7 +13,7 @@ import { directorCalls } from '../hooks/model.mjs'
  * @typedef {{ name: string, url: string, base: string, sha: string, intents: readonly import('../hooks/model.mjs').Intent[] }} Checkout
  * `name`: the repository's short name; `url`: its web address ('' when origin is not on GitHub); `sha`: the base commit read
  * @typedef {{ letter: string, label: string, text: string, isRecommended: boolean }} DeskOption
- * @typedef {{ id: string, repo: string, slug: string, intent: string, owner: string, area: string, updatedAt: number,
+ * @typedef {{ id: string, repo: string, slug: string, intent: string, owner: string, updatedAt: number,
  *   finding: string, question: string, isBlocking: boolean, options: DeskOption[], source: string, link: string }} DeskItem
  * `id`: `<repo>/<slug>/<finding>`, the key of its answer; `question`: the finding's heading, whole; `source`: the finding as written
  * @typedef {{ name: string, url: string, base: string, sha: string, intents: number, waiting: number }} DeskRepo
@@ -45,7 +45,6 @@ export const deskOf = (checkouts, at) => {
         slug: intent.slug,
         intent: intent.title,
         owner: intent.owner,
-        area: intent.area,
         updatedAt: intent.updatedAt,
         finding: finding.id,
         question: finding.full,

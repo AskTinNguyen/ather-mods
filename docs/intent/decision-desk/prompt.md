@@ -35,7 +35,7 @@ Every decision that waits on the owner, in every repository the owner names, on 
 - D3 (answers): one `db` document per decision in the collection `answers`, keyed by repository, intent and finding. It holds the choice (an option's letter, or the typed words), the prompt it hands a session (`decidePrompt`), who answered and when, and a state: `answered`, then `recorded` with the PR, set by the session. An answer can be changed until it is recorded.
 - D4 (recording): the `plan` command reads the answers and a fresh collection and lists, per repository, the decisions to record and the exact prompt for each; answers whose finding is already closed on the base branch are settled and left out. The desk skill walks a session through it: a branch per repository, each decision recorded as the intent skill's decision step says, the repository's own gates, one PR, then each answer marked `recorded`.
 - D5 (Explain): asks Claude through `sample`, with the finding as written and its options, to explain in plain words without deciding. Hidden where the page cannot ask.
-- D6 (look): The Drawing Set tokens (warm paper, seal red for what waits, mono annotations, a serif title), in light and dark, mobile first.
+- D6 (look): The Drawing Set (apmos-wiki `DESIGN.md`): warm paper and a ruled grid, one sheet with a title block, mono annotations, a serif title, seal red only for a blocking call (the stop family). Light only, as that system rules out a dark mode. Phone first.
 - D7 (code): the pure part in `ather-automata/desk/model.mjs` (no `$`, no Node), the command line in `desk/desk.mjs`, the page template in `desk/page.html`, the procedure in `skills/desk/SKILL.md`. Each reuses the hooks modules that already own the logic; none copies them.
 
 ## Acceptance
@@ -43,7 +43,7 @@ Every decision that waits on the owner, in every repository the owner names, on 
 | Id | Item | Proof |
 | --- | --- | --- |
 | A1 | `collect` over two or more checkouts lists exactly the pane's director calls of each base branch, with options and prompts, and writes the data and the page. | Unit over git fixtures (base branch, completed intents left out, closed findings left out, a working-tree edit not read); live run over storey and ather-mods. |
-| A2 | The page draws every state: waiting (options, recommended marked, typed answer, Explain), answered (change it), recorded (its PR), settled, read-only for a viewer who cannot write, and no `db`. | Playwright over the page with a stand-in `claude`: assertions per state; screenshots at 390 and 1280 px, light and dark. |
+| A2 | The page draws every state: waiting (options, recommended marked, typed answer, Explain), answered (change it), recorded (its PR), settled, read-only for a viewer who cannot write, and no `db`. | Playwright over the page with a stand-in `claude`: assertions per state; screenshots at 390 and 1280 px (light only, D6). |
 | A3 | `plan` lists per repository what to record with the exact `decidePrompt`, and leaves out recorded, settled and withdrawn answers. | Unit. |
 | A4 | The desk skill takes a session from collect to published page to recorded PRs; the plugin validates with it. | `claude plugin validate ather-automata`; a dry run of `plan` and the recording on a scratch clone (no push). |
 | A5 | The live desk: published with `db`, `user` and `sample`; one `ArtifactData` list of `answers`. | The artifact link; the list's result. |

@@ -107,7 +107,7 @@ describe('decision desk: collect (A1)', () => {
     expect(desk.webUrl('git@github.com:AskTinNguyen/storey.git')).toBe('https://github.com/AskTinNguyen/storey')
     expect(desk.webUrl('https://github.com/AskTinNguyen/ather-mods\n')).toBe('https://github.com/AskTinNguyen/ather-mods')
     expect(desk.webUrl('/srv/git/storey.git')).toBe('')
-    const intent = { slug: 'retention', title: 'R', owner: 'Tin', area: 'Cost', status: 'active', updatedAt: 1, findings: [{ id: 'F-1', title: 'q', full: 'q', isBlocking: true, isDirectorCall: true, options: [], source: '## F-1' }] }
+    const intent = { slug: 'retention', title: 'R', owner: 'Tin', status: 'active', updatedAt: 1, findings: [{ id: 'F-1', title: 'q', full: 'q', isBlocking: true, isDirectorCall: true, options: [], source: '## F-1' }] }
     const page = model.deskOf([{ name: 'storey', url: 'https://github.com/AskTinNguyen/storey', base: 'main', sha: 'abc', intents: [/** @type {any} */ (intent)] }], 1)
     expect(page.items[0]?.link).toBe('https://github.com/AskTinNguyen/storey/blob/main/docs/intent/retention/findings.md')
   })
@@ -130,9 +130,9 @@ describe('decision desk: plan (A3)', () => {
       { name: 'web', url: '', base: 'develop', sha: 'b', intents: 1, waiting: 1 },
     ],
     items: [
-      { id: 'storey/retention/F-1', repo: 'storey', slug: 'retention', intent: 'R', owner: 'Tin', area: 'Cost', updatedAt: 1, finding: 'F-1', question: 'Which rate?', isBlocking: false, options: [{ letter: 'A', label: 'Five per cent', text: 'Five per cent, half at handover', isRecommended: true }, { letter: 'B', label: 'Ten', text: 'Ten per cent', isRecommended: false }], source: '', link: '' },
-      { id: 'storey/tender/F-2', repo: 'storey', slug: 'tender', intent: 'T', owner: 'Tin', area: 'Cost', updatedAt: 1, finding: 'F-2', question: 'Late bids?', isBlocking: false, options: [], source: '', link: '' },
-      { id: 'web/login/F-4', repo: 'web', slug: 'login', intent: 'L', owner: 'Tin', area: 'Web', updatedAt: 1, finding: 'F-4', question: 'SSO?', isBlocking: true, options: [{ letter: 'A', label: 'Yes', text: 'Yes', isRecommended: true }, { letter: 'B', label: 'No', text: 'No', isRecommended: false }], source: '', link: '' },
+      { id: 'storey/retention/F-1', repo: 'storey', slug: 'retention', intent: 'R', owner: 'Tin', updatedAt: 1, finding: 'F-1', question: 'Which rate?', isBlocking: false, options: [{ letter: 'A', label: 'Five per cent', text: 'Five per cent, half at handover', isRecommended: true }, { letter: 'B', label: 'Ten', text: 'Ten per cent', isRecommended: false }], source: '', link: '' },
+      { id: 'storey/tender/F-2', repo: 'storey', slug: 'tender', intent: 'T', owner: 'Tin', updatedAt: 1, finding: 'F-2', question: 'Late bids?', isBlocking: false, options: [], source: '', link: '' },
+      { id: 'web/login/F-4', repo: 'web', slug: 'login', intent: 'L', owner: 'Tin', updatedAt: 1, finding: 'F-4', question: 'SSO?', isBlocking: true, options: [{ letter: 'A', label: 'Yes', text: 'Yes', isRecommended: true }, { letter: 'B', label: 'No', text: 'No', isRecommended: false }], source: '', link: '' },
     ],
   }
   /** @param {Partial<import('../desk/model.mjs').Answer> & { id: string }} answer @returns {import('../desk/model.mjs').Answer} */
