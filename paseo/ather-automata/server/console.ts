@@ -274,6 +274,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     sent: [],
     githubLogin: "",
     crew: [],
+    crewTree: { heading: "", live: [], done: [] },
     intentView: null,
     issueView: null,
     message: Date.now() - (messages.get(agentId)?.at ?? 0) < MESSAGE_MS ? (messages.get(agentId)?.text ?? "") : "",
@@ -327,7 +328,9 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     isNewcomer: built.isNewcomer,
     sent: [...sentOf(agentId)],
     githubLogin: await githubLogin().catch(() => ""),
-    crew: await crewOf(agentId).catch(() => []),
+    ...(await crewOf(agentId)
+      .then(({ crew, ...tree }) => ({ crew, crewTree: tree }))
+      .catch(() => ({ crew: [], crewTree: { heading: "", live: [], done: [] } }))),
     intentView: await intentViewOf(ctx, built, slug),
     issueView: await issueViewOf(ctx),
   };

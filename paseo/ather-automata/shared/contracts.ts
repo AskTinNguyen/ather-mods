@@ -137,8 +137,18 @@ export const homeView = z.object({
       // What came of it: the first sentence of its report.
       outcome: z.string(),
       source: z.enum(["worker", "agent"]),
+      parentId: z.string(),
+      via: z.string(),
     }),
   ),
+  // The workers as drawn (crew.mjs crewTree): each under the worker that started it, the live ones then the last
+  // finished. A line is a worker of `crew` by id (`fold` 0), or "+N finished" (`fold` N); `via`: "started by …"
+  // when the one that started it is not right above.
+  crewTree: z.object({
+    heading: z.string(),
+    live: z.array(z.object({ id: z.string(), depth: z.number(), via: z.string(), fold: z.number() })),
+    done: z.array(z.object({ id: z.string(), depth: z.number(), via: z.string(), fold: z.number() })),
+  }),
   // An intent opened to look at (rows and matching words open it; looking never tracks), or null.
   intentView: z
     .object({

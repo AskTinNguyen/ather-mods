@@ -76,8 +76,10 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
     ) : null;
 
   const next = view.next;
-  const live = view.crew.filter((one) => one.state === "running" || one.state === "waiting");
-  const ended = view.crew.filter((one) => one.state === "done" || one.state === "failed");
+  const workers = new Map(view.crew.map((one) => [one.id, one]));
+  // The finished workers' lines, a few roots with what each started, the rest on request.
+  const doneRoots = view.crewTree.done.filter((line) => line.depth === 0).length;
+  const doneShown = open.done ? view.crewTree.done : view.crewTree.done.slice(0, nthRoot(view.crewTree.done, DONE_SHOWN));
   const meta = [view.role, view.lock, view.week].filter(Boolean).join(" · ");
   const open_ = view.items.filter((one) => one.kind !== "away-end" && !isSent(one.id));
 
@@ -236,25 +238,25 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
 
       {view.stages.length > 0 || view.crew.length > 0 ? <SummaryStrip kit={kit} view={view} /> : null}
 
-      {live.length > 0 ? (
+      {view.crewTree.live.length > 0 ? (
         <FadeIn delay={60} style={s.section}>
-          <SectionLabel kit={kit} text={`Workers · running ${live.filter((one) => one.state === "running").length}`} />
-          {live.map((one, index) => (
-            <CrewRow key={one.id} kit={kit} one={one} index={index} now={now} isLightTheme={isLight(theme)} />
+          <SectionLabel kit={kit} text={view.crewTree.heading} />
+          {view.crewTree.live.map((line, index) => (
+            <CrewLine key={line.id} kit={kit} line={line} one={workers.get(line.id)} index={index} now={now} isLightTheme={isLight(theme)} />
           ))}
         </FadeIn>
       ) : null}
 
-      {ended.length > 0 ? (
+      {view.crewTree.done.length > 0 ? (
         <FadeIn delay={90} style={s.section}>
-          <SectionLabel kit={kit} text={`Done ${ended.length}`}>
+          <SectionLabel kit={kit} text={`Done ${doneRoots}`}>
             <View style={{ flex: 1 }} />
-            {ended.length > DONE_SHOWN ? (
-              <Button kit={kit} variant="ghost" icon={open.done ? "ChevronUp" : "ChevronDown"} label={open.done ? "fold" : `all ${ended.length}`} onPress={() => toggle("done")} />
+            {doneRoots > DONE_SHOWN ? (
+              <Button kit={kit} variant="ghost" icon={open.done ? "ChevronUp" : "ChevronDown"} label={open.done ? "fold" : `all ${doneRoots}`} onPress={() => toggle("done")} />
             ) : null}
           </SectionLabel>
-          {(open.done ? ended : ended.slice(0, DONE_SHOWN)).map((one, index) => (
-            <CrewRow key={one.id} kit={kit} one={one} index={index} now={now} isLightTheme={isLight(theme)} />
+          {doneShown.map((line, index) => (
+            <CrewLine key={line.id} kit={kit} line={line} one={workers.get(line.id)} index={index} now={now} isLightTheme={isLight(theme)} />
           ))}
         </FadeIn>
       ) : null}
@@ -470,6 +472,28 @@ function SummaryStrip({ kit, view }: { kit: Kit; view: HomeView }) {
 // One worker, as the original drew it: its avatar (a body for its kind, holding what it is doing)
 // in a ring for its state, floating while it runs; what it is, on which model, doing what; how long
 // and how many tool calls. A finished one shows its steps and what came of it.
+// Where the lines of the nth finished root begin: the first `count` roots are drawn with what they started.
+function nthRoot(lines: HomeView["crewTree"]["done"], count: number) {
+  let seen = 0;
+  const at = lines.findIndex((line) => line.depth === 0 && ++seen > count);
+  return at < 0 ? lines.length : at;
+}
+
+// One line of the workers tree: a worker indented under the one that started it ("started by …" when that one
+// is not right above), or a parent's finished workers past the first few, as "+N finished".
+function CrewLine({ kit, line, one, index, now, isLightTheme }: { kit: Kit; line: HomeView["crewTree"]["live"][number]; one: HomeView["crew"][number] | undefined; index: number; now: number; isLightTheme: boolean }) {
+  const { s } = kit;
+  const indent = { marginLeft: Math.min(line.depth, 4) * 20 };
+  if (line.fold > 0) return <Text style={[s.hint, indent, { paddingVertical: 6, paddingHorizontal: 8 }]}>{`+${line.fold} finished`}</Text>;
+  if (!one) return null;
+  return (
+    <View style={indent}>
+      {line.via ? <Text style={[s.hint, { paddingHorizontal: 8, paddingTop: 6, fontSize: 12 }]}>{`started by ${line.via}`}</Text> : null}
+      <CrewRow kit={kit} one={one} index={index} now={now} isLightTheme={isLightTheme} />
+    </View>
+  );
+}
+
 function CrewRow({ kit, one, index, now, isLightTheme }: { kit: Kit; one: HomeView["crew"][number]; index: number; now: number; isLightTheme: boolean }) {
   const { c, s } = kit;
   const isEnded = one.state === "done" || one.state === "failed";
