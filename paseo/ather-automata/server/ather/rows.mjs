@@ -31,6 +31,9 @@ export const fit = (text, width) => {
 
 // A checkout's name after a row's title: a worktree's folder can be longer than the title it sits beside, so it is cut.
 const REPO_CELLS = 16
+// A row's title (its glyph included) keeps this many cells in a narrow terminal pane: the right-hand columns are left out for it, in this order.
+const TITLE_MIN = 16
+const LEFT_OUT = ['count', 'age', 'owner', 'bar']
 
 // A top-level section label, spaced out as the studio's are ("N E E D S   Y O U"), plain when too wide.
 /** @param {any} el @param {string} key @param {string} text @param {number} width @param {string} [colour] */
@@ -77,16 +80,27 @@ export const choiceRow = (el, row, isClicked) => {
 export const workLine = (el, row) => {
   const { cells, cols } = row
   if (row.isClicked) return deskLine(el, row)
-  const columns = /** @type {[string, string, string | undefined, number][]} */ ([
-    ['bar', cells.bar, INK, BAR_CELLS],
-    ['count', cells.count.padStart(cols.count), undefined, cols.count],
-    ['age', cells.age.padStart(cols.age), QUIET, cols.age],
-    ['owner', fit(cells.owner, cols.owner).padEnd(cols.owner), row.ownerColour, cols.owner],
-  ]).filter(([, , , size]) => size > 0)
-  const right = columns.reduce((sum, [, , , size]) => sum + size + 2, 0)
-  const warn = cells.warn ? ` ${cells.warn}` : ''
-  const repo = cells.repo ? ` ${fit(cells.repo, REPO_CELLS)}` : ''
-  const title = fit(`${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, Math.max(8, row.width - right - warn.length - repo.length - (row.hotkey ? 3 : 0)))
+  /** @param {[string, string, string | undefined, number][]} list */
+  const sizeOf = list => list.reduce((sum, [, , , size]) => sum + size + 2, 0)
+  // Every row counts a hotkey's 3 cells here, with one or not, so a list's rows leave out the same columns.
+  const columns = LEFT_OUT.reduce(
+    (kept, name) => (row.width - 3 - sizeOf(kept) >= TITLE_MIN ? kept : kept.filter(([key]) => key !== name)),
+    /** @type {[string, string, string | undefined, number][]} */ ([
+      ['bar', cells.bar, INK, BAR_CELLS],
+      ['count', cells.count.padStart(cols.count), undefined, cols.count],
+      ['age', cells.age.padStart(cols.age), QUIET, cols.age],
+      ['owner', fit(cells.owner, cols.owner).padEnd(cols.owner), row.ownerColour, cols.owner],
+    ]).filter(([, , , size]) => size > 0),
+  )
+  const whole = `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`
+  const space = row.width - sizeOf(columns) - (row.hotkey ? 3 : 0)
+  // What the title's own cells leave goes to the warning, then to the name; one left fewer than 4 cells is not drawn.
+  const spare = space - Math.min(TITLE_MIN, whole.length)
+  /** @param {string} text @param {number} size */
+  const after = (text, size) => (text && size >= 4 ? fit(` ${text}`, size) : '')
+  const warn = after(cells.warn, spare)
+  const repo = after(fit(cells.repo, REPO_CELLS), spare - warn.length)
+  const title = fit(whole, Math.max(8, space - warn.length - repo.length))
   return el.Box({
     key: `row-${row.key}`,
     flexDirection: 'row',
@@ -129,17 +143,23 @@ const deskLine = (el, row) => {
 }
 
 // The header's one status line: where things stand, and at its right how fresh the team's list is
-// (`fresh`, a press that fetches now); without it, the words alone.
-/** @param {any} el @param {{ text: string, fresh: string, width: number, hotkey?: string, onPress: () => void }} line */
-export const statusLine = (el, { text, fresh, width, hotkey, onPress }) => {
-  if (!fresh) return text ? el.Text({ key: 'status', children: fit(text, width) }) : null
-  return el.Box({
-    key: 'status',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    children: [el.Text({ key: 'status-words', children: fit(text, Math.max(1, width - fresh.length - 6)) }), el.Button({ key: 'sync', label: fresh, hotkey, plain: true, dimColor: true, onPress })],
-  })
+// (`fresh`, a press that fetches now); without it, the words alone. A failed sync's `error` (git's own
+// words) is drawn under it, cut to two lines of the width (the desktop's width leaves it whole).
+/** @param {any} el @param {{ text: string, fresh: string, width: number, hotkey?: string, onPress: () => void, error?: string }} line */
+export const statusLine = (el, { text, fresh, width, hotkey, onPress, error = '' }) => {
+  const line = fresh
+    ? el.Box({
+        key: 'status',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        width: '100%',
+        children: [el.Text({ key: 'status-words', children: fit(text, Math.max(1, width - fresh.length - 6)) }), el.Button({ key: 'sync', label: fresh, hotkey, plain: true, dimColor: true, onPress })],
+      })
+    : text
+      ? el.Text({ key: 'status', children: fit(text, width) })
+      : null
+  if (!error) return line
+  return el.Box({ key: 'status-lines', flexDirection: 'column', width: '100%', children: [line, el.Text({ key: 'status-error', color: QUIET, wrap: 'wrap', children: fit(error, 2 * width) })] })
 }
 
 /**
