@@ -2069,13 +2069,14 @@ describe('one pane over the workspace', () => {
   const columnsOf = (/** @type {any} */ row) => all(row, one => /-cols$/.test(one.props?.key ?? ''))[0].children
   const drawnCells = (/** @type {any} */ row) => 3 + mainOf(row).children.reduce((/** @type {number} */ sum, /** @type {any} */ one) => sum + (one.props.label ?? textOf(one)).length, 0) + columnsOf(row).reduce((/** @type {number} */ sum, /** @type {any} */ one) => sum + one.props.width + 2, 0)
   const NARROW = { glyph: '◐', title: 'ability-system-rework', warn: '', repo: '', bar: '▰▰▱▱▱', count: '12/20', age: '14d', owner: 'Tin Nguyen QA' }
-  const narrowLine = (/** @type {number} */ width, /** @type {any} */ cells = {}, /** @type {any} */ cols = { count: 5, age: 3, owner: 12 }, /** @type {string | undefined} */ hotkey = '1') => workLine(el, { key: 'pick-a', cells: { ...NARROW, ...cells }, cols, width, ownerColour: '#ffffff', hotkey, onPress: () => undefined })
+  const narrowLine = (/** @type {number} */ width, /** @type {any} */ cells = {}, /** @type {any} */ cols = { count: 5, age: 3, owner: 12 }, /** @type {boolean} */ hasKey = true) => workLine(el, { key: 'pick-a', cells: { ...NARROW, ...cells }, cols, width, ownerColour: '#ffffff', hotkey: hasKey ? '1' : undefined, onPress: () => undefined })
 
   test('a narrow terminal row leaves out count, age, owner, then the bar, so that the title keeps its cells; a wide one draws them all', () => {
-    const drawn = (/** @type {number} */ width, /** @type {string | undefined} */ hotkey = '1') => columnsOf(narrowLine(width, {}, undefined, hotkey)).map((/** @type {any} */ one) => one.props.key.replace('pick-a-', ''))
+    const drawn = (/** @type {number} */ width, /** @type {boolean} */ hasKey = true) => columnsOf(narrowLine(width, {}, undefined, hasKey)).map((/** @type {any} */ one) => one.props.key.replace('pick-a-', ''))
     expect([100, 60, 52, 51, 44, 41, 36, 20].map(width => drawn(width))).toEqual([['bar', 'count', 'age', 'owner'], ['bar', 'count', 'age', 'owner'], ['bar', 'count', 'age', 'owner'], ['bar', 'age', 'owner'], ['bar', 'owner'], ['bar', 'owner'], ['bar'], []])
     // A row without a hotkey leaves out the same columns, so a list's columns stay aligned.
-    for (const width of [60, 51, 41, 36]) expect(drawn(width, undefined)).toEqual(drawn(width))
+    expect(mainOf(narrowLine(41, {}, undefined, false)).children[0].props.hotkey).toBe(undefined)
+    for (const width of [60, 51, 41, 36]) expect(drawn(width, false)).toEqual(drawn(width))
     for (const width of [36, 41, 60]) {
       for (const cells of [{}, { warn: 'local' }, { repo: 'web-checkout1' }, { warn: 'local', repo: 'web-checkout1' }]) {
         const row = narrowLine(width, cells)
