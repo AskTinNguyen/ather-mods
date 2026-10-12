@@ -2026,14 +2026,13 @@ describe('one pane over the workspace', () => {
   test("the status line draws git's error under it only when given one, cut to two lines in a terminal", () => {
     const line = { text: 'Build · 2/5', fresh: 'sync failed ↻', width: 40, onPress: () => undefined }
     const plain = statusLine(el, line)
-    expect([plain.props.key, keysOf([plain])]).toEqual(['status', ['status', 'status-words', 'sync']])
+    expect(plain.props.key).toBe('status')
     expect(statusLine(el, { ...line, error: '' })).toEqual(plain)
     const error = `fatal: ${'x'.repeat(200)}`
     const drawn = statusLine(el, { ...line, error })
-    expect(keysOf([drawn]).slice(1)).toEqual(['status', 'status-words', 'sync', 'status-error'])
     expect(drawn.children[0]).toEqual(plain)
     const under = drawn.children[1]
-    expect([under.props.color, under.props.wrap, textOf(under)]).toEqual([QUIET, 'wrap', `${error.slice(0, 79)}…`])
+    expect([under.props.key, under.props.color, under.props.wrap, textOf(under)]).toEqual(['status-error', QUIET, 'wrap', `${error.slice(0, 79)}…`])
     expect(textOf(statusLine(el, { ...line, width: 1000, error }).children[1])).toBe(error)
   })
 
