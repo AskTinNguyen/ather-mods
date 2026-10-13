@@ -15,7 +15,7 @@
     {
       "name": "ather-board",
       "description": "The team's intents as a project board: what is stuck, every intent by owner, area or stage, the open acceptance items, and a page to share. Read-only.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": { "name": "Tin Nguyen" },
       "category": "productivity",
       "source": "./ather-board"
