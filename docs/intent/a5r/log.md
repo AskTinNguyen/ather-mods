@@ -206,3 +206,10 @@ With a screenshot of the A5R pane: Orchestrate card with "17:25 · 1009-loco-ab2
 > A5R mục đích là kiểm soát chất lượng ship, không phải là làm hỏng automomous workflow.
 
 Hai also ran `/a5r pass a5r` (kept for the close after this rev). The TALab session (lane talab-upgrade, bypass permissions, an away window open) was refused by rule 1 on `git checkout 55693182ad46 -- tools/TALab/build_topic_stage.py tools/TALab/stages/patterns.py tools/TALab/stages/walker_wall.json tools/TALab/stages/README.md` ("needs Hai's approval in a dialog"; "nobody could approve it now"); Hai's "duyệt" in chat did not count; the lane stalled overnight; Hai ran the git commands himself and turned A5R off: "lệnh này quá conflict vì Claude Code session tôi đang để Bypass permissions, việc gate chặn hay từ chối là sai hoàn toàn với mục đích workflow của tôi".
+
+## L-31 (2026-10-13) | class: intent | -> rev 28
+
+> A5R rất hiệu quả để manage sync và editor, nhưng quá phiền khi block nhiều fast route và automous của AtherAutomata.
+> Kiểm tra lại xem cần sửa gì?
+
+Found from the S2 transcripts: A5R has been off since 2026-10-10 morning (one `/a5r off` turns it off for every session); every A5R sync aborted because the plugin-spawned sync worker cannot call A5R's own tools; force-with-lease and add-all blocked even outside the shared checkout; 45-minute build cap with an empty queue; repeated notices.
