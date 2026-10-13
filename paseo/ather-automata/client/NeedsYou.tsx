@@ -110,16 +110,7 @@ function Answers({ kit, one, answers, busy, run }: { kit: Kit; one: Item; answer
     <View style={{ paddingLeft: 32, paddingRight: 8, paddingBottom: 8, gap: 6 }}>
       {one.detail ? <Text style={[s.body, { fontSize: 13, lineHeight: 18 }]}>{one.detail}</Text> : null}
       {answers.options.map((option) => (
-        <Button
-          key={option.letter}
-          kit={kit}
-          variant={option.isRecommended ? "primary" : "secondary"}
-          label={`${option.letter}: ${option.label}${option.isRecommended ? " (recommended)" : ""}`}
-          accessibilityLabel={`${option.letter}: ${option.text}`}
-          full
-          disabled={busy}
-          onPress={() => run("answer", one.id, option.letter)}
-        />
+        <OptionButton key={option.letter} kit={kit} option={option} disabled={busy} onPress={() => run("answer", one.id, option.letter)} />
       ))}
       <View style={[s.buttons, { gap: 6 }]}>
         <Button kit={kit} variant="ghost" icon="MessageCircle" label="Explain" disabled={busy} onPress={() => run("explain", one.id)} />
@@ -149,5 +140,40 @@ function Answers({ kit, one, answers, busy, run }: { kit: Kit; one: Item; answer
         </View>
       ) : null}
     </View>
+  );
+}
+
+// One answer: the whole option, wrapped to as many lines as it needs (the recommended one primary). Button is one
+// fixed-height line, which cuts a decision's long options, and its `full` is for a wrapping row, not a column.
+function OptionButton({ kit, option, disabled, onPress }: { kit: Kit; option: NonNullable<Item["answers"]>["options"][number]; disabled: boolean; onPress: () => void }) {
+  const { c } = kit;
+  const primary = option.isRecommended;
+  const fg = primary ? c.accentForeground : c.foreground;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${option.letter}: ${option.text}`}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        {
+          alignSelf: "stretch" as const,
+          flexDirection: "row" as const,
+          alignItems: "flex-start" as const,
+          gap: 8,
+          paddingVertical: 8,
+          paddingHorizontal: 12,
+          borderRadius: 8,
+          backgroundColor: primary ? c.accent : c.surface2,
+          borderWidth: primary ? 0 : 1,
+          borderColor: c.border,
+          opacity: disabled ? 0.5 : pressed ? 0.85 : 1,
+        },
+      ]}
+    >
+      <Text style={{ color: fg, fontSize: 13, fontWeight: "700" }}>{option.letter}</Text>
+      <Text style={{ flex: 1, color: fg, fontSize: 13, lineHeight: 18, fontWeight: primary ? "600" : "500" }}>{`${option.text}${primary ? " (recommended)" : ""}`}</Text>
+    </Pressable>
   );
 }
