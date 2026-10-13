@@ -1,6 +1,8 @@
-# A5R 0.16.0
+# A5R 0.16.1
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
+
+0.16.1: lease push đọc xuyên `timeout`/`nice`/`env`/`time`/`command`, chữ trong `echo`/`printf` không phải lệnh, chỉ `eval`/`source`/file script mới bị coi là "không đọc được"; dòng kết thúc của sync worker phải viết hoa `SYNC DONE`/`SYNC ABORT` và nằm trong 3 dòng cuối, DONE có sha thắng ABORT; notice cutoff không đếm lệnh chỉ đọc (git log/status/diff, ls, cat, rg…), có đếm redirect vào checkout chung từ bất kỳ đâu, và nhớ qua reload.
 
 0.16.0 (rev 28): sync chạy tới cùng (worker không gọi tool a5r; lock Editor do a5r của holder lấy và thả; worker kết thúc bằng dòng `SYNC DONE …`/`SYNC ABORT …`); `git push --force-with-lease` lên nhánh của mình chạy (không lên main/master/develop hay nhánh checkout chung đang đứng), `--force`/`-f`/`+refspec` vẫn bị từ chối, lease push nằm trong `eval`/script không đọc được thì bị từ chối ("viết thành một lệnh git thường"); `git add .`/`-A` chỉ bị từ chối trong checkout chung S2; build window > 45 phút được cấp khi không ai xếp hàng và không cắt qua cutoff (cả khi `extend`); mỗi notice chỉ một lần, notice ổ đĩa một lần mỗi ngày và nói phải dọn gì, notice cutoff chỉ tới session có thay đổi chưa commit trong checkout chung (Edit/Write, hoặc đã chạy lệnh shell trong đó từ lần commit cuối) hay đang giữ/xếp hàng Editor (các session khác nhận một dòng lúc freeze).
 

@@ -57,7 +57,13 @@ test('A79 (review 2): unit: the last SYNC line reads leniently: Markdown, backti
   expect(done('SYNC DONE: 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')?.sha).toBe('1a2b3c4')
   expect(done('SYNC DONE `1a2b3c4` pre=`9f8e7d6` build=Succeeded conflicts=none')?.sha).toBe('1a2b3c4')
   expect(done('## SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')?.sha).toBe('1a2b3c4')
-  expect(done('sync done 1A2B3C4 pre=9f8e7d6 build=skipped conflicts=none')?.sha).toBe('1a2b3c4')
+  expect(done('SYNC DONE 1A2B3C4 pre=9f8e7d6 build=skipped conflicts=none')?.sha).toBe('1a2b3c4')
+  // 0.16.1: the keywords in capitals, in the last three lines; a DONE with a sha wins over a later prose ABORT.
+  expect(done('sync done 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')).toBe(null)
+  expect(done('Sync done: the merge finished, see below.')).toBe(null)
+  expect(done('SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none\nSYNC ABORT was not needed.')?.kind).toBe('done')
+  expect(parseSyncEnd('Tried twice.\nSYNC DONE (merge left half-way)\nSYNC ABORT conflict in X.uasset state=merge aborted')?.kind).toBe('abort') // no sha on the DONE
+  expect(done('SYNC DONE 1a2b3c4 pre=x build=skipped conflicts=none\nThen I looked again.\nOne more note.\nThe end.')).toBe(null) // not in the last three lines
   expect(done(`My procedure ends with one of:\n${T1}\n${T2}\nSYNC worker report: merged cleanly.\nSYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none`)?.sha).toBe('1a2b3c4')
   expect(done(`${T1}\n${T2}`)).toBe(null) // only the template quoted: no last word
   expect(done('SYNC ABORT fetch failed state=clean\nthen retried\nSYNC DONE 1a2b3c4 pre=x build=skipped conflicts=none')?.kind).toBe('done') // the last one wins
@@ -191,6 +197,13 @@ test('A80: --force-with-lease to a branch of one\'s own runs; to main or the sha
   expect(await run('bash -c "git push --force-with-lease origin HaiHuynh/x"')).toBeUndefined()
   expect(await run('eval "git push --force-with-lease origin HaiHuynh/x"')).toContain('write it as one plain git command')
   expect(await run('git commit -m "note: prefer --force-with-lease"')).toBeUndefined() // names the flag, pushes nothing
+  // 0.16.1: wrapper verbs are read through; text in echo/printf is no command; a script or a fed shell is unread.
+  expect(await run('timeout 120 git push --force-with-lease origin HaiHuynh/x')).toBeUndefined()
+  expect(await run('timeout 120 git -C E:/s2 push --force-with-lease origin')).toContain('HaiHuynh/20261005, the branch the shared checkout has checked out')
+  expect(await run('echo "next: git push --force-with-lease origin HaiHuynh/20261005"')).toBeUndefined()
+  expect(await run("printf '%s\\n' 'git push --force-with-lease origin main'")).toBeUndefined()
+  expect(await run('bash push.sh --force-with-lease')).toContain('write it as one plain git command')
+  expect(await run('./push.sh --force-with-lease origin HaiHuynh/x')).toContain('write it as one plain git command')
 })
 
 test('A80: git add . / -A / --all is refused only in the shared S2 checkout; in a worktree or another repository it runs', opts(), async ($, on) => {
@@ -289,31 +302,60 @@ test('A82: an idle session with nothing uncommitted and no Editor request gets n
 })
 
 // ---------- review fixes ----------
-test('A82 (review 4): a shell command run inside the shared checkout since the last commit there makes the session hear the cutoff; a commit there clears it', opts(), async ($, on) => {
-  const w = world(on)
+// 0.16.1: an S2 session's working folder IS the shared checkout, so the tests run from there.
+const START_S2 = { cwd: 'E:/s2', surface: 'terminal', isInteractive: true } as never
+const cutoffs = (w: W) => prompts(w).filter(p => p.includes('Sync main — cutoff: sync-lane merges origin/main at 15:30')).length
+
+test('A82 (review 4, 0.16.1): from the shared checkout, reads leave a session out of the cutoff; a command that may write there brings it in (kept in its session file)', opts(), async ($, on) => {
+  const w = world(on, { cwd: 'E:/s2' })
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
   w.put(SYNC, JSON.stringify(newSync(T(15, 30), B, 'sync-lane (session bbbbbbbb)', NOW))) // cutoff 15:00
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
-  await $.session.start(START)
-  await $.tool.call({ tool: 'Bash', command: 'cd E:/s2 && python tools/gen.py' } as never) // may have written files there
+  await $.session.start(START_S2)
+  for (const c of ['git log -3', 'git status --short', 'git diff --stat', 'git branch --list', 'ls Source', 'rg TODO Source', 'cat AGENTS.md | head -20', 'timeout 60 git rev-parse HEAD'])
+    await $.tool.call({ tool: 'Bash', command: c } as never)
   await idle($)
-  await advance(w, 20) // 15:00
-  expect(prompts(w).filter(p => p.includes('Sync main — cutoff: sync-lane merges origin/main at 15:30')).length).toBe(1)
+  await advance(w, 21) // 15:01: inside the cutoff
+  expect(cutoffs(w)).toBe(0)
+  await $.tool.call({ tool: 'Bash', command: 'python tools/gen.py' } as never) // may write files in the checkout
+  expect(typeof JSON.parse(w.read(`${HF}/editor/${ME8}.json`)).sharedShellAt).toBe('number') // survives a reload
+  await idle($)
+  await advance(w, 1)
+  expect(cutoffs(w)).toBe(1)
 })
 
-test('A82 (review 4): after a commit in the shared checkout and no shell there since, the session is not told at the cutoff', opts(), async ($, on) => {
+test('A82 (review 4, 0.16.1): after a commit in the shared checkout and nothing written there since, the session is not told at the cutoff', opts(), async ($, on) => {
+  const w = world(on, { cwd: 'E:/s2' })
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put(SYNC, JSON.stringify(newSync(T(15, 30), B, 'sync-lane (session bbbbbbbb)', NOW)))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
+  await $.session.start(START_S2)
+  await $.tool.call({ tool: 'Bash', command: 'python tools/gen.py' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "wip: gen" -- tools/out.json' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git log -1' } as never)
+  expect(JSON.parse(w.read(`${HF}/editor/${ME8}.json`)).sharedShellAt).toBeUndefined()
+  await idle($)
+  await advance(w, 20)
+  expect(cutoffs(w)).toBe(0)
+})
+
+test('A82 (0.16.1): a redirect into the shared checkout counts from any folder', opts(), async ($, on) => {
   const w = world(on)
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
   w.put(SYNC, JSON.stringify(newSync(T(15, 30), B, 'sync-lane (session bbbbbbbb)', NOW)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
   await $.session.start(START)
-  await $.tool.call({ tool: 'Bash', command: 'cd E:/s2 && python tools/gen.py' } as never)
-  await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit -m "wip: gen" -- tools/out.json' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 log -3 > notes.txt' } as never) // a read, written outside
   await idle($)
-  await advance(w, 20)
-  expect(prompts(w).filter(p => p.includes('Sync main — cutoff')).length).toBe(0)
+  await advance(w, 21)
+  expect(cutoffs(w)).toBe(0)
+  await $.tool.call({ tool: 'Bash', command: 'python report.py > E:/s2/Docs/report.md' } as never)
+  await idle($)
+  await advance(w, 1)
+  expect(cutoffs(w)).toBe(1)
 })
 
 test('A81 (review 3): extending a 45-min build lease past 45 min in all is refused while someone is queued; with nobody queued it runs', opts(), async ($, on) => {

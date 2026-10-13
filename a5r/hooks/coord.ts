@@ -103,6 +103,9 @@ export type SessionFile = {
   agents?: number
   /** A67: the kinds of those running agents (their agent types). */
   agentKinds?: string[]
+  /** A82: when this session last ran a shell command that may write inside the shared checkout, since its last commit
+   * there (absent: none); kept across a reload. */
+  sharedShellAt?: number
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
@@ -126,7 +129,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}) }
   } catch {
     return null
   }
@@ -990,30 +993,35 @@ export const SYNC_WORKER_PROMPT = [
   '   The holder\'s a5r records the first as done and the second as aborted; any other ending is recorded as an abort with your answer\'s first line.',
 ].join('\n')
 
-/** A79 (rev 28, review 2): the sync worker's last word, read from its final answer, leniently: the LAST line whose words
- * are SYNC DONE or SYNC ABORT (any case; Markdown marks, backticks and colons around the keywords and the sha are
- * dropped), skipping the prompt's own template lines (`<merge sha>`, `<why, one line>`) when the answer quotes them. A DONE
- * whose sha cannot be read is still done ("sha unread"); an ABORT without a reason is still an abort. Null: no such line. */
+/** A79 (rev 28, review 2; 0.16.1): the sync worker's last word, read from the last three non-empty lines of its final
+ * answer: a line whose keywords are SYNC DONE or SYNC ABORT in capitals (Markdown marks, backticks, `#` and colons around
+ * them dropped), the prompt's own template lines (`<merge sha>`, `<why, one line>`) skipped. A DONE that carries a sha
+ * wins over any ABORT there ("SYNC ABORT was not needed" after it is prose); otherwise the last such line. A DONE whose
+ * sha cannot be read is still done ("sha unread"); an ABORT without a reason is still an abort. Null: no such line, or
+ * prose such as "Sync done: the merge finished". */
 export type SyncEnd = { kind: 'done'; sha: string; note: string } | { kind: 'abort'; why: string; note: string }
-const SYNC_LINE = /^SYNC[\s*`_:]+(DONE|ABORT)\b[\s*`_:]*(.*)$/i
+const SYNC_LINE = /^SYNC[\s*`_:]+(DONE|ABORT)\b[\s*`_:]*(.*)$/
+const SHA_START = /^([0-9a-f]{7,40})\b/i
 export const parseSyncEnd = (answer: string): SyncEnd | null => {
-  const lines = (answer ?? '')
-    .split(/\r?\n/)
-    .map(l => l.trim().replace(/^[\s`*#>_:-]+/, '').replace(/[\s`*_]+$/, '').replace(/\s+/g, ' '))
+  const tail = (answer ?? '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(-3)
+  const lines = tail
+    .map(l => l.replace(/^[\s`*#>_:-]+/, '').replace(/[\s`*_]+$/, '').replace(/\s+/g, ' '))
     .filter(l => SYNC_LINE.test(l) && !/<merge sha>|<why, one line>|<pre-merge HEAD>/i.test(l))
-  const line = lines[lines.length - 1]
+    .map(l => {
+      const m = SYNC_LINE.exec(l)
+      return { kind: m?.[1] ?? '', rest: (m?.[2] ?? '').replace(/[`*]/g, '').trim() }
+    })
+  const withSha = lines.filter(l => l.kind === 'DONE' && SHA_START.test(l.rest)).pop()
+  const line = withSha ?? lines[lines.length - 1]
   if (line === undefined) return null
-  const m = SYNC_LINE.exec(line)
-  const kind = (m?.[1] ?? '').toUpperCase()
-  const rest = (m?.[2] ?? '').replace(/[`*]/g, '').trim()
-  if (kind === 'DONE') {
-    const sha = /^([0-9a-f]{7,40})\b/i.exec(rest)?.[1]?.toLowerCase() ?? ''
+  if (line.kind === 'DONE') {
+    const sha = SHA_START.exec(line.rest)?.[1]?.toLowerCase() ?? ''
     return sha
-      ? { kind: 'done', sha, note: `merged ${sha}${rest.slice(sha.length).trimEnd()}`.slice(0, 300) }
-      : { kind: 'done', sha: '', note: `merged (sha unread)${rest ? ` ${rest}` : ''}`.slice(0, 300) }
+      ? { kind: 'done', sha, note: `merged ${sha}${line.rest.slice(sha.length).trimEnd()}`.slice(0, 300) }
+      : { kind: 'done', sha: '', note: `merged (sha unread)${line.rest ? ` ${line.rest}` : ''}`.slice(0, 300) }
   }
-  const why = rest.replace(/\s*state=.*$/i, '').trim() || 'no reason given'
-  return { kind: 'abort', why, note: (rest || why).slice(0, 300) }
+  const why = line.rest.replace(/\s*state=.*$/i, '').trim() || 'no reason given'
+  return { kind: 'abort', why, note: (line.rest || why).slice(0, 300) }
 }
 
 /** The task the holder's a5r hands the sync worker: this sync's facts. */

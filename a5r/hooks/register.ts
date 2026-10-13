@@ -12,7 +12,7 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { classifyGit, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk } from './gitshared.ts'
+import { classifyGit, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -424,9 +424,11 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
   const LEASE = /--force-(with-lease|if-includes)/
   const unread = blocked(gate, 'this force push with a lease sits inside a nested shell, eval or script, so the branch it writes cannot be read', 'write it as one plain git command: git push --force-with-lease origin <your-branch>')
   let shared: string | null = null
-  for (const seg of walk(command, cwd, home)) {
-    if (!LEASE.test(seg.raw)) continue
-    // Review 1: `bash -c "…"`, `powershell -Command "…"`, `cmd /c "…"` are read inside (two levels at most).
+  for (const raw of walk(command, cwd, home)) {
+    if (!LEASE.test(raw.raw)) continue
+    const seg = unwrap(raw) // 0.16.1: `timeout 120 git push …` is the git command it runs
+    // Review 1: `bash -c "…"`, `powershell -Command "…"`, `cmd /c "…"` are read inside (two levels at most); a shell fed a
+    // script file or stdin (`bash -s`, `bash x.sh`) cannot be.
     if (NESTED.has(seg.verb)) {
       const inner = nestedCommand(seg.verb, seg.args)
       if (!inner || depth >= 2) return unread
@@ -434,10 +436,10 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
       if (problem) return problem
       continue
     }
-    if (!isGit(seg)) {
-      // eval, an inline script or a pipe into a shell: a push it may run cannot be read (text that only names the flag
-      // without git push, an echo of a note, runs).
-      if (/\bgit\b[^\n]*\bpush\b/.test(seg.raw)) return unread
+    if (seg.verb !== 'git') {
+      // 0.16.1: only a command that runs code it was handed (eval, source, Invoke-Expression, a script file) is unread;
+      // text inside echo, printf or any other argument is no command.
+      if (EVALS.has(seg.verb) || /\.(sh|bash|ps1|psm1|bat|cmd|py)$/i.test(seg.verb)) return unread
       continue
     }
     const { dir, args } = gitPlace(seg)
@@ -456,6 +458,7 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
   return null
 }
 const NESTED = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
+const EVALS = new Set(['eval', 'source', '.', 'iex', 'invoke-expression', 'xargs'])
 
 /** A74 (review 5): after this session commits in the shared checkout, its touch set keeps only the paths still changed
  * (a committed path is no longer its uncommitted work). */
@@ -599,6 +602,7 @@ async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
   // already hold (granted before it started) is never judged unseen.
   if (me.lastTurnAt === undefined) me = { ...me, lastTurnAt: await $.clock.now() }
   for (const d of me.delivered) delivered.add(d)
+  if (typeof me.sharedShellAt === 'number') sharedShellAt = me.sharedShellAt // 0.16.1: kept across a reload
   for (const n of me.prsKnown ?? []) prsKnown.add(n)
   for (const slug of me.prBaseline ?? []) prBaseline.add(slug)
   for (const p of parseTouch(await $.fs.read(`${dir}/touch/${id8}.json`).catch(() => null))?.paths ?? []) touched.add(p)
@@ -618,6 +622,7 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   me8 = new8
   me = src ? { ...src, session: newSid, id8: new8, heartbeatAt: now } : blankSession(newSid, `session-${new8}`, '', now)
   for (const d of me.delivered) delivered.add(d)
+  if (typeof me.sharedShellAt === 'number') sharedShellAt = me.sharedShellAt // 0.16.1: kept across a reload
   for (const n of me.prsKnown ?? []) prsKnown.add(n)
   for (const slug of me.prBaseline ?? []) prBaseline.add(slug)
   await saveMe($, opts, now)
@@ -657,7 +662,8 @@ function followClear($: Engine, opts: Opts, oldSid: string, tries: number): void
 async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
-  me = { ...me, heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  const { sharedShellAt: _was, ...rest } = me
+  me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -3062,10 +3068,14 @@ export const register: Register = (on, options) => {
       if (isS2 && SHELL_TOOLS.has(tool)) {
         const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
         const cwd = await $.session.cwd()
-        const segs = walk(what, cwd, home)
-        const inShared = segs.some(seg => under(isGit(seg) ? gitPlace(seg).dir : seg.dir, s2Root(opts)))
-        if (inShared && segs.some(seg => isGit(seg) && (gitPlace(seg).args[0] ?? '') === 'commit')) sharedShellAt = null
-        else if (inShared) sharedShellAt = await $.clock.now()
+        // 0.16.1: reads (git log/status/diff, ls, cat, grep, …) change nothing; a redirect into the checkout counts from anywhere.
+        const segs = walk(what, cwd, home).map(unwrap)
+        const root = s2Root(opts)
+        const commits = segs.some(seg => seg.verb === 'git' && under(gitPlace(seg).dir, root) && (gitPlace(seg).args[0] ?? '') === 'commit')
+        const was = sharedShellAt
+        if (commits) sharedShellAt = null
+        else if (segs.some(seg => writesInside(seg, root))) sharedShellAt = await $.clock.now()
+        if ((was === null) !== (sharedShellAt === null)) await saveMe($, opts)
       }
     }
     // A director call added to an intent's findings this turn (🟥 routing); no per-turn report is kept (D10).

@@ -37,7 +37,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark' } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark', cwd = PROJ } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -78,10 +78,10 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
         : { deny: 'ENOENT' })
   on('session.id', async () => value(ids.current))
   on('session.end', async (_$: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
-  on('session.cwd', async () => value(PROJ))
-  on('session.root', async () => value(PROJ))
+  on('session.cwd', async () => value(cwd))
+  on('session.root', async () => value(cwd))
   on('session.messages', async () => value([]))
-  on('session.start', async () => ({ cwd: PROJ }))
+  on('session.start', async () => ({ cwd }))
   on('session.send', async (_$: unknown, e: Rec) => {
     sent.push(e)
     return { isDelivered: true }

@@ -1,6 +1,6 @@
 // A74 (rev 27, adversary review): git in the shared checkout that can discard work or move the tree, read segment by
 // segment with the folder each one runs in. Pure: no `$`; register.ts reads git status and the touch files and decides.
-import { blankQuotes, commandVerb, norm, segments, stripHeredocs, tokenize } from './a5r.ts'
+import { blankQuotes, commandVerb, norm, segments, stripHeredocs, tokenize, under } from './a5r.ts'
 
 /** One command segment with the folder it runs in (after `cd`, `pushd`, `popd`, `Set-Location` before it). */
 export type Seg = { raw: string; dir: string; verb: string; args: string[] }
@@ -212,6 +212,52 @@ export const leasePushTargets = (args: string[]): string[] | null => {
     if (/[*$%`]/.test(dst)) return '*'
     return dst === '' || dst === 'HEAD' || dst === '@' ? '' : dst
   })
+}
+
+/** 0.16.1: a segment without its wrapper verbs (`timeout 120`, `nice -n 5`, `env A=1`, `time`, `command`, `nohup`,
+ * `stdbuf -o0`, `ionice -c3`), so `timeout 120 git push …` reads as the git command it runs. */
+const WRAPPER_VERBS = new Set(['timeout', 'nice', 'env', 'time', 'command', 'nohup', 'stdbuf', 'ionice'])
+export const unwrap = (seg: Seg): Seg => {
+  let verb = seg.verb
+  let args = seg.args
+  for (let guard = 0; guard < 4 && WRAPPER_VERBS.has(verb); guard += 1) {
+    let i = 0
+    while (i < args.length) {
+      const a = args[i] ?? ''
+      if (/^-/.test(a)) i += /^-(n|c|s|k|o|e|i|u|-signal|-kill-after)$/.test(a) ? 2 : 1
+      else if (/^\w+=/.test(a) || (verb === 'timeout' && /^\d+(\.\d+)?[smhd]?$/.test(a))) i += 1
+      else break
+    }
+    verb = (args[i] ?? '').split(/[\\/]/).pop()?.toLowerCase().replace(/\.exe$/, '') ?? ''
+    args = args.slice(i + 1)
+  }
+  return verb === seg.verb ? seg : { ...seg, verb, args }
+}
+
+/** 0.16.1: verbs that only read files: a session that ran them inside the shared checkout changed nothing there. */
+const READ_VERBS = new Set(['ls', 'cat', 'rg', 'grep', 'egrep', 'find', 'head', 'tail', 'echo', 'printf', 'wc', 'pwd', 'stat', 'du', 'tree', 'which', 'where', 'type', 'less', 'more', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'dir', 'get-item', 'test-path', 'resolve-path'])
+const GIT_READS = new Set(['log', 'status', 'diff', 'show', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'blame', 'describe', 'cat-file', 'merge-base', 'shortlog', 'grep', 'fetch', 'reflog'])
+
+/** 0.16.1 (A82): whether a segment may change files inside `root`: a redirection or tee target there (from any folder), or
+ * a command that is not a plain read run with its folder (after `cd`, or `git -C`) there. */
+export const writesInside = (raw: Seg, root: string): boolean => {
+  const seg = unwrap(raw)
+  const inside = (p: string) => under(norm(p.replace(/\\/g, '/'), seg.dir), root)
+  for (const m of seg.raw.matchAll(/(?:^|[^<>&\d])(?:\d*>>?|&>>?)\s*(?:"([^"]+)"|'([^']+)'|([^\s;|&<>]+))/g)) {
+    const target = m[1] ?? m[2] ?? m[3] ?? ''
+    if (target && !/^(&\d|\/dev\/null$|nul$|\$null$)/i.test(target) && inside(target)) return true
+  }
+  if (['tee', 'tee-object', 'out-file', 'set-content', 'add-content', 'sc', 'ac'].includes(seg.verb) && seg.args.some(a => !a.startsWith('-') && inside(a))) return true
+  const isGitSeg = seg.verb === 'git'
+  const place = isGitSeg ? gitPlace(seg) : null
+  if (!under(place?.dir ?? seg.dir, root)) return false
+  if (READ_VERBS.has(seg.verb)) return false
+  if (place) {
+    const sub = (place.args[0] ?? '').toLowerCase()
+    if (GIT_READS.has(sub)) return false
+    if (sub === 'branch' && place.args.slice(1).every(a => /^(--list|-a|-r|-v|-vv|--all|--remotes|--show-current)$/.test(a))) return false
+  }
+  return true
 }
 
 /** A80: the branches no force push may rewrite, whatever its lease. */
