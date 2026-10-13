@@ -597,6 +597,20 @@ export const aboutIntentPrompt = (slug, fromMain, root = '', base = 'main') => {
   return `Tell me about intent ${slug}${root ? ` in the checkout at ${root}` : ''} in under ten lines: what it is for, who owns it, its status and stage (Plan, Build, Prove, Ship) and why, its checklist progress, which decisions are open and whose they are, and what the next step would be. ${read}`
 }
 
+// Closing an intent, step 5 of the intent skill: what was read (every item met, and the PRs it names
+// merged; none named, the items alone) is confirmed first. `commit`: how the close ends.
+/** @param {string} slug @param {readonly number[]} prs @param {string} [commit] */
+export const closePrompt = (slug, prs, commit = 'commit as the skill says') => {
+  const named = andList(prs.map(number => `#${number}`))
+  const merged = prs.length === 0 ? '' : ` and ${prs.length === 1 ? `PR ${named} as` : `PRs ${named} as`} merged`
+  return `Close intent ${slug} as step 5 (Close) of .agents/skills/intent/SKILL.md says. Ather reads every acceptance row in docs/intent/${slug}/progress.md as met${merged}: confirm ${prs.length === 0 ? 'it from the files' : 'both from the files and gh'} first, and stop and tell me if ${prs.length === 0 ? 'it is' : 'either is'} not so. Then set Status: completed in prompt.md, add the changelog line, and ${commit}.`
+}
+
+// Drafting an intent's "done" checklist, shown before any work starts.
+/** @param {string} slug */
+export const checklistPrompt = slug =>
+  `Draft the acceptance checklist for intent ${slug} in docs/intent/${slug}/prompt.md: items with ids (A1, A2, ...), each with the proof that will show it is done, and no checkboxes (whether an item is met lives in progress.md). Show it to me before the worker starts.`
+
 /**
  * The one next step for the tracked intent and the person's role.
  * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me @param {PrStates} [prs] @param {Pack} [pack]
@@ -617,11 +631,11 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = u
       key: 'close',
       label: 'Close the intent',
       hint: `Every item is met and ${intent.prs.length === 1 ? `PR ${named} is` : `PRs ${named} are`} merged; the session closes it the intent skill's way.`,
-      prompt: `Close intent ${slug} as step 5 (Close) of .agents/skills/intent/SKILL.md says. Ather reads every acceptance row in docs/intent/${slug}/progress.md as met and ${intent.prs.length === 1 ? `PR ${named} as` : `PRs ${named} as`} merged: confirm both from the files and gh first, and stop and tell me if either is not so. Then set Status: completed in prompt.md, add the changelog line, and commit as the skill says.`,
+      prompt: closePrompt(slug, intent.prs),
     }
   }
   if (stage === 'plan') {
-    return { key: 'checklist', label: 'Write the "done" checklist', hint: 'The session drafts it and shows you before any work starts.', prompt: `Draft the acceptance checklist for intent ${slug} in docs/intent/${slug}/prompt.md: items with ids (A1, A2, ...), each with the proof that will show it is done, and no checkboxes (whether an item is met lives in progress.md). Show it to me before the worker starts.` }
+    return { key: 'checklist', label: 'Write the "done" checklist', hint: 'The session drafts it and shows you before any work starts.', prompt: checklistPrompt(slug) }
   }
   if (stage === 'build') {
     if (!intent.hasReview && !intent.hasWorker && intent.acceptanceDone === 0 && workers === 0) {

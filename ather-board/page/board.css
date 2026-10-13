@@ -1,0 +1,171 @@
+/* Ather's look (ather-automata/hooks/rows.mjs): near-black, one lime kept for what needs someone, ink for
+   headings and progress, quiet grey for everything secondary, amber for a warning on its row. Light mode keeps
+   the same discipline on paper: lime is a fill behind ink there, never text. No other colour means anything. */
+:root {
+  color-scheme: light;
+  --bg: #f4f4f1; --panel: #ffffff; --well: #ebebe6; --hover: #f3f3ef; --line: #ebebe6; --edge: #dcdcd5;
+  --ink: #1b1c1a; --quiet: #63665f; --amber: #9a5a00;
+  --loud: #1b1c1a; --loud-fill: #ddff00; --lime: #ddff00;
+  --side: max(24px, calc((100% - 1192px) / 2));
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0c0d0c; --panel: #131412; --well: #101110; --hover: #1a1b19; --line: #20221e; --edge: #2c2e29;
+    --ink: #c9cccc; --quiet: #8e918a; --amber: #f2a516;
+    --loud: #ddff00; --loud-fill: transparent;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, nav#tabs, #controls, #shown, main, footer { padding-left: var(--side); padding-right: var(--side); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+a { color: inherit; text-underline-offset: 2px; }
+code { font: 12px/1.4 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; color: var(--quiet); }
+
+/* The frame: brand, title, where things stand; the views; the filters. */
+header { padding-top: 24px; padding-bottom: 12px; }
+.brand { margin: 0 0 4px; color: var(--quiet); font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+header h1 { margin: 0; font-size: 22px; line-height: 1.25; }
+header #summary { margin: 4px 0 0; color: var(--quiet); }
+nav#tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+nav#tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 10px 8px; color: var(--quiet); cursor: pointer; white-space: nowrap; }
+nav#tabs button:first-child { margin-left: -10px; }
+nav#tabs button:hover { color: var(--ink); }
+nav#tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+#controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding-top: 14px; }
+#controls input[type="search"], #controls select { font: inherit; font-size: 13px; color: var(--ink); background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; height: 32px; padding: 0 8px; }
+#controls input[type="search"] { flex: 1 1 240px; max-width: 340px; }
+#controls .check { color: var(--quiet); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+#shown { color: var(--quiet); font-size: 12px; min-height: 18px; padding-top: 6px; }
+main { padding-top: 4px; padding-bottom: 48px; }
+footer { color: var(--quiet); font-size: 12px; padding-bottom: 24px; }
+
+/* Two levels: a label in spaced-out capitals heads the groups after it (lime for what needs someone); a group is
+   its bold title and quiet rollup over one panel, its rows divided by hairlines. */
+h2.label { display: flex; align-items: baseline; gap: 10px; margin: 28px 0 12px; font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+h2.label.loud span { color: var(--loud); background: var(--loud-fill); padding: 2px 6px; margin-left: -6px; border-radius: 2px; }
+h2.label small, .group h3 small, .column h3 small { color: var(--quiet); font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 12.5px; }
+.group { margin: 0 0 20px; }
+main > :first-child { margin-top: 16px; }
+.group h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; display: flex; align-items: baseline; gap: 10px; }
+.panel { background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; overflow: hidden; }
+.empty { color: var(--quiet); margin: 0 0 20px; }
+
+/* One row, Ather's anatomy: glyph, name and its warnings (the title beneath), then bar and count, age, owner. */
+.row + .row { border-top: 1px solid var(--line); }
+.line { all: unset; box-sizing: border-box; display: grid; grid-template-columns: 14px minmax(0, 1fr) 104px 36px 150px; grid-template-areas: "glyph main progress age owner"; column-gap: 14px; align-items: center; width: 100%; padding: 8px 14px; cursor: pointer; }
+.line:hover, .line[aria-expanded="true"], .line[aria-expanded="true"] ~ .details { background: var(--hover); }
+.glyph { grid-area: glyph; align-self: start; line-height: 20px; text-align: center; }
+.main { grid-area: main; min-width: 0; display: flex; flex-direction: column; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; min-width: 0; line-height: 20px; }
+.slug { font-weight: 600; overflow-wrap: anywhere; }
+.warn { color: var(--amber); font-size: 12.5px; }
+.title { color: var(--quiet); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress { grid-area: progress; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.progress svg { flex: none; display: block; }
+.count { min-width: 40px; text-align: right; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.age { grid-area: age; color: var(--quiet); font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.owner { grid-area: owner; color: var(--quiet); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row.done .slug, .row.done .glyph { color: var(--quiet); }
+
+/* What a row opens to, and the items listed under it, both in line with its name. */
+.details { padding: 0 14px 12px 42px; }
+.details p { margin: 6px 0; }
+.details .sub { color: var(--quiet); font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; margin: 12px 0 4px; }
+.refs { color: var(--quiet); font-size: 13px; }
+.items { list-style: none; margin: 0; padding: 0; }
+.items li { margin: 3px 0; }
+.items li b { color: var(--quiet); font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 6px; }
+.items.calls li b { color: var(--amber); }
+.items.under { padding: 0 14px 10px 42px; color: var(--quiet); font-size: 13px; }
+
+/* The Board: a column for each stage that has intents; the columns wrap to the width rather than run off it
+   (four fit from 770 px, five with Done from 950), and a few stay at most 300 px wide (`--columns`: how many). */
+.kanban { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); gap: 10px; align-items: start; max-width: calc(var(--columns) * 310px); }
+.column { background: var(--well); border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+.column h3 { margin: 4px 6px 8px; font-size: 13px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
+.column .empty { margin: 4px 6px 8px; }
+.card { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; margin-top: 6px; }
+.card .line { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 8px 10px; }
+.card .meta { color: var(--quiet); font-size: 12px; }
+.card .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card .progress { justify-content: flex-start; }
+.card .count { min-width: 0; text-align: left; }
+.card .details { padding: 0 10px 10px; }
+
+/* People and Areas: one table, the counts that matter standing out from the zeros. */
+.tablewrap { overflow-x: auto; max-width: 880px; }
+table.rollups { border-collapse: collapse; width: 100%; }
+table.rollups th, table.rollups td { text-align: right; padding: 7px 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.rollups tr + tr td { border-top: 1px solid var(--line); }
+table.rollups th { color: var(--quiet); font-weight: 400; font-size: 12px; border-bottom: 1px solid var(--edge); }
+table.rollups th:first-child, table.rollups td:first-child { text-align: left; }
+table.rollups td.zero { color: var(--quiet); opacity: 0.6; }
+table.rollups td.warn { color: var(--amber); font-weight: 600; }
+table.rollups td.age { color: var(--quiet); }
+.pick { all: unset; cursor: pointer; font-weight: 500; }
+.pick:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* Pulse: opened in quiet, closed in ink (progress), drawn in HTML so its words keep their size. */
+.pulse { padding: 14px 16px 12px; width: fit-content; min-width: min(100%, 360px); max-width: 100%; }
+.legend { margin: 0 0 8px; color: var(--quiet); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 10px; }
+.legend i:first-child { margin-left: 0; }
+.weeks { display: flex; overflow-x: auto; }
+.week { flex: 1 0 64px; max-width: 88px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.bars { display: flex; align-items: flex-end; justify-content: center; gap: 3px; width: 100%; height: 150px; padding-top: 18px; border-bottom: 1px solid var(--edge); }
+.bars span { position: relative; width: 16px; }
+.bars em { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); padding-bottom: 2px; font-style: normal; font-size: 12px; font-variant-numeric: tabular-nums; }
+.opened { background: var(--quiet); }
+.closed { background: var(--ink); }
+.day { color: var(--quiet); font-size: 12px; white-space: nowrap; }
+.stages { padding: 8px 16px; max-width: 720px; }
+.stagebar { display: grid; grid-template-columns: 150px 1fr 36px; gap: 12px; align-items: center; margin: 6px 0; }
+.stagebar .track { height: 8px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.stagebar .track i { display: block; height: 100%; background: var(--ink); }
+.stagebar .track i.s-done { background: var(--quiet); }
+.stagebar .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 960px) {
+  .line { grid-template-columns: 14px minmax(0, 1fr) 104px 36px 110px; }
+}
+/* A phone: owner, age and bar move under the name instead of leaving. */
+@media (max-width: 640px) {
+  :root { --side: 16px; }
+  header { padding-top: 18px; }
+  #controls input[type="search"] { flex-basis: 100%; max-width: none; }
+  #controls select { flex: 1 1 calc(50% - 4px); min-width: 0; }
+  .line { grid-template-columns: 14px minmax(0, 1fr) auto auto; grid-template-areas: "glyph main main main" ". owner age progress"; row-gap: 4px; column-gap: 10px; padding: 10px 12px; }
+  .details, .items.under { padding-left: 36px; padding-right: 12px; }
+  .stagebar { grid-template-columns: 120px 1fr 32px; }
+}
+
+/* The brief: Sonnet's suggestions, read-only, each naming its intents as links into the table. */
+.brief { padding: 12px 16px; }
+.brief .headline { margin: 0 0 8px; }
+.brief ul { list-style: none; margin: 0; padding: 0; }
+.brief li { padding: 8px 0; border-top: 1px solid var(--line); }
+.brief li:first-child { border-top: 0; }
+.brief .why { color: var(--quiet); }
+.brief .names { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; }
+
+/* The Map: modules as hubs on a ring, intents as dots; lime only where something needs someone. */
+.map { padding: 8px; }
+.map svg { display: block; width: 100%; height: auto; }
+.map line.in { stroke: var(--edge); stroke-width: 1; opacity: 0.45; }
+.map line.names { stroke: var(--quiet); stroke-width: 1; stroke-dasharray: 3 4; opacity: 0.45; }
+.map line.lit { stroke: var(--ink); opacity: 1; stroke-width: 1.5; }
+.map .hub circle { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; }
+.map .hub text { fill: var(--ink); font-size: 14px; font-weight: 600; }
+.map .hub text tspan { fill: var(--quiet); font-weight: 400; }
+.map .hub { cursor: pointer; }
+.map .dot { fill: var(--quiet); stroke: var(--panel); stroke-width: 1; cursor: pointer; }
+.map .dot.loud { fill: var(--lime); }
+.map .dot.done { opacity: 0.35; }
+.map .dot.open, .map .dot:hover, .map .dot:focus-visible { stroke: var(--ink); stroke-width: 2; outline: none; }
+.map .legend { color: var(--quiet); font-size: 12px; margin: 8px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.map .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--quiet); margin-right: 4px; vertical-align: -1px; }
+.map .legend i.loud { background: var(--lime); }
+.map .legend i.names { width: 16px; height: 0; border-radius: 0; border-top: 1px dashed var(--quiet); background: none; vertical-align: 3px; }
