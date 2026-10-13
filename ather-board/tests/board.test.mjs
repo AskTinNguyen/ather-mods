@@ -139,7 +139,7 @@ describe('open items (A4) and pulse (A5)', () => {
 
 describe('what each view shows, for the pane and the page alike (A3, A4, A6, A7)', () => {
   test('stages run Plan, then the stages of Ather’s list, then Done', () => {
-    expect(STAGES.map(stage => `${stage.glyph} ${stage.label}`)).toEqual(['○ Plan', '● Building', '◐ Proving', '✓ Ready to close', '‖ Parked', '✔ Done'])
+    expect(STAGES.map(stage => `${stage.glyph} ${stage.label}`)).toEqual(['○ Plan', '● Building', '◐ Proving', '✓ Ready to close', '‖ Parked', '■ Done'])
   })
   test('the filters apply in every view; done intents are hidden only on the board and the table', () => {
     const tools = { ...NO_FILTER, area: 'Tools' }
@@ -179,7 +179,7 @@ describe('what each view shows, for the pane and the page alike (A3, A4, A6, A7)
   })
   test('Board: a group per stage that has intents, in order, no card repeating its column; Pulse has none (the page draws its chart)', () => {
     const board = sectionsOf(RECORDS, { ...DEFAULT_LOOK, view: 'board' }, NOW)
-    expect(board.map(part => part.kind === 'intents' && `${part.title} ${part.meta}`)).toEqual(['○ Plan 1', '● Building 2', '✓ Ready to close 1', '‖ Parked 1', '✔ Done 1'])
+    expect(board.map(part => part.kind === 'intents' && `${part.title} ${part.meta}`)).toEqual(['○ Plan 1', '● Building 2', '✓ Ready to close 1', '‖ Parked 1', '■ Done 1'])
     expect(board.map(part => part.kind === 'intents' && part.rows.map(row => row.flags.map(flag => flag.kind).join(',')).join(' '))).toEqual(['', ' decisions,stale', '', 'unparked', ''])
     expect(sectionsOf([], { ...DEFAULT_LOOK, view: 'board' }, NOW).map(part => part.kind === 'intents' && part.empty)).toEqual(['No intent matches.'])
     expect(sectionsOf(RECORDS, { ...DEFAULT_LOOK, view: 'pulse' }, NOW)).toEqual([])
@@ -271,7 +271,7 @@ return sectionsOf`)()
 })
 
 describe('reading a checkout (A1)', () => {
-  test('origin/main\u2019s intents with their first and last commit dates, through git', async () => {
+  test('origin/main\u2019s intents with their first and last commit dates, through git; a completed one with its progress read', async () => {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-board-'))
     /** @param {string} cwd @param {string[]} args @param {number} [at] seconds */
     const git = (cwd, args, at = 0) => execFileSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd, env: { ...process.env, GIT_AUTHOR_NAME: 'LamPhung-Art', GIT_AUTHOR_EMAIL: 'l@x', GIT_COMMITTER_NAME: 'LamPhung-Art', GIT_COMMITTER_EMAIL: 'l@x', ...(at ? { GIT_AUTHOR_DATE: `${at} +0000`, GIT_COMMITTER_DATE: `${at} +0000` } : {}) }, encoding: 'utf8' })
@@ -284,6 +284,10 @@ describe('reading a checkout (A1)', () => {
     git(origin, ['add', '.'])
     git(origin, ['commit', '-q', '-m', 'start'], first)
     fs.writeFileSync(path.join(origin, 'docs/intent/snow-look/progress.md'), FILES[0]?.progress ?? '')
+    // A completed intent, whose progress Ather's reader leaves out: the board reads it itself.
+    fs.mkdirSync(path.join(origin, 'docs/intent/old-tool'), { recursive: true })
+    fs.writeFileSync(path.join(origin, 'docs/intent/old-tool/prompt.md'), FILES[2]?.prompt ?? '')
+    fs.writeFileSync(path.join(origin, 'docs/intent/old-tool/progress.md'), FILES[2]?.progress ?? '')
     git(origin, ['add', '.'])
     git(origin, ['commit', '-q', '-m', 'progress'], last)
     const clone = path.join(work, 'clone')
@@ -304,8 +308,11 @@ describe('reading a checkout (A1)', () => {
     }
     const { board, cache } = await readBoard(repo, root, { pack: unreal, base: 'main', cache: EMPTY_BOARD_CACHE, now: NOW })
     fs.rmSync(work, { recursive: true, force: true })
-    expect([board.isRepo, board.sha.length, board.records.length]).toEqual([true, 40, 1])
-    const snow = board.records[0]
+    expect([board.isRepo, board.sha.length, board.records.length]).toEqual([true, 40, 2])
+    const snow = board.records.find(one => one.slug === 'snow-look')
+    const old = board.records.find(one => one.slug === 'old-tool')
+    expect([old?.stage, old?.done, old?.total]).toEqual(['done', 1, 1])
+    expect(cache.closed?.progress.has('old-tool')).toBe(true)
     expect([snow?.slug, snow?.owner, snow?.done, snow?.total, snow?.createdAt, snow?.updatedAt]).toEqual(['snow-look', 'Lam Phung', 1, 3, first * 1000, last * 1000])
     expect(cache.created?.sha).toBe(board.sha)
   })

@@ -67,6 +67,7 @@ Then sign in to it from `/mcp` in a Claude Code terminal. Without it, the sessio
 
 ## Changes
 
+- **0.1.1** A done intent shows how many of its items were met: the board now reads the progress of completed intents, which Ather's reader leaves out (they read as none met before). Done's glyph is ■, no longer close to Ready to close's ✓.
 - **0.1.0** First release: `/board` opens on For you (what is yours to act on, with Sonnet's suggestions), then Triage, Modules, Table, Open items, People and Areas, with filters, sorts and groups; an ask box; intents opened in place with their decisions and next action, every action handed to the session; `/board open` (the full page with the brief, Board, Map and Pulse); `/board publish` (through the `vesper-sites` MCP server).
 
 ## Maintainers

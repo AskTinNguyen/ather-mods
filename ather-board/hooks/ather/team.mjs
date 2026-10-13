@@ -119,8 +119,9 @@ export const parseStatus = text => new Set(text.split('\0').map(entry => slugOf(
 /** @param {string} prompt */
 const isCompleted = prompt => /^\s*-\s*Status:\s*completed/im.test(prompt)
 
+// The text of each file at `sha`, in order; null for one that is missing (one `git cat-file --batch`).
 /** @param {Repo} repo @param {string} sha @param {readonly string[]} paths */
-const blobs = async (repo, sha, paths) => {
+export const blobs = async (repo, sha, paths) => {
   if (paths.length === 0) return []
   const ran = await repo.git(['cat-file', '--batch'], { stdin: paths.map(path => `${sha}:${path}\n`).join('') })
   return ran.exitCode === 0 ? parseBatch(ran.stdout, paths.length) : paths.map(() => null)

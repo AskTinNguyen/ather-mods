@@ -40,7 +40,7 @@ export { BAR_CELLS, ageText, miniBarSvg }
 export const STAGES = [
   { key: 'plan', label: 'Plan', glyph: '○' },
   ...(/** @type {const} */ (['build', 'prove', 'met', 'parked'])).map(key => ({ key, label: STAGE_BLOCKS.find(block => block.key === key)?.title ?? key, glyph: STAGE_GLYPHS[key] })),
-  { key: 'done', label: 'Done', glyph: '✔' },
+  { key: 'done', label: 'Done', glyph: '■' },
 ]
 
 /** @type {Record<Sort, string>} */
