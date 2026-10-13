@@ -1,4 +1,5 @@
-// Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata.
+// Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata, and
+// ather-board's unit tests (its copies of Ather's modules must match first).
 // The mod is plain .mjs: nothing to compile. Run from anywhere: `node dev/test-all.mjs`.
 // Type-checking needs the engine's API types: set CLAUDE_CODE_TYPES to a claude-code.d.ts
 // (the plugin-authoring skill writes one, and a loaded mod gets .claude-plugin/types/claude-code/index.d.ts);
@@ -11,6 +12,7 @@ import { fileURLToPath } from 'url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const MOD = path.resolve(HERE, '../ather-automata')
+const BOARD = path.resolve(HERE, '../ather-board')
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-test-'))
 const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: 'inherit' })
 
@@ -46,6 +48,9 @@ for (const plugin of ['ather-automata', 'week-calendar']) {
   else console.log(`skipped: npm install in paseo/${plugin} to type-check it`)
 }
 
+console.log('== ather-board')
+sh(`${NODE} sync.mjs --check`, BOARD)
+
 console.log('== type-check')
 const types = process.env.CLAUDE_CODE_TYPES ?? [path.join(MOD, '.claude-plugin/types/claude-code/index.d.ts')].find(f => fs.existsSync(f))
 if (types) {
@@ -53,21 +58,28 @@ if (types) {
   fs.writeFileSync(config, JSON.stringify({
     compilerOptions: { target: 'es2023', lib: ['es2023'], types: [], module: 'esnext', moduleResolution: 'bundler', allowJs: true, checkJs: true, strict: true, noImplicitAny: false, noEmit: true, skipLibCheck: true },
     // A loaded mod's types keep the built-in tools in a sibling folder; include them when present.
-    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs')).map(f => f.replace(/\\/g, '/')),
+    include: [types, path.join(path.dirname(types), '../claude-code-tools/index.d.ts')].filter(f => fs.existsSync(f)).concat(path.join(MOD, 'hooks/*.mjs'), path.join(MOD, 'hooks/packs/*.mjs'), path.join(BOARD, 'hooks/*.mjs')).map(f => f.replace(/\\/g, '/')),
   }))
   sh(`npx -y -p typescript@5.6 tsc -p "${config}"`, WORK)
 } else console.log('skipped: set CLAUDE_CODE_TYPES to the engine API types to type-check')
 
 console.log('== unit')
-const unit = path.join(WORK, 'unit')
-copy(path.join(MOD, 'hooks'), path.join(unit, 'hooks'))
+// A mod's unit tests in a folder of their own under WORK: its hooks and any other folders it reads
+// (`also`), its tests with 'claude-code/testing' pointed at the shim, and one main.mjs that runs them all.
+const shim = path.join(HERE, 'shim/testing.mjs').replace(/\\/g, '/')
+const runUnit = (mod, name, also = []) => {
+  const dir = path.join(WORK, name)
+  for (const folder of ['hooks', ...also]) copy(path.join(mod, folder), path.join(dir, folder))
+  copy(path.join(mod, 'tests'), path.join(dir, 'tests'), s => s.replace(/from 'claude-code\/testing'/g, `from 'file:///${shim.replace(/^\//, '')}'`))
+  const tests = fs.readdirSync(path.join(mod, 'tests')).filter(f => f.endsWith('.test.mjs'))
+  fs.writeFileSync(path.join(dir, 'main.mjs'), `${tests.map(f => `import './tests/${f}'`).join('\n')}\nimport { run } from 'file:///${shim.replace(/^\//, '')}'\nawait run()\n`)
+  sh('node main.mjs', dir)
+}
 // This repository's own intents, where the tests look for them (../../docs/intent from tests/): tests/acceptance.test.mjs reads four.
 copy(path.resolve(HERE, '../docs/intent'), path.join(WORK, 'docs/intent'))
-const shim = path.join(HERE, 'shim/testing.mjs').replace(/\\/g, '/')
-copy(path.join(MOD, 'tests'), path.join(unit, 'tests'), s => s.replace(/from 'claude-code\/testing'/g, `from 'file:///${shim.replace(/^\//, '')}'`))
-const tests = fs.readdirSync(path.join(MOD, 'tests')).filter(f => f.endsWith('.test.mjs'))
-fs.writeFileSync(path.join(unit, 'main.mjs'), `${tests.map(f => `import './tests/${f}'`).join('\n')}\nimport { run } from 'file:///${shim.replace(/^\//, '')}'\nawait run()\n`)
-sh('node main.mjs', unit)
+runUnit(MOD, 'unit')
+// The board's hooks carry their copies of Ather's; its tests read its page too.
+runUnit(BOARD, 'board', ['page'])
 
 const e2e = path.join(HERE, 'e2e')
 fs.rmSync(path.join(e2e, 'out'), { recursive: true, force: true })

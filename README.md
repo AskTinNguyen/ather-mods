@@ -5,6 +5,7 @@ Claude Code mods for the S2 team. This repository is the `ather` plugin marketpl
 | Mod | What it does |
 |---|---|
 | [ather-automata](ather-automata/README.md) | Type `/ather` to see what needs you and what to do next. New here? `/ather tour`. Leaving? `/away tonight`. |
+| [ather-board](ather-board/README.md) | Type `/board` to see the team's intents as a board: what is stuck, every intent by owner, area or stage, the open acceptance items. `/board open` for the full page, `/board publish` to share it. Read-only. |
 | [week-calendar](week-calendar/README.md) | For agent PCs: a weekly calendar of every session and a weekly report (PRs merged, productive agent time) pushed to the team's agent-reports repo. Install it only where sessions should be reported. |
 
 ## Install (once)
@@ -15,6 +16,8 @@ Claude Code 2.1.287 or later:
 claude plugin marketplace add AskTinNguyen/ather-mods
 claude plugin install ather-automata@ather --scope user
 ```
+
+For the team's board, add `claude plugin install ather-board@ather --scope user` too.
 
 Then start a new Claude Code session in your S2 checkout and type `/ather`. Ather works where a repository has intents (a `docs/intent` folder). It does not add them: each team adds the structure to its own repository, and the mod's [README](ather-automata/README.md#a-repository-without-intents) says what Ather reads.
 
@@ -45,6 +48,7 @@ They behave the same, on Paseo's surfaces: an Ather panel per agent, `/ather` an
 ```bash
 claude plugin marketplace update ather
 claude plugin update ather-automata@ather
+claude plugin update ather-board@ather
 claude plugin update week-calendar@ather
 ```
 
