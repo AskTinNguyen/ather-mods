@@ -46,13 +46,31 @@ const planMine = async ($: any) => {
 }
 
 // ---------- A79: the sync worker without A5R tools ----------
+test('A79 (review 2): unit: the last SYNC line reads leniently: Markdown, backticks, colons, case, the quoted template, other SYNC lines', () => {
+  const T1 = 'SYNC DONE <merge sha> pre=<pre-merge HEAD> build=<Succeeded|skipped> conflicts=<none, or path:how; path:how>'
+  const T2 = 'SYNC ABORT <why, one line> state=<the state the checkout is in>'
+  const done = (a: string) => {
+    const e = parseSyncEnd(a)
+    return e === null ? null : e.kind === 'done' ? e : { ...e, sha: undefined }
+  }
+  expect(done('**SYNC DONE** 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')).toEqual({ kind: 'done', sha: '1a2b3c4', note: 'merged 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none' })
+  expect(done('SYNC DONE: 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')?.sha).toBe('1a2b3c4')
+  expect(done('SYNC DONE `1a2b3c4` pre=`9f8e7d6` build=Succeeded conflicts=none')?.sha).toBe('1a2b3c4')
+  expect(done('## SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')?.sha).toBe('1a2b3c4')
+  expect(done('sync done 1A2B3C4 pre=9f8e7d6 build=skipped conflicts=none')?.sha).toBe('1a2b3c4')
+  expect(done(`My procedure ends with one of:\n${T1}\n${T2}\nSYNC worker report: merged cleanly.\nSYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none`)?.sha).toBe('1a2b3c4')
+  expect(done(`${T1}\n${T2}`)).toBe(null) // only the template quoted: no last word
+  expect(done('SYNC ABORT fetch failed state=clean\nthen retried\nSYNC DONE 1a2b3c4 pre=x build=skipped conflicts=none')?.kind).toBe('done') // the last one wins
+  expect(done('SYNC DONE merged, sha not at hand')).toEqual({ kind: 'done', sha: '', note: 'merged (sha unread) merged, sha not at hand' })
+  expect(parseSyncEnd('**SYNC ABORT:** binary conflict in X.uasset state=merge aborted')).toEqual({ kind: 'abort', why: 'binary conflict in X.uasset', note: 'binary conflict in X.uasset state=merge aborted' })
+})
+
 test('A79: unit: the worker\'s last line reads as done or abort; anything else is none', () => {
   expect(parseSyncEnd('Merged.\nSYNC DONE 1a2b3c4d pre=9f8e7d6 build=skipped conflicts=none')).toEqual({ kind: 'done', sha: '1a2b3c4d', note: 'merged 1a2b3c4d pre=9f8e7d6 build=skipped conflicts=none' })
   expect(parseSyncEnd('Report\n`SYNC DONE ABCDEF1 pre=1234567 build=Succeeded conflicts=Source/A.cpp:ours`')?.kind).toBe('done')
   expect(parseSyncEnd('Stopped.\nSYNC ABORT Content/S2/X.uasset conflicts (binary) state=merge aborted, clean at 9f8e7d6')).toEqual({ kind: 'abort', why: 'Content/S2/X.uasset conflicts (binary)', note: 'Content/S2/X.uasset conflicts (binary) state=merge aborted, clean at 9f8e7d6' })
   expect(parseSyncEnd('I could not finish.')).toBe(null)
-  expect(parseSyncEnd('SYNC DONE pre=9f8e7d6 build=skipped')).toBe(null) // a DONE without its merge sha
-  expect(parseSyncEnd('SYNC ABORT one\nSYNC DONE 1a2b3c4 pre=x build=skipped conflicts=none')).toBe(null) // two last words
+  expect(parseSyncEnd('SYNC DONE pre=9f8e7d6 build=skipped')?.note).toBe('merged (sha unread) pre=9f8e7d6 build=skipped') // review 2: still done
   expect(SYNC_WORKER_PROMPT.includes('mcp__a5r__')).toBe(false)
 })
 
@@ -120,7 +138,9 @@ test('A79: with another lane on the lock at T, the sync\'s request waits first i
   expect(w.read(LOCK)).toMatch(/^FREE since=/)
 })
 
-test('A79: the worker A5R spawned is the frozen holder for its git (its calls carry the holder session); a lease push or add-all of its own still reads facts', opts(), async ($, on) => {
+// Review 6: the engine never delivers a plugin-spawned agent's calls to that plugin's tool.call hook (F-7), so this test covers
+// only the case "if A5R does see them": then they pass as the frozen holder's. It is no proof that the worker's git runs.
+test('A79 (F-7, only if A5R sees the worker\'s calls): its sync git passes as the frozen holder\'s (same session id)', opts(), async ($, on) => {
   const w = world(on, { git: { 'status --porcelain': { stdout: 'UU Source/S2/Foo.cpp\0' } } })
   repo(w, 'E:/s2')
   w.put('E:/s2/.git/MERGE_HEAD', '1a2b3c\n')
@@ -140,6 +160,13 @@ test('A80: unit: the branches a lease push writes', () => {
   expect(leasePushTargets(['push', '--force-with-lease', '--all', 'origin'])).toEqual(['*'])
   expect(leasePushTargets(['push', 'origin', 'HaiHuynh/x'])).toBe(null)
   expect(leasePushTargets(['push', '--force', 'origin', 'HaiHuynh/x'])).toBe(null) // rule 1's
+  // Review 1: redirections and pipes are no refspec.
+  expect(leasePushTargets(['push', '--force-with-lease', 'origin', '2>&1'])).toEqual([''])
+  expect(leasePushTargets(['push', '--force-with-lease', 'origin', '>', 'push.log'])).toEqual([''])
+  expect(leasePushTargets(['push', '--force-with-lease', 'origin', '&>', 'push.log'])).toEqual([''])
+  expect(leasePushTargets(['push', '--force-with-lease', 'origin', 'HaiHuynh/x>push.log'])).toEqual(['HaiHuynh/x'])
+  expect(leasePushTargets(['push', '--force-with-lease', 'origin', 'HaiHuynh/x', '2>', 'err.log'])).toEqual(['HaiHuynh/x'])
+  expect(leasePushTargets(['push', '--force-with-lease', 'origin', '|', 'tail'])).toEqual([''])
 })
 
 test('A80: --force-with-lease to a branch of one\'s own runs; to main or the shared checkout\'s branch it is refused; plain force stays refused with the lease as its alternative', opts(), async ($, on) => {
@@ -157,6 +184,13 @@ test('A80: --force-with-lease to a branch of one\'s own runs; to main or the sha
   expect(await run('git push --force-with-lease --all origin')).toContain('push one branch of your own by name')
   for (const c of ['git push --force origin HaiHuynh/x', 'git push -f origin HaiHuynh/x', 'git push origin +HaiHuynh/x'])
     expect([c, (await run(c))?.includes('use git push --force-with-lease to a branch of your own')]).toEqual([c, true])
+  // Review 1: a redirection or a pipe after the remote is no refspec: the push writes the current branch, the shared one.
+  for (const c of ['git -C E:/s2 push --force-with-lease origin 2>&1', 'git -C E:/s2 push --force-with-lease origin > push.log', 'git -C E:/s2 push --force-with-lease origin 2>&1 | tail -3'])
+    expect([c, (await run(c))?.includes('HaiHuynh/20261005, the branch the shared checkout has checked out')]).toEqual([c, true])
+  expect(await run('bash -c "git push --force-with-lease origin HaiHuynh/20261005"')).toContain('the branch the shared checkout has checked out')
+  expect(await run('bash -c "git push --force-with-lease origin HaiHuynh/x"')).toBeUndefined()
+  expect(await run('eval "git push --force-with-lease origin HaiHuynh/x"')).toContain('write it as one plain git command')
+  expect(await run('git commit -m "note: prefer --force-with-lease"')).toBeUndefined() // names the flag, pushes nothing
 })
 
 test('A80: git add . / -A / --all is refused only in the shared S2 checkout; in a worktree or another repository it runs', opts(), async ($, on) => {
@@ -199,7 +233,8 @@ test('A81: a long build window that would cross a sync cutoff is refused with th
 })
 
 // ---------- A82: each notice once, to whom it concerns ----------
-test('A82: one grant is one notice, across many tool calls, turns and minutes', opts(), async ($, on) => {
+// Review 6: these two passed at e1e3cb6 too (the delivery was already once per id, F-6): regression guards, not A82's proof.
+test('A82 (guard): one grant is one notice, across many tool calls, turns and minutes', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
   on('turn.complete', async () => ({ text: '' }))
   w.put(LOCK, 'free since 14:20\n')
@@ -215,7 +250,7 @@ test('A82: one grant is one notice, across many tool calls, turns and minutes', 
   expect(all.split('Editor — granted to this session until 15:10').length - 1).toBe(1)
 })
 
-test('A82: the disk notice is said once a day per session and says what to clean, not "tell Hai"', opts(), async ($, on) => {
+test('A82 (guard for once a day; proof for the text): the disk notice is said once a day per session and says what to clean, not "tell Hai"', opts(), async ($, on) => {
   const w = world(on, { disk: 15 })
   await $.session.start(START)
   const contexts: string[] = []
@@ -251,4 +286,84 @@ test('A82: an idle session with nothing uncommitted and no Editor request gets n
   expect(prompts(w)).toEqual([]) // the lift waits for its next turn
   await call($, contexts, { tool: 'Bash', command: 'echo again' })
   expect(contexts.filter(c => c.includes('Sync main — done at 15:10')).length).toBe(1)
+})
+
+// ---------- review fixes ----------
+test('A82 (review 4): a shell command run inside the shared checkout since the last commit there makes the session hear the cutoff; a commit there clears it', opts(), async ($, on) => {
+  const w = world(on)
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put(SYNC, JSON.stringify(newSync(T(15, 30), B, 'sync-lane (session bbbbbbbb)', NOW))) // cutoff 15:00
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Bash', command: 'cd E:/s2 && python tools/gen.py' } as never) // may have written files there
+  await idle($)
+  await advance(w, 20) // 15:00
+  expect(prompts(w).filter(p => p.includes('Sync main — cutoff: sync-lane merges origin/main at 15:30')).length).toBe(1)
+})
+
+test('A82 (review 4): after a commit in the shared checkout and no shell there since, the session is not told at the cutoff', opts(), async ($, on) => {
+  const w = world(on)
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put(SYNC, JSON.stringify(newSync(T(15, 30), B, 'sync-lane (session bbbbbbbb)', NOW)))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
+  await $.session.start(START)
+  await $.tool.call({ tool: 'Bash', command: 'cd E:/s2 && python tools/gen.py' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit -m "wip: gen" -- tools/out.json' } as never)
+  await idle($)
+  await advance(w, 20)
+  expect(prompts(w).filter(p => p.includes('Sync main — cutoff')).length).toBe(0)
+})
+
+test('A81 (review 3): extending a 45-min build lease past 45 min in all is refused while someone is queued; with nobody queued it runs', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, 'free since 14:20\n')
+  await $.session.start(START)
+  expect(out(await $.tool.call({ tool: 'mcp__a5r__editor', action: 'request', minutes: 45, build: true, what: 'C++ build' } as never))).toContain('granted to this session until 15:25')
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { want: { minutes: 20, pie: false, build: false, what: 'PIE proof', mode: 'interactive', pausable: true, nextSafe: 'after save', requestedAt: NOW } }))
+  expect(out(await $.tool.call({ tool: 'mcp__a5r__editor', action: 'extend', minutes: 120 } as never))).toBe('A5R · Editor — 1 session is queued for the Editor, so a build window is at most 45 min (S2 standard); extended to 17:25 it would be 165 min → finish the build by 15:25, release, and ask again for the rest')
+  w.files.delete(`${HF}/editor/cccccccc.json`.toLowerCase())
+  expect(out(await $.tool.call({ tool: 'mcp__a5r__editor', action: 'extend', minutes: 30 } as never))).toContain('extended until 15:55')
+})
+
+test('A79 (review 5): a SYNC DONE that arrives after the hard end, before anyone wrote the expiry, is recorded as done', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  await $.session.start(START)
+  // The worker ran past the hard end and no tick has written the expiry yet.
+  w.put(SYNC, JSON.stringify({ ...newSync(T(13, 50), MINE, 'me', NOW - 90 * MIN), workerId: 'w-sync', workerAt: T(13, 50) })) // hard end 14:35
+  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')
+  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none'])
+})
+
+test('A79 (review 5): /a5r off while the worker runs: its SYNC line is still recorded and the sync\'s lock released', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put(LOCK, 'free since 14:20\n')
+  await $.session.start(START)
+  await planMine($)
+  await w.clock.advance(5 * MIN)
+  expect(w.read(LOCK)).toContain('note=Sync main 14:45')
+  expect(await a5r($, 'off')).toContain('A5R off')
+  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')
+  expect(syncOf(w)?.state).toBe('done')
+  expect(w.read(LOCK)).toMatch(/^FREE since=/)
+})
+
+test('A79 (review 5): the holder still on the Editor at T: the sync takes that lease, the cutoff notice says so, and the lock is released at the end', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  on('turn.complete', async () => ({ text: '' }))
+  repo(w, 'E:/s2')
+  w.put(LOCK, 'free since 14:20\n')
+  await $.session.start(START)
+  expect(out(await $.tool.call({ tool: 'mcp__a5r__editor', action: 'request', minutes: 30, what: 'PIE proof' } as never))).toContain('granted to this session until 15:10')
+  await planMine($) // 14:45: inside the cutoff already
+  await w.clock.advance(5 * MIN)
+  expect(prompts(w).some(p => p.includes('the sync takes that lease: its worker uses or closes that Editor after a dirty-package check, and a5r releases it when the sync ends'))).toBe(true)
+  expect(w.read(LOCK)).toContain(`session ${ME8}`)
+  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')
+  expect(w.read(LOCK)).toMatch(/^FREE since=.*Sync main 14:45 ended/)
 })

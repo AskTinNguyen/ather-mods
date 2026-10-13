@@ -268,7 +268,7 @@ test('A13: the freeze ends at once when the holder session is gone (expired, ðŸŸ
   expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBeUndefined()
 })
 
-test('A13: every sync has a hard end (45 min, 90 with a build, from the options); the holder is told 10 min before it', { options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, syncMergeMinutes: 30 } }, async ($, on) => {
+test('A13: every sync has a hard end (45 min, 90 with a build, from the options); the holder is told 10 min before it', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, syncMergeMinutes: 30 } }, async ($, on) => {
   const w = world(on)
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')

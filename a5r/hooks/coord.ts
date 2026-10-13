@@ -835,7 +835,7 @@ export const NOTICES = {
   disk: (drive: string, free: number): string => noticeText('Disk', `${drive} has ${free} GB free, under ${DISK_MIN_GB} GB (the DDC refuses writes under 10 GB)`, 'free space yourself: delete your own temp builds and scratch copies, move old Saved/_restore_backup*, Saved/_train_residue* and whole Saved/Autosaves copies to another drive (keep PackageRestoreData.json and the files it lists); never delete another session\'s files (said once a day)'),
   cutoff: (s: SyncFile, isHolder: boolean, lockMine: boolean): string =>
     isHolder
-      ? noticeText('Sync main', `cutoff: you hold the sync at ${hhmm(s.at)}`, `checkpoint your own work now and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; the conflict dry-run runs now and lands in sync.json; at ${hhmm(s.at)} a5r starts the sync worker, which runs the merge and ends it with done or abort (at the latest ${hhmm(s.hardEnd)})`)
+      ? noticeText('Sync main', `cutoff: you hold the sync at ${hhmm(s.at)}`, `checkpoint your own work now and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}${lockMine ? ' (if this session still holds it at the sync time, the sync takes that lease: its worker uses or closes that Editor after a dirty-package check, and a5r releases it when the sync ends)' : ''};the conflict dry-run runs now and lands in sync.json; at ${hhmm(s.at)} a5r starts the sync worker, which runs the merge and ends it with done or abort (at the latest ${hhmm(s.hardEnd)})`)
       : noticeText('Sync main', `cutoff: ${s.holder.lane} merges origin/main at ${hhmm(s.at)}`, `commit your own paths now (exact paths, wip: is fine), write your resume note in Saved/LANE_NOTES/<session id>.md, stop PIE and ${lockMine ? 'release the Editor' : 'leave the Editor alone'} by ${hhmm(s.at - RELEASE_BEFORE_MS)}; keep Source/ and Plugins/ edits out of the shared tree from now; from ${hhmm(s.at)} git writes and the Editor wait until the sync is done`),
   releaseBy: (s: SyncFile): string => noticeText('Sync main', `the sync at ${hhmm(s.at)} needs the Editor free by ${hhmm(s.at - RELEASE_BEFORE_MS)} and this session still holds it`, 'stop PIE, save your own assets, release with the editor tool now'),
   frozen: (s: SyncFile): string => noticeText('Sync main', `frozen: ${s.holder.lane} merges origin/main since ${hhmm(s.at)}`, 'no git writes in the shared checkout and no Editor use until it is done; keep working without them (or in your own worktree); you will be told when it lifts'),
@@ -980,7 +980,7 @@ export const SYNC_WORKER_PROMPT = [
   'Rules (the checkout\'s AGENTS.md and the user\'s machine profile win over this list):',
   '1. Git never prompts. Run every git command with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never in its environment (Bash: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> …`; PowerShell: set $env:GIT_TERMINAL_PROMPT=\'0\' and $env:GCM_INTERACTIVE=\'never\' first) and a timeout on the tool call: fetch and merge 10 min at most, everything else 2 min. A credential, network or LFS failure is an abort, never a retry loop. Never set GIT_LFS_SKIP_SMUDGE.',
   '2. Always `git -C <checkout>`. Never rebase, reset --hard, stash, clean, push or switch branches. Your git writes are exactly: `git merge --no-edit origin/main`, `git merge --abort`, `git checkout --ours|--theirs -- <paths>`, `git add -- <paths>`, `git commit --no-edit`, `git revert -m 1 <merge sha> --no-edit`. If any command is refused, abort the sync with the refusal as the reason.',
-  '3. The Editor. Never write Saved/EDITOR_OWNER.txt. Read it before any merge: it must name the holder session given in your task (the sync\'s lock). If it names another lane: never close, kill or drive that Editor; read the file again every few minutes (the sync is first in the queue and is granted when it comes free); if it does not name the holder session 10 minutes before the hard end, abort. If an Editor is open while the lock is the sync\'s (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone.',
+  '3. The Editor. Never write Saved/EDITOR_OWNER.txt. Read it before any merge: it must name the holder session given in your task (the sync\'s lock). If it names another lane: never close, kill or drive that Editor; never sleep or poll in a loop (a foreground sleep is refused here); read it once more after the fetch of rule 4 (the sync is first in the queue and is granted the moment it comes free), and if it still names another lane, end with SYNC ABORT naming that lane. If an Editor is open while the lock is the sync\'s (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone.',
   '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
   '5. Merge: `git merge --no-edit origin/main` (never rebase). For each conflicted path (`git diff --name-only --diff-filter=U`): rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
   '6. Build, only when the sync builds: the engine root comes from the machine profile; a build succeeded only when its own `Result: Succeeded` line says so (Build.bat exits 0 on failure). A failed build: `git revert -m 1 <merge sha> --no-edit`, then abort with its first error lines.',
@@ -990,21 +990,30 @@ export const SYNC_WORKER_PROMPT = [
   '   The holder\'s a5r records the first as done and the second as aborted; any other ending is recorded as an abort with your answer\'s first line.',
 ].join('\n')
 
-/** A79 (rev 28): the sync worker's last word, read from its final answer: exactly one `SYNC DONE …` or `SYNC ABORT …`
- * line (code marks around it allowed). Null when there is none, or more than one, or a DONE line without its sha. */
+/** A79 (rev 28, review 2): the sync worker's last word, read from its final answer, leniently: the LAST line whose words
+ * are SYNC DONE or SYNC ABORT (any case; Markdown marks, backticks and colons around the keywords and the sha are
+ * dropped), skipping the prompt's own template lines (`<merge sha>`, `<why, one line>`) when the answer quotes them. A DONE
+ * whose sha cannot be read is still done ("sha unread"); an ABORT without a reason is still an abort. Null: no such line. */
 export type SyncEnd = { kind: 'done'; sha: string; note: string } | { kind: 'abort'; why: string; note: string }
+const SYNC_LINE = /^SYNC[\s*`_:]+(DONE|ABORT)\b[\s*`_:]*(.*)$/i
 export const parseSyncEnd = (answer: string): SyncEnd | null => {
-  const lines = (answer ?? '').split(/\r?\n/).map(l => l.trim().replace(/^[`*>\s-]+|[`*\s]+$/g, '')).filter(l => /^SYNC\s+(DONE|ABORT)\b/.test(l))
-  if (lines.length !== 1) return null
-  const line = (lines[0] ?? '').replace(/\s+/g, ' ')
-  const done = /^SYNC DONE ([0-9a-f]{7,40})\b(.*)$/i.exec(line)
-  if (done) return { kind: 'done', sha: (done[1] ?? '').toLowerCase(), note: `merged ${(done[1] ?? '').toLowerCase()}${(done[2] ?? '').trimEnd()}`.slice(0, 300) }
-  const abort = /^SYNC ABORT\s+(.+)$/i.exec(line)
-  if (abort) {
-    const why = (abort[1] ?? '').trim()
-    return why ? { kind: 'abort', why: why.replace(/\s+state=.*$/, '').trim() || why, note: why.slice(0, 300) } : null
+  const lines = (answer ?? '')
+    .split(/\r?\n/)
+    .map(l => l.trim().replace(/^[\s`*#>_:-]+/, '').replace(/[\s`*_]+$/, '').replace(/\s+/g, ' '))
+    .filter(l => SYNC_LINE.test(l) && !/<merge sha>|<why, one line>|<pre-merge HEAD>/i.test(l))
+  const line = lines[lines.length - 1]
+  if (line === undefined) return null
+  const m = SYNC_LINE.exec(line)
+  const kind = (m?.[1] ?? '').toUpperCase()
+  const rest = (m?.[2] ?? '').replace(/[`*]/g, '').trim()
+  if (kind === 'DONE') {
+    const sha = /^([0-9a-f]{7,40})\b/i.exec(rest)?.[1]?.toLowerCase() ?? ''
+    return sha
+      ? { kind: 'done', sha, note: `merged ${sha}${rest.slice(sha.length).trimEnd()}`.slice(0, 300) }
+      : { kind: 'done', sha: '', note: `merged (sha unread)${rest ? ` ${rest}` : ''}`.slice(0, 300) }
   }
-  return null
+  const why = rest.replace(/\s*state=.*$/i, '').trim() || 'no reason given'
+  return { kind: 'abort', why, note: (rest || why).slice(0, 300) }
 }
 
 /** The task the holder's a5r hands the sync worker: this sync's facts. */

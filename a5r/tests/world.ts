@@ -8,7 +8,9 @@ export const LOCK = 'E:/s2/Saved/EDITOR_OWNER.txt'
 export const PENDING = 'C:/Users/hai.huynh/.claude/PENDING.md'
 export const ME = 'ab12cd34-5678-4000-8000-000000000000'
 export const ENV = { TEMP: 'C:/Users/HAI~1.HUY/AppData/Local/Temp', LOCALAPPDATA: 'C:/Users/hai.huynh/AppData/Local', USERPROFILE: 'C:/Users/hai.huynh' }
-export const opts = (a5rWhenPresent = 'deny') => ({ options: { a5rWhenPresent, editorLock: LOCK, pendingFile: PENDING } })
+// Review 7: engine tests take 0.3–2.5 s alone; under a loaded machine (two gate runs at once) the default 5 s cap failed one
+// at random. Their clock is the mock's, so a longer real-time budget changes no result, only removes the race.
+export const opts = (a5rWhenPresent = 'deny') => ({ timeoutMs: 30_000, options: { a5rWhenPresent, editorLock: LOCK, pendingFile: PENDING } })
 export const BAT = '"D:/GameEditors/5.8/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development'
 export const NOW = new Date(2026, 9, 6, 14, 40).getTime()
 export const LIME = '#DDFF00'

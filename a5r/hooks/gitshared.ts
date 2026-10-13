@@ -185,7 +185,20 @@ export const leasePushTargets = (args: string[]): string[] | null => {
   const valued = new Set(['--repo', '--receive-pack', '--exec', '-o', '--push-option'])
   const words: string[] = []
   for (let i = 0; i < rest.length; i += 1) {
-    const a = rest[i] ?? ''
+    let a = rest[i] ?? ''
+    // Review 1: a pipe or a list operator ends the git command; a redirection (`2>&1`, `> log`, `&> log`, `x>log`) is no
+    // refspec: an operator alone takes the next word as its target.
+    const redirect = /^(\d*|&)(>>?|<)(.*)$/.exec(a)
+    if (redirect) {
+      if ((redirect[3] ?? '') === '') i += 1
+      continue
+    }
+    if (/^(\||;|&)/.test(a)) break
+    const at = a.search(/[<>]/)
+    if (at > 0) {
+      if (/[<>]&?$/.test(a)) i += 1
+      a = a.slice(0, at)
+    }
     if (a.startsWith('-')) {
       if (valued.has(a)) i += 1
       continue

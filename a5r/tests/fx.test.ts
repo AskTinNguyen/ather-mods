@@ -82,7 +82,7 @@ test('A38: a new acceptance score resolves the chips one by one (dither, then �
   expect(marks().every(m => /^[✓✗–]$/.test(m))).toBe(true)
 })
 
-test('A38: none on the terminal; none with motion off', { options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('A38: none on the terminal; none with motion off', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
   world(on)
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   await $.tool.call({ tool: 'Bash', command: 'git push --force origin HaiHuynh/x' })

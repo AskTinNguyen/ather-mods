@@ -262,7 +262,7 @@ test('A5R seal on the desktop: stamps in once when A5R comes on, still afterward
   expect(((find(still, 'hai-brand')?.children ?? [])[1] as Tree)?.props?.isInteractive).toBeUndefined()
 })
 
-test('motion off: every icon stays still', { options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('motion off: every icon stays still', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
   world(on, { a5r: false })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
