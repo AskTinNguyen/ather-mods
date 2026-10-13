@@ -103,7 +103,7 @@ test('a worker\'s own worktree: git and repository config there are its own (the
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x reset --hard' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Write', file_path: 'E:/wt/x/Config/DefaultGame.ini', content: '[x]' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git checkout HEAD -- Config/DefaultGame.ini' }))).toContain('Config/DefaultGame.ini (no session claims it)')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x add .' }))).toContain('stage exact paths')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x add .' }))).toBeUndefined() // A80 (rev 28): its own worktree
 })
 
 test('A73: a worker (subagent) gets the main loop\'s answer: refused with the alternative, no dialog', opts('ask'), async ($, on) => {

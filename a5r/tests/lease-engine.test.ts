@@ -79,8 +79,10 @@ test('A12: at T the holder\'s a5r spawns the sync worker once, with the non-inte
   await $.session.start(START)
   const spec = (w.calls['agent.register'] ?? [])[0] as Rec
   expect([spec?.name, spec?.background]).toEqual(['sync', true])
-  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'mcp__a5r__sync'])
+  // A79 (rev 28): the worker calls no a5r tool; it ends with one SYNC DONE / SYNC ABORT line (changed by design).
+  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'SYNC DONE <merge sha> pre=<pre-merge HEAD> build=<Succeeded|skipped> conflicts=', 'SYNC ABORT <why, one line> state='])
     expect([must, String(spec?.prompt).includes(must)]).toEqual([must, true])
+  expect(String(spec?.prompt).includes('mcp__a5r__')).toBe(false)
   expect(await $.agent.offer({ agent: 'a5r:sync', description: 'x', source: 'plugin', provider: { plugin: 'a5r', tier: 'user' } } as never)).toEqual({ isOffered: false })
   await planMine($, w)
   await w.clock.advance(4 * MIN)
@@ -105,8 +107,8 @@ test('A12: a worker that ends without done or abort aborts the sync for it; the 
   await idle($)
   await $.turn.complete({ agentId: 'w-sync', answer: 'Stopped: git reset --hard was refused.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
   expect(syncOf(w)?.state).toBe('aborted')
-  expect(syncOf(w)?.note).toBe('the sync worker ended without done or abort: Stopped: git reset --hard was refused.')
-  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync worker ended without done or abort, so the sync at 14:45 was aborted for it'))).toBe(true)
+  expect(syncOf(w)?.note).toBe('the sync worker ended without a SYNC DONE or SYNC ABORT line: Stopped: git reset --hard was refused.')
+  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync worker ended without a SYNC DONE or SYNC ABORT line, so the sync at 14:45 was aborted for it'))).toBe(true)
 })
 
 test('A12: the worker ends the sync with done: the sync is done and its end is no abort', opts(), async ($, on) => {
@@ -226,6 +228,8 @@ test('A13: at its hard end the freeze expires for every session: marked expired,
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
   w.put(PENDING, '')
+  // A82: a session with an uncommitted change in the shared checkout is told at the cutoff and woken for the end.
+  w.put(`${HF}/touch/${ME8}.json`, JSON.stringify({ session: ME, id8: ME8, lane: '3️⃣-Loco-fix', paths: ['Source/S2/Mine.cpp'], updatedAt: NOW }))
   w.put(SYNC, JSON.stringify(newSync(T(14, 45), B, PLANNED_BY_B, NOW)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
   await $.session.start(START) // 14:40: the cutoff notice

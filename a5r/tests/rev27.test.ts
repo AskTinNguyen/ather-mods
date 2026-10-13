@@ -72,7 +72,7 @@ const PROBES: { tool: string; [k: string]: unknown }[] = [
   { tool: 'Bash', command: `git -C ${S2} checkout HEAD -- Source/S2/Foo.cpp` },
   { tool: 'Bash', command: 'git push --force origin HaiHuynh/x' },
   { tool: 'Bash', command: 'git push origin HEAD:main' },
-  { tool: 'Bash', command: 'git add -A' },
+  { tool: 'Bash', command: `git -C ${S2} add -A` }, // A80 (rev 28): add-all is refused in the shared checkout only
   { tool: 'Bash', command: 'rm -rf E:/Projects/s2/Saved/Logs' },
   { tool: 'Write', file_path: `${PROJ}/Config/DefaultGame.ini`, content: '[x]' },
   { tool: 'Write', file_path: `${PROJ}/S2.uproject`, content: '{}' },
@@ -110,7 +110,7 @@ test('A75: kept refusals each name the alternative the agent can carry out', opt
   const cases: [string, string][] = [
     ['git push --force origin HaiHuynh/x', 'push to a new branch and open a PR'],
     ['git push origin HEAD:main', 'push your branch and open a PR'],
-    ['git add .', 'stage exact paths'],
+    [`git -C ${S2} add .`, 'stage exact paths'], // A80 (rev 28): in the shared checkout
     ['git commit --no-verify -m x', 'fix what the hook reports'],
     ['GIT_LFS_SKIP_SMUDGE=1 git pull', 'git lfs pull'],
     [`git -C ${S2} sparse-checkout set Source`, 'worktree of your own'],

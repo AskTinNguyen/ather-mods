@@ -27,6 +27,8 @@ const advance = async (w: ReturnType<typeof world>, minutes: number, id8 = 'bbbb
     await w.clock.advance(MIN)
   }
 }
+/** A82: this session has an uncommitted change in the shared checkout (its touch file names a path). */
+const mineTouched = (w: ReturnType<typeof world>) => w.put(`${HF}/touch/${ME8}.json`, JSON.stringify({ session: ME, id8: ME8, lane: '3️⃣-Loco-fix', paths: ['Source/S2/Mine.cpp'], updatedAt: NOW }))
 /** A git repository folder in the in-memory file system: the shared S2 checkout, or a linked worktree. */
 const repo = (w: ReturnType<typeof world>, root: string, linked = false) => (linked ? w.put(`${root}/.git`, 'gitdir: E:/s2/.git/worktrees/x') : w.put(`${root}/.git/HEAD`, 'ref: refs/heads/HaiHuynh/20261005'))
 
@@ -65,8 +67,9 @@ test('named holder: its own a5r tells it once that it holds the sync', opts(), a
   expect(prompts(w).length).toBe(1)
 })
 
-test('cutoff: every A5R session gets the checkpoint notice at T − 30, once, as one prompt while idle', opts(), async ($, on) => {
+test('cutoff: a session with uncommitted changes in the shared checkout gets the checkpoint notice at T − 30, once, as one prompt while idle (A82: only to whom it concerns)', opts(), async ($, on) => {
   const w = world(on)
+  mineTouched(w)
   w.put(SYNC, JSON.stringify(newSync(T(15, 30), B, 'sync-lane (session bbbbbbbb)', NOW)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
   await $.session.start(START)
@@ -143,6 +146,7 @@ test('freeze: from T until done, a non-holder makes no git write in the shared c
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
   repo(w, 'E:/wt/x', true)
+  mineTouched(w) // A82: the cutoff notice concerns a session with uncommitted changes in the shared checkout
   w.put(LOCK, 'free since 14:20\n')
   w.put(SYNC, JSON.stringify(newSync(T(14, 50), B, 'sync-lane (session bbbbbbbb)', NOW)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))

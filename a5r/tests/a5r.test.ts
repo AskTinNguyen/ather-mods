@@ -82,7 +82,8 @@ test('a worker\'s own worktree: shared-checkout rules step aside, the rest stay'
   expect(kind('git -C "E:/wt/x" stash')).toBe(null)
   expect(kind('git -C E:/wt/x sparse-checkout set Source')).toBe(null)
   expect(kind('git reset --hard', 'E:/wt/x')).toBe(null)
-  expect(kind('git -C E:/wt/x add .')).toBe('ask')
+  expect(kind('git -C E:/wt/x add .')).toBe(null) // A80 (rev 28): add-all is the shared checkout's rule only
+  expect(kind('git -C E:/Projects/s2 add -A')).toBe('ask')
   expect(kind('git -C E:/wt/x push --force origin HaiHuynh/x')).toBe('ask')
   expect(kind('git -C E:/wt/x commit --no-verify -m x')).toBe('deny')
   expect(kind('git checkout main')).toBe('ask')

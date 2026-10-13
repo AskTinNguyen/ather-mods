@@ -172,3 +172,34 @@ export const repoPath = (spec: string, dir: string, root: string): { rel: string
 
 /** Whether a segment's (blanked) text is git at all (cheap pre-filter). */
 export const isGit = (seg: Seg): boolean => seg.verb === 'git' && blankQuotes(seg.raw).length > 0
+
+/** A80 (rev 28): the branches a `git push --force-with-lease` (or `--force-if-includes`) writes on the remote, or null
+ * when the segment is no such push. `''` is "the current branch of the folder it runs in" (no refspec, or `HEAD`); `*`
+ * is a push that cannot be read by branch (`--all`, `--mirror`, a pattern). Plain `--force`/`-f`/`+refspec` stay rule
+ * 1's (refused with the alternative `--force-with-lease`). */
+export const leasePushTargets = (args: string[]): string[] | null => {
+  if ((args[0] ?? '').toLowerCase() !== 'push') return null
+  const rest = args.slice(1)
+  if (!rest.some(a => /^--force-(with-lease|if-includes)(=|$)/.test(a))) return null
+  if (rest.some(a => a === '--all' || a === '--mirror' || a === '--branches')) return ['*']
+  const valued = new Set(['--repo', '--receive-pack', '--exec', '-o', '--push-option'])
+  const words: string[] = []
+  for (let i = 0; i < rest.length; i += 1) {
+    const a = rest[i] ?? ''
+    if (a.startsWith('-')) {
+      if (valued.has(a)) i += 1
+      continue
+    }
+    words.push(a)
+  }
+  const refspecs = words.slice(1) // the first word is the remote
+  if (refspecs.length === 0) return ['']
+  return refspecs.map(r => {
+    const dst = (r.includes(':') ? r.slice(r.indexOf(':') + 1) : r).replace(/^\+/, '').replace(/^refs\/heads\//, '')
+    if (/[*$%`]/.test(dst)) return '*'
+    return dst === '' || dst === 'HEAD' || dst === '@' ? '' : dst
+  })
+}
+
+/** A80: the branches no force push may rewrite, whatever its lease. */
+export const PROTECTED_BRANCH = /^(main|master|develop)$/i

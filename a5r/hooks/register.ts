@@ -9,10 +9,10 @@ import {
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
   lapseOf, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { classifyGit, exactAlternative, gitPlace, isGit, repoPath, walk } from './gitshared.ts'
+import { classifyGit, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk } from './gitshared.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -308,7 +308,7 @@ const ACTIONS: Record<string, Act> = {
   'sparse-checkout': { act: 'refuse', alt: 'make a worktree of your own and set its sparse layout there' },
   kit: { act: 'refuse', alt: 'change the mod in a worktree of its repository (D:/Projects/ather-mods-wt/<name>), never in the live plugin folder' },
   secret: { act: 'refuse', alt: 'keep the secret in an environment variable or a config file outside the repository' },
-  'force-push': { act: 'refuse', alt: 'push to a new branch and open a PR; never rewrite shared history' },
+  'force-push': { act: 'refuse', alt: 'use git push --force-with-lease to a branch of your own (it runs), or push to a new branch and open a PR; never rewrite shared history' },
   'push-main': { act: 'refuse', alt: 'push your branch and open a PR' },
   'add-all': { act: 'refuse', alt: 'stage exact paths: git add -- <path> ...' },
   // git-discard and git-switch are read by gitSharedProblem (segment by segment, on facts).
@@ -391,6 +391,50 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     }
     if (foreign.length > 0)
       return blocked(gate, `git ${sub} would ${sub.startsWith('stash ') ? 'write over' : 'discard'} uncommitted changes in the shared checkout: ${foreign.slice(0, 6).join('; ')}${foreign.length > 6 ? `; and ${foreign.length - 6} more` : ''}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
+  }
+  return null
+}
+
+/** A80 (rev 28): whether a `git add .`/`-A`/`--all` of the command stages in the shared S2 checkout itself (its main
+ * working tree, the checkout the editorLock option names); in any other repository or worktree it is that one's own. */
+async function addsAllInShared($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<boolean> {
+  const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
+  for (const seg of walk(command, cwd, home)) {
+    if (!isGit(seg)) continue
+    const { dir, args } = gitPlace(seg)
+    if ((args[0] ?? '').toLowerCase() !== 'add' || !args.slice(1).some(a => a === '.' || a === '-A' || a === '--all')) continue
+    const root = (await locate($, a5r, `${dir}/_`)).root
+    if (root && sameRoot(root, s2Root(opts)) && (await isSharedRoot($, root))) return true
+  }
+  // Inside a nested shell or a form walk cannot read: the rule's own match stands.
+  return !walk(command, cwd, home).some(seg => isGit(seg) && (gitPlace(seg).args[0] ?? '').toLowerCase() === 'add')
+}
+
+/** A80 (rev 28): `git push --force-with-lease` (or `--force-if-includes`) runs to a branch of one's own; it is refused only
+ * when it would rewrite main/master/develop or the branch the shared checkout has checked out (every session commits on
+ * it). A push with no refspec (or `HEAD`) writes the current branch of the folder it runs in (one `rev-parse`, 8 s). */
+async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: string): Promise<string | null> {
+  const gate = gateOf('D1')
+  const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
+  const branchOf = async (dir: string): Promise<string> => {
+    const r = await $.process.run(['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 8_000 }).catch(() => null)
+    return r && r.exitCode === 0 ? r.stdout.trim() : ''
+  }
+  let shared: string | null = null
+  for (const seg of walk(command, cwd, home)) {
+    if (!isGit(seg)) continue
+    const { dir, args } = gitPlace(seg)
+    const targets = leasePushTargets(args)
+    if (!targets) continue
+    for (const t of targets) {
+      if (t === '*') return blocked(gate, 'a lease push of every branch (--all, --mirror or a pattern) cannot be read branch by branch', 'push one branch of your own by name: git push --force-with-lease origin <your-branch>')
+      const name = t === '' ? await branchOf(dir) : t
+      if (!name || name === 'HEAD') return blocked(gate, `the branch git push --force-with-lease would write in ${dir} could not be read`, 'name it: git push --force-with-lease origin <your-branch>')
+      if (PROTECTED_BRANCH.test(name)) return blocked(gate, `--force-with-lease would still rewrite ${name}, a protected branch`, 'push your branch and open a PR')
+      shared ??= await branchOf(s2Root(opts))
+      if (shared && name.toLowerCase() === shared.toLowerCase())
+        return blocked(gate, `--force-with-lease would rewrite ${name}, the branch the shared checkout has checked out (every session commits on it)`, 'push your commits to a branch of your own (git push origin HEAD:<your-branch>) and open a PR')
+    }
   }
   return null
 }
@@ -780,7 +824,7 @@ async function ensureTools($: Engine): Promise<void> {
         minutes: { type: 'number', description: 'request: how long you need the Editor (5–180, default 30; ≤ 20 without a build may ask the holder to yield). extend: how many more minutes.' },
         pie: { type: 'boolean', description: 'request: the slot starts PIE (the launch gate is higher).' },
         launch: { type: 'boolean', description: 'request: false when the slot never launches the Editor (it holds the lock to keep the Editor down, as the sync worker does): the RAM launch gate is skipped.' },
-        build: { type: 'boolean', description: 'request: the Editor must be closed for a build (one window ≤ 45 min).' },
+        build: { type: 'boolean', description: 'request: the Editor must be closed for a build (one window ≤ 45 min while anyone is queued; longer when nobody is and no sync cutoff falls inside it).' },
         what: { type: 'string', description: 'request: what the slot is for, one line.' },
         lane: { type: 'string', description: 'request: the lane name written into the lock (default: this session\'s title).' },
         mode: { type: 'string', enum: ['interactive', 'unattended'] },
@@ -823,6 +867,9 @@ async function ensureTools($: Engine): Promise<void> {
 async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   if (!(await writeSync($, opts, { ...s, workerAt: now, updatedAt: now }, s))) return
   const claimed = syncFile ?? s
+  // A79: the worker calls no a5r tool (a plugin's hooks never see the calls of an agent it spawned), so the holder's a5r
+  // takes the Editor lock for the sync here, as the editor tool's request does, and releases it when the worker ends.
+  await takeSyncLock($, opts, claimed, now).catch(err => $.ui.log(`a5r: sync lock: ${String(err)}`, { to: 'debug' }))
   const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(opts), (lockRaw ?? '').trim()) }).catch(err => ({ deny: String(err) }))
   if (ran.deny !== undefined) {
     push({ id: `sync:${s.id}:${s.at}:worker-failed`, text: NOTICES.workerFailed(claimed, ran.deny), isActionable: true })
@@ -833,11 +880,46 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
 }
 
-/** A12: the worker's turn ended; if the sync is still open it ended without done or abort, so the sync is aborted
- * for it and the holder told (the freeze must never outlive its worker). */
+/** A79: the Editor slot the sync takes for its worker (its `what` names it, so the grant, lease and idle notices that are
+ * meant for a person's own slot skip it). */
+const SYNC_SLOT = 'Sync main '
+const isSyncSlot = (w: Want | null | undefined): boolean => Boolean(w?.what.startsWith(SYNC_SLOT))
+
+/** A79: the holder's a5r requests the Editor for the sync in code (the editor tool's request: launch false, build per the
+ * sync, unattended, up to the hard end) and is granted at once when the lock is free (the sync holder is first in the
+ * queue in its freeze); otherwise the request stays queued and a later tick grants it. Kept when this session already
+ * holds the Editor. Runs inside the tick (no runTick here). */
+async function takeSyncLock($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
+  if (!me) return
+  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lock = parseLockLine(lockRaw)
+  if (holdsLock()) return
+  const minutes = Math.ceil((s.hardEnd - now) / 60_000)
+  me = { ...me, want: { ...wantFrom({ action: 'request', minutes, build: s.build, launch: false, mode: 'unattended', pausable: false, what: `${SYNC_SLOT}${clockOf(s.at)}`, next_safe: 'after the merge' } as unknown as Input, now), requestedAt: now } }
+  await saveMe($, opts, now)
+  await editorStep($, opts, now)
+  await saveMe($, opts, now)
+}
+
+/** The FREE line for this session's lease (the editor tool's release and the sync's own, A79): a fresh probe names an
+ * Editor left open; the request and lease are dropped. False when the lock changed meanwhile. */
+async function releaseLock($: Engine, opts: Opts, now: number, extra: string, dont: string[] = []): Promise<{ isWritten: boolean; line: string }> {
+  const fresh = await freshProbe($, opts)
+  const pid = editorPid(fresh)
+  const note = [pid ? `Editor open PID ${pid}, reusable` : 'Editor closed', dont.length ? `Don't-Save: ${dont.join(', ')}` : '', extra].filter(Boolean).join('; ')
+  const line = freeLine({ since: now, by: me?.lane ?? me8, note, background: 'none' })
+  if (!(await writeLock($, opts, line))) return { isWritten: false, line }
+  if (me) me = { ...me, want: null, holding: null }
+  await saveMe($, opts, now)
+  return { isWritten: true, line }
+}
+
+/** A12 / A79: the worker's turn ended. The sync's Editor lock is released (or its queued request withdrawn); then the
+ * worker's last line is recorded through the sync tool's own path: `SYNC DONE …` → done, `SYNC ABORT …` → aborted;
+ * any other ending aborts the sync with the answer's first line (the freeze must never outlive its worker). */
 async function workerEnded($: Engine, opts: Opts, agentId: string, answer: string): Promise<void> {
   const s = parseSyncFile(await readJson($, syncPath(opts)))
-  if (!s || s.state !== 'planned' || s.workerAt === null || s.holder.id8 !== me8) return
+  if (!s || s.workerAt === null || s.holder.id8 !== me8) return
   if (s.workerId !== agentId) {
     // No id was recorded (or another agent ended): it is the worker only if the agent list says it ran as one.
     if (s.workerId !== null) return
@@ -845,7 +927,28 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
     if (agent?.type !== SYNC_AGENT) return
   }
   const now = await $.clock.now()
-  const ended = endedSync(s, 'aborted', `the sync worker ended without done or abort${answer ? `: ${answer.replace(/\s+/g, ' ').slice(0, 140)}` : ''}`, now)
+  await restoreMe($, opts)
+  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lock = parseLockLine(lockRaw)
+  if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ended`)
+  else if (me && isSyncSlot(me.want)) {
+    me = { ...me, want: null }
+    await saveMe($, opts, now)
+  }
+  if (s.state !== 'planned') return
+  const end = parseSyncEnd(answer)
+  let refusal = ''
+  if (end) {
+    const text = await syncAction($, opts, end.kind === 'done' ? 'done' : 'abort', { note: end.note })
+    const after = parseSyncFile(await readJson($, syncPath(opts)))
+    if (after && after.id === s.id && after.state !== 'planned') {
+      push({ id: `sync:${s.id}:${s.at}:worker-${after.state}`, text: after.state === 'done' ? NOTICES.workerDone(after) : NOTICES.workerAborted(after), isActionable: true })
+      return
+    }
+    refusal = `its ${end.kind === 'done' ? 'SYNC DONE' : 'SYNC ABORT'} line was not recorded (${text.replace(/\s+/g, ' ').slice(0, 120)})`
+  }
+  const first = (answer ?? '').split(/\r?\n/).map(l => l.trim()).find(Boolean) ?? ''
+  const ended = endedSync(s, 'aborted', `the sync worker ended without a SYNC DONE or SYNC ABORT line${refusal ? `; ${refusal}` : ''}${first ? `: ${first.slice(0, 140)}` : ''}`, now)
   await $.fs.write(syncPath(opts), JSON.stringify(ended))
   syncFile = ended
   delivered.add(noticeIds.lifted(ended)) // the holder hears the worker's end instead of the lift
@@ -914,6 +1017,11 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (holdsLock()) {
     if (!me.holding) me = { ...me, holding: { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? now + 30 * 60_000, extended: 0 } }
     const h = me.holding ?? { since: now, end: now, extended: 0 }
+    if (isSyncSlot(me.want)) {
+      // A79: the sync's slot ends with its worker (released in code); its hard end has its own notice.
+      decision = { kind: 'mine' }
+      return
+    }
     if (now >= h.end - LEASE_WARN_MS && now < h.end) push({ id: noticeIds.leaseEnding(h.since, h.end), text: NOTICES.leaseEnding(h.end), isActionable: true })
     if (now >= h.end) push({ id: noticeIds.overrun(h.since, h.end), text: NOTICES.overrun(h.end), isActionable: true })
     if (!isPieRunning && me.want?.mode !== 'unattended' && now - Math.max(lastEditorUseAt, h.since) >= IDLE_RELEASE_MS)
@@ -1186,7 +1294,8 @@ async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number |
   if (!(await writeLock($, opts, line))) return
   me = { ...me, holding: { since: now, end: d.end, extended: 0 } }
   lastEditorUseAt = now
-  push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : ''), isActionable: true })
+  // A79: the sync's own slot is its worker's; the holder's model is not woken to launch an Editor for it.
+  if (!isSyncSlot(w)) push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : ''), isActionable: true })
 }
 
 /** A short request without a build asks the holder to yield, once per holder per hour: through the holder's own
@@ -1347,7 +1456,10 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   const isHolder = s.holder.id8 === me8
   if (isHolder && phase === 'frozen' && now >= s.hardEnd - HARD_END_WARN_MS) push({ id: noticeIds.hardEndSoon(s), text: NOTICES.hardEndSoon(s), isActionable: true })
   if (isHolder && isOpenPhase(phase) && !s.plannedBy.includes(me8)) push({ id: noticeIds.holderNamed(s), text: NOTICES.syncHolderNamed(s), isActionable: true })
-  if (phase === 'cutoff') push({ id: noticeIds.cutoff(s), text: NOTICES.cutoff(s, isHolder, holdsLock()), isActionable: true })
+  // A82: the cutoff concerns the holder and the sessions with uncommitted changes in the shared checkout (their touch
+  // set) or holding or queued for the Editor; any other session hears only the one line at the freeze.
+  const isConcerned = isHolder || touched.size > 0 || holdsLock() || Boolean(me.want)
+  if (phase === 'cutoff' && isConcerned) push({ id: noticeIds.cutoff(s), text: NOTICES.cutoff(s, isHolder, holdsLock()), isActionable: true })
   if (!isHolder && holdsLock() && ((phase === 'cutoff' && now >= s.at - RELEASE_BEFORE_MS) || phase === 'frozen')) push({ id: noticeIds.releaseBy(s), text: NOTICES.releaseBy(s), isActionable: true })
   if (phase === 'frozen') push({ id: noticeIds.frozen(s), text: isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s), isActionable: false })
   if (isHolder && phase === 'frozen' && s.workerAt === null) {
@@ -1355,14 +1467,18 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
     s = syncFile ?? s
   }
   if (!isOpenPhase(phase)) {
+    // A79: a sync that ended or expired while its worker still held the Editor for it gives the lock back.
+    if (isHolder && holdsLock() && isSyncSlot(me?.want)) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ${s.state}`)
     // The lift reaches the sessions that were told of this sync, and only for a while after it ended.
     const stale = [noticeIds.cutoff(s), noticeIds.frozen(s), noticeIds.releaseBy(s)]
     const wasTold = stale.some(id => delivered.has(id) || pending.some(n => n.id === id))
     if (wasTold && now - (s.endedAt ?? s.updatedAt) < 6 * 3_600_000) {
+      // A82: a session told only the freeze line hears the lift at its next turn; one told to act wakes for it.
+      const wasAsked = [noticeIds.cutoff(s), noticeIds.releaseBy(s)].some(id => delivered.has(id))
       // The lift supersedes what this session was still to be told about the same sync.
       for (const id of stale) if (pending.some(n => n.id === id)) delivered.add(id)
       pending = pending.filter(n => !stale.includes(n.id))
-      push({ id: noticeIds.lifted(s), text: s.state === 'expired' ? NOTICES.expired(s) : NOTICES.lifted(s), isActionable: true })
+      push({ id: noticeIds.lifted(s), text: s.state === 'expired' ? NOTICES.expired(s) : NOTICES.lifted(s), isActionable: wasAsked })
     }
     return
   }
@@ -2023,7 +2139,8 @@ const A5R_HELP = [
   '/a5r status · the state as text',
   '/a5r accept · A5R acceptance now, for this session\'s repository (the full list)',
   '/a5r pass <intent slug | PR number> · lets the next PR call or close of that intent (or that PR\'s after-the-fact score) through once, even if acceptance fails; acceptance never asks',
-  'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs on exact paths when no other session\'s uncommitted change is in its way (else it names the path and owner); with no paths, `.` or a top folder it is refused with the same command on exact paths; shared config, recursive deletes and removed test assertions run and are recorded for acceptance; force push, push to main, git add ., --no-verify, GIT_LFS_SKIP_SMUDGE, reset --hard, clean -x and moving the shared tree are refused with what to do instead.',
+  'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs on exact paths when no other session\'s uncommitted change is in its way (else it names the path and owner); with no paths, `.` or a top folder it is refused with the same command on exact paths; shared config, recursive deletes and removed test assertions run and are recorded for acceptance; a plain force push, push to main, git add . in the shared checkout, --no-verify, GIT_LFS_SKIP_SMUDGE, reset --hard, clean -x and moving the shared tree are refused with what to do instead; git push --force-with-lease to a branch of your own and git add . in a worktree of your own run.',
+  'Editor: a build window is at most 45 min while anyone else is queued, longer when nobody is and no sync cutoff falls inside it. Sync main: at the sync time this session\'s a5r takes the Editor lock for the sync, starts the sync worker (it calls no a5r tool), records its SYNC DONE / SYNC ABORT line and releases the lock. Each notice reaches a session once; the cutoff notice only sessions with uncommitted changes in the shared checkout or on the Editor queue.',
   '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
@@ -2154,6 +2271,38 @@ const placeText = (d: GrantDecision | null): string => {
   return d.kind === 'grant' ? `granted until ${clockOf(d.end)}` : 'recovering a stale lease'
 }
 
+const BUILD_WINDOW_MIN = 45 // the S2 standard's build window while anyone waits (A81)
+
+/** A request's slot as this session's file keeps it: the editor tool's request and the sync's own request (A79) alike. */
+function wantFrom(e: Input, now: number): Want {
+  return {
+    minutes: Math.max(5, Math.min(180, Math.round(Number(e.minutes) || 30))),
+    pie: e.pie === true,
+    build: e.build === true,
+    what: str(e.what).slice(0, 120) || 'Editor work',
+    mode: e.mode === 'unattended' ? 'unattended' : 'interactive',
+    pausable: e.pausable !== false,
+    nextSafe: str(e.next_safe) || 'after save',
+    requestedAt: me?.want?.requestedAt ?? now, // asking again keeps the place in the queue
+    ...(e.launch === false ? { launch: false } : {}),
+  }
+}
+
+/** A81 (rev 28): a build window over 45 min (the S2 standard) is granted when nobody else is queued for the Editor and no
+ * sync cutoff falls inside it; with someone queued the 45-minute cap stays. Read after a fresh tick. */
+function buildWindowProblem(want: Want, now: number): string | null {
+  if (!want.build || want.minutes <= BUILD_WINDOW_MIN) return null
+  const others = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile).filter(f => f.id8 !== me8)
+  if (others.length > 0)
+    return blocked('Editor', `${others.length} session${others.length === 1 ? ' is' : 's are'} queued for the Editor (${others.map(f => f.lane).join(', ')}), so a build window is at most ${BUILD_WINDOW_MIN} min (S2 standard); ${want.minutes} asked`, `batch the code changes into one window of ≤ ${BUILD_WINDOW_MIN} min and ask again`)
+  const phase = phaseOf(syncFile, now)
+  if (syncFile && phase === 'planned' && now + want.minutes * 60_000 > syncFile.at - CUTOFF_MS) {
+    const room = Math.floor((syncFile.at - CUTOFF_MS - now) / 60_000)
+    return blocked('Editor', `a ${want.minutes}-min build window would cross the cutoff ${clockOf(syncFile.at - CUTOFF_MS)} of the sync at ${clockOf(syncFile.at)}`, room >= 5 ? `ask for ≤ ${room} min (it ends by the cutoff), or after the sync is done` : 'ask after the sync is done')
+  }
+  return null
+}
+
 /** The `editor` tool: request, release, extend, status (the only writer of the lock under A5R). */
 async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   if (!(await readA5R($))) return blocked('Editor', 'A5R is off, so the Editor holder is not running', 'follow AGENTS.md: take Saved/EDITOR_OWNER.txt by hand')
@@ -2166,20 +2315,9 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     if (!me) return 'no session file'
     await runTick($, opts) // a fresh read of the lock and the queue first
     if (holdsLock()) return tail(`this session already holds the Editor until ${me.holding ? clockOf(me.holding.end) : lock.end} → use it; extend if you need more`)
-    const build = e.build === true
-    const minutes = Math.max(5, Math.min(180, Math.round(Number(e.minutes) || 30)))
-    if (build && minutes > 45) return blocked('Editor', `a build window is at most 45 min (S2 standard), ${minutes} asked`, 'batch the code changes into one window of ≤ 45 min and ask again')
-    const want: Want = {
-      minutes,
-      pie: e.pie === true,
-      build,
-      what: str(e.what).slice(0, 120) || 'Editor work',
-      mode: e.mode === 'unattended' ? 'unattended' : 'interactive',
-      pausable: e.pausable !== false,
-      nextSafe: str(e.next_safe) || 'after save',
-      requestedAt: me.want?.requestedAt ?? now, // asking again keeps the place in the queue
-      ...(e.launch === false ? { launch: false } : {}),
-    }
+    const want = wantFrom(e, now)
+    const long = buildWindowProblem(want, now)
+    if (long) return long
     me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
     await saveMe($, opts, now)
     await runTick($, opts)
@@ -2195,15 +2333,10 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       return tail(blocked('Editor', 'the lock does not name this session', 'nothing to release (any request of this session is withdrawn)'))
     }
     if (isPieRunning && e.pie_stopped !== true) return blocked('Editor', 'this session started PIE and no stop was seen', 'stop PIE first (or call release with pie_stopped: true once it has ended)')
-    const fresh = await freshProbe($, opts)
-    const pid = editorPid(fresh)
     const dont = Array.isArray(e.dont_save) ? e.dont_save.map(String).filter(Boolean) : []
-    const note = [pid ? `Editor open PID ${pid}, reusable` : 'Editor closed', dont.length ? `Don't-Save: ${dont.join(', ')}` : '', str(e.note)].filter(Boolean).join('; ')
-    const line = freeLine({ since: now, by: me?.lane ?? me8, note, background: 'none' })
-    if (!(await writeLock($, opts, line))) return blocked('Editor', 'the lock changed while releasing', 'read it with action status, then release again')
-    if (me) me = { ...me, want: null, holding: null }
+    const { isWritten, line } = await releaseLock($, opts, now, str(e.note), dont)
+    if (!isWritten) return blocked('Editor', 'the lock changed while releasing', 'read it with action status, then release again')
     isPieRunning = false
-    await saveMe($, opts, now)
     return tail(`released: ${line}`)
   }
   if (action === 'extend') {
@@ -2786,6 +2919,8 @@ export const register: Register = (on, options) => {
         d = a5r.preShell(what, cwd, places, 0, await sharedTest($, a5r, what, cwd))
         // A15: the sync's own git work passes A5R's asks for its holder and worker, during their frozen phase only.
         if (d?.kind === 'ask' && isSyncCommandOnly(what) && (await isFrozenHolder($, opts))) d = null
+        // A80: `git add .`/`-A` is refused only in the shared S2 checkout; another repository or a worktree is its own.
+        if (d?.key === 'add-all' && !(await addsAllInShared($, opts, a5r, what, cwd))) d = null
       }
     } else if (EDIT_TOOLS.has(tool)) {
       parts = await editParts($, tool, input)
@@ -2804,6 +2939,14 @@ export const register: Register = (on, options) => {
     // the sync's own commands in its frozen phase pass (A15).
     if (isOn && SHELL_TOOLS.has(tool) && /\bgit\b/.test(what) && !(isSyncCommandOnly(what) && (await isFrozenHolder($, opts)))) {
       const problem = await gitSharedProblem($, opts, a5r, what, await $.session.cwd())
+      if (problem) {
+        count('D1')
+        return { deny: problem }
+      }
+    }
+    // A80: a lease push to a branch of one's own runs; to a protected branch or the shared checkout's branch it is refused.
+    if (isOn && SHELL_TOOLS.has(tool) && /--force-(with-lease|if-includes)/.test(what)) {
+      const problem = await leasePushProblem($, opts, what, await $.session.cwd())
       if (problem) {
         count('D1')
         return { deny: problem }

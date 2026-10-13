@@ -48,7 +48,7 @@ export const CONFIG: A5RConfig = {
   "shell_ask": [
     {
       "id": "force-push",
-      "re": "\\bgit\\b.*\\spush\\b.*(\\s(-f|--force)\\b|\\s\\+[\\w/])",
+      "re": "\\bgit\\b.*\\spush\\b.*(\\s(-f|--force)(\\s|$)|\\s\\+[\\w/])",
       "why": "Force push rewrites shared history."
     },
     {
@@ -71,7 +71,8 @@ export const CONFIG: A5RConfig = {
     {
       "id": "add-all",
       "re": "\\bgit\\b(\\s+-[cC]\\s+\\S+)*\\s+add\\s+(\\.|-A|--all)(\\s|$)",
-      "why": "Stage exact paths; 'git add .' picks up other sessions' files."
+      "why": "Stage exact paths; 'git add .' picks up other sessions' files.",
+      "where": "shared"
     },
     {
       "id": "git-config-global",
