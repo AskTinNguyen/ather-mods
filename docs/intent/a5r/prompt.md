@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 28
+- Rev: 29
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -129,6 +129,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A80 (rev 28): Fast routes in one's own branch or worktree run: `git push --force-with-lease` (and `--force-if-includes`) to a branch other than main/master/develop and other than the shared checkout's current branch runs; plain `--force`/`-f`/`+refspec` stays refused with the alternative (`--force-with-lease`). `git add .`/`-A`/`--all` is refused only in the shared checkout (in a worktree of one's own it runs). MEASURED: the force-push pattern matches `--force-with-lease` (`\s(-f|--force)\b`), and add-all is matched in every repository. Proof: gate: unit and engine tests per form.
 - A81 (rev 28): The Editor build window fits the queue, not a fixed number: a build window longer than 45 minutes is granted when nobody is queued for the Editor and no sync cutoff falls inside it; with someone queued, the 45-minute cap stays (the S2 standard). MEASURED: requests for 60 and 120 minutes were refused "batch the code changes into one window of ≤ 45 min" with an empty queue. Proof: gate: engine tests.
 - A82 (rev 28): A notice is said once, to whom it concerns: each notice id reaches a session once (the grant notice was repeated up to 13 times in one session); the disk notice is once a day per session and says what to clean, not "tell Hai"; the sync cutoff notice goes only to sessions with uncommitted changes in the shared checkout or holding or queued for the Editor (others get a one-line note at the freeze). Proof: gate: engine tests (one grant → one notice across many tool calls; disk once a day; an idle clean session gets no cutoff notice).
+- A83 (rev 29): A5R has no decision convention of its own; decisions are Ather's (Hai, 2026-10-14: "Bỏ quy ước 🟥 đi, để Ather lo quyết định"). A5R no longer injects the "Decisions that are Hai's (🟥 / ⏯️)" section (on or off), no longer marks session titles 🟥 or ⏯️, sets no unread flag, writes no PENDING.md line and shows no "Waiting on Hai" toast; its rules text no longer says "raise 🟥". What A5R raised as a 🟥 itself becomes a plain fact where it already shows: a failing after-the-fact PR score on the A5R pane's acceptance card and as one coordination notice to the session that owns the PR; an expired sync on the pane and as one notice to the holder (and the "Hai is asked" wording goes). The clean-up stays: when Hai types in a session whose title still carries an old 🟥 or ⏯️, the mark is taken off (A63). Proof: gate: engine tests (an answer ending with a 🟥 NEEDS DECISION line changes no title, writes no PENDING line, sets no unread; the injected prompt has no 🟥/⏯️ section with A5R on or off; a failing post-hoc score and an expired sync give a notice and a card line, no mark); the old-name style scan extended to the 🟥 convention's strings outside history and tests.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -142,6 +143,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 29 (2026-10-14): L-32: A83 no 🟥/⏯️ convention in A5R; decisions are Ather's.
 - rev 28 (2026-10-13): L-31: A79 the sync worker uses no A5R tool (every sync so far aborted), A80 force-with-lease and add-all in one's own branch or worktree run, A81 a long build window when nobody waits, A82 each notice once, to whom it concerns.
 - rev 27 (2026-10-10): L-30: A5R never asks or waits at the action: A73 no approval gates, A74 fact checks on discarding git, A75 config edits, deletes and removed assertions reported at nghiệm thu, A76 the kit and notice guards narrowed, A77 tests are the proof where there is no build, A78 one table of every gate.
 - rev 26 (2026-10-10): L-29: A72 nghiệm thu reads its own definitions and the word PENDING as prose, not unfinished work (9 false alarms at the close).

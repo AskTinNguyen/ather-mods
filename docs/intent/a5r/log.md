@@ -213,3 +213,7 @@ Hai also ran `/a5r pass a5r` (kept for the close after this rev). The TALab sess
 > Kiểm tra lại xem cần sửa gì?
 
 Found from the S2 transcripts: A5R has been off since 2026-10-10 morning (one `/a5r off` turns it off for every session); every A5R sync aborted because the plugin-spawned sync worker cannot call A5R's own tools; force-with-lease and add-all blocked even outside the shared checkout; 45-minute build cap with an empty queue; repeated notices.
+
+## L-32 (2026-10-14) | class: intent | -> rev 29
+
+> Bỏ quy ước 🟥 đi, để Ather lo quyết định
