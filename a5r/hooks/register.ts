@@ -1,7 +1,7 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
 import { A5R, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
-import { bareTitle, hasMark, isDirectorCallLine, isFindingsFile, isPending, markedTitle, pendingLine, readMarker, type Marker } from './decision.ts'
+import { bareTitle, hasMark } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
 import {
   CUTOFF_MS, DIR, HARD_END_WARN_MS, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
@@ -19,7 +19,7 @@ import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf
 import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5R off it draws nothing into Ather's
-// pane, status line or toasts and gates nothing; only the 🟥 / ⏯️ title marks stay (D1).
+// pane, status line or toasts and gates nothing (D1). A83: decisions are Ather's; A5R has no decision convention.
 // - A5R (a5r.ts, accept.ts, rules/config.json), only while `/a5r on`: the five rules (D9). At the tool call it
 //   refuses or asks only before what cannot be undone (D10); nothing per turn. Everything else is scored at
 //   acceptance (nghiệm thu A5R) over the branch, the intent's files and Ather's proof, when a PR is opened or
@@ -30,9 +30,8 @@ import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, ty
 //   launch gate, PIE 5/3 GB fixed) and the Sync main holder (`/a5r sync`, model tool `sync`: cutoff, freeze,
 //   conflicts to their owners). One minute timer reads files and probes; it wakes the model only for an
 //   event addressed to this session. Notices start "A5R ·" and are never logged in docs/intent.
-// - 🟥 / ⏯️ (decision.ts), always: the title is marked and unread set. A 🟥 that relays an intent's director
-//   call (a worker added it to findings.md, intent skill) is in Ather's Needs you already; any other 🟥 gets
-//   one PENDING.md line, so no decision is lost.
+// - A63 clean-up (decision.ts), always: when Hai types in a session whose title still carries an old decision mark
+//   from before 0.17.0, the mark is taken off. Nothing marks a title any more (A83).
 // - Ather's pane (theme.ts, watch.ts, icons.ts), A5R on only: its home view gains Editor holder · Memory ·
 //   Sync main tiles with pixel icons; the accent turns gold, a red seal joins the brand, the five rules sit
 //   at the foot. Icons move only when a state turns over (a dither reveal) or a sync runs (a dither sweep).
@@ -40,7 +39,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, sessionsBox, editorTile, ty
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5rWhenPresent: string; editorLock: string; pendingFile: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number }
+type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -56,11 +55,9 @@ const INK = (): string => A5R_LOOK.paneInk // A40: the pane's ink, per theme
 
 let engine: A5R | null = null
 let rulesA5R = ''
-let rulesFlow = ''
 let places: Places = {}
 const rootOf = new Map<string, string | null>()
 const isLinked = new Map<string, boolean>() // git root -> a linked worktree (one session's own), not the shared checkout
-let wroteDirectorCall = false // this turn added an open director call to an intent's findings.md
 let a5rOn = false
 let a5rFlipAt = 0
 let hits: RuleHits = noHits()
@@ -160,7 +157,6 @@ const parentOf = (p: string): string => {
 }
 const s2Root = (opts: Opts): string => parentOf(parentOf(norm(opts.editorLock)))
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-const stampOf = (d: Date): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hhmm(d)}`
 const count = (rule: string) => {
   for (const id of rule.match(/D[1-5]/g) ?? []) freshHits.add(id) // A38: the chip stamps at the next draw
   for (const id of rule.match(/D[1-5]/g) ?? []) hits[id as keyof RuleHits] += 1
@@ -185,7 +181,6 @@ async function load($: Engine): Promise<A5R> {
     PROJECT: await $.session.root(),
   }
   rulesA5R = await $.fs.read(`${root}/rules/rules-a5r.md`).catch(() => '')
-  rulesFlow = await $.fs.read(`${root}/rules/rules-flow.md`).catch(() => '')
   engine = new A5R(cfg, places)
   return engine
 }
@@ -255,13 +250,6 @@ async function atherStatus($: Engine): Promise<AtherStatus | null> {
 /** Ather's proof for the intent this session tracks, or null with no intent tracked. */
 const proofOf = (s: AtherStatus | null): Proof | null =>
   s?.tracked?.slug ? { intent: s.tracked.slug, role: s.role ?? '', evidence: s.evidence ?? {}, ...(s.pack ? { pack: s.pack, gates: s.gates ?? [] } : {}) } : null
-
-/** Whether an answer relays one of the tracked intent's open director calls by its id (Ather lists it under Needs you). */
-const namesDirectorCall = (s: AtherStatus | null, answer: string): boolean =>
-  (s?.tracked?.directorCalls ?? []).some(call => {
-    const id = (call.split(':')[0] ?? '').trim()
-    return id !== '' && new RegExp(`(^|[^\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(answer)
-  })
 
 async function scopeGlobs($: Engine): Promise<string[]> {
   const text: string = await $.fs.read(`${$.plugin.root}/rules/scope`).catch(() => '')
@@ -536,25 +524,6 @@ async function retitle($: Engine, text: string): Promise<string> {
   return callTool($, { tool: 'mcp__ccd_session_mgmt__set_session_title', session_id: 'self', title: text })
 }
 
-async function applyMarker($: Engine, opts: Opts, m: NonNullable<Marker>, isInFindings: boolean): Promise<void> {
-  const now = await sessionTitle($).catch(() => '')
-  if (m.kind === 'decision') {
-    // An intent's director call (its worker added it to findings.md) is in Ather's Needs you already;
-    // anything else gets one PENDING.md line, the only list outside Ather.
-    if (!isInFindings) {
-      const label = bareTitle(now) || (await $.session.id()).slice(0, 8)
-      const file = opts.pendingFile || `${(places.USERPROFILE ?? '').replace(/\\/g, '/')}/.claude/PENDING.md`
-      const pending = await $.fs.read(file).catch(() => '')
-      if (!isPending(pending, m.question)) await $.fs.write(file, `${pending.replace(/\s*$/, '')}\n${pendingLine(stampOf(new Date(await $.clock.now())), label, m.question, m.fallback)}\n`)
-    }
-    if (a5rOn) $.ui.toast(`🟥 Waiting on Hai${isInFindings ? ' (Ather: Needs you)' : ''}: ${m.question.slice(0, 80)}`, { timeoutMs: 12_000 })
-    await callTool($, { tool: 'mcp__ccd_sidebar__set_unread', session_id: 'self', unread: true }).catch(() => '')
-  }
-  const sign = m.kind === 'decision' ? '🟥' : '⏯️'
-  if (now && !now.startsWith(sign)) {
-    await retitle($, markedTitle(now, sign)).catch(() => '')
-  }
-}
 
 
 /** The line under the prompt says only what the pane would not tell at a glance: ★ A5R while it is on, and
@@ -865,7 +834,7 @@ async function ensureTools($: Engine): Promise<void> {
     name: 'sync',
     description:
       'a5r A5R Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
-      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and Hai is asked. At the sync time the holder\'s a5r starts the sync worker, which runs the merge and ends with done or abort. ' +
+      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and every session is told. At the sync time the holder\'s a5r starts the sync worker, which runs the merge and ends with done or abort. ' +
       '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "done" (note), "abort" (note: why), "status". Only the holder changes a planned sync.',
     inputSchema: {
       type: 'object',
@@ -1148,7 +1117,7 @@ function holderFacts(held: LockLine, now: number, p: Probe | null): Omit<Orchest
 }
 
 /** A62: the candidate rules (Tier 1, not acted on yet), each logged once per lease by the first session to claim it:
- * a lease held with no Editor or build running; its holder gone. A64: no rule reads a title mark or PENDING.md;
+ * a lease held with no Editor or build running; its holder gone. A64: no rule reads a session's title or a list file;
  * whether a holder waits on Hai is read from its own transcript by the judge (A65). */
 async function logCandidates($: Engine, opts: Opts, now: number): Promise<void> {
   const held = lock
@@ -1398,7 +1367,7 @@ const freezeMinutes = (opts: Opts, build: boolean): number => {
   return Number.isFinite(v) && v >= 10 && v <= 480 ? Math.round(v) : build ? SYNC_BUILD_MIN : SYNC_MERGE_MIN
 }
 
-/** One session raises an alert that every session sees (a 🟥 for Hai): the first to create its alert file wins. */
+/** One session claims an event every session sees (an alert file): the first to create it wins. */
 async function claimAlert($: Engine, opts: Opts, key: string, extra: Record<string, unknown> = {}): Promise<boolean> {
   const path = alertPath(opts, key)
   if (await $.fs.exists(path)) return false
@@ -1409,14 +1378,9 @@ async function claimAlert($: Engine, opts: Opts, key: string, extra: Record<stri
 
 const alertPath = (opts: Opts, key: string): string => `${hfDir(opts)}/alerts/${key.replace(/[^\w.-]+/g, '_')}.json`
 
-/** A 🟥 for Hai from the coordination layer: the title, unread and one PENDING.md line (decision.ts). */
-async function raiseRed($: Engine, opts: Opts, question: string, fallback: string): Promise<void> {
-  await applyMarker($, opts, { kind: 'decision', question, fallback }, false).catch(err => $.ui.log(`a5r: 🟥 not raised: ${String(err)}`, { to: 'debug' }))
-}
-
 /** D8: a freeze past its hard end, or whose holder is gone, is written down as expired (a terminal state any
- * session may write, read-compare-write; writing it twice is harmless), and the session whose alert file wins
- * raises the 🟥. */
+ * session may write, read-compare-write; writing it twice is harmless). A83: the pane shows it and the holder and every
+ * session told of the sync get one notice (syncStep); nobody's title is marked. */
 async function expireSync($: Engine, opts: Opts, s: SyncFile, now: number): Promise<SyncFile> {
   const why = now >= s.hardEnd ? `its hard end ${clockOf(s.hardEnd)} passed` : `its holder ${s.holder.lane} (session ${s.holder.id8}) is gone`
   const cur = parseSyncFile(await readJson($, syncPath(opts)))
@@ -1424,7 +1388,6 @@ async function expireSync($: Engine, opts: Opts, s: SyncFile, now: number): Prom
   const ended = endedSync(cur, 'expired', why, now)
   await $.fs.write(syncPath(opts), JSON.stringify(ended))
   syncFile = ended
-  if (await claimAlert($, opts, `sync-expired-${s.id}-${s.at}`)) await raiseRed($, opts, NOTICES.expiredRed(ended, why), 'git and the Editor stay open; nobody touches the merge state until Hai decides')
   return ended
 }
 
@@ -1531,6 +1494,8 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (!isOpenPhase(phase)) {
     // A79: a sync that ended or expired while its worker still held the Editor for it gives the lock back.
     if (isHolder && holdsLock() && isSyncSlot(me?.want)) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ${s.state}`)
+    // A83: an expired sync is one notice to its holder (no mark on a title), whether or not it heard the cutoff.
+    if (isHolder && s.state === 'expired' && now - (s.endedAt ?? s.updatedAt) < 6 * 3_600_000) push({ id: noticeIds.lifted(s), text: NOTICES.expired(s), isActionable: true })
     // The lift reaches the sessions that were told of this sync, and only for a while after it ended.
     const stale = [noticeIds.cutoff(s), noticeIds.frozen(s), noticeIds.releaseBy(s)]
     const wasTold = stale.some(id => delivered.has(id) || pending.some(n => n.id === id))
@@ -1591,7 +1556,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   const when = (x: SyncFile) => `the sync at ${clockOf(x.at)} (holder ${x.holder.lane}, session ${x.holder.id8})`
   const notHolder = (x: SyncFile) => blocked(gate, `${when(x)} is held by another live session; only its holder changes it`, `ask that session (${x.holder.lane}) to ${action === 'cancel' ? 'cancel' : action === 'move' || action === 'plan' ? 'move' : 'end'} it`)
   const planned = (x: SyncFile) =>
-    `${when(x)}${x.build ? ', with a build' : ''}: cutoff ${clockOf(x.at - CUTOFF_MS)} (every session commits its own paths, writes its resume note, releases the Editor by ${clockOf(x.at - RELEASE_BEFORE_MS)}); from ${clockOf(x.at)} git writes and the Editor freeze for everyone but the holder until done or abort, at the latest until ${clockOf(x.hardEnd)} (its hard end: then it expires and Hai is asked).`
+    `${when(x)}${x.build ? ', with a build' : ''}: cutoff ${clockOf(x.at - CUTOFF_MS)} (every session commits its own paths, writes its resume note, releases the Editor by ${clockOf(x.at - RELEASE_BEFORE_MS)}); from ${clockOf(x.at)} git writes and the Editor freeze for everyone but the holder until done or abort, at the latest until ${clockOf(x.hardEnd)} (its hard end: then it expires and every session is told).`
   if (action === 'plan' || action === 'move') {
     const at = atNext(a.at ?? '', now)
     if (at === null) return blocked(gate, `"${a.at ?? ''}" is not a time`, 'give HH:MM, for example /a5r sync 16:00')
@@ -1700,7 +1665,7 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
 // ---------- A5R acceptance (nghiệm thu, A18): the five rules over the branch, before a PR and when an intent closes ----------
 /** A56: the tracked intent when its checklist is complete (every acceptance row met or waived in its progress.md, read
  * in `root` and else in the session's own checkout, or Ather's checklist full), else null: before that, and with no
- * tracked intent, A5R acceptance stays out of a PR (no score, no refusal, no dialog, no 🟥, no card). */
+ * tracked intent, A5R acceptance stays out of a PR (no score, no refusal, no dialog, no notice, no card). */
 async function checklistEnd($: Engine, a5r: A5R, root: string, status: AtherStatus | null): Promise<string | null> {
   const slug = status?.tracked?.slug
   if (!slug) return null
@@ -2093,30 +2058,17 @@ async function oldAlert($: Engine, opts: Opts, n: number): Promise<boolean> {
   }
 }
 
-/** A52: withdraws an old scorer's alert for PR `n`: its alert file says so (so no session withdraws it twice) and its open
- * PENDING.md line is ticked with why. */
+/** A52: withdraws an old scorer's alert for PR `n`: its alert file says so (so no session withdraws it twice). */
 async function withdrawOldAlert($: Engine, opts: Opts, n: number): Promise<void> {
   const now = await $.clock.now()
   await $.fs.write(alertPath(opts, `pr-${n}`), JSON.stringify({ by: me8, at: now, scorer: POSTHOC_SCORER, withdrawn: true, why: 'scored the session checkout, not the PR (before a5r 0.12.3)' })).catch(() => undefined)
-  const file = opts.pendingFile || `${(places.USERPROFILE ?? '').replace(/\\/g, '/')}/.claude/PENDING.md`
-  const pending = await $.fs.read(file).catch(() => null)
-  if (pending === null) return
-  const mark = `PR #${n} (intent `
-  const lines = pending.split('\n')
-  let changed = false
-  const next = lines.map(l => {
-    if (!l.startsWith('- [ ]') || !l.includes(mark) || !l.includes('without A5R acceptance')) return l
-    changed = true
-    return `- [x]${l.slice(5).replace(/\r$/, '')} · withdrawn ${stampOf(new Date(now))}: that score read the session's checkout, not the PR; a5r 0.12.3 scored the PR on its own diff${l.endsWith('\r') ? '\r' : ''}`
-  })
-  if (changed) await $.fs.write(file, next.join('\n')).catch(() => undefined)
 }
 
 /** A23: a PR number on the tracked intent's `- PR:` line (or in Ather's `tracked.prs`) that this session never scored
- * (opened on GitHub, or by the app's own button) is scored now, shown on the card with its number, and one 🟥 is
- * raised per failing PR (the first session to claim its alert file). The first read of an intent only records the
- * numbers already there. A52: each PR is scored on its own diff (scorePr), one section per PR on the card, a 🟥 only
- * for a PR whose own score fails; a PR an old scorer raised an alert for is scored again once and that alert is
+ * (opened on GitHub, or by the app's own button) is scored now and shown on the card with its number; A83: a failing PR
+ * gets one coordination notice to this session, which tracks its intent (once per PR: the first session to claim its
+ * alert file). The first read of an intent only records the numbers already there. A52: each PR is scored on its own
+ * diff (scorePr), one section per PR on the card, a notice only for a PR whose own score fails; a PR an old scorer raised an alert for is scored again once and that alert is
  * withdrawn. Returns whether it scored. */
 async function postHoc($: Engine, opts: Opts, a5r: A5R, root: string, status: AtherStatus | null, now: number): Promise<boolean> {
   const slug = status?.tracked?.slug
@@ -2160,14 +2112,7 @@ async function postHoc($: Engine, opts: Opts, a5r: A5R, root: string, status: At
     if (!(await claimAlert($, opts, `pr2-${r.n}`, { scorer: POSTHOC_SCORER }))) continue
     const isMerged = r.state === 'MERGED'
     const verdict = r.problem ? `could not be scored: ${unreadLine(r.problem)}` : `fails ${bad.length} of 5 (${bad.map(b => `${b.rule} ${ruleName(b.rule)}`).join('; ')})`
-    await raiseRed(
-      $,
-      opts,
-      isMerged
-        ? `PR #${r.n} (intent ${slug}) was merged without A5R acceptance and ${verdict}: fix it in a follow-up PR, or leave it as it is?`
-        : `PR #${r.n} (intent ${slug}) was opened without A5R acceptance and ${verdict}: fix it on its branch before it merges, or let it merge as it is?`,
-      isMerged ? 'a follow-up PR fixes it' : 'hold the merge until the branch scores 5 of 5',
-    )
+    push({ id: `accept:pr:${r.n}`, text: NOTICES.prAfter(r.n, slug, verdict, isMerged), isActionable: true })
   }
   return true
 }
@@ -2254,18 +2199,13 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   return null
 }
 
-/** A14: a merge left in the shared checkout with no sync open (.git/MERGE_HEAD) is one 🟥 for Hai, raised by the
- * first session that sees it (an alert file per MERGE_HEAD). */
+/** A14: a merge left in the shared checkout with no sync open (.git/MERGE_HEAD): one notice per MERGE_HEAD to every
+ * session (A83: no mark on any title); the holder of the last sync is woken for it, the others hear it at their next
+ * turn. */
 async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void> {
   const head = await $.fs.stat(`${s2Root(opts)}/.git/MERGE_HEAD`).catch(() => null)
   if (!head || isOpenPhase(phaseOf(syncFile, now))) return
-  if (await claimAlert($, opts, `merge-head-${Math.round(head.mtimeMs)}`))
-    await raiseRed(
-      $,
-      opts,
-      `A merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since ${clockOf(head.mtimeMs)}) and no sync is open${syncFile ? ` (the last sync, ${clockOf(syncFile.at)} by ${syncFile.holder.lane}, is ${syncFile.state})` : ''}: finish it or abort it (git merge --abort) yourself, or name a session to do it`,
-      'every session but the last sync holder stays refused git writes there until MERGE_HEAD is gone',
-    )
+  push({ id: `merge-head:${Math.round(head.mtimeMs)}`, text: NOTICES.mergeLeft(head.mtimeMs, syncFile), isActionable: syncFile?.holder.id8 === me8 })
 }
 
 /** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */
@@ -2936,7 +2876,7 @@ export const register: Register = (on, options) => {
       return {
         text: a5rOn
           ? '★ A5R on: the five rules apply in every session from its next tool call (at the action for what cannot be undone; A5R acceptance at the end of an intent checklist, at Ship and at its close); Ather\'s pane takes the red seal and the gold accent.'
-          : 'A5R off: the rules, A5R acceptance, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again. The 🟥/⏯️ title marks stay.',
+          : 'A5R off: the rules, A5R acceptance, the Editor holder, RAM and Sync main gates stop; Ather\'s pane, status line and toasts are Ather\'s own again.',
       }
     }
     await readA5R($)
@@ -3078,8 +3018,6 @@ export const register: Register = (on, options) => {
         if ((was === null) !== (sharedShellAt === null)) await saveMe($, opts)
       }
     }
-    // A director call added to an intent's findings this turn (🟥 routing); no per-turn report is kept (D10).
-    if (EDIT_TOOLS.has(tool) && ran.isError !== true && parts.some(([path, old, neu]) => isFindingsFile(path) && newLines(old, neu).some(isDirectorCallLine))) wroteDirectorCall = true
     // Mid-turn, queued notices ride the main loop's next tool result (D6); a worker's results carry none.
     if (isOn && isMain && pending.length > 0) {
       const texts = drain()
@@ -3104,14 +3042,6 @@ export const register: Register = (on, options) => {
       if (!isBusy) await deliverIdle($, opts)
     }
     if (e.agentId === undefined) {
-      const wrote = wroteDirectorCall
-      wroteDirectorCall = false
-      if (e.reason === 'answer') {
-        const m = readMarker(e.answer)
-        // A 🟥 that relays a director call (added to findings.md this turn, or named by its F-<n>) is in Ather already.
-        const isInFindings = m?.kind === 'decision' && (wrote || namesDirectorCall(await atherStatus($), e.answer))
-        if (m) await applyMarker($, opts, m, isInFindings).catch(err => $.ui.log(`marker: ${String(err)}`))
-      }
       // The session is idle now: a notice that needs action and arrived after the last tool result is one prompt.
       await markTurn($) // A55: the turn saw everything its tool results carried, a grant made in it included
       turnSignalAt = await $.clock.now() // A59
@@ -3128,8 +3058,8 @@ export const register: Register = (on, options) => {
     if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') turnSignalAt = await $.clock.now()
     // A55: a turn starts (a prompt a plugin queued, this mod's notice prompt included, counts once the turn runs a tool or ends)
     if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') await markTurn($)
-    // Hai typed: the marker has been seen, so the title goes back. A63: the title without its mark, read now (never a
-    // value kept in memory, which a reload or a restart loses).
+    // A63 clean-up (kept by A83): Hai typed in a session whose title still carries an old decision mark (from before
+    // 0.17.0): the title goes back without it, read now (never a value kept in memory, which a reload loses).
     const typed = (e.origin as { kind?: string } | undefined)?.kind
     if (typed === 'composer' || typed === 'bridge') {
       const title = await sessionTitle($)
@@ -3155,7 +3085,8 @@ export const register: Register = (on, options) => {
     await load($)
     const isOn = await readA5R($)
     const id8 = (await $.session.id()).slice(0, 8)
-    const text = [rulesFlow, isOn ? rulesA5R : ''].filter(Boolean).join('\n\n').replaceAll('{SESSION8}', id8)
+    // A83: no decision section, on or off; only A5R's own rules while it is on.
+    const text = isOn ? rulesA5R.replaceAll('{SESSION8}', id8) : ''
     if (!text) return res
     return { ...res, sections: [...res.sections, { id: 'a5r:rules', text, scope: 'session' as const }] }
   })

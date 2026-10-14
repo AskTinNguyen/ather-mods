@@ -24,7 +24,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('A20: with motion off the footer says "Love the project" and holds no switching element', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('A20: with motion off the footer says "Love the project" and holds no switching element', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, motion: 'off' } }, async ($, on) => {
   world(on, { a5r: true })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)

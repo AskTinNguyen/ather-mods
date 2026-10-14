@@ -21,7 +21,7 @@ const minutes = async (w: ReturnType<typeof world>, n: number) => {
 }
 const titled = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title').map(e => String(e.title))
 const head = async ($: any) => text(find(await $.ui.render(A5RPANE as never), 'hai-accept-head'))
-const prLines = (w: ReturnType<typeof world>) => w.read(PENDING).split('\n').filter(l => l.includes('PR #'))
+const prLines = (w: ReturnType<typeof world>) => (w.calls['prompt.submit'] ?? []).flatMap(e => String((e as { text?: string }).text).split('\n\n')).filter(l => l.startsWith('A5R · Acceptance — PR #')) // A83: the notice, not a list line
 
 test('A23: unit: PR numbers read as Ather reads them; the number a PR call reports', () => {
   expect(prNumbersOf('- PR: #812, sipherxyz/s2#813, https://github.com/sipherxyz/s2/pull/814\n## Steps\n- PR: #999', '- PR: #700')).toEqual([812, 813, 814, 700])
@@ -44,7 +44,7 @@ test('A23: a PR line added by hand is scored after the fact: the card names the 
   await minutes(w, 5)
   expect(prLines(w).length).toBe(1)
   expect(prLines(w)[0]).toContain('PR #812 (intent tail-vfx) was opened without A5R acceptance and fails 1 of 5 (4 Keep it clean)')
-  expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
+  expect(titled(w)).toEqual([]) // A83: no mark
   expect(await head($)).toContain('● 1 of 5 not mettail-vfx · PR #812 · scored after the fact')
   expect(text(find(await $.ui.render(A5RPANE as never), 'hai-accept-pr-812-head'))).toBe('PR #812● 1 of 5 not mettail-glow → main · open · 1 files, read from local branches')
   await minutes(w, 11)

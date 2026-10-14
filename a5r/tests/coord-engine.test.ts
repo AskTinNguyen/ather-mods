@@ -223,7 +223,7 @@ test('RAM: LiveCodingConsole stays while an Editor runs, and an open Editor is r
   expect(parseLockLine(w.read(LOCK)).pid).toBe(91)
 })
 
-const GATE_OPTS = { options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, launchGatePieGb: 24 } }
+const GATE_OPTS = { options: { a5rWhenPresent: 'deny', editorLock: LOCK, launchGatePieGb: 24 } }
 test('RAM: the launch gate comes from the plugin options', GATE_OPTS, async ($, on) => {
   const w = world(on, { ram: '25' })
   w.put(LOCK, 'free since 14:20\n')

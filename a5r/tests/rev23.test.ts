@@ -56,14 +56,14 @@ test('A63: an unmarked title is never retitled when Hai types', opts(), async ($
   expect(titled(w)).toEqual([])
 })
 
-test('A63: marked in this session, then typed: the mark comes off', opts(), async ($, on) => {
+test('A63 (kept by A83): an old mark from before 0.17.0 comes off when Hai types; a decision line marks nothing now', opts(), async ($, on) => {
   const out: Record<string, string> = { [GET]: '{"title":"3️⃣ Loco fix"}' }
   const w = world(on, { out })
   on('turn.complete', async () => ({ text: '' }))
   await $.session.start(START)
   await $.turn.complete({ answer: '🟥 NEEDS DECISION — which preset? Default if no answer: keep the old one.', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as never)
-  expect(titled(w)[0]?.startsWith('🟥')).toBe(true)
-  out[GET] = JSON.stringify({ title: titled(w)[0] })
+  expect(titled(w)).toEqual([]) // A83 (changed by design): no mark
+  out[GET] = JSON.stringify({ title: '🟥 3️⃣ Loco fix' }) // a mark an older a5r left
   await $.prompt.submit({ text: 'keep it', wait: false, origin: { kind: 'composer' } } as never)
   expect(titled(w).at(-1)).toBe('3️⃣ Loco fix')
 })

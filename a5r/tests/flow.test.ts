@@ -21,7 +21,7 @@ test('A5R off: the rules, nghiệm thu and the Editor gate all rest (D1)', opts(
   expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toBeUndefined()
 })
 
-test('A5R off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; 🟥 still marks the title', opts(), async ($, on) => {
+test('A5R off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; A83: an answer\'s decision line marks nothing', opts(), async ($, on) => {
   const w = world(on, { a5r: false, ram: '2.1' })
   w.put(LOCK, '1006-other-s9 (worker) since 13:30, expected end 14:00. session ffffffff\n') // over its lease, RAM under the PIE gate
   w.put(PENDING, '')
@@ -37,7 +37,9 @@ test('A5R off: Ather\'s pane tree, status line and toasts are exactly Ather\'s; 
   expect((w.calls['ui.status'] ?? []).filter(e => (e as Rec).text !== undefined)).toEqual([])
   expect(w.calls['ui.toast'] ?? []).toEqual([])
   expect(w.calls['tool.register'] ?? []).toEqual([])
-  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' && e.title === '🟥 3️⃣ Loco fix')).toBe(true)
+  // A83 (changed by design): decisions are Ather's; A5R marks no title, sets no unread, writes no list line.
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' || e.tool === 'mcp__ccd_sidebar__set_unread')).toBe(false)
+  expect(w.read(PENDING)).toBe('')
 })
 
 test('/a5r on and /a5r off flip the switch every session reads', opts(), async ($, on) => {
@@ -118,26 +120,18 @@ test('A73: a worker (subagent) gets the main loop\'s answer: refused with the al
   expect(w.seen.length).toBe(0)
 })
 
-test('🟥 that relays an intent\'s director call: Ather lists it, so no PENDING.md line; title and unread still mark it', opts(), async ($, on) => {
+test('A83: an answer ending with a decision line (A5R on): no title mark, no unread, no list line, no toast', opts(), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status({ tracked: { slug: 'tail-vfx', directorCalls: ['F-3: Tail VFX colour: gold or red'] }, evidence: {} }) } })
-  w.put(PENDING, '')
-  on('turn.complete', async () => ({ text: '' }))
-  const answer = 'Worker dừng ở F-3.\n\n> 🟥 **NEEDS DECISION** — F-3: tail VFX gold or red? / Default if no answer: gold'
-  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
-  expect(w.files.get(k(PENDING)) ?? '').not.toContain('tail VFX')
-  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' && e.title === '🟥 3️⃣ Loco fix')).toBe(true)
-  expect(w.seen.some(e => e.tool === 'mcp__ccd_sidebar__set_unread' && e.unread === true)).toBe(true)
-})
-
-test('🟥 after a worker added a director call this turn: no PENDING.md line', opts(), async ($, on) => {
-  const w = world(on)
+  w.put(PENDING, '- [x] old line\n')
   on('turn.complete', async () => ({ text: '' }))
   const findings = `${PROJ}/docs/intent/tail-vfx/findings.md`
   w.put(findings, '# Findings\n')
   await $.tool.call({ tool: 'Write', file_path: findings, content: '# Findings\n\n## F-4 (2026-10-06) | blocking: yes | status: open (director)\nGold or red?\n', agentId: 'worker-1' } as never)
-  const answer = '> 🟥 **NEEDS DECISION** — Tail colour? / Default if no answer: gold'
-  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
-  expect(w.files.get(k(PENDING)) ?? '').not.toContain('Tail colour')
+  for (const answer of ['Phần A xong.\n\n> 🟥 **NEEDS DECISION** — Merge PR #1 now or after the train? / Default if no answer: after the train', 'Worker dừng ở F-3.\n\n> 🟥 **NEEDS DECISION** — F-3: tail VFX gold or red? / Default if no answer: gold', '⏯️ Bước 2 xong, chờ Hai xem clip.'])
+    await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' || e.tool === 'mcp__ccd_sidebar__set_unread')).toBe(false)
+  expect(w.read(PENDING)).toBe('- [x] old line\n')
+  expect((w.calls['ui.toast'] ?? []).map(t => String((t as Rec).text ?? (t as Rec).message ?? JSON.stringify(t))).some(t => /Waiting on Hai|🟥/.test(t))).toBe(false)
 })
 
 // ---------- the Editor ----------
@@ -161,20 +155,6 @@ test('Editor: PIE needs 5 GB free RAM', opts(), async ($, on) => {
 })
 
 // ---------- 🟥 ----------
-test('🟥 at the end of a turn: PENDING.md once, title marked, unread', opts(), async ($, on) => {
-  const w = world(on)
-  w.put(PENDING, '- [x] old line\n')
-  const answer = 'Phần A xong.\n\n> 🟥 **NEEDS DECISION** — Merge PR #1 now or after the train? / Default if no answer: after the train'
-  on('turn.complete', async () => ({ text: answer }))
-  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer' })
-  await $.turn.complete({ answer, durationMs: 10, isAborted: false, turnId: 't2', reason: 'answer' })
-  const pending = w.files.get(k(PENDING)) ?? ''
-  expect(pending.split('\n').filter(l => l.includes('Merge PR #1')).length).toBe(1)
-  expect(pending).toContain('· 3️⃣ Loco fix · Merge PR #1 now or after the train? · default: after the train')
-  expect(w.seen.some(e => e.tool === 'mcp__ccd_session_mgmt__set_session_title' && e.title === '🟥 3️⃣ Loco fix')).toBe(true)
-  expect(w.seen.some(e => e.tool === 'mcp__ccd_sidebar__set_unread' && e.unread === true)).toBe(true)
-})
-
 // ---------- Ather's pane ----------
 const GOLD = '#F2C14E' // A33: the approved gold
 /** The brand label's color: the first Text of the masthead, or of the brand row once A5R adds its seal. */
@@ -262,7 +242,7 @@ test('A5R seal on the desktop: stamps in once when A5R comes on, still afterward
   expect(((find(still, 'hai-brand')?.children ?? [])[1] as Tree)?.props?.isInteractive).toBeUndefined()
 })
 
-test('motion off: every icon stays still', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('motion off: every icon stays still', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, motion: 'off' } }, async ($, on) => {
   world(on, { a5r: false })
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)

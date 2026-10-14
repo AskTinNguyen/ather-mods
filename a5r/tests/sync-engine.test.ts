@@ -274,7 +274,7 @@ test('A11: at the cutoff the holder lists the files main adds that already exist
   expect(told).toContain('A5R · Sync main — origin/main adds Source/S2/NewFile.cpp, which already exists untracked in the shared checkout and was written by this session')
   expect(told).toContain('before 15:30: commit it with exact paths (then it is an ordinary conflict, yours to settle) or move it out of the tree')
   expect(told).toContain('origin/main adds 3 files that already exist untracked in the shared checkout ("untracked would be overwritten"): Source/S2/NewFile.cpp → 3️⃣-Loco-fix; Content/S2/New/A.uasset → level-lane; Config/Stray.ini → owner unknown')
-  expect(told).toContain('owner unknown → 🟥 to Hai')
+  expect(told).toContain("owner unknown → name it in the sync's note and leave it") // A83: no mark
 })
 
 test('A11: a session whose touch file names an untracked file main adds is told by its own a5r', opts(), async ($, on) => {

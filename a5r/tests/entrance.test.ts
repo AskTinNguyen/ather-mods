@@ -67,7 +67,7 @@ test('A37: the terminal draws at once (no curtain); motion off draws at once on 
   expect(curtains(await $.ui.render(PANE as never))).toEqual([])
 })
 
-test('A37: motion off: no curtain on the desktop', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('A37: motion off: no curtain on the desktop', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, motion: 'off' } }, async ($, on) => {
   world(on)
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)

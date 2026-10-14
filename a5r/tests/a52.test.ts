@@ -43,7 +43,7 @@ const PRS = `${URL(32806)}, ${URL(32788)}, ${URL(32791)}`
 const minutes = async (w: ReturnType<typeof world>, n: number) => {
   for (let i = 0; i < n; i += 1) await w.clock.advance(MIN)
 }
-const pendingPr = (w: ReturnType<typeof world>) => w.read(PENDING).split('\n').filter(l => l.includes('PR #'))
+const pendingPr = (w: ReturnType<typeof world>) => (w.calls['prompt.submit'] ?? []).flatMap(e => String((e as { text?: string }).text).split('\n\n')).filter(l => l.startsWith('A5R · Acceptance — PR #')) // A83: the notice, not a list line
 const setup = (w: ReturnType<typeof world>, prs: string) => {
   w.put(PENDING, '')
   w.put(`${INTENT}/prompt.md`, PROMPT)
@@ -100,12 +100,10 @@ test('A52: a PR the old scorer raised a 🟥 for is scored once more on its own 
   await minutes(w, 6)
   const tree = await $.ui.render(A5RPANE as never)
   expect(text(find(tree, 'hai-accept-pr-32806-head'))).toContain('PR #32806● 5 of 5 met')
-  // The old alert is withdrawn: its file says so, its PENDING line is ticked with why; no new 🟥 (the PR passes).
+  // The old alert is withdrawn: its file says so; no notice (the PR passes). A83: the old list file is left as it is.
   expect(JSON.parse(w.read(`${HF}/alerts/pr-32806.json`))).toMatchObject({ withdrawn: true, scorer: 2 })
-  const line = pendingPr(w)
-  expect(line.length).toBe(1)
-  expect(line[0]?.startsWith('- [x]')).toBe(true)
-  expect(line[0]).toContain('withdrawn')
+  expect(pendingPr(w)).toEqual([])
+  expect(w.read(PENDING).startsWith('- [ ] 2026-10-07 17:02 · Filler · PR #32806')).toBe(true)
   expect(w.read(`${HF}/alerts/pr2-32806.json`)).toBe('')
   // This session's file records the scorer; the PR is not scored a third time.
   expect(JSON.parse(w.read(`${HF}/editor/${id8}.json`)).prScorer).toBe(2)

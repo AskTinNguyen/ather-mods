@@ -11,7 +11,7 @@ import { A5RPANE, LOCK, NOW, PENDING, PROJ, all, find, keys, world, type Tree } 
 const HF = 'E:/s2/Saved/A5R'
 const MIN = 60_000
 const T = (h: number, m: number) => new Date(2026, 9, 6, h, m).getTime()
-const SLOW_OPTS = { options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'slow' } }
+const SLOW_OPTS = { options: { a5rWhenPresent: 'deny', editorLock: LOCK, motion: 'slow' } }
 const D = { ...A5RPANE, surface: 'desktop' } as never
 const timings = (svg: string) => [...svg.matchAll(/begin="(\d+)ms" dur="(\d+)ms"/g)].map(m => [Number(m[1]), Number(m[2])] as const)
 const lastEnd = (svg: string) => Math.max(...timings(svg).map(([b, d]) => b + d))

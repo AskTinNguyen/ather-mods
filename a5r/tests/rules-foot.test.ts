@@ -72,7 +72,7 @@ test('A36: a rule hit today turns its chip\'s rim red (only that rule), and its 
   expect([text(last), last.props?.color]).toEqual(['Hits today: 1', RIM.red])
 })
 
-test('A36: motion off keeps the chips with a still "Love the project" beside the label', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, motion: 'off' } }, async ($, on) => {
+test('A36: motion off keeps the chips with a still "Love the project" beside the label', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, motion: 'off' } }, async ($, on) => {
   world(on, { a5r: true })
   await $.session.start({ cwd: PROJ, surface: 'desktop', isInteractive: true } as never)
   const tree = await $.ui.render({ ...A5RPANE, surface: 'desktop' } as never)

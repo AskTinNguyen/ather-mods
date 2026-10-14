@@ -10,7 +10,7 @@ export const ME = 'ab12cd34-5678-4000-8000-000000000000'
 export const ENV = { TEMP: 'C:/Users/HAI~1.HUY/AppData/Local/Temp', LOCALAPPDATA: 'C:/Users/hai.huynh/AppData/Local', USERPROFILE: 'C:/Users/hai.huynh' }
 // Review 7: engine tests take 0.3–2.5 s alone; under a loaded machine (two gate runs at once) the default 5 s cap failed one
 // at random. Their clock is the mock's, so a longer real-time budget changes no result, only removes the race.
-export const opts = (a5rWhenPresent = 'deny') => ({ timeoutMs: 30_000, options: { a5rWhenPresent, editorLock: LOCK, pendingFile: PENDING } })
+export const opts = (a5rWhenPresent = 'deny') => ({ timeoutMs: 30_000, options: { a5rWhenPresent, editorLock: LOCK } })
 export const BAT = '"D:/GameEditors/5.8/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development'
 export const NOW = new Date(2026, 9, 6, 14, 40).getTime()
 export const LIME = '#DDFF00'
@@ -52,7 +52,6 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   on('fs.read', async (_$: unknown, e: { path: string }) => {
     if (k(e.path).endsWith('/rules/config.json')) return value(JSON.stringify(CONFIG))
     if (k(e.path).endsWith('/rules/rules-a5r.md')) return value(rules)
-    if (k(e.path).endsWith('/rules/rules-flow.md')) return value('FLOW RULES {SESSION8}')
     const t = files.get(k(e.path))
     return t === undefined ? { deny: `ENOENT: ${e.path}` } : value(t)
   })

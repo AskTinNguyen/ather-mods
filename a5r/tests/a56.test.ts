@@ -18,7 +18,7 @@ const minutes = async (w: ReturnType<typeof world>, n: number) => {
   for (let i = 0; i < n; i += 1) await w.clock.advance(MIN)
 }
 const views = (w: ReturnType<typeof world>) => w.runs.filter(r => r.includes('pr view')).map(r => /pr view (\d+)/.exec(r)?.[1])
-const prLines = (w: ReturnType<typeof world>) => w.read(PENDING).split('\n').filter(l => l.includes('PR #'))
+const prLines = (w: ReturnType<typeof world>) => (w.calls['prompt.submit'] ?? []).flatMap(e => String((e as { text?: string }).text).split('\n\n')).filter(l => l.startsWith('A5R · Acceptance — PR #')) // A83: the notice, not a list line
 
 test('A56/A57: unit: a checklist is complete when every row is met or waived; Ather\'s count; what /a5r pass names', () => {
   expect([checklistComplete(PROMPT, rows('met | PIE: fade', '')), checklistComplete(PROMPT, rows('waived | Hai', '')), checklistComplete(PROMPT, rows('open |', '')), checklistComplete(PROMPT, rows('gate met, review open | x', '')), checklistComplete('# no rows', '')]).toEqual([true, true, false, false, false])

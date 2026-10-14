@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXCEPTIONS, oldNamesIn, uncovered } from './old-names.ts'
+import { DECISION_EXCEPTIONS, decisionNamesIn } from './decision-names.ts'
 
 const mod = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const skip = new Set(['.claude-plugin/types', 'node_modules'])
@@ -33,4 +34,20 @@ for (const rel of files) {
 const stale = EXCEPTIONS.filter((_, i) => !used.has(i)).map(x => `stale exception: ${x.file}: ${x.name}: ${x.line}`)
 console.log(`scanned ${files.length} files: ${hits.length} old names outside the exceptions, ${used.size} of ${EXCEPTIONS.length} exceptions in use`)
 for (const s of [...hits, ...stale]) console.log(s)
-process.exit(hits.length + stale.length > 0 ? 1 : 0)
+
+// A83 (rev 29): the decision convention's strings stand only in tests/, the A63 clean-up and the listed exceptions.
+const dHits = []
+const dUsed = new Set()
+const outside = files.filter(rel => !rel.startsWith('tests/'))
+for (const rel of outside) {
+  for (const line of fs.readFileSync(path.join(mod, rel), 'utf8').split(/\r?\n/))
+    for (const name of decisionNamesIn(line)) {
+      const i = DECISION_EXCEPTIONS.findIndex(x => x.file === rel && x.name === name && line.includes(x.line))
+      if (i >= 0) dUsed.add(i)
+      else dHits.push(`${rel}: ${name}: ${line.trim().slice(0, 160)}`)
+    }
+}
+const dStale = DECISION_EXCEPTIONS.filter((_, i) => !dUsed.has(i)).map(x => `stale exception: ${x.file}: ${x.name}: ${x.line}`)
+console.log(`scanned ${outside.length} files outside tests/: ${dHits.length} decision-convention strings outside the exceptions, ${dUsed.size} of ${DECISION_EXCEPTIONS.length} exceptions in use`)
+for (const s of [...dHits, ...dStale]) console.log(s)
+process.exit(hits.length + stale.length + dHits.length + dStale.length > 0 ? 1 : 0)

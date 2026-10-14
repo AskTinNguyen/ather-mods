@@ -48,17 +48,20 @@ test('A14: while .git/MERGE_HEAD exists, a non-holder\'s git writes in the share
   expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBeUndefined()
 })
 
-test('A14: a merge left behind with no sync open is one 🟥 for Hai; the holder of the last sync may still end it', opts(), async ($, on) => {
+test('A14 (A83): a merge left behind with no sync open is one notice to each session, no mark; the holder of the last sync may still end it', opts(), async ($, on) => {
   const w = world(on)
   repo(w, 'E:/s2')
   w.put(PENDING, '')
   w.put('E:/s2/.git/MERGE_HEAD', '1a2b3c\n', T(14, 20))
   await $.session.start(START)
-  expect(w.read(PENDING)).toContain('A merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since 14:20) and no sync is open')
-  expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
   expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toContain('no sync is open (a merge left behind)')
+  const heard: string[] = []
+  const say = async () => heard.push(...(((await $.tool.call({ tool: 'Bash', command: 'echo hi' } as never)) as { context?: string[] }).context ?? []))
+  await say()
   await advance(w, 3, null)
-  expect(w.read(PENDING).split('\n').filter(l => l.includes('MERGE_HEAD')).length).toBe(1)
+  await say()
+  expect(heard.filter(t => t.startsWith('A5R · Merge guard — a merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since 14:20) and no sync is open')).length).toBe(1)
+  expect([w.read(PENDING), titled(w)]).toEqual(['', []])
   // This session held the last sync: its own git there passes the guard (to finish or abort that merge).
   w.put(SYNC, JSON.stringify({ ...newSync(T(14, 0), { session: ME, id8: ME8, lane: '3️⃣-Loco-fix' }, 'me', NOW - 60 * MIN), state: 'aborted', endedAt: T(14, 30) }))
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge --abort' }))).toBeUndefined()
@@ -223,7 +226,7 @@ test('A16: at the cutoff the holder sends each live S2 session without a5r 0.4 o
 })
 
 // ---------- A13: the freeze is a lease ----------
-test('A13: at its hard end the freeze expires for every session: marked expired, a notice, one 🟥 for Hai', opts(), async ($, on) => {
+test('A13 (A83): at its hard end the freeze expires for every session: marked expired, one notice, no mark', opts(), async ($, on) => {
   const w = world(on)
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
@@ -240,17 +243,15 @@ test('A13: at its hard end the freeze expires for every session: marked expired,
   await advance(w, 30) // 15:30: the hard end (T + 45)
   expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['expired', 'its hard end 15:30 passed'])
   expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync at 14:45 expired at 15:30 without done or abort (its hard end 15:30 passed) → git and the Editor are open again'))).toBe(true)
-  expect(w.read(PENDING)).toContain('Sync main 14:45 (holder sync-lane) expired without done or abort: its hard end 15:30 passed')
-  expect(titled(w).some(t => t.startsWith('🟥'))).toBe(true)
-  expect(w.seen.some(e => e.tool === 'mcp__ccd_sidebar__set_unread' && e.unread === true)).toBe(true)
+  // A83 (changed by design): no mark, no unread, no list line; the notice says it once.
+  expect([w.read(PENDING), titled(w)]).toEqual(['', []])
+  expect(w.seen.some(e => e.tool === 'mcp__ccd_sidebar__set_unread')).toBe(false)
   expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBeUndefined()
-  // One 🟥 for all sessions: the alert file names who raised it; a second look raises nothing new.
-  expect(JSON.parse(w.read(`${HF}/alerts/sync-expired-${syncOf(w)?.id}-${T(14, 45)}.json`)).by).toBe(ME8)
   await advance(w, 3)
-  expect(w.read(PENDING).split('\n').filter(l => l.includes('expired without done')).length).toBe(1)
+  expect(prompts(w).filter(p => p.includes('the sync at 14:45 expired at 15:30')).length).toBe(1)
 })
 
-test('A13: the freeze ends at once when the holder session is gone (expired, 🟥), never waiting for its hard end', opts(), async ($, on) => {
+test('A13: the freeze ends at once when the holder session is gone (expired), never waiting for its hard end', opts(), async ($, on) => {
   const w = world(on)
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
@@ -264,11 +265,11 @@ test('A13: the freeze ends at once when the holder session is gone (expired, �
   await idle($)
   await advance(w, 4, null) // the holder's file stops: gone after 3 min
   expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['expired', 'its holder sync-lane (session bbbbbbbb) is gone'])
-  expect(w.read(PENDING)).toContain('expired without done or abort: its holder sync-lane (session bbbbbbbb) is gone')
+  expect([w.read(PENDING), titled(w)]).toEqual(['', []]) // A83: no mark
   expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBeUndefined()
 })
 
-test('A13: every sync has a hard end (45 min, 90 with a build, from the options); the holder is told 10 min before it', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, pendingFile: PENDING, syncMergeMinutes: 30 } }, async ($, on) => {
+test('A13: every sync has a hard end (45 min, 90 with a build, from the options); the holder is told 10 min before it', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: LOCK, syncMergeMinutes: 30 } }, async ($, on) => {
   const w = world(on)
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')

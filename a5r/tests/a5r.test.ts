@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { A5R, proofProblems } from '../hooks/a5r.ts'
 import { CONFIG } from './config.fixture.ts'
 import { lockProblem, mcpKind, parseEditorLock, isEditorStartStop } from '../hooks/editor.ts'
-import { readMarker, markedTitle, bareTitle, isDirectorCallLine, isFindingsFile } from '../hooks/decision.ts'
+import { bareTitle, hasMark } from '../hooks/decision.ts'
 
 // The same shell and path cases the Hermes kit's tests/test_core.py runs, so both engines agree.
 const KIT = 'C:/Users/hai.huynh/.claude/mods/a5r'
@@ -112,16 +112,6 @@ test('with an intent tracked, Verified answers to Ather\'s proof', () => {
   expect(proofProblems({ ...noRole, evidence: ev({ build: 'pass' }) }, 'build ok').some(p => p.includes('PIE, or build and tests'))).toBe(true)
 })
 
-test('director calls Ather lists under Needs you', () => {
-  expect(isFindingsFile('E:\\Projects\\s2\\docs\\intent\\tail-vfx\\findings.md')).toBe(true)
-  expect(isFindingsFile('E:/Projects/s2/docs/intent/tail-vfx/progress.md')).toBe(false)
-  expect(isDirectorCallLine('## F-3 (2026-10-06, rev 2) | blocking: no | status: open (director)')).toBe(true)
-  expect(isDirectorCallLine('## F-4 (2026-10-06) | blocking: yes | status: open (worker)')).toBe(true)
-  expect(isDirectorCallLine('## F-5 (2026-10-06) | blocking: no | status: open (worker)')).toBe(false)
-  expect(isDirectorCallLine('## F-3 (2026-10-06) | blocking: no | status: accepted (director)')).toBe(false)
-  expect(isDirectorCallLine('- status: open (director)')).toBe(false)
-})
-
 test('Editor lock: only the session it names may drive the Editor', () => {
   const held = parseEditorLock('1006-x-s9 (worker) since 14:30, expected end 15:10. session ab12cd34', 14 * 60 + 40)
   expect(held.state).toBe('held')
@@ -138,11 +128,9 @@ test('Editor lock: only the session it names may drive the Editor', () => {
   expect(isEditorStartStop('UnrealEditor-Cmd.exe E:/Projects/s2/S2.uproject -run=pythonscript')).toBe(false)
 })
 
-test('🟥 and ⏯️ markers', () => {
-  const m = readMarker('Xong phần A.\n\n> 🟥 **NEEDS DECISION** — Merge PR #1 now or after the train? / Default if no answer: after the train')
-  expect(m).toEqual({ kind: 'decision', question: 'Merge PR #1 now or after the train?', fallback: 'after the train' })
-  expect(readMarker('⏯️ Bước 2 xong, chờ Hai xem clip.')).toEqual({ kind: 'waiting' })
-  expect(readMarker('Không có gì.')).toBe(null)
-  expect(markedTitle('⏯️ 3️⃣ Loco fix', '🟥')).toBe('🟥 3️⃣ Loco fix')
+test('A63 clean-up (kept by A83): an old decision mark comes off a title; nothing else reads it', () => {
   expect(bareTitle('🟥 3️⃣ Loco fix')).toBe('3️⃣ Loco fix')
+  expect(bareTitle('⏯️ 3️⃣ Loco fix')).toBe('3️⃣ Loco fix')
+  expect(hasMark('🟥 3️⃣ Loco fix')).toBe(true)
+  expect(hasMark('3️⃣ Loco fix')).toBe(false)
 })
