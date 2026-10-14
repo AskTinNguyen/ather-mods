@@ -835,11 +835,11 @@ async function ensureTools($: Engine): Promise<void> {
     description:
       'a5r A5R Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
       'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and every session is told. At the sync time the holder\'s a5r starts the sync worker, which runs the merge and ends with done or abort. ' +
-      '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "done" (note), "abort" (note: why), "status". Only the holder changes a planned sync.',
+      '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "done" (note), "abort" (note: why), "takeover" (a sync, or a merge left in .git/MERGE_HEAD, whose holder is gone), "status". Only the holder changes a planned sync.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['plan', 'move', 'build', 'cancel', 'conflicts', 'done', 'abort', 'status'] },
+        action: { type: 'string', enum: ['plan', 'move', 'build', 'cancel', 'conflicts', 'done', 'abort', 'takeover', 'status'] },
         build: { type: 'boolean', description: 'plan, move, build: the sync includes a build (a longer freeze).' },
         at: { type: 'string', description: 'plan, move: the sync time, HH:MM (the next time it comes round).' },
         holder: { type: 'string', description: 'plan: the session that will run the merge (its first 8 hex or its lane); default this session.' },
@@ -1586,6 +1586,19 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     if (!(await endSync($, opts, s, action === 'done' ? 'done' : 'aborted', a.note ?? '', now))) return blocked(gate, 'sync.json changed', 'read it with status')
     return `${action === 'done' ? 'done' : 'aborted'} (after its hard end ${clockOf(s.hardEnd)}): git and the Editor are open again for every session; each one is told at its next tick`
   }
+  // 0.17.1: a merge left in .git/MERGE_HEAD with no sync open is taken over by a live session when the last sync's holder
+  // is gone (or there is no sync file): it becomes the holder of that ended sync, which the merge guard lets end the merge.
+  if (action === 'takeover' && (!s || !open) && (await $.fs.exists(`${s2Root(opts)}/.git/MERGE_HEAD`))) {
+    const root = s2Root(opts)
+    const end = `git -C ${root} merge --abort (or finish it: resolve, git add -- <paths>, git commit --no-edit)`
+    if (s && isMine) return `this session already holds the last sync (${when(s)}): end the merge with ${end}`
+    if (s && !isGone) return notHolder(s)
+    const holder = { session: me.session, id8: me8, lane: me.lane }
+    const base = s ?? endedSync(newSync(now, holder, `${me.lane} (session ${me8})`, now), 'aborted', 'a merge left in .git/MERGE_HEAD with no sync', now)
+    const taken = { ...base, holder, note: `${base.note ? `${base.note}; ` : ''}merge left behind taken over by ${me.lane} at ${clockOf(now)}`, updatedAt: now }
+    if (!(await writeSync($, opts, taken, s))) return blocked(gate, 'sync.json changed while taking it over', 'read it with status, then try again')
+    return `taken over the merge left in the shared checkout (.git/MERGE_HEAD): run ${end}; every other session makes no git write there until it is gone; then plan a new sync`
+  }
   if (!s || !open) return blocked(gate, 'no sync is planned', 'plan one with /a5r sync HH:MM or the panel')
   if (action === 'takeover') {
     if (isMine) return `this session already holds ${when(s)}`
@@ -2205,7 +2218,17 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
 async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void> {
   const head = await $.fs.stat(`${s2Root(opts)}/.git/MERGE_HEAD`).catch(() => null)
   if (!head || isOpenPhase(phaseOf(syncFile, now))) return
-  push({ id: `merge-head:${Math.round(head.mtimeMs)}`, text: NOTICES.mergeLeft(head.mtimeMs, syncFile), isActionable: syncFile?.holder.id8 === me8 })
+  const all = me ? [me, ...peers] : peers
+  // 0.17.1: the last sync's holder ends it while it lives; when it is gone (or there is none), the first live session in
+  // the queue (else the first live one by id) takes it over, so a left merge never waits on a gone session.
+  const holderAlive = syncFile !== null && livenessOf(syncFile.holder.id8, all, lanes, now) !== 'gone' && syncFile.holder.id8 !== ''
+  const alive = all.filter(f => f.id8 === me8 || livenessOf(f.id8, all, lanes, now) === 'alive')
+  const queued = queueOf(alive, lanes, now, syncFile).map(f => f.id8)
+  const order = [...queued, ...alive.map(f => f.id8).filter(id => !queued.includes(id)).sort()]
+  const takerId = holderAlive ? null : (order[0] ?? null)
+  const taker = takerId === null ? null : { lane: all.find(f => f.id8 === takerId)?.lane ?? takerId, isMe: takerId === me8 }
+  const id = `merge-head:${Math.round(head.mtimeMs)}:${takerId ?? syncFile?.holder.id8 ?? ''}`
+  push({ id, text: NOTICES.mergeLeft(head.mtimeMs, syncFile, taker, s2Root(opts)), isActionable: holderAlive ? syncFile?.holder.id8 === me8 : taker?.isMe === true })
 }
 
 /** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */

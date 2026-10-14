@@ -1,6 +1,8 @@
-# A5R 0.17.0
+# A5R 0.17.1
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
+
+0.17.1: merge bị bỏ dở mà holder của sync đã mất thì session sống đầu hàng đợi (hoặc session sống đầu tiên) được đánh thức để nhận lại: `/a5r sync takeover` (hay tool sync, action `takeover`), rồi `git merge --abort` trong checkout chung; các thông báo điều phối không còn "ask/tell Hai" mà nêu bước tiếp theo agent tự làm được (hoặc một finding cho Needs you của Ather).
 
 0.17.0 (rev 29, A83): bỏ quy ước dấu quyết định của A5R, quyết định là việc của Ather (Hai: "Bỏ quy ước 🟥 đi, để Ather lo quyết định"). A5R không còn chèn mục "Decisions that are Hai's", không đánh dấu tiêu đề, không đặt unread, không ghi file danh sách quyết định, không toast "Waiting on Hai"; PR chấm sau không đạt thì hiện trên thẻ và một notice cho session track intent đó; sync expired thì hiện trên pane và một notice cho holder; merge bị bỏ dở thì một notice cho mỗi session. Dấu cũ trên tiêu đề vẫn được gỡ khi Hai gõ (A63).
 

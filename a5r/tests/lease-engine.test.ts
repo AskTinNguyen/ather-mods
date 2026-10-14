@@ -60,7 +60,9 @@ test('A14 (A83): a merge left behind with no sync open is one notice to each ses
   await say()
   await advance(w, 3, null)
   await say()
-  expect(heard.filter(t => t.startsWith('A5R · Merge guard — a merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since 14:20) and no sync is open')).length).toBe(1)
+  // 0.17.1 (changed by design): alone and with no sync file, this session is the one asked to take it over: a prompt, once.
+  const all = [...heard, ...prompts(w).flatMap(p => p.split(String.fromCharCode(10, 10)))]
+  expect(all.filter(t => t.startsWith('A5R · Merge guard — a merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since 14:20) and no sync is open')).length).toBe(1)
   expect([w.read(PENDING), titled(w)]).toEqual(['', []])
   // This session held the last sync: its own git there passes the guard (to finish or abort that merge).
   w.put(SYNC, JSON.stringify({ ...newSync(T(14, 0), { session: ME, id8: ME8, lane: '3️⃣-Loco-fix' }, 'me', NOW - 60 * MIN), state: 'aborted', endedAt: T(14, 30) }))
