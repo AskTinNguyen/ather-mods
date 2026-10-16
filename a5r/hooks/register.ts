@@ -1074,6 +1074,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await judgeStep($, opts, now).catch(err => $.ui.log(`a5r: judge: ${String(err)}`, { to: 'debug' }))
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
+  currentVerdicts(now) // A89: note which verdicts' incidents are current, so an ended one stays 30 min
   ramStep(opts, now)
   const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running') // A62, A67
   agentsNow = running.length
@@ -1339,7 +1340,7 @@ async function judgeEnded($: Engine, opts: Opts, agentId: string, answer: string
 /** A65: a verdict in orchestrate.log, in Saved/A5R/verdicts.json (the card) and as a toast here. Nothing else. */
 async function recordVerdict($: Engine, opts: Opts, f: JudgeFacts, v: { verdict: VerdictRow['verdict']; evidence: string[]; recommendation: string }, source: VerdictRow['source']): Promise<void> {
   const now = await $.clock.now()
-  const row: VerdictRow = { at: now, id8: f.id8, lane: f.lane, kind: f.kind, verdict: v.verdict, evidence: v.evidence[0] ?? '', recommendation: v.recommendation, by: me8, source }
+  const row: VerdictRow = { at: now, id8: f.id8, lane: f.lane, kind: f.kind, verdict: v.verdict, evidence: v.evidence[0] ?? '', recommendation: v.recommendation, by: me8, source, since: f.since, ...(f.kind === 'sync' && syncFile ? { syncId: syncFile.id } : {}) }
   await orchestrateLog($, opts, { at: now, rule: 'A65-judge', lane: f.lane, id8: f.id8, procs: f.procs, liveness: f.liveness, lastTurnAt: f.lastTurnAt, agents: f.agents, build: f.hasBuild, acted: false, note: `verdict ${v.verdict} (${source}): ${v.evidence.join('; ')}; recommend: ${v.recommendation}` }).catch(() => undefined)
   verdicts = [row, ...(await readVerdicts($, opts))].slice(0, 10)
   await $.fs.write(verdictsPath(opts), JSON.stringify({ v: 1, verdicts })).catch(err => $.ui.log(`a5r: verdicts not written: ${String(err)}`, { to: 'debug' }))
@@ -1347,21 +1348,55 @@ async function recordVerdict($: Engine, opts: Opts, f: JudgeFacts, v: { verdict:
   $.ui.invalidate('ui.render')
 }
 
-/** A65: the Orchestrate card: the latest verdicts, one row each (time, session, verdict), a quiet line of evidence and
- * the recommendation under it. */
-function orchestrateCard(el: { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }, rows: readonly VerdictRow[]): unknown {
+/** A89: how long after its incident ended a verdict stays on the card. */
+const VERDICT_KEEP_MS = 30 * 60_000
+/** A89: when each verdict's incident was last seen current in this session (by its row's key). */
+const verdictSeen = new Map<string, number>()
+const verdictKey = (r: VerdictRow): string => `${r.kind}:${r.id8}:${r.since ?? ''}:${r.syncId ?? ''}:${r.at}`
+
+/** A89: whether a verdict's incident is current: that holder still holds that lease (the lock's grant time matches the
+ * row's) or that sync (its id) is still open. A row written before 0.18.1 (no `since`) is never current. */
+function isVerdictCurrent(r: VerdictRow, now: number): boolean {
+  if (typeof r.since !== 'number' || !r.id8) return false
+  if (r.kind === 'sync') return Boolean(syncFile && r.syncId && syncFile.id === r.syncId && syncFile.holder.id8 === r.id8 && isOpenPhase(phaseOf(syncFile, now)))
+  if ((lock.kind !== 'held' && lock.kind !== 'handed') || lock.id8 !== r.id8) return false
+  const t = lockTimes(lock, now)
+  return t !== null && Math.abs(t.since - r.since) < 60_000
+}
+
+/** A89: the verdicts the card lists: current incidents, or ones that ended less than 30 min ago (seen current here). */
+function currentVerdicts(now: number): VerdictRow[] {
+  return verdicts.filter(r => {
+    const key = verdictKey(r)
+    if (isVerdictCurrent(r, now)) {
+      verdictSeen.set(key, now)
+      return true
+    }
+    const seen = verdictSeen.get(key)
+    return seen !== undefined && now - seen < VERDICT_KEEP_MS
+  })
+}
+
+/** A89: a verdict's time, with its date when it is not today. */
+const verdictTime = (at: number, now: number): string => (ymd(at) === ymd(now) ? clockOf(at) : `${ymd(at)} ${clockOf(at)}`)
+
+/** A65 / A89: the Orchestrate card: the verdicts of current incidents, one row each (time, dated when not today; session;
+ * verdict), a quiet line of evidence and the recommendation under it; with none current, one quiet line naming the last
+ * verdict (the judge is there and nothing is stalled now), rather than leaving the card out, which would hide that. */
+function orchestrateCard(el: { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }, rows: readonly VerdictRow[], now: number, last: VerdictRow | undefined): unknown {
   const tone = (v: VerdictRow['verdict']) => (v === 'working' || v === 'done' ? STATUS.ok : v === 'stuck-or-crashed' ? STATUS.bad : STATUS.warn)
   return el.Box({
     key: 'hai-orchestrate',
     flexDirection: 'column',
     children: [
       el.Box({ key: 'hai-orchestrate-head', children: [el.Text({ color: V2.label, children: 'ORCHESTRATE' })] }),
+      ...(rows.length === 0 && last ? [el.Box({ key: 'hai-orchestrate-none', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: `No stalled holder now · last verdict ${verdictTime(last.at, now)}` })] })] : []),
       ...rows.slice(0, 3).map((r, i) =>
         el.Box({
           key: `hai-orchestrate-${i}`,
           flexDirection: 'column',
           children: [
-            el.Text({ wrap: 'wrap', children: [`${clockOf(r.at)} · ${r.lane || r.id8} (${r.id8}) · `, el.Text({ color: tone(r.verdict), bold: true, children: r.verdict }), r.source === 'rule' ? ' (rule)' : ''] }),
+            el.Text({ wrap: 'wrap', children: [`${verdictTime(r.at, now)} · ${r.lane || r.id8} (${r.id8}) · `, el.Text({ color: tone(r.verdict), bold: true, children: r.verdict }), r.source === 'rule' ? ' (rule)' : ''] }),
             el.Text({ color: ATHER.quiet, wrap: 'wrap', children: `${r.evidence ? `${r.evidence} → ` : ''}${r.recommendation}` }),
           ],
         }),
@@ -2997,7 +3032,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     }
   if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
   // A65: the Orchestrate card, the judges' latest verdicts, last before the rules (the rules stay the foot, A27).
-  if (isS2 && verdicts.length > 0) kids.push(orchestrateCard(el as never, verdicts))
+  if (isS2 && verdicts.length > 0) kids.push(orchestrateCard(el as never, currentVerdicts(now), now, verdicts[0])) // A89: current incidents only
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
   if (paneEnterAt === 0) paneEnterAt = now

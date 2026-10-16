@@ -172,4 +172,4 @@ export const defaultRecommendation = (v: Verdict): string =>
   v === 'working' ? 'nothing: let it finish' : v === 'done' ? 'nothing from Hai: the lease is stale; it can be freed' : v === 'waiting-on-Hai' ? 'answer it in that session' : v === 'stuck-or-crashed' ? 'look at that session; release its lease if it is really gone' : 'look at that session when you can'
 
 /** A65: one verdict as kept in Saved/A5R/verdicts.json and shown on the Orchestrate card. */
-export type VerdictRow = { at: number; id8: string; lane: string; kind: 'editor' | 'sync'; verdict: Verdict; evidence: string; recommendation: string; by: string; source: 'judge' | 'rule' }
+export type VerdictRow = { at: number; id8: string; lane: string; kind: 'editor' | 'sync'; verdict: Verdict; evidence: string; recommendation: string; by: string; source: 'judge' | 'rule'; since?: number; syncId?: string } // A89: since = the lease's grant or the sync's time, syncId = the sync judged (absent before 0.18.1: never current)
