@@ -217,3 +217,9 @@ Found from the S2 transcripts: A5R has been off since 2026-10-10 morning (one `/
 ## L-32 (2026-10-14) | class: intent | -> rev 29
 
 > Bỏ quy ước 🟥 đi, để Ather lo quyết định
+
+## L-33 (2026-10-16) | class: intent | -> rev 30
+
+> Review lại code a5r lần nữa và eli5 cho tôi biết một user bình thường expect làm việc khi bật nó so với tắt nó khác nhau thế nào?
+
+> Ok sửa luôn đi
