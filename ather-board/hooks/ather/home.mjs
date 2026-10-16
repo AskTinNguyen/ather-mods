@@ -5,7 +5,7 @@
 import { windowDecisions } from './away.mjs'
 import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
 import { issueId, issueLabel, issuePrompt } from './issues.mjs'
-import { STAGE_LABELS, clockText, currentStage, cutWords, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural, prStatusList, shortTitle } from './model.mjs'
+import { STAGE_LABELS, clockText, currentStage, cutWords, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural, prStatusList, shortTitle, waitingCalls } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
 
@@ -265,10 +265,10 @@ export const buildHome = input => {
   }
   // A session that tracks an intent answers for that intent only: pressing another intent's call here would put it
   // in this session's chat. With nothing tracked, every call of yours is offered, each named by its intent.
-  for (const one of intent ? owned.filter(each => each.key === pinned) : owned) {
-    for (const finding of directorCalls(one)) {
-      items.push({ kind: 'call', slug: one.key, id: callId(one.key, finding.id), label: `Decide ${finding.id} on ${one.key}`, title: `${finding.id} · ${one.key === pinned ? '' : `${one.key} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.key}: ${finding.title}`, prompt: callPrompt(one, finding), answers: findingAnswers(callName(one), finding) })
-    }
+  // Each call once across the checkouts holding a copy of its intent; tracked, the other copies only settle the tracked one's.
+  const calls = waitingCalls(owned, pinned).filter(call => !intent || call.intent.key === pinned)
+  for (const { intent: one, finding } of calls) {
+    items.push({ kind: 'call', slug: one.key, id: callId(one.key, finding.id), label: `Decide ${finding.id} on ${one.key}`, title: `${finding.id} · ${one.key === pinned ? '' : `${one.key} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.key}: ${finding.title}`, prompt: callPrompt(one, finding), answers: findingAnswers(callName(one), finding) })
   }
   if (intent && pack.lockRoles.includes(role) && (stage === 'build' || stage === 'prove') && lock.state === 'held' && !lock.isStale) {
     const holder = lock.holder || 'another lane'

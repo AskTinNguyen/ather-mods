@@ -185,7 +185,7 @@ export const parseOptions = body => {
   /** @type {{ letter: string, text: string, isMarked: boolean }[]} */
   let found = []
   // The list format: an "Options:" line on its own, then "- <Letter>[ (recommended)]: <text>" items and their indented continuations.
-  const head = lines.findLastIndex(line => /^\s*[-*]?\s*\**\s*options(?:\s+\w+)?\s*\**\s*:\s*\**\s*$/i.test(line))
+  const head = lines.findLastIndex(line => OPTIONS_HEAD.test(line))
   if (head >= 0) {
     for (const line of lines.slice(head + 1)) {
       const item = /^\s*[-*]\s+\**\s*([A-Za-z])\b\s*(?:\(([^)]*)\))?\s*\**\s*[:.)]\s*\**\s*(.*)$/.exec(line)
@@ -235,6 +235,9 @@ export const parseOptions = body => {
   })
 }
 
+// The intent template's "**Options:**" line, on its own above its lettered list.
+const OPTIONS_HEAD = /^\s*[-*]?\s*\**\s*options(?:\s+\w+)?\s*\**\s*:\s*\**\s*$/i
+
 // A finding's lines about itself: "Status: …", "**Resolution:** …", "- Resolution (orchestrator, 2026-10-05): …".
 const SELF_LINE = /^[ \t]*[-*]?[ \t]*\**[ \t]*(status|resolution)[ \t]*(?:\([^)\n]*\))?[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.*)$/gim
 
@@ -242,9 +245,9 @@ const SELF_LINE = /^[ \t]*[-*]?[ \t]*\**[ \t]*(status|resolution)[ \t]*(?:\([^)\
 // "partly addressed …", "not yet", "pending", "tbd", a template's "<pending owner>", "-".
 const UNSETTLED = /^(open|pending|partly|not yet|tbd)\b|^[<\-—–]/i
 
-// Open findings. Template heading: "## F-<n> (date, rev r) | blocking: yes|no | status: open (owner)".
+// Every finding, open or not. Template heading: "## F-<n> (date, rev r) | blocking: yes|no | status: open (owner)".
 /** @param {string} findings @param {string} prompt */
-export const parseFindings = (findings, prompt) => {
+const readFindings = (findings, prompt) => {
   const decisions = section(prompt, 'Decisions')
   return findings
     .split(/^(?=##\s+F)/m)
@@ -271,7 +274,9 @@ export const parseFindings = (findings, prompt) => {
           : CLOSED.test(rest) || (statusLine !== undefined && CLOSED.test(statusLine.text)) || new RegExp(`\\b${id.replace(/-/g, '\\-')}\\b`).test(decisions)
       // "(open, not blocking)" and "non-blocking for this change" say it does not block.
       const isBlocking = headBlocking ? headBlocking[1]?.toLowerCase() === 'yes' : /blocking:\s*yes/i.test(part) || (/\bblocking\b/i.test(rest) && !/\b(non|not)[\s-]+blocking\b/i.test(rest))
-      const isDirectorCall = owner ? /director|producer|design|production|user/i.test(owner) : /\(a\)\s/.test(body) || /director|design lead|production call/i.test(body)
+      // Without a decider in the status, the template's Options list (written only when the user decides) or
+      // words naming a director's call make it one; inline "(a) … (b) …" choices are the worker's engineering notes.
+      const isDirectorCall = owner ? /director|producer|design|production|user/i.test(owner) : body.split(/\r?\n/).some(line => OPTIONS_HEAD.test(line)) || /director|design lead|production call/i.test(body)
       const headTitle = shortTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
       const bodyTitle = shortTitle(body.trim().split('\n').find(line => line.trim() !== '' && !line.trim().startsWith('#')) ?? '')
       const headFull = fullTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
@@ -279,9 +284,14 @@ export const parseFindings = (findings, prompt) => {
       // `source`: the finding as written (capped), for the pane's finding view.
       return { id, title: headTitle || bodyTitle || id, full: headFull || bodyFull || id, isBlocking, isDirectorCall, options: parseOptions(body), source: part.trim().slice(0, 6000), isOpen: !isClosed }
     })
-    .filter(one => one.isOpen)
-    .map(({ isOpen: _open, ...one }) => one)
 }
+
+/** @param {ReturnType<typeof readFindings>} all */
+const openOnes = all => all.filter(one => one.isOpen).map(({ isOpen: _open, ...one }) => one)
+
+// Open findings.
+/** @param {string} findings @param {string} prompt */
+export const parseFindings = (findings, prompt) => openOnes(readFindings(findings, prompt))
 
 // ---------------------------------------------------------------- acceptance and PRs
 //
@@ -406,10 +416,10 @@ export const prKey = (intent, number) => (otherRoot(intent) ? `${otherRoot(inten
 
 /**
  * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string,
- *   key?: string, root?: string, repoName?: string, base?: string }} IntentFiles
+ *   key?: string, root?: string, repo?: string, repoName?: string, base?: string }} IntentFiles
  * `updatedAt`: when it last changed (its last commit on main, or its files'); `source`: where it was read; `firstAuthor`: who first committed its folder.
  * Read from one of several checkouts: `key` names it in the pane (its slug in the session's own checkout,
- * `<repoName>/<slug>` in another), `root` is the checkout holding it, `repoName` the short name of its repository,
+ * `<repoName>/<slug>` in another), `root` is the checkout holding it, `repo` its repository's id ('' unknown), `repoName` the short name of its repository,
  * `base` the branch that checkout's team merges into (main unless said).
  * @typedef {ReturnType<typeof parseIntent>} Intent
  */
@@ -424,6 +434,7 @@ export const parseIntent = (input, pack = unreal) => {
   // "parked: weather presets merged…" is a status too: take the leading word.
   const status = /^[a-z]+/.exec(field(prompt, 'Status').toLowerCase())?.[0] ?? 'unknown'
   const items = acceptanceItems(prompt, progress)
+  const findings = readFindings(input.findings, prompt)
   return {
     slug: input.slug,
     title: /^#\s+(.+)$/m.exec(prompt)?.[1]?.trim() ?? input.slug,
@@ -443,7 +454,9 @@ export const parseIntent = (input, pack = unreal) => {
     currentStep: stepNote(field(progress, 'Current step')),
     thenStep: stepNote(field(progress, 'Next step')),
     prs: intentPrs(progress, prompt),
-    findings: parseFindings(input.findings, prompt),
+    findings: openOnes(findings),
+    // The ids of its findings that are settled here: another checkout's copy may still say open (waitingCalls).
+    settled: findings.filter(one => !one.isOpen).map(one => one.id),
     hasReview: input.files.some(name => /review/i.test(name)) || /\b(plan|opus|design)[- ]review\b|reviewed by|after (an? )?(opus )?review/i.test(prompt + progress.slice(0, 20000)),
     hasWorker: /^\s*[-*]?\s*\**worker\**\s*[:=-]\s*\S/im.test(progress) || /^(###\s+S\d+|-\s+S\d+\b)/m.test(progress),
     hasDebrief: input.hasDebrief,
@@ -452,6 +465,7 @@ export const parseIntent = (input, pack = unreal) => {
     firstAuthor: input.firstAuthor,
     key: input.key ?? input.slug,
     root: input.root ?? '',
+    repo: input.repo ?? '',
     repoName: input.repoName ?? '',
     base: input.base ?? 'main',
   }
@@ -463,6 +477,26 @@ export const otherRoot = intent => (intent.key === intent.slug ? '' : intent.roo
 
 /** @param {Intent | undefined} intent */
 export const directorCalls = intent => (intent && intent.status !== 'completed' ? intent.findings.filter(one => one.isDirectorCall || one.isBlocking) : [])
+
+// The calls that wait, each once however many checkouts hold its intent. Copies of one intent (one repository,
+// one slug: each worktree whose branch changed it shows its own) share their findings: one settled in any copy
+// waits in none, and the rest are offered from the tracked copy, else the session's own checkout's, else the
+// freshest (`intents` comes freshest first).
+/** @param {readonly Intent[]} intents @param {string | null} pinned @returns {{ intent: Intent, finding: Intent['findings'][number] }[]} */
+export const waitingCalls = (intents, pinned) => {
+  const copyOf = (/** @type {Intent} */ one) => `${one.repo || one.root}|${one.slug}`
+  const settled = new Set(intents.flatMap(one => one.settled.map(id => `${copyOf(one)}|${id}`)))
+  const rank = (/** @type {Intent} */ one) => (one.key === pinned ? 0 : otherRoot(one) === '' ? 1 : 2)
+  /** @type {Map<string, { intent: Intent, finding: Intent['findings'][number] }>} */
+  const waiting = new Map()
+  for (const intent of [...intents].sort((a, b) => rank(a) - rank(b))) {
+    for (const finding of directorCalls(intent)) {
+      const id = `${copyOf(intent)}|${finding.id}`
+      if (!settled.has(id) && !waiting.has(id)) waiting.set(id, { intent, finding })
+    }
+  }
+  return [...waiting.values()]
+}
 
 /** @param {{ owner: string }} intent @param {string} me */
 export const isMine = (intent, me) => me !== '' && isSamePerson(intent.owner, me)
