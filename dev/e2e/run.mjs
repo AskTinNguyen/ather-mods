@@ -877,8 +877,10 @@ const hasFocus = tree => {
   expect('Heading off says what it is for: let AI work while you zZz', /H E A D I N G   O F F \?\nLet AI work while you zZz\n/.test(home), home)
   expect("a teammate's name sits in its own column at the right edge, out of the detail line", (() => {
     // Whichever teammates the checkout has: the first row under the heading ends in a name at column 110, and its detail line does not repeat it.
+    // The first row under the teammates' heading: rows of yours (an issue under Also yours) may take the letters before it.
     const lines = home.split('\n')
-    const at = lines.findIndex(line => /^a: /.test(line))
+    const heading = lines.findIndex(line => /^T E A M M A T E S/.test(line))
+    const at = heading < 0 ? -1 : lines.findIndex((line, index) => index > heading && /^[a-z]: /.test(line))
     const name = /\s{2,}(\S.*)$/.exec(lines[at] ?? '')?.[1] ?? ''
     return at > 0 && lines[at].length === 110 && name !== '' && !(lines[at + 1] ?? '').includes(name)
   })(), home)
@@ -909,7 +911,7 @@ const hasFocus = tree => {
 
 {
   // Two fixture intents of Tin's. zz-decide, the newer so it comes first: F-1 in the list format (A recommended)
-  // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended) and F-4 with no options,
+  // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended, a director call by its words) and F-4 with no options,
   // two decisions that wait as one block. A trap seen in three sessions waits too, and the Editor is held
   // (a designer's Ask for the Editor: an item with nothing to answer, offered while an intent is tracked).
   const { engine, root, done } = await boot({ surfaces: ['terminal'], ownFindingsOnly: true, store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
@@ -937,6 +939,7 @@ const hasFocus = tree => {
   fixture('zz-group', [
     '## F-2 (open, not blocking): restart one quest also restores every flow-owned actor',
     '',
+    "A director call: inline choices alone would be the worker's engineering notes.",
     '- Options: (a) keep it as is, with the confirmation; (b) add a runtime hook that restores only the restarted quest; (c) re-run the',
     "  other quests' entry actions. Recommendation: (b).",
     '',

@@ -592,6 +592,8 @@ const glyphOf = (tree, id) => (nodesOf(tree).find(node => node.type === 'Button'
 // ---------------------------------------------------------------- deciding in place and grouping, over a checkout and its worktree
 
 const DECISION = '# Findings\n\n## F-1 (2026-10-01, rev 1) | blocking: yes | status: open (director)\n\nOne page or two?\n\n**Options:**\n- A (recommended): one page\n- B: two pages\n'
+// The worktree's branch added a decision of its own beside the shared F-1.
+const TREE_DECISIONS = `${DECISION}\n## F-2 (2026-10-02, rev 1) | blocking: no | status: open (director)\n\nRed or blue?\n\n**Options:**\n- A (recommended): red\n- B: blue\n`
 const writeFindings = (root, slug, text = DECISION) => fs.writeFileSync(join(root, 'docs/intent', slug, 'findings.md'), text)
 const lastSubmit = engine => {
   const sent = engine.record.submits.at(-1) ?? ''
@@ -599,12 +601,13 @@ const lastSubmit = engine => {
 }
 
 {
-  // A session in s2/ with a worktree s2-x/: `login` is yours in both, each with an open decision; `board` is a teammate's in both.
+  // A session in s2/ with a worktree s2-x/: `login` is yours in both, sharing the open decision F-1, the worktree's
+  // copy with its own F-2 beside it; `board` is a teammate's in both.
   const { s2 } = makeWorkspace()
   const tree = addTree(s2, 's2-x')
   for (const [root, text] of [[s2, LOGIN], [tree, LOGIN.replace('- [ ] A2', '- [x] A2')]]) {
     writeIntent(root, 'login', text)
-    writeFindings(root, 'login')
+    writeFindings(root, 'login', root === tree ? TREE_DECISIONS : DECISION)
     writeIntent(root, 'board', text.replace('Owner: Tin Nguyen', 'Owner: TienPham'))
   }
   const ghAt = { [s2]: { issues: [issue(7, 'Boss shield')] }, [tree]: { issues: [issue(7, 'Boss shield')] } }
@@ -615,10 +618,10 @@ const lastSubmit = engine => {
   await engine.command('ather', '')
   const pane = (surface = 'terminal') => engine.render('Pane', { bodyColumns: 110 }, 'ather', surface)
   const keys = tree => nodesOf(tree).map(node => node.props?.key).filter(key => typeof key === 'string')
-  const TREE_CALL = 'call:s2-x/login:F-1'
+  const TREE_CALL = 'call:s2-x/login:F-2'
   const OWN_CALL = 'call:login:F-1'
   let home = await pane()
-  expect("Needs you lists both checkouts' decisions, each by its intent's key", [TREE_CALL, OWN_CALL].every(id => keys(home).includes(`item-${id}`)), keys(home).filter(key => key.startsWith('item-')))
+  expect("Needs you lists the shared decision once, from the session's own checkout, and the worktree's own by its key", [TREE_CALL, OWN_CALL].every(id => keys(home).includes(`item-${id}`)) && !keys(home).includes('item-call:s2-x/login:F-1'), keys(home).filter(key => key.startsWith('item-')))
   const desk = keys(await pane('desktop'))
   expect('on the desktop too: both decisions, and no element key drawn twice', [TREE_CALL, OWN_CALL].every(id => desk.includes(`item-${id}`)) && desk.every((key, at, list) => list.indexOf(key) === at), desk.filter(key => /call:/.test(key)))
   home = await pane()
@@ -631,9 +634,9 @@ const lastSubmit = engine => {
   byKey(home, `option-${TREE_CALL}-A`)?.props.onPress()
   await engine.flush()
   const answer = engine.record.submits.length > before ? lastSubmit(engine) : ''
-  expect("answering A on the worktree's decision hands the session s2-x/login and the worktree's findings file", answer.includes('F-1 on s2-x/login') && answer.includes(`${tree}/docs/intent/login/findings.md`) && !answer.includes(`${s2}/docs`), answer)
+  expect("answering A on the worktree's decision hands the session s2-x/login and the worktree's findings file", answer.includes('F-2 on s2-x/login') && answer.includes(`${tree}/docs/intent/login/findings.md`) && !answer.includes(`${s2}/docs`), answer)
   const answered = await pane()
-  expect("the worktree's row reads decided; s2's same-slug decision still waits, with its answers", keys(answered).includes(`item-${TREE_CALL}-done`) && !keys(answered).includes(`item-${OWN_CALL}-done`) && Boolean(byKey(answered, `option-${OWN_CALL}-A`)), keys(answered).filter(key => /call:/.test(key)))
+  expect("the worktree's row reads decided; the shared decision still waits, with its answers", keys(answered).includes(`item-${TREE_CALL}-done`) && !keys(answered).includes(`item-${OWN_CALL}-done`) && Boolean(byKey(answered, `option-${OWN_CALL}-A`)), keys(answered).filter(key => /call:/.test(key)))
   byKey(answered, `explain-${OWN_CALL}`)?.props.onPress()
   await engine.flush()
   expect("Explain on s2's decision names its plain slug and nothing of the worktree", lastSubmit(engine).includes('F-1 on login') && !lastSubmit(engine).includes(tree), lastSubmit(engine))
@@ -642,11 +645,20 @@ const lastSubmit = engine => {
   expect("Open findings on s2's decision shows that finding", textIn(byKey(finding, 'title')).includes('login') && !textIn(byKey(finding, 'title')).includes('s2-x') && byKey(finding, 'finding-markdown')?.props.text.startsWith('## F-1'), textIn(byKey(finding, 'title')))
   nodesOf(finding).find(node => node.type === 'Button' && node.props.key === 'finding-back')?.props.onPress()
   // The session records the answer in the worktree's findings: read again, its decision is gone and s2's is still there.
-  writeFindings(tree, 'login', `${DECISION}\n**Resolution:** accepted A.\n`)
+  writeFindings(tree, 'login', `${TREE_DECISIONS}\n**Resolution:** accepted A.\n`)
   await engine.turnEnd()
   await engine.flush()
   const settled = keys(await pane())
-  expect("once the worktree's findings read resolved, its decision leaves Needs you and s2's stays", !settled.some(key => key.includes(TREE_CALL)) && settled.includes(`item-${OWN_CALL}`), settled.filter(key => /call:/.test(key)))
+  expect("once the worktree's findings read resolved, its decision leaves Needs you and the shared one stays", !settled.some(key => key.includes(TREE_CALL)) && settled.includes(`item-${OWN_CALL}`), settled.filter(key => /call:/.test(key)))
+  // Settled in the worktree's copy, the shared decision waits in neither.
+  writeFindings(tree, 'login', DECISION.replace('status: open (director)', 'status: accepted (director)'))
+  await engine.turnEnd()
+  await engine.flush()
+  const shared = keys(await pane())
+  expect("once the worktree's copy settles the shared decision, it leaves Needs you though s2's copy still says open", !shared.some(key => key.startsWith('item-call:') && key.includes('login')), shared.filter(key => /call:/.test(key)))
+  writeFindings(tree, 'login', `${TREE_DECISIONS}\n**Resolution:** accepted A.\n`)
+  await engine.turnEnd()
+  await engine.flush()
 
   // Everything open, grouped by Person (the default): both checkouts' rows, the teammate's two under one head, on either surface.
   await engine.command('ather', 'pick')

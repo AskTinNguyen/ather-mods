@@ -5,7 +5,7 @@ import { awayReason, isStopWord, ledgerWithWindow, mandateText, newWindow, nextL
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
-import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle } from '../hooks/model.mjs'
+import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle, waitingCalls } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
 import { checkoutNames, checkoutOf, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
@@ -113,6 +113,36 @@ describe('intents', () => {
     expect(open.map(one => one.id)).toEqual(['F-1', 'F-3'])
     expect(open[0]?.title).toBe('Drops only or full respawn?')
     expect(open[1]?.isDirectorCall).toBe(false)
+  })
+
+  test('inline (a)/(b) choices are engineering notes; the template Options list makes a call', () => {
+    const [inline, listed] = parseFindings(`## F-4 (2026-10-14, B14) - no HLOD was built - blocking: no
+
+Not investigated. Options: (a) find why and build; (b) leave HLOD to the level. Recommendation: (a).
+
+## F-5 (2026-10-14, rev 2) - one boss or two - blocking: no
+
+**Found:** two read the same.
+**Options:**
+- A (recommended): one boss
+- B: two bosses
+`, '')
+    expect(inline?.isDirectorCall).toBe(false)
+    expect(inline?.options.map(one => one.letter)).toEqual(['A', 'B'])
+    expect(listed?.isDirectorCall).toBe(true)
+  })
+
+  test('a call waits once across the checkouts holding its intent, and not at all once a copy settles it', () => {
+    const copy = (/** @type {string} */ key, /** @type {string} */ root, /** @type {number} */ updatedAt, /** @type {string} */ findings) =>
+      parseIntent({ slug: 'spawner', key, root, repo: 'github.com/s/s2', prompt: prompt({ Status: 'active', Area: 'Combat', Owner: 'Tin Nguyen' }), findings, progress: '', files: [], hasDebrief: false, updatedAt, source: 'local', firstAuthor: '' })
+    const settledF1 = FINDINGS.replace('status: open (director)', 'status: accepted (director)')
+    const own = copy('spawner', 'E:/S2_', 1, FINDINGS)
+    const fresher = copy('wt-a/spawner', 'E:/wt-a', 9, FINDINGS)
+    expect(waitingCalls([fresher, own], null).map(({ intent: one, finding }) => `${one.key}:${finding.id}`)).toEqual(['spawner:F-1'])
+    expect(waitingCalls([fresher, own], 'wt-a/spawner').map(({ intent: one }) => one.key)).toEqual(['wt-a/spawner'])
+    expect(waitingCalls([copy('wt-b/spawner', 'E:/wt-b', 5, settledF1), own], null)).toEqual([])
+    // Another repository's intent of the same name is its own.
+    expect(waitingCalls([{ ...fresher, repo: 'github.com/o/other' }, own], null)).toHaveLength(2)
   })
 
   test('titles, people, picking and search', () => {
