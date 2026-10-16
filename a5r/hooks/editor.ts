@@ -38,13 +38,16 @@ export const mcpCallKind = (tool: string, input: Record<string, unknown>): Retur
   const method = [tool.split('__').pop() ?? '', ...MCP_METHOD_KEYS.map(k => (typeof input[k] === 'string' ? (input[k] as string) : ''))].filter(Boolean).join(' ')
   const kind = mcpKind(method)
   if (kind === 'save-all' || kind === 'pie' || kind === 'write') return kind
-  if (/console/i.test(method)) {
+  // Round-2 review: by exact method names and prefixes (the last `.` segment of each name), never substrings, so
+  // `find_closest_actor` stays a read.
+  const names = method.split(/\s+/).map(n => n.split('.').pop() ?? '').filter(Boolean)
+  if (names.some(n => /^(execute_?)?console_?command$/i.test(n))) {
     const args = (typeof input.arguments === 'object' && input.arguments !== null ? input.arguments : input) as Record<string, unknown>
     const command = [args.command, args.cmd, args.Command, input.command].filter((v): v is string => typeof v === 'string').join(' ')
     if (command && mcpKind(command) === 'pie') return 'pie'
-    return 'write' // re-review: a console command can quit, close or save: it needs the lock
+    return 'write' // a console command can quit, close or save: it needs the lock
   }
-  if (/quit|exit|close|shutdown|save/i.test(method)) return 'write' // re-review: a method that can quit, close or save
+  if (names.some(n => /^(quit|exit|shutdown)(_|$)/i.test(n) || /^(quit|exit|shutdown|close)_?editor$/i.test(n) || /^save_/i.test(n) || /^Save[A-Z]/.test(n))) return 'write'
   return kind
 }
 

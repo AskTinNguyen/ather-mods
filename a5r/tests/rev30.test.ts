@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { A5R } from '../hooks/a5r.ts'
-import { blankSession, lapseOf, namesHolder, newSync, parseLockLine, releasedNote, resolveLock, type SessionFile } from '../hooks/coord.ts'
+import { blankSession, decide, lapseOf, namesHolder, newSync, parseLockLine, releasedNote, resolveLock, type SessionFile } from '../hooks/coord.ts'
 import { mcpCallKind } from '../hooks/editor.ts'
 import { CONFIG } from './config.fixture.ts'
 import { LOCK, ME, NOW, PROJ, opts, refused, world, type Proc } from './world.ts'
@@ -161,6 +161,8 @@ test('A85: unit: the kit\'s read-only checks run from any folder; everything els
     `git -C ${KIT} status`,
     `git -C ${KIT} diff HEAD~1`,
     `git -C ${KIT} show HEAD:a5r/hooks/editor.ts`,
+    `node ${KIT}/tests/x.mjs`,
+    `node --experimental-strip-types ${KIT}/tests/scan-old-names.mjs`,
     `rg -n lockProblem ${KIT}/hooks`,
     `grep -rn x ${KIT}/hooks`,
     `cat ${KIT}/rules/config.json`,
@@ -182,8 +184,8 @@ test('A85: unit: the kit\'s read-only checks run from any folder; everything els
     `[IO.File]::WriteAllText('${KIT}/hooks/x.ts', '')`,
     `npm install --prefix ${KIT}`,
     `python ${KIT}/tests/make_fixture.py`,
-    `node ${KIT}/tests/x.mjs`,
-    `node --experimental-strip-types ${KIT}/tests/scan-old-names.mjs`,
+    `node --import ${KIT}/hooks/x.mjs ${KIT}/tests/y.mjs`,
+    `node ${KIT}/hooks/register.ts`,
     `cp x.ts ${KIT}/hooks/x.ts`,
     `claude plugin test ${KIT} > ${KIT}/out.txt`,
     `git -C ${KIT} commit -m x`,
@@ -359,7 +361,12 @@ test('MCP kind: unit: the method decides; a read whose arguments mention set_ or
   expect(mcpCallKind(T, { name: 'McpPieToolset.ExecuteConsoleCommand', arguments: { command: 'stat fps' } })).toBe('write')
   expect(mcpCallKind(T, { name: 'McpPieToolset.ExecuteConsoleCommand', arguments: { command: 'QUIT_EDITOR' } })).toBe('write')
   expect(mcpCallKind(T, { name: 'EditorTools.QuitEditor' })).toBe('write')
-  expect(mcpCallKind(T, { name: 'LevelTools.CloseLevel' })).toBe('write')
+  expect(mcpCallKind(T, { name: 'quit_editor' })).toBe('write')
+  expect(mcpCallKind(T, { name: 'close_editor' })).toBe('write')
+  expect(mcpCallKind(T, { name: 'AssetTools.save_asset' })).toBe('write')
+  // Round-2 review: exact names and prefixes, never substrings.
+  expect(mcpCallKind(T, { name: 'ActorTools.find_closest_actor' })).toBe('read')
+  expect(mcpCallKind('mcp__unreal__find_closest_actor', {})).toBe('read')
 })
 
 test('MCP kind: a read while another lane holds the Editor runs even when its arguments mention set_', opts(), async ($, on) => {
@@ -394,4 +401,41 @@ test('F-8: a missing lock while an Unreal Editor runs is held by unknown (nothin
   const lock = parseLockLine(w.read(LOCK))
   expect([lock.kind, lock.id8]).toEqual(['held', ME8])
   expect(w.runs.some(r => /Stop-Process|taskkill|kill\b/i.test(r))).toBe(false)
+})
+
+// ---------- round-2 review ----------
+test('A84 (round 2): the legacy hand form "<lane> (…) since HH:MM … expected end HH:MM" names its holder lane, end and PID; that session drives it', opts(), async ($, on) => {
+  const legacy = parseLockLine('1006-x-s9 (worker) since 14:30, expected end 15:10. Editor PID 4242.\n')
+  expect([legacy.isReadable, legacy.heldLane, legacy.end, legacy.pid, legacy.id8]).toEqual([true, '1006-x-s9', '15:10', 4242, ''])
+  expect(parseLockLine('editor (testing) busy, do not touch\n').isReadable).toBe(false)
+  const w = world(on)
+  w.put(LOCK, '3️⃣-Loco-fix (worker) since 14:30, expected end 15:10.\n') // this session's lane (its title)
+  await $.session.start(START)
+  await w.clock.advance(MIN) // the session file is written: the lane resolves to this session
+  expect(refused(await $.tool.call(SAVE as never))).toBeUndefined()
+})
+
+test('A84 (round 2): no conversion while any Unreal Editor runs, even one the hand line does not name; the request queues', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', procs: [{ ...UE, pid: 999 }] })
+  w.put(LOCK, 'held by walker since 14:00 until 15:30\n')
+  await $.session.start(START)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))).toContain('walker holds the Editor until 15:30')
+  expect(w.read(LOCK)).toBe('held by walker since 14:00 until 15:30\n')
+})
+
+test('A84 (round 2): with no process reading the request converts nothing and names the step', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', git: { 'ConvertTo-Json': { stdout: '', deny: 'probe failed' } } })
+  w.put(LOCK, 'held by walker since 14:00 until 15:30\n')
+  await $.session.start(START)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))).toContain('queued: the line lapses at 16:00 if nothing runs; request again after')
+  expect(w.read(LOCK)).toBe('held by walker since 14:00 until 15:30\n')
+})
+
+test('round 2: unit: a gone holder\'s lease is never recovered without a process reading (it waits for the next minute)', () => {
+  const me = { ...blankSession(ME, 'me', 'me', NOW), want: { minutes: 30, pie: false, build: false, what: 'x', mode: 'interactive' as const, pausable: true, nextSafe: 'after save', requestedAt: NOW - MIN } }
+  const holder = { ...blankSession('bbbbbbbb-1', 'gone-lane', 'gone', NOW - 30 * MIN) }
+  const lock = parseLockLine(`HELD lane=gone-lane session=gone since=13:00 2026-10-06 pid=none end=14:00 mode=interactive pausable=yes next_safe=after-save note=x · held by gone-lane, session bbbbbbbb, until 14:00\n`)
+  const input = { me8: ME8, lock, files: [me, holder], lanes: [], now: NOW, sync: null, gates: { pieGb: 31, nopieGb: 28 } }
+  expect(decide({ ...input, probe: null })).toMatchObject({ kind: 'wait', code: 'probe' })
+  expect(decide({ ...input, probe: probe([]) })).toEqual({ kind: 'recover', holder: 'bbbbbbbb' })
 })

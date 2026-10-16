@@ -87,7 +87,8 @@ const isKitCheck = (verb: string, args: readonly string[]): boolean => {
   const tscAt = verb === 'tsc' ? -1 : verb === 'npx' ? low.indexOf('tsc') : -2
   if (tscAt >= -1) return low.slice(tscAt + 1).some(a => a === '-p' || a === '--project' || a === '--noemit')
   if (verb === 'bun') return low[0] === 'test'
-  if (verb === 'node') return low.includes('--test') && !low.some(a => /^(-e|--eval|-p|--print)$/.test(a))
+  // Round-2 review: `node [--experimental-strip-types] <kit>/tests/<file>.mjs` (the README's scan) reads the kit too.
+  if (verb === 'node') return !low.some(a => /^(-e|--eval|-p|--print|-r|--require|--import)$/.test(a)) && (low.includes('--test') || low.some(a => !a.startsWith('-') && /(^|\/)tests\/[^/\s]+\.(mjs|cjs|js)$/.test(a.replace(/\\/g, '/'))))
   if (verb === 'git') {
     const rest = low.filter((a, n) => !/^(-c)$/i.test(a) && !/^(-c)$/i.test(low[n - 1] ?? ''))
     return ['log', 'status', 'diff', 'show'].includes(rest.find(a => !a.startsWith('-')) ?? '')

@@ -8,7 +8,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  lapseOf, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
+  lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
@@ -2465,19 +2465,26 @@ function buildWindowProblem(want: Want, now: number): string | null {
 }
 
 /** A84 (orchestrator, re-review): a hand-written line whose holder is no single known session is turned into a standard
- * HELD line for the requesting session when no other A5R session holds a lease and no Unreal Editor of another lane is
- * known to run (the PID the line names); the queue and the RAM launch gate apply as for a free lock. */
-async function convertHandLock($: Engine, opts: Opts, now: number): Promise<void> {
-  if (!me?.want || holdsLock() || !isUnresolvedHand(lock) || !lock.isReadable) return
+ * HELD line for the requesting session when no other A5R session holds a lease and (round-2 review) a fresh process
+ * reading shows no Unreal Editor running at all, whatever the line names (a named PID alive never converts); the queue and
+ * the RAM launch gate apply as for a free lock. An unreadable reading converts nothing and the answer names the step.
+ * Returns that step ('' when there is nothing to add). */
+async function convertHandLock($: Engine, opts: Opts, now: number): Promise<string> {
+  if (!me?.want || holdsLock() || !isUnresolvedHand(lock) || !lock.isReadable) return ''
   const all = [me, ...peers]
-  if (peers.some(f => f.holding && livenessOf(f.id8, all, lanes, now) === 'alive')) return
-  const fresh = (await freshProbe($, opts)) ?? probe
-  if (lock.pid !== null && (fresh?.procs ?? []).some(p => p.pid === lock.pid)) return
+  if (peers.some(f => f.holding && livenessOf(f.id8, all, lanes, now) === 'alive')) return ''
+  const fresh = await freshProbe($, opts)
+  if (!fresh) {
+    const t = lockTimes(lock, now)
+    return `queued: the line lapses at ${t ? clockOf(t.end + HAND_LAPSE_MS) : '2 h after it was written'} if nothing runs; request again after`
+  }
   probe = fresh
+  if (unrealPids(fresh).length > 0 || (lock.pid !== null && fresh.procs.some(p => p.pid === lock.pid))) return ''
   const d = decide({ ...grantInput(now), lock: parseLockLine(`free since ${clockOf(now)}`) })
-  if (d.kind !== 'grant') return
+  if (d.kind !== 'grant') return ''
   await takeLock($, opts, d, now)
   if (holdsLock()) decision = { kind: 'mine' }
+  return ''
 }
 
 /** The `editor` tool: request, release, extend, status (the only writer of the lock under A5R). */
@@ -2493,6 +2500,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   if (Number.isFinite(gbIn) && gbIn > 0 && gbIn < 1024) supplied = { gb: Math.round(gbIn * 10) / 10, at: now, logged: [] }
   if (action === 'request') {
     if (!me) return 'no session file'
+    let convertNote = ''
     // A88 (b): the request answers from the Editor's own pass (a fresh read of the lock and the queue, a lapsed lease
     // released, the grant), never behind the minute tick's slow work.
     const answer = await editorSerial(async (): Promise<string> => {
@@ -2505,7 +2513,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
       await saveMe($, opts, now)
       await editorPass($, opts, now)
-      await convertHandLock($, opts, now)
+      convertNote = await convertHandLock($, opts, now)
       await saveMe($, opts, now)
       return ''
     })
@@ -2513,7 +2521,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     showStatus($)
     $.ui.invalidate('ui.render')
     const asked = me?.yieldAsks.find(a => a.at === now)
-    return tail(`${placeText(decision)}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5r)' : ''}` : ''}`)
+    return tail(`${placeText(decision)}${convertNote ? ` · ${convertNote}` : ''}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5r)' : ''}` : ''}`)
   }
   if (action === 'release') {
     lockRaw = await $.fs.read(opts.editorLock).catch(() => null)

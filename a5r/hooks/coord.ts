@@ -224,9 +224,11 @@ export const parseLockLine = (raw: string | null): LockLine => {
   const after = /\bheld by\s+(.+)$/i.exec(first)?.[1] ?? ''
   const token = (/^([^\s(]+?)(?=\s|\(|since\b|until\b|$)/i.exec(after)?.[1] ?? '').replace(/[,.;:]+$/, '')
   const hex = /^(?=[0-9a-f]*\d)[0-9a-f]{6,8}$/i.test(token) ? token.toLowerCase() : ''
-  const heldLane = token && !hex ? token : ''
   const anyId = id8 || hex
   const legacyLane = /^(\S+)\s+\(/.exec(first)?.[1] ?? ''
+  // Round-2 review: the legacy hand form `<lane> (…) since HH:MM … expected end HH:MM` names its holder lane first.
+  const legacyHolder = !after && !anyId ? (/^(\S+)\s+\([^)]*\)\s*,?\s*since\s+\d{1,2}:\d{2}/i.exec(first)?.[1] ?? '') : ''
+  const heldLane = token && !hex ? token : legacyHolder
   const lane = (hex ? (/^\s*\(([^):]+)/.exec(after.slice(token.length))?.[1] ?? '') : heldLane) || legacyLane || (first.split(/\s+/)[0] ?? '')
   const span = /(\d{1,2}:\d{2})\s*(?:->|→)\s*~?(\d{1,2}:\d{2})/.exec(first)
   const end = span?.[2] ?? field(first, /(?:until|expected end|ends?)\s+~?(\d{1,2}:\d{2})/i)
@@ -602,7 +604,9 @@ export const decide = (x: GrantInput): Decision => {
     const who = lock.lane || 'another lane'
     const until = lock.end ? ` until ${lock.end}` : ''
     const live = livenessOf(lock.id8, x.files, x.lanes, now)
-    if (live === 'gone' && unrealPids(x.probe).length === 0 && buildProcs(x.probe).length === 0 && queue[0]?.id8 === me8) return { kind: 'recover', holder: lock.id8 }
+    // Round-2 review: never a FREE line without a process reading: a gone holder's lease waits for one (the next minute).
+    if (live === 'gone' && !x.probe && queue[0]?.id8 === me8) return wait('probe', `${who} (session ${lock.id8}) is gone, but there is no process reading to show no Editor or build runs`, 'it is read again at the next minute; do work that needs no Editor meanwhile')
+    if (live === 'gone' && x.probe && unrealPids(x.probe).length === 0 && buildProcs(x.probe).length === 0 && queue[0]?.id8 === me8) return { kind: 'recover', holder: lock.id8 }
     if (live === 'gone' && pid !== null) return wait('gone-editor', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (its lease is freed once no UnrealEditor runs); an Editor left hung is a finding for Ather\'s Needs you')
     return wait('held', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}${isUnresolvedHand(lock) && lock.isReadable ? ' (a hand-written line naming no single live session)' : ''}`, `${place > 1 ? `you are ${ordinal(place)} in the queue` : 'you are next'}; do work that needs no Editor meanwhile${isUnresolvedHand(lock) && lock.isReadable ? '; a request turns it into a standard line for you once no other A5R session holds a lease and no Editor of another lane (the PID it names) runs, and it lapses 30 min past its end with nothing running' : ''}`)
   }
