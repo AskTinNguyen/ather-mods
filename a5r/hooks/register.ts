@@ -1008,7 +1008,22 @@ async function editorPass($: Engine, opts: Opts, now: number): Promise<void> {
   await readWorld($, opts)
   gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
   await lapseStep($, opts, now)
+  await missingLockStep($, opts, now)
   await editorStep($, opts, now)
+}
+
+/** F-8 (rev 30, under A84; A73 "never wait"): a lock file that is missing or empty is written by A5R itself as the S2
+ * standard's FREE line once a fresh probe shows no UnrealEditor or UnrealEditor-Cmd running (one writer: the alert claim
+ * and read-compare-write). While an Editor runs with no lock it stays held by unknown until that process ends; nothing
+ * is ever killed. The queue then proceeds in the same pass. */
+async function missingLockStep($: Engine, opts: Opts, now: number): Promise<void> {
+  if (!me || lock.kind !== 'missing') return
+  const fresh = await freshProbe($, opts)
+  if (!fresh) return
+  probe = fresh
+  if (unrealPids(fresh).length > 0) return
+  if (!(await claimAlert($, opts, `lock-missing-${Math.floor(now / 60_000)}`))) return
+  await writeLock($, opts, freeLine({ since: now, by: me.lane, note: 'lock file was missing; written by A5R, no Unreal process running', background: 'none' }))
 }
 
 async function tick($: Engine, opts: Opts): Promise<void> {

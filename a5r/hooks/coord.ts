@@ -576,7 +576,7 @@ export const decide = (x: GrantInput): Decision => {
   const place = Math.max(1, queue.findIndex(f => f.id8 === me8) + 1)
   const wait = (code: WaitCode, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place })
   const pid = editorPid(x.probe)
-  if (lock.kind === 'missing') return wait('missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', 'nobody takes it while it is unknown (never write it by hand under A5R); do work that needs no Editor meanwhile; if it stays missing while no UnrealEditor runs, add it as a finding for Ather\'s Needs you')
+  if (lock.kind === 'missing') return wait('missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', unrealPids(x.probe).length > 0 ? `an Unreal Editor runs with no lock (PID ${unrealPids(x.probe).join(', ')}): held by unknown until it ends, then A5R writes the FREE line; never kill or drive it, never write the lock by hand; do work that needs no Editor meanwhile` : 'A5R writes the FREE line once a fresh probe shows no Unreal Editor running (never write it by hand); do work that needs no Editor meanwhile')
   if (lock.kind === 'held' || lock.kind === 'handed') {
     const who = lock.lane || 'another lane'
     const until = lock.end ? ` until ${lock.end}` : ''

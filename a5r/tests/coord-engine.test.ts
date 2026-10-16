@@ -288,6 +288,7 @@ const probes = (w: ReturnType<typeof world>) => w.runs.filter(r => r.includes('C
 test('A9: while another session keeps the shared reading fresh, this one never probes; once it is stale, it probes once per period and shares it', opts(), async ($, on) => {
   const w = world(on, { ram: '33' })
   w.put(PROBE, sharedBy('bbbbbbbb', NOW - 10_000, 40))
+  w.put(LOCK, 'free since 14:20\n') // rev 30 (F-8), by design: a missing lock is written FREE after a fresh probe of its own
   await $.session.start(START)
   for (let n = 1; n <= 3; n += 1) {
     w.put(PROBE, sharedBy('bbbbbbbb', NOW + n * MIN - 5_000, 40), NOW + n * MIN - 5_000)

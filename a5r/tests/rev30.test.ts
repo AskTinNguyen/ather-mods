@@ -246,3 +246,29 @@ test('MCP kind: a read while another lane holds the Editor runs even when its ar
   expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'find_assets', arguments: { query: 'set_visibility' } } as never))).toBeUndefined()
   expect(refused(await $.tool.call(SAVE as never))).toContain('A5R · Editor lock')
 })
+
+// ---------- F-8 (orchestrator, rev 30, under A84): a missing lock never stalls the queue ----------
+for (const empty of [false, true])
+  test(`F-8: a ${empty ? 'empty' : 'missing'} lock with no Unreal process running is written FREE by A5R and the request is granted`, opts(), async ($, on) => {
+    const w = world(on, { ram: '40' })
+    if (empty) w.put(LOCK, '')
+    await $.session.start(START)
+    const ran = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))
+    expect(ran).toContain('until 15:10')
+    expect(parseLockLine(w.read(LOCK)).id8).toBe(ME8)
+    expect(w.read(`${HF}/alerts/lock-missing-${Math.floor(NOW / MIN)}.json`)).toContain(ME8) // the one writer's claim
+  })
+
+test('F-8: a missing lock while an Unreal Editor runs is held by unknown (nothing killed); once it exits, FREE is written and the queue goes on', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', procs: [{ name: 'UnrealEditor', pid: 777, gb: 26, parentAlive: true }] })
+  await $.session.start(START)
+  const ran = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))
+  expect(ran).toContain('an Unreal Editor runs with no lock (PID 777): held by unknown until it ends')
+  await w.clock.advance(2 * MIN)
+  expect(w.read(LOCK)).toBe('')
+  w.machine.procs = [] // the Editor exited
+  for (let n = 0; n < 2; n += 1) await w.clock.advance(MIN)
+  const lock = parseLockLine(w.read(LOCK))
+  expect([lock.kind, lock.id8]).toEqual(['held', ME8])
+  expect(w.runs.some(r => /Stop-Process|taskkill|kill\b/i.test(r))).toBe(false)
+})

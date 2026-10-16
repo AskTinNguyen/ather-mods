@@ -52,8 +52,8 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 **Proposed amendment:** keep A79's review row ("the next real sync") and read in that sync's worker transcript whether any of its git writes was answered by A5R; if the Hermes kit must keep parity, copy the two `rules/config.json` lines there (Hai's or the orchestrator's call).
 **Resolution:**
 
-## F-8 (2026-10-16, rev 30) | blocking: no | status: open (director)
+## F-8 (2026-10-16, rev 30) | blocking: no | status: resolved (orchestrator, rev 30, under A84)
 
 **Found:** A84 covers a lock line A5R did not write; a lock that is **missing or empty** is still the S2 standard's "unknown, not free" (`decide` → wait `missing`, coord.ts), and with A5R on nobody can write it (an edit or redirect of `Saved/EDITOR_OWNER.txt` is refused, the editor tool never takes a missing lock). So a deleted lock file stalls every Editor request until someone with A5R off writes it; the wait text now says "never write it by hand under A5R" and names a finding for Ather's Needs you, which is honest but not a way out. Not measured in a session (no incident seen), INFERRED from the code.
 **Proposed amendment:** treat a missing lock like A84's unreadable line: held for 2 h from when it went missing (or at once when the file never existed and no Unreal or build process runs), then the head of the queue writes a FREE line and takes it; or let `editor request` write a FREE line for a missing lock when a fresh probe shows no Unreal or build process. Director's call (it departs from the S2 standard's wording).
-**Resolution:**
+**Resolution:** resolved 2026-10-16 by the orchestrator (rev 30, under A84, in line with A73 "never wait"): a missing or empty lock is written by A5R as the standard FREE line (note `lock file was missing; written by A5R, no Unreal process running`) the first time a session's tick or editor request finds it and a fresh probe shows no UnrealEditor/UnrealEditor-Cmd; with an Editor running it stays held by unknown until that process ends, then FREE; nothing killed; one writer (alert claim + read-compare-write). Built in S87.
