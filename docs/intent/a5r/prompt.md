@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 30
+- Rev: 31
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -135,6 +135,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A86 (rev 30): A5R's own background agents never count against a PR: rule 4's "background agent still running" leaves out `a5r:judge` (as it already leaves out `a5r:sync`). Proof: engine test.
 - A87 (rev 30): The merge-guard refusal names a step an agent can do (the holder ends it; when the holder is gone, a live session takes the sync over and runs `git merge --abort`), never "or Hai". README and rules text match the code: what still runs while A5R is off (the title clean-up, the off-state sync-slot release, a temp chain file), scope misses recorded (not asked), the switch being global for every session. Proof: unit test on the refusal text; review.
 - A88 (rev 30): Three suspected stalls are checked and fixed where real: (a) the acceptance diff of a long S2 branch (30 s / 4 MiB) refuses every PR attempt and is re-run every 5 minutes; (b) an editor request waits behind a sync dry-run on the same tick chain; (c) a failed RAM probe makes the launch gate wait while the PIE check lets it through. Each gets a measured verdict in progress.md and, where real, a fix with a test. Proof: gate per fix.
+- A89 (rev 31): The Orchestrate card shows the present, not old verdicts: it lists a verdict only while its incident is current (that holder still holds that lease or sync, or it ended less than 30 minutes ago), each with its date when not today; when none is current the card says so in one quiet line ("No stalled holder now", with the last verdict's date and time) or is left out. MEASURED 2026-10-16: the card showed three verdicts from 2026-10-09 (talab-upgrade 19:38, 1009-loco-ab2 17:25, mc-jump 16:37) with no date, read from `Saved/A5R/verdicts.json` with no check of age or current state. Proof: engine tests (an old verdict whose lease ended is not listed; a current one is; dates on another day); review on the pane.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -148,6 +149,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 31 (2026-10-16): L-34: A89 the Orchestrate card shows current incidents only.
 - rev 30 (2026-10-16): L-33: review of 0.17.1: A84 a hand-written lock never deadlocks, A85 the kit's checks run from anywhere, A86 A5R's judge never fails a PR, A87 no "or Hai" and README matches the code, A88 three suspected stalls checked.
 - rev 29 (2026-10-14): L-32: A83 no 🟥/⏯️ convention in A5R; decisions are Ather's.
 - rev 28 (2026-10-13): L-31: A79 the sync worker uses no A5R tool (every sync so far aborted), A80 force-with-lease and add-all in one's own branch or worktree run, A81 a long build window when nobody waits, A82 each notice once, to whom it concerns.

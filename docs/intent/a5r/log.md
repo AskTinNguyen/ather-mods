@@ -223,3 +223,9 @@ Found from the S2 transcripts: A5R has been off since 2026-10-10 morning (one `/
 > Review lại code a5r lần nữa và eli5 cho tôi biết một user bình thường expect làm việc khi bật nó so với tắt nó khác nhau thế nào?
 
 > Ok sửa luôn đi
+
+## L-34 (2026-10-16) | class: intent | -> rev 31
+
+> A5R sao phần Orchestrate chứ dữ liệu cũ, thay vì các session thực tế đang có?
+
+With a screenshot of the A5R pane: the Orchestrate card lists 19:38 talab-upgrade, 17:25 1009-loco-ab2, 16:37 mc-jump-fall-triage (all from 2026-10-09).
