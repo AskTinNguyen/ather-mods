@@ -76,8 +76,24 @@ export const writesFiles = (raw: string, verb: string, all: readonly string[], i
   return false
 }
 const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
-// A85: interpreters whose inline code (-c / -e) A5R cannot read: inline code that names the live kit is refused.
-const INLINE_CODE = new Set(['python', 'python3', 'py', 'node', 'bun', 'deno', 'perl', 'ruby'])
+/** A85 (orchestrator, re-review): the kit's read-only checks that may name the live kit: `claude plugin test|validate`,
+ * `tsc -p`/`--noEmit` (bare or through npx), `bun test`, `node --test`, `git log|status|diff|show` (after `-C <dir>`).
+ * The readers (rg, grep, cat, ls, head, tail, Get-Content, Select-String …) pass through READERS before this. Anything
+ * else naming the kit (robocopy, xcopy, tar, curl -o, Invoke-WebRequest, Expand-Archive, [IO.File]::Write…, npm --prefix,
+ * python or node on a kit script) is refused. */
+const isKitCheck = (verb: string, args: readonly string[]): boolean => {
+  const low = args.map(a => a.toLowerCase())
+  if (verb === 'claude') return low[0] === 'plugin' && (low[1] === 'test' || low[1] === 'validate')
+  const tscAt = verb === 'tsc' ? -1 : verb === 'npx' ? low.indexOf('tsc') : -2
+  if (tscAt >= -1) return low.slice(tscAt + 1).some(a => a === '-p' || a === '--project' || a === '--noemit')
+  if (verb === 'bun') return low[0] === 'test'
+  if (verb === 'node') return low.includes('--test') && !low.some(a => /^(-e|--eval|-p|--print)$/.test(a))
+  if (verb === 'git') {
+    const rest = low.filter((a, n) => !/^(-c)$/i.test(a) && !/^(-c)$/i.test(low[n - 1] ?? ''))
+    return ['log', 'status', 'diff', 'show'].includes(rest.find(a => !a.startsWith('-')) ?? '')
+  }
+  return false
+}
 const WRAPPERS = new Set(['&', 'sudo', 'command', 'builtin', 'exec', 'time', 'nohup', 'xargs', 'call'])
 const PS_VALUE_PARAMS = new Set(['-erroraction', '-ea', '-exclude', '-include', '-filter', '-warningaction', '-wa'])
 
@@ -383,11 +399,11 @@ export class A5R {
     const redirected = />>?\s*['"]?([^\s'"]+)/.exec(low)
     // A reader, or a bare assignment (`D="<kit>"`), writes nothing unless it redirects into the kit.
     if ((READERS.has(verb) || verb === '') && !(redirected && this.kitMentions.some(([re]) => re.test(redirected[1] ?? '')))) return null
-    // A85 (rev 30): the kit's own checks name it from anywhere and only read it (`claude plugin test|validate <kit>`,
-    // `npx tsc -p <kit>`, `node|bun … <kit>/tests/…`): refused only when the command writes files (a delete, move, copy,
-    // in-place edit, redirect or tee into the kit, a git write, a package install) or runs inline code that names the kit.
-    if (INLINE_CODE.has(verb) && args.some(a => /^(-c|-e|--eval|-p|--print)$/i.test(a))) return hit[1]
-    return writesFiles(raw, verb, args, inKit) ? hit[1] : null
+    // A85 (rev 30, orchestrator after the re-review): the 0.17.1 model (any command naming the live kit is refused) with an
+    // allow-list of the kit's own read-only checks; a redirect or tee into the kit is refused even for them.
+    if (redirected && inKit(redirected[1] ?? '')) return hit[1]
+    if ((verb === 'tee' || verb === 'tee-object') && args.some(a => !a.startsWith('-') && inKit(a))) return hit[1]
+    return isKitCheck(verb, args) ? null : hit[1]
   }
 
   /** True when every delete target resolves inside a temp folder (delete_safe_roots). */

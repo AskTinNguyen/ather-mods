@@ -8,7 +8,7 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  lapseOf, namesHolder, resolveLock, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
+  lapseOf, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
@@ -109,6 +109,7 @@ let lock: LockLine = parseLockLine(null)
  * or lane), from the session files and Ather's lanes as last read. */
 const lockOf = (raw: string | null): LockLine => resolveLock(parseLockLine(raw), me ? [me, ...peers.filter(p => p.id8 !== me8)] : peers, lanes, nowMs)
 let probe: Probe | null = null
+let probeOk = true // A88 (c, re-review): whether the last reading this session tried answered (or the shared one was fresh)
 let gates: Gates & { source: string } = gatesOf(null, undefined, undefined)
 let syncFile: SyncFile | null = null
 let touches: Touch[] = []
@@ -281,21 +282,42 @@ async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Pro
   const nowMsHere = await $.clock.now() // the engine's clock, never the wall clock (a test's time is its own)
   const now = new Date(nowMsHere)
   const id8 = (await $.session.id()).slice(0, 8).toLowerCase()
-  // A84: a hand-written line is read for its holder (an id prefix or a lane it names): that session drives the Editor.
+  // A84: a hand-written line is read for its holder (an id prefix or a lane it names) and resolved to one known session:
+  // that session drives the Editor. A name matching two live sessions or none drives nothing on the name alone (re-review).
   const read = resolveLock(parseLockLine(raw), me ? [me, ...peers] : peers, lanes, nowMsHere)
-  const isMine = namesHolder(read, id8, me?.id8 === id8 ? me.lane : '')
-  const why = isMine ? null : lockProblem(parseEditorLock(raw, now.getHours() * 60 + now.getMinutes()), id8, `Take the lock first: ask for it with ${EDITOR_TOOL} (action request) and retry once it is granted.`, `ask for it with ${EDITOR_TOOL} (action request): you are queued, and a lock that names this session by its id or lane is this session's`)
+  const isMine = (read.kind === 'held' || read.kind === 'handed') && read.id8 === id8
+  if (!isMine && isUnresolvedHand(read) && read.isReadable) return `the lock line was written by hand and names ${read.heldLane || read.id8 || 'nobody'}, which matches no single live session, so nobody drives the Editor on that name alone → ${HAND_CONVERT_ALT}`
+  const why = isMine ? null : lockProblem(parseEditorLock(raw, now.getHours() * 60 + now.getMinutes()), id8, `Take the lock first: ask for it with ${EDITOR_TOOL} (action request) and retry once it is granted.`, `ask for it with ${EDITOR_TOOL} (action request): you are queued`)
   if (why) return why.replace(/\s+(Take the lock first:|If this session|Never drive)/, ' → $1')
   if (kind === 'pie') {
-    // A88 (c): a probe that fails is retried once; failing twice, PIE starts with a warning (as the launch gate grants),
-    // never a silent pass and never a wait nobody can end.
+    // A88 (c, re-review): a probe that fails is retried once; failing twice, PIE is refused with a step the agent can do:
+    // read free RAM itself and hand the number to the editor tool (used for 2 min, the normal gate applied, logged).
     const gbOf = async (): Promise<number> => Number((await $.process.run(FREE_RAM_PROBE, { timeoutMs: 20_000 }).catch(() => null))?.stdout.trim())
     let gb = await gbOf()
     if (!(Number.isFinite(gb) && gb > 0)) gb = await gbOf()
-    if (!(Number.isFinite(gb) && gb > 0)) push({ id: `pie:probe-failed:${Math.floor(nowMsHere / 60_000)}`, text: NOTICES.probeFailed('PIE start', 'the 5 GB PIE start gate'), isActionable: false })
-    else if (gb < PIE_MIN_FREE_GB) return `free RAM is ${gb} GB, under the ${PIE_MIN_FREE_GB} GB PIE start gate (fixed, never lowered) → free memory or wait, then start PIE`
+    if (!(Number.isFinite(gb) && gb > 0)) {
+      const given = suppliedGb(nowMsHere)
+      if (given === null) return `the RAM probe did not answer twice, so the 5 GB PIE start gate cannot be checked → read free RAM with ${FREE_RAM_READ} and give it to ${EDITOR_TOOL} (action status, freeGb: <number>), then start PIE again`
+      await logSupplied($, opts, given, 'PIE start', nowMsHere)
+      gb = given
+    }
+    if (gb < PIE_MIN_FREE_GB) return `free RAM is ${gb} GB, under the ${PIE_MIN_FREE_GB} GB PIE start gate (fixed, never lowered) → free memory or wait, then start PIE`
   }
   return null
+}
+
+/** A84 (orchestrator, re-review): the step for a hand-written lock whose holder is no single known session. */
+const HAND_CONVERT_ALT = `call ${EDITOR_TOOL} (action request): it turns the line into a standard HELD line for this session when no other A5R session holds a lease and no Unreal Editor of another lane (the PID the line names) is known to run; otherwise you wait in the queue`
+
+/** A88 (c, re-review): free RAM an agent read itself and gave to the editor tool (`freeGb`) after the probe failed twice:
+ * used for 2 min, for one decision at a time, through the normal gates, and logged in orchestrate.log. */
+let supplied: { gb: number; at: number; logged: string[] } | null = null
+const SUPPLIED_MS = 2 * 60_000
+const suppliedGb = (now: number): number | null => (supplied && now - supplied.at <= SUPPLIED_MS ? supplied.gb : null)
+async function logSupplied($: Engine, opts: Opts, gb: number, what: string, now: number): Promise<void> {
+  if (!supplied || supplied.logged.includes(what)) return // once per number given and use
+  supplied.logged.push(what)
+  await orchestrateLog($, opts, { at: now, rule: 'ram-supplied', lane: me?.lane ?? me8, id8: me8, procs: [], liveness: 'alive', lastTurnAt: me?.lastTurnAt ?? null, agents: agentsNow, build: false, acted: true, note: `${what}: the RAM probe failed twice; the agent read ${gb} GB of RAM available and gave it to the editor tool` }).catch(() => undefined)
 }
 
 /** A73: what a rule-1 match does at the action. Nothing asks and nothing waits: a call is refused only with an alternative
@@ -656,6 +678,7 @@ async function readJson($: Engine, path: string): Promise<string | null> {
 async function freshProbe($: Engine, opts: Opts): Promise<Probe | null> {
   const ran = await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null)
   const p = ran ? parseProbe(ran.stdout) : null
+  probeOk = p !== null // A88 (c, re-review): the last reading this session tried
   if (p) await $.fs.write(`${hfDir(opts)}/probe.json`, JSON.stringify({ at: await $.clock.now(), by: me8, probe: p })).catch(() => undefined)
   return p
 }
@@ -667,7 +690,10 @@ async function sharedProbe($: Engine, opts: Opts, now: number): Promise<Probe | 
   const path = `${hfDir(opts)}/probe.json`
   const raw = await readJson($, path)
   const cur = parseSharedProbe(raw)
-  if (cur?.probe && now - cur.at < PROBE_FRESH_MS) return cur.probe
+  if (cur?.probe && now - cur.at < PROBE_FRESH_MS) {
+    probeOk = true
+    return cur.probe
+  }
   const claim = JSON.stringify({ at: now, by: me8, probe: cur?.probe ?? null })
   const again = await readJson($, path)
   if (again !== raw) return parseSharedProbe(again)?.probe ?? cur?.probe ?? null // another session claimed it first
@@ -836,6 +862,7 @@ async function ensureTools($: Engine): Promise<void> {
         mode: { type: 'string', enum: ['interactive', 'unattended'] },
         pausable: { type: 'boolean', description: 'request: whether you can yield at a safe point (default true).' },
         next_safe: { type: 'string', description: 'request: your next safe point, HH:MM or "after save".' },
+        freeGb: { type: 'number', description: 'any action: free RAM in GB you read yourself, only when A5R said the RAM probe failed twice (used for 2 min, through the normal gates, logged).' },
         note: { type: 'string', description: 'release: one line for the lock note.' },
         dont_save: { type: 'array', items: { type: 'string' }, description: 'release: dirty packages to discard (Don\'t-Save), each confirmed by its owning lane.' },
         pie_stopped: { type: 'boolean', description: 'release: PIE this session started has ended (needed only when no stop was seen).' },
@@ -1024,6 +1051,10 @@ async function missingLockStep($: Engine, opts: Opts, now: number): Promise<void
   if (unrealPids(fresh).length > 0) return
   if (!(await claimAlert($, opts, `lock-missing-${Math.floor(now / 60_000)}`))) return
   await writeLock($, opts, freeLine({ since: now, by: me.lane, note: 'lock file was missing; written by A5R, no Unreal process running', background: 'none' }))
+  // Re-review: the FREE line is written alone and the lock read again before any grant: a line another writer put there
+  // meanwhile wins, and this session keeps its request and waits (the grant itself is read-compare-write too).
+  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lock = lockOf(lockRaw)
 }
 
 async function tick($: Engine, opts: Opts): Promise<void> {
@@ -1107,11 +1138,17 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
     d = decide(grantInput(now))
   }
   if (d.kind === 'grant' || (d.kind === 'wait' && d.code === 'probe')) {
-    // A grant reads the machine itself, not the shared reading (A9). A88 (c): with no reading at all the probe is run once
-    // more; failing again, the slot is granted with a warning instead of waiting forever.
+    // A grant reads the machine itself, not the shared reading (A9). A88 (c, re-review): with no reading at all the probe
+    // runs once more; failing again, the free RAM an agent read itself (`freeGb` on the editor tool, ≤ 2 min old) is read
+    // through the normal gate for this one decision and logged; without one the wait names that step.
     const fresh = await freshProbe($, opts)
     probe = fresh ?? probe
-    d = decide({ ...grantInput(now), probeFailed: probe === null })
+    const given = probe === null ? suppliedGb(now) : null
+    if (given !== null) {
+      d = decide({ ...grantInput(now), probe: { freeGb: given, diskGb: null, procs: [] } })
+      await logSupplied($, opts, given, 'Editor launch', now)
+      if (d.kind === 'grant') supplied = null // used for this one decision
+    } else d = decide({ ...grantInput(now), probeFailed: probe === null })
   }
   if (d.kind === 'grant' || (d.kind === 'wait' && d.code === 'ram')) {
     const plan = probe ? cleanupPlan(probe) : null
@@ -1354,7 +1391,7 @@ async function notePid($: Engine, opts: Opts, fresh: boolean): Promise<void> {
   await writeLock($, opts, line)
 }
 
-async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number | null; unchecked?: boolean }, now: number): Promise<void> {
+async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number | null }, now: number): Promise<void> {
   const w = me?.want
   if (!me || !w) return
   const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: now, pid: d.reuse, end: d.end, mode: w.mode, pausable: w.pausable, nextSafe: w.nextSafe, note: `${w.what}${w.pie ? ' (PIE)' : ''}${w.build ? ' (build)' : ''}` })
@@ -1362,7 +1399,7 @@ async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number |
   me = { ...me, holding: { since: now, end: d.end, extended: 0 } }
   lastEditorUseAt = now
   // A79: the sync's own slot is its worker's; the holder's model is not woken to launch an Editor for it.
-  if (!isSyncSlot(w)) push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : '', d.unchecked === true), isActionable: true })
+  if (!isSyncSlot(w)) push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : ''), isActionable: true })
 }
 
 /** A short request without a build asks the holder to yield, once per holder per hour: through the holder's own
@@ -2325,7 +2362,10 @@ async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void>
 
 /** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */
 function ramStep(opts: Opts, now: number): void {
-  if (!probe) return
+  // A88 (c, re-review): no reading while this session's PIE runs: the 3 GB abort cannot be checked, so the holder is told
+  // to read it itself (no silent pass), once per minute of failure.
+  if (isPieRunning && holdsLock() && (!probe || !probeOk)) push({ id: `pie:probe-failed:${Math.floor(now / 60_000)}`, text: NOTICES.pieProbeFailed(), isActionable: true })
+  if (!probe || !probeOk) return
   if (isPieRunning && holdsLock() && probe.freeGb < PIE_ABORT_GB) {
     if (!isPieLow) pieLowSince = now
     isPieLow = true
@@ -2424,6 +2464,22 @@ function buildWindowProblem(want: Want, now: number): string | null {
   return null
 }
 
+/** A84 (orchestrator, re-review): a hand-written line whose holder is no single known session is turned into a standard
+ * HELD line for the requesting session when no other A5R session holds a lease and no Unreal Editor of another lane is
+ * known to run (the PID the line names); the queue and the RAM launch gate apply as for a free lock. */
+async function convertHandLock($: Engine, opts: Opts, now: number): Promise<void> {
+  if (!me?.want || holdsLock() || !isUnresolvedHand(lock) || !lock.isReadable) return
+  const all = [me, ...peers]
+  if (peers.some(f => f.holding && livenessOf(f.id8, all, lanes, now) === 'alive')) return
+  const fresh = (await freshProbe($, opts)) ?? probe
+  if (lock.pid !== null && (fresh?.procs ?? []).some(p => p.pid === lock.pid)) return
+  probe = fresh
+  const d = decide({ ...grantInput(now), lock: parseLockLine(`free since ${clockOf(now)}`) })
+  if (d.kind !== 'grant') return
+  await takeLock($, opts, d, now)
+  if (holdsLock()) decision = { kind: 'mine' }
+}
+
 /** The `editor` tool: request, release, extend, status (the only writer of the lock under A5R). */
 async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   if (!(await readA5R($))) return blocked('Editor', 'A5R is off, so the Editor holder is not running', 'follow AGENTS.md: take Saved/EDITOR_OWNER.txt by hand')
@@ -2432,6 +2488,9 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   const action = str(e.action)
   const now = await $.clock.now()
   const tail = (text: string): string => [text, ...drain()].join('\n')
+  // A88 (c, re-review): free RAM the agent read itself after the probe failed twice (any action carries it).
+  const gbIn = Number(e.freeGb)
+  if (Number.isFinite(gbIn) && gbIn > 0 && gbIn < 1024) supplied = { gb: Math.round(gbIn * 10) / 10, at: now, logged: [] }
   if (action === 'request') {
     if (!me) return 'no session file'
     // A88 (b): the request answers from the Editor's own pass (a fresh read of the lock and the queue, a lapsed lease
@@ -2446,6 +2505,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
       await saveMe($, opts, now)
       await editorPass($, opts, now)
+      await convertHandLock($, opts, now)
       await saveMe($, opts, now)
       return ''
     })

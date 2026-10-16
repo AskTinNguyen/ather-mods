@@ -42,7 +42,9 @@ export const mcpCallKind = (tool: string, input: Record<string, unknown>): Retur
     const args = (typeof input.arguments === 'object' && input.arguments !== null ? input.arguments : input) as Record<string, unknown>
     const command = [args.command, args.cmd, args.Command, input.command].filter((v): v is string => typeof v === 'string').join(' ')
     if (command && mcpKind(command) === 'pie') return 'pie'
+    return 'write' // re-review: a console command can quit, close or save: it needs the lock
   }
+  if (/quit|exit|close|shutdown|save/i.test(method)) return 'write' // re-review: a method that can quit, close or save
   return kind
 }
 

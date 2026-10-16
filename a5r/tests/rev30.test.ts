@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { A5R } from '../hooks/a5r.ts'
-import { blankSession, lapseOf, namesHolder, newSync, parseLockLine, resolveLock, type SessionFile } from '../hooks/coord.ts'
+import { blankSession, lapseOf, namesHolder, newSync, parseLockLine, releasedNote, resolveLock, type SessionFile } from '../hooks/coord.ts'
 import { mcpCallKind } from '../hooks/editor.ts'
 import { CONFIG } from './config.fixture.ts'
 import { LOCK, ME, NOW, PROJ, opts, refused, world, type Proc } from './world.ts'
@@ -36,13 +36,18 @@ test('A84: unit: the hand-written line is read for its holder (9b53d3, avian win
   const holder = { ...blankSession(HOLDER, 'avian-wing-kit', 'avian wing-kit', D(11, 0)) }
   expect(resolveLock(lock, [holder], [], D(11, 0)).id8).toBe('9b53d3e1')
   expect(resolveLock(lock, [], [{ sessionId: HOLDER, hasEnded: false, mtimeMs: D(11, 0) }], D(11, 0)).id8).toBe('9b53d3e1')
+  // Re-review (orchestrator): a holder that resolves to no session lapses 30 min past its end with nothing running.
   const x = { lock, files: [], lanes: [], waiting: [] }
-  expect(lapseOf({ ...x, now: D(13, 20), probe: probe([]) })?.kind).toBe('lapsed') // past 13:06 + 10 min, PID 21832 gone
-  expect(lapseOf({ ...x, now: D(13, 20), probe: probe([UE]) })).toBeNull() // its Editor still runs
-  expect(lapseOf({ ...x, now: D(13, 20), probe: probe([{ ...UE, pid: 4444, name: 'UnrealBuildTool' }]) })).toBeNull() // a build runs
-  expect(lapseOf({ ...x, now: D(13, 10), probe: probe([]) })).toBeNull() // inside the 10 min
-  // A live holder (its a5r's fresh heartbeat) keeps it past its end and hears the overrun.
-  expect(lapseOf({ ...x, files: [{ ...holder, heartbeatAt: D(13, 19) }], lock: resolveLock(lock, [holder], [], D(13, 20)), now: D(13, 20), probe: probe([]) })).toBeNull()
+  expect(lapseOf({ ...x, now: D(13, 36), probe: probe([]) })?.kind).toBe('lapsed') // past 13:06 + 30 min, PID 21832 gone
+  expect(lapseOf({ ...x, now: D(13, 30), probe: probe([]) })).toBeNull() // inside the 30 min
+  expect(lapseOf({ ...x, now: D(13, 40), probe: probe([UE]) })).toBeNull() // its Editor still runs
+  expect(lapseOf({ ...x, now: D(13, 40), probe: probe([{ ...UE, pid: 4444, name: 'UnrealBuildTool' }]) })).toBeNull() // a build runs
+  expect(lapseOf({ ...x, now: D(13, 40), probe: probe([{ ...UE, pid: 4445, name: 'UnrealEditor-Win64-DebugGame' }]) })).toBeNull() // any UnrealEditor* counts
+  // A resolved holder: 10 min past its end once its session is gone; a live one (fresh heartbeat) keeps it.
+  const known = resolveLock(lock, [holder], [], D(13, 20))
+  expect(lapseOf({ ...x, files: [{ ...holder, heartbeatAt: D(13, 19) }], lock: known, now: D(13, 20), probe: probe([]) })).toBeNull()
+  expect(lapseOf({ ...x, files: [{ ...holder, heartbeatAt: D(12, 0) }], lock: known, now: D(13, 20), probe: probe([]) })?.kind).toBe('lapsed')
+  expect(releasedNote({ kind: 'lapsed', at: D(13, 36), by: '', since: D(10, 36), end: D(13, 6) }, lock)).toBe('hand-written lock by avian wing-kit (id 9b53d3) lapsed: past 13:06 + 30 min, nothing running (pid 21832 not running, no Editor or build)')
   // A line naming nobody: held until its end, or 2 h after it was written, then free when nothing runs.
   const blind = parseLockLine('editor busy - do not touch\n')
   expect([blind.kind, blind.isReadable]).toEqual(['held', false])
@@ -51,6 +56,44 @@ test('A84: unit: the hand-written line is read for its holder (9b53d3, avian win
   expect(lapseOf({ ...x, lock: blind, writtenAt: D(11, 0), now: D(13, 0), probe: probe([{ ...UE, pid: 9 }]) })).toBeNull()
   const timed = parseLockLine('testing the editor until 12:00, do not touch\n')
   expect(lapseOf({ ...x, lock: timed, writtenAt: D(9, 0), now: D(12, 0), probe: probe([]) })?.kind).toBe('lapsed')
+})
+
+test('A84 (re-review): the holder is only the token right after "held by" or an explicit session id; never an id elsewhere in the note', () => {
+  const read = (l: string) => {
+    const p = parseLockLine(l)
+    return [p.id8, p.heldLane, p.end]
+  }
+  expect(read('held by walker since 10:00 until 11:00; yield request from 0e860966\n')).toEqual(['', 'walker', '11:00'])
+  expect(read('held by walker (merging c15348341b29, ab12cd34 pending) until 11:00\n')).toEqual(['', 'walker', '11:00'])
+  expect(read('held by 1009-loco-ab2 since 09:00 until 11:00\n')).toEqual(['', '1009-loco-ab2', '11:00'])
+  expect(read(LINE)).toEqual(['9b53d3', '', '13:06'])
+  expect(read('1006-x-s9 (worker) since 14:30, expected end 15:10. session ab12cd34\n')).toEqual(['ab12cd34', '', '15:10'])
+  expect(parseLockLine('notes: build c15348341b29 for ab12cd34 until 12:00\n').isReadable).toBe(false)
+  // A lane matching two live sessions resolves to none: nobody drives on the name alone.
+  const two = [blankSession('aaaaaaaa-1', 'walker', 'walker', D(11, 0)), blankSession('cccccccc-1', 'walker', 'walker', D(11, 0))]
+  expect(resolveLock(parseLockLine('held by walker until 12:00\n'), two, [], D(11, 0)).id8).toBe('')
+  expect(resolveLock(parseLockLine('held by walker until 12:00\n'), two.slice(0, 1), [], D(11, 0)).id8).toBe('aaaaaaaa')
+})
+
+test('A84 (re-review): a lane matching two live sessions drives nothing on the name; a request converts it to a standard line when no other lease or named Editor runs', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', now: D(11, 0) })
+  w.put(LOCK, 'held by walker since 10:00 until 12:00\n', D(10, 0))
+  for (const id8 of ['aaaaaaaa', 'cccccccc']) w.put(`${HF}/editor/${id8}.json`, JSON.stringify({ ...blankSession(`${id8}-1111-4000-8000-000000000000`, 'walker', 'walker', D(11, 0)) }), D(11, 0))
+  await $.session.start(START)
+  const why = refused(await $.tool.call(SAVE as never)) ?? ''
+  expect(why).toContain('names walker, which matches no single live session, so nobody drives the Editor on that name alone')
+  expect(why).toContain(`call ${EDITOR} (action request): it turns the line into a standard HELD line for this session when no other A5R session holds a lease and no Unreal Editor of another lane (the PID the line names) is known to run`)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))).toContain('until 11:30')
+  const lock = parseLockLine(w.read(LOCK))
+  expect([lock.kind, lock.isStandard, lock.id8]).toEqual(['held', true, ME8])
+})
+
+test('A84 (re-review): no conversion while the Editor PID the hand line names runs; the request queues', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', now: D(11, 0), procs: [{ ...UE, pid: 555 }] })
+  w.put(LOCK, 'held by walker since 10:00 until 12:00. Editor PID 555.\n', D(10, 0))
+  await $.session.start(START)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))).toContain('walker holds the Editor until 12:00 (a hand-written line naming no single live session)')
+  expect(w.read(LOCK)).toBe('held by walker since 10:00 until 12:00. Editor PID 555.\n')
 })
 
 test('A84: the holder 9b53d3 named by that exact line uses the Editor, releases it and re-takes it through the editor tool', opts(), async ($, on) => {
@@ -77,15 +120,15 @@ test('A84: another session queues behind that exact line, is never told to edit 
   expect(why).toContain(`${EDITOR} (action request)`)
   expect(why).not.toMatch(/add 'session|write your slot|EDITOR_OWNER\.txt/)
   expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))).toContain('avian wing-kit (session 9b53d3) holds the Editor until 13:06')
-  while (w.clock.now() < D(13, 10)) {
+  while (w.clock.now() < D(13, 30)) {
     if (w.clock.now() >= D(12, 50)) w.machine.procs = [] // the avian lane closed its Editor
     await w.clock.advance(MIN)
   }
-  expect(w.read(LOCK)).toBe(LINE) // 13:10: inside the 10 min past its end
-  while (w.clock.now() < D(13, 20)) await w.clock.advance(MIN)
+  expect(w.read(LOCK)).toBe(LINE) // 13:30: inside the 30 min past its end (its holder resolves to no session)
+  while (w.clock.now() < D(13, 40)) await w.clock.advance(MIN)
   const lock = parseLockLine(w.read(LOCK))
   expect([lock.kind, lock.id8]).toEqual(['held', ME8])
-  expect(w.read(`${HF}/orchestrate.log`)).toContain('lapsed hand-written lock of avian wing-kit (session-9b53d3): ended 13:06')
+  expect(w.read(`${HF}/orchestrate.log`)).toContain('hand-written lock by avian wing-kit (id 9b53d3) lapsed: past 13:06 + 30 min, nothing running')
   expect(w.runs.some(r => /Stop-Process|taskkill|kill\b/i.test(r))).toBe(false) // nothing closed or killed
 })
 
@@ -101,8 +144,8 @@ test('A84: a line A5R cannot read is held for 2 h from when it was written, then
   expect(w.read(`${HF}/orchestrate.log`)).toContain('unreadable hand-written lock (it names nobody): ended 13:00')
 })
 
-// ---------- A85: the kit's own checks run from anywhere ----------
-test('A85: unit: claude plugin test|validate, tsc -p, node/bun on the kit\'s tests run from any folder; writes into the live kit stay refused', () => {
+// ---------- A85: the kit's own checks run from anywhere (orchestrator after the re-review: an allow-list of readers) ----------
+test('A85: unit: the kit\'s read-only checks run from any folder; everything else naming the live kit is refused', () => {
   const KIT = 'D:/Projects/ather-mods/a5r'
   const a5r = new A5R(CONFIG, { KIT, HOME: 'C:/Users/hai.huynh', USERPROFILE: 'C:/Users/hai.huynh', TEMP: 'C:/Users/HAI~1.HUY/AppData/Local/Temp', LOCALAPPDATA: 'C:/Users/hai.huynh/AppData/Local' })
   const pre = (c: string) => a5r.preShell(c, PROJ, {})?.key ?? null
@@ -110,22 +153,46 @@ test('A85: unit: claude plugin test|validate, tsc -p, node/bun on the kit\'s tes
     `claude plugin test ${KIT}`,
     `claude plugin validate ${KIT}`,
     `npx -y -p typescript@5.6 tsc -p ${KIT}`,
-    `node --experimental-strip-types ${KIT}/tests/scan-old-names.mjs`,
+    `npx tsc --noEmit -p ${KIT}/tsconfig.json`,
+    `tsc -p ${KIT}`,
     `bun test ${KIT}/tests`,
+    `node --test ${KIT}/tests`,
     `git -C ${KIT} log -3 --oneline`,
+    `git -C ${KIT} status`,
+    `git -C ${KIT} diff HEAD~1`,
+    `git -C ${KIT} show HEAD:a5r/hooks/editor.ts`,
+    `rg -n lockProblem ${KIT}/hooks`,
+    `grep -rn x ${KIT}/hooks`,
+    `cat ${KIT}/rules/config.json`,
+    `ls ${KIT}/hooks`,
+    `head -5 ${KIT}/README.md`,
+    `tail -5 ${KIT}/README.md`,
+    `Get-Content ${KIT}/README.md`,
+    `Select-String -Path ${KIT}/hooks/*.ts -Pattern x`,
     `claude plugin test ${KIT} > C:/tmp/a5r-test.txt`,
   ])
     expect([c, pre(c)]).toEqual([c, null])
   for (const c of [
+    `robocopy C:/tmp/a5r ${KIT} /E`,
+    `xcopy C:/tmp/a5r ${KIT} /E /Y`,
+    `tar -C ${KIT} -xf C:/tmp/a5r.tar`,
+    `curl -o ${KIT}/hooks/x.ts https://example.com/x.ts`,
+    `Invoke-WebRequest https://example.com/x.ts -OutFile ${KIT}/hooks/x.ts`,
+    `Expand-Archive C:/tmp/a5r.zip -DestinationPath ${KIT}`,
+    `[IO.File]::WriteAllText('${KIT}/hooks/x.ts', '')`,
+    `npm install --prefix ${KIT}`,
+    `python ${KIT}/tests/make_fixture.py`,
+    `node ${KIT}/tests/x.mjs`,
+    `node --experimental-strip-types ${KIT}/tests/scan-old-names.mjs`,
     `cp x.ts ${KIT}/hooks/x.ts`,
     `claude plugin test ${KIT} > ${KIT}/out.txt`,
     `git -C ${KIT} commit -m x`,
     `node -e "require('fs').writeFileSync('${KIT}/x', '')"`,
-    `npm install --prefix ${KIT}`,
     `rm ${KIT}/hooks/x.ts`,
     `sed -i s/a/b/ ${KIT}/rules/config.json`,
   ])
     expect([c, pre(c)]).toEqual([c, 'kit'])
+  expect(a5r.preShell(`robocopy C:/tmp/a5r ${KIT} /E`, PROJ, {})?.why).toContain('A5R kit')
 })
 
 // ---------- A86: A5R's own agents never count against a PR ----------
@@ -205,27 +272,78 @@ test('A88 (b): while the holder\'s cutoff dry-run (git merge-tree) is still runn
   await sleep(50)
 })
 
-// ---------- A88 (c): a failed RAM probe never makes a wait nobody can end, nor a silent pass ----------
-test('A88 (c): with no RAM reading at all, the probe is run once more and the slot is granted with a warning (the launch gate unchecked)', opts(), async ($, on) => {
+// ---------- A88 (c), orchestrator after the re-review: a failed RAM probe is never a blind pass nor a wait without a step ----------
+const READ_CMD = 'powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB"'
+const FREE = 'FREE since=14:00 2026-10-06 by=x note=none background=none · free since 14:00\n'
+test('A88 (c): no RAM reading after a fresh retry: the launch waits with the step (read RAM, ask again with freeGb); the number given goes through the gate and is logged', opts(), async ($, on) => {
   const w = world(on, { git: { 'ConvertTo-Json': { stdout: '', deny: 'probe failed' } } })
-  w.put(LOCK, 'FREE since=14:00 2026-10-06 by=x note=none background=none · free since 14:00\n')
+  w.put(LOCK, FREE)
   await $.session.start(START)
   const ran = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))
-  expect(ran).toContain('the RAM probe did not answer twice, so the launch gate was not checked')
-  expect(ran).toContain('read free RAM yourself first')
+  expect(ran).toContain(`the RAM probe did not answer → read free RAM with ${READ_CMD} and call the editor tool request again with freeGb: <number>`)
+  expect(parseLockLine(w.read(LOCK)).kind).toBe('free')
+  const low = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX', freeGb: 12 } as never))
+  expect(low).toContain('free RAM is 12 GB after cleanup, under the launch gate of 28 GB')
+  expect(parseLockLine(w.read(LOCK)).kind).toBe('free')
+  const ok = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX', freeGb: 36.4 } as never))
+  expect(ok).toContain('until 15:10')
   expect(parseLockLine(w.read(LOCK)).id8).toBe(ME8)
+  expect(w.read(`${HF}/orchestrate.log`)).toContain('rule=ram-supplied')
+  expect(w.read(`${HF}/orchestrate.log`)).toContain('Editor launch: the RAM probe failed twice; the agent read 36.4 GB of RAM available')
 })
 
-test('A88 (c): the PIE check retries a failed probe once, then lets PIE start with a warning (as the launch gate does)', opts(), async ($, on) => {
+test('A88 (c): the PIE check retries a failed probe once, then refuses with the step; a number given to the editor tool goes through the 5 GB gate', opts(), async ($, on) => {
   const w = world(on, { git: { '[math]::Round((Get-CimInstance': { stdout: '', deny: 'probe failed' } } })
   w.put(LOCK, `1006-me-s1 (this lane) since 14:30, expected end 15:10. session ${ME8}\n`)
   await $.session.start(START)
-  const pie = (await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'McpPieToolset.StartPIE' } as never)) as { deny?: string; context?: string[] }
-  expect(refused(pie)).toBeUndefined()
+  const START_PIE = { tool: 'mcp__unreal-mcp__call_tool', name: 'McpPieToolset.StartPIE' }
+  expect(refused(await $.tool.call(START_PIE as never))).toBe(`A5R · Editor lock — the RAM probe did not answer twice, so the 5 GB PIE start gate cannot be checked → read free RAM with ${READ_CMD} and give it to ${EDITOR} (action status, freeGb: <number>), then start PIE again`)
   expect(w.runs.filter(r => r.includes('[math]::Round((Get-CimInstance')).length).toBe(2)
-  expect((pie.context ?? []).join('\n')).toContain('the RAM probe did not answer twice, so the 5 GB PIE start gate was not checked for this PIE start')
+  await $.tool.call({ tool: EDITOR, action: 'status', freeGb: 3.5 } as never)
+  expect(refused(await $.tool.call(START_PIE as never))).toContain('free RAM is 3.5 GB, under the 5 GB PIE start gate')
+  await $.tool.call({ tool: EDITOR, action: 'status', freeGb: 20 } as never)
+  expect(refused(await $.tool.call(START_PIE as never))).toBeUndefined()
+  expect(w.read(`${HF}/orchestrate.log`)).toContain('PIE start: the RAM probe failed twice; the agent read 20 GB of RAM available')
 })
 
+test('A88 (c): the probe failing while this session\'s PIE runs tells the holder to read RAM itself (no silent pass of the 3 GB abort)', opts(), async ($, on) => {
+  const git: Record<string, { stdout: string; deny?: string }> = {}
+  const w = world(on, { git })
+  on('turn.complete', async () => ({ text: '' }))
+  w.put(LOCK, `1006-me-s1 (this lane) since 14:30, expected end 15:10. session ${ME8}\n`)
+  await $.session.start(START)
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'McpPieToolset.StartPIE' } as never))).toBeUndefined()
+  await idle($)
+  git['ConvertTo-Json'] = { stdout: '', deny: 'probe failed' }
+  for (let n = 0; n < 2; n += 1) await w.clock.advance(MIN)
+  const said = (w.calls['prompt.submit'] ?? []).map(e => String((e as { text?: string }).text)).join('\n')
+  expect(said).toContain(`A5R · RAM — the RAM probe did not answer while your PIE runs, so the 3 GB PIE abort cannot be checked → read free RAM with ${READ_CMD} now and stop PIE if it is under 3 GB`)
+})
+
+// ---------- F-8 race (re-review): a line written meanwhile wins over A5R's FREE line; the requester keeps its request ----------
+test('F-8 (re-review): a lock line another writer puts while A5R probes for a missing lock wins; this session keeps its request and waits', opts(), async ($, on) => {
+  let release = () => {}
+  const hold = new Promise<void>(r => {
+    release = r
+  })
+  const git: Record<string, { stdout: string; hold?: Promise<void> }> = {}
+  const w = world(on, { ram: '40', git, procs: [{ ...UE, pid: 777 }] })
+  await $.session.start(START)
+  // The lock is missing while an Editor runs: this session asks and waits (held by unknown).
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX' } as never))).toContain('held by unknown')
+  // The Editor exits; at the next minute A5R probes (held open here) while a session without A5R writes the lock.
+  w.machine.procs = []
+  const runs = w.runs.length
+  git['ConvertTo-Json'] = { stdout: JSON.stringify({ freeGb: 40, diskGb: 40, procs: [] }), hold }
+  await w.clock.advance(MIN)
+  for (let n = 0; n < 100 && !w.runs.slice(runs).some(r => r.includes('ConvertTo-Json')); n += 1) await sleep(10)
+  w.put(LOCK, 'held by walker since 14:00 until 15:30\n')
+  release()
+  await sleep(100)
+  expect(w.read(LOCK)).toBe('held by walker since 14:00 until 15:30\n') // the later line wins
+  expect(JSON.parse(w.read(`${HF}/editor/${ME8}.json`)).want?.what).toBe('tail VFX') // the request is kept
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain('walker holds the Editor until 15:30')
+})
 // ---------- review (PLAUSIBLE, confirmed): an Unreal MCP call is classed by its tool and method, not its arguments ----------
 test('MCP kind: unit: the method decides; a read whose arguments mention set_ or run_ stays a read', () => {
   const T = 'mcp__unreal-mcp__call_tool'
@@ -237,6 +355,11 @@ test('MCP kind: unit: the method decides; a read whose arguments mention set_ or
   expect(mcpCallKind(T, { name: 'McpPieToolset.ExecuteConsoleCommand', arguments: { command: 'Sipher.Bench.Combo.Start' } })).toBe('pie')
   expect(mcpCallKind('mcp__unreal__set_actor_property', { actor: 'x' })).toBe('write')
   expect(mcpCallKind('mcp__unreal__get_level_actors', { filter: 'create_' })).toBe('read')
+  // Re-review: a console command, and any method that can quit, close or save, needs the lock.
+  expect(mcpCallKind(T, { name: 'McpPieToolset.ExecuteConsoleCommand', arguments: { command: 'stat fps' } })).toBe('write')
+  expect(mcpCallKind(T, { name: 'McpPieToolset.ExecuteConsoleCommand', arguments: { command: 'QUIT_EDITOR' } })).toBe('write')
+  expect(mcpCallKind(T, { name: 'EditorTools.QuitEditor' })).toBe('write')
+  expect(mcpCallKind(T, { name: 'LevelTools.CloseLevel' })).toBe('write')
 })
 
 test('MCP kind: a read while another lane holds the Editor runs even when its arguments mention set_', opts(), async ($, on) => {
