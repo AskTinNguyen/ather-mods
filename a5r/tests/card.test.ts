@@ -63,5 +63,6 @@ test('review: when the branch diff cannot be read whole the card says "not score
   await w.clock.advance(50)
   const tree = await $.ui.render(P)
   expect(text(find(tree, 'hai-accept-head'))).toContain('● not scored')
-  for (const n of [1, 2, 3, 4, 5]) expect(rowText(tree, n).startsWith('–') && rowText(tree, n).endsWith('could not read the whole branch diff (git diff -U0 output passed 4 MiB)')).toBe(true)
+  // A88 (a), by design: the whole diff cut at 4 MiB is read again in batches; the file still cut alone is named.
+  for (const n of [1, 2, 3, 4, 5]) expect(rowText(tree, n).startsWith('–') && /could not read the whole branch diff \(git diff -U0 of \S+ alone passed 4 MiB \(split it, or open it in a PR of its own\)\)$/.test(rowText(tree, n))).toBe(true)
 })

@@ -134,13 +134,16 @@ test('review: a name-only diff that times out is no pass: refused with why, noth
   expect(shown.slice(1).every(l => l.startsWith('– ') && l.endsWith(`${UNREAD} (git diff --name-only timed out or did not start)`))).toBe(true)
 })
 
+// A88 (a), by design: a whole diff cut at 4 MiB is read again in batches of paths; only a file whose own diff passes the
+// cap stays unread, and the refusal names it.
+const CUT = `${UNREAD} (git diff -U0 of Source/S2/Tail/Glow.cpp alone passed 4 MiB (split it, or open it in a PR of its own))`
 test('review: a -U0 diff cut at 4 MiB is no pass (a worker is refused at once); Hai can still let it through with /a5r pass', opts('ask'), async ($, on) => {
   const w = world(on, { out: { [STATUS_TOOL]: status(PROVEN) }, git: { ...branch(OWN), 'diff -U0': { stdout: DIFF, truncated: true } }, ask: 'Let this PR through' })
   setup(w)
   const why = refused(await $.tool.call({ tool: 'Bash', command: PR, agentId: 'worker-1' } as never))
-  expect(why?.split('\n')[0]).toBe(`A5R · Acceptance — ${UNREAD} (git diff -U0 output passed 4 MiB) ${NEXT}`)
+  expect(why?.split('\n')[0]).toBe(`A5R · Acceptance — ${CUT} ${NEXT}`)
   expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 0])
-  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))?.split('\n')[0]).toBe(`A5R · Acceptance — ${UNREAD} (git diff -U0 output passed 4 MiB) ${NEXT}`)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))?.split('\n')[0]).toBe(`A5R · Acceptance — ${CUT} ${NEXT}`)
   await $.command.run({ command: 'a5r', args: 'pass tail-vfx' } as never)
   expect(refused(await $.tool.call({ tool: 'Bash', command: PR }))).toBeUndefined()
   expect([(w.calls.ask ?? []).length, ran(w)]).toEqual([0, 1])

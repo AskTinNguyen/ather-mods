@@ -2,13 +2,13 @@ import type { EngineInterface as Engine, Register, RenderElement } from 'claude-
 import { A5R, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark } from './decision.ts'
-import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpKind, parseEditorLock } from './editor.ts'
+import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpCallKind, parseEditorLock } from './editor.ts'
 import {
   CUTOFF_MS, DIR, HARD_END_WARN_MS, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  lapseOf, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
+  lapseOf, namesHolder, resolveLock, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
@@ -94,6 +94,7 @@ const EDITOR_TOOL = 'mcp__a5r__editor'
 const SYNC_TOOL = 'mcp__a5r__sync'
 const SYNC_AGENT = 'a5r:sync' // D7: the sync worker's agent type
 const JUDGE_AGENT = 'a5r:judge' // A65: the advisory judge's agent type
+const A5R_AGENTS = new Set<string>([SYNC_AGENT, JUDGE_AGENT]) // A86: A5R's own agents, never "a background agent still running" at a PR
 const CLEANUP_EVERY_MS = 5 * 60_000 // while a slot waits on RAM, the safe cleanup runs at most this often
 const PIE_STOP = /StopPIE|EndPIE|StopPlayInEditor|EndPlayMap|RequestEndPlayMap/i
 const EDITOR_WORK = /Build\.(bat|sh|cmd)\b|UnrealEditor|RunUAT/i
@@ -104,6 +105,9 @@ let peers: SessionFile[] = [] // every other session's file
 let lanes: LaneBeat[] = [] // Ather's lane heartbeats
 let lockRaw: string | null = null
 let lock: LockLine = parseLockLine(null)
+/** A84: the lock as every decision reads it: a free-form line's holder resolved to the session it names (its id prefix
+ * or lane), from the session files and Ather's lanes as last read. */
+const lockOf = (raw: string | null): LockLine => resolveLock(parseLockLine(raw), me ? [me, ...peers.filter(p => p.id8 !== me8)] : peers, lanes, nowMs)
 let probe: Probe | null = null
 let gates: Gates & { source: string } = gatesOf(null, undefined, undefined)
 let syncFile: SyncFile | null = null
@@ -269,19 +273,27 @@ const isUnrealMcp = (tool: string): boolean => tool.startsWith('mcp__') && /unre
 
 /** The Editor gate: null when the call may touch the Editor, else why not and what to do. */
 async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Promise<string | null> {
-  const kind = isUnrealMcp(tool) ? mcpKind(JSON.stringify(e).slice(0, 4000)) : SHELL_TOOLS.has(tool) && isEditorStartStop(str(e.command)) ? 'startstop' : null
+  const kind = isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) && isEditorStartStop(str(e.command)) ? 'startstop' : null
   if (!kind || kind === 'read') return null
   if (kind === 'save-all') return 'save-all saves every dirty package, other lanes\' included → list the dirty packages and save each one by exact path'
   const raw = await $.fs.read(opts.editorLock).catch(() => null)
   if (raw === null && !(await $.fs.exists(s2Root(opts)))) return null // no S2 checkout on this machine
-  const now = new Date(await $.clock.now()) // the engine's clock, never the wall clock (a test's time is its own)
-  const why = lockProblem(parseEditorLock(raw, now.getHours() * 60 + now.getMinutes()), (await $.session.id()).slice(0, 8).toLowerCase(), `Take the lock first: ask for it with ${EDITOR_TOOL} (action request) and retry once it is granted.`)
+  const nowMsHere = await $.clock.now() // the engine's clock, never the wall clock (a test's time is its own)
+  const now = new Date(nowMsHere)
+  const id8 = (await $.session.id()).slice(0, 8).toLowerCase()
+  // A84: a hand-written line is read for its holder (an id prefix or a lane it names): that session drives the Editor.
+  const read = resolveLock(parseLockLine(raw), me ? [me, ...peers] : peers, lanes, nowMsHere)
+  const isMine = namesHolder(read, id8, me?.id8 === id8 ? me.lane : '')
+  const why = isMine ? null : lockProblem(parseEditorLock(raw, now.getHours() * 60 + now.getMinutes()), id8, `Take the lock first: ask for it with ${EDITOR_TOOL} (action request) and retry once it is granted.`, `ask for it with ${EDITOR_TOOL} (action request): you are queued, and a lock that names this session by its id or lane is this session's`)
   if (why) return why.replace(/\s+(Take the lock first:|If this session|Never drive)/, ' → $1')
   if (kind === 'pie') {
-    const probe = await $.process.run(FREE_RAM_PROBE, { timeoutMs: 20_000 }).catch(() => null)
-    const gb = Number(probe?.stdout.trim())
-    if (Number.isFinite(gb) && gb > 0 && gb < PIE_MIN_FREE_GB)
-      return `free RAM is ${gb} GB, under the ${PIE_MIN_FREE_GB} GB PIE start gate (fixed, never lowered) → free memory or wait, then start PIE`
+    // A88 (c): a probe that fails is retried once; failing twice, PIE starts with a warning (as the launch gate grants),
+    // never a silent pass and never a wait nobody can end.
+    const gbOf = async (): Promise<number> => Number((await $.process.run(FREE_RAM_PROBE, { timeoutMs: 20_000 }).catch(() => null))?.stdout.trim())
+    let gb = await gbOf()
+    if (!(Number.isFinite(gb) && gb > 0)) gb = await gbOf()
+    if (!(Number.isFinite(gb) && gb > 0)) push({ id: `pie:probe-failed:${Math.floor(nowMsHere / 60_000)}`, text: NOTICES.probeFailed('PIE start', 'the 5 GB PIE start gate'), isActionable: false })
+    else if (gb < PIE_MIN_FREE_GB) return `free RAM is ${gb} GB, under the ${PIE_MIN_FREE_GB} GB PIE start gate (fixed, never lowered) → free memory or wait, then start PIE`
   }
   return null
 }
@@ -601,7 +613,7 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   if (touched.size > 0) await $.fs.write(`${dir}/touch/${new8}.json`, JSON.stringify({ session: newSid, id8: new8, lane: me.lane, paths: [...touched].slice(-500), updatedAt: now })).catch(() => undefined)
   if (t) await $.fs.write(`${dir}/touch/${old8}.json`, JSON.stringify({ ...t, paths: [], updatedAt: now })).catch(() => undefined)
   lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
-  lock = parseLockLine(lockRaw)
+  lock = lockOf(lockRaw)
   if (lockRaw && lock.id8 === old8 && (lock.kind === 'held' || lock.kind === 'handed')) {
     const line = lockRaw.trim().replace(new RegExp(`\\bsession\\s+${old8}\\b`, 'gi'), `session ${new8}`)
     if (!(await writeLock($, opts, line))) $.ui.log('a5r: the lock changed while moving it to the cleared session id', { to: 'debug' })
@@ -697,6 +709,7 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
       }),
     )
   ).filter((l): l is LaneBeat => l !== null)
+  lock = resolveLock(lock, me ? [me, ...peers] : peers, lanes, now) // A84: a hand-written line's holder, once the files are read
   syncFile = parseSyncFile(syncText)
   touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
   probe = shared
@@ -885,7 +898,7 @@ const isSyncSlot = (w: Want | null | undefined): boolean => Boolean(w?.what.star
 async function takeSyncLock($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   if (!me) return
   lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
-  lock = parseLockLine(lockRaw)
+  lock = lockOf(lockRaw)
   const minutes = Math.ceil((s.hardEnd - now) / 60_000)
   const want: Want = { ...wantFrom({ action: 'request', minutes, build: s.build, launch: false, mode: 'unattended', pausable: false, what: `${SYNC_SLOT}${clockOf(s.at)}`, next_safe: 'after the merge' } as unknown as Input, now), requestedAt: now }
   if (holdsLock()) {
@@ -929,7 +942,7 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
   const now = await $.clock.now()
   await restoreMe($, opts)
   lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
-  lock = parseLockLine(lockRaw)
+  lock = lockOf(lockRaw)
   if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ended`)
   else if (me && isSyncSlot(me.want)) {
     me = { ...me, want: null }
@@ -963,7 +976,7 @@ async function syncSlotWhenOff($: Engine, opts: Opts): Promise<void> {
   await restoreMe($, opts)
   if (!me || !isSyncSlot(me.want)) return
   lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
-  lock = parseLockLine(lockRaw)
+  lock = lockOf(lockRaw)
   const now = await $.clock.now()
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   if (s && isOpenPhase(syncPhase(s, now, false))) return
@@ -980,6 +993,24 @@ function runTick($: Engine, opts: Opts): Promise<void> {
   return tickChain
 }
 
+/** A88 (b): the Editor's own pass (the world read, a lapsed lease released, the grant decided) is serialized on a chain
+ * of its own, shared by the minute tick and the editor tool's request, so a request never waits behind the tick's slow
+ * work: the acceptance score (gh and git), the judge's spawn, the holder's sync dry-run at the cutoff (merge-tree up to
+ * 60 s, then two git calls per conflicted path, 1.3-4 s each on S2, MEASURED 2026-10-16). */
+let editorChain: Promise<unknown> = Promise.resolve()
+function editorSerial<T>(f: () => Promise<T>): Promise<T> {
+  const run = editorChain.then(f, f)
+  editorChain = run.catch(() => undefined)
+  return run
+}
+async function editorPass($: Engine, opts: Opts, now: number): Promise<void> {
+  nowMs = now
+  await readWorld($, opts)
+  gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
+  await lapseStep($, opts, now)
+  await editorStep($, opts, now)
+}
+
 async function tick($: Engine, opts: Opts): Promise<void> {
   await readTheme($)
   if ((await readA5R($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
@@ -992,13 +1023,9 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await ensureTools($)
   await restoreMe($, opts)
   const now = await $.clock.now()
-  nowMs = now
-  await readWorld($, opts)
-  gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
+  await editorSerial(() => editorPass($, opts, now))
   await refreshClients($, opts, now)
-  await lapseStep($, opts, now)
   await judgeStep($, opts, now).catch(err => $.ui.log(`a5r: judge: ${String(err)}`, { to: 'debug' }))
-  await editorStep($, opts, now)
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
   ramStep(opts, now)
@@ -1021,13 +1048,13 @@ async function writeLock($: Engine, opts: Opts, line: string): Promise<boolean> 
   const before = await $.fs.read(opts.editorLock).catch(() => null)
   if (before !== lockRaw) {
     lockRaw = before
-    lock = parseLockLine(before)
+    lock = lockOf(before)
     return false
   }
   await $.fs.write(opts.editorLock, `${line}\n`)
   const after = await $.fs.read(opts.editorLock).catch(() => null)
   lockRaw = after
-  lock = parseLockLine(after)
+  lock = lockOf(after)
   return (after ?? '').trim() === line
 }
 
@@ -1064,10 +1091,12 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
     if (await writeLock($, opts, line)) push({ id: noticeIds.recovered(d.holder, now), text: NOTICES.recovered(d.holder), isActionable: false })
     d = decide(grantInput(now))
   }
-  if (d.kind === 'grant') {
-    // A grant reads the machine itself, not the shared reading (A9).
-    probe = (await freshProbe($, opts)) ?? probe
-    d = decide(grantInput(now))
+  if (d.kind === 'grant' || (d.kind === 'wait' && d.code === 'probe')) {
+    // A grant reads the machine itself, not the shared reading (A9). A88 (c): with no reading at all the probe is run once
+    // more; failing again, the slot is granted with a warning instead of waiting forever.
+    const fresh = await freshProbe($, opts)
+    probe = fresh ?? probe
+    d = decide({ ...grantInput(now), probeFailed: probe === null })
   }
   if (d.kind === 'grant' || (d.kind === 'wait' && d.code === 'ram')) {
     const plan = probe ? cleanupPlan(probe) : null
@@ -1121,7 +1150,7 @@ function holderFacts(held: LockLine, now: number, p: Probe | null): Omit<Orchest
  * whether a holder waits on Hai is read from its own transcript by the judge (A65). */
 async function logCandidates($: Engine, opts: Opts, now: number): Promise<void> {
   const held = lock
-  if (held.kind !== 'held' || !held.isStandard || !held.id8 || !probe) return
+  if (held.kind !== 'held' || !held.id8 || !probe) return
   const t = lockTimes(held, now)
   if (!t) return
   const facts = holderFacts(held, now, probe)
@@ -1152,7 +1181,9 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   await logCandidates($, opts, now).catch(err => $.ui.log(`a5r: orchestrate log: ${String(err)}`, { to: 'debug' }))
   const all = [me, ...peers]
   const waiting = queueOf(all, lanes, now, syncFile)
-  const input = { lock, files: all, lanes, now, waiting }
+  // A84: a hand-written line with no end or no holder is held 2 h from when it was written (the lock file's time).
+  const writtenAt = lock.isStandard ? null : ((await $.fs.stat(opts.editorLock).catch(() => null))?.mtimeMs ?? null)
+  const input = { lock, files: all, lanes, now, waiting, writtenAt }
   if (!lapseOf({ ...input, probe })) return
   const fresh = await freshProbe($, opts)
   const r = lapseOf({ ...input, probe: fresh })
@@ -1164,6 +1195,7 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (!(await writeLock($, opts, line))) return
   const released: Released = { ...r, by: me.lane }
   await orchestrateLog($, opts, { ...holderFacts(held, now, fresh), at: now, rule: r.kind === 'lapsed' ? 'A54-lapsed' : 'A55-unseen', acted: true, note: releasedNote(r, held) }).catch(() => undefined)
+  if (held.id8.length !== 8) return // A84: a hand-written line naming no session has no holder file to tell
   const list = await readReleases($, opts, held.id8)
   await $.fs.write(releasedPath(opts, held.id8), JSON.stringify({ v: 1, releases: [...list, released].slice(-10) })).catch(err => $.ui.log(`a5r: released file not written: ${String(err)}`, { to: 'debug' }))
   if (held.id8 === me8) me = { ...me, holding: null, want: null }
@@ -1196,7 +1228,7 @@ async function transcriptTail($: Engine, path: string, max = 200): Promise<strin
  * sync holder silent 10 min in its cutoff or freeze. Never this session's own holding. */
 function incidentOf(now: number): { kind: 'editor' | 'sync'; id8: string; lane: string; session: string; since: number; end: number | null; why: string } | null {
   const all = me ? [me, ...peers] : peers
-  if (lock.kind === 'held' && lock.isStandard && lock.id8 && lock.id8 !== me8) {
+  if (lock.kind === 'held' && lock.id8.length === 8 && lock.id8 !== me8) {
     const t = lockTimes(lock, now)
     const f = all.find(x => x.id8 === lock.id8)
     if (t) {
@@ -1307,7 +1339,7 @@ async function notePid($: Engine, opts: Opts, fresh: boolean): Promise<void> {
   await writeLock($, opts, line)
 }
 
-async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number | null }, now: number): Promise<void> {
+async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number | null; unchecked?: boolean }, now: number): Promise<void> {
   const w = me?.want
   if (!me || !w) return
   const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: now, pid: d.reuse, end: d.end, mode: w.mode, pausable: w.pausable, nextSafe: w.nextSafe, note: `${w.what}${w.pie ? ' (PIE)' : ''}${w.build ? ' (build)' : ''}` })
@@ -1315,7 +1347,7 @@ async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number |
   me = { ...me, holding: { since: now, end: d.end, extended: 0 } }
   lastEditorUseAt = now
   // A79: the sync's own slot is its worker's; the holder's model is not woken to launch an Editor for it.
-  if (!isSyncSlot(w)) push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : ''), isActionable: true })
+  if (!isSyncSlot(w)) push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : '', d.unchecked === true), isActionable: true })
 }
 
 /** A short request without a build asks the holder to yield, once per holder per hour: through the holder's own
@@ -1359,6 +1391,12 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
 // ---------- Sync main holder: Saved/A5R/sync.json, written by the holder alone ----------
 const syncPath = (opts: Opts): string => `${hfDir(opts)}/sync.json`
 const isLive = (id8: string, now: number): boolean => livenessOf(id8, me ? [me, ...peers] : peers, lanes, now) !== 'gone'
+/** A87: the merge guard's step an agent can take itself: the live holder ends it; with the holder gone (or no sync on
+ * file) a live session takes the sync over and aborts the merge. Never "or Hai". */
+const mergeGuardAlt = (opts: Opts, s: SyncFile | null, now: number): string =>
+  s && s.holder.id8 && isLive(s.holder.id8, now)
+    ? `leave the merge state alone (no commit, reset, abort or stash of yours): its holder ${s.holder.lane} (session ${s.holder.id8}) finishes it or runs git merge --abort; work without git or in your own worktree meanwhile`
+    : `its holder is gone${s ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root(opts)} merge --abort; until then no commit, reset or stash there`
 /** The sync's phase for every reader alike, the freeze lease included (D8: hard end, holder gone). */
 const phaseOf = (s: SyncFile | null, now: number): Phase => syncPhase(s, now, isSyncHolderGone(s, me ? [me, ...peers] : peers, lanes, now))
 /** D8: how long a freeze may last past T, from the plugin options. */
@@ -1765,8 +1803,42 @@ const fileDiff = (patch: string, path: string): string => {
   return parts.find(p => p.startsWith('diff --git ') && (p.split('\n')[0] ?? '').endsWith(` b/${path}`)) ?? ''
 }
 
+/** A88 (a): the -U0 text of a branch diff read in batches of paths (at most 40 paths or 12,000 characters of them per git
+ * call); a batch whose output passes 4 MiB is halved and read again, so only a single file can stay unread: its name is
+ * the reason, and the score refuses with it (an unread diff never passes). */
+async function diffInBatches(paths: readonly string[], whole: (args: string[]) => Promise<{ out: string; why: string | null }>, range: string): Promise<{ out: string; why: string | null }> {
+  const batches: string[][] = []
+  let cur: string[] = []
+  let size = 0
+  for (const p of paths) {
+    if (cur.length >= 40 || size + p.length > 12_000) {
+      batches.push(cur)
+      cur = []
+      size = 0
+    }
+    cur.push(p)
+    size += p.length + 1
+  }
+  if (cur.length) batches.push(cur)
+  const outs: string[] = []
+  while (batches.length > 0) {
+    const b = batches.shift() ?? []
+    const r = await whole(['diff', '-U0', '--no-color', range, '--', ...b])
+    if (!r.why) {
+      outs.push(r.out)
+      continue
+    }
+    if (!r.why.endsWith('passed 4 MiB')) return { out: '', why: r.why }
+    if (b.length === 1) return { out: '', why: `git diff -U0 of ${b[0]} alone passed 4 MiB (split it, or open it in a PR of its own)` }
+    batches.unshift(b.slice(0, Math.ceil(b.length / 2)), b.slice(Math.ceil(b.length / 2)))
+  }
+  return { out: outs.join('\n'), why: null }
+}
+
 /** Binaries left out of the added-lines diff (they carry no lines to score and make it big). */
-const BINARY_EXCLUDES = ['uasset', 'umap', 'ubulk', 'uexp', 'png', 'jpg', 'jpeg', 'tga', 'exr', 'hdr', 'psd', 'fbx', 'abc', 'wav', 'ogg', 'mp4', 'dll', 'exe', 'pdb', 'lib', 'zip', '7z'].map(x => `:(exclude,icase)*.${x}`)
+const BINARY_TYPES = ['uasset', 'umap', 'ubulk', 'uexp', 'png', 'jpg', 'jpeg', 'tga', 'exr', 'hdr', 'psd', 'fbx', 'abc', 'wav', 'ogg', 'mp4', 'dll', 'exe', 'pdb', 'lib', 'zip', '7z']
+const BINARY_EXCLUDES = BINARY_TYPES.map(x => `:(exclude,icase)*.${x}`)
+const BINARY_EXT = new RegExp(`\\.(${BINARY_TYPES.join('|')})$`, 'i')
 
 /** The added lines per file of `git diff -U0`. */
 const addedLines = (diff: string): Map<string, string[]> => {
@@ -1842,8 +1914,13 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
   }
   const range = `${base}...${head}`
   const names = given ? { out: given.files, why: given.why } : refProblem ? { out: '', why: refProblem } : await whole(['diff', '--name-only', range])
-  const text = given ? { out: given.patch, why: null } : !names.why ? await whole(['diff', '-U0', '--no-color', range, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
   const files = names.out.split(/\r?\n/).map(f => f.trim()).filter(Boolean)
+  let text = given ? { out: given.patch, why: null as string | null } : !names.why ? await whole(['diff', '-U0', '--no-color', range, '--', '.', ...BINARY_EXCLUDES]) : { out: '', why: null }
+  // A88 (a): a long branch's whole diff can pass the 4 MiB a process may print (MEASURED 2026-10-16 on the shared S2
+  // checkout's branch, 1,079 commits ahead: 297 files, 3.36 MiB of -U0 text in 0.4 s, most of it generated evidence JSON),
+  // which refused every PR from it. Then the diff is read again in batches of paths; only a file whose own diff passes the
+  // cap stays unread, and it is named.
+  if (!given && text.why?.endsWith('passed 4 MiB')) text = await diffInBatches(files.filter(f => !BINARY_EXT.test(f)), whole, range)
   const added = addedLines(text.out)
   const status = await atherStatus($)
   const fromDiff = [...new Set(files.map(f => /^docs\/intent\/([^/]+)\//.exec(f)?.[1]).filter((s): s is string => Boolean(s)))]
@@ -1889,9 +1966,9 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
     else if (l === `branch refs/heads/${branch}` && wt && !sameRoot(wt, root)) strayWorktrees.push(wt)
   }
   // A41: this session's background agents count against a PR from its own worktree; a PR from another worktree is not
-  // held up by work elsewhere.
+  // held up by work elsewhere. A86: A5R's own background agents (the sync worker, the judge) never count.
   const sessionRoot = (await locate($, a5r, `${await $.session.cwd()}/_`)).root
-  const runningAgents = sessionRoot && sameRoot(sessionRoot, root) ? (await $.agent.list().catch(() => [])).filter(a => a.status === 'running' && a.type !== SYNC_AGENT && a.id !== agentId).map(a => `${a.type}: ${a.description}`) : []
+  const runningAgents = sessionRoot && sameRoot(sessionRoot, root) ? (await $.agent.list().catch(() => [])).filter(a => a.status === 'running' && !A5R_AGENTS.has(a.type) && a.id !== agentId).map(a => `${a.type}: ${a.description}`) : []
   return {
     slug,
     branch,
@@ -2203,7 +2280,7 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5r, writes) : null
   if (shared && !isHolder && (await $.fs.exists(`${s2Root(opts)}/.git/MERGE_HEAD`))) {
     const state = s ? `${s.holder.lane} holds the sync at ${clockOf(s.at)} (${phaseOf(s, now)})` : 'no sync is open (a merge left behind)'
-    return blocked('Merge guard', `a merge is in progress in the shared checkout (.git/MERGE_HEAD; ${state}): no git ${shared.verb} there until it is finished or aborted`, 'leave the merge state alone (no commit, reset, abort or stash of yours); its holder or Hai ends it; work without git or in your own worktree')
+    return blocked('Merge guard', `a merge is in progress in the shared checkout (.git/MERGE_HEAD; ${state}): no git ${shared.verb} there until it is finished or aborted`, mergeGuardAlt(opts, s, now))
   }
   if (!s || phaseOf(s, now) !== 'frozen' || isHolder) return null
   const why = `${s.holder.lane} merges origin/main since ${clockOf(s.at)}`
@@ -2342,20 +2419,30 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   const tail = (text: string): string => [text, ...drain()].join('\n')
   if (action === 'request') {
     if (!me) return 'no session file'
-    await runTick($, opts) // a fresh read of the lock and the queue first
-    if (holdsLock()) return tail(`this session already holds the Editor until ${me.holding ? clockOf(me.holding.end) : lock.end} → use it; extend if you need more`)
-    const want = wantFrom(e, now)
-    const long = buildWindowProblem(want, now)
-    if (long) return long
-    me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
-    await saveMe($, opts, now)
-    await runTick($, opts)
-    const asked = me.yieldAsks.find(a => a.at === now)
+    // A88 (b): the request answers from the Editor's own pass (a fresh read of the lock and the queue, a lapsed lease
+    // released, the grant), never behind the minute tick's slow work.
+    const answer = await editorSerial(async (): Promise<string> => {
+      await editorPass($, opts, now)
+      if (!me) return 'no session file'
+      if (holdsLock()) return tail(`this session already holds the Editor until ${me.holding ? clockOf(me.holding.end) : lock.end} → use it; extend if you need more`)
+      const want = wantFrom(e, now)
+      const long = buildWindowProblem(want, now)
+      if (long) return long
+      me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
+      await saveMe($, opts, now)
+      await editorPass($, opts, now)
+      await saveMe($, opts, now)
+      return ''
+    })
+    if (answer) return answer
+    showStatus($)
+    $.ui.invalidate('ui.render')
+    const asked = me?.yieldAsks.find(a => a.at === now)
     return tail(`${placeText(decision)}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5r)' : ''}` : ''}`)
   }
   if (action === 'release') {
     lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
-    lock = parseLockLine(lockRaw)
+    lock = lockOf(lockRaw)
     if (!holdsLock()) {
       if (me) me = { ...me, want: null, holding: null }
       await saveMe($, opts, now)
@@ -3021,7 +3108,7 @@ export const register: Register = (on, options) => {
       if (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && EDITOR_WORK.test(what))) lastEditorUseAt = await $.clock.now()
       // A66: the holder launched the Editor or reached it over MCP: name its pid in the lock line if it does not yet.
       if (isS2 && (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && isEditorStartStop(what))) && holdsLock() && lock.pid === null) await notePid($, opts, true).catch(() => undefined)
-      if (text && mcpKind(text) === 'pie') isPieRunning = true
+      if (text && mcpCallKind(tool, input as Record<string, unknown>) === 'pie') isPieRunning = true
       if (text && PIE_STOP.test(text)) isPieRunning = false
       if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, opts, locs)
       // A74 (review 5): a commit in the shared checkout takes its committed paths out of this session's touch set.

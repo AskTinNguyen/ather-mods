@@ -40,7 +40,7 @@ test('A14: while .git/MERGE_HEAD exists, a non-holder\'s git writes in the share
   w.put(SYNC, JSON.stringify({ ...newSync(T(14, 0), B, PLANNED_BY_B, NOW - 60 * MIN), state: 'expired', endedAt: T(14, 30), note: 'its hard end 14:45 passed' }))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb'))
   await $.session.start(START)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBe('A5R · Merge guard — a merge is in progress in the shared checkout (.git/MERGE_HEAD; sync-lane holds the sync at 14:00 (expired)): no git commit there until it is finished or aborted → leave the merge state alone (no commit, reset, abort or stash of yours); its holder or Hai ends it; work without git or in your own worktree')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: COMMIT }))).toBe('A5R · Merge guard — a merge is in progress in the shared checkout (.git/MERGE_HEAD; sync-lane holds the sync at 14:00 (expired)): no git commit there until it is finished or aborted → leave the merge state alone (no commit, reset, abort or stash of yours): its holder sync-lane (session bbbbbbbb) finishes it or runs git merge --abort; work without git or in your own worktree meanwhile') // A87, by design: no "or Hai"
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge --abort' }))).toContain('Merge guard')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 status && git -C E:/s2 diff --stat' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x commit -m "own worktree"' }))).toBeUndefined()

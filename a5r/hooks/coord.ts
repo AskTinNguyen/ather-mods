@@ -161,6 +161,10 @@ export type LockLine = {
   kind: LockKind
   /** Written in the S2 standard's form (HELD / HANDED / FREE), not a legacy free-text line. */
   isStandard: boolean
+  /** A84: a held line names its holder (a standard line, or a free-form one naming an id, `held by`/`holder:` or a
+   * `<lane> (…)` start); a free-form line naming nobody is unreadable (held until its end or 2 h, then free when nothing
+   * runs). Free and missing lines count as readable. */
+  isReadable: boolean
   raw: string
   lane: string
   sessionName: string
@@ -177,7 +181,7 @@ export type LockLine = {
 }
 
 const field = (text: string, re: RegExp): string => re.exec(text)?.[1]?.trim() ?? ''
-const blank = (raw: string, kind: LockKind): LockLine => ({ kind, isStandard: false, raw, lane: '', sessionName: '', id8: '', since: '', pid: null, end: '', mode: '', pausable: true, nextSafe: '', note: '', by: '', background: '' })
+const blank = (raw: string, kind: LockKind): LockLine => ({ kind, isStandard: false, isReadable: kind !== 'held' && kind !== 'handed', raw, lane: '', sessionName: '', id8: '', since: '', pid: null, end: '', mode: '', pausable: true, nextSafe: '', note: '', by: '', background: '' })
 
 /** The lock's first line, read the S2 standard's way (HELD / HANDED / FREE) or as an older free-text line: a
  * line without a prefix is FREE when it says "free since", else HELD (the standard, section 1). */
@@ -189,11 +193,12 @@ export const parseLockLine = (raw: string | null): LockLine => {
   const pidText = field(first, /\bpid=(\d+|none)\b/)
   const pid = /^\d+$/.test(pidText) ? Number(pidText) : null
   if (/^FREE\b/.test(first))
-    return { ...blank(first, 'free'), isStandard: true, since: field(first, /\bsince=(\d{1,2}:\d{2}(?: \d{4}-\d{2}-\d{2})?)/), by: field(first, /\bby=(\S+)/), note: field(first, /\bnote=(.*?)(?=\s+background=|\s+·\s|$)/), background: field(first, /\bbackground=(\S+)/), pid: /open PID (\d+)/i.test(first) ? Number(/open PID (\d+)/i.exec(first)?.[1]) : null }
+    return { ...blank(first, 'free'), isStandard: true, isReadable: true, since: field(first, /\bsince=(\d{1,2}:\d{2}(?: \d{4}-\d{2}-\d{2})?)/), by: field(first, /\bby=(\S+)/), note: field(first, /\bnote=(.*?)(?=\s+background=|\s+·\s|$)/), background: field(first, /\bbackground=(\S+)/), pid: /open PID (\d+)/i.test(first) ? Number(/open PID (\d+)/i.exec(first)?.[1]) : null }
   if (/^HELD\b/.test(first))
     return {
       ...blank(first, 'held'),
       isStandard: true,
+      isReadable: true,
       lane: field(first, /\blane=(\S+)/),
       sessionName: field(first, /\bsession=(\S+)/),
       id8,
@@ -206,18 +211,64 @@ export const parseLockLine = (raw: string | null): LockLine => {
       note: field(first, /\bnote=(.*?)(?=\s+·\s|$)/),
     }
   if (/^HANDED\b/.test(first))
-    return { ...blank(first, 'handed'), isStandard: true, lane: field(first, /\blane=(\S+)/), by: field(first, /\bfrom=(\S+)/), id8, since: field(first, /\bat=(\d{1,2}:\d{2})/), pid, end: field(first, /\breturn_by=(\d{1,2}:\d{2})/), note: field(first, /\bnote=(.*)$/) }
+    return { ...blank(first, 'handed'), isStandard: true, isReadable: true, lane: field(first, /\blane=(\S+)/), by: field(first, /\bfrom=(\S+)/), id8, since: field(first, /\bat=(\d{1,2}:\d{2})/), pid, end: field(first, /\breturn_by=(\d{1,2}:\d{2})/), note: field(first, /\bnote=(.*)$/) }
   if (/\bfree since\b/i.test(first) || /^free\b/i.test(first)) return { ...blank(first, 'free'), since: field(first, /free since\s+(\d{1,2}:\d{2})/i) }
+  // A84 (MEASURED 2026-10-16: `held by 9b53d3 (avian wing-kit: …) since 10:36 until 13:06 2026-10-16. … Editor PID
+  // 21832.`, written by hand while A5R was off): a free-form line is read for what it says: its holder by the id it
+  // names (`session <8 hex>`; a 6-8 hex id with a digit right after `held by`/`holder:`; else one 8-hex word with a digit
+  // and a letter) or by the lane it names, its end (dated when the line carries a date) and its Editor PID.
   const named = /(?:holder|owner)\s*[:=]\s*([^,;\n]+)|held by\s+([^,;\n]+)/i.exec(first)
+  const who = (named?.[1] ?? named?.[2] ?? '').trim()
+  const hex = /^(?=[0-9a-f]*\d)([0-9a-f]{6,8})(?![\w-])/i.exec(who)?.[1]?.toLowerCase() ?? ''
+  const anyId = id8 || hex || (/(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{8}(?![\w-])/i.exec(first)?.[0]?.toLowerCase() ?? '')
+  const legacyLane = /^(\S+)\s+\(/.exec(first)?.[1] ?? ''
+  const lane = (hex ? (/\(([^):]+)/.exec(who)?.[1] ?? '') : who.replace(/\s*\(.*$/, '')) || legacyLane || (first.split(/\s+/)[0] ?? '')
   const span = /(\d{1,2}:\d{2})\s*(?:->|→)\s*~?(\d{1,2}:\d{2})/.exec(first)
+  const end = span?.[2] ?? field(first, /(?:until|expected end|ends?)\s+~?(\d{1,2}:\d{2})/i)
+  let since = span?.[1] ?? field(first, /\bsince\s+(\d{1,2}:\d{2})/i)
+  const date = /\b(\d{4})-(\d{2})-(\d{2})\b/.exec(first)
+  if (since && date) {
+    // The date names the line's day (its end's, when it follows the end); a start later than the end is the day before.
+    const d = new Date(Number(date[1]), Number(date[2]) - 1, Number(date[3]))
+    const minutes = (t: string): number => Number(t.split(':')[0]) * 60 + Number(t.split(':')[1])
+    if (end && minutes(since) > minutes(end)) d.setDate(d.getDate() - 1)
+    since = `${since.padStart(5, '0')} ${ymd(d.getTime())}`
+  }
+  const handPid = /\bPID\s*[=:]?\s*(\d{2,})\b/i.exec(first)?.[1]
   return {
     ...blank(first, 'held'),
-    lane: (named?.[1] ?? named?.[2] ?? first.split(/\s+/)[0] ?? '').replace(/\buntil\b.*$/i, '').trim().slice(0, 60),
-    id8,
-    since: span?.[1] ?? field(first, /\bsince\s+(\d{1,2}:\d{2})/i),
-    end: span?.[2] ?? field(first, /(?:until|expected end|ends?)\s+~?(\d{1,2}:\d{2})/i),
+    isReadable: anyId !== '' || who !== '' || legacyLane !== '',
+    lane: lane.replace(/\buntil\b.*$/i, '').trim().slice(0, 60),
+    id8: anyId,
+    since,
+    end,
+    pid: pid ?? (handPid ? Number(handPid) : null),
     note: first.slice(0, 120),
   }
+}
+
+/** A84: whether a lock line names this session as its holder: by its id (a hand-written line may name only its first
+ * 6-8 hex), or, for a free-form line that names no id, by its lane. */
+export const namesHolder = (lock: LockLine, id8: string, lane = ''): boolean => {
+  if ((lock.kind !== 'held' && lock.kind !== 'handed') || !id8) return false
+  if (lock.id8) return lock.id8.length >= 6 && id8.toLowerCase().startsWith(lock.id8)
+  if (lock.isStandard || !lock.isReadable) return false
+  const a = safeWord(lock.lane).toLowerCase()
+  return a !== 'unnamed' && a.length >= 3 && a === safeWord(lane).toLowerCase()
+}
+
+/** A84: a free-form line's holder as a session: the one session file it names (by its id prefix; by its lane only while
+ * that session lives), else the one Ather lane whose id starts with the named prefix. The lock then carries that
+ * session's id8, so its holder uses, releases and re-takes it through the editor tool and everyone else queues. */
+export const resolveLock = (lock: LockLine, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): LockLine => {
+  if ((lock.kind !== 'held' && lock.kind !== 'handed') || lock.isStandard || !lock.isReadable || lock.id8.length === 8) return lock
+  const hits = files.filter(f => namesHolder(lock, f.id8, f.lane) && (lock.id8 !== '' || now - f.heartbeatAt <= HEARTBEAT_STALE_MS))
+  if (hits.length === 1) return { ...lock, id8: hits[0]?.id8 ?? lock.id8 }
+  if (lock.id8 && hits.length === 0) {
+    const ls = lanes.filter(l => l.sessionId.toLowerCase().startsWith(lock.id8))
+    if (ls.length === 1) return { ...lock, id8: (ls[0]?.sessionId ?? '').slice(0, 8).toLowerCase() }
+  }
+  return lock
 }
 
 /** A word for a key=value field: no spaces, commas, semicolons or the separator. */
@@ -293,8 +344,9 @@ export const isBuildLease = (lock: LockLine, holder: SessionFile | undefined): b
  * process runs (the overrun notice stays) or while the lock's own pid still runs; never without a probe reading.
  * Lapsed: 10 min past its end. Unseen: 10 min after the grant its session ran no turn (its a5r writes `lastTurnAt`;
  * an older a5r that writes none is never judged), Ather's lane shows no activity since, and another session waits. */
-export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; probe: Probe | null; waiting: readonly SessionFile[] }): Released | null => {
+export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; probe: Probe | null; waiting: readonly SessionFile[]; writtenAt?: number | null }): Released | null => {
   const { lock, now } = x
+  if (lock.kind === 'held' && !lock.isStandard && x.probe) return handLapseOf({ ...x, probe: x.probe })
   if (lock.kind !== 'held' || !lock.isStandard || !lock.id8 || !x.probe) return null
   const t = lockTimes(lock, now)
   if (!t) return null
@@ -313,9 +365,30 @@ export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lane
   return null
 }
 
+/** A84: how long a lock line A5R cannot read (no holder named) and with no end is held, from when it was written. */
+export const UNREADABLE_MS = 2 * 3_600_000
+
+/** A84: a lock line written by hand (not the S2 standard's) lapses like a standard one: never while any Unreal Editor or
+ * build process runs or while the PID it names runs; a readable line 10 min past its end, unless its holder's session is
+ * known to be alive (a live holder keeps it and hears the overrun); a line naming no holder at its end, or 2 h after it
+ * was written when it names no end, whoever wrote it. */
+const handLapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; probe: Probe; writtenAt?: number | null }): Released | null => {
+  const { lock, now, probe } = x
+  if (unrealPids(probe).length > 0 || buildProcs(probe).length > 0) return null
+  if (lock.pid !== null && probe.procs.some(p => p.pid === lock.pid)) return null
+  const t = lockTimes(lock, now)
+  const until = t ? t.end + (lock.isReadable ? LAPSE_MS : 0) : typeof x.writtenAt === 'number' ? x.writtenAt + UNREADABLE_MS : null
+  if (until === null || now < until) return null
+  if (lock.isReadable && lock.id8 && livenessOf(lock.id8, x.files, x.lanes, now) === 'alive') return null
+  const end = t?.end ?? until
+  return { kind: 'lapsed', at: now, by: '', since: t?.since ?? x.writtenAt ?? end, end }
+}
+
 /** A54 / A55: the FREE line's note: whose lease, why it was released. */
 export const releasedNote = (r: Released, lock: LockLine): string =>
-  r.kind === 'lapsed'
+  !lock.isStandard
+    ? `${lock.isReadable ? `lapsed hand-written lock of ${lock.lane || 'a lane'}${lock.id8 ? ` (session-${lock.id8})` : ''}` : 'unreadable hand-written lock (it names nobody)'}: ended ${hhmm(r.end)}, ${Math.round((r.at - r.end) / 60_000)} min ago; pid ${lock.pid ?? 'none'} not running, no Editor or build running`
+    : r.kind === 'lapsed'
     ? `lapsed lease of ${lock.lane || 'a lane'} (session-${lock.id8}): ended ${hhmm(r.end)}, ${Math.round((r.at - r.end) / 60_000)} min ago; session gone, pid ${lock.pid ?? 'none'}, no Editor or build running`
     : `unseen grant of ${lock.lane || 'a lane'} (session-${lock.id8}): granted ${hhmm(r.since)}, no turn of that session since and no Editor launched; passed to the next in the queue`
 
@@ -472,7 +545,7 @@ export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | '
 export type Decision =
   | { kind: 'none' }
   | { kind: 'mine' }
-  | { kind: 'grant'; end: number; reuse: number | null }
+  | { kind: 'grant'; end: number; reuse: number | null; unchecked?: boolean }
   | { kind: 'recover'; holder: string }
   | { kind: 'wait'; code: WaitCode; why: string; next: string; place: number }
 
@@ -487,6 +560,8 @@ export type GrantInput = {
   gates: Gates
   /** A61: `.git/MERGE_HEAD` exists in the shared checkout (a merge in progress or left behind). */
   mergeHead?: boolean
+  /** A88 (c): the RAM probe failed again on a fresh retry (no reading at all). */
+  probeFailed?: boolean
 }
 
 /** Whether this session may take the Editor now, and if not why and what next. Only the head of the queue takes
@@ -501,7 +576,7 @@ export const decide = (x: GrantInput): Decision => {
   const place = Math.max(1, queue.findIndex(f => f.id8 === me8) + 1)
   const wait = (code: WaitCode, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place })
   const pid = editorPid(x.probe)
-  if (lock.kind === 'missing') return wait('missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', 'nobody takes it until a lane writes it; do work that needs no Editor meanwhile; if it stays missing while no UnrealEditor runs, add it as a finding for Ather\'s Needs you')
+  if (lock.kind === 'missing') return wait('missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', 'nobody takes it while it is unknown (never write it by hand under A5R); do work that needs no Editor meanwhile; if it stays missing while no UnrealEditor runs, add it as a finding for Ather\'s Needs you')
   if (lock.kind === 'held' || lock.kind === 'handed') {
     const who = lock.lane || 'another lane'
     const until = lock.end ? ` until ${lock.end}` : ''
@@ -524,7 +599,9 @@ export const decide = (x: GrantInput): Decision => {
     return wait('sync', `the sync at ${hhmm(sync.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, 'Editor grants wait until it is done')
   // The launch gate guards a launch: a slot that never launches the Editor (the sync worker's) skips it.
   if (pid === null && want.launch !== false) {
-    if (!x.probe) return wait('probe', 'the RAM probe did not answer', 'the slot waits for a reading (the launch gate fails closed)')
+    // A88 (c): a failed probe is read once more at once; failing twice, the slot is granted with a warning (the launch
+    // gate unchecked) rather than waiting on a reading nobody can bring back, as the PIE check does.
+    if (!x.probe) return x.probeFailed ? { kind: 'grant', end, reuse: null, unchecked: true } : wait('probe', 'the RAM probe did not answer', 'it is read again at once; failing twice, the slot is granted with a warning')
     const gate = want.pie ? x.gates.pieGb : x.gates.nopieGb
     if (x.probe.freeGb < gate)
       return wait('ram', `free RAM is ${x.probe.freeGb} GB after cleanup, under the launch gate of ${gate} GB for a slot ${want.pie ? 'with' : 'without'} PIE`, `the slot waits; memory is held by ${heavyList(x.probe)}`)
@@ -823,9 +900,14 @@ export const writesNoticeToIntent = (command: string): boolean =>
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
+/** A88 (c): the command an agent can run itself when the probe failed. */
+const FREE_RAM_READ = 'powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB"'
+
 export const NOTICES = {
-  granted: (end: number, pie: boolean, reuse: number | null, cleanup: string): Notice['text'] =>
-    noticeText('Editor', `granted to this session until ${hhmm(end)}${reuse ? ` (UnrealEditor PID ${reuse} is open: reuse it)` : ''}${cleanup ? `; cleanup: ${cleanup}` : ''}`, `${reuse ? 'use that Editor' : 'launch the Editor'}${pie ? ' (PIE needs 5 GB free to start)' : ''}; release with the editor tool (action release) when done, and before ${hhmm(end)}`),
+  granted: (end: number, pie: boolean, reuse: number | null, cleanup: string, unchecked = false): Notice['text'] =>
+    noticeText('Editor', `granted to this session until ${hhmm(end)}${reuse ? ` (UnrealEditor PID ${reuse} is open: reuse it)` : ''}${cleanup ? `; cleanup: ${cleanup}` : ''}${unchecked ? '; the RAM probe did not answer twice, so the launch gate was not checked' : ''}`, `${unchecked ? `read free RAM yourself first (${FREE_RAM_READ}) and launch only at or above the launch gate; ` : ''}${reuse ? 'use that Editor' : 'launch the Editor'}${pie ? ' (PIE needs 5 GB free to start)' : ''}; release with the editor tool (action release) when done, and before ${hhmm(end)}`),
+  /** A88 (c): a probe that failed twice: the call goes on with this warning instead of a wait or a silent pass. */
+  probeFailed: (what: string, gate: string): string => noticeText('RAM', `the RAM probe did not answer twice, so ${gate} was not checked for this ${what}`, `read free RAM yourself (${FREE_RAM_READ}) and stop if it is under the gate`),
   leaseEnding: (end: number): string => noticeText('Editor lease', `your lease ends at ${hhmm(end)}`, 'finish to a checkpoint (PIE stopped, your own assets saved), then release with the editor tool, or extend it if it still fits'),
   overrun: (end: number): string => noticeText('Editor lease', `your lease ended at ${hhmm(end)}`, 'stop at the nearest checkpoint and release now with the editor tool; ask again for the rest (almost done is no reason to overrun)'),
   idle: (min: number): string => noticeText('Editor lease', `this session holds the Editor but has not used it for ${min} min`, 'release it with the editor tool (the Editor may stay open: say so in the note)'),

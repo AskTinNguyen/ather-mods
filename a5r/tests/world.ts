@@ -37,7 +37,7 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark', cwd = PROJ } = {}) {
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string; hold?: Promise<void> }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark', cwd = PROJ, now = NOW } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
@@ -48,7 +48,8 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   const value = (v: unknown) => ({ value: v })
   mock.env(on, ENV)
   mock.store(on, { a5r: { on: a5r }, ...store })
-  const clock = mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now }) // rev 30: a test may start at another moment (A84's lock line is dated 2026-10-16)
+  const agents: Rec[] = [] // rev 30 (A86): further running agents the session lists
   on('fs.read', async (_$: unknown, e: { path: string }) => {
     if (k(e.path).endsWith('/rules/config.json')) return value(JSON.stringify(CONFIG))
     if (k(e.path).endsWith('/rules/rules-a5r.md')) return value(rules)
@@ -89,6 +90,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     const argv = e.argv.join(' ')
     runs.push(argv)
     const hit = Object.entries(git).find(([needle]) => argv.includes(needle))?.[1]
+    if (hit?.hold) await hit.hold // rev 30 (A88 b): a slow git call, settled by the test
     if (hit?.deny) return { deny: hit.deny } // the run rejects, as a timeout does
     const stdout = hit ? hit.stdout
       : argv.includes('ConvertTo-Json') ? JSON.stringify({ freeGb: Number(machine.ram), diskGb: machine.disk, procs: machine.procs })
@@ -120,7 +122,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   on('agent.list', async () => {
     const spawns = (calls['agent.spawn'] ?? []) as Rec[]
     const judges = spawns.filter(s => (s.subagent_type ?? s.subagentType) === 'a5r:judge').map((s, n) => ({ id: `w-judge-${n + 1}`, description: String(s.description ?? ''), type: 'a5r:judge', status: 'running', spawnedBy: 'a5r' }))
-    return value([...(spawns.some(s => (s.subagent_type ?? s.subagentType) !== 'a5r:judge') ? [{ id: 'w-sync', description: 'Sync main', type: 'a5r:sync', status: 'running', spawnedBy: 'a5r' }] : []), ...judges])
+    return value([...(spawns.some(s => (s.subagent_type ?? s.subagentType) !== 'a5r:judge') ? [{ id: 'w-sync', description: 'Sync main', type: 'a5r:sync', status: 'running', spawnedBy: 'a5r' }] : []), ...judges, ...agents])
   })
   // A prompt the plugin submits enters as it was sent (an event: it answers { text }).
   // A59: `failSubmit(n)` makes the next n prompt submissions fail (a refused wake); they are not recorded.
@@ -167,6 +169,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     },
     files,
     mtimes,
+    agents,
     seen,
     clock,
     calls,

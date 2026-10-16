@@ -48,7 +48,9 @@ const PKG = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3'])
 const PKG_WRITES = new Set(['install', 'i', 'add', 'ci', 'update', 'upgrade', 'remove', 'rm', 'uninstall', 'un', 'link', 'init', 'create', 'unlink'])
 /** A76: whether a command segment writes files in the folder it runs in (`isHere(target)`: whether a redirect or tee
  * target lies there; rev 27 follow-up: a target outside it, and git's read-only sub-verbs, write nothing here). */
-export const writesFiles = (raw: string, verb: string, args: readonly string[], isHere: (target: string) => boolean = () => true): boolean => {
+export const writesFiles = (raw: string, verb: string, all: readonly string[], isHere: (target: string) => boolean = () => true): boolean => {
+  // A85: git's global options before the sub-verb (`-C <dir>`, `-c <key=value>`, `--git-dir <dir>`) are not the sub-verb.
+  const args = verb === 'git' ? all.filter((a, n) => !/^(-C|-c|--git-dir|--work-tree|--namespace)$/.test(a) && !/^(-C|-c|--git-dir|--work-tree|--namespace)$/.test(all[n - 1] ?? '')) : all
   const sub = (args.find(a => !a.startsWith('-')) ?? '').toLowerCase()
   for (const m of blankQuotes(raw).matchAll(/(?:^|[^0-9&>])>>?\s*(["']?)([^\s"'|;&]+)\1/g)) {
     const t = m[2] ?? ''
@@ -74,6 +76,8 @@ export const writesFiles = (raw: string, verb: string, args: readonly string[], 
   return false
 }
 const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
+// A85: interpreters whose inline code (-c / -e) A5R cannot read: inline code that names the live kit is refused.
+const INLINE_CODE = new Set(['python', 'python3', 'py', 'node', 'bun', 'deno', 'perl', 'ruby'])
 const WRAPPERS = new Set(['&', 'sudo', 'command', 'builtin', 'exec', 'time', 'nohup', 'xargs', 'call'])
 const PS_VALUE_PARAMS = new Set(['-erroraction', '-ea', '-exclude', '-include', '-filter', '-warningaction', '-wa'])
 
@@ -354,7 +358,7 @@ export class A5R {
       }
       const kitHere = (t: string) => !isAbs(t.replace(/\\/g, '/')) || this.kitMentions.some(([re]) => re.test(norm(t).toLowerCase()))
       if (inKit && writesFiles(raw, verb, args, kitHere)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
-      const hit = this.writesProtected(raw, verb)
+      const hit = this.writesProtected(raw, verb, args)
       if (hit) return decision('deny', 'D1', `This command touches the A5R kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
       if (NESTED_SHELLS.has(verb) && depth < 2) {
         const inner = this.preShell(nestedCommand(verb, args), workdir, env, depth + 1, isShared)
@@ -371,14 +375,19 @@ export class A5R {
     return firstAsk
   }
 
-  private writesProtected(raw: string, verb: string): string | null {
+  private writesProtected(raw: string, verb: string, args: readonly string[] = []): string | null {
     const low = raw.replace(/\\/g, '/').toLowerCase()
     const hit = this.kitMentions.find(([re]) => re.test(low))
     if (!hit) return null
+    const inKit = (t: string) => this.kitMentions.some(([re]) => re.test(norm(t).toLowerCase()))
     const redirected = />>?\s*['"]?([^\s'"]+)/.exec(low)
     // A reader, or a bare assignment (`D="<kit>"`), writes nothing unless it redirects into the kit.
     if ((READERS.has(verb) || verb === '') && !(redirected && this.kitMentions.some(([re]) => re.test(redirected[1] ?? '')))) return null
-    return hit[1]
+    // A85 (rev 30): the kit's own checks name it from anywhere and only read it (`claude plugin test|validate <kit>`,
+    // `npx tsc -p <kit>`, `node|bun … <kit>/tests/…`): refused only when the command writes files (a delete, move, copy,
+    // in-place edit, redirect or tee into the kit, a git write, a package install) or runs inline code that names the kit.
+    if (INLINE_CODE.has(verb) && args.some(a => /^(-c|-e|--eval|-p|--print)$/i.test(a))) return hit[1]
+    return writesFiles(raw, verb, args, inKit) ? hit[1] : null
   }
 
   /** True when every delete target resolves inside a temp folder (delete_safe_roots). */

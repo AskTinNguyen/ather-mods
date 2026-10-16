@@ -30,12 +30,28 @@ export const mcpKind = (input: string): 'save-all' | 'pie' | 'write' | 'read' | 
   return null
 }
 
+/** A88 (review of 0.17.1): what an Unreal MCP call does to the Editor, read from the MCP tool's own name and the toolset
+ * method its input names (`name`, `tool`, …), never from the rest of its arguments: a read whose query or path mentions
+ * `set_` or `run_` stays a read. A console command reaches PIE only through a console tool. */
+const MCP_METHOD_KEYS = ['name', 'tool', 'tool_name', 'toolName', 'method', 'function', 'action'] as const
+export const mcpCallKind = (tool: string, input: Record<string, unknown>): ReturnType<typeof mcpKind> => {
+  const method = [tool.split('__').pop() ?? '', ...MCP_METHOD_KEYS.map(k => (typeof input[k] === 'string' ? (input[k] as string) : ''))].filter(Boolean).join(' ')
+  const kind = mcpKind(method)
+  if (kind === 'save-all' || kind === 'pie' || kind === 'write') return kind
+  if (/console/i.test(method)) {
+    const args = (typeof input.arguments === 'object' && input.arguments !== null ? input.arguments : input) as Record<string, unknown>
+    const command = [args.command, args.cmd, args.Command, input.command].filter((v): v is string => typeof v === 'string').join(' ')
+    if (command && mcpKind(command) === 'pie') return 'pie'
+  }
+  return kind
+}
+
 /** A shell command that opens or closes the shared Editor (headless UnrealEditor-Cmd is not it). */
 export const isEditorStartStop = (command: string): boolean =>
   /(Stop-Process|taskkill|kill)\b[^\n]*UnrealEditor(?!-Cmd)\b|Start-Process[^\n]*UnrealEditor(?!-Cmd)\b|UnrealEditor(\.exe)?["']?\s+[^\n]*\.uproject/i.test(command)
 
 /** Why this session may not drive the Editor now, or null when it holds the lock. */
-export const lockProblem = (lock: EditorLock, me8: string, take = `Take the lock first: write your slot, 'session ${me8}' and your end time into Saved/EDITOR_OWNER.txt (AGENTS.md), then retry.`): string | null => {
+export const lockProblem = (lock: EditorLock, me8: string, take = `Take the lock first: write your slot, 'session ${me8}' and your end time into Saved/EDITOR_OWNER.txt (AGENTS.md), then retry.`, queue = ''): string | null => {
   if (lock.state === 'unknown') return `Saved/EDITOR_OWNER.txt is missing or empty: that means unknown, not free. ${take}`
   if (lock.state === 'free') return `The Editor lock is free, so nobody (this session included) holds it. ${take}`
   if (lock.session === me8) return null
@@ -43,7 +59,9 @@ export const lockProblem = (lock: EditorLock, me8: string, take = `Take the lock
   const stale = lock.isStale ? ' The lease looks stale, but only a confirmed-gone holder may be replaced.' : ''
   return lock.session
     ? `The Editor is held by ${lock.holder || 'another lane'} (session ${lock.session})${when}. Never drive an Editor another lane holds.${stale}`
-    : `The Editor is held by ${lock.holder || 'another lane'}${when}, and the lock does not name this session. If this session holds it, add 'session ${me8}' to the lock; otherwise wait.${stale}`
+    : queue
+      ? `The Editor is held by ${lock.holder || 'another lane'}${when}, and the lock does not name this session. Never drive an Editor another lane holds: ${queue}.${stale}` // A84: no step that hand-edits a lock A5R refuses to let you edit
+      : `The Editor is held by ${lock.holder || 'another lane'}${when}, and the lock does not name this session. If this session holds it, add 'session ${me8}' to the lock; otherwise wait.${stale}`
 }
 
 export const PIE_MIN_FREE_GB = 5
