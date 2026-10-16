@@ -2522,6 +2522,15 @@ async function convertHandLock($: Engine, opts: Opts, now: number): Promise<stri
   return ''
 }
 
+/** Hotfix 0.18.2: the answer of an A5R tool whose run failed: what went wrong and a step the agent can take; logged. */
+function toolErrorText($: Engine, tool: string, err: unknown): string {
+  const msg = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 300)
+  $.ui.log(`a5r: ${tool} failed: ${msg}`, { to: 'debug' })
+  return tool === EDITOR_TOOL
+    ? `A5R · Editor — A5R hit an error reading the lock or the queue: ${msg} → retry the call; if it fails again, /a5r off and take Saved/EDITOR_OWNER.txt by hand (AGENTS.md)`
+    : `A5R · Sync main — A5R hit an error in the sync tool: ${msg} → retry the call; if it fails again, use /a5r sync (or /a5r off and coordinate the merge by hand)`
+}
+
 /** The `editor` tool: request, release, extend, status (the only writer of the lock under A5R). */
 async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   if (!(await readA5R($))) return blocked('Editor', 'A5R is off, so the Editor holder is not running', 'follow AGENTS.md: take Saved/EDITOR_OWNER.txt by hand')
@@ -3123,14 +3132,22 @@ export const register: Register = (on, options) => {
     // plugin, not the engine): it marks the session busy, and its result may carry queued notices to the model.
     const isMain = e.agentId === undefined && next.origin.plugin === 'engine'
     if (isMain) isBusy = true
+    // Hotfix 0.18.2: A5R's own tools always answer: an error inside is the call's result (named, with a step), never a
+    // throw that leaves the call unanswered ("no tool.call hook answered this call", MEASURED in b4f33d56 at 15:00:43).
+    if (tool === EDITOR_TOOL || tool === SYNC_TOOL) {
+      try {
+        if (isMain) await markTurn($) // A55: the main loop runs
+        if (isMain) turnSignalAt = await $.clock.now() // A59
+        if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
+        const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
+        const text = await syncAction($, opts, str(input.action), { at: str(input.at), holder: str(input.holder), note: str(input.note), paths, build: typeof input.build === 'boolean' ? input.build : undefined })
+        return { result: [text, ...drain()].join('\n') }
+      } catch (err) {
+        return { result: toolErrorText($, tool, err) }
+      }
+    }
     if (isMain) await markTurn($) // A55: the main loop runs
     if (isMain) turnSignalAt = await $.clock.now() // A59
-    if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
-    if (tool === SYNC_TOOL) {
-      const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
-      const text = await syncAction($, opts, str(input.action), { at: str(input.at), holder: str(input.holder), note: str(input.note), paths, build: typeof input.build === 'boolean' ? input.build : undefined })
-      return { result: [text, ...drain()].join('\n') }
-    }
     const a5r = await load($)
     const isOn = await readA5R($)
 
@@ -3253,6 +3270,14 @@ export const register: Register = (on, options) => {
       return { ...ran, context: [...(ran.context ?? []), ...texts] }
     }
     return ran
+  }).catch(($, e, next) => {
+    // Hotfix 0.18.2: the hook threw or outran its budget. A5R's own tools still answer with what went wrong and a step;
+    // any other call goes on as if A5R were not there (replay-safe: a call already made is not made again).
+    const tool = String(e.tool)
+    const why = `${next.error.kind}${next.error.message ? `: ${next.error.message}` : ''}`
+    if (tool === EDITOR_TOOL || tool === SYNC_TOOL) return { result: toolErrorText($, tool, why) }
+    $.ui.log(`a5r: the tool.call hook failed (${why}) on ${tool}; the call went on unchecked`, { to: 'debug' })
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {

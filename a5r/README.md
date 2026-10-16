@@ -1,6 +1,8 @@
-# A5R 0.18.1
+# A5R 0.18.2
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
+
+0.18.2 (hotfix, A84): tool `editor` và `sync` của a5r luôn trả lời: lỗi bên trong thành kết quả nêu lỗi và bước tiếp theo (thử lại; vẫn lỗi thì `/a5r off` và giữ lock bằng tay), hook `tool.call` có `.catch` (ném lỗi hay quá giờ thì lời gọi khác đi tiếp như không có a5r, tool của a5r vẫn trả lời); dòng HELD chuẩn không nêu `session <id8>` (`session=` là tên) được xác định holder theo lane như dòng viết tay.
 
 0.18.1 (rev 31, A89): thẻ Orchestrate chỉ hiện verdict của sự cố **đang diễn ra** (đúng holder đó còn giữ đúng lease đó hay sync đó còn mở) hoặc vừa kết thúc chưa tới 30 phút; giờ có kèm ngày khi không phải hôm nay; không có gì đang diễn ra thì thẻ chỉ còn một dòng mờ "No stalled holder now · last verdict <ngày giờ>" (giữ thẻ để thấy judge vẫn có mặt và hiện không ai kẹt). Verdict cũ (trước 0.18.1, không ghi lease) không bao giờ hiện lại.
 

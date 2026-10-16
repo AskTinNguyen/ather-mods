@@ -202,6 +202,9 @@ export const parseLockLine = (raw: string | null): LockLine => {
       ...blank(first, 'held'),
       isStandard: true,
       isReadable: true,
+      // Hotfix 0.18.2: a standard line naming no `session <id8>` (its session= is a title, not an id) is resolved by its
+      // lane, like a hand-written line.
+      heldLane: id8 ? '' : field(first, /\blane=(\S+)/),
       lane: field(first, /\blane=(\S+)/),
       sessionName: field(first, /\bsession=(\S+)/),
       id8,
@@ -260,20 +263,20 @@ export const parseLockLine = (raw: string | null): LockLine => {
 export const namesHolder = (lock: LockLine, id8: string, lane = ''): boolean => {
   if ((lock.kind !== 'held' && lock.kind !== 'handed') || !id8) return false
   if (lock.id8) return lock.id8.length >= 6 && id8.toLowerCase().startsWith(lock.id8)
-  if (lock.isStandard || !lock.heldLane) return false
+  if (!lock.heldLane) return false
   const a = safeWord(lock.heldLane).toLowerCase()
   return a !== 'unnamed' && a.length >= 3 && a === safeWord(lane).toLowerCase()
 }
 
 /** A84 (re-review): a hand-written held line whose holder is no single known session (a lane matching two live sessions
  * or none, an id prefix nobody has): nobody drives the Editor through the gate on the name alone. */
-export const isUnresolvedHand = (lock: LockLine): boolean => (lock.kind === 'held' || lock.kind === 'handed') && !lock.isStandard && lock.id8.length !== 8
+export const isUnresolvedHand = (lock: LockLine): boolean => (lock.kind === 'held' || lock.kind === 'handed') && lock.id8.length !== 8
 
 /** A84: a free-form line's holder as a session: the one session file it names (by its id prefix; by its lane only while
  * that session lives), else the one Ather lane whose id starts with the named prefix. The lock then carries that
  * session's id8, so its holder uses, releases and re-takes it through the editor tool and everyone else queues. */
 export const resolveLock = (lock: LockLine, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): LockLine => {
-  if ((lock.kind !== 'held' && lock.kind !== 'handed') || lock.isStandard || !lock.isReadable || lock.id8.length === 8) return lock
+  if ((lock.kind !== 'held' && lock.kind !== 'handed') || !lock.isReadable || lock.id8.length === 8) return lock
   const hits = files.filter(f => namesHolder(lock, f.id8, f.lane) && (lock.id8 !== '' || now - f.heartbeatAt <= HEARTBEAT_STALE_MS))
   if (hits.length === 1) return { ...lock, id8: hits[0]?.id8 ?? lock.id8 }
   if (lock.id8 && hits.length === 0) {
@@ -358,7 +361,7 @@ export const isBuildLease = (lock: LockLine, holder: SessionFile | undefined): b
  * an older a5r that writes none is never judged), Ather's lane shows no activity since, and another session waits. */
 export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; probe: Probe | null; waiting: readonly SessionFile[]; writtenAt?: number | null }): Released | null => {
   const { lock, now } = x
-  if (lock.kind === 'held' && !lock.isStandard && x.probe) return handLapseOf({ ...x, probe: x.probe })
+  if (lock.kind === 'held' && (!lock.isStandard || lock.id8.length !== 8) && x.probe) return handLapseOf({ ...x, probe: x.probe })
   if (lock.kind !== 'held' || !lock.isStandard || !lock.id8 || !x.probe) return null
   const t = lockTimes(lock, now)
   if (!t) return null
@@ -403,7 +406,7 @@ const handLapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: 
 
 /** A54 / A55: the FREE line's note: whose lease, why it was released. */
 export const releasedNote = (r: Released, lock: LockLine): string =>
-  !lock.isStandard
+  !lock.isStandard || lock.id8.length !== 8
     ? lock.isReadable && lock.id8.length !== 8
       ? `hand-written lock by ${lock.heldLane || lock.lane || lock.id8 || 'a lane'}${lock.id8 ? ` (id ${lock.id8})` : ''} lapsed: past ${hhmm(r.end)} + 30 min, nothing running (pid ${lock.pid ?? 'none'} not running, no Editor or build)`
       : `${lock.isReadable ? `lapsed hand-written lock of ${lock.lane || 'a lane'}${lock.id8 ? ` (session-${lock.id8})` : ''}` : 'unreadable hand-written lock (it names nobody)'}: ended ${hhmm(r.end)}, ${Math.round((r.at - r.end) / 60_000)} min ago; pid ${lock.pid ?? 'none'} not running, no Editor or build running`
