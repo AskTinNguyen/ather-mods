@@ -4,7 +4,7 @@
 // columns, and Pulse is the page's own chart. page.mjs writes views.mjs's exports above this script and
 // the board's data into #board-data. The look (view, filters, sort, group) lives in the address's #hash,
 // so a link opens the same cut.
-/* global collisionFact, collisionOwners, overlapCount, spotLabel, graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, summaryText, choices, ageText, miniBarSvg */
+/* global collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel, graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, summaryText, choices, ageText, miniBarSvg */
 ;(function () {
   'use strict'
   var DATA = JSON.parse(document.getElementById('board-data').textContent)
@@ -141,9 +141,9 @@
   function pairDetails(collision) {
     var spots = collision.spots.map(function (spot) {
       var label = '<p class="spot">' + esc(spotLabel(collision, spot)) + '</p>'
-      return spot.kind !== 'lines' ? label : label + '<div class="versus"><span>' + esc(collision.a.slug) + '</span><code>' + esc(spot.ours || '(blank)') + '</code><span>' + esc(collision.b.slug) + '</span><code>' + esc(spot.theirs || '(blank)') + '</code></div>'
+      return spot.kind !== 'lines' ? label : label + '<div class="versus"><span>' + esc(collision.a.slug) + '</span><code>' + esc(sideLine(spot.ours)) + '</code><span>' + esc(collision.b.slug) + '</span><code>' + esc(sideLine(spot.theirs)) + '</code></div>'
     }).join('')
-    var more = collision.count > collision.spots.length ? '<p class="refs">and ' + (collision.count - collision.spots.length) + ' more</p>' : ''
+    var more = moreText(collision) ? '<p class="refs">' + esc(moreText(collision)) + '</p>' : ''
     return '<div class="details"><p class="refs">' + esc(collisionFact(collision, NOW)) + '</p>' + spots + more + '</div>'
   }
   function pairGroup(part) {

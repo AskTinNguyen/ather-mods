@@ -304,6 +304,12 @@ export const collisionOwners = collision => [collision.b.owner, collision.a.owne
 /** @param {Collision} collision @param {number} now */
 export const collisionFact = (collision, now) =>
   collision.a.key === '' ? `origin/${collision.a.slug} changed these lines${collision.at ? ` ${ageText(collision.at, now)} ago` : ''}${collision.a.owner ? ` (${collision.a.owner})` : ''}.` : 'Neither is merged yet: whichever merges second will conflict.'
+// A side's first changed line as shown: '(blank)' for an empty one.
+/** @param {string} line */
+export const sideLine = line => line || '(blank)'
+// The places past those kept: "and 3 more", '' for none.
+/** @param {Collision} collision */
+export const moreText = collision => (collision.count > collision.spots.length ? `and ${collision.count - collision.spots.length} more` : '')
 // A place: "path:line", or the file and what each side did to it.
 /** @param {Collision} collision @param {import('./ather/overlap.mjs').Spot} spot */
 export const spotLabel = (collision, spot) =>

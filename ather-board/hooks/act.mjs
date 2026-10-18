@@ -7,7 +7,7 @@
 
 import { decidePrompt, explainPrompt } from './ather/decide.mjs'
 import { aboutIntentPrompt, andList, checklistPrompt, closePrompt, isMine as isOwner, plural } from './ather/model.mjs'
-import { HYGIENE, isReason, spotLabel } from './views.mjs'
+import { HYGIENE, isReason, moreText, sideLine, spotLabel } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
@@ -116,7 +116,7 @@ export const decisionPrompt = (record, call, letter) => {
 // "Combat/HitStop.cpp:42 (main: return FMath::Min…; dodge-cancel: return CanCancel…) and Map.umap · binary, both changed".
 /** @param {Collision} collision */
 export const spotsText = collision =>
-  andList(collision.spots.map(spot => (spot.kind === 'lines' ? `${spotLabel(collision, spot)} (${collision.a.slug}: ${spot.ours || 'blank'}; ${collision.b.slug}: ${spot.theirs || 'blank'})` : spotLabel(collision, spot)))) + (collision.count > collision.spots.length ? `, and ${collision.count - collision.spots.length} more` : '')
+  andList(collision.spots.map(spot => (spot.kind === 'lines' ? `${spotLabel(collision, spot)} (${collision.a.slug}: ${sideLine(spot.ours)}; ${collision.b.slug}: ${sideLine(spot.theirs)})` : spotLabel(collision, spot)))) + (moreText(collision) ? `, ${moreText(collision)}` : '')
 
 // What the pair is, in words: "dodge-cancel and main", or two intents.
 /** @param {Collision} collision */

@@ -11,7 +11,7 @@ import { BAR_CELLS, ageText, miniBar, rowColumns } from './ather/worklist.mjs'
 import { ACTION_LABELS, actionsFor, collisionActions } from './act.mjs'
 import { isMine } from './ather/model.mjs'
 import { paneView } from './focus.mjs'
-import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, collisionFact, collisionOwners, overlapCount, spotLabel, summaryText } from './views.mjs'
+import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel, summaryText } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
@@ -97,9 +97,9 @@ const pairOpened = (el, model, actions, collision, at) => {
       el.Text({ key: `${key}-fact`, color: QUIET, wrap: 'wrap', children: collisionFact(collision, model.now) }),
       ...collision.spots.flatMap((spot, index) => [
         el.Text({ key: `${key}-spot-${index}`, bold: true, wrap: 'truncate', children: spotLabel(collision, spot) }),
-        ...(spot.kind === 'lines' ? [[a.slug, spot.ours], [b.slug, spot.theirs]].map(([who = '', line = ''], side) => el.Text({ key: `${key}-spot-${index}-${side}`, color: side === 0 ? QUIET : undefined, wrap: 'truncate', children: fit(`  ${who.padEnd(width)}  ${line || '(blank)'}`, model.width - 2) })) : []),
+        ...(spot.kind === 'lines' ? [[a.slug, spot.ours], [b.slug, spot.theirs]].map(([who = '', line = ''], side) => el.Text({ key: `${key}-spot-${index}-${side}`, color: side === 0 ? QUIET : undefined, wrap: 'truncate', children: fit(`  ${who.padEnd(width)}  ${sideLine(line)}`, model.width - 2) })) : []),
       ]),
-      ...(collision.count > collision.spots.length ? [el.Text({ key: `${key}-more`, color: QUIET, children: `and ${collision.count - collision.spots.length} more` })] : []),
+      ...(moreText(collision) ? [el.Text({ key: `${key}-more`, color: QUIET, children: moreText(collision) })] : []),
       el.Box({ key: `${key}-acts`, flexDirection: 'row', flexWrap: 'wrap', gap: 2, marginTop: 1, children: [
         ...(next ? [el.Button({ key: `collide-${collision.key}-${next.key}`, label: next.label, variant: 'primary', onPress: () => actions.onCollision(next) })] : []),
         ...rest.map(one => el.Button({ key: `collide-${collision.key}-${one.key}`, label: one.label, plain: true, dimColor: true, onPress: () => actions.onCollision(one) })),

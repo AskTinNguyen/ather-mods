@@ -231,6 +231,8 @@ describe('the page (A7) and publishing (A8)', () => {
     collisionFact: [views.collisionsOf(COLLIDING)[0], NOW],
     spotLabel: [views.collisionsOf(COLLIDING)[0], { path: 'a.umap', line: 0, kind: 'binary', ours: '', theirs: '' }],
     isReason: [{ kind: 'colliding', label: '' }],
+    sideLine: [''],
+    moreText: [{ ...views.collisionsOf(COLLIDING)[0], count: 4 }],
   }
   test('every function the page is given answers there as it does here, and every one is checked', () => {
     const both = /** @type {Record<string, any>} */ ({ ...views, ...map })
