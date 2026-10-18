@@ -13,3 +13,7 @@
 - Fixed non-critical: Simple lists what it shows (`SIMPLE_SHOWS`, typed `HomePart`), so a new part stays out of Simple until chosen; `otherView` and `VIEW_LABELS` in home.mjs; the A3 e2e checks every part this fixture draws; a new repos e2e checks Group is kept and read by a new session (it was only in the S2 e2e).
 - Left: `paneViewOf` stays in home.mjs (the board's sync follows JSDoc `import()` types, so pointing home.mjs's type at state.mjs would copy state.mjs into the board); Home's render stays in `paneView` (extracting it is a separate change); hidden parts are still built (cheap).
 - test-all exit 0: unit 360/360, board 56/56, repos e2e 277/277.
+
+## 2026-10-18, closed
+
+- PR #68 merged (98abff1), released as ather-automata 0.4.0. Its hour-dependent e2e check fixed in #69. Status completed; the S2 e2e run stays owed.
