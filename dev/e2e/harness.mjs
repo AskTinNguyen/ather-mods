@@ -1,8 +1,10 @@
 // What the end-to-end runs share (repos.mjs, board.mjs): a sandbox folder with git's own settings kept out, the
-// checks and their report, and the drawn tree's lookups. run.mjs keeps its own: it runs only against an S2 checkout.
+// run's arguments, the checks and their report, what was drawn written as text, and the drawn tree's lookups.
+// run.mjs keeps its own: it runs only against an S2 checkout.
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { check } from './screen.mjs'
 
 // Folders with forward slashes, as the hooks name a checkout: on Windows path.join and the temporary folder give backslashes.
 export const join = (...parts) => path.join(...parts).split(path.sep).join('/')
@@ -16,6 +18,20 @@ export const sandbox = prefix => {
   process.env.GIT_CONFIG_GLOBAL = join(base, 'gitconfig')
   process.env.GIT_CONFIG_NOSYSTEM = '1'
   return base
+}
+
+// A run's arguments: the report's path, if one is given, and `--out <dir>`, where it writes what it drew ('' for none).
+export const runArgs = () => {
+  const args = process.argv.slice(2)
+  const at = args.indexOf('--out')
+  return { report: args.find((one, index) => !one.startsWith('--') && (at < 0 || index !== at + 1)), out: at >= 0 ? (args[at + 1] ?? '') : '' }
+}
+
+// A drawn tree as the terminal lays it out at `width` columns, written to <dir>/<name>-<width>.txt.
+/** @param {string} dir @param {string} name @param {any} tree @param {number} width */
+export const writeDrawn = (dir, name, tree, width) => {
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(join(dir, `${name}-${width}.txt`), `${check(tree, width).lines.join('\n')}\n`)
 }
 
 // The checks: `expect` records one, `finish` writes the report (when asked), prints the failures and the count,

@@ -8,7 +8,7 @@ import os from 'os'
 import path from 'path'
 
 import { parseIntent } from '../hooks/model.mjs'
-import { EMPTY_OVERLAPS, SPOTS_KEPT, canMergeTree, fetchBranches, gitVersion, intentsIn, pairKey, pairsToCheck, parseMergeTree, readOverlaps, spotsIn } from '../hooks/overlap.mjs'
+import { EMPTY_OVERLAPS, SPOTS_KEPT, canMergeTree, fetchBranches, gitVersion, intentsIn, overlapJob, pairKey, pairsToCheck, parseMergeTree, readOverlaps, spotsIn } from '../hooks/overlap.mjs'
 import { fetchArgs } from '../hooks/team.mjs'
 
 /** @param {string} prompt */
@@ -101,6 +101,36 @@ describe('what git says (A3, A4)', () => {
   })
 })
 
+describe('the check as a background job (overlapJob)', () => {
+  /** @param {Partial<import('../hooks/overlap.mjs').OverlapRead>} read */
+  const answer = read => ({ overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false, ...read })
+  test('one run at a time: an ask while one runs is one more run, with the newest ask; a partial run is followed by the next; each run starts from the last cache', async () => {
+    const job = overlapJob()
+    /** @type {string[]} */
+    const runs = []
+    /** @type {(value?: unknown) => void} */
+    let release = () => undefined
+    const held = new Promise(resolve => (release = resolve))
+    const first = job.run(async () => (await held, runs.push('first'), answer({ note: 'first' })), read => runs.push(`saw ${read.note}`))
+    const second = job.run(async () => (runs.push('second'), answer({ note: 'second' })), read => runs.push(`saw ${read.note}`))
+    const third = job.run(async () => (runs.push('third'), answer({ note: 'third' })), read => runs.push(`saw ${read.note}`))
+    release()
+    expect([first === second && second === third, (await first).note]).toEqual([true, 'third'])
+    expect(runs).toEqual(['first', 'saw first', 'third', 'saw third'])
+    let left = 2
+    /** @type {unknown[]} */
+    const caches = []
+    const done = await job.run(async cache => (caches.push(cache), answer({ isPartial: (left -= 1) > 0, cache: { ...EMPTY_OVERLAPS, version: `run ${left}` } })), () => undefined)
+    expect([done.isPartial, caches.length, /** @type {any} */ (caches[1]).version, job.last().cache.version]).toEqual([false, 2, 'run 1', 'run 0'])
+  })
+  test('a run that throws ends the job with its error, and the next ask starts again', async () => {
+    const job = overlapJob()
+    const failed = await job.run(async () => { throw new Error('git went away') }, () => undefined).catch(error => String(error))
+    expect(failed).toBe('Error: git went away')
+    expect((await job.run(async () => answer({ note: 'back' }), () => undefined)).note).toBe('back')
+  })
+})
+
 describe('a real repository (A3, A4, A6)', () => {
   // origin with main and three intent branches; main moved after dodge left it: the same line, and a binary map.
   const make = () => {
@@ -168,7 +198,14 @@ describe('a real repository (A3, A4, A6)', () => {
       git(tree, ['push', '-q', origin, 'HEAD:refs/heads/main'])
       git(clone, ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'])
     }
-    return { work, repo, calls: () => calls, push: moveDash, mergeRetune, squashRetune }
+    // Work in the clone itself, never pushed: a branch from main before Lena's retune, editing the line she edited.
+    const localWork = () => {
+      git(clone, ['checkout', '-q', '-b', 'feat/local', 'HEAD~1'])
+      fs.writeFileSync(path.join(clone, 'Combat/HitStop.cpp'), 'a\nb\nreturn Budget * Scale;\nd\n')
+      git(clone, ['commit', '-q', '-am', 'local'])
+      return git(clone, ['rev-parse', 'HEAD']).trim()
+    }
+    return { work, repo, calls: () => calls, push: moveDash, mergeRetune, squashRetune, localWork }
   }
   const SIDES = [
     { key: 'dodge-cancel', branch: 'intent/dodge' },
@@ -247,6 +284,16 @@ describe('a real repository (A3, A4, A6)', () => {
     expect([first.isPartial, runs > 1, read.isPartial]).toEqual([true, true, false])
     expect(read.overlaps.map(one => one.key)).toEqual(whole.overlaps.map(one => one.key))
     expect([again.isPartial, calls() - settled]).toEqual([false, 1])
+  })
+
+  test('collision-alert: a side with its own tip needs no copy on origin; the same branch without one is not compared', async () => {
+    const { work, repo, localWork } = make()
+    const tip = localWork()
+    const withTip = await readOverlaps(repo, { base: 'main', sides: [{ key: 'here', branch: 'feat/local', tip }], cache: EMPTY_OVERLAPS })
+    const without = await readOverlaps(repo, { base: 'main', sides: [{ key: 'here', branch: 'feat/local' }], cache: EMPTY_OVERLAPS })
+    fs.rmSync(work, { recursive: true, force: true })
+    expect(withTip.overlaps.map(one => [one.key, one.files, one.spots[0]?.theirs, one.base?.who])).toEqual([['|here', ['Combat/HitStop.cpp'], 'return Budget * Scale;', 'Lena Park']])
+    expect(without.overlaps).toEqual([])
   })
 
   test('A4: before git 2.38 nothing is checked and the note says why', async () => {

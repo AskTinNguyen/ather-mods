@@ -602,6 +602,20 @@ describe('home', () => {
     expect(model.items.find(one => one.kind === 'rule')?.prompt).toContain('do not commit')
   })
 
+  test('collision-alert: this checkout\'s branch against origin\'s base waits in Needs you after lost edits, named by its places; its press brings the base in', () => {
+    const party = (/** @type {string} */ key, /** @type {string} */ slug, /** @type {string} */ owner, /** @type {string} */ branch) => ({ key, slug, owner, stage: /** @type {const} */ (''), branch })
+    const collision = { key: '|here', a: party('', 'main', 'Lena Park', 'main'), b: party('here', 'spawner', 'Tin Nguyen', 'feat/spawner'), files: ['Combat/HitStop.cpp'], spots: [{ path: 'Combat/HitStop.cpp', line: 3, kind: /** @type {const} */ ('lines'), ours: 'return Min;', theirs: 'return Scale;' }], count: 3, base: { at: NOON - 2 * 3600000, via: ['hitstop-retune'] } }
+    const model = home({ lost: { paths: ['A.uasset'], isDisclosed: false }, collision })
+    const item = model.items.find(one => one.kind === 'collide')
+    expect(model.items.map(one => one.kind).slice(0, 2)).toEqual(['lost', 'collide'])
+    expect([item?.id, item?.label, item?.title, item?.question]).toEqual(['collide:feat/spawner:Combat/HitStop.cpp:3', 'Bring origin/main into feat/spawner', 'feat/spawner no longer merges cleanly into origin/main', 'feat/spawner no longer merges cleanly into origin/main'])
+    expect(item?.detail).toBe('▲ 3 overlaps: hitstop-retune changed these lines on origin/main 2h ago (Lena Park). Combat/HitStop.cpp:3, and 2 more')
+    expect(item?.prompt.startsWith("Intent spawner's branch feat/spawner no longer merges cleanly into origin/main: Combat/HitStop.cpp:3 (main: return Min;; spawner: return Scale;), and 2 more. Merge origin/main into feat/spawner")).toBe(true)
+    // Work on a branch with no intent tracked is named by its branch.
+    expect(home({ collision: { ...collision, b: party('here', 'feat/x', 'Tin Nguyen', 'feat/x') } }).items.find(one => one.kind === 'collide')?.prompt.startsWith('The branch feat/x no longer merges')).toBe(true)
+    expect(home({ collision: null }).items.some(one => one.kind === 'collide')).toBe(false)
+  })
+
   test('many problems that keep coming back wait as one item, which settles them all', async () => {
     const recurring = ['a', 'b', 'c'].map(id => ({ id, title: `Trap ${id}`, fix: 'Fix.', count: 3 }))
     const rules = home({ recurring }).items.filter(one => one.kind === 'rule')

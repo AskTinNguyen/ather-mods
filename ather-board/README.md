@@ -77,6 +77,7 @@ Then sign in to it from `/mcp` in a Claude Code terminal. Without it, the sessio
 
 ## Changes
 
+- **0.2.2** No change to what you see: a collision's words and actions come from Ather's `collide.mjs`, shared with Ather Automata's Needs you (ather-automata 0.5.0), and the check runs through its shared background job.
 - **0.2.1** Colliding names the intent behind a change on `main` ("hitstop-retune changed these lines on origin/main 6m ago (Lena Park)"), read from the pull request's merge or squash commit that brought it. A large first check runs in short runs and shows collisions as they are found.
 - **0.2.0** **Colliding**: open intents whose branches change the same lines as the base branch or as each other, found with `git merge-tree` (Ather Automata 0.4.1's overlap check), shown second in Triage, one row a pair, opened in place with the files, lines and each side's version, and what to do (bring the base in, or a drafted note). The intents warn "overlaps …" on their rows, For you lists yours, and the page shows the same. The board now fetches the open intents' branches with the base. An opened row no longer shows a thin gap above its details on the page.
 - **0.1.1** A done intent shows how many of its items were met: the board now reads the progress of completed intents, which Ather's reader leaves out (they read as none met before). Done's glyph is ■, no longer close to Ready to close's ✓.

@@ -15,7 +15,7 @@ import { answerLook } from './brief.mjs'
 import { mergeSuggestions, plainSuggestions } from './focus.mjs'
 import { choosePack } from './ather/packs/index.mjs'
 import { GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchMain, isFetchDue, syncError, syncText } from './ather/team.mjs'
-import { EMPTY_OVERLAPS, fetchBranches, readOverlaps } from './ather/overlap.mjs'
+import { fetchBranches, overlapJob, readOverlaps } from './ather/overlap.mjs'
 import { sidesOf, withCollisions } from './records.mjs'
 import { boardPane } from './pane.mjs'
 import { renderPage } from './page.mjs'
@@ -62,13 +62,8 @@ let isAgain = false
 let sync = NO_SYNC
 // A line under the tabs: what the last press did (the page written, a publish handed over).
 let note = ''
-// The overlap check's last answer, and the run in hand.
-/** @type {import('./ather/overlap.mjs').OverlapRead} */
-let overlaps = { overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false }
-/** @type {Promise<void> | null} */
-let checking = null
-// A check asked for while one runs: one more follows it, over the read and the branches as they are then.
-let isCheckAgain = false
+// The overlap check, one run at a time; `.last()` is its last answer.
+const overlaps = overlapJob()
 
 /** @param {Engine} $ @param {string} root @returns {Repo} */
 const repoOf = ($, root) => ({
@@ -141,38 +136,20 @@ const refresh = ($, force = false) => {
   return reading
 }
 
-// The overlap check over the last read (overlap-check D6), one run at a time, in the background: the board
-// draws without waiting. Asked for while one runs, one more follows it. Unchanged branches cost one git call
-// (overlap.mjs keeps the rest by their tips).
+// The overlap check over the last read (overlap-check D6), in the background: the board draws without waiting,
+// and draws again after each run. Unchanged branches cost one git call (overlap.mjs keeps the rest by their tips).
 /** @param {Engine} $ */
-const checkOverlaps = $ => {
-  if (checking) {
-    isCheckAgain = true
-    return checking
-  }
-  if (!board) return Promise.resolve()
-  checking = (async () => {
-    try {
-      const at = await laneOf($)
-      do {
-        isCheckAgain = false
-        overlaps = await readOverlaps(repoOf($, at.root), { base: at.base, sides: sidesOf(board?.records ?? []), cache: overlaps.cache })
-        // Each run shows what it found; one that ran out of time (overlap-hardening D1) is followed by the next.
-        $.ui.invalidate('ui.render')
-      } while (isCheckAgain || overlaps.isPartial)
-    } catch (error) {
-      $.ui.log(`Ather Board: the overlap check failed: ${String(error)}`, { to: 'debug' })
-    } finally {
-      checking = null
-      $.ui.invalidate('ui.render')
-    }
-  })()
-  return checking
+const checkOverlaps = async $ => {
+  if (!board) return
+  const at = await laneOf($)
+  await overlaps
+    .run(cache => readOverlaps(repoOf($, at.root), { base: at.base, sides: sidesOf(board?.records ?? []), cache }), () => $.ui.invalidate('ui.render'))
+    .catch(error => $.ui.log(`Ather Board: the overlap check failed: ${String(error)}`, { to: 'debug' }))
 }
 
 // The records as drawn: the last read, with the overlaps they are a side of.
 /** @param {string} base */
-const recordsNow = base => withCollisions(board?.records ?? [], overlaps.overlaps, base)
+const recordsNow = base => withCollisions(board?.records ?? [], overlaps.last().overlaps, base)
 
 // Fetches origin's base in the background when due (or at once for ↻), then reads the board again.
 /** @param {Engine} $ @param {boolean} [now] */
@@ -209,7 +186,7 @@ const writePage = async $ => {
   await Promise.race([Promise.all([runBrief(io, board, at.me), runMapping(io, board, set)]), new Promise(resolve => $.clock.after(MODEL_WAIT_MS, () => resolve(undefined)))])
   const [css, client] = await Promise.all([$.fs.read(`${$.plugin.root}/page/board.css`), $.fs.read(`${$.plugin.root}/page/client.js`)])
   const path = `${at.root}/${at.pack.localDir}/board/index.html`
-  await $.fs.write(path, renderPage({ ...board, records: recordsNow(at.base) }, { overlapNote: overlaps.note, now: Date.now(), repoName: at.repoName, repoUrl: at.repoUrl, css: String(css), client: String(client), brief: briefState().value, briefAt: briefState().at, modules: set.modules, mapping: mapState().value.mapping }))
+  await $.fs.write(path, renderPage({ ...board, records: recordsNow(at.base) }, { overlapNote: overlaps.last().note, now: Date.now(), repoName: at.repoName, repoUrl: at.repoUrl, css: String(css), client: String(client), brief: briefState().value, briefAt: briefState().at, modules: set.modules, mapping: mapState().value.mapping }))
   return path
 }
 
@@ -323,7 +300,7 @@ const drawPane = async ($, e) => {
   const named = (/** @type {readonly string[]} */ keys) => records.filter(one => keys.includes(one.key))
   return boardPane(
     el,
-    { records, look, width: e.props?.bodyColumns ?? 80, isDesktop: e.surface !== 'terminal', now, title: `${at.repoName || 'Team'} intents`, fresh: syncText(sync, now), error: syncError(sync), note, me: at.me, base: at.base, overlapNote: overlaps.note, opened, suggestions, brief, asked: askState(), modules: set.modules, mapped: mapState() },
+    { records, look, width: e.props?.bodyColumns ?? 80, isDesktop: e.surface !== 'terminal', now, title: `${at.repoName || 'Team'} intents`, fresh: syncText(sync, now), error: syncError(sync), note, me: at.me, base: at.base, overlapNote: overlaps.last().note, opened, suggestions, brief, asked: askState(), modules: set.modules, mapped: mapState() },
     {
       onView: view => () => setLook($, { view }),
       onFilter: patch => setLook($, { filter: { ...look.filter, ...patch } }),

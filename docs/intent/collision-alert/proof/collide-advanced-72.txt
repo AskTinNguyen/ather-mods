@@ -1,0 +1,26 @@
+Welcome
+                                                    f: synced just now ↻
+
+Yours 0 · Workers 0 · Needs you 1
+
+[ ＋ New intent ]
+
+N E E D S   Y O U   ·   1
+◆ 1: Bring origin/main into feat/x
+     ▲ 1 overlap: origin/main changed these lines 0m ago (Lena Park).
+     src/a.js:1
+
+N E X T
+n: Take the tour
+   Six short steps. Ends with your first intent started.
+
+i: Everything open ›
+
+S T E P P I N G   O U T ?
+Keep the prompt cache warm while you are away from the keyboard, so your
+next turn reads the context instead of paying to write it again.
+w: Keep the cache warm
+
+v: Simple view
+
+Enter chooses · Esc closes

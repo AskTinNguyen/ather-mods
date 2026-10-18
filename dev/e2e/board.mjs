@@ -8,12 +8,9 @@ import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import { createEngine } from './engine.mjs'
 import { check } from './screen.mjs'
-import { byKey, checks, join, nodesOf, sandbox, until } from './harness.mjs'
+import { byKey, checks, join, nodesOf, runArgs, sandbox, until, writeDrawn } from './harness.mjs'
 
-const args = process.argv.slice(2)
-const OUT_AT = args.indexOf('--out')
-const OUT = OUT_AT >= 0 ? args[OUT_AT + 1] : ''
-const REPORT = args.find((one, at) => !one.startsWith('--') && at !== OUT_AT + 1)
+const { report: REPORT, out: OUT } = runArgs()
 const BOARD = new URL('../../ather-board/', import.meta.url)
 const { register } = await import(new URL('hooks/index.mjs', BOARD).href)
 
@@ -153,13 +150,11 @@ expect('A7: /board open writes the page with every collision in its data', (data
 expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
 
 if (OUT) {
-  fs.mkdirSync(OUT, { recursive: true })
   // The pair opened above stays open.
   byKey(await pane(), 'tab-triage')?.props.onPress()
-  fs.writeFileSync(join(OUT, 'pane-triage-110.txt'), textOf(await pane(110), 110))
-  fs.writeFileSync(join(OUT, 'pane-triage-72.txt'), textOf(await pane(72), 72))
+  for (const width of [110, 72]) writeDrawn(OUT, 'pane-triage', await pane(width), width)
   byKey(await pane(), 'tab-foryou')?.props.onPress()
-  fs.writeFileSync(join(OUT, 'pane-foryou-110.txt'), textOf(await pane(110), 110))
+  writeDrawn(OUT, 'pane-foryou', await pane(110), 110)
   if (page) fs.writeFileSync(join(OUT, 'board.html'), page)
 }
 

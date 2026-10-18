@@ -1,6 +1,6 @@
 # Ather Automata for Paseo
 
-The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://paseo.sh) plugin: what needs you, what to do next, and a safe pair of hands while you are away, for the agents Paseo runs. Its version is the ather-automata release its shared code is copied from: **0.4.3** (`package.json`'s `version`, which `npm run sync` sets from `ather-automata/.claude-plugin/plugin.json` and `npm run sync:check` holds to it). The intents, stages, Next, away windows, packs, traps and decision ledger are the same code: `server/ather/` is a copy of `ather-automata/hooks/`. The Paseo screens lag behind: see Limits for what of 0.1.5–0.3.3 is not shown here yet. What differs is how it hooks into Paseo.
+The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://paseo.sh) plugin: what needs you, what to do next, and a safe pair of hands while you are away, for the agents Paseo runs. Its version is the ather-automata release its shared code is copied from: **0.5.0** (`package.json`'s `version`, which `npm run sync` sets from `ather-automata/.claude-plugin/plugin.json` and `npm run sync:check` holds to it). The intents, stages, Next, away windows, packs, traps and decision ledger are the same code: `server/ather/` is a copy of `ather-automata/hooks/`. The Paseo screens lag behind: see Limits for what of 0.1.5–0.3.3 is not shown here yet. What differs is how it hooks into Paseo.
 
 ## Install
 
@@ -46,6 +46,7 @@ Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, o
 - Codex agents get the tools, question deferral and turn reading, but no ask rules: holds apply only when Codex asks on its own.
 - If the plugin stops, Claude agents created with its ask rules still prompt for those commands, and the prompts wait for you.
 - The panel has no Simple view yet (ather-automata 0.4.0): it always shows everything.
+- The panel does not check this checkout's branch against origin's base (ather-automata 0.5.0): Needs you never shows Bring origin/main in.
 - "Also tracked in … · active Nm ago" can be a little off: `state.mjs` keeps one "last active" time per process, and one plugin process serves every agent.
 - A worker's calls in flight are not seen (Paseo has no hook around a worker's tool calls), so the workers list has no "⏳ asking permission", "⏳ waiting on …" or "one call running N min" lines (0.1.9); a worker silent for three minutes reads quiet, as before.
 - Not here yet: the newcomer tour toast (the tour is the Next row and `/ather tour`).
@@ -69,6 +70,7 @@ paseo plugin logs ather-automata
 
 ## Changes
 
+- **0.5.0** Shared code at ather-automata 0.5.0: `collide.mjs`, and Needs you's collision item (`buildHome`'s `collision`), which the Paseo panel does not check for yet; see Limits.
 - **0.4.3** Shared code at ather-automata 0.4.3: the pane's modes (`modes.mjs`), which the Paseo panel does not use.
 - **0.4.2** Shared code at ather-automata 0.4.2: the overlap check's time budget and the intent behind a base change.
 - **0.4.1** Shared code at ather-automata 0.4.1: the overlap check (`overlap.mjs`) and an intent's Branch line. Nothing in the panel uses them yet.

@@ -1,0 +1,15 @@
+Welcome
+                                                    f: synced just now ↻
+
+N E E D S   Y O U   ·   1
+◆ 1: Bring origin/main into feat/x
+     ▲ 1 overlap: origin/main changed these lines 0m ago (Lena Park).
+     src/a.js:1
+
+N E X T
+n: Take the tour
+   Six short steps. Ends with your first intent started.
+
+v: Advanced view
+
+Enter chooses · Esc closes
