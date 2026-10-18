@@ -1,7 +1,8 @@
 // End-to-end run of Ather Board's overlap check (docs/intent/overlap-check) through the stand-in engine, on
 // real git: an origin whose main moved under one intent's branch, two intents' branches that change the same
 // line, and a teammate's clone that knows only main. Needs no S2_ROOT.
-// `node board.mjs [report.md] [--out <dir>]`: `--out` writes the pane as text (72 and 110 columns) and the page.
+// `node board.mjs [report.md] [--out <dir>]`: `--out` writes the pane as text (Triage at 72 and 110 columns, People,
+// For you) and the page.
 import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
@@ -140,6 +141,18 @@ await new Promise(resolve => setTimeout(resolve, 1500))
 await pane()
 expect('A6: drawing again merges nothing again', engine.record.gitRuns.filter(run => run.argv.includes('merge-tree')).length === mergesBefore, engine.record.gitRuns.filter(run => run.argv.includes('merge-tree')).length - mergesBefore)
 expect('every git call reads without the index lock', engine.record.gitRuns.every(run => run.env.GIT_OPTIONAL_LOCKS === '0'), engine.record.gitRuns.filter(run => run.env.GIT_OPTIONAL_LOCKS !== '0').map(run => run.argv.join(' ')))
+
+// People: each count of a line is a press that opens what it counts (board-counts D1).
+byKey(await pane(), 'tab-people')?.props.onPress()
+const people = await pane()
+if (OUT) for (const width of [110, 72]) writeDrawn(OUT, 'pane-people', await pane(width), width)
+const countsOf = (/** @type {any} */ tree, /** @type {RegExp} */ key) => nodesOf(tree).filter(node => node.type === 'Button' && key.test(node.props?.key ?? ''))
+expect('board-counts D1: People draws every line\u2019s open count as a press, with no layout problems at 72 and 110 columns', countsOf(people, /^lines-owner-.+-open$/).length >= 2 && check(people, 110).problems.length === 0 && check(await pane(72), 72).problems.length === 0, [textOf(people, 110), check(await pane(72), 72).problems])
+const itemsCount = countsOf(people, /^lines-owner-.+-items$/)[0]
+const owner = /^lines-owner-(.+)-items$/.exec(itemsCount?.props.key ?? '')?.[1] ?? ''
+itemsCount?.props.onPress()
+const itemsText = textOf(await pane(), 110)
+expect('board-counts D1: a line\u2019s items count opens Open items, cut to that owner', Boolean(itemsCount) && /open items?/.test(itemsText) && /A\d/.test(itemsText), [itemsCount?.props.label, owner, itemsText])
 
 // The page: the same rows, the data inside.
 const said = String((await engine.command('board', 'open'))?.text ?? '')

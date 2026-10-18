@@ -175,7 +175,27 @@ describe('what each view shows, for the pane and the page alike (A3, A4, A6, A7)
     const [vfx] = sectionsOf(RECORDS, { ...DEFAULT_LOOK, view: 'items' }, NOW)
     expect(vfx?.kind === 'intents' && [vfx.title, vfx.meta, vfx.rows[0]?.items.map(item => item.id)]).toEqual(['VFX', '2 open items', ['A2', 'A3']])
     const [areas] = sectionsOf(RECORDS, { ...DEFAULT_LOOK, view: 'areas' }, NOW)
-    expect(areas?.kind === 'lines' && areas.lines.map(line => `${line.title}: ${line.words}${line.warn ? ` / ${line.warn}` : ''}`)).toEqual(['Combat: 1 open · 1d', 'Tools: 1 open · 1 parked · 1 done · 1 items · 0m', 'Unsorted: 1 open · 1 items · 2d', 'VFX: 1 open · 2 items · 7d / 1 decision · 1 stale'])
+    expect(areas?.kind === 'lines' && areas.lines.map(line => `${line.title}: ${[...line.counts.map(count => `${count.isWarn ? '!' : ''}${count.text}`), line.age].join(' · ')}`)).toEqual(['Combat: 1 open · 1d', 'Tools: 1 open · 1 parked · 1 done · 1 item · 0m', 'Unsorted: 1 open · 1 item · 2d', 'VFX: 1 open · 2 items · !1 decision · !1 stale · 7d'])
+  })
+  test('board-counts D1: each count of a line opens what it counts, the other filters cleared', () => {
+    const look = { ...DEFAULT_LOOK, view: /** @type {const} */ ('areas'), filter: { ...NO_FILTER, words: 'snow' } }
+    const opened = views.COUNTS.map(({ kind: count }) => {
+      const { view, filter } = views.pickLook(look, 'area', 'VFX', count)
+      return `${count}: ${view} ${filter.area} ${filter.stage || '-'} ${filter.showDone ? 'done shown' : ''}${filter.words}`.trim()
+    })
+    expect(opened).toEqual(['open: table VFX -', 'parked: table VFX parked', 'done: table VFX done done shown', 'items: items VFX -', 'calls: triage VFX -', 'stale: triage VFX -'])
+    // Each lands on the intents it counted.
+    const vfx = views.pickLook(look, 'area', 'VFX', 'calls')
+    expect(recordsFor(RECORDS, vfx).filter(one => one.calls.length > 0).map(one => one.area)).toEqual(['VFX'])
+  })
+  test('board-counts D2: the Timeline, a lane per owner, spans packed into rows that never overlap, old done work left out', () => {
+    const at = (/** @type {number} */ days) => NOW - days * DAY_MS
+    const one = (/** @type {string} */ key, /** @type {string} */ owner, /** @type {any} */ stage, /** @type {number} */ from, /** @type {number} */ to) => ({ ...RECORDS[0], key, slug: key, owner, stage, createdAt: at(from), updatedAt: at(to) })
+    const records = /** @type {any[]} */ ([one('a', 'Lena', 'build', 10, 0), one('b', 'Lena', 'done', 30, 20), one('c', 'Lena', 'build', 5, 1), one('d', 'Sam', 'done', 300, 200), one('e', 'Sam', 'parked', 120, 3)])
+    const t = views.timeline(records, NOW, 12)
+    expect(t.lanes.map(lane => `${lane.owner}: ${lane.rows.map(row => row.map(span => span.key).join(',')).join(' | ')}`)).toEqual(['Lena: b,a | c', 'Sam: e'])
+    const e = t.lanes[1]?.rows[0]?.[0]
+    expect([e?.from === t.start, e?.isClipped, e?.to === at(3), t.lanes[0]?.rows[0]?.[1]?.to === NOW]).toEqual([true, true, true, true])
   })
   test('Board: a group per stage that has intents, in order, no card repeating its column; Pulse has none (the page draws its chart)', () => {
     const board = sectionsOf(RECORDS, { ...DEFAULT_LOOK, view: 'board' }, NOW)
@@ -216,7 +236,8 @@ describe('the page (A7) and publishing (A8)', () => {
     choices: [RECORDS],
     recordsFor: [RECORDS, { ...DEFAULT_LOOK, view: 'table' }],
     sectionsOf: [RECORDS, { ...DEFAULT_LOOK, view: 'items', by: 'owner' }, NOW],
-    pickLook: [{ ...DEFAULT_LOOK, filter: { ...NO_FILTER, words: 'snow', showDone: true } }, 'area', 'VFX'],
+    pickLook: [{ ...DEFAULT_LOOK, filter: { ...NO_FILTER, words: 'snow', showDone: true } }, 'area', 'VFX', 'parked'],
+    timeline: [RECORDS, NOW, 4],
     rowOf: [RECORDS[0], ['stale']],
     hubsOf: [RECORDS[0], MAPPING],
     moduleSections: [RECORDS, MODULES, MAPPING, 'stale', NOW],
@@ -251,7 +272,7 @@ return sectionsOf`)()
     }
   })
   test('a person or area picked opens the table of theirs, the other filters cleared, done as it was', () => {
-    expect(views.pickLook({ ...DEFAULT_LOOK, filter: { ...NO_FILTER, words: 'snow', showDone: true } }, 'area', 'VFX')).toEqual({ ...DEFAULT_LOOK, view: 'table', filter: { ...NO_FILTER, area: 'VFX', showDone: true } })
+    expect(views.pickLook({ ...DEFAULT_LOOK, filter: { ...NO_FILTER, words: 'snow', showDone: true } }, 'area', 'VFX', 'open')).toEqual({ ...DEFAULT_LOOK, view: 'table', filter: { ...NO_FILTER, area: 'VFX', showDone: true } })
   })
   test('the browser script compiles', () => {
     expect(typeof new Function(client)).toBe('function')

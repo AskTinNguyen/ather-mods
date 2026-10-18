@@ -304,7 +304,7 @@ const drawPane = async ($, e) => {
     {
       onView: view => () => setLook($, { view }),
       onFilter: patch => setLook($, { filter: { ...look.filter, ...patch } }),
-      onPick: (by, value) => setLook($, pickLook(look, by, value)),
+      onPick: (by, value, count) => setLook($, pickLook(look, by, value, count)),
       onSort: () => setLook($, { sort: nextOf(SORT_KEYS, look.sort) }),
       onGroup: () => setLook($, { group: nextOf(GROUP_KEYS, look.group) }),
       onBy: () => setLook($, { by: look.by === 'area' ? 'owner' : 'area' }),
