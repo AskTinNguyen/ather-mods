@@ -38,10 +38,10 @@ export const forYou = (records, me) => {
   if (me === '') return [{ kind: 'label', key: 'label-you', title: 'For you', meta: '', isLoud: true, groups: [group('you-none', '', 'Set git user.name in this checkout so the board knows which intents are yours. Triage shows the team’s.', [])] }]
   const mine = sortRecords(records.filter(one => one.stage !== 'done' && isMine(one, me)), 'stale')
   const needs = NEEDS.map(need => ({ need, list: mine.filter(one => need.actions.some(action => action === nextAction(one, true))) })).filter(one => one.list.length > 0)
-  const placed = new Set(needs.flatMap(one => one.list.map(record => record.key)))
-  const rest = sortRecords(mine.filter(one => !placed.has(one.key)), 'recent')
-  // Your work that collides, after your decisions (overlap-check D5).
+  // Your work that collides, after your decisions (overlap-check D5); an intent in a pair is placed by it.
   const colliding = collisionGroup('you-colliding', mine, '')
+  const placed = new Set([...needs.flatMap(one => one.list.map(record => record.key)), ...mine.filter(one => one.collisions.length > 0).map(one => one.key)])
+  const rest = sortRecords(mine.filter(one => !placed.has(one.key)), 'recent')
   const count = needs.reduce((sum, one) => sum + one.list.length, 0) + (colliding[0]?.pairs.length ?? 0)
   const byNeed = needs.map(({ need, list }) => group(`you-${need.key}`, need.title, '', list))
   const at = needs[0]?.need.key === 'decide' ? 1 : 0

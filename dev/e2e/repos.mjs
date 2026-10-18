@@ -1544,15 +1544,16 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   const home = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
   const keysOf = tree => new Set(nodesOf(tree).map(node => node.props?.key).filter(Boolean))
   const hotkeysOf = tree => nodesOf(tree).filter(node => node.type === 'Button' && node.props?.hotkey).map(node => node.props.hotkey)
-  // The parts this fixture draws in Advanced (no workers run here): the stage track, the meta line, the strip, quick actions, Everything open, Heading off?, Stepping out?.
-  const PARTS = ['stages', 'meta', 'strip', 'actions', 'all', 'away', 'warm']
+  // The parts this fixture draws in Advanced at any hour (no workers run here): the stage track, the meta line, the strip,
+  // quick actions, Everything open, Stepping out?. Heading off? shows only in the evening: Simple must leave it out too.
+  const PARTS = ['stages', 'meta', 'strip', 'actions', 'all', 'warm']
   const advanced = await home()
   expect('A3: Home opens in Advanced with all those parts and Next, and a quiet "Simple view" button keyed v', PARTS.every(key => keysOf(advanced).has(key)) && keysOf(advanced).has('next-section') && buttonOf(advanced, 'view-toggle')?.props.label === 'Simple view' && buttonOf(advanced, 'view-toggle')?.props.hotkey === 'v', PARTS.filter(key => !keysOf(advanced).has(key)))
 
   buttonOf(advanced, 'view-toggle').props.onPress()
   await engine.flush()
   const simple = await home()
-  expect('A2: Simple leaves out the strip, quick actions, the track, the meta line, workers, previews and Stepping out?; keeps the title and Next', PARTS.every(key => !keysOf(simple).has(key)) && keysOf(simple).has('title') && keysOf(simple).has('next-section') && buttonOf(simple, 'view-toggle')?.props.label === 'Advanced view', [...keysOf(simple)])
+  expect('A2: Simple leaves out the strip, quick actions, the track, the meta line, workers, previews and Stepping out?; keeps the title and Next', PARTS.every(key => !keysOf(simple).has(key)) && !keysOf(simple).has('away') && keysOf(simple).has('title') && keysOf(simple).has('next-section') && buttonOf(simple, 'view-toggle')?.props.label === 'Advanced view', [...keysOf(simple)])
   expect('A4: the press is kept for the person', engine.store.get('view:tinnguyen') === 'simple', engine.store.get('view:tinnguyen'))
   expect('A6: every key on Simple and Advanced Home is drawn once', [advanced, simple].every(tree => new Set(hotkeysOf(tree)).size === hotkeysOf(tree).length), [hotkeysOf(advanced), hotkeysOf(simple)])
 

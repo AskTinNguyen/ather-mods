@@ -1,4 +1,4 @@
-// Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata, and
+// Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata (and the board's overlap check), and
 // ather-board's unit tests (its copies of Ather's modules must match first).
 // The mod is plain .mjs: nothing to compile. Run from anywhere: `node dev/test-all.mjs`.
 // Type-checking needs the engine's API types: set CLAUDE_CODE_TYPES to a claude-code.d.ts
@@ -88,6 +88,10 @@ copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
 // Several real git checkouts under the temp folder: needs no S2 checkout.
 console.log('== repos e2e')
 sh(`node repos.mjs "${path.join(WORK, 'checkouts-report.md')}"`, e2e)
+
+// Ather Board's overlap check through the engine, on real git: needs no S2 checkout either.
+console.log('== board e2e')
+sh(`node board.mjs "${path.join(WORK, 'board-report.md')}"`, e2e)
 
 console.log('== e2e')
 // The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for

@@ -66,13 +66,14 @@ const cellsOf = (model, part, { record, flags }) => ({
 })
 
 // A collision as a row (overlap-check D5): the intent's glyph and the pair, the places in amber, the first file
-// quiet beside them, then the base's last change and the owners, in the columns every row has.
+// quiet beside them (left out in a narrow pane, where the pair's names need the room; opened, the row lists every
+// file), then the base's last change and the owners, in the columns every row has.
 /** @param {PaneModel} model @param {Collision} collision @returns {import('./ather/worklist.mjs').RowCells} */
 const pairCells = (model, { a, b, files, count, at }) => ({
   glyph: glyphOf(b.stage),
   title: `${b.slug} ⇄ ${a.key === '' ? a.slug : `${glyphOf(a.stage)} ${a.slug}`}`,
   warn: `▲ ${count} ${count === 1 ? 'overlap' : 'overlaps'}`,
-  repo: `${(files[0] ?? '').split('/').pop()}${files.length > 1 ? ` +${files.length - 1}` : ''}`,
+  repo: model.width < 90 ? '' : `${(files[0] ?? '').split('/').pop()}${files.length > 1 ? ` +${files.length - 1}` : ''}`,
   bar: '',
   count: '',
   age: at ? ageText(at, model.now) : '',
