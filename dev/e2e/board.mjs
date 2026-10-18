@@ -3,7 +3,6 @@
 // line, and a teammate's clone that knows only main. Needs no S2_ROOT.
 // `node board.mjs [report.md] [--out <dir>]`: `--out` writes the pane as text (72 and 110 columns) and the page.
 import fs from 'fs'
-
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'

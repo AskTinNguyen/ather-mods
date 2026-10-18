@@ -3,20 +3,23 @@
 // JSON line: the sizes, the fetch, the first check (in budgeted runs, as the board makes them) and a check with
 // nothing moved. `node dev/bench/overlap.mjs [--files 30000] [--branches 40] [--commits 300] [--budget 15000]`.
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
 import { execFileSync, spawnSync } from 'child_process'
 import { EMPTY_OVERLAPS, fetchBranches, readOverlaps } from '../../ather-automata/hooks/overlap.mjs'
+import { sandbox } from '../e2e/harness.mjs'
 
-const arg = (name, fallback) => Number(process.argv[process.argv.indexOf(`--${name}`) + 1] ?? fallback) || fallback
+// `--name <number>`, else the fallback.
+const arg = (name, fallback) => {
+  const at = process.argv.indexOf(`--${name}`)
+  return at >= 0 ? Number(process.argv[at + 1]) || fallback : fallback
+}
 const FILES = arg('files', 30000)
 const BRANCHES = arg('branches', 40)
 const COMMITS = arg('commits', 300)
 const BUDGET = arg('budget', 15000)
 
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-bench-'))
-fs.writeFileSync(path.join(work, 'gitconfig'), '')
-const env = { ...process.env, GIT_CONFIG_GLOBAL: path.join(work, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Bench', GIT_AUTHOR_EMAIL: 'b@x', GIT_COMMITTER_NAME: 'Bench', GIT_COMMITTER_EMAIL: 'b@x' }
+const work = sandbox('ather-bench-')
+const env = { ...process.env, GIT_AUTHOR_NAME: 'Bench', GIT_AUTHOR_EMAIL: 'b@x', GIT_COMMITTER_NAME: 'Bench', GIT_COMMITTER_EMAIL: 'b@x' }
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'init.defaultBranch=main', ...args], { cwd, env, encoding: 'utf8', maxBuffer: 1 << 28 }).trim()
 // The same files every run: a seeded generator.
 let seed = 7
@@ -48,12 +51,13 @@ const edit = (count, line, tag) => {
     }
   }
 }
-const timed = run => {
+// How long a step takes, synchronous or not.
+const clock = async run => {
   const start = Date.now()
-  const value = run()
+  const value = await run()
   return { value, ms: Date.now() - start }
 }
-const built = timed(() => {
+const built = await clock(() => {
   for (let one = 0; one < BRANCHES; one += 1) {
     git(tree, 'checkout', '-q', '-B', `intent/b${one}`, 'main')
     for (let commit = 0; commit < 3; commit += 1) {
@@ -83,11 +87,6 @@ const repo = {
   mtime: async () => 0,
 }
 const sides = Array.from({ length: BRANCHES }, (_, one) => ({ key: `intent-${one}`, branch: `intent/b${one}` }))
-const clock = async run => {
-  const start = Date.now()
-  const value = await run()
-  return { value, ms: Date.now() - start }
-}
 const fetched = await clock(() => fetchBranches(repo, sides.map(side => side.branch)))
 const runs = []
 let read = { cache: EMPTY_OVERLAPS, isPartial: true, overlaps: [] }

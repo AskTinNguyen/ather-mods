@@ -192,7 +192,7 @@ describe('a real repository (A3, A4, A6)', () => {
       { path: 'Combat/HitStop.cpp', line: 3, kind: 'lines', ours: 'return FMath::Min(Budget, 0.070f);', theirs: 'return CanCancel(Dodge) ? 0.f : Budget;' },
       { path: 'Map.umap', line: 0, kind: 'binary', ours: '', theirs: '' },
     ])
-    expect(overlaps[0]?.who).toBe('Lena Park')
+    expect(overlaps[0]?.base?.who).toBe('Lena Park')
     expect(overlaps[1]?.spots[0]).toEqual({ path: 'Move/Modes.cpp', line: 1, kind: 'lines', ours: 'case MOVE_Dash: return PhysVault(dt, Iter);', theirs: 'case MOVE_Dash: return PhysDash(dt, Iter);' })
   })
 
@@ -223,7 +223,7 @@ describe('a real repository (A3, A4, A6)', () => {
     squashRetune()
     const squashed = await base()
     fs.rmSync(work, { recursive: true, force: true })
-    expect([before?.via, merged?.via, merged?.who, squashed?.via]).toEqual([[], ['hitstop-retune'], 'Lena Park', ['hitstop-squash']])
+    expect([before?.base?.via, merged?.base?.via, merged?.base?.who, squashed?.base?.via]).toEqual([[], ['hitstop-retune'], 'Lena Park', ['hitstop-squash']])
     expect(intentsIn('docs/intent/a-b/prompt.md\nsrc/x.cpp\ndocs/intent/a-b/log.md\ndocs/intent/c/progress.md\n')).toEqual(['a-b', 'c'])
   })
 

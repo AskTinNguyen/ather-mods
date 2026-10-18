@@ -38,14 +38,14 @@ const RECORDS = [
 /** @type {import('../hooks/ather/overlap.mjs').Overlap[]} */
 const OVERLAPS = [
   {
-    key: '|dodge-cancel', a: '', b: 'dodge-cancel', files: ['Combat/HitStop.cpp', 'Maps/Arena.umap'], count: 2, who: 'Lena Park', at: NOW - 6 * 60000, via: ['hitstop-retune'],
+    key: '|dodge-cancel', a: '', b: 'dodge-cancel', files: ['Combat/HitStop.cpp', 'Maps/Arena.umap'], count: 2, base: { who: 'Lena Park', at: NOW - 6 * 60000, via: ['hitstop-retune'] },
     spots: [
       { path: 'Combat/HitStop.cpp', line: 42, kind: 'lines', ours: 'return FMath::Min(Budget, 0.070f);', theirs: 'return CanCancel(Dodge) ? 0.f : Budget;' },
       { path: 'Maps/Arena.umap', line: 0, kind: 'binary', ours: '', theirs: '' },
     ],
   },
   {
-    key: 'mc-vault|nine-tail-dash', a: 'mc-vault', b: 'nine-tail-dash', files: ['Character/S2CharacterMovement.cpp'], count: 1, who: '', at: 0, via: [],
+    key: 'mc-vault|nine-tail-dash', a: 'mc-vault', b: 'nine-tail-dash', files: ['Character/S2CharacterMovement.cpp'], count: 1, base: null,
     spots: [{ path: 'Character/S2CharacterMovement.cpp', line: 301, kind: 'lines', ours: 'case MOVE_Dash: return PhysVault(dt, Iter);', theirs: 'case MOVE_Dash: return PhysDash(dt, Iter);' }],
   },
 ]
@@ -71,7 +71,7 @@ describe('the records (A1, A5)', () => {
     expect([named('mc-vault')?.flags.at(-1)?.label, named('nine-tail-dash')?.flags.at(-1)?.label]).toEqual(['overlaps nine-tail-dash', 'overlaps mc-vault'])
     // Records in no collision are the same records; two intents' collision has no base time.
     expect(named('frame-call')).toBe(RECORDS[3])
-    expect([pair('mc-vault|nine-tail-dash')?.at, pair('|dodge-cancel')?.at]).toEqual([0, NOW - 6 * 60000])
+    expect([pair('mc-vault|nine-tail-dash')?.base, pair('|dodge-cancel')?.base]).toEqual([null, { at: NOW - 6 * 60000, via: ['hitstop-retune'] }])
   })
   test('an overlap naming an intent the board does not have is dropped', () => {
     expect(withCollisions(RECORDS, [{ ...(OVERLAPS[1] ?? OVERLAPS[0]), key: 'gone|mc-vault', a: 'gone' }], 'main').some(one => one.collisions.length > 0)).toBe(false)

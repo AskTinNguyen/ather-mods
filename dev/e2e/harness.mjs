@@ -35,7 +35,7 @@ export const checks = () => {
     for (const one of results.filter(r => !r.ok)) console.log(`FAIL ${one.name}\n     ${one.detail.slice(0, cut)}`)
     process.exit(passed === results.length ? 0 : 1)
   }
-  return { results, expect, finish }
+  return { expect, finish }
 }
 
 // A drawn tree's nodes, depth first, and the one with a key.

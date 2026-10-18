@@ -157,12 +157,9 @@ const checkOverlaps = $ => {
       do {
         isCheckAgain = false
         overlaps = await readOverlaps(repoOf($, at.root), { base: at.base, sides: sidesOf(board?.records ?? []), cache: overlaps.cache })
-        // A run that ran out of time (overlap-hardening D1) shows what it found, and the next goes on from there.
-        if (overlaps.isPartial) {
-          isCheckAgain = true
-          $.ui.invalidate('ui.render')
-        }
-      } while (isCheckAgain)
+        // Each run shows what it found; one that ran out of time (overlap-hardening D1) is followed by the next.
+        $.ui.invalidate('ui.render')
+      } while (isCheckAgain || overlaps.isPartial)
     } catch (error) {
       $.ui.log(`Ather Board: the overlap check failed: ${String(error)}`, { to: 'debug' })
     } finally {

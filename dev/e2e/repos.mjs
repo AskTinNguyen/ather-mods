@@ -2,7 +2,6 @@
 // checkout and a web checkout side by side, each with a local bare origin, some with worktrees,
 // driven through the stand-in engine. Needs no S2_ROOT. `node repos.mjs [report.md]`.
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { aborts, createEngine } from './engine.mjs'
@@ -284,7 +283,7 @@ const readJson = file => {
 
 // ---------------------------------------------------------------- one pane over the workspace
 
-// Every node of a drawn pane, depth first.
+// The text a drawn node shows, its children's joined.
 const textIn = node => (!node || typeof node !== 'object' ? String(node ?? '') : (node.children ?? []).map(textIn).join(''))
 // The intent rows a pane draws: each row's work id (intent:<key>) and its repository's name.
 const intentRows = tree =>

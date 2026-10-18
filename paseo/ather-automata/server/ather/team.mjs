@@ -54,7 +54,7 @@ const lf = text => text.replace(/\r\n/g, '\n')
 
 // The intent folder a repository path is in: "docs/intent/lead-vfx/prompt.md" → "lead-vfx".
 /** @param {string} path */
-const slugOf = path => /^docs\/intent\/([^/]+)\/./.exec(path.trim())?.[1] ?? ''
+export const slugOf = path => /^docs\/intent\/([^/]+)\/./.exec(path.trim())?.[1] ?? ''
 
 // `git ls-tree -r --name-only` under docs/intent: each folder with the names of its files.
 /** @param {string} text @returns {Map<string, string[]>} */
