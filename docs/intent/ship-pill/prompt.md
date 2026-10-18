@@ -1,7 +1,7 @@
 # Ather Automata: the merge line and the stage pill (mockups A and C, without the Ship card)
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`
