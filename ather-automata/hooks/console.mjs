@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, isShownIn, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
+import { CREATE_SHOWN, VIEW_LABELS, isShownIn, otherView, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
@@ -81,14 +81,40 @@ let intentBack = /** @type {'home' | 'pick'} */ ('home')
 // (read from the person's stored choice once a session), and the heads pressed to fold or unfold.
 let pickQuery = ''
 let pickSort = /** @type {import('./worklist.mjs').Sort} */ ('recent')
-let pickGroup = /** @type {import('./worklist.mjs').GroupBy} */ ('person')
-let isGroupRead = false
-// Presses of Group: a stored choice read back after a press does not undo it.
-let groupPresses = 0
-// Home's view (Advanced or Simple), read from the person's stored choice once a session, like Group.
-let homeView = /** @type {import('./home.mjs').PaneView} */ ('advanced')
-let isViewRead = false
-let viewPresses = 0
+// A choice remembered for the person (Group, Home's view): read from the store once a session; a press
+// made before the read lands is not undone by it.
+/** @template T @param {T} initial @param {(io: import('./state.mjs').Io, me: string) => Promise<T>} read @param {(io: import('./state.mjs').Io, me: string, value: T) => Promise<unknown>} write */
+const remembered = (initial, read, write) => {
+  let value = initial
+  let isRead = false
+  let presses = 0
+  return {
+    get value() {
+      return value
+    },
+    reset() {
+      value = initial
+      isRead = false
+    },
+    /** @param {import('./state.mjs').Io} store */
+    async readOnce(store) {
+      if (isRead) return
+      const before = presses
+      const stored = await read(store, me).catch(() => value)
+      if (presses === before) value = stored
+      isRead = true
+    },
+    /** @param {import('./state.mjs').Io} store @param {T} next */
+    pick(store, next) {
+      value = next
+      presses += 1
+      isRead = true
+      return write(store, me, next).catch(() => undefined)
+    },
+  }
+}
+const pickGroup = remembered(/** @type {import('./worklist.mjs').GroupBy} */ ('person'), state.readGroupBy, state.setGroupBy)
+const homeView = remembered(/** @type {import('./home.mjs').PaneView} */ ('advanced'), state.readPaneView, state.setPaneView)
 /** @type {Set<string>} */
 const pickFolded = new Set()
 // Needs you's intents opened to show each of their decisions.
@@ -473,8 +499,8 @@ async function drawPane($, e) {
   isDrawn = true
   void syncMain($)
   if (paneMode === 'intent') await readIntentView($)
-  if (paneMode === 'pick' && !isGroupRead) await readGroup($)
-  if (!isViewRead) await readView($)
+  if (paneMode === 'pick') await pickGroup.readOnce(io($))
+  await homeView.readOnce(io($))
   return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
 }
 
@@ -503,10 +529,8 @@ async function openConsole($, folder) {
   pickQuery = ''
   pickSort = 'recent'
   pickFolded.clear()
-  pickGroup = 'person'
-  isGroupRead = false
-  homeView = 'advanced'
-  isViewRead = false
+  pickGroup.reset()
+  homeView.reset()
   callsOpen.clear()
   answerState = { ...FRESH_ANSWERS }
   findingShown = ''
@@ -1628,38 +1652,17 @@ function setSearch($, text) {
 // Group: Person → Area → Stage → None, remembered for the person (folds are not).
 /** @param {Engine} $ */
 function cycleGroup($) {
-  pickGroup = nextGroup(pickGroup)
-  groupPresses += 1
-  isGroupRead = true
+  void pickGroup.pick(io($), nextGroup(pickGroup.value))
   $.ui.invalidate('ui.render')
-  void state.setGroupBy(io($), me, pickGroup).catch(() => undefined)
-}
-
-/** @param {Engine} $ */
-async function readGroup($) {
-  const pressesBefore = groupPresses
-  const stored = await state.readGroupBy(io($), me).catch(() => pickGroup)
-  if (groupPresses === pressesBefore) pickGroup = stored
-  isGroupRead = true
 }
 
 // Simple or Advanced, remembered for the person.
 /** @param {Engine} $ @param {import('./home.mjs').PaneView} view */
 async function pickView($, view) {
-  homeView = view
-  viewPresses += 1
-  isViewRead = true
+  const written = homeView.pick(io($), view)
   $.ui.invalidate('ui.render')
-  await state.setPaneView(io($), me, view).catch(() => undefined)
+  await written
   return view === 'simple' ? 'Simple view: what needs you and what is next. /ather advanced shows everything.' : 'Advanced view: everything Ather shows. /ather simple shows less.'
-}
-
-/** @param {Engine} $ */
-async function readView($) {
-  const pressesBefore = viewPresses
-  const stored = await state.readPaneView(io($), me).catch(() => homeView)
-  if (viewPresses === pressesBefore) homeView = stored
-  isViewRead = true
 }
 
 /** @param {Engine} $ */
@@ -1972,9 +1975,9 @@ function paneView(el, $, model, columns, surface, crew = []) {
       : Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: hasInput ? () => ((isSearchOpen = true), $.ui.invalidate('ui.render')) : press($, () => searchQuestion($), true) })
     const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
     const sort = Button({ key: 'pick-sort', label: `Sort: ${SORT_LABELS[pickSort]}`, hotkey: hotkeyFor('o'), plain: true, onPress: () => cycleSort($) })
-    const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
+    const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup.value]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
     rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
-    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
+    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup.value, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
     rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
@@ -2153,9 +2156,9 @@ function paneView(el, $, model, columns, surface, crew = []) {
   const status = [header.stage, header.progress, header.sentence === 'waiting on you' ? '' : header.sentence].filter(Boolean).join(' · ')
   const meta = [header.role, header.proof, header.lock, header.week].filter(Boolean).join(' · ')
   // Home's parts by name, each drawn only when the person's view shows it (simple-view D2).
-  /** @type {[string, any[]][]} */
+  /** @type {[import('./home.mjs').HomePart, any[]][]} */
   const parts = []
-  const shown = (/** @type {[string, any[]][]} */ list) => list.filter(([part]) => isShownIn(homeView, part)).flatMap(([, nodes]) => nodes)
+  const shown = (/** @type {[import('./home.mjs').HomePart, any[]][]} */ list) => list.filter(([part]) => isShownIn(homeView.value, part)).flatMap(([, nodes]) => nodes)
   rows.push(
     masthead(
       el,
@@ -2222,7 +2225,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
   // Beside Heading off? and at any hour: keep the prompt cache warm while the person steps out, as the row's ◔ does.
   const warm = warmPaneText(warmStore.readWarmView())
   parts.push(['warm', [section(el, 'warm', [label(el, 'warm-label', 'Stepping out?', width), Text({ key: 'warm-pitch', color: warm.action === 'Stop keeping warm' ? undefined : QUIET, wrap: 'wrap', children: warm.text }), ...(warm.action ? [Button({ key: 'warm-toggle', label: warm.action, hotkey: hotkeyFor('w'), plain: isClicked ? undefined : true, onPress: () => void pressWarm($) })] : [])])]])
-  parts.push(['view', [section(el, 'view', [Button({ key: 'view-toggle', label: homeView === 'simple' ? 'Advanced view' : 'Simple view', hotkey: hotkeyFor('v'), plain: true, dimColor: true, onPress: () => void pickView($, homeView === 'simple' ? 'advanced' : 'simple') })])]])
+  parts.push(['view', [section(el, 'view', [Button({ key: 'view-toggle', label: VIEW_LABELS[otherView(homeView.value)], hotkey: hotkeyFor('v'), plain: true, dimColor: true, onPress: () => void pickView($, otherView(homeView.value)) })])]])
 
   rows.push(...shown(parts), ...foot)
   return Box({ flexDirection: 'column', children: rows })

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { awayReason, isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, isShownIn, paneViewOf, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
+import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, SIMPLE_SHOWS, VIEW_LABELS, isShownIn, otherView, paneViewOf, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle, waitingCalls } from '../hooks/model.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
@@ -2529,7 +2529,12 @@ describe('Home in Simple and Advanced views (simple-view)', () => {
   test('A1: Advanced shows every part; Simple keeps the title, its status, Needs you, Needs attention and Next', () => {
     const parts = ['title', 'status', 'stages', 'meta', 'strip', 'actions', 'needs', 'attention', 'next', 'crew', 'preview', 'away', 'warm', 'view']
     expect(parts.filter(part => isShownIn('advanced', part))).toEqual(parts)
-    expect(parts.filter(part => isShownIn('simple', part))).toEqual(['title', 'status', 'needs', 'attention', 'next', 'view'])
+    expect(parts.filter(part => isShownIn('simple', part))).toEqual([...SIMPLE_SHOWS])
+    expect(SIMPLE_SHOWS).toEqual(['title', 'status', 'needs', 'attention', 'next', 'view'])
+  })
+
+  test('A4: the toggle offers the other view by name', () => {
+    expect([otherView('simple'), otherView('advanced'), VIEW_LABELS[otherView('advanced')]]).toEqual(['advanced', 'simple', 'Simple view'])
   })
 
   test('A1: anything but "simple" reads as Advanced, so no one\'s Home changes on update', () => {
