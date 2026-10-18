@@ -76,7 +76,7 @@ const pairCells = (model, collision) => ({
   repo: model.width < 90 ? '' : `${(collision.files[0] ?? '').split('/').pop()}${collision.files.length > 1 ? ` +${collision.files.length - 1}` : ''}`,
   bar: '',
   count: '',
-  age: collision.at ? ageText(collision.at, model.now) : '',
+  age: collision.base?.at ? ageText(collision.base.at, model.now) : '',
   owner: collisionOwners(collision),
 })
 

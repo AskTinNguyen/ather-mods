@@ -133,7 +133,7 @@
       '<div class="row pair">' + toggle({ key: collision.key }) + glyph(b.stage) +
       '<span class="main"><span class="head"><span class="slug">' + esc(b.slug) + ' <span class="versus-mark">⇄</span> ' + other + '</span><span class="warn">' + esc(overlapCount(collision.count)) + '</span></span><span class="title">' + esc(files) + '</span></span>' +
       '<span class="progress"></span>' +
-      '<span class="age" title="the base’s last change to these files">' + esc(collision.at ? ageText(collision.at, NOW) : '') + '</span>' +
+      '<span class="age" title="the base’s last change to these files">' + esc(collision.base && collision.base.at ? ageText(collision.base.at, NOW) : '') + '</span>' +
       '<span class="owner">' + esc(collisionOwners(collision)) + '</span>' +
       '</button>' + (opened[collision.key] ? pairDetails(collision) : '') + '</div>'
     )

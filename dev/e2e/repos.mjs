@@ -2,25 +2,16 @@
 // checkout and a web checkout side by side, each with a local bare origin, some with worktrees,
 // driven through the stand-in engine. Needs no S2_ROOT. `node repos.mjs [report.md]`.
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { aborts, createEngine } from './engine.mjs'
+import { byKey, checks, join, nodesOf, sandbox } from './harness.mjs'
 
 const OUT = process.argv[2]
 const { register } = await import('./out/hooks/ather.mjs')
 
-// The person's own git settings (signing, hooks, default branch) stay out of these repositories and of the hooks' git calls.
-// Folders with forward slashes, as the hooks name a checkout: on Windows path.join and the temporary folder give backslashes.
-const join = (...parts) => path.join(...parts).split(path.sep).join('/')
-// The folder's real path: git names a checkout by it (macOS's temporary folder is behind a link).
-const BASE = join(fs.realpathSync(fs.mkdtempSync(join(os.tmpdir(), 'ather-checkouts-'))))
-fs.writeFileSync(join(BASE, 'gitconfig'), '')
-process.env.GIT_CONFIG_GLOBAL = join(BASE, 'gitconfig')
-process.env.GIT_CONFIG_NOSYSTEM = '1'
-
-const results = []
-const expect = (name, ok, detail = '') => results.push({ name, ok: Boolean(ok), detail: typeof detail === 'string' ? detail : JSON.stringify(detail) })
+const BASE = sandbox('ather-checkouts-')
+const { expect, finish } = checks()
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 
@@ -292,9 +283,7 @@ const readJson = file => {
 
 // ---------------------------------------------------------------- one pane over the workspace
 
-// Every node of a drawn pane, depth first.
-const nodesOf = node => (!node || typeof node !== 'object' ? [] : [node, ...(node.children ?? []).flatMap(nodesOf)])
-const byKey = (tree, key) => nodesOf(tree).find(node => node.props?.key === key)
+// The text a drawn node shows, its children's joined.
 const textIn = node => (!node || typeof node !== 'object' ? String(node ?? '') : (node.children ?? []).map(textIn).join(''))
 // The intent rows a pane draws: each row's work id (intent:<key>) and its repository's name.
 const intentRows = tree =>
@@ -1592,11 +1581,4 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })
-const passed = results.filter(one => one.ok).length
-const lines = ['# Ather Automata across checkouts', '', `${passed} of ${results.length} checks passed.`, '']
-for (const one of results) lines.push(`- ${one.ok ? '✅' : '❌'} ${one.name}${one.ok || !one.detail ? '' : `  \n  ${one.detail}`}`)
-if (OUT) fs.writeFileSync(OUT, `${lines.join('\n')}\n`)
-console.log(`${passed}/${results.length} passed`)
-for (const one of results.filter(r => !r.ok)) console.log(`FAIL ${one.name}\n     ${one.detail.slice(0, 400)}`)
-// Timers the hooks started (the 30-second tick, background fetches) must not keep the run alive.
-process.exit(passed === results.length ? 0 : 1)
+finish({ title: 'Ather Automata across checkouts', report: OUT })

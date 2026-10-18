@@ -196,7 +196,7 @@ describe('the page (A7) and publishing (A8)', () => {
   const MAPPING = { 'snow-look': ['vfx'], 'quest-calls': ['combat', 'vfx'] }
   const GRAPH = map.graphOf(RECORDS, MODULES, MAPPING)
   // Two records in a collision, as withCollisions leaves them.
-  const COLLIDING = withCollisions(RECORDS, [{ key: '|snow-look', a: '', b: 'snow-look', files: ['VFX/Snow.cpp'], spots: [{ path: 'VFX/Snow.cpp', line: 4, kind: 'lines', ours: 'a', theirs: 'b' }], count: 1, who: 'Lena Park', at: NOW }], 'main')
+  const COLLIDING = withCollisions(RECORDS, [{ key: '|snow-look', a: '', b: 'snow-look', files: ['VFX/Snow.cpp'], spots: [{ path: 'VFX/Snow.cpp', line: 4, kind: 'lines', ours: 'a', theirs: 'b' }], count: 1, base: { who: 'Lena Park', at: NOW, via: [] } }], 'main')
   /** @type {Record<string, unknown[]>} */
   const CALLS = {
     ageText: [NOW - 3 * DAY_MS, NOW],
