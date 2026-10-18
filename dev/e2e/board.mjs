@@ -6,6 +6,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
+import { fileURLToPath } from 'url'
 import { createEngine } from './engine.mjs'
 import { check } from './screen.mjs'
 
@@ -94,7 +95,7 @@ git(clone, ['config', 'user.name', 'Tin Nguyen'])
 // ---------------------------------------------------------------- the board in the engine
 
 const engine = createEngine({ root: clone, surfaces: ['terminal'], user: 'Tin Nguyen' })
-engine.$.plugin = { name: 'ather-board', root: fileURLToPathSafe(BOARD) }
+engine.$.plugin = { name: 'ather-board', root: fileURLToPath(BOARD).replace(/\\/g, '/').replace(/\/$/, '') }
 engine.$.model.complete = async () => ({ isAnswered: false, reason: 'refused' })
 register(engine.on)
 await engine.start(true)
@@ -105,10 +106,6 @@ const textOf = (tree, columns) => check(tree, columns).lines.join('\n')
 const until = async (test, ms = 20000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 150))) if (await test()) return true
   return false
-}
-
-function fileURLToPathSafe(url) {
-  return decodeURIComponent(new URL(url).pathname).replace(/^\/([A-Za-z]:)/, '$1').replace(/\/$/, '')
 }
 
 await engine.command('board')

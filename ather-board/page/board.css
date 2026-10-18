@@ -84,7 +84,6 @@ main > :first-child { margin-top: 16px; }
 /* A collision opened: each place, then each side's first changed line on one grey ground, named by its side. */
 .versus-mark { color: var(--quiet); font-weight: 400; }
 .spot { margin: 10px 0 2px; font: 600 12.5px/1.4 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
-.spot .kind { color: var(--quiet); font-weight: 400; }
 .versus { display: grid; grid-template-columns: max-content minmax(0, 1fr); overflow-x: auto; column-gap: 14px; row-gap: 2px; background: var(--well); border-radius: 4px; padding: 6px 10px; margin: 0 0 8px; font: 12.5px/1.45 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
 .versus span { color: var(--quiet); }
 .versus code { color: var(--ink); font: inherit; white-space: pre; }

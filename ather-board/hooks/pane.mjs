@@ -11,7 +11,7 @@ import { BAR_CELLS, ageText, miniBar, rowColumns } from './ather/worklist.mjs'
 import { ACTION_LABELS, actionsFor, collisionActions } from './act.mjs'
 import { isMine } from './ather/model.mjs'
 import { paneView } from './focus.mjs'
-import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, summaryText } from './views.mjs'
+import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, collisionFact, collisionOwners, overlapCount, spotLabel, summaryText } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
@@ -69,15 +69,15 @@ const cellsOf = (model, part, { record, flags }) => ({
 // quiet beside them (left out in a narrow pane, where the pair's names need the room; opened, the row lists every
 // file), then the base's last change and the owners, in the columns every row has.
 /** @param {PaneModel} model @param {Collision} collision @returns {import('./ather/worklist.mjs').RowCells} */
-const pairCells = (model, { a, b, files, count, at }) => ({
-  glyph: glyphOf(b.stage),
-  title: `${b.slug} ⇄ ${a.key === '' ? a.slug : `${glyphOf(a.stage)} ${a.slug}`}`,
-  warn: `▲ ${count} ${count === 1 ? 'overlap' : 'overlaps'}`,
-  repo: model.width < 90 ? '' : `${(files[0] ?? '').split('/').pop()}${files.length > 1 ? ` +${files.length - 1}` : ''}`,
+const pairCells = (model, collision) => ({
+  glyph: glyphOf(collision.b.stage),
+  title: `${collision.b.slug} ⇄ ${collision.a.key === '' ? collision.a.slug : `${glyphOf(collision.a.stage)} ${collision.a.slug}`}`,
+  warn: overlapCount(collision.count),
+  repo: model.width < 90 ? '' : `${(collision.files[0] ?? '').split('/').pop()}${collision.files.length > 1 ? ` +${collision.files.length - 1}` : ''}`,
   bar: '',
   count: '',
-  age: at ? ageText(at, model.now) : '',
-  owner: [...new Set([b.owner, a.owner].filter(Boolean))].join(', '),
+  age: collision.at ? ageText(collision.at, model.now) : '',
+  owner: collisionOwners(collision),
 })
 
 // A collision opened in place: what happened, each place with both sides' first changed line, and what can be done.
@@ -86,7 +86,6 @@ const pairOpened = (el, model, actions, collision, at) => {
   const { a, b } = collision
   const key = `${at}-${collision.key}-open`
   const [next, ...rest] = collisionActions(collision, model.me, model.base)
-  const fact = a.key === '' ? `origin/${a.slug} changed these lines${collision.at ? ` ${ageText(collision.at, model.now)} ago` : ''}${a.owner ? ` (${a.owner})` : ''}.` : 'Neither is merged yet: whichever merges second will conflict.'
   const width = Math.max(a.slug.length, b.slug.length)
   return el.Box({
     key,
@@ -95,9 +94,9 @@ const pairOpened = (el, model, actions, collision, at) => {
     paddingLeft: 2,
     marginBottom: 1,
     children: [
-      el.Text({ key: `${key}-fact`, color: QUIET, wrap: 'wrap', children: fact }),
+      el.Text({ key: `${key}-fact`, color: QUIET, wrap: 'wrap', children: collisionFact(collision, model.now) }),
       ...collision.spots.flatMap((spot, index) => [
-        el.Text({ key: `${key}-spot-${index}`, bold: true, wrap: 'truncate', children: spot.kind === 'lines' ? `${spot.path}:${spot.line}` : `${spot.path} · ${spot.kind === 'binary' ? 'binary, both changed' : `${a.slug} ${spot.ours} it, ${b.slug} ${spot.theirs} it`}` }),
+        el.Text({ key: `${key}-spot-${index}`, bold: true, wrap: 'truncate', children: spotLabel(collision, spot) }),
         ...(spot.kind === 'lines' ? [[a.slug, spot.ours], [b.slug, spot.theirs]].map(([who = '', line = ''], side) => el.Text({ key: `${key}-spot-${index}-${side}`, color: side === 0 ? QUIET : undefined, wrap: 'truncate', children: fit(`  ${who.padEnd(width)}  ${line || '(blank)'}`, model.width - 2) })) : []),
       ]),
       ...(collision.count > collision.spots.length ? [el.Text({ key: `${key}-more`, color: QUIET, children: `and ${collision.count - collision.spots.length} more` })] : []),

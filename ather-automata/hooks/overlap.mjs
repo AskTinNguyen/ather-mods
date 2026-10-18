@@ -5,7 +5,7 @@
 // draws it (ather-board). Pure: git comes through a Repo (team.mjs) built where `$` lives. Every call
 // here reads, never the working tree or the index; the one fetch writes only remote-tracking refs.
 
-import { FETCH_TIMEOUT_MS, fetchArgs } from './team.mjs'
+import { FETCH_TIMEOUT_MS, complaintOf, fetchArgs } from './team.mjs'
 
 /**
  * @typedef {import('./team.mjs').Repo} Repo
@@ -14,7 +14,8 @@ import { FETCH_TIMEOUT_MS, fetchArgs } from './team.mjs'
  *   'lines': `line` is where it starts in the first side's file, `ours` and `theirs` each side's first changed line;
  *   'binary': a file git cannot merge by lines; 'deleted': one side deleted the file the other changed (`ours`, `theirs`: 'changed' or 'deleted')
  * @typedef {{ files: string[], spots: Spot[], count: number, who: string, at: number }} Merge what merging two tips conflicts on:
- *   `count` every place, `spots` the first SPOTS_KEPT; `who`, `at`: the first side's last author and commit time on those files
+ *   `count` every place, `spots` the first SPOTS_KEPT; `who`, `at`: when the first side is the base, its last author and commit
+ *   time on those files ('' and 0 for two intents)
  * @typedef {Merge & { key: string, a: string, b: string }} Overlap two sides that conflict: `a` an intent's key, or '' for the base branch
  *   (the base is always `a`), `b` an intent's key; `key`: pairKey(a, b)
  * @typedef {{ version: string, files: Map<string, string[]>, merges: Map<string, Merge | null> }} OverlapCache what earlier reads learned:
@@ -137,10 +138,10 @@ const changedFiles = async (repo, base, tip) => {
 
 /**
  * Merges two tips with no working tree: null when they merge cleanly (or cannot be merged at all, such as
- * unrelated histories); else the places they conflict.
- * @param {Repo} repo @param {string} ours @param {string} theirs @returns {Promise<Merge | null>}
+ * unrelated histories); else the places they conflict. `isBase`: `ours` is the base, whose last change is named.
+ * @param {Repo} repo @param {string} ours @param {string} theirs @param {boolean} isBase @returns {Promise<Merge | null>}
  */
-const mergeOf = async (repo, ours, theirs) => {
+const mergeOf = async (repo, ours, theirs, isBase) => {
   const ran = await repo.git(['merge-tree', '--write-tree', ours, theirs])
   if (ran.exitCode !== 1) return null
   const { tree, stages, binary } = parseMergeTree(ran.stdout)
@@ -156,8 +157,8 @@ const mergeOf = async (repo, ours, theirs) => {
   }
   if (spots.length === 0) return null
   const files = [...stages.keys()]
-  const last = await repo.git(['log', '-1', '--format=%an%x09%ct', ours, '--', ...files])
-  const [who = '', at = '0'] = last.exitCode === 0 ? last.stdout.trim().split('\t') : []
+  const last = isBase ? await repo.git(['log', '-1', '--format=%an%x09%ct', ours, '--', ...files]) : null
+  const [who = '', at = '0'] = last?.exitCode === 0 ? last.stdout.trim().split('\t') : []
   return { files, spots: spots.slice(0, SPOTS_KEPT), count: spots.length, who, at: Number(at) * 1000 }
 }
 
@@ -177,22 +178,19 @@ export const readOverlaps = async (repo, { base, sides, cache }) => {
   const baseTip = tips.get(base)
   const present = sides.filter(side => side.branch !== base && tips.has(side.branch))
   if (!baseTip || present.length === 0) return { overlaps: [], note: '', cache: { version, files: new Map(), merges: new Map() } }
-  const tipOf = (/** @type {string} */ key) => (key === '' ? baseTip : (tips.get(present.find(side => side.key === key)?.branch ?? '') ?? ''))
-  const files = new Map()
+  /** @type {Map<string, string>} each side's tip, and the base's under '' */
+  const tipOf = new Map([['', baseTip], ...present.map(side => /** @type {[string, string]} */ ([side.key, tips.get(side.branch) ?? '']))])
+  const tip = (/** @type {string} */ key) => tipOf.get(key) ?? ''
   /** @type {Map<string, string[]>} */
   const byKey = new Map()
-  for (const side of present) {
-    const id = `${baseTip}...${tipOf(side.key)}`
-    const list = cache.files.get(id) ?? (await changedFiles(repo, baseTip, tipOf(side.key)))
-    files.set(id, list)
-    byKey.set(side.key, list)
-  }
+  for (const side of present) byKey.set(side.key, cache.files.get(`${baseTip}...${tip(side.key)}`) ?? (await changedFiles(repo, baseTip, tip(side.key))))
+  const files = new Map(present.map(side => [`${baseTip}...${tip(side.key)}`, byKey.get(side.key) ?? []]))
   const merges = new Map()
   /** @type {Overlap[]} */
   const overlaps = []
   for (const { a, b } of pairsToCheck(present, byKey)) {
-    const id = `${tipOf(a)}..${tipOf(b)}`
-    const merged = cache.merges.has(id) ? (cache.merges.get(id) ?? null) : await mergeOf(repo, tipOf(a), tipOf(b))
+    const id = `${tip(a)}..${tip(b)}`
+    const merged = cache.merges.has(id) ? (cache.merges.get(id) ?? null) : await mergeOf(repo, tip(a), tip(b), a === '')
     merges.set(id, merged)
     if (merged) overlaps.push({ key: pairKey(a, b), a, b, ...merged })
   }
@@ -208,11 +206,11 @@ export const readOverlaps = async (repo, { base, sides, cache }) => {
 export const fetchBranches = async (repo, branches) => {
   if (branches.length === 0) return ''
   const listed = await repo.git(['ls-remote', '--heads', 'origin'], { timeoutMs: FETCH_TIMEOUT_MS })
-  if (listed.exitCode !== 0) return (listed.stderr ?? '').trim().split('\n').pop() || `git ls-remote exited with ${listed.exitCode}`
+  if (listed.exitCode !== 0) return complaintOf(listed, 'git ls-remote')
   const origin = tipsIn(listed.stdout, /^([0-9a-f]+)\trefs\/heads\/(.+)$/)
   const local = await remoteTips(repo)
   const moved = [...new Set(branches)].filter(branch => origin.has(branch) && origin.get(branch) !== local.get(branch))
   if (moved.length === 0) return ''
   const ran = await repo.git(fetchArgs(...moved), { timeoutMs: FETCH_TIMEOUT_MS })
-  return ran.exitCode === 0 ? '' : (ran.stderr ?? '').trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`
+  return ran.exitCode === 0 ? '' : complaintOf(ran, 'git fetch')
 }

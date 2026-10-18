@@ -153,18 +153,22 @@ export const groupRecords = (records, group, sort) => {
   return groups.sort((a, b) => (group === 'stage' ? stageAt(a.key) - stageAt(b.key) : b.rollup.open - a.rollup.open || a.title.localeCompare(b.title)))
 }
 
+// A flag that puts an intent under one of Triage's reasons: not a warning only (colliding), not data hygiene.
+/** @param {Flag} flag */
+export const isReason = flag => REASONS.some(reason => reason.kind === flag.kind)
+
 /** @param {BoardRecord} record */
 export const worstFlag = record => Math.min(...record.flags.map(flag => FLAG_ORDER.indexOf(flag.kind)).filter(at => at >= 0), FLAG_ORDER.length)
 
 /**
  * What needs someone, team-wide: open intents with a reason's flag, worst first, then the longest untouched.
- * Colliding is drawn by pairs instead (collisionGroup). `hygiene`: intents whose files the board could not fully read as written.
+ * Colliding is drawn by pairs instead (withColliding). `hygiene`: intents whose files the board could not fully read as written.
  * @param {readonly BoardRecord[]} records
  */
 export const triage = records => {
   const isHygiene = (/** @type {Flag} */ flag) => HYGIENE.some(kind => kind === flag.kind)
   const attention = records
-    .filter(one => one.stage !== 'done' && one.flags.some(flag => REASONS.some(reason => reason.kind === flag.kind)))
+    .filter(one => one.stage !== 'done' && one.flags.some(isReason))
     .sort((a, b) => worstFlag(a) - worstFlag(b) || a.updatedAt - b.updatedAt)
   const hygiene = records.filter(one => one.flags.some(isHygiene)).sort((a, b) => b.updatedAt - a.updatedAt)
   return { attention, hygiene }
@@ -273,12 +277,37 @@ export const rollupLine = (sum, now) => ({
  *   | { kind: 'lines', key: string, by: 'owner' | 'area', lines: Line[] }} Section
  */
 
-// Colliding (overlap-check D5): one row a pair; `note` says why nothing could be checked (old git), shown in its place.
-/** @param {string} key @param {readonly BoardRecord[]} records @param {string} note @returns {PairGroup[]} */
-export const collisionGroup = (key, records, note) => {
+/**
+ * Groups listed by need with Colliding among them, one row a pair, after the decisions (overlap-check D5): Triage's
+ * and For you's order alike. `note` says why nothing could be checked (old git), shown in Colliding's place.
+ * @template {IntentGroup | PairGroup} G @param {readonly G[]} groups @param {readonly BoardRecord[]} records
+ * @param {{ key: string, note: string, isDecisions: (group: G) => boolean }} where @returns {(G | PairGroup)[]}
+ */
+export const withColliding = (groups, records, { key, note, isDecisions }) => {
   const pairs = collisionsOf(records)
-  return pairs.length > 0 || note ? [{ kind: 'pairs', key, title: 'Colliding', meta: pairs.length > 0 ? String(pairs.length) : '', empty: note, pairs }] : []
+  /** @type {PairGroup[]} */
+  const colliding = pairs.length > 0 || note ? [{ kind: 'pairs', key, title: 'Colliding', meta: pairs.length > 0 ? String(pairs.length) : '', empty: note, pairs }] : []
+  return [...groups.filter(isDecisions), ...colliding, ...groups.filter(group => !isDecisions(group))]
 }
+
+// How many collisions some groups list.
+/** @param {readonly (IntentGroup | PairGroup)[]} groups */
+export const pairCount = groups => groups.reduce((sum, group) => sum + (group.kind === 'pairs' ? group.pairs.length : 0), 0)
+
+// A collision's words, the same on the pane, the page and in the prompts (overlap-check D5).
+/** @param {number} count */
+export const overlapCount = count => `▲ ${count} ${count === 1 ? 'overlap' : 'overlaps'}`
+// Its people, the intent's owner first, each once.
+/** @param {Collision} collision */
+export const collisionOwners = collision => [collision.b.owner, collision.a.owner].filter((owner, at, all) => owner !== '' && all.indexOf(owner) === at).join(', ')
+// What happened, in one clause: the base's last change to the files, or that neither side is merged.
+/** @param {Collision} collision @param {number} now */
+export const collisionFact = (collision, now) =>
+  collision.a.key === '' ? `origin/${collision.a.slug} changed these lines${collision.at ? ` ${ageText(collision.at, now)} ago` : ''}${collision.a.owner ? ` (${collision.a.owner})` : ''}.` : 'Neither is merged yet: whichever merges second will conflict.'
+// A place: "path:line", or the file and what each side did to it.
+/** @param {Collision} collision @param {import('./ather/overlap.mjs').Spot} spot */
+export const spotLabel = (collision, spot) =>
+  spot.kind === 'lines' ? `${spot.path}:${spot.line}` : `${spot.path} · ${spot.kind === 'binary' ? 'binary, both changed' : `${collision.a.slug} ${spot.ours} it, ${collision.b.slug} ${spot.theirs} it`}`
 
 /**
  * What a view shows, as sections both surfaces draw; [] for Pulse (the page's own chart). `records`: recordsFor's.
@@ -296,11 +325,9 @@ export const sectionsOf = (records, look, now, note = '') => {
     const reasons = REASONS.map(reason => ({ ...reason, list: attention.filter(one => FLAG_ORDER[worstFlag(one)] === reason.kind) })).filter(reason => reason.list.length > 0)
     // A reason's rows leave out the warning its title says; how many decisions wait is each row's own.
     const byReason = reasons.map(reason => intents(`attention-${reason.kind}`, reason.title, String(reason.list.length), '', reason.list.map(one => row(one, WARNINGS.filter(kind => kind !== reason.kind || kind === 'decisions')))))
-    // Colliding comes second, after the decisions (D5).
-    const at = byReason[0]?.key === 'attention-decisions' ? 1 : 0
-    const groups = [...byReason.slice(0, at), ...collisionGroup('attention-colliding', records, note), ...byReason.slice(at)]
+    const groups = withColliding(byReason, records, { key: 'attention-colliding', note, isDecisions: group => group.key === 'attention-decisions' })
     return [
-      { kind: 'label', key: 'label-attention', title: 'Needs someone', meta: String(attention.length + collisionsOf(records).length), isLoud: true, groups: groups.length > 0 ? groups : none('Nothing is stuck.') },
+      { kind: 'label', key: 'label-attention', title: 'Needs someone', meta: String(attention.length + pairCount(groups)), isLoud: true, groups: groups.length > 0 ? groups : none('Nothing is stuck.') },
       { kind: 'label', key: 'label-hygiene', title: 'Data hygiene', meta: `${hygiene.length} not fully readable`, isLoud: false, groups: [intents('hygiene', '', '', 'Every intent reads cleanly.', hygiene.map(one => row(one, HYGIENE)))] },
     ]
   }

@@ -67,6 +67,8 @@ let note = ''
 let overlaps = { overlaps: [], note: '', cache: EMPTY_OVERLAPS }
 /** @type {Promise<void> | null} */
 let checking = null
+// A check asked for while one runs: one more follows it, over the read and the branches as they are then.
+let isCheckAgain = false
 
 /** @param {Engine} $ @param {string} root @returns {Repo} */
 const repoOf = ($, root) => ({
@@ -140,15 +142,22 @@ const refresh = ($, force = false) => {
 }
 
 // The overlap check over the last read (overlap-check D6), one run at a time, in the background: the board
-// draws without waiting. Unchanged branches cost one git call (overlap.mjs keeps the rest by their tips).
+// draws without waiting. Asked for while one runs, one more follows it. Unchanged branches cost one git call
+// (overlap.mjs keeps the rest by their tips).
 /** @param {Engine} $ */
 const checkOverlaps = $ => {
-  if (checking || !board) return checking ?? Promise.resolve()
-  const read = board
+  if (checking) {
+    isCheckAgain = true
+    return checking
+  }
+  if (!board) return Promise.resolve()
   checking = (async () => {
     try {
       const at = await laneOf($)
-      overlaps = await readOverlaps(repoOf($, at.root), { base: at.base, sides: sidesOf(read.records), cache: overlaps.cache })
+      do {
+        isCheckAgain = false
+        overlaps = await readOverlaps(repoOf($, at.root), { base: at.base, sides: sidesOf(board?.records ?? []), cache: overlaps.cache })
+      } while (isCheckAgain)
     } catch (error) {
       $.ui.log(`Ather Board: the overlap check failed: ${String(error)}`, { to: 'debug' })
     } finally {

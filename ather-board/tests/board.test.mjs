@@ -224,7 +224,13 @@ describe('the page (A7) and publishing (A8)', () => {
     seedOf: ['snow-look'],
     layoutGraph: [GRAPH, 1000, 660],
     collisionsOf: [COLLIDING],
-    collisionGroup: ['attention-colliding', COLLIDING, ''],
+    withColliding: [[], COLLIDING, { key: 'attention-colliding', note: '', isDecisions: () => false }],
+    pairCount: [[{ kind: 'pairs', pairs: [1, 2] }, { kind: 'intents', rows: [1] }]],
+    overlapCount: [3],
+    collisionOwners: [views.collisionsOf(COLLIDING)[0]],
+    collisionFact: [views.collisionsOf(COLLIDING)[0], NOW],
+    spotLabel: [views.collisionsOf(COLLIDING)[0], { path: 'a.umap', line: 0, kind: 'binary', ours: '', theirs: '' }],
+    isReason: [{ kind: 'colliding', label: '' }],
   }
   test('every function the page is given answers there as it does here, and every one is checked', () => {
     const both = /** @type {Record<string, any>} */ ({ ...views, ...map })

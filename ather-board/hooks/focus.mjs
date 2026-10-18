@@ -7,7 +7,7 @@
 import { isMine } from './ather/model.mjs'
 import { nextAction } from './act.mjs'
 import { moduleSections } from './map.mjs'
-import { DAY_MS, WARNINGS, collisionGroup, recordsFor, rowOf, sectionsOf, sortRecords } from './views.mjs'
+import { DAY_MS, WARNINGS, pairCount, recordsFor, rowOf, sectionsOf, sortRecords, withColliding } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
@@ -39,13 +39,10 @@ export const forYou = (records, me) => {
   const mine = sortRecords(records.filter(one => one.stage !== 'done' && isMine(one, me)), 'stale')
   const needs = NEEDS.map(need => ({ need, list: mine.filter(one => need.actions.some(action => action === nextAction(one, true))) })).filter(one => one.list.length > 0)
   // Your work that collides, after your decisions (overlap-check D5); an intent in a pair is placed by it.
-  const colliding = collisionGroup('you-colliding', mine, '')
+  const groups = withColliding(needs.map(({ need, list }) => group(`you-${need.key}`, need.title, '', list)), mine, { key: 'you-colliding', note: '', isDecisions: one => one.key === 'you-decide' })
   const placed = new Set([...needs.flatMap(one => one.list.map(record => record.key)), ...mine.filter(one => one.collisions.length > 0).map(one => one.key)])
   const rest = sortRecords(mine.filter(one => !placed.has(one.key)), 'recent')
-  const count = needs.reduce((sum, one) => sum + one.list.length, 0) + (colliding[0]?.pairs.length ?? 0)
-  const byNeed = needs.map(({ need, list }) => group(`you-${need.key}`, need.title, '', list))
-  const at = needs[0]?.need.key === 'decide' ? 1 : 0
-  const groups = [...byNeed.slice(0, at), ...colliding, ...byNeed.slice(at)]
+  const count = needs.reduce((sum, one) => sum + one.list.length, 0) + pairCount(groups)
   return [
     { kind: 'label', key: 'label-you', title: 'For you', meta: String(count), isLoud: true, groups: groups.length > 0 ? groups : [group('you-none', '', mine.length > 0 ? 'Nothing of yours needs you now.' : 'You own no open intents. Triage shows the team’s.', [])] },
     ...(rest.length > 0 ? [/** @type {Section} */ ({ kind: 'label', key: 'label-yours', title: 'Your other open work', meta: String(rest.length), isLoud: false, groups: [group('yours', '', '', rest)] })] : []),

@@ -4,7 +4,7 @@
 // columns, and Pulse is the page's own chart. page.mjs writes views.mjs's exports above this script and
 // the board's data into #board-data. The look (view, filters, sort, group) lives in the address's #hash,
 // so a link opens the same cut.
-/* global graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, summaryText, choices, ageText, miniBarSvg */
+/* global collisionFact, collisionOwners, overlapCount, spotLabel, graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, summaryText, choices, ageText, miniBarSvg */
 ;(function () {
   'use strict'
   var DATA = JSON.parse(document.getElementById('board-data').textContent)
@@ -127,28 +127,24 @@
   // opened, each place with both sides' first changed line.
   function pairRow(collision) {
     var a = collision.a, b = collision.b
-    var isOpen = opened[collision.key]
     var other = a.key === '' ? esc(a.slug) : glyph(a.stage) + ' ' + esc(a.slug)
     var files = collision.files.map(function (f) { return f.split('/').pop() }).join(', ')
-    var owners = [b.owner, a.owner].filter(function (o, i, all) { return o && all.indexOf(o) === i }).join(', ')
     return (
       '<div class="row pair">' + toggle({ key: collision.key }) + glyph(b.stage) +
-      '<span class="main"><span class="head"><span class="slug">' + esc(b.slug) + ' <span class="versus-mark">⇄</span> ' + other + '</span><span class="warn">▲ ' + collision.count + (collision.count === 1 ? ' overlap' : ' overlaps') + '</span></span><span class="title">' + esc(files) + '</span></span>' +
+      '<span class="main"><span class="head"><span class="slug">' + esc(b.slug) + ' <span class="versus-mark">⇄</span> ' + other + '</span><span class="warn">' + esc(overlapCount(collision.count)) + '</span></span><span class="title">' + esc(files) + '</span></span>' +
       '<span class="progress"></span>' +
       '<span class="age" title="the base’s last change to these files">' + esc(collision.at ? ageText(collision.at, NOW) : '') + '</span>' +
-      '<span class="owner">' + esc(owners) + '</span>' +
-      '</button>' + (isOpen ? pairDetails(collision) : '') + '</div>'
+      '<span class="owner">' + esc(collisionOwners(collision)) + '</span>' +
+      '</button>' + (opened[collision.key] ? pairDetails(collision) : '') + '</div>'
     )
   }
   function pairDetails(collision) {
-    var a = collision.a, b = collision.b
-    var fact = a.key === '' ? 'origin/' + a.slug + ' changed these lines' + (collision.at ? ' ' + ageText(collision.at, NOW) + ' ago' : '') + (a.owner ? ' (' + a.owner + ')' : '') + '.' : 'Neither is merged yet: whichever merges second will conflict.'
     var spots = collision.spots.map(function (spot) {
-      if (spot.kind !== 'lines') return '<p class="spot">' + esc(spot.path) + ' <span class="kind">' + esc(spot.kind === 'binary' ? 'binary, both changed' : a.slug + ' ' + spot.ours + ' it, ' + b.slug + ' ' + spot.theirs + ' it') + '</span></p>'
-      return '<p class="spot">' + esc(spot.path) + '<span class="kind">:' + spot.line + '</span></p><div class="versus"><span>' + esc(a.slug) + '</span><code>' + esc(spot.ours || '(blank)') + '</code><span>' + esc(b.slug) + '</span><code>' + esc(spot.theirs || '(blank)') + '</code></div>'
+      var label = '<p class="spot">' + esc(spotLabel(collision, spot)) + '</p>'
+      return spot.kind !== 'lines' ? label : label + '<div class="versus"><span>' + esc(collision.a.slug) + '</span><code>' + esc(spot.ours || '(blank)') + '</code><span>' + esc(collision.b.slug) + '</span><code>' + esc(spot.theirs || '(blank)') + '</code></div>'
     }).join('')
     var more = collision.count > collision.spots.length ? '<p class="refs">and ' + (collision.count - collision.spots.length) + ' more</p>' : ''
-    return '<div class="details"><p class="refs">' + esc(fact) + '</p>' + spots + more + '</div>'
+    return '<div class="details"><p class="refs">' + esc(collisionFact(collision, NOW)) + '</p>' + spots + more + '</div>'
   }
   function pairGroup(part) {
     var body = part.pairs.length ? '<div class="panel">' + part.pairs.map(pairRow).join('') + '</div>' : '<p class="empty">' + esc(part.empty) + '</p>'

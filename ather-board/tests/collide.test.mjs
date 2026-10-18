@@ -7,7 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { unreal } from '../hooks/ather/packs/unreal.mjs'
 import { AMBER } from '../hooks/ather/rows.mjs'
-import { collisionActions, spotsText } from '../hooks/act.mjs'
+import { actionsFor, collisionActions, spotsText } from '../hooks/act.mjs'
 import { forYou } from '../hooks/focus.mjs'
 import { boardPane } from '../hooks/pane.mjs'
 import { sidesOf, toRecord, withCollisions } from '../hooks/records.mjs'
@@ -45,7 +45,7 @@ const OVERLAPS = [
     ],
   },
   {
-    key: 'mc-vault|nine-tail-dash', a: 'mc-vault', b: 'nine-tail-dash', files: ['Character/S2CharacterMovement.cpp'], count: 1, who: 'Sam Vo', at: NOW,
+    key: 'mc-vault|nine-tail-dash', a: 'mc-vault', b: 'nine-tail-dash', files: ['Character/S2CharacterMovement.cpp'], count: 1, who: '', at: 0,
     spots: [{ path: 'Character/S2CharacterMovement.cpp', line: 301, kind: 'lines', ours: 'case MOVE_Dash: return PhysVault(dt, Iter);', theirs: 'case MOVE_Dash: return PhysDash(dt, Iter);' }],
   },
 ]
@@ -112,7 +112,7 @@ describe('what a collision offers, and the prompts (A5)', () => {
   const base = pair('|dodge-cancel')
   const two = pair('mc-vault|nine-tail-dash')
   test('the places in words: the line and both sides, a binary file, and how many more', () => {
-    expect(spotsText(base)).toBe('Combat/HitStop.cpp:42 (main: return FMath::Min(Budget, 0.070f);; dodge-cancel: return CanCancel(Dodge) ? 0.f : Budget;) and Maps/Arena.umap (binary, both changed)')
+    expect(spotsText(base)).toBe('Combat/HitStop.cpp:42 (main: return FMath::Min(Budget, 0.070f);; dodge-cancel: return CanCancel(Dodge) ? 0.f : Budget;) and Maps/Arena.umap · binary, both changed')
     expect(spotsText({ ...base, count: 5 }).endsWith(', and 3 more')).toBe(true)
   })
   test('your intent against the base: bring the base in, then a note to whoever changed it', () => {
@@ -126,6 +126,9 @@ describe('what a collision offers, and the prompts (A5)', () => {
   test('your intent against a teammate’s: a note to them, and where both stand', () => {
     expect(collisionActions(two, 'Minh Le', 'main').map(one => one.label)).toEqual(['Draft a note to Sam Vo', 'Where they stand'])
     expect(collisionActions(two, 'Sam Vo', 'main').map(one => one.label)).toEqual(['Draft a note to Minh Le', 'Where they stand'])
+  })
+  test('a teammate’s intent whose only flag is colliding is not one to ping (a warning, not a reason)', () => {
+    expect(actionsFor(named('mc-vault') ?? COLLIDING[0], false)).toEqual(['about'])
   })
   test('teammates’ work: ask the owner, or both owners who goes first; nothing is sent', () => {
     expect(collisionActions(base, 'Lena Park', 'main').map(one => one.label)).toEqual(['Ask Tin Nguyen', 'Where they stand'])

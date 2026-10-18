@@ -7,7 +7,7 @@
 
 import { decidePrompt, explainPrompt } from './ather/decide.mjs'
 import { aboutIntentPrompt, andList, checklistPrompt, closePrompt, isMine as isOwner, plural } from './ather/model.mjs'
-import { HYGIENE } from './views.mjs'
+import { HYGIENE, isReason, spotLabel } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
@@ -53,7 +53,7 @@ export const actionsFor = (record, isMine) => {
   if (record.stage === 'done') return ['about']
   const kinds = new Set(record.flags.map(flag => flag.kind))
   /** @type {ActionKind[]} */
-  const offered = isMine ? OWN.filter(([flag]) => kinds.has(flag)).map(([, action]) => action) : record.flags.some(flag => !HYGIENE.includes(flag.kind)) ? ['ping'] : []
+  const offered = isMine ? OWN.filter(([flag]) => kinds.has(flag)).map(([, action]) => action) : record.flags.some(isReason) ? ['ping'] : []
   return [...new Set([...offered, /** @type {ActionKind} */ ('about')])]
 }
 
@@ -113,18 +113,10 @@ export const decisionPrompt = (record, call, letter) => {
 
 // ---------------------------------------------------------------- a collision (overlap-check D5)
 
-// "Combat/HitStop.cpp:42 (main: return FMath::Min…; dodge-cancel: return CanCancel…), Map.umap (binary, both changed)".
+// "Combat/HitStop.cpp:42 (main: return FMath::Min…; dodge-cancel: return CanCancel…) and Map.umap · binary, both changed".
 /** @param {Collision} collision */
 export const spotsText = collision =>
-  andList(
-    collision.spots.map(spot =>
-      spot.kind === 'lines'
-        ? `${spot.path}:${spot.line} (${collision.a.slug}: ${spot.ours || 'blank'}; ${collision.b.slug}: ${spot.theirs || 'blank'})`
-        : spot.kind === 'binary'
-          ? `${spot.path} (binary, both changed)`
-          : `${spot.path} (${collision.a.slug} ${spot.ours} it, ${collision.b.slug} ${spot.theirs} it)`,
-    ),
-  ) + (collision.count > collision.spots.length ? `, and ${collision.count - collision.spots.length} more` : '')
+  andList(collision.spots.map(spot => (spot.kind === 'lines' ? `${spotLabel(collision, spot)} (${collision.a.slug}: ${spot.ours || 'blank'}; ${collision.b.slug}: ${spot.theirs || 'blank'})` : spotLabel(collision, spot)))) + (collision.count > collision.spots.length ? `, and ${collision.count - collision.spots.length} more` : '')
 
 // What the pair is, in words: "dodge-cancel and main", or two intents.
 /** @param {Collision} collision */

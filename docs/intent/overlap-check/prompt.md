@@ -1,6 +1,6 @@
 # Overlap check: open work that changes the same lines
 
-- Rev: 2
+- Rev: 3
 - Status: active
 - Area: ather-board
 - Owner: Tin Nguyen
@@ -37,11 +37,11 @@ Two people find out that their work collides only when one of them merges and th
   - Two open intents: the same command on their two branches, run only for pairs whose changed files (`git diff --name-only origin/<base>...origin/<branch>`, once per branch) share a path. Most pairs share none, so the cost stays near one diff per open branch.
   - The lines: for each conflicted path, read the written tree's file and take each conflict block's starting line (in the first side's file) and the first changed line on each side; a diff3 base section is skipped. A binary file (git's "Cannot merge binary files"), or one with no markers, is one place, "binary, both changed"; a file one side deleted is one place too. At most six places are kept per pair; the count says how many there are.
   - The names: each side is named by its intent's owner; the base side by its last author on those files, with that commit's time ("origin/main changed these lines 6m ago (Lena Park)"). Naming the intent that merged them is a follow-up.
-- D4 (old git): where `git merge-tree --write-tree` is not available (git before 2.38), the check reports nothing and the board's data hygiene shows one line, "git <version> cannot check overlaps (needs 2.38)". It never fails the board or blocks a hook.
+- D4 (old git, rev 3): where `git merge-tree --write-tree` is not available (git before 2.38), the check reports nothing and Colliding's place in Triage says "git <version> cannot check overlaps (needs 2.38)" (it is about overlaps, not an intent's files, so not Data hygiene). A git whose version cannot be read says nothing: the board's own reads would already fail. It never fails the board or blocks a hook.
 - D5 (the board's Triage): Colliding is a reason, second after waiting on a decision. One row per pair: `<glyph> a ⇄ <glyph> b ▲ N overlaps`, the files on the right in quiet type, then age and owners, the same columns as every Triage row. Pressing a row opens it in place:
   - one quiet fact ("hitstop-retune merged to main 6m ago", or "Neither is merged yet");
   - each spot as `path:line`, then each side's line on one grey ground, named by person;
-  - two actions handed to the session. On the person's own intent: "Bring <base> into <slug>", then "Draft a note to <owner>" (drafted, never sent). On two teammates' intents: "Ask <a> and <b> who goes first" (drafted), then "Open both intents".
+  - two actions handed to the session. On the person's own intent: "Bring <base> into <slug>", then "Draft a note to <owner>" (drafted, never sent). On two teammates' intents: "Ask <a> and <b> who goes first" (drafted), then "Where they stand" (each intent's state, read; rev 3: the board's own name for that action).
   - An intent sits under its worst reason, as today; its row names the others.
 - D6 (when it runs, rev 2): after each read of the board, in the background, one run at a time: the board draws without waiting, and the rows appear when the check is done (on S2, the first run's diffs and merges can take a while). Each branch's files are kept by `<base tip>...<tip>` and each merge by its two tips, in memory, so an unchanged pair is never merged twice and a run with nothing moved is one git call. The calls run one after another on purpose, beside the person's own git. Nothing is persisted.
 - D7 (the page): `/board open` and `/board publish` show the same group in Triage with the same rows; on the page, a row opens in place the same way (read-only: no actions there). The records carry their collisions, so the page's own copy of the views draws them with no new data shape.
@@ -71,4 +71,5 @@ Two people find out that their work collides only when one of them merges and th
 ## Changelog
 
 - rev 1 (2026-10-18): created.
+- rev 3 (2026-10-18): after the thermo-nuclear review, D4 and D5 say what was built (the old-git note in Colliding's place; "Where they stand").
 - rev 2 (2026-10-18): built. D2a (fetching the intents' branches), D3's binary and deleted places and the base side's naming, D6 (in the background, not on the fetch), D8 (warnings, For you), D9 (narrow panes).

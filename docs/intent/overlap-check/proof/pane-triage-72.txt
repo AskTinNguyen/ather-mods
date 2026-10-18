@@ -8,14 +8,13 @@ Ask[what is blocking combat? whose decisions are oldest?]
 
 Search[words from a name, title, area or owner]
     
-Page written: /tmp/ather-board-dE1N9A/clone/.ather/local/board/index.htm
+Page written: /tmp/ather-board-Zx89kS/clone/.ather/local/board/index.htm
 l (open it in a browser)
 
 N E E D S   S O M E O N E  2
 Colliding  2
 ● dodge-cancel ⇄ main ▲ 3 overlaps                      0m  Tin Nguyen,…
-  origin/main changed these lines 0m ago (Lena Park); dodge-cancel no
-  longer merges cleanly.
+  origin/main changed these lines 0m ago (Lena Park).
   Content/Maps/Arena.umap · binary, both changed
   Source/Combat/CombatComponent.cpp:3
     main          HitStop.Apply(Target, FrameBudget());

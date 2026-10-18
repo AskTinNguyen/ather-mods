@@ -263,6 +263,10 @@ export const lockOf = text => {
   return path.includes('/.git/') ? path.slice(path.lastIndexOf('/.git/') + 6) : path.split('/').pop() ?? ''
 }
 
+// What a git run that failed says: its last line of complaint, else its exit code.
+/** @param {Ran} ran @param {string} command */
+export const complaintOf = (ran, command) => ((ran.stderr ?? '').trim().split('\n').pop() || `${command} exited with ${ran.exitCode}`).slice(0, 200)
+
 // Fetches origin's main, or the `base` given. Synced means git said so and origin/<base> resolves after it (`moved`: it moved).
 // On a failure: git's last line of complaint, and the lock it ran into, if any. `isAborted`: the app took the
 // run back, so nothing was tried.
@@ -272,8 +276,7 @@ export const fetchMain = async (repo, base = 'main') => {
   const ran = await repo.git(base === 'main' ? FETCH_ARGS : fetchArgs(base), { timeoutMs: FETCH_TIMEOUT_MS })
   const after = await shaOf(repo, refOf(base))
   if (ran.exitCode === 0 && after) return { error: '', lock: '', moved: after !== before }
-  const stderr = ran.stderr ?? ''
-  return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false, ...(ran.isAborted ? { isAborted: /** @type {const} */ (true) } : {}) }
+  return { error: complaintOf(ran, 'git fetch'), lock: lockOf(ran.stderr ?? ''), moved: false, ...(ran.isAborted ? { isAborted: /** @type {const} */ (true) } : {}) }
 }
 
 // One sync line for several checkouts: a failed fetch in any of them, else one running, else the least
