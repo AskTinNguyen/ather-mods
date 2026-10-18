@@ -8,7 +8,7 @@ import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
 import { issueId, issueLabel, issuePrompt } from './issues.mjs'
 import { STAGE_LABELS, clockText, currentStage, cutWords, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural, prStatusList, shortTitle, waitingCalls } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
-import { isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
+import { ageText, isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
 
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
 
@@ -53,7 +53,7 @@ export const TEAM_SHOWN = 4
 // Home in two views, remembered per person (simple-view D1-D5): Advanced draws every part; Simple only the
 // title and its status, Needs you, Needs attention, Next and the toggle. The rest stays a command away.
 /** @typedef {'advanced' | 'simple'} PaneView */
-/** @typedef {'title' | 'status' | 'stages' | 'meta' | 'strip' | 'actions' | 'needs' | 'attention' | 'next' | 'crew' | 'preview' | 'away' | 'warm' | 'view'} HomePart */
+/** @typedef {'title' | 'status' | 'stages' | 'meta' | 'merge' | 'strip' | 'actions' | 'needs' | 'attention' | 'next' | 'crew' | 'preview' | 'away' | 'warm' | 'view'} HomePart */
 /** @param {unknown} value @returns {PaneView} */
 export const paneViewOf = value => (value === 'simple' ? 'simple' : 'advanced')
 /** @type {readonly HomePart[]} */
@@ -125,6 +125,31 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  */
 
 /**
+ * @typedef {{ branch: string, base: string, at: number, collision: import('./collide.mjs').Collision | null }} MergeCheck this checkout's branch
+ *   compared with origin's base at `at`: `collision` where they no longer merge cleanly, null where they do (ship-pill D1)
+ */
+
+// Whether this checkout's branch merges into origin's base, as Home's masthead says it (ship-pill D1): '' when it was
+// not compared (on the base, detached, nothing changed, origin's base not fetched).
+/** @param {MergeCheck | null} merge @param {number} now @returns {{ text: string, isWarn: boolean }} */
+export const mergeLine = (merge, now) => {
+  if (!merge) return { text: '', isWarn: false }
+  if (merge.collision) return { text: `${overlapCount(merge.collision.count)} with origin/${merge.base} · see Needs you`, isWarn: true }
+  const age = ageText(merge.at, now)
+  return { text: `Merges cleanly into origin/${merge.base} · checked ${age === '0m' ? 'just now' : `${age} ago`}`, isWarn: false }
+}
+
+// Each stage's glyph on the pill, as the work list draws them: begun or not, half there, met, shipped.
+/** @type {Record<keyof typeof STAGE_LABELS, string>} */
+const PILL_GLYPHS = { plan: '○', build: '●', prove: '◐', ship: '◐', close: '✓', shipped: '■' }
+
+// The tracked intent as one pill above the prompt when nothing needs the person (ship-pill D2): its stage's glyph,
+// the stage ('Planned' before anything is done or anyone works), the items met, and its name.
+/** @param {keyof typeof STAGE_LABELS} stage @param {string} label @param {Intent} intent */
+const stagePill = (stage, label, intent) =>
+  `${label === 'Planned' ? '○' : PILL_GLYPHS[stage]} ${label}${intent.acceptanceTotal > 0 && stage !== 'shipped' ? ` ${intent.acceptanceDone}/${intent.acceptanceTotal}` : ''} · ${intent.key}`
+
+/**
  * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked', isLook?: boolean, look?: string }} Next
  * `look`: the key of the intent whose view answers a step that only reads (model.mjs's `isLook`).
  * Something to work on: an open intent to track, or an assigned GitHub issue to start an intent from.
@@ -137,12 +162,12 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * @typedef {{
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
- *   collision?: import('./collide.mjs').Collision | null,
+ *   merge?: MergeCheck | null,
  *   lock: import('./model.mjs').EditorLock, recurring: readonly { id: string, title: string, fix: string, count: number }[],
  *   issues: readonly import('./issues.mjs').Issue[], last?: string | null, sent: readonly string[], workers: number, now: number, tz: number,
  *   skills?: readonly { name: string, description: string }[], prs?: import('./model.mjs').PrStates, week?: Week | null, pack?: Pack
- * }} HomeInput `pinned` and `last`: intents' keys (the tracked one, and the one the person last worked on); `collision`: this checkout's
- *   branch against origin's base, where they no longer merge cleanly (collision-alert)
+ * }} HomeInput `pinned` and `last`: intents' keys (the tracked one, and the one the person last worked on); `merge`: this checkout's
+ *   branch as last compared with origin's base (collision-alert, ship-pill)
  */
 
 /**
@@ -267,7 +292,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.key ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week) }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), own: [], teamPreview: { rows: [], total: 0 }, attention: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.key ?? 'Ather', stage: 'Away', pill: '', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week), merge: mergeLine(null, now) }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), own: [], teamPreview: { rows: [], total: 0 }, attention: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -283,7 +308,7 @@ export const buildHome = input => {
   }
   // This checkout's branch no longer merges into origin's base: named by its places, the press brings the base in.
   // Its id changes with the places, so one already handed over comes back only when they change.
-  const collision = input.collision
+  const collision = input.merge?.collision
   if (collision) {
     const { a, b } = collision
     const places = [...collision.spots.map(spot => spotLabel(collision, spot)), moreText(collision)].filter(Boolean).join(', ')
@@ -366,6 +391,8 @@ export const buildHome = input => {
   const actions = [{ id: 'action:new-intent', label: '＋ New intent', prompt: NEW_INTENT_PROMPT, isPrimary: true }]
   if (skills.length > 0) actions.push({ id: 'action:skills', label: '▶ Skills', opens: 'skills' })
   if (create.length > 0) actions.push({ id: 'action:create', label: '✦ Create', opens: 'create' })
+  // A checklist with nothing done and no one working yet is planned, not being built.
+  const stageLabel = !intent ? '' : stage === 'build' && intent.acceptanceDone === 0 && !intent.hasWorker && input.workers === 0 ? 'Planned' : STAGE_LABELS[stage]
   return {
     actions,
     skills,
@@ -373,8 +400,8 @@ export const buildHome = input => {
     editor,
     header: {
       title: intent?.key ?? 'Ather',
-      // A checklist with nothing done and no one working yet is planned, not being built.
-      stage: !intent ? '' : stage === 'build' && intent.acceptanceDone === 0 && !intent.hasWorker && input.workers === 0 ? 'Planned' : STAGE_LABELS[stage],
+      stage: stageLabel,
+      pill: intent ? stagePill(stage, stageLabel, intent) : '',
       progress: intent && intent.acceptanceTotal > 0 ? `${intent.acceptanceDone} of ${intent.acceptanceTotal} done` : '',
       track: intent ? stageTrack(stage) : '',
       stages: intent ? stageList(stage) : [],
@@ -385,6 +412,7 @@ export const buildHome = input => {
       lock: lockText,
       role: roleText,
       week: weekText(input.week),
+      merge: mergeLine(input.merge ?? null, now),
     },
     items,
     open,

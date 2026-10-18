@@ -17,7 +17,7 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 |---|---|
 | Terminal | `/ather` opens one pane: where your work is (Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○) and the proof so far, what needs you, then Next, then other work you could pick up. Enter hands a row to the session; a decision opens in place with its options as buttons, so you answer it where it is shown. |
 | Desktop app | `/ather` opens the same pane in the side panel; click a row to hand it to the session. |
-| Above the prompt | One line: what needs you, a running window, or just the name; then ☾ away, ◔ keep the prompt cache warm (on or off; `◔ 1/3` in amber while a read is due), ⤢ open the pane, ✕ hide it until something is new. |
+| Above the prompt | One line: what needs you, a running window, or the tracked intent's stage (`● Build 1/2 · feat-x`); then ☾ away, ◔ keep the prompt cache warm (on or off; `◔ 1/3` in amber while a read is due), ⤢ open the pane, ✕ hide it until something is new. |
 | Status line | With `/warm on` and you idle: `◔ warm 1/3 · next 14:55`, when the cache is read next and how many reads of the cap are done. |
 | Pop-ups | A known trap with its fix, a build that really failed, a merge that dropped your edits, a worker gone quiet, a thin worker brief. |
 
@@ -190,6 +190,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/handoff.test.
 
 ## Changes
 
+- **0.6.0** Home says whether your branch merges cleanly into origin's base, under the status line: `Merges cleanly into origin/main · checked 2m ago`, or in amber `▲ 2 overlaps with origin/main · see Needs you` (Advanced view). With nothing needing you, the line above the prompt is the tracked intent's stage, items met and name (`● Build 1/2 · feat-x`) instead of Ather's name. This is mockups A and C without the Ship card: each of its states already has a place (docs/intent/ship-pill).
 - **0.5.0** Needs you says when this checkout's branch no longer merges cleanly into origin's base (`main`, or the team's base): after each read of the intents (a turn's end, a fetch, `/ather`), the branch's own tip, unpushed commits included, is merged with `origin/main` with `git merge-tree` (git 2.38 or later), no working tree touched. **Bring origin/main into feat/x** names the overlaps, who changed the lines and the intent whose merge brought the change, and the places; a press hands the session the merge to do in a worktree on the branch, each place resolved keeping both changes' purpose, the gates run, the diff shown, nothing pushed. Above the prompt: `▲ feat/x no longer merges cleanly into origin/main`. In the Simple view too. The words and the actions are now one module (`collide.mjs`), shared with Ather Board.
 - **0.4.3** No change to what you see: the pane's modes past Home are drawn by `modes.mjs`, out of `console.mjs`. Every pane the S2 run lays out, at 72 and 110 columns, is the same as 0.4.2's.
 - **0.4.2** The overlap check, hardened (for Ather Board 0.2.1): a run starts new git work only within 15 seconds, so a large first check goes in short runs, each showing what it found; and a collision with the base names the intent whose merge brought the change. On a synthetic repository of 100,000 files and 120 open branches, the first check took 5 seconds and a check with nothing moved one git call.

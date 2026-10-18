@@ -103,7 +103,7 @@ describe('what git says (A3, A4)', () => {
 
 describe('the check as a background job (overlapJob)', () => {
   /** @param {Partial<import('../hooks/overlap.mjs').OverlapRead>} read */
-  const answer = read => ({ overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false, ...read })
+  const answer = read => ({ overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false, compared: [], ...read })
   test('one run at a time: an ask while one runs is one more run, with the newest ask; a partial run is followed by the next; each run starts from the last cache', async () => {
     const job = overlapJob()
     /** @type {string[]} */
@@ -293,7 +293,7 @@ describe('a real repository (A3, A4, A6)', () => {
     const without = await readOverlaps(repo, { base: 'main', sides: [{ key: 'here', branch: 'feat/local' }], cache: EMPTY_OVERLAPS })
     fs.rmSync(work, { recursive: true, force: true })
     expect(withTip.overlaps.map(one => [one.key, one.files, one.spots[0]?.theirs, one.base?.who])).toEqual([['|here', ['Combat/HitStop.cpp'], 'return Budget * Scale;', 'Lena Park']])
-    expect(without.overlaps).toEqual([])
+    expect([without.overlaps, withTip.compared, without.compared]).toEqual([[], ['here'], []])
   })
 
   test('A4: before git 2.38 nothing is checked and the note says why', async () => {

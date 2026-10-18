@@ -23,8 +23,9 @@ import { FETCH_TIMEOUT_MS, INTENTS, complaintOf, fetchArgs, slugOf } from './tea
  *   (the base is always `a`), `b` an intent's key; `key`: pairKey(a, b)
  * @typedef {{ version: string, files: Map<string, string[]>, merges: Map<string, Merge | null> }} OverlapCache what earlier reads learned:
  *   git's version, each branch's changed files by "<base tip>...<tip>", each merge by "<tip>..<tip>" (null: it merges cleanly)
- * @typedef {{ overlaps: Overlap[], note: string, cache: OverlapCache, isPartial: boolean }} OverlapRead `note`: why nothing could be checked,
- *   '' when it ran; `isPartial`: the time budget ran out first, so another run goes on from where this one stopped (overlap-hardening D1)
+ * @typedef {{ overlaps: Overlap[], note: string, cache: OverlapCache, isPartial: boolean, compared: string[] }} OverlapRead `note`: why nothing could be checked,
+ *   '' when it ran; `isPartial`: the time budget ran out first, so another run goes on from where this one stopped (overlap-hardening D1);
+ *   `compared`: the sides this run merged with the base, so one with no overlap there merges cleanly (ship-pill D1)
  */
 
 /** @type {OverlapCache} */
@@ -214,11 +215,11 @@ const broughtBy = async (repo, sha, base) => {
 export const readOverlaps = async (repo, { base, sides, cache, budgetMs = BUDGET_MS, now = Date.now }) => {
   const version = cache.version || (await repo.git(['version'])).stdout.trim()
   const known = gitVersion(version)
-  if (!canMergeTree(known)) return { overlaps: [], note: known ? `git ${known.join('.')} cannot check overlaps (needs ${MIN_GIT.join('.')})` : '', cache: { ...cache, version: known ? version : '' }, isPartial: false }
+  if (!canMergeTree(known)) return { overlaps: [], note: known ? `git ${known.join('.')} cannot check overlaps (needs ${MIN_GIT.join('.')})` : '', cache: { ...cache, version: known ? version : '' }, isPartial: false, compared: [] }
   const tips = await remoteTips(repo)
   const baseTip = tips.get(base)
   const present = sides.filter(side => side.branch !== base && (side.tip || tips.has(side.branch)))
-  if (!baseTip || present.length === 0) return { overlaps: [], note: '', cache: { version, files: new Map(), merges: new Map() }, isPartial: false }
+  if (!baseTip || present.length === 0) return { overlaps: [], note: '', cache: { version, files: new Map(), merges: new Map() }, isPartial: false, compared: [] }
   /** @type {Map<string, string>} each side's tip, and the base's under '' */
   const tipOf = new Map([['', baseTip], ...present.map(side => /** @type {[string, string]} */ ([side.key, side.tip || (tips.get(side.branch) ?? '')]))])
   const tip = (/** @type {string} */ key) => tipOf.get(key) ?? ''
@@ -242,14 +243,17 @@ export const readOverlaps = async (repo, { base, sides, cache, budgetMs = BUDGET
   const brought = new Map()
   /** @type {Overlap[]} */
   const overlaps = []
+  /** @type {string[]} */
+  const compared = []
   for (const { a, b } of pairs) {
     const id = `${tip(a)}..${tip(b)}`
     if (!cache.merges.has(id) && isOver()) continue
     const merged = cache.merges.has(id) ? (cache.merges.get(id) ?? null) : await mergeOf(repo, tip(a), tip(b), a === '' ? brought : null)
     merges.set(id, merged)
+    if (a === '') compared.push(b)
     if (merged) overlaps.push({ key: pairKey(a, b), a, b, ...merged })
   }
-  return { overlaps, note: '', cache: { version, files, merges }, isPartial: byKey.size < present.length || merges.size < pairs.length }
+  return { overlaps, note: '', cache: { version, files, merges }, isPartial: byKey.size < present.length || merges.size < pairs.length, compared }
 }
 
 /**
@@ -261,7 +265,7 @@ export const readOverlaps = async (repo, { base, sides, cache, budgetMs = BUDGET
  */
 export const overlapJob = () => {
   /** @type {OverlapRead} */
-  let last = { overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false }
+  let last = { overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false, compared: [] }
   /** @type {Promise<OverlapRead> | null} */
   let running = null
   /** @type {{ read: (cache: OverlapCache) => Promise<OverlapRead>, onRun: (read: OverlapRead) => void } | null} */
