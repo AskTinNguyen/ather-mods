@@ -1,7 +1,7 @@
 # Overlap check hardening
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-board
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`
