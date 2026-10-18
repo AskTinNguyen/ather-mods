@@ -1,7 +1,7 @@
 # Ather Board: counts that open, and a Timeline
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-board
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`

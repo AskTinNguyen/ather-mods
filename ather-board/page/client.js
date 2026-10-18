@@ -208,7 +208,7 @@
   // The Timeline (board-counts D2): a lane per owner, an intent a bar from its first commit to its last (to now while
   // open), its stage's glyph and slug on it; week lines behind. A bar picked cuts the table to that intent.
   function timelineView(records) {
-    var t = timeline(records, NOW, 12)
+    var t = timeline(records, NOW)
     var week = 7 * DAY_MS
     var span = Math.max(1, t.end - t.start)
     function x(at) { return (((at - t.start) / span) * 100).toFixed(2) + '%' }

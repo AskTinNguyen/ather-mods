@@ -41,7 +41,7 @@ export { collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotL
  * @typedef {{ view: View, filter: Filter, sort: Sort, group: Group, by: 'area' | 'owner' }} Look what the person picked
  * @typedef {{ count: number, done: number, open: number, parked: number, items: number, calls: number, stale: number, at: number }} Rollup `open`: neither done nor parked; `calls`: decisions waiting
  * @typedef {'open' | 'parked' | 'done' | 'items' | 'calls' | 'stale'} CountKind
- * @typedef {{ kind: CountKind, head: string, one: string, many: string, view: View, stage: '' | Stage, isWarn: boolean }} CountSpec
+ * @typedef {{ kind: CountKind, head: string, one: string, many: string, view: View, stage: '' | Stage, isWarn: boolean, isAlways: boolean }} CountSpec
  * @typedef {{ kind: CountKind, text: string, isWarn: boolean }} Count one count on a People or Areas line
  * @typedef {{ key: string, slug: string, title: string, stage: Stage, from: number, to: number, isOpen: boolean, isClipped: boolean }} Span
  *   one intent on the Timeline: from its first commit to its last, or to now while `isOpen` (neither done nor parked)
@@ -92,15 +92,15 @@ export const HIDES_DONE = /** @type {readonly View[]} */ (['board', 'table'])
 export const NO_FILTER = { words: '', area: '', owner: '', stage: '', showDone: false, keys: [] }
 
 // A line's counts in People and Areas, in their order (board-counts D1): each one's heading, its word for one and for
-// several, what it opens (the view, and the stage it is cut to), and whether it needs someone.
+// several, what it opens (the view, and the stage it is cut to), whether it needs someone, and whether a line shows it at 0.
 /** @type {readonly CountSpec[]} */
 export const COUNTS = [
-  { kind: 'open', head: 'Open', one: 'open', many: 'open', view: 'table', stage: '', isWarn: false },
-  { kind: 'parked', head: 'Parked', one: 'parked', many: 'parked', view: 'table', stage: 'parked', isWarn: false },
-  { kind: 'done', head: 'Done', one: 'done', many: 'done', view: 'table', stage: 'done', isWarn: false },
-  { kind: 'items', head: 'Open items', one: 'item', many: 'items', view: 'items', stage: '', isWarn: false },
-  { kind: 'calls', head: 'Decisions', one: 'decision', many: 'decisions', view: 'triage', stage: '', isWarn: true },
-  { kind: 'stale', head: 'Stale', one: 'stale', many: 'stale', view: 'triage', stage: '', isWarn: true },
+  { kind: 'open', head: 'Open', one: 'open', many: 'open', view: 'table', stage: '', isWarn: false, isAlways: true },
+  { kind: 'parked', head: 'Parked', one: 'parked', many: 'parked', view: 'table', stage: 'parked', isWarn: false, isAlways: false },
+  { kind: 'done', head: 'Done', one: 'done', many: 'done', view: 'table', stage: 'done', isWarn: false, isAlways: false },
+  { kind: 'items', head: 'Open items', one: 'item', many: 'items', view: 'items', stage: '', isWarn: false, isAlways: false },
+  { kind: 'calls', head: 'Decisions', one: 'decision', many: 'decisions', view: 'triage', stage: '', isWarn: true, isAlways: false },
+  { kind: 'stale', head: 'Stale', one: 'stale', many: 'stale', view: 'triage', stage: '', isWarn: true, isAlways: false },
 ]
 
 /** @type {Look} */
@@ -301,6 +301,7 @@ export const rowOf = (record, kinds) => ({ record, flags: record.flags.filter(fl
 // The other filters are cleared.
 /** @param {Look} look @param {'owner' | 'area'} by @param {string} value @param {CountKind} count @returns {Look} */
 export const pickLook = (look, by, value, count) => {
+  // The page hands the count over as text: one it does not know reads as open.
   const { view, stage } = COUNTS.find(one => one.kind === count) ?? COUNTS[0]
   return { ...look, view, filter: { ...NO_FILTER, showDone: look.filter.showDone || stage === 'done', [by]: value, stage } }
 }
@@ -309,11 +310,11 @@ export const pickLook = (look, by, value, count) => {
 /** @param {readonly BoardRecord[]} records @param {Look} look */
 export const recordsFor = (records, look) => filterRecords(records, HIDES_DONE.includes(look.view) ? look.filter : { ...look.filter, showDone: true })
 
-// A person's or an area's line: its counts, open always and the rest when there are any, those that need someone
+// A person's or an area's line: its counts, open always and the rest when there are any (COUNTS), those that need someone
 // (decisions, stale) marked; each opens what it counts (pickLook). Then when it last changed.
 /** @param {Rollup} sum @param {number} now @returns {{ counts: Count[], age: string }} */
 export const rollupLine = (sum, now) => ({
-  counts: COUNTS.filter(({ kind }) => kind === 'open' || sum[kind] > 0).map(({ kind, one, many, isWarn }) => ({ kind, text: `${sum[kind]} ${sum[kind] === 1 ? one : many}`, isWarn })),
+  counts: COUNTS.filter(({ kind, isAlways }) => isAlways || sum[kind] > 0).map(({ kind, one, many, isWarn }) => ({ kind, text: `${sum[kind]} ${sum[kind] === 1 ? one : many}`, isWarn })),
   age: ageText(sum.at, now),
 })
 
