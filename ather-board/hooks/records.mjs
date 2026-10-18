@@ -12,6 +12,9 @@ import { DAY_MS, STALE_DAYS } from './views.mjs'
  * @typedef {import('./views.mjs').Stage} Stage
  * @typedef {import('./ather/model.mjs').IntentFiles} IntentFiles
  * @typedef {import('./ather/packs/index.mjs').Pack} Pack
+ * @typedef {import('./views.mjs').Party} Party
+ * @typedef {import('./views.mjs').Collision} Collision
+ * @typedef {import('./ather/overlap.mjs').Overlap} Overlap
  */
 
 // The words the intent skill writes on a Status line; anything else is read by its first word and flagged.
@@ -82,5 +85,38 @@ export const toRecord = (files, { pack, createdAt, now, slugs = new Set() }) => 
     source: intent.source,
     mentions: mentionsOf(files, slugs),
     flags: flagsOf(intent, stage, pack, now),
+    branch: intent.branch,
+    collisions: [],
   }
+}
+
+// The open intents whose branches the overlap check compares (overlap-check D2): not done, not parked, with a Branch line.
+/** @param {readonly BoardRecord[]} records */
+export const sidesOf = records => records.filter(one => one.stage !== 'done' && one.stage !== 'parked' && one.branch !== '').map(one => ({ key: one.key, branch: one.branch }))
+
+/**
+ * The records with the overlaps they are a side of (overlap-check D5), each named by its intents, or by the
+ * base branch and its last author there, and a "colliding" warning naming what it overlaps.
+ * @param {readonly BoardRecord[]} records @param {readonly Overlap[]} overlaps @param {string} base
+ * @returns {BoardRecord[]}
+ */
+export const withCollisions = (records, overlaps, base) => {
+  const byKey = new Map(records.map(one => [one.key, one]))
+  /** @param {string} key @returns {Party | null} */
+  const party = key => {
+    const one = byKey.get(key)
+    return one ? { key, slug: one.slug, owner: one.owner, stage: one.stage, branch: one.branch } : null
+  }
+  /** @type {Collision[]} */
+  const collisions = overlaps.flatMap(one => {
+    const a = one.a === '' ? { key: '', slug: base, owner: one.who, stage: /** @type {const} */ (''), branch: base } : party(one.a)
+    const b = party(one.b)
+    return a && b ? [{ key: one.key, a, b, files: one.files, spots: one.spots, count: one.count, at: one.a === '' ? one.at : 0 }] : []
+  })
+  return records.map(record => {
+    const its = collisions.filter(one => one.a.key === record.key || one.b.key === record.key)
+    if (its.length === 0) return record
+    const others = its.map(one => (one.a.key === record.key ? one.b.slug : one.a.slug))
+    return { ...record, collisions: its, flags: [...record.flags, { kind: /** @type {const} */ ('colliding'), label: `overlaps ${others.join(', ')}` }] }
+  })
 }

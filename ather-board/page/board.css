@@ -81,6 +81,14 @@ main > :first-child { margin-top: 16px; }
 .items.calls li b { color: var(--amber); }
 .items.under { padding: 0 14px 10px 42px; color: var(--quiet); font-size: 13px; }
 
+/* A collision opened: each place, then each side's first changed line on one grey ground, named by its side. */
+.versus-mark { color: var(--quiet); font-weight: 400; }
+.spot { margin: 10px 0 2px; font: 600 12.5px/1.4 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
+.spot .kind { color: var(--quiet); font-weight: 400; }
+.versus { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 14px; row-gap: 2px; background: var(--well); border-radius: 4px; padding: 6px 10px; margin: 0 0 8px; font: 12.5px/1.45 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
+.versus span { color: var(--quiet); }
+.versus code { color: var(--ink); font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* The Board: a column for each stage that has intents; the columns wrap to the width rather than run off it
    (four fit from 770 px, five with Done from 950), and a few stay at most 300 px wide (`--columns`: how many). */
 .kanban { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); gap: 10px; align-items: start; max-width: calc(var(--columns) * 310px); }

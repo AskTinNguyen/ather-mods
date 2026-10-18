@@ -10,10 +10,10 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const from = path.resolve(here, '../ather-automata/hooks')
 const to = path.join(here, 'hooks/ather')
-// The modules the board imports from Ather: the reader (team), the parsing (model, worklist) and the
+// The modules the board imports from Ather: the reader (team), the parsing (model, worklist), the overlap check, and the
 // row look (rows). Copied with everything they import, followed from their import lines and their
 // JSDoc import() types, so the copy set is always whole.
-const ENTRIES = ['team.mjs', 'model.mjs', 'worklist.mjs', 'rows.mjs']
+const ENTRIES = ['team.mjs', 'model.mjs', 'worklist.mjs', 'rows.mjs', 'overlap.mjs']
 const FILES = []
 for (const queue = [...ENTRIES]; queue.length > 0; ) {
   const file = queue.shift()

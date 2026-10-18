@@ -16,15 +16,19 @@ export { BAR_CELLS, ageText, miniBarSvg }
 
 /**
  * @typedef {'plan' | 'build' | 'prove' | 'met' | 'parked' | 'done'} Stage
- * @typedef {'decisions' | 'met' | 'stale' | 'unparked' | 'plan' | 'status' | 'owner' | 'area'} FlagKind
+ * @typedef {'decisions' | 'colliding' | 'met' | 'stale' | 'unparked' | 'plan' | 'status' | 'owner' | 'area'} FlagKind
  * @typedef {{ kind: FlagKind, label: string }} Flag
  * @typedef {{
  *   key: string, slug: string, title: string, goal: string, area: string, owner: string, stage: Stage,
  *   status: string, statusNote: string, done: number, total: number, openItems: { id: string, text: string }[],
  *   prs: number[], issue: number | null, calls: Call[], updatedAt: number, createdAt: number,
- *   source: 'main' | 'local', flags: Flag[], mentions: string[]
+ *   source: 'main' | 'local', flags: Flag[], mentions: string[], branch: string, collisions: Collision[]
  * }} BoardRecord one intent as the board reads it (records.mjs); `calls`: its open findings waiting on a decision;
- *   `mentions`: the other intents its files name
+ *   `mentions`: the other intents its files name; `branch`: its Branch line; `collisions`: the overlaps it is a side of (records.mjs withCollisions)
+ * @typedef {{ key: string, slug: string, owner: string, stage: Stage | '', branch: string }} Party one side of a collision: an intent, or the base
+ *   branch (`key` '', `slug` the branch's name, `owner` its last author on the files, `stage` '')
+ * @typedef {{ key: string, a: Party, b: Party, files: string[], spots: import('./ather/overlap.mjs').Spot[], count: number, at: number }} Collision
+ *   two pieces of work that change the same lines (overlap.mjs): the base, when it is a side, is always `a`; `at`: the base's last change to the files (0 for two intents)
  * @typedef {{ id: string, title: string, options: { letter: string, label: string, text: string, isRecommended: boolean }[] }} Call a decision waiting: its options as the finding writes them (model.mjs parseOptions); none for an open question
  * @typedef {{ words: string, area: string, owner: string, stage: string, showDone: boolean, keys: readonly string[] }} Filter '' matches any; `keys`: only these intents (a suggestion's or an answer's), none: any
  * @typedef {'recent' | 'stale' | 'closest' | 'items'} Sort
@@ -68,7 +72,7 @@ export const HYGIENE = /** @type {readonly FlagKind[]} */ (['status', 'owner', '
 export const FLAG_ORDER = [...REASONS.map(reason => reason.kind), ...HYGIENE]
 // The warnings a row carries: what needs someone, less ready to close and no checklist, which the row's
 // stage glyph (✓, ○), or its column, already says.
-export const WARNINGS = /** @type {readonly FlagKind[]} */ (['decisions', 'stale', 'unparked'])
+export const WARNINGS = /** @type {readonly FlagKind[]} */ (['decisions', 'colliding', 'stale', 'unparked'])
 
 export const VIEW_LABELS = /** @type {const} */ ({ foryou: 'For you', triage: 'Triage', board: 'Board', map: 'Map', modules: 'Modules', table: 'Table', items: 'Open items', people: 'People', areas: 'Areas', pulse: 'Pulse' })
 // The pane's views, in its tab order; the page has its own (page/client.js), adding Board, Map and Pulse.
@@ -153,14 +157,14 @@ export const groupRecords = (records, group, sort) => {
 export const worstFlag = record => Math.min(...record.flags.map(flag => FLAG_ORDER.indexOf(flag.kind)).filter(at => at >= 0), FLAG_ORDER.length)
 
 /**
- * What needs someone, team-wide: open intents with a flag that is not data hygiene, worst flag first,
- * then the longest untouched. `hygiene`: intents whose files the board could not fully read as written.
+ * What needs someone, team-wide: open intents with a reason's flag, worst first, then the longest untouched.
+ * Colliding is drawn by pairs instead (collisionGroup). `hygiene`: intents whose files the board could not fully read as written.
  * @param {readonly BoardRecord[]} records
  */
 export const triage = records => {
   const isHygiene = (/** @type {Flag} */ flag) => HYGIENE.some(kind => kind === flag.kind)
   const attention = records
-    .filter(one => one.stage !== 'done' && one.flags.some(flag => !isHygiene(flag)))
+    .filter(one => one.stage !== 'done' && one.flags.some(flag => REASONS.some(reason => reason.kind === flag.kind)))
     .sort((a, b) => worstFlag(a) - worstFlag(b) || a.updatedAt - b.updatedAt)
   const hygiene = records.filter(one => one.flags.some(isHygiene)).sort((a, b) => b.updatedAt - a.updatedAt)
   return { attention, hygiene }
@@ -224,6 +228,15 @@ export const choices = records => ({
   owners: [...new Set(records.map(one => one.owner).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
 })
 
+// The collisions among the records shown, each once, those with the most places first.
+/** @param {readonly BoardRecord[]} records @returns {Collision[]} */
+export const collisionsOf = records => {
+  /** @type {Map<string, Collision>} */
+  const seen = new Map()
+  for (const one of records) for (const collision of one.collisions) seen.set(collision.key, collision)
+  return [...seen.values()].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key))
+}
+
 // ---------------------------------------------------------------- what a view shows
 
 // One intent as a row: the flags among `kinds` it warns with, and no items under it.
@@ -254,17 +267,25 @@ export const rollupLine = (sum, now) => ({
  * @typedef {{ record: BoardRecord, flags: Flag[], items: { id: string, text: string }[] }} Row
  * @typedef {{ key: string, title: string, rollup: Rollup, words: string, warn: string }} Line
  * @typedef {{ kind: 'intents', key: string, title: string, meta: string, empty: string, hide: '' | 'owner' | 'area', rows: Row[] }} IntentGroup
- * @typedef {{ kind: 'label', key: string, title: string, meta: string, isLoud: boolean, groups: IntentGroup[] }
+ * @typedef {{ kind: 'pairs', key: string, title: string, meta: string, empty: string, pairs: Collision[] }} PairGroup the collisions, one row a pair
+ * @typedef {{ kind: 'label', key: string, title: string, meta: string, isLoud: boolean, groups: (IntentGroup | PairGroup)[] }
  *   | IntentGroup
  *   | { kind: 'lines', key: string, by: 'owner' | 'area', lines: Line[] }} Section
  */
 
+// Colliding (overlap-check D5): one row a pair; `note` says why nothing could be checked (old git), shown in its place.
+/** @param {string} key @param {readonly BoardRecord[]} records @param {string} note @returns {PairGroup[]} */
+export const collisionGroup = (key, records, note) => {
+  const pairs = collisionsOf(records)
+  return pairs.length > 0 || note ? [{ kind: 'pairs', key, title: 'Colliding', meta: pairs.length > 0 ? String(pairs.length) : '', empty: note, pairs }] : []
+}
+
 /**
  * What a view shows, as sections both surfaces draw; [] for Pulse (the page's own chart). `records`: recordsFor's.
- * Board: a group per stage that has intents, in board order.
- * @param {readonly BoardRecord[]} records @param {Look} look @param {number} now @returns {Section[]}
+ * Board: a group per stage that has intents, in board order. `note`: why overlaps could not be checked ('' when they were).
+ * @param {readonly BoardRecord[]} records @param {Look} look @param {number} now @param {string} [note] @returns {Section[]}
  */
-export const sectionsOf = (records, look, now) => {
+export const sectionsOf = (records, look, now, note = '') => {
   const row = rowOf
   /** @param {string} key @param {string} title @param {string} meta @param {string} empty @param {Row[]} rows @param {'' | 'owner' | 'area'} [hide] @returns {IntentGroup} */
   const intents = (key, title, meta, empty, rows, hide = '') => ({ kind: 'intents', key, title, meta, empty, hide, rows })
@@ -274,9 +295,12 @@ export const sectionsOf = (records, look, now) => {
     const { attention, hygiene } = triage(records)
     const reasons = REASONS.map(reason => ({ ...reason, list: attention.filter(one => FLAG_ORDER[worstFlag(one)] === reason.kind) })).filter(reason => reason.list.length > 0)
     // A reason's rows leave out the warning its title says; how many decisions wait is each row's own.
-    const groups = reasons.map(reason => intents(`attention-${reason.kind}`, reason.title, String(reason.list.length), '', reason.list.map(one => row(one, WARNINGS.filter(kind => kind !== reason.kind || kind === 'decisions')))))
+    const byReason = reasons.map(reason => intents(`attention-${reason.kind}`, reason.title, String(reason.list.length), '', reason.list.map(one => row(one, WARNINGS.filter(kind => kind !== reason.kind || kind === 'decisions')))))
+    // Colliding comes second, after the decisions (D5).
+    const at = byReason[0]?.key === 'attention-decisions' ? 1 : 0
+    const groups = [...byReason.slice(0, at), ...collisionGroup('attention-colliding', records, note), ...byReason.slice(at)]
     return [
-      { kind: 'label', key: 'label-attention', title: 'Needs someone', meta: String(attention.length), isLoud: true, groups: groups.length > 0 ? groups : none('Nothing is stuck.') },
+      { kind: 'label', key: 'label-attention', title: 'Needs someone', meta: String(attention.length + collisionsOf(records).length), isLoud: true, groups: groups.length > 0 ? groups : none('Nothing is stuck.') },
       { kind: 'label', key: 'label-hygiene', title: 'Data hygiene', meta: `${hygiene.length} not fully readable`, isLoud: false, groups: [intents('hygiene', '', '', 'Every intent reads cleanly.', hygiene.map(one => row(one, HYGIENE)))] },
     ]
   }

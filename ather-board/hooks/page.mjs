@@ -20,13 +20,13 @@ export const viewsScript = () =>
 
 /**
  * @param {Board} board
- * @param {{ now: number, repoName: string, repoUrl: string, css: string, client: string, brief?: Brief | null, briefAt?: number, modules?: import('./modules.mjs').Module[], mapping?: import('./modules.mjs').Mapping }} page
+ * @param {{ now: number, repoName: string, repoUrl: string, css: string, client: string, brief?: Brief | null, briefAt?: number, modules?: import('./modules.mjs').Module[], mapping?: import('./modules.mjs').Mapping, overlapNote?: string }} page
  * `repoUrl`: the repository's web address, for PR and issue links ('' for none); `css`, `client`: page/board.css and page/client.js;
  * `brief`: the latest brief, shown read-only at the top of Triage (A14), and when it was made; `modules`, `mapping`: the game's
- * modules and which intents work on which, for the Map (A15)
+ * modules and which intents work on which, for the Map (A15); `overlapNote`: why the overlap check could not run, for Triage
  */
-export const renderPage = (board, { now, repoName, repoUrl, css, client, brief = null, briefAt = 0, modules = [], mapping = {} }) => {
-  const data = JSON.stringify({ records: board.records, now, repoUrl, sha: board.sha, base: board.base, brief, briefAt, modules, mapping })
+export const renderPage = (board, { now, repoName, repoUrl, css, client, brief = null, briefAt = 0, modules = [], mapping = {}, overlapNote = '' }) => {
+  const data = JSON.stringify({ records: board.records, now, repoUrl, sha: board.sha, base: board.base, brief, briefAt, modules, mapping, overlapNote })
   // Inside <script>, "</" could end the element: written as "<\/".
   const script = (/** @type {string} */ text) => text.replace(/<\//g, '<\\/')
   const title = `${repoName ? `${repoName} ` : ''}intents`

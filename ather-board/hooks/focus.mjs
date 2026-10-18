@@ -7,7 +7,7 @@
 import { isMine } from './ather/model.mjs'
 import { nextAction } from './act.mjs'
 import { moduleSections } from './map.mjs'
-import { DAY_MS, WARNINGS, recordsFor, rowOf, sectionsOf, sortRecords } from './views.mjs'
+import { DAY_MS, WARNINGS, collisionGroup, recordsFor, rowOf, sectionsOf, sortRecords } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
@@ -40,9 +40,14 @@ export const forYou = (records, me) => {
   const needs = NEEDS.map(need => ({ need, list: mine.filter(one => need.actions.some(action => action === nextAction(one, true))) })).filter(one => one.list.length > 0)
   const placed = new Set(needs.flatMap(one => one.list.map(record => record.key)))
   const rest = sortRecords(mine.filter(one => !placed.has(one.key)), 'recent')
-  const count = needs.reduce((sum, one) => sum + one.list.length, 0)
+  // Your work that collides, after your decisions (overlap-check D5).
+  const colliding = collisionGroup('you-colliding', mine, '')
+  const count = needs.reduce((sum, one) => sum + one.list.length, 0) + (colliding[0]?.pairs.length ?? 0)
+  const byNeed = needs.map(({ need, list }) => group(`you-${need.key}`, need.title, '', list))
+  const at = needs[0]?.need.key === 'decide' ? 1 : 0
+  const groups = [...byNeed.slice(0, at), ...colliding, ...byNeed.slice(at)]
   return [
-    { kind: 'label', key: 'label-you', title: 'For you', meta: String(count), isLoud: true, groups: needs.length > 0 ? needs.map(({ need, list }) => group(`you-${need.key}`, need.title, '', list)) : [group('you-none', '', mine.length > 0 ? 'Nothing of yours needs you now.' : 'You own no open intents. Triage shows the team’s.', [])] },
+    { kind: 'label', key: 'label-you', title: 'For you', meta: String(count), isLoud: true, groups: groups.length > 0 ? groups : [group('you-none', '', mine.length > 0 ? 'Nothing of yours needs you now.' : 'You own no open intents. Triage shows the team’s.', [])] },
     ...(rest.length > 0 ? [/** @type {Section} */ ({ kind: 'label', key: 'label-yours', title: 'Your other open work', meta: String(rest.length), isLoud: false, groups: [group('yours', '', '', rest)] })] : []),
   ]
 }
@@ -91,10 +96,11 @@ const EXTRAS = { foryou: { filters: false, brief: true, mapping: false }, module
  * What a pane view shows: the records it sees, its sections (For you's, the modules', or the shared
  * views'), and its extras. The one place the pane's views are told apart.
  * @param {readonly BoardRecord[]} records @param {import('./views.mjs').Look} look
- * @param {{ me: string, modules: readonly import('./modules.mjs').Module[], mapping: import('./modules.mjs').Mapping, now: number }} context
+ * @param {{ me: string, modules: readonly import('./modules.mjs').Module[], mapping: import('./modules.mjs').Mapping, now: number, note?: string }} context
+ * `note`: why the overlap check could not run, for Triage
  */
-export const paneView = (records, look, { me, modules, mapping, now }) => {
+export const paneView = (records, look, { me, modules, mapping, now, note = '' }) => {
   const shown = recordsFor(records, look)
-  const parts = look.view === 'foryou' ? forYou(records, me) : look.view === 'modules' ? moduleSections(shown, modules, mapping, look.sort, now) : sectionsOf(shown, look, now)
+  const parts = look.view === 'foryou' ? forYou(records, me) : look.view === 'modules' ? moduleSections(shown, modules, mapping, look.sort, now) : sectionsOf(shown, look, now, note)
   return { shown, parts, extras: EXTRAS[look.view] ?? PLAIN }
 }

@@ -123,6 +123,37 @@
       '</button>' + (opened[record.key] ? details(record) : '') + '</div>'
     )
   }
+  // A collision (overlap-check D5): the intent and what it collides with, the places in amber, the files beneath;
+  // opened, each place with both sides' first changed line.
+  function pairRow(collision) {
+    var a = collision.a, b = collision.b
+    var isOpen = opened[collision.key]
+    var other = a.key === '' ? esc(a.slug) : glyph(a.stage) + ' ' + esc(a.slug)
+    var files = collision.files.map(function (f) { return f.split('/').pop() }).join(', ')
+    var owners = [b.owner, a.owner].filter(function (o, i, all) { return o && all.indexOf(o) === i }).join(', ')
+    return (
+      '<div class="row pair">' + toggle({ key: collision.key }) + glyph(b.stage) +
+      '<span class="main"><span class="head"><span class="slug">' + esc(b.slug) + ' <span class="versus-mark">⇄</span> ' + other + '</span><span class="warn">▲ ' + collision.count + (collision.count === 1 ? ' overlap' : ' overlaps') + '</span></span><span class="title">' + esc(files) + '</span></span>' +
+      '<span class="progress"></span>' +
+      '<span class="age" title="the base’s last change to these files">' + esc(collision.at ? ageText(collision.at, NOW) : '') + '</span>' +
+      '<span class="owner">' + esc(owners) + '</span>' +
+      '</button>' + (isOpen ? pairDetails(collision) : '') + '</div>'
+    )
+  }
+  function pairDetails(collision) {
+    var a = collision.a, b = collision.b
+    var fact = a.key === '' ? 'origin/' + a.slug + ' changed these lines' + (collision.at ? ' ' + ageText(collision.at, NOW) + ' ago' : '') + (a.owner ? ' (' + a.owner + ')' : '') + '; ' + b.slug + ' no longer merges cleanly.' : 'Neither is merged yet: whichever merges second will conflict.'
+    var spots = collision.spots.map(function (spot) {
+      if (spot.kind !== 'lines') return '<p class="spot">' + esc(spot.path) + ' <span class="kind">' + esc(spot.kind === 'binary' ? 'binary, both changed' : a.slug + ' ' + spot.ours + ' it, ' + b.slug + ' ' + spot.theirs + ' it') + '</span></p>'
+      return '<p class="spot">' + esc(spot.path) + '<span class="kind">:' + spot.line + '</span></p><div class="versus"><span>' + esc(a.slug) + '</span><code>' + esc(spot.ours || '(blank)') + '</code><span>' + esc(b.slug) + '</span><code>' + esc(spot.theirs || '(blank)') + '</code></div>'
+    }).join('')
+    var more = collision.count > collision.spots.length ? '<p class="refs">and ' + (collision.count - collision.spots.length) + ' more</p>' : ''
+    return '<div class="details"><p class="refs">' + esc(fact) + '</p>' + spots + more + '</div>'
+  }
+  function pairGroup(part) {
+    var body = part.pairs.length ? '<div class="panel">' + part.pairs.map(pairRow).join('') + '</div>' : '<p class="empty">' + esc(part.empty) + '</p>'
+    return '<section class="group">' + groupHead(part) + body + '</section>'
+  }
   function heading(title, meta, isLoud) {
     return '<h2 class="label' + (isLoud ? ' loud' : '') + '"><span>' + esc(title) + '</span>' + (meta ? '<small>' + esc(meta) + '</small>' : '') + '</h2>'
   }
@@ -231,12 +262,12 @@
     var current = look()
     if (current.view === 'pulse') return pulseView(records)
     if (current.view === 'map') return mapView(records)
-    var parts = sectionsOf(records, current, NOW)
+    var parts = sectionsOf(records, current, NOW, DATA.overlapNote || '')
     if (current.view === 'board') return '<div class="kanban" style="--columns:' + parts.length + '">' + parts.map(column).join('') + '</div>'
     // Triage with no filter in force opens on the brief.
     var isPlain = !flat.words && !flat.area && !flat.owner && !flat.stage && !flat.keys
     var lead = current.view === 'triage' && isPlain ? briefView() : ''
-    return lead + parts.map(function (part) { return part.kind === 'label' ? heading(part.title, part.meta, part.isLoud) + part.groups.map(group).join('') : part.kind === 'lines' ? lines(part) : group(part) }).join('')
+    return lead + parts.map(function (part) { return part.kind === 'label' ? heading(part.title, part.meta, part.isLoud) + part.groups.map(function (g) { return g.kind === 'pairs' ? pairGroup(g) : group(g) }).join('') : part.kind === 'lines' ? lines(part) : group(part) }).join('')
   }
 
   function options(values, current, any, name) {

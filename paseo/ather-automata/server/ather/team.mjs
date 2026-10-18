@@ -35,8 +35,9 @@ const INTENTS = 'docs/intent'
 // The fetch (D2): origin's base into origin/<base> by an explicit refspec (a narrowed remote.origin.fetch
 // would not move it otherwise), no tags, no FETCH_HEAD, no submodules, and no automatic gc or
 // maintenance: a background fetch in a shared checkout must not start a repack.
-/** @param {string} base */
-export const fetchArgs = base => ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', `+refs/heads/${base}:refs/remotes/${refOf(base)}`]
+// Several branches in one fetch, each into its own remote-tracking ref (the overlap check's, overlap.mjs).
+/** @param {...string} branches */
+export const fetchArgs = (...branches) => ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', ...branches.map(branch => `+refs/heads/${branch}:refs/remotes/${refOf(branch)}`)]
 export const FETCH_ARGS = fetchArgs('main')
 export const FETCH_EVERY_MS = 10 * 60 * 1000
 // As long as the engine lets a process run: a slow fetch is not a failed one.
