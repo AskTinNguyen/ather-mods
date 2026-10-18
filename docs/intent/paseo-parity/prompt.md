@@ -1,7 +1,7 @@
 # Ather Automata for Paseo: the Simple view and the branch check in the panel
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: paseo
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`

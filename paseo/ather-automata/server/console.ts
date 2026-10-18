@@ -4,8 +4,6 @@
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
 import { HOME_PARTS, NEW_INTENT_PROMPT, VIEW_LABELS, askPrompt, batchPrompt, buildHome, heldByLine, isShownIn, otherView, parseWeek, proofLine, skillFolder, standsLines, untrackText, viewText } from "./ather/home.mjs";
-import { checkBranch, isSameCheck, type MergeCheck } from "./ather/collide.mjs";
-import { overlapJob } from "./ather/overlap.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
@@ -17,7 +15,7 @@ import { USER_HOME, list, readText, run } from "./io";
 import { ctxOf, laneOf, peers, readLock, type Ctx, type Pack } from "./lane";
 import { needsOf, openDecision, recordAnswer, toggleBlock } from "./needs";
 import { crewOf, githubLogin } from "./squad";
-import { readTeamIntents, repoOf, syncLine, syncMain } from "./team";
+import { checkMerge, mergeOf, readTeamIntents, syncLine, syncMain } from "./team";
 import { cycleGroup, cycleSort, setSearch, workListOf } from "./worklist";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,19 +51,6 @@ const sentOf = (agentId: string) => {
 };
 const stale = (agentId: string) => views.delete(agentId);
 
-// Each checkout's branch against origin's base (ather-automata 0.5.0, 0.6.0), one check at a time per checkout, run as
-// its model is built; Needs you, the merge line and the pill read what it last found. A new answer redraws every agent.
-const merges = new Map<string, { job: ReturnType<typeof overlapJob>; check: MergeCheck | null }>();
-function checkMerge(root: string, base: string, slug: string, me: string) {
-  let kept = merges.get(root);
-  if (!kept) merges.set(root, (kept = { job: overlapJob(), check: null }));
-  const one = kept;
-  void checkBranch(repoOf(root) as never, one.job, { base, slug, owner: me }, (found) => {
-    const isSame = isSameCheck(found, one.check);
-    one.check = found;
-    if (!isSame) for (const agent of knownAgents()) stale(agent.id);
-  }).catch((error: unknown) => console.log(`[ather] ${root}: the overlap check failed: ${String(error)}`));
-}
 
 // ---------------------------------------------------------------- reading the checkout
 
@@ -198,7 +183,8 @@ async function model(ctx: Ctx, force = false, fetchNow = false) {
   const { root, me, pack, base } = await laneOf(ctx);
   const cache = await refreshRoot(ctx, force, fetchNow);
   const pinned = await state.readPinned(io);
-  checkMerge(root, base, pinned ?? "", me);
+  // A new answer redraws every agent.
+  checkMerge(root, base, pinned ?? "", me, () => knownAgents().forEach((agent) => stale(agent.id)));
   void refreshIssues(ctx).catch(() => undefined);
   const tz = await state.readTz(io);
   const now = Date.now();
@@ -214,7 +200,7 @@ async function model(ctx: Ctx, force = false, fetchNow = false) {
     away,
     ledger: away.phase === "off" ? "" : ((await readText(away.ledgerPath)) ?? ""),
     lost: await state.readLost(io),
-    merge: merges.get(root)?.check ?? null,
+    merge: mergeOf(root),
     lock: await namedLock(root, await readLock(ctx)),
     recurring: await state.readRecurring(io, pack),
     issues: await state.readIssues(io, me),
