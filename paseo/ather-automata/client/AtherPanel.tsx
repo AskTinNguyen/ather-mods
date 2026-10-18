@@ -72,6 +72,8 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
     if (!busy) action.mutate({ kind, id, text });
   };
   const isSent = (id: string) => view.sent.includes(id);
+  // Home's parts the person's view shows (Simple or Advanced, home.mjs isShownIn).
+  const shows = (part: string) => view.shows.includes(part);
   const toggle = (name: string) => setOpen((prev) => ({ ...prev, [name]: !prev[name] }));
   const more = (name: string, total: number, shown: number) =>
     total > shown ? (
@@ -121,11 +123,11 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         />
       </View>
 
-      {view.stages.length > 0 ? (
+      {view.stages.length > 0 && shows("stages") ? (
         <FadeIn>
           <StageTrack kit={kit} stages={view.stages} />
         </FadeIn>
-      ) : view.stage ? (
+      ) : view.stage && shows("stages") ? (
         <View style={{ alignSelf: "flex-start", marginTop: 10, backgroundColor: c.surface1, borderRadius: 6, paddingVertical: 2, paddingHorizontal: 8 }}>
           <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>{view.stage}</Text>
         </View>
@@ -133,15 +135,17 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
 
       <View style={{ marginTop: 12, gap: 6 }}>
         {[view.progress, view.sentence].filter(Boolean).length > 0 ? <Text style={s.body}>{[view.progress, view.sentence].filter(Boolean).join(" · ")}</Text> : null}
-        {view.proof ? <Proof kit={kit} proof={view.proof} /> : null}
-        {meta ? <Text style={s.hint}>{meta}</Text> : null}
+        {view.proof && shows("meta") ? <Proof kit={kit} proof={view.proof} /> : null}
+        {meta && shows("meta") ? <Text style={s.hint}>{meta}</Text> : null}
+        {/* Whether this checkout's branch merges into origin's base; amber where it does not (Needs you has the press). */}
+        {view.merge.text && shows("merge") ? <Text style={[s.hint, view.merge.isWarn ? { color: c.statusWarning } : null]}>{view.merge.text}</Text> : null}
         {/* How fresh the team's intents are; pressing it fetches origin now (the header's Refresh does too). */}
         {view.sync ? (
           <Pressable accessibilityRole="button" accessibilityLabel={`${view.sync.replace(" ↻", "")}. Sync now`} disabled={refresh.isPending} onPress={() => refresh.mutate()} style={({ pressed }) => ({ alignSelf: "flex-start", opacity: pressed ? 0.6 : 1 })}>
             <Text style={s.hint}>{view.sync}</Text>
           </Pressable>
         ) : null}
-        {view.heldBy ? (
+        {view.heldBy && shows("meta") ? (
           <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
             <Icon name="Users" size={14} color={c.statusWarning} />
             <Text style={[s.hint, { color: c.statusWarning, flex: 1 }]}>{view.heldBy}</Text>
@@ -180,10 +184,10 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {view.needs.blocks.length > 0 || view.needs.folded.length > 0 ? <NeedsYou kit={kit} needs={view.needs} busy={busy} isSent={isSent} run={run} /> : null}
+      {(view.needs.blocks.length > 0 || view.needs.folded.length > 0) && shows("needs") ? <NeedsYou kit={kit} needs={view.needs} busy={busy} isSent={isSent} run={run} /> : null}
 
       {/* Your own intents that want a press: every item met, or parked with no reason. A press opens the intent. */}
-      {view.attention.length > 0 ? (
+      {view.attention.length > 0 && shows("attention") ? (
         <FadeIn delay={60} style={s.section}>
           <SectionLabel kit={kit} text="Needs attention" count={view.attention.length} />
           {view.attention.map((one, index) => (
@@ -192,7 +196,7 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {next ? (
+      {next && shows("next") ? (
         <FadeIn delay={80} style={s.section}>
           <SectionLabel kit={kit} text="Next" />
           <View style={[s.card, { borderColor: c.accent, padding: next.draft !== undefined ? 12 : 4 }]}>
@@ -232,11 +236,11 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {view.stages.length > 0 || view.crew.length > 0 ? <SummaryStrip kit={kit} view={view} /> : null}
+      {(view.stages.length > 0 || view.crew.length > 0) && shows("strip") ? <SummaryStrip kit={kit} view={view} /> : null}
 
-      <CrewSection kit={kit} view={view} now={now} isLightTheme={isLight(theme)} />
+      {shows("crew") ? <CrewSection kit={kit} view={view} now={now} isLightTheme={isLight(theme)} /> : null}
 
-      {view.changes.length > 0 ? (
+      {view.changes.length > 0 && shows("preview") ? (
         <FadeIn delay={120} style={s.section}>
           <SectionLabel kit={kit} text="Today in the intent" />
           {view.changes.map((one, index) => (
@@ -245,8 +249,9 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
         </FadeIn>
       ) : null}
 
-      {view.workList.total > 0 ? <WorkSection kit={kit} view={view} busy={busy} isSent={isSent} run={run} search={search} light={isLight(theme)} /> : null}
+      {view.workList.total > 0 && shows("preview") ? <WorkSection kit={kit} view={view} busy={busy} isSent={isSent} run={run} search={search} light={isLight(theme)} /> : null}
 
+      {shows("actions") ? (
       <FadeIn delay={200} style={s.section}>
         <SectionLabel kit={kit} text="Start" />
         <View style={s.buttons}>
@@ -278,8 +283,9 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
             })
           : null}
       </FadeIn>
+      ) : null}
 
-      {view.away.phase === "off" ? (
+      {view.away.phase === "off" && shows("away") ? (
         <FadeIn delay={240} style={s.section}>
           <SectionLabel kit={kit} text={view.offerAway ? "Heading off?" : "Away"} />
           <Text style={[s.hint, { paddingHorizontal: 2 }]}>
@@ -309,6 +315,11 @@ export function AtherPanel({ theme, layout, agentId }: PluginAgentPanelProps) {
           </View>
         </FadeIn>
       ) : null}
+
+      {/* Simple or Advanced: the person's own choice, kept for them (simple-view D4). */}
+      <View style={[s.section, { alignItems: "flex-start" as const }]}>
+        <Button kit={kit} variant="ghost" icon="SlidersHorizontal" label={view.viewToggle} disabled={busy} onPress={() => run("pane", "")} />
+      </View>
       </View>
     </ScrollView>
   );

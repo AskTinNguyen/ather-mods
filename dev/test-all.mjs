@@ -93,6 +93,11 @@ sh(`node repos.mjs "${path.join(WORK, 'checkouts-report.md')}"`, e2e)
 console.log('== board e2e')
 sh(`node board.mjs "${path.join(WORK, 'board-report.md')}"`, e2e)
 
+// The Paseo plugin's server over a real checkout (dev/e2e/paseo.mts), where its npm install is in place.
+const PASEO_ATHER = path.join(PASEO, 'ather-automata')
+if (fs.existsSync(path.join(PASEO_ATHER, 'node_modules/@getpaseo'))) sh(`node --no-warnings --import ./server/test-resolve.mjs --experimental-strip-types "${path.join(e2e, 'paseo.mts')}" "${path.join(WORK, 'paseo-report.md')}"`, PASEO_ATHER)
+else console.log('skipped: the Paseo e2e did not run. npm install in paseo/ather-automata to run it')
+
 console.log('== e2e')
 // The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for
 // people who do not work on the game (web, tools) and have no S2 checkout on their PC. A S2_ROOT that is

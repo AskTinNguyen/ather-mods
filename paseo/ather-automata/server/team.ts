@@ -13,7 +13,7 @@ type Any = any;
 const caches = new Map<string, Any>();
 const syncs = new Map<string, Any>();
 
-const repoOf = (root: string) => ({
+export const repoOf = (root: string) => ({
   git: async (args: readonly string[], options: { stdin?: string; timeoutMs?: number } = {}) => run(["git", "-C", root, ...args], { cwd: root, env: GIT_ENV, timeoutMs: options.timeoutMs ?? 120000, stdin: options.stdin }),
   read: readText,
   list,

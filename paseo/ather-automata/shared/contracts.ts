@@ -28,6 +28,12 @@ export const homeView = z.object({
   // "Also tracked in 1 other session · active 3m ago"; '' when no other session tracks it.
   heldBy: z.string(),
   sentence: z.string(),
+  // Whether this checkout's branch merges into origin's base (home.mjs mergeLine): '' when it was not compared.
+  merge: z.object({ text: z.string(), isWarn: z.boolean() }),
+  // Home's parts the person's view shows (home.mjs HOME_PARTS, isShownIn): every one in Advanced, a few in Simple.
+  shows: z.array(z.string()),
+  // The toggle's words: "Simple view" or "Advanced view".
+  viewToggle: z.string(),
   lock: z.string(),
   role: z.string(),
   week: z.string(),
@@ -200,7 +206,7 @@ export const atherHome = defineRpc({
   output: homeView,
 });
 
-const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask", "open", "calls", "answer", "explain", "typed", "find", "sort", "group"]);
+const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask", "open", "calls", "answer", "explain", "typed", "find", "sort", "group", "pane"]);
 export type ActKind = z.infer<typeof actKind>;
 
 export const atherAct = defineRpc({
