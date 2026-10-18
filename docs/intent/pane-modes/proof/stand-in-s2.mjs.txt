@@ -1,0 +1,21 @@
+// A stand-in S2 docs/intent so run.mjs lays out every pane without an S2 checkout.
+import fs from 'fs'
+import path from 'path'
+const root = process.argv[2]
+const intents = [
+  ['box-scale-tool', 'Box scale tool', 'Tools', 'Tin Nguyen', 'Scale boxes from a handle in the Editor.', 2, 4],
+  ['fluid-snow-sand-look', 'Fluid snow and sand look', 'Rendering', 'Tin Nguyen', 'Snow and sand that deform and read as fluid.', 3, 6],
+  ['snow-trail-lod-pop', 'Snow trail LOD pop', 'Rendering', 'Tin Nguyen', 'No pop when trails change LOD.', 1, 3],
+  ['quest-calls', 'Quest calls', 'Gameplay', 'Lam Phung', 'Quest steps call into the dialogue system.', 0, 5],
+  ['time-dilation-ownership', 'Time dilation ownership (#28887)', 'Gameplay', 'Lena Park', 'One owner for time dilation.', 4, 4],
+  ['camera-shake-pass', 'Camera shake pass', 'Camera', 'Lena Park', 'Tune shakes across the boss fights.', 2, 5],
+]
+for (const [slug, title, area, owner, goal, done, total] of intents) {
+  const dir = path.join(root, 'docs/intent', slug)
+  fs.mkdirSync(dir, { recursive: true })
+  const items = Array.from({ length: total }, (_, at) => `- [${at < done ? 'x' : ' '}] A${at + 1}: ${title} part ${at + 1}.`).join('\n')
+  fs.writeFileSync(path.join(dir, 'prompt.md'), `# ${title}\n\n- Rev: 1\n- Status: active\n- Area: ${area}\n- Owner: ${owner}\n- Started: 2026-10-01\n\n## Goal\n\n${goal}\n\n## Acceptance\n\n${items}\n`)
+  fs.writeFileSync(path.join(dir, 'progress.md'), `# Progress\n\n${Array.from({ length: total }, (_, at) => `- [${at < done ? 'x' : ' '}] A${at + 1}`).join('\n')}\n`)
+  fs.writeFileSync(path.join(dir, 'findings.md'), '# Findings\n')
+  fs.writeFileSync(path.join(dir, 'log.md'), '# Log\n\n- 2026-10-01 created.\n')
+}
