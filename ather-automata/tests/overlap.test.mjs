@@ -8,7 +8,7 @@ import os from 'os'
 import path from 'path'
 
 import { parseIntent } from '../hooks/model.mjs'
-import { EMPTY_OVERLAPS, SPOTS_KEPT, canMergeTree, fetchBranches, gitVersion, pairKey, pairsToCheck, parseMergeTree, readOverlaps, spotsIn } from '../hooks/overlap.mjs'
+import { EMPTY_OVERLAPS, SPOTS_KEPT, canMergeTree, fetchBranches, gitVersion, intentsIn, pairKey, pairsToCheck, parseMergeTree, readOverlaps, spotsIn } from '../hooks/overlap.mjs'
 import { fetchArgs } from '../hooks/team.mjs'
 
 /** @param {string} prompt */
@@ -152,7 +152,23 @@ describe('a real repository (A3, A4, A6)', () => {
       commit({ 'Move/Modes.cpp': 'case MOVE_Dash: return PhysDash(dt, Iter, Speed);\n' }, 'dash again')
       git(tree, ['push', '-q', origin, 'HEAD:refs/heads/intent/dash'])
     }
-    return { work, repo, calls: () => calls, push: moveDash }
+    // A pull request from Lena's intent lands on main with a merge commit: the same line again, and her intent's progress.
+    const mergeRetune = () => {
+      git(tree, ['checkout', '-q', '-B', 'intent/hitstop-retune', 'main'])
+      commit({ 'Combat/HitStop.cpp': 'a\nb\nreturn FMath::Min(Budget, 0.050f);\nd\n', 'docs/intent/hitstop-retune/progress.md': '# Progress\n' }, 'Retune again', 'Lena Park')
+      git(tree, ['checkout', '-q', 'main'])
+      git(tree, ['merge', '-q', '--no-ff', '-m', 'Merge pull request #7 from team/intent/hitstop-retune', 'intent/hitstop-retune'], 'Lena Park')
+      git(tree, ['push', '-q', origin, 'HEAD:refs/heads/main'])
+      git(clone, ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'])
+    }
+    // A squash merge: one commit on main itself, the code and the intent's progress together.
+    const squashRetune = () => {
+      git(tree, ['checkout', '-q', 'main'])
+      commit({ 'Combat/HitStop.cpp': 'a\nb\nreturn FMath::Min(Budget, 0.040f);\nd\n', 'docs/intent/hitstop-squash/progress.md': '# Progress\n' }, 'Retune (#8)', 'Lena Park')
+      git(tree, ['push', '-q', origin, 'HEAD:refs/heads/main'])
+      git(clone, ['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'])
+    }
+    return { work, repo, calls: () => calls, push: moveDash, mergeRetune, squashRetune }
   }
   const SIDES = [
     { key: 'dodge-cancel', branch: 'intent/dodge' },
@@ -195,6 +211,42 @@ describe('a real repository (A3, A4, A6)', () => {
     await readOverlaps(repo, { base: 'main', sides: SIDES, cache: again.cache })
     fs.rmSync(work, { recursive: true, force: true })
     expect(calls() - fetched > 1).toBe(true)
+  })
+
+  test('hardening D2: the intent that brought the base\u2019s change: the merge that landed it, or a squash commit on the base itself; none when that change wrote no intent', async () => {
+    const { work, repo, mergeRetune, squashRetune } = make()
+    await fetchBranches(repo, SIDES.map(side => side.branch))
+    const base = async () => (await readOverlaps(repo, { base: 'main', sides: SIDES, cache: EMPTY_OVERLAPS })).overlaps.find(one => one.a === '')
+    const before = await base()
+    mergeRetune()
+    const merged = await base()
+    squashRetune()
+    const squashed = await base()
+    fs.rmSync(work, { recursive: true, force: true })
+    expect([before?.via, merged?.via, merged?.who, squashed?.via]).toEqual([[], ['hitstop-retune'], 'Lena Park', ['hitstop-squash']])
+    expect(intentsIn('docs/intent/a-b/prompt.md\nsrc/x.cpp\ndocs/intent/a-b/log.md\ndocs/intent/c/progress.md\n')).toEqual(['a-b', 'c'])
+  })
+
+  test('hardening D1: a run past its budget returns what it found, partial; the next, from its cache, finishes; a third has nothing to do', async () => {
+    const { work, repo, calls } = make()
+    await fetchBranches(repo, SIDES.map(side => side.branch))
+    let clock = 0
+    // Each git call costs 10 ms of a 25 ms budget.
+    const timed = { ...repo, git: async (/** @type {readonly string[]} */ args, /** @type {any} */ options) => { clock += 10; return repo.git(args, options) } }
+    const first = await readOverlaps(timed, { base: 'main', sides: SIDES, cache: EMPTY_OVERLAPS, budgetMs: 25, now: () => clock })
+    let read = first
+    let runs = 1
+    while (read.isPartial && runs < 20) {
+      read = await readOverlaps(timed, { base: 'main', sides: SIDES, cache: read.cache, budgetMs: 25, now: () => clock })
+      runs += 1
+    }
+    const whole = await readOverlaps(repo, { base: 'main', sides: SIDES, cache: EMPTY_OVERLAPS })
+    const settled = calls()
+    const again = await readOverlaps(repo, { base: 'main', sides: SIDES, cache: read.cache })
+    fs.rmSync(work, { recursive: true, force: true })
+    expect([first.isPartial, runs > 1, read.isPartial]).toEqual([true, true, false])
+    expect(read.overlaps.map(one => one.key)).toEqual(whole.overlaps.map(one => one.key))
+    expect([again.isPartial, calls() - settled]).toEqual([false, 1])
   })
 
   test('A4: before git 2.38 nothing is checked and the note says why', async () => {

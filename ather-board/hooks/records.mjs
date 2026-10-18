@@ -111,7 +111,7 @@ export const withCollisions = (records, overlaps, base) => {
   const collisions = overlaps.flatMap(one => {
     const a = one.a === '' ? { key: '', slug: base, owner: one.who, stage: /** @type {const} */ (''), branch: base } : party(one.a)
     const b = party(one.b)
-    return a && b ? [{ key: one.key, a, b, files: one.files, spots: one.spots, count: one.count, at: one.at }] : []
+    return a && b ? [{ key: one.key, a, b, files: one.files, spots: one.spots, count: one.count, at: one.at, via: one.via }] : []
   })
   return records.map(record => {
     const its = collisions.filter(one => one.a.key === record.key || one.b.key === record.key)

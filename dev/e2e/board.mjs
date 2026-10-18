@@ -3,12 +3,13 @@
 // line, and a teammate's clone that knows only main. Needs no S2_ROOT.
 // `node board.mjs [report.md] [--out <dir>]`: `--out` writes the pane as text (72 and 110 columns) and the page.
 import fs from 'fs'
-import os from 'os'
+
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import { createEngine } from './engine.mjs'
 import { check } from './screen.mjs'
+import { byKey, checks, join, nodesOf, sandbox, until } from './harness.mjs'
 
 const args = process.argv.slice(2)
 const OUT_AT = args.indexOf('--out')
@@ -17,14 +18,8 @@ const REPORT = args.find((one, at) => !one.startsWith('--') && at !== OUT_AT + 1
 const BOARD = new URL('../../ather-board/', import.meta.url)
 const { register } = await import(new URL('hooks/index.mjs', BOARD).href)
 
-const join = (...parts) => path.join(...parts).split(path.sep).join('/')
-const BASE = join(fs.realpathSync(fs.mkdtempSync(join(os.tmpdir(), 'ather-board-'))))
-fs.writeFileSync(join(BASE, 'gitconfig'), '')
-process.env.GIT_CONFIG_GLOBAL = join(BASE, 'gitconfig')
-process.env.GIT_CONFIG_NOSYSTEM = '1'
-
-const results = []
-const expect = (name, ok, detail = '') => results.push({ name, ok: Boolean(ok), detail: typeof detail === 'string' ? detail : JSON.stringify(detail) })
+const BASE = sandbox('ather-board-')
+const { expect, finish } = checks()
 const git = (cwd, args, who = 'Tin Nguyen') => execFileSync('git', ['-c', 'init.defaultBranch=main', '-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: who, GIT_AUTHOR_EMAIL: 'x@x', GIT_COMMITTER_NAME: who, GIT_COMMITTER_EMAIL: 'x@x' } }).trim()
 
 // ---------------------------------------------------------------- the team's repository
@@ -74,8 +69,8 @@ branch('intent/dodge-cancel', {
 })
 branch('intent/nine-tail-dash', { 'Source/Character/S2CharacterMovement.cpp': ['switch (Mode)', '{', '  case MOVE_Walk: return PhysDash(dt, Iter);', '}', ''].join('\n') }, 'Minh Le')
 branch('intent/mc-vault', { 'Source/Character/S2CharacterMovement.cpp': ['switch (Mode)', '{', '  case MOVE_Walk: return PhysVault(dt, Iter);', '}', ''].join('\n') }, 'Sam Vo')
-// Lena's retune lands on main after dodge-cancel left it: the same lines.
-git(tree, ['checkout', '-q', 'main'])
+// Lena's retune lands on main after dodge-cancel left it, through her pull request's merge: the same lines, and her intent's progress.
+git(tree, ['checkout', '-q', '-B', 'intent/hitstop-retune', 'main'])
 commit(
   {
     'Source/Combat/HitStop.cpp': ['float UHitStop::Duration(float Budget)', '{', '  return FMath::Min(Budget, 0.070f);', '}', ''].join('\n'),
@@ -85,6 +80,9 @@ commit(
   'Retune hit-stop to 70 ms',
   'Lena Park',
 )
+commit({ 'docs/intent/hitstop-retune/progress.md': PROGRESS(['met', 'met', 'met']).replace('# Progress', '# Progress\n\n- PR: #12') }, 'hitstop-retune: done', 'Lena Park')
+git(tree, ['checkout', '-q', 'main'])
+git(tree, ['merge', '-q', '--no-ff', '-m', 'Merge pull request #12 from team/intent/hitstop-retune', 'intent/hitstop-retune'], 'Lena Park')
 git(tree, ['push', '-q', origin, 'HEAD:refs/heads/main'])
 
 // A teammate's checkout: cloned when main alone was asked for, so it knows no intent's branch until the board fetches.
@@ -100,13 +98,7 @@ engine.$.model.complete = async () => ({ isAnswered: false, reason: 'refused' })
 register(engine.on)
 await engine.start(true)
 const pane = (columns = 110, surface = 'terminal') => engine.render('Pane', { bodyColumns: columns }, 'board', surface)
-const nodesOf = node => (!node || typeof node !== 'object' ? [] : [node, ...(node.children ?? []).flatMap(nodesOf)])
-const byKey = (tree, key) => nodesOf(tree).find(node => node.props?.key === key)
 const textOf = (tree, columns) => check(tree, columns).lines.join('\n')
-const until = async (test, ms = 20000) => {
-  for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 150))) if (await test()) return true
-  return false
-}
 
 await engine.command('board')
 await pane()
@@ -131,7 +123,7 @@ byKey(await pane(), 'tab-triage')?.props.onPress()
 nodesOf(await pane()).find(node => node.type === 'Button' && node.props.key === 'attention-colliding-|dodge-cancel')?.props.onPress()
 const opened = await pane()
 const openText = textOf(opened, 110)
-expect('A5: opened in place: what happened, each place with both sides’ lines, the binary map, the actions', /origin\/main changed these lines .* \(Lena Park\)\./.test(openText) && /Source\/Combat\/HitStop\.cpp:3/.test(openText) && /main +return FMath::Min\(Budget, 0\.070f\);/.test(openText) && /dodge-cancel +return CanCancel\(Dodge\) \? 0\.f : Budget;/.test(openText) && /Arena\.umap · binary, both changed/.test(openText) && /Bring main into dodge-cancel/.test(openText) && /Draft a note to Lena Park/.test(openText), openText)
+expect('A5: opened in place: what happened, each place with both sides’ lines, the binary map, the actions', /hitstop-retune changed these lines on origin\/main .* \(Lena Park\)\./.test(openText) && /Source\/Combat\/HitStop\.cpp:3/.test(openText) && /main +return FMath::Min\(Budget, 0\.070f\);/.test(openText) && /dodge-cancel +return CanCancel\(Dodge\) \? 0\.f : Budget;/.test(openText) && /Arena\.umap · binary, both changed/.test(openText) && /Bring main into dodge-cancel/.test(openText) && /Draft a note to Lena Park/.test(openText), openText)
 const submitsBefore = engine.record.submits.length
 byKey(opened, 'collide-|dodge-cancel-bring')?.props.onPress()
 await until(async () => engine.record.submits.length > submitsBefore, 3000)
@@ -174,10 +166,4 @@ if (OUT) {
 
 await engine.end('other')
 fs.rmSync(BASE, { recursive: true, force: true })
-const passed = results.filter(one => one.ok).length
-const lines = ['# Ather Board: the overlap check', '', `${passed} of ${results.length} checks passed.`, '']
-for (const one of results) lines.push(`- ${one.ok ? '✅' : '❌'} ${one.name}${one.ok || !one.detail ? '' : `  \n  ${one.detail}`}`)
-if (REPORT) fs.writeFileSync(REPORT, `${lines.join('\n')}\n`)
-for (const one of results.filter(r => !r.ok)) console.log(`FAIL ${one.name}\n     ${one.detail.slice(0, 1200)}`)
-console.log(`${passed}/${results.length} passed`)
-process.exit(passed === results.length ? 0 : 1)
+finish({ title: 'Ather Board: the overlap check', report: REPORT, cut: 1200 })

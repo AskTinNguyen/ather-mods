@@ -31,7 +31,7 @@ export const GIT_ENV = { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
 /** @param {string} base */
 const refOf = base => `origin/${base}`
 export const MAIN = refOf('main')
-const INTENTS = 'docs/intent'
+export const INTENTS = 'docs/intent'
 // The fetch (D2): origin's base into origin/<base> by an explicit refspec (a narrowed remote.origin.fetch
 // would not move it otherwise), no tags, no FETCH_HEAD, no submodules, and no automatic gc or
 // maintenance: a background fetch in a shared checkout must not start a repack.

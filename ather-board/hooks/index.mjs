@@ -64,7 +64,7 @@ let sync = NO_SYNC
 let note = ''
 // The overlap check's last answer, and the run in hand.
 /** @type {import('./ather/overlap.mjs').OverlapRead} */
-let overlaps = { overlaps: [], note: '', cache: EMPTY_OVERLAPS }
+let overlaps = { overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false }
 /** @type {Promise<void> | null} */
 let checking = null
 // A check asked for while one runs: one more follows it, over the read and the branches as they are then.
@@ -157,6 +157,11 @@ const checkOverlaps = $ => {
       do {
         isCheckAgain = false
         overlaps = await readOverlaps(repoOf($, at.root), { base: at.base, sides: sidesOf(board?.records ?? []), cache: overlaps.cache })
+        // A run that ran out of time (overlap-hardening D1) shows what it found, and the next goes on from there.
+        if (overlaps.isPartial) {
+          isCheckAgain = true
+          $.ui.invalidate('ui.render')
+        }
       } while (isCheckAgain)
     } catch (error) {
       $.ui.log(`Ather Board: the overlap check failed: ${String(error)}`, { to: 'debug' })

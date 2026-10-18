@@ -38,14 +38,14 @@ const RECORDS = [
 /** @type {import('../hooks/ather/overlap.mjs').Overlap[]} */
 const OVERLAPS = [
   {
-    key: '|dodge-cancel', a: '', b: 'dodge-cancel', files: ['Combat/HitStop.cpp', 'Maps/Arena.umap'], count: 2, who: 'Lena Park', at: NOW - 6 * 60000,
+    key: '|dodge-cancel', a: '', b: 'dodge-cancel', files: ['Combat/HitStop.cpp', 'Maps/Arena.umap'], count: 2, who: 'Lena Park', at: NOW - 6 * 60000, via: ['hitstop-retune'],
     spots: [
       { path: 'Combat/HitStop.cpp', line: 42, kind: 'lines', ours: 'return FMath::Min(Budget, 0.070f);', theirs: 'return CanCancel(Dodge) ? 0.f : Budget;' },
       { path: 'Maps/Arena.umap', line: 0, kind: 'binary', ours: '', theirs: '' },
     ],
   },
   {
-    key: 'mc-vault|nine-tail-dash', a: 'mc-vault', b: 'nine-tail-dash', files: ['Character/S2CharacterMovement.cpp'], count: 1, who: '', at: 0,
+    key: 'mc-vault|nine-tail-dash', a: 'mc-vault', b: 'nine-tail-dash', files: ['Character/S2CharacterMovement.cpp'], count: 1, who: '', at: 0, via: [],
     spots: [{ path: 'Character/S2CharacterMovement.cpp', line: 301, kind: 'lines', ours: 'case MOVE_Dash: return PhysVault(dt, Iter);', theirs: 'case MOVE_Dash: return PhysDash(dt, Iter);' }],
   },
 ]
@@ -170,7 +170,7 @@ describe('the pane (A5)', () => {
   test('opened in place: what happened, each place with both sides, and its actions, the first primary; a press hands one prompt', () => {
     const open = nodes(draw({ opened: '|dodge-cancel' })).find(one => one.props?.key === 'attention-colliding-|dodge-cancel-open')
     const words = texts(open)
-    expect(words[0]).toBe('origin/main changed these lines 6m ago (Lena Park).')
+    expect(words[0]).toBe('hitstop-retune changed these lines on origin/main 6m ago (Lena Park).')
     expect(words.slice(1, 5)).toEqual(['Combat/HitStop.cpp:42', '  main          return FMath::Min(Budget, 0.070f);', '  dodge-cancel  return CanCancel(Dodge) ? 0.f : Budget;', 'Maps/Arena.umap · binary, both changed'])
     const buttons = nodes(open).filter(one => one.type === 'Button')
     expect(buttons.map(one => [one.props.label, one.props.variant ?? ''])).toEqual([['Bring main into dodge-cancel', 'primary'], ['Draft a note to Lena Park', '']])

@@ -27,8 +27,9 @@ export { BAR_CELLS, ageText, miniBarSvg }
  *   `mentions`: the other intents its files name; `branch`: its Branch line; `collisions`: the overlaps it is a side of (records.mjs withCollisions)
  * @typedef {{ key: string, slug: string, owner: string, stage: Stage | '', branch: string }} Party one side of a collision: an intent, or the base
  *   branch (`key` '', `slug` the branch's name, `owner` its last author on the files, `stage` '')
- * @typedef {{ key: string, a: Party, b: Party, files: string[], spots: import('./ather/overlap.mjs').Spot[], count: number, at: number }} Collision
- *   two pieces of work that change the same lines (overlap.mjs): the base, when it is a side, is always `a`; `at`: the base's last change to the files (0 for two intents)
+ * @typedef {{ key: string, a: Party, b: Party, files: string[], spots: import('./ather/overlap.mjs').Spot[], count: number, at: number, via: string[] }} Collision
+ *   two pieces of work that change the same lines (overlap.mjs): the base, when it is a side, is always `a`; `at`: the base's last change to the files (0 for two intents);
+ *   `via`: the intents whose merge brought that change into the base (overlap-hardening D2)
  * @typedef {{ id: string, title: string, options: { letter: string, label: string, text: string, isRecommended: boolean }[] }} Call a decision waiting: its options as the finding writes them (model.mjs parseOptions); none for an open question
  * @typedef {{ words: string, area: string, owner: string, stage: string, showDone: boolean, keys: readonly string[] }} Filter '' matches any; `keys`: only these intents (a suggestion's or an answer's), none: any
  * @typedef {'recent' | 'stale' | 'closest' | 'items'} Sort
@@ -303,7 +304,9 @@ export const collisionOwners = collision => [collision.b.owner, collision.a.owne
 // What happened, in one clause: the base's last change to the files, or that neither side is merged.
 /** @param {Collision} collision @param {number} now */
 export const collisionFact = (collision, now) =>
-  collision.a.key === '' ? `origin/${collision.a.slug} changed these lines${collision.at ? ` ${ageText(collision.at, now)} ago` : ''}${collision.a.owner ? ` (${collision.a.owner})` : ''}.` : 'Neither is merged yet: whichever merges second will conflict.'
+  collision.a.key === ''
+    ? `${collision.via.length > 0 ? `${collision.via.join(', ')} changed these lines on origin/${collision.a.slug}` : `origin/${collision.a.slug} changed these lines`}${collision.at ? ` ${ageText(collision.at, now)} ago` : ''}${collision.a.owner ? ` (${collision.a.owner})` : ''}.`
+    : 'Neither is merged yet: whichever merges second will conflict.'
 // A side's first changed line as shown: '(blank)' for an empty one.
 /** @param {string} line */
 export const sideLine = line => line || '(blank)'
