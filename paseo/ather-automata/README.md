@@ -1,6 +1,6 @@
 # Ather Automata for Paseo
 
-The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://paseo.sh) plugin: what needs you, what to do next, and a safe pair of hands while you are away, for the agents Paseo runs. Its version is the ather-automata release its shared code is copied from: **0.4.2** (`package.json`'s `version`, which `npm run sync` sets from `ather-automata/.claude-plugin/plugin.json` and `npm run sync:check` holds to it). The intents, stages, Next, away windows, packs, traps and decision ledger are the same code: `server/ather/` is a copy of `ather-automata/hooks/`. The Paseo screens lag behind: see Limits for what of 0.1.5–0.3.3 is not shown here yet. What differs is how it hooks into Paseo.
+The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://paseo.sh) plugin: what needs you, what to do next, and a safe pair of hands while you are away, for the agents Paseo runs. Its version is the ather-automata release its shared code is copied from: **0.4.3** (`package.json`'s `version`, which `npm run sync` sets from `ather-automata/.claude-plugin/plugin.json` and `npm run sync:check` holds to it). The intents, stages, Next, away windows, packs, traps and decision ledger are the same code: `server/ather/` is a copy of `ather-automata/hooks/`. The Paseo screens lag behind: see Limits for what of 0.1.5–0.3.3 is not shown here yet. What differs is how it hooks into Paseo.
 
 ## Install
 
@@ -69,6 +69,7 @@ paseo plugin logs ather-automata
 
 ## Changes
 
+- **0.4.3** Shared code at ather-automata 0.4.3: the pane's modes (`modes.mjs`), which the Paseo panel does not use.
 - **0.4.2** Shared code at ather-automata 0.4.2: the overlap check's time budget and the intent behind a base change.
 - **0.4.1** Shared code at ather-automata 0.4.1: the overlap check (`overlap.mjs`) and an intent's Branch line. Nothing in the panel uses them yet.
 - **0.4.0** Shared code at ather-automata 0.4.0: Home's Simple and Advanced views (the view is remembered per person; Group by now goes through the same helper). The panel does not draw the Simple view yet; see Limits.

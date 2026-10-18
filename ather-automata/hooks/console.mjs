@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, VIEW_LABELS, isShownIn, otherView, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
+import { VIEW_LABELS, isShownIn, otherView, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
@@ -23,13 +23,13 @@ import { crewSections } from './crew-rows.mjs'
 import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
 import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
-import { changeGlyph } from './changes.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncError, syncSummary, syncText } from './team.mjs'
 import { checkoutNames, checkoutOf, normalFolder } from './workspace.mjs'
 import { forBase } from './guards.mjs'
 import { withFolders } from './shell.mjs'
-import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
-import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
+import { nextGroup, nextSort } from './worklist.mjs'
+import { LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
+import { awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
 import { createOutbox, holdersOf, routedText, toldText } from './handoff.mjs'
 
@@ -1965,56 +1965,38 @@ function paneView(el, $, model, columns, surface, crew = []) {
     paneMode = 'home'
   }
 
+  const frame = { width, surface, isClicked }
+  const column = (/** @type {any[]} */ children) => Box({ flexDirection: 'column', children })
+
   if (paneMode === 'pick') {
-    const shown = filterWork(model.work, pickQuery)
-    rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, model.sync, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
     // Search opens a field (without one, a question whose Other is the words). Sort cycles Recent, Ready to close, Oldest; Group cycles Person, Area, Stage, None.
-    const field = isSearchOpen && hasInput
-    const search = field
-      ? el.Input({ key: 'pick-search-field', label: 'Search: ', placeholder: 'title, issue number, area or owner', value: pickQuery, submitLabel: 'search', autoFocus: true, onSubmit: (/** @type {string} */ words) => ((isSearchOpen = false), void setSearch($, words)) })
-      : Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: hasInput ? () => ((isSearchOpen = true), $.ui.invalidate('ui.render')) : press($, () => searchQuestion($), true) })
-    const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
-    const sort = Button({ key: 'pick-sort', label: `Sort: ${SORT_LABELS[pickSort]}`, hotkey: hotkeyFor('o'), plain: true, onPress: () => cycleSort($) })
-    const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup.value]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
-    rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
-    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup.value, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
-    rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    return Box({ flexDirection: 'column', children: rows })
+    const shown = filterWork(model.work, pickQuery)
+    const status = headerLine(el, $, model.sync, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)
+    const groups = { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup.value, areas: pack.areas, folded: pickFolded, me, isFocusTaken: isSearchOpen && hasInput, onFold: (/** @type {string} */ key) => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }
+    return column(
+      pickRows(el, frame, { status, look: lookOf($, width, 'pick'), groups }, {
+        onSearch: words => ((isSearchOpen = false), void setSearch($, words)),
+        onSearchOpen: hasInput ? () => ((isSearchOpen = true), $.ui.invalidate('ui.render')) : press($, () => searchQuestion($), true),
+        onClear: () => setSearch($, ''),
+        onSort: () => cycleSort($),
+        onGroup: () => cycleGroup($),
+        onBack: show($, 'home'),
+      }),
+    )
   }
 
   if (header.stage === 'Away') {
-    // Nothing is focused: one stray Enter must not end the window and lift its holds.
     const [end] = model.items
-    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: fit(header.title === 'Ather' ? 'The session is working' : header.title, width) }), Text({ key: 'status', children: fit(`🌙 ${header.progress}`, width) }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: `So far: ${header.sentence}.` })], surface))
-    if (end) rows.push(section(el, 'end', [choice(el, { key: 'end', title: end.title, hotkey: 'e', width, onPress: press($, () => act($, end), isReviewQueued) })]))
-    if (!isClicked) rows.push(section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Esc closes' })]))
-    return Box({ flexDirection: 'column', children: rows })
+    return column(awayWindowRows(el, frame, { title: header.title, progress: header.progress, sentence: header.sentence, end }, { onEnd: end ? press($, () => act($, end), isReviewQueued) : () => undefined }))
   }
 
   if (paneMode === 'issue') {
     const one = model.work.find(work => work.kind === 'issue' && work.id === issueShown)
     if (one?.kind === 'issue') {
       const { issue } = one
-      rows.push(masthead(el, [label(el, 'brand', `Issue #${issue.number}`, width), Text({ key: 'title', bold: true, wrap: 'wrap', children: issue.name }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: one.hint })], surface))
       const link = issueLink(issue.url)
-      rows.push(
-        section(el, 'issue-actions', [
-          Box({
-            key: 'issue-buttons',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: 3,
-            children: [
-              Button({ key: 'issue-start', label: '＋ Start an intent', variant: 'primary', hotkey: hotkeyFor('1'), autoFocus: true, onPress: press($, () => startWork($, one), false) }),
-              ...(link ? [openControl(el, $, issue, link, { key: 'issue-open', label: '↗ Open on GitHub', hotkey: '2' }), Button({ key: 'issue-copy', label: '⧉ Copy link', plain: true, hotkey: hotkeyFor('3'), onPress: copyLink($, link) })] : []),
-            ],
-          }),
-          Text({ key: 'issue-note', color: QUIET, wrap: 'wrap', children: 'Start an intent: the session checks for overlapping work first, then drafts an intent linked to this issue and shows you the plan. Nothing is written to GitHub.' }),
-        ]),
-      )
-      rows.push(section(el, 'issue-back', [Button({ key: 'issue-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, issueBack) })]))
-      rows.push(...foot)
-      return Box({ flexDirection: 'column', children: rows })
+      const open = link ? openControl(el, $, issue, link, { key: 'issue-open', label: '↗ Open on GitHub', hotkey: '2' }) : null
+      return column([...issueRows(el, frame, { issue, hint: one.hint, open }, { onStart: press($, () => startWork($, one), false), onCopy: copyLink($, link), onBack: show($, issueBack) }), ...foot])
     }
     paneMode = 'home'
   }
@@ -2025,130 +2007,39 @@ function paneView(el, $, model, columns, surface, crew = []) {
     if (intent) {
       // Seeing the tracked intent's view settles the band's notice; another intent's view does not.
       if (isHere) intentSeenAt = Date.now()
-      rows.push(
-        masthead(
-          el,
-          [
-            label(el, 'brand', 'Intent', width),
-            Text({ key: 'title', bold: true, children: fit(key, width) }),
-            ...(intent.goal ? [Text({ key: 'goal', wrap: 'wrap', children: intent.goal })] : []),
-            ...(intentView.proof ? [Text({ key: 'proof', color: QUIET, wrap: 'wrap', children: `Proof: ${intentView.proof}` })] : []),
-            ...(intentView.heldBy ? [Text({ key: 'held-by', color: AMBER, wrap: 'wrap', children: intentView.heldBy })] : []),
-          ],
-          surface,
-        ),
-      )
-      // Looking never tracks: working on it here is its own press, and needs its folder in this
-      // checkout. Asking about it never needs one: the session reads it from origin/main if it must.
-      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, () => askAbout($, key, aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base), `asked the session about ${key}`), false) })
-      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackKey($, key), true) })] : []
-      if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
-      if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: `Not in this checkout yet: pull ${intent.base} to work on it here.` }))
-      // Where it stands, from its files: what "See how the work is going" used to ask the session for.
-      if (intentView.stands.length > 0) {
-        rows.push(
-          section(el, 'intent-stands', [
-            label(el, 'intent-stands-label', 'Where it stands', width),
-            ...intentView.stands.map((line, index) => Text({ key: `stands-${index}`, wrap: 'wrap', children: line })),
-            Text({ key: 'stands-note', color: QUIET, wrap: 'wrap', children: 'From its files; what is met is what progress.md says.' }),
-          ]),
-        )
-      }
-      const today = intentToday.slice(0, 5)
-      rows.push(
-        section(el, 'intent-today', [
-          label(el, 'intent-today-label', 'Today', width),
-          ...(today.length === 0
-            ? [Text({ key: 'intent-none', color: QUIET, children: 'Nothing recorded yet today.' })]
-            : today.map((one, index) =>
-                Box({
-                  key: `change-${index}`,
-                  flexDirection: 'row',
-                  gap: 1,
-                  width: '100%',
-                  children: [
-                    Text({ color: one.kind === 'done' ? '#3ccf7a' : one.kind === 'yours' ? LIME : '#8fb8ff', children: changeGlyph(one.kind) }),
-                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, () => askAbout($, key, `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`, 'asked the session about that change'), false) })] }),
-                    Text({ color: QUIET, children: one.time }),
-                  ],
-                }),
-              )),
-        ]),
-      )
-      // The tracked intent's next step, pressed here as on home. A step that only looks at it is this view, so no card.
-      const next = model.next
-      if (isHere && next && !next.look) {
-        const card = Box({ key: 'intent-next-card', flexDirection: 'column', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [choice(el, { key: 'intent-next-step', title: next.label, detail: next.hint, hotkey: 'n', isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id), width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })] })
-        rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), card]))
-      }
-      const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
-      // Stop tracking keeps the view on this intent, which then offers Work on this here again.
-      const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = key), untrackHere($)), true) })
-      rows.push(section(el, 'intent-back', isHere ? [Box({ key: 'intent-back-row', flexDirection: 'row', gap: 3, children: [stop, back] })] : [back]))
-      rows.push(...foot)
-      return Box({ flexDirection: 'column', children: rows })
+      // The tracked intent's next step. A step that only looks at it is this view, so no card.
+      const next = isHere && model.next && !model.next.look ? model.next : null
+      const view = { ...intentView, intent, today: intentToday, next: next && { label: next.label, hint: next.hint, isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id) } }
+      return column([
+        ...intentRows(el, frame, view, {
+          onAsk: press($, () => askAbout($, key, aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base), `asked the session about ${key}`), false),
+          onWork: press($, () => trackKey($, key), true),
+          onChange: one => press($, () => askAbout($, key, `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`, 'asked the session about that change'), false),
+          onNext: next ? press($, () => doNext($, next), next.work?.kind === 'intent') : () => undefined,
+          onStop: press($, () => ((intentShown = key), untrackHere($)), true),
+          onBack: show($, intentBack),
+        }),
+        ...foot,
+      ])
     }
     paneMode = 'home'
   }
 
   if (paneMode === 'create') {
     const { editor } = model
-    const editorLine = pack.createMeta(editor)
-    rows.push(masthead(el, [label(el, 'brand', 'Create', width), Text({ key: 'title', bold: true, children: pack.createTitle }), Text({ key: 'meta', color: editor.isHeld ? '#f2a516' : QUIET, wrap: 'wrap', children: editorLine })], surface))
-    let index = 0
-    for (const { group, items } of model.create) {
-      const isOpen = createOpen.has(group)
-      const shown = isOpen ? items : items.slice(0, CREATE_SHOWN)
-      const more = items.length - shown.length
-      rows.push(
-        section(el, `create-${group}`, [
-          label(el, `create-${group}-label`, group, width),
-          ...shown.map(one => {
-            index += 1
-            return choice(el, { key: one.id, title: one.verb, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => toldText(handOff($, [], one.prompt), `sent to the session: ${one.verb}`), false) })
-          }),
-          ...(more > 0
-            ? [Button({ key: `create-${group}-more`, label: `More… (${more})`, plain: true, dimColor: true, onPress: () => { createOpen.add(group); $.ui.invalidate('ui.render') } })]
-            : []),
-        ]),
-      )
-    }
-    rows.push(section(el, 'create-back', [Button({ key: 'create-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    rows.push(...foot)
-    return Box({ flexDirection: 'column', children: rows })
+    const view = { title: pack.createTitle, meta: pack.createMeta(editor), isHeld: editor.isHeld, groups: model.create, opened: createOpen }
+    const onItem = (/** @type {Home['create'][number]['items'][number]} */ one) => press($, async () => toldText(handOff($, [], one.prompt), `sent to the session: ${one.verb}`), false)
+    return column([...createRows(el, frame, view, { onItem, onMore: group => () => { createOpen.add(group); $.ui.invalidate('ui.render') }, onBack: show($, 'home') }), ...foot])
   }
 
   if (paneMode === 'skills') {
-    rows.push(masthead(el, [label(el, 'brand', 'Skills', width), Text({ key: 'title', bold: true, children: 'Run a skill' }), Text({ key: 'meta', color: QUIET, children: header.title === 'Ather' ? 'The session reads it, says what it will do, then follows it.' : `For ${header.title}: the session reads it, says what it will do, then follows it.` })], surface))
-    let index = 0
-    for (const { group } of pack.skillGroups) {
-      const list = model.skills.filter(one => one.group === group)
-      if (list.length === 0) continue
-      rows.push(
-        section(el, `skills-${group}`, [
-          label(el, `skills-${group}-label`, group, width),
-          ...list.map(one => {
-            index += 1
-            return choice(el, { key: one.id, title: one.name, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => toldText(handOff($, [one.id], one.prompt), `sent to the session: ${one.name}`), false) })
-          }),
-        ]),
-      )
-    }
-    rows.push(section(el, 'skills-back', [Button({ key: 'skills-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    rows.push(...foot)
-    return Box({ flexDirection: 'column', children: rows })
+    const meta = header.title === 'Ather' ? 'The session reads it, says what it will do, then follows it.' : `For ${header.title}: the session reads it, says what it will do, then follows it.`
+    const onSkill = (/** @type {Home['skills'][number]} */ one) => press($, async () => toldText(handOff($, [one.id], one.prompt), `sent to the session: ${one.name}`), false)
+    return column([...skillsRows(el, frame, { meta, groups: pack.skillGroups, skills: model.skills }, { onSkill, onBack: show($, 'home') }), ...foot])
   }
 
   if (paneMode === 'away') {
-    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: 'Heading off?' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: forBase(pack.mandate.pane, paneBase) })], surface))
-    rows.push(
-      section(el, 'away-choices', [
-        ...AWAY_PRESETS.map((preset, index) => choice(el, { key: `away-${preset.hotkey}`, title: preset.label, detail: preset.choice.untilDone ? 'Ends when the work is done, 24 hours at most.' : `Ends in ${preset.label}.`, hotkey: String(index + 1), autoFocus: index === 0, width, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) })),
-      ]),
-    )
-    rows.push(section(el, 'away-back', [Button({ key: 'away-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    rows.push(...foot)
-    return Box({ flexDirection: 'column', children: rows })
+    return column([...awayRows(el, frame, { mandate: forBase(pack.mandate.pane, paneBase) }, { onPreset: preset => press($, () => startAway($, { ...preset.choice, goal: '' }), false), onBack: show($, 'home') }), ...foot])
   }
 
   const isUntracked = header.title === 'Ather'
