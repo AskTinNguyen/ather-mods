@@ -1,7 +1,7 @@
 # Overlap check: open work that changes the same lines
 
 - Rev: 3
-- Status: active
+- Status: completed
 - Area: ather-board
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`

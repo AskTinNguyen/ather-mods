@@ -12,3 +12,7 @@
 - `dev/e2e/board.mjs`: the board in the engine on real git, in `dev/test-all.mjs`. Found and fixed with it: narrow rows cut the pair's names (D9); For you listed an intent twice; the opened details' white gap on the page.
 - Tooling: the engine's API types (the plugin-authoring skill writes them) let the type-check run here; `npm install` in both Paseo packages let the Paseo type-check run. Lockfile churn from npm reverted.
 - Fable checked the screenshots; thermo-nuclear review BLOCK, then PASS (progress.md A9, A10).
+
+## 2026-10-18, closed
+
+- PR #69 merged (93aaf10). Released as ather-board 0.2.0 and ather-automata 0.4.1: `claude plugin marketplace add AskTinNguyen/ather-mods` and install gave those versions, and the installed board validates and carries `hooks/ather/overlap.mjs`. Status completed; the S2 e2e run (A8) and F-3 stay as follow-ups.

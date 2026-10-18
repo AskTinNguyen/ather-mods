@@ -1,7 +1,7 @@
 # Ather Automata: Simple and Advanced views of Home
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`
