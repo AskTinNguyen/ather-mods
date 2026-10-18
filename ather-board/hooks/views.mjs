@@ -36,10 +36,12 @@ export { collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotL
  * @typedef {{ words: string, area: string, owner: string, stage: string, showDone: boolean, keys: readonly string[] }} Filter '' matches any; `keys`: only these intents (a suggestion's or an answer's), none: any
  * @typedef {'recent' | 'stale' | 'closest' | 'items'} Sort
  * @typedef {'owner' | 'area' | 'stage' | 'none'} Group
- * @typedef {'foryou' | 'triage' | 'board' | 'map' | 'modules' | 'table' | 'items' | 'people' | 'areas' | 'pulse'} View 'foryou': the pane's own (focus.mjs), needing the person's name;
+ * @typedef {'foryou' | 'triage' | 'board' | 'map' | 'modules' | 'table' | 'items' | 'people' | 'areas' | 'pulse' | 'timeline'} View 'foryou': the pane's own (focus.mjs), needing the person's name;
  *   'modules' (the pane) and 'map' (the page): the intents on the game's modules (map.mjs)
  * @typedef {{ view: View, filter: Filter, sort: Sort, group: Group, by: 'area' | 'owner' }} Look what the person picked
  * @typedef {{ count: number, done: number, open: number, parked: number, items: number, calls: number, stale: number, at: number }} Rollup `open`: neither done nor parked; `calls`: decisions waiting
+ * @typedef {'open' | 'parked' | 'done' | 'items' | 'calls' | 'stale'} CountKind
+ * @typedef {{ kind: CountKind, text: string, isWarn: boolean }} Count one count on a People or Areas line
  */
 
 // In the order the board's columns and stage groups run: Ather's list stages (worklist.mjs), with
@@ -77,7 +79,7 @@ export const FLAG_ORDER = [...REASONS.map(reason => reason.kind), ...HYGIENE]
 // stage glyph (✓, ○), or its column, already says.
 export const WARNINGS = /** @type {readonly FlagKind[]} */ (['decisions', 'colliding', 'stale', 'unparked'])
 
-export const VIEW_LABELS = /** @type {const} */ ({ foryou: 'For you', triage: 'Triage', board: 'Board', map: 'Map', modules: 'Modules', table: 'Table', items: 'Open items', people: 'People', areas: 'Areas', pulse: 'Pulse' })
+export const VIEW_LABELS = /** @type {const} */ ({ foryou: 'For you', triage: 'Triage', board: 'Board', map: 'Map', modules: 'Modules', table: 'Table', items: 'Open items', people: 'People', areas: 'Areas', pulse: 'Pulse', timeline: 'Timeline' })
 // The pane's views, in its tab order; the page has its own (page/client.js), adding Board, Map and Pulse.
 export const PANE_VIEWS = /** @type {const} */ (['foryou', 'triage', 'modules', 'table', 'items', 'people', 'areas'])
 // The views that hide done intents unless they are shown; the rest count every intent (Open items lists none of theirs).
@@ -85,6 +87,9 @@ export const HIDES_DONE = /** @type {readonly View[]} */ (['board', 'table'])
 
 /** @type {Filter} */
 export const NO_FILTER = { words: '', area: '', owner: '', stage: '', showDone: false, keys: [] }
+
+// A line's counts in People and Areas, in their order (board-counts D1).
+export const COUNT_KINDS = /** @type {const} */ (['open', 'parked', 'done', 'items', 'calls', 'stale'])
 
 /** @type {Look} */
 export const DEFAULT_LOOK = { view: 'triage', filter: NO_FILTER, sort: 'recent', group: 'owner', by: 'area' }
@@ -197,6 +202,36 @@ export const outstanding = (records, by) => {
 }
 
 /**
+ * The Timeline (board-counts D2): a lane per owner over the last `weeks` weeks, each intent a span from its folder's
+ * first commit to its last (to now while it is open), packed into rows so that no two spans of a lane overlap. A span
+ * begun before the window starts at its edge (`isClipped`); a done or parked intent that last changed before it is
+ * left out. Owners with the most spans first.
+ * @param {readonly BoardRecord[]} records @param {number} now @param {number} [weeks]
+ * @returns {{ start: number, end: number, lanes: { owner: string, rows: { key: string, slug: string, title: string, stage: Stage, from: number, to: number, isClipped: boolean }[][] }[] }}
+ */
+export const timeline = (records, now, weeks = 12) => {
+  const start = now - weeks * 7 * DAY_MS
+  const isStopped = (/** @type {BoardRecord} */ one) => one.stage === 'done' || one.stage === 'parked'
+  const spans = records
+    .filter(one => (isStopped(one) ? one.updatedAt : now) >= start)
+    .map(one => ({ key: one.key, slug: one.slug, title: one.title, stage: one.stage, from: Math.max(one.createdAt, start), to: isStopped(one) ? Math.max(one.updatedAt, one.createdAt, start) : now, isClipped: one.createdAt < start, owner: one.owner || 'No owner' }))
+    .sort((a, b) => a.from - b.from || a.key.localeCompare(b.key))
+  const owners = [...new Set(spans.map(one => one.owner))]
+  const lanes = owners.map(owner => {
+    /** @type {{ key: string, slug: string, title: string, stage: Stage, from: number, to: number, isClipped: boolean }[][]} */
+    const rows = []
+    for (const { owner: _, ...span } of spans.filter(one => one.owner === owner)) {
+      const row = rows.find(list => (list.at(-1)?.to ?? 0) < span.from)
+      if (row) row.push(span)
+      else rows.push([span])
+    }
+    return { owner, rows }
+  })
+  const size = (/** @type {{ rows: unknown[][] }} */ lane) => lane.rows.reduce((sum, row) => sum + row.length, 0)
+  return { start, end: now, lanes: lanes.sort((a, b) => size(b) - size(a) || a.owner.localeCompare(b.owner)) }
+}
+
+/**
  * The last `weeks` weeks (Monday to Sunday, UTC), oldest first: intents opened (their folder's first
  * commit) and closed (done, dated by their last commit), and how many there are in each stage now.
  * @param {readonly BoardRecord[]} records @param {number} now @param {number} [weeks]
@@ -250,19 +285,26 @@ export const collisionsOf = records => {
 /** @param {BoardRecord} record @param {readonly string[]} kinds @returns {Row} */
 export const rowOf = (record, kinds) => ({ record, flags: record.flags.filter(flag => kinds.includes(flag.kind)), items: [] })
 
-// A person or an area picked from People or Areas: the table of their intents, the other filters cleared.
-/** @param {Look} look @param {'owner' | 'area'} by @param {string} value @returns {Look} */
-export const pickLook = (look, by, value) => ({ ...look, view: 'table', filter: { ...NO_FILTER, showDone: look.filter.showDone, [by]: value } })
+// A person or an area picked from People or Areas, or one of its counts (board-counts D1): the table of their
+// intents, of those parked or done; their open items; or Triage, where their decisions and stale intents are.
+// The other filters are cleared.
+/** @param {Look} look @param {'owner' | 'area'} by @param {string} value @param {CountKind} [count] @returns {Look} */
+export const pickLook = (look, by, value, count = 'open') => ({
+  ...look,
+  view: count === 'items' ? 'items' : count === 'calls' || count === 'stale' ? 'triage' : 'table',
+  filter: { ...NO_FILTER, showDone: look.filter.showDone || count === 'done', [by]: value, stage: count === 'parked' || count === 'done' ? count : '' },
+})
 
 // The records a view sees: the filters always, done intents only where the view hides them unless shown.
 /** @param {readonly BoardRecord[]} records @param {Look} look */
 export const recordsFor = (records, look) => filterRecords(records, HIDES_DONE.includes(look.view) ? look.filter : { ...look.filter, showDone: true })
 
-// A person's or an area's line: what is in hand, and what needs someone, apart.
-/** @param {Rollup} sum @param {number} now */
+// A person's or an area's line: its counts, open always and the rest when there are any, those that need someone
+// (decisions, stale) marked; each opens what it counts (pickLook). Then when it last changed.
+/** @param {Rollup} sum @param {number} now @returns {{ counts: Count[], age: string }} */
 export const rollupLine = (sum, now) => ({
-  words: [`${sum.open} open`, sum.parked ? `${sum.parked} parked` : '', sum.done ? `${sum.done} done` : '', sum.items ? `${sum.items} items` : '', ageText(sum.at, now)].filter(Boolean).join(' · '),
-  warn: [sum.calls ? `${sum.calls} ${sum.calls === 1 ? 'decision' : 'decisions'}` : '', sum.stale ? `${sum.stale} stale` : ''].filter(Boolean).join(' · '),
+  counts: COUNT_KINDS.filter(kind => kind === 'open' || sum[kind] > 0).map(kind => ({ kind, text: `${sum[kind]} ${kind === 'calls' ? (sum.calls === 1 ? 'decision' : 'decisions') : kind === 'items' && sum.items === 1 ? 'item' : kind}`, isWarn: kind === 'calls' || kind === 'stale' })),
+  age: ageText(sum.at, now),
 })
 
 /**
@@ -272,7 +314,7 @@ export const rollupLine = (sum, now) => ({
  * A row: the flags it warns with, the items listed under it (Open items), and the column a group of one
  * owner or one area leaves out (`hide`, on the group).
  * @typedef {{ record: BoardRecord, flags: Flag[], items: { id: string, text: string }[] }} Row
- * @typedef {{ key: string, title: string, rollup: Rollup, words: string, warn: string }} Line
+ * @typedef {{ key: string, title: string, rollup: Rollup, counts: Count[], age: string }} Line
  * @typedef {{ kind: 'intents', key: string, title: string, meta: string, empty: string, hide: '' | 'owner' | 'area', rows: Row[] }} IntentGroup
  * @typedef {{ kind: 'pairs', key: string, title: string, meta: string, empty: string, pairs: Collision[] }} PairGroup the collisions, one row a pair
  * @typedef {{ kind: 'label', key: string, title: string, meta: string, isLoud: boolean, groups: (IntentGroup | PairGroup)[] }

@@ -8,7 +8,7 @@ The team's intents as a project board that helps you act: what is yours to do no
 - **See what collides before it hurts.** Triage's **Colliding** lists open intents whose branches change the same lines as `main` or as each other: which two, which files and lines, and each side's version. Press one for what to do (bring `main` in, or a drafted note to the other owner).
 - **Ask** it anything in the box at the top ("what is blocking combat?"): Sonnet answers in a line or two and cuts the board to what it means. `/board ask <question>` does the same.
 - **Press an intent** to open it in place: its decisions with their options as buttons, and its next action (answer, close, unstick, give a reason, write the checklist, fix the header, ask the owner) ready to hand to the session.
-- **`/board open`** writes the full page (the brief, a kanban by stage, the **Map** of intents on the game's modules, the weekly pulse, every view with filters) and opens it in your browser.
+- **`/board open`** writes the full page (the brief, a kanban by stage, the **Map** of intents on the game's modules, the weekly pulse, the timeline, every view with filters) and opens it in your browser.
 - **`/board publish`** writes the same page and has the session publish it to the team's shared site, for leads and producers who do not run Claude Code.
 
 ## Install
@@ -28,9 +28,10 @@ Then type `/board` in a session opened in a checkout with intents (a `docs/inten
 | **Triage** | What needs someone, team-wide, grouped by reason, the worst first: decisions waiting on an owner or director, **Colliding** (below), ready to close (every item met, not closed), no change for 5 days or more, parked without a reason, no acceptance checklist. Each intent sits under its worst reason; its row names any others. Below it, **Data hygiene**: intents whose files the board could not fully read (a Status that is a sentence or another word than active, parked or completed; no Owner line; an area outside the list). |
 | **Table** | Every intent, grouped by owner, area, stage or not at all, each group with a one-line rollup ("4 intents · 3 done · 6 open items · 2d"). Sort by recent, stalest, closest to done or most open items. Filter by words, area, owner and stage; done intents are hidden unless shown. |
 | **Open items** | Every acceptance item not yet met, of every intent not done, grouped by area or owner, the biggest pile first. Parked intents' items count: they are still owed. |
-| **People**, **Areas** | One line each: open, parked and done intents, open items, decisions waiting, stale intents, last change. Pick one to see its intents in the table. |
+| **People**, **Areas** | One line each: open, parked and done intents, open items, decisions waiting, stale intents, last change. Pick a name to see its intents in the table, or a count to see what it counts: its parked or done intents in the table, its open items, or Triage for its decisions and stale intents. |
 | **Board** (page) | A kanban, a column for each stage that has intents: Plan, Building, Proving, Ready to close, Parked, Done. |
 | **Pulse** (page) | Intents opened and closed per week, from the first week anything happened, and how many are in each stage. |
+| **Timeline** (page) | The last 12 weeks, a lane per owner: each intent a bar from its folder's first commit to its last (to now while open), its stage's glyph and name on it; ink while it moves, outlined when ready to close or not begun, quiet once done, dashed while parked. Pick a bar for that intent in the table. Filters apply. |
 
 Every row reads the same on both surfaces, as Ather's list does: stage glyph, name and its warnings (decisions waiting, stale, parked without a reason), the checklist bar (▰▱) and count, age, owner. Both use Ather's look: lime only for what needs someone, amber for a warning, ink and quiet grey for the rest; the page in light and dark.
 
@@ -77,6 +78,7 @@ Then sign in to it from `/mcp` in a Claude Code terminal. Without it, the sessio
 
 ## Changes
 
+- **0.3.0** Counts that open: in People and Areas each count is a press (Enter in the pane, a click on the page) that opens what it counts. The page gains **Timeline**, a lane per owner over the last 12 weeks. A count of one open item now reads "1 item".
 - **0.2.2** No change to what you see: a collision's words and actions come from Ather's `collide.mjs`, shared with Ather Automata's Needs you (ather-automata 0.5.0), and the check runs through its shared background job.
 - **0.2.1** Colliding names the intent behind a change on `main` ("hitstop-retune changed these lines on origin/main 6m ago (Lena Park)"), read from the pull request's merge or squash commit that brought it. A large first check runs in short runs and shows collisions as they are found.
 - **0.2.0** **Colliding**: open intents whose branches change the same lines as the base branch or as each other, found with `git merge-tree` (Ather Automata 0.4.1's overlap check), shown second in Triage, one row a pair, opened in place with the files, lines and each side's version, and what to do (bring the base in, or a drafted note). The intents warn "overlaps …" on their rows, For you lists yours, and the page shows the same. The board now fetches the open intents' branches with the base. An opened row no longer shows a thin gap above its details on the page.

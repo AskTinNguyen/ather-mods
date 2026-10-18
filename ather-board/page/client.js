@@ -4,13 +4,13 @@
 // columns, and Pulse is the page's own chart. page.mjs writes views.mjs's exports above this script and
 // the board's data into #board-data. The look (view, filters, sort, group) lives in the address's #hash,
 // so a link opens the same cut.
-/* global collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel, graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, summaryText, choices, ageText, miniBarSvg */
+/* global collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel, graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, timeline, summaryText, choices, ageText, miniBarSvg */
 ;(function () {
   'use strict'
   var DATA = JSON.parse(document.getElementById('board-data').textContent)
   var RECORDS = DATA.records
   var NOW = DATA.now
-  var PAGE_VIEWS = ['triage', 'board', 'map', 'table', 'items', 'people', 'areas', 'pulse']
+  var PAGE_VIEWS = ['triage', 'board', 'map', 'table', 'items', 'people', 'areas', 'pulse', 'timeline']
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   // The look as flat hash fields, each with its default.
   var FIELDS = {
@@ -163,7 +163,7 @@
   function column(part) {
     return '<section class="column">' + groupHead(part) + (part.rows.length ? part.rows.map(card).join('') : '<p class="empty">' + esc(part.empty) + '</p>') + '</section>'
   }
-  // People or Areas: one table; a name picked opens the table of its intents.
+  // People or Areas: one table; a name picked opens the table of its intents, a count what it counts (board-counts D1).
   function lines(part) {
     var cols = [['open', 'Open'], ['parked', 'Parked'], ['done', 'Done'], ['items', 'Open items'], ['calls', 'Decisions'], ['stale', 'Stale']]
     var head = '<tr><th>' + (part.by === 'owner' ? 'Owner' : 'Area') + '</th>' + cols.map(function (c) { return '<th>' + c[1] + '</th>' }).join('') + '<th>Last change</th></tr>'
@@ -171,7 +171,8 @@
       var sum = line.rollup
       var cells = cols.map(function (c) {
         var n = sum[c[0]]
-        return '<td' + (!n ? ' class="zero"' : c[0] === 'calls' || c[0] === 'stale' ? ' class="warn"' : '') + '>' + n + '</td>'
+        var cell = n ? '<button class="count" data-pick="' + part.by + '" data-value="' + esc(line.key) + '" data-count="' + c[0] + '" title="Show ' + esc(c[1].toLowerCase()) + ' of ' + esc(line.title) + '">' + n + '</button>' : n
+        return '<td' + (!n ? ' class="zero"' : c[0] === 'calls' || c[0] === 'stale' ? ' class="warn"' : '') + '>' + cell + '</td>'
       }).join('')
       return '<tr><td><button class="pick" data-pick="' + part.by + '" data-value="' + esc(line.key) + '">' + esc(line.title) + '</button></td>' + cells + '<td class="age">' + esc(ageText(sum.at, NOW)) + '</td></tr>'
     }).join('')
@@ -203,6 +204,28 @@
       '<div class="panel pulse"><p class="legend"><i class="opened"></i>opened <i class="closed"></i>closed</p><div class="weeks" role="img" aria-label="Intents opened and closed per week">' + chart + '</div></div>' +
       heading('Where everything stands', records.length + ' intents') +
       '<div class="panel stages">' + stages + '</div>'
+    )
+  }
+  // The Timeline (board-counts D2): a lane per owner, an intent a bar from its first commit to its last (to now while
+  // open), its stage's glyph and slug on it; week lines behind. A bar picked cuts the table to that intent.
+  function timelineView(records) {
+    var t = timeline(records, NOW, 12)
+    var span = Math.max(1, t.end - t.start)
+    function x(at) { return (((at - t.start) / span) * 100).toFixed(2) + '%' }
+    var ticks = []
+    for (var at = t.end - 7 * 86400000; at > t.start; at -= 7 * 86400000) ticks.push('<i class="tick" style="left:' + x(at) + '"><span>' + weekName(at) + '</span></i>')
+    var lanes = t.lanes.map(function (lane) {
+      var rows = lane.rows.map(function (row) {
+        return '<div class="lanerow">' + row.map(function (one) {
+          var tip = one.slug + ' · ' + stageOf(one.stage).label + ' · ' + weekName(one.from) + (one.stage === 'done' || one.stage === 'parked' ? ' – ' + weekName(one.to) : ' – now')
+          return '<button class="bar s-' + one.stage + (one.isClipped ? ' clipped' : '') + '" data-keys="' + esc(one.key) + '" style="left:' + x(one.from) + ';width:max(' + ((((one.to - one.from) / span) * 100).toFixed(2)) + '%, 6px)" title="' + esc(tip) + '"><span>' + stageOf(one.stage).glyph + ' ' + esc(one.slug) + '</span></button>'
+        }).join('') + '</div>'
+      }).join('')
+      return '<div class="lane"><div class="lanename">' + esc(lane.owner) + '</div><div class="lanebody">' + rows + '</div></div>'
+    }).join('')
+    return (
+      heading('Timeline', 'the last 12 weeks · a lane per owner · each intent from its first commit to its last') +
+      '<div class="panel timeline">' + (lanes ? '<div class="timescroll"><div class="axis">' + ticks.join('') + '</div>' + lanes + '</div>' : '<p class="empty">Nothing in these weeks.</p>') + '</div>'
     )
   }
   // The latest brief, read-only (A14): its headline, then each suggestion with the intents it names as
@@ -257,6 +280,7 @@
   function view(records) {
     var current = look()
     if (current.view === 'pulse') return pulseView(records)
+    if (current.view === 'timeline') return timelineView(records)
     if (current.view === 'map') return mapView(records)
     var parts = sectionsOf(records, current, NOW, DATA.overlapNote || '')
     if (current.view === 'board') return '<div class="kanban" style="--columns:' + parts.length + '">' + parts.map(column).join('') + '</div>'
@@ -307,10 +331,10 @@
     var target = event.target.closest('[data-view],[data-toggle],[data-pick],[data-keys]')
     if (!target) return
     if (target.dataset.view) set({ view: target.dataset.view })
-    else if (target.dataset.keys) set({ view: 'table', words: '', area: '', owner: '', stage: '', keys: target.dataset.keys })
+    else if (target.dataset.keys) set({ view: 'table', words: '', area: '', owner: '', stage: '', done: '1', keys: target.dataset.keys })
     else if (target.dataset.pick) {
-      var picked = pickLook(look(), target.dataset.pick, target.dataset.value)
-      set({ view: picked.view, words: picked.filter.words, area: picked.filter.area, owner: picked.filter.owner, stage: picked.filter.stage, keys: '' })
+      var picked = pickLook(look(), target.dataset.pick, target.dataset.value, target.dataset.count)
+      set({ view: picked.view, words: picked.filter.words, area: picked.filter.area, owner: picked.filter.owner, stage: picked.filter.stage, done: picked.filter.showDone ? '1' : '', keys: '' })
     } else {
       opened[target.dataset.toggle] = !opened[target.dataset.toggle]
       draw()

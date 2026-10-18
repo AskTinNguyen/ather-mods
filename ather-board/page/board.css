@@ -176,3 +176,28 @@ table.rollups td.age { color: var(--quiet); }
 .map .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--quiet); margin-right: 4px; vertical-align: -1px; }
 .map .legend i.loud { background: var(--lime); }
 .map .legend i.names { width: 16px; height: 0; border-radius: 0; border-top: 1px dashed var(--quiet); background: none; vertical-align: 3px; }
+
+/* People and Areas: a count opens what it counts. */
+table.rollups button.count { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: var(--edge); text-underline-offset: 3px; }
+table.rollups button.count:hover { text-decoration-color: currentColor; }
+
+/* The Timeline: a lane per owner; a bar per intent, ink while it moves, outlined when ready to close or not begun,
+   quiet once done, dashed while parked. */
+.timeline { padding: 8px 16px 16px; overflow-x: auto; }
+.timeline .axis { position: relative; height: 22px; margin-left: 140px; border-bottom: 1px solid var(--line); }
+.timeline .tick { position: absolute; top: 0; bottom: -2000px; border-left: 1px dashed var(--line); pointer-events: none; }
+.timeline .tick span { position: absolute; top: 2px; left: 4px; color: var(--quiet); font-size: 11px; white-space: nowrap; font-style: normal; }
+/* Weeks keep their width on a phone: the chart scrolls sideways inside its panel. */
+.timeline .timescroll { position: relative; min-width: 760px; }
+.timeline .lane { display: grid; grid-template-columns: 140px minmax(0, 1fr); border-bottom: 1px solid var(--line); padding: 6px 0; }
+.timeline .lane:last-child { border-bottom: 0; }
+.timeline .lanename { font-weight: 600; font-size: 13px; padding-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline .lanerow { position: relative; height: 24px; }
+.timeline .bar { position: absolute; top: 2px; height: 20px; border: 0; border-radius: 4px; padding: 0 6px; font: 12px/20px system-ui, sans-serif; text-align: left; cursor: pointer; overflow: hidden; white-space: nowrap; background: var(--ink); color: var(--panel); }
+.timeline .bar span { overflow: hidden; text-overflow: ellipsis; display: block; }
+.timeline .bar.s-plan { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge); }
+.timeline .bar.s-met { background: var(--panel); color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); }
+.timeline .bar.s-done { background: var(--edge); color: var(--quiet); }
+.timeline .bar.s-parked { background: transparent; color: var(--quiet); border: 1px dashed var(--quiet); line-height: 18px; }
+.timeline .bar.clipped { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.timeline .bar:hover, .timeline .bar:focus-visible { outline: 2px solid var(--quiet); outline-offset: 1px; }

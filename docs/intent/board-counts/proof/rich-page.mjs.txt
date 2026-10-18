@@ -1,0 +1,46 @@
+// node timeline.mjs <board.html> <outdir>: the page with a richer set of intents, shot at People and Timeline.
+import { chromium } from '/opt/node-tools/node_modules/playwright/index.mjs'
+import fs from 'fs'
+const [file, out] = process.argv.slice(2)
+const html = fs.readFileSync(file, 'utf8')
+const re = /(<script type="application\/json" id="board-data">)([\s\S]*?)(<\/script>)/
+const data = JSON.parse(re.exec(html)[2].replace(/<\\\//g, '</'))
+const DAY = 86400000
+const now = data.now ?? Date.now()
+const base = data.records[0]
+const owners = ['Lena Park', 'Tin Nguyen', 'Sam Vo', 'Minh Le', 'Hao Than']
+const areas = ['Combat', 'VFX', 'Tools', 'Gameplay']
+const stages = ['build', 'build', 'prove', 'met', 'done', 'parked', 'plan', 'done', 'build', 'done', 'prove', 'build', 'done', 'parked', 'build', 'met', 'done', 'plan']
+const names = ['hitstop-retune', 'dodge-cancel', 'snow-trail-lod', 'quest-calls', 'boss-shield', 'camera-shake', 'vault-ledge', 'dash-cancel', 'fluid-snow', 'key-rumble', 'photo-mode', 'parry-window', 'combo-rank', 'stagger-meter', 'aim-assist', 'boss-phase-2', 'ui-hitmarker', 'loot-table']
+let seed = 3
+const rnd = () => ((seed = (seed * 48271) % 2147483647) / 2147483647)
+data.records = names.map((slug, i) => {
+  const created = now - Math.floor(4 + rnd() * 110) * DAY
+  const stage = stages[i]
+  const updated = stage === 'done' || stage === 'parked' ? created + Math.floor(5 + rnd() * 30) * DAY : now - Math.floor(rnd() * 3) * DAY
+  const total = 3 + Math.floor(rnd() * 4)
+  const done = stage === 'done' || stage === 'met' ? total : Math.floor(rnd() * total)
+  return { ...base, key: slug, slug, title: slug.replace(/-/g, ' '), owner: owners[i % owners.length], area: areas[i % areas.length], stage, createdAt: created, updatedAt: Math.min(updated, now), done, total, openItems: Array.from({ length: total - done }, (_, k) => ({ id: `A${done + k + 1}`, text: 'item' })), calls: i % 5 === 1 ? [{ id: 'F-1', title: 'Which frame?', options: [] }] : [], flags: [], collisions: [], branch: '' }
+})
+const page = html.replace(re, (_, a, _b, c) => a + JSON.stringify(data).replace(/<\//g, '<\\/') + c)
+fs.writeFileSync(`${out}/rich.html`, page)
+const browser = await chromium.launch()
+for (const [name, hash, dark] of [['page-timeline', '#view=timeline', false], ['page-timeline-dark', '#view=timeline', true], ['page-people', '#view=people', false]]) {
+  const p = await browser.newPage({ viewport: { width: 1280, height: 800 }, colorScheme: dark ? 'dark' : 'light' })
+  await p.goto(`file://${out}/rich.html${hash}`)
+  await p.waitForTimeout(300)
+  await p.screenshot({ path: `${out}/${name}.png`, fullPage: true })
+  await p.close()
+}
+// A count pressed: Lena's open items.
+const p = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+await p.goto(`file://${out}/rich.html#view=people`)
+await p.click('button.count[data-value="Lena Park"][data-count="items"]')
+await p.waitForTimeout(200)
+console.log('after press:', p.url().split('#')[1])
+await p.screenshot({ path: `${out}/page-people-pressed.png`, fullPage: true })
+const phone = await browser.newPage({ viewport: { width: 390, height: 800 } })
+await phone.goto(`file://${out}/rich.html#view=timeline`)
+await phone.waitForTimeout(300)
+await phone.screenshot({ path: `${out}/page-timeline-phone.png`, fullPage: true })
+await browser.close()
