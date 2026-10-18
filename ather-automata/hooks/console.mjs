@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { VIEW_LABELS, isShownIn, otherView, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
+import { VIEW_LABELS, isShownIn, otherView, viewText, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
@@ -25,8 +25,8 @@ import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncError, syncSummary, syncText } from './team.mjs'
 import { checkoutNames, checkoutOf, normalFolder } from './workspace.mjs'
-import { overlapJob, readOverlaps } from './overlap.mjs'
-import { collisionsFor } from './collide.mjs'
+import { overlapJob } from './overlap.mjs'
+import { checkBranch, isSameCheck } from './collide.mjs'
 import { forBase } from './guards.mjs'
 import { withFolders } from './shell.mjs'
 import { nextGroup, nextSort } from './worklist.mjs'
@@ -760,33 +760,20 @@ async function syncMain($, isAsked = false) {
 // found (ship-pill D1). Its own tip is compared, so commits not pushed yet count. Detached, on the base, or outside
 // git: nothing to check. A run that ran out of time leaves the last answer as it was.
 const collisions = overlapJob()
-/** @type {import('./home.mjs').MergeCheck | null} */
+/** @type {import('./collide.mjs').MergeCheck | null} */
 let merge = null
 
 /** @param {Engine} $ */
 async function checkCollision($) {
   const { root, base } = await wordsLane($)
-  // The tip, then the branch's name ('HEAD' when detached).
-  const head = await repo($, root).git(['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'])
-  const [tip = '', branch = ''] = head.exitCode === 0 ? head.stdout.trim().split('\n') : []
-  if (!tip || branch === 'HEAD' || branch === base) return showMerge($, null)
-  // The work is named by the tracked intent when there is one, else by its branch.
   const key = await trackedKey($)
-  const here = { key: 'here', slug: intents.find(one => one.key === key)?.slug ?? branch, owner: me, stage: '', branch }
-  await collisions.run(
-    cache => readOverlaps(repo($, root), { base, sides: [{ key: here.key, branch, tip }], cache }),
-    read => {
-      if (read.isPartial) return
-      const collision = collisionsFor(read.overlaps, side => (side === here.key ? here : null), base)[0] ?? null
-      showMerge($, read.compared.includes(here.key) ? { base, at: Date.now(), collision } : null)
-    },
-  )
+  await checkBranch(repo($, root), collisions, { base, slug: intents.find(one => one.key === key)?.slug ?? '', owner: me }, found => showMerge($, found))
 }
 
 // What the check found, drawn again only when that changed; a check that found the same only moves "checked … ago".
-/** @param {Engine} $ @param {import('./home.mjs').MergeCheck | null} found */
+/** @param {Engine} $ @param {import('./collide.mjs').MergeCheck | null} found */
 function showMerge($, found) {
-  const isSame = JSON.stringify(found && { ...found, at: 0 }) === JSON.stringify(merge && { ...merge, at: 0 })
+  const isSame = isSameCheck(found, merge)
   merge = found
   if (isSame) return
   stale()
@@ -1710,7 +1697,7 @@ async function pickView($, view) {
   const written = homeView.pick(io($), view)
   $.ui.invalidate('ui.render')
   await written
-  return view === 'simple' ? 'Simple view: what needs you and what is next. /ather advanced shows everything.' : 'Advanced view: everything Ather shows. /ather simple shows less.'
+  return viewText(view)
 }
 
 /** @param {Engine} $ */

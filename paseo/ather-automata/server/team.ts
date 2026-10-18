@@ -1,10 +1,13 @@
 // The team's intents as origin/main has them (0.1.5; origin/<base> where the team merges into another branch),
 // merged with the folders only this checkout has, and the background fetch that keeps origin/<base> fresh: once a
 // list is read, then at most every ten minutes, or at once from ↻. The reading and merging are team.mjs's; this
-// gives it git and the files, and keeps each checkout's cache and sync state. Every git call reads, never the
-// working tree or the index; the fetch writes only the remote-tracking ref.
+// gives it git and the files, and keeps each checkout's cache and sync state, and the check of its branch against
+// origin/<base> (collide.mjs checkBranch). Every git call reads, never the working tree or the index; the fetch
+// writes only the remote-tracking ref.
 
-import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from "./ather/team.mjs";
+import { checkBranch, isSameCheck, type MergeCheck } from "./ather/collide.mjs";
+import { overlapJob } from "./ather/overlap.mjs";
+import { EMPTY_CACHE, GIT_ENV, NO_SYNC, type Repo, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from "./ather/team.mjs";
 import { list, mtime, readText, run } from "./io";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -13,12 +16,26 @@ type Any = any;
 const caches = new Map<string, Any>();
 const syncs = new Map<string, Any>();
 
-const repoOf = (root: string) => ({
+const repoOf = (root: string): Repo => ({
   git: async (args: readonly string[], options: { stdin?: string; timeoutMs?: number } = {}) => run(["git", "-C", root, ...args], { cwd: root, env: GIT_ENV, timeoutMs: options.timeoutMs ?? 120000, stdin: options.stdin }),
   read: readText,
   list,
   mtime,
 });
+
+// Each checkout's branch against origin's base (ather-automata 0.5.0, 0.6.0), one check at a time per checkout, run
+// as its model is built; Needs you, the merge line and the pill read what it last found (mergeOf).
+const merges = new Map<string, { job: ReturnType<typeof overlapJob>; check: MergeCheck | null }>();
+export const mergeOf = (root: string) => merges.get(root)?.check ?? null;
+export function checkMerge(root: string, base: string, slug: string, me: string, onChange: () => void) {
+  const kept = merges.get(root) ?? { job: overlapJob(), check: null };
+  merges.set(root, kept);
+  void checkBranch(repoOf(root), kept.job, { base, slug, owner: me }, (found) => {
+    const isSame = isSameCheck(found, kept.check);
+    kept.check = found;
+    if (!isSame) onChange();
+  }).catch((error: unknown) => console.log(`[ather] ${root}: the overlap check failed: ${String(error)}`));
+}
 
 // The checkout's intents as files (model.mjs IntentFiles), main's and its own. `pinned` is always read from the checkout.
 export async function readTeamIntents(root: string, pinned: string | null, base: string): Promise<Any[]> {

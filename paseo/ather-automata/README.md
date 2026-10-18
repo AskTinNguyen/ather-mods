@@ -1,6 +1,6 @@
 # Ather Automata for Paseo
 
-The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://paseo.sh) plugin: what needs you, what to do next, and a safe pair of hands while you are away, for the agents Paseo runs. Its version is the ather-automata release its shared code is copied from: **0.6.0** (`package.json`'s `version`, which `npm run sync` sets from `ather-automata/.claude-plugin/plugin.json` and `npm run sync:check` holds to it). The intents, stages, Next, away windows, packs, traps and decision ledger are the same code: `server/ather/` is a copy of `ather-automata/hooks/`. The Paseo screens lag behind: see Limits for what of 0.1.5–0.3.3 is not shown here yet. What differs is how it hooks into Paseo.
+The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://paseo.sh) plugin: what needs you, what to do next, and a safe pair of hands while you are away, for the agents Paseo runs. Its version is the ather-automata release its shared code is copied from: **0.6.1** (`package.json`'s `version`, which `npm run sync` sets from `ather-automata/.claude-plugin/plugin.json` and `npm run sync:check` holds to it). The intents, stages, Next, away windows, packs, traps and decision ledger are the same code: `server/ather/` is a copy of `ather-automata/hooks/`. The Paseo screens lag behind: see Limits for what of 0.1.5–0.3.3 is not shown here yet. What differs is how it hooks into Paseo.
 
 ## Install
 
@@ -20,7 +20,7 @@ It applies to agents created after install whose checkout runs intents (a `docs/
 | `/ather …`, `/away …` | The same commands, `/ather untrack` included. Replies show as a toast, on the panel and in the agent's timeline. |
 | Intent view | Pressing an intent (or `/ather intent <words>`) opens it: where it stands, its proof by session, who else tracks it, today's lines (a press asks what one changed). **Work on this here** tracks it; looking never does. **Stop tracking** undoes it. **Ask about it** asks the agent. |
 | Work list (Pick something / Other work) | Grouped by source, each group coloured and foldable: your intents, your assigned GitHub issues, teammates' intents. Every row reads the same: stage glyph (● building, ◐ items met, PR not merged, ✓ ready to close, ‖ parked), title, the owner in their own colour, a small progress bar with its count, and its age. A search box (title, number, area or owner; pressing an owner's name searches for them) narrows it, with "x of y" counts. **Sort** cycles Recent, Ready to close (in stage blocks) and Oldest. **Group** sorts the teammates' intents by Person, Area, Stage or None, in foldable sub-groups (over six start folded), and is remembered for you. Each group's parked intents fold into "‖ Parked" at its end. |
-| Band above the prompt | A composer pill per agent: what needs you, a running window, or the stage. |
+| Band above the prompt | A composer pill per agent: what needs you, a running window, or the tracked intent's stage and items met. |
 | Pop-ups | Ather rows in the agent's timeline: held actions, traps with their fix, false build passes, lost merge edits. |
 | The squad | Each worker with its avatar (body for its kind, holding what it is doing, a ring for its state), model, what it is doing or what came of it, its steps, how long it took and its tool calls. Read from Claude Code's own record of each worker (`~/.claude/projects/<checkout>/<session>/subagents/`). |
 | `status`, `away`, `profile` tools | The same tools, as an MCP server (`mcp__ather-automata__*`) added to each agent and preapproved. `profile` takes `track: "none"` to stop tracking. |
@@ -45,8 +45,6 @@ Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, o
 - Agents created before install get neither the tools nor the ask rules; the panel, pill and commands still work for them. Agents whose Claude `settings` option is a file path get the tools but not the ask rules.
 - Codex agents get the tools, question deferral and turn reading, but no ask rules: holds apply only when Codex asks on its own.
 - If the plugin stops, Claude agents created with its ask rules still prompt for those commands, and the prompts wait for you.
-- The panel has no Simple view yet (ather-automata 0.4.0): it always shows everything.
-- The panel does not check this checkout's branch against origin's base (ather-automata 0.5.0, 0.6.0): Needs you never shows Bring origin/main in, and there is no merge line.
 - "Also tracked in … · active Nm ago" can be a little off: `state.mjs` keeps one "last active" time per process, and one plugin process serves every agent.
 - A worker's calls in flight are not seen (Paseo has no hook around a worker's tool calls), so the workers list has no "⏳ asking permission", "⏳ waiting on …" or "one call running N min" lines (0.1.9); a worker silent for three minutes reads quiet, as before.
 - Not here yet: the newcomer tour toast (the tour is the Next row and `/ather tour`).
@@ -70,6 +68,7 @@ paseo plugin logs ather-automata
 
 ## Changes
 
+- **0.6.1** Shared code at ather-automata 0.6.1, and the panel catches up with 0.4.0–0.6.0. **Simple and Advanced views**: the button at the panel's foot, or `/ather simple` and `/ather advanced`, kept for you as in the mod (Simple shows the title and status, Needs you, Needs attention, Next and the toggle). **Your branch against origin's base**: each checkout's branch is checked as its panel is built, one check at a time; Needs you shows **Bring origin/main into feat/x** when they no longer merge cleanly, and a line under the status says `Merges cleanly into origin/main · checked 2m ago` or, in warning, `▲ N overlaps with origin/main · see Needs you`. The composer pill shows the tracked intent's stage (`● Build 1/2 · feat-x`) when nothing needs you. Proven by `dev/e2e/paseo.mts` (the server over a real checkout, run by `dev/test-all.mjs`).
 - **0.6.0** Shared code at ather-automata 0.6.0: Home's merge line and the stage pill (`buildHome`'s `merge`, `header.merge`, `header.pill`); the panel shows neither yet.
 - **0.5.0** Shared code at ather-automata 0.5.0: `collide.mjs`, and Needs you's collision item (`buildHome`'s `collision`), which the Paseo panel does not check for yet; see Limits.
 - **0.4.3** Shared code at ather-automata 0.4.3: the pane's modes (`modes.mjs`), which the Paseo panel does not use.

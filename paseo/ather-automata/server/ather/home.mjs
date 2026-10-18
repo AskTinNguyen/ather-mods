@@ -52,7 +52,9 @@ export const TEAM_SHOWN = 4
 // Home in two views, remembered per person (simple-view D1-D5): Advanced draws every part; Simple only the
 // title and its status, Needs you, Needs attention, Next and the toggle. The rest stays a command away.
 /** @typedef {'advanced' | 'simple'} PaneView */
-/** @typedef {'title' | 'status' | 'stages' | 'meta' | 'merge' | 'strip' | 'actions' | 'needs' | 'attention' | 'next' | 'crew' | 'preview' | 'away' | 'warm' | 'view'} HomePart */
+// Home's parts, top to bottom.
+export const HOME_PARTS = /** @type {const} */ (['title', 'status', 'stages', 'meta', 'merge', 'strip', 'actions', 'needs', 'attention', 'next', 'crew', 'preview', 'away', 'warm', 'view'])
+/** @typedef {(typeof HOME_PARTS)[number]} HomePart */
 /** @param {unknown} value @returns {PaneView} */
 export const paneViewOf = value => (value === 'simple' ? 'simple' : 'advanced')
 /** @type {readonly HomePart[]} */
@@ -61,6 +63,9 @@ export const SIMPLE_SHOWS = ['title', 'status', 'needs', 'attention', 'next', 'v
 export const isShownIn = (view, part) => view === 'advanced' || SIMPLE_SHOWS.includes(part)
 /** @param {PaneView} view @returns {PaneView} */
 export const otherView = view => (view === 'simple' ? 'advanced' : 'simple')
+// What choosing a view says, and how to go back.
+/** @param {PaneView} view */
+export const viewText = view => (view === 'simple' ? 'Simple view: what needs you and what is next. /ather advanced shows everything.' : 'Advanced view: everything Ather shows. /ather simple shows less.')
 /** @type {Record<PaneView, string>} */
 export const VIEW_LABELS = { simple: 'Simple view', advanced: 'Advanced view' }
 
@@ -123,10 +128,7 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'collide' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
 
-/**
- * @typedef {{ base: string, at: number, collision: import('./collide.mjs').Collision | null }} MergeCheck this checkout's branch
- *   compared with origin's base at `at`: `collision` where they no longer merge cleanly, null where they do (ship-pill D1)
- */
+/** @typedef {import('./collide.mjs').MergeCheck} MergeCheck */
 
 // Whether this checkout's branch merges into origin's base, as Home's masthead says it (ship-pill D1): '' when it was
 // not compared (on the base, detached, nothing changed, origin's base not fetched).

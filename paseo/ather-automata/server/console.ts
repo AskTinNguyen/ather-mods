@@ -3,7 +3,7 @@
 // as a message. Where the original asked a question dialog, the panel lists the choices.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
-import { NEW_INTENT_PROMPT, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, skillFolder, standsLines, untrackText } from "./ather/home.mjs";
+import { HOME_PARTS, NEW_INTENT_PROMPT, VIEW_LABELS, askPrompt, batchPrompt, buildHome, heldByLine, isShownIn, otherView, parseWeek, proofLine, skillFolder, standsLines, untrackText, viewText } from "./ather/home.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
@@ -15,7 +15,7 @@ import { USER_HOME, list, readText, run } from "./io";
 import { ctxOf, laneOf, peers, readLock, type Ctx, type Pack } from "./lane";
 import { needsOf, openDecision, recordAnswer, toggleBlock } from "./needs";
 import { crewOf, githubLogin } from "./squad";
-import { readTeamIntents, syncLine, syncMain } from "./team";
+import { checkMerge, mergeOf, readTeamIntents, syncLine, syncMain } from "./team";
 import { cycleGroup, cycleSort, setSearch, workListOf } from "./worklist";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,6 +50,7 @@ const sentOf = (agentId: string) => {
   return set;
 };
 const stale = (agentId: string) => views.delete(agentId);
+
 
 // ---------------------------------------------------------------- reading the checkout
 
@@ -179,8 +180,11 @@ async function model(ctx: Ctx, force = false, fetchNow = false) {
   const hit = views.get(ctx.agent.id);
   if (!force && hit && hit.version === version && Date.now() - hit.at < VIEW_TTL_MS) return hit.model;
   const io = ctx.io as never;
-  const { root, me, pack } = await laneOf(ctx);
+  const { root, me, pack, base } = await laneOf(ctx);
   const cache = await refreshRoot(ctx, force, fetchNow);
+  const pinned = await state.readPinned(io);
+  // A new answer redraws every agent.
+  checkMerge(root, base, pinned ?? "", me, () => knownAgents().forEach((agent) => stale(agent.id)));
   void refreshIssues(ctx).catch(() => undefined);
   const tz = await state.readTz(io);
   const now = Date.now();
@@ -189,13 +193,14 @@ async function model(ctx: Ctx, force = false, fetchNow = false) {
   const workers = knownAgents().filter((agent) => agent.parentAgentId === ctx.agent.id).length;
   const built = buildHome({
     intents: cache.intents,
-    pinned: await state.readPinned(io),
+    pinned,
     me,
     ...profile,
     evidence: await state.readEvidence(io, await state.evidenceScope(io), pack),
     away,
     ledger: away.phase === "off" ? "" : ((await readText(away.ledgerPath)) ?? ""),
     lost: await state.readLost(io),
+    merge: mergeOf(root),
     lock: await namedLock(root, await readLock(ctx)),
     recurring: await state.readRecurring(io, pack),
     issues: await state.readIssues(io, me),
@@ -226,6 +231,9 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     proof: "",
     heldBy: "",
     sentence: "",
+    merge: { text: "", isWarn: false },
+    shows: [...HOME_PARTS],
+    viewToggle: VIEW_LABELS.simple,
     lock: "",
     role: "",
     week: "",
@@ -259,6 +267,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
   const away = await state.readAway(io);
   const slug = await state.readPinned(io);
   const now = Date.now();
+  const paneView = await state.readPaneView(io, lane.me);
   const changes = slug ? await changesToday(ctx, slug) : [];
   const next = built.next;
   const ledger = away.ledgerPath && away.ledgerPath.startsWith(lane.root) ? away.ledgerPath.slice(lane.root.length + 1) : away.ledgerPath;
@@ -273,6 +282,9 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     proof: slug ? await proofOf(ctx, slug) : built.header.proof,
     heldBy: slug ? heldByLine(await peers(ctx), slug, now) : "",
     sentence: built.header.sentence,
+    merge: built.header.merge,
+    shows: HOME_PARTS.filter((part) => isShownIn(paneView, part)),
+    viewToggle: VIEW_LABELS[otherView(paneView)],
     lock: built.header.lock,
     role: built.header.role,
     week: built.header.week,
@@ -400,7 +412,7 @@ export async function bandOf(agentId: string, cwd: string): Promise<Band | null>
   if (built.open.some((one: Any) => one.kind === "review")) return { label: "Review away window", urgent: true, kind: "review" };
   if (built.isNewcomer) return { label: "New here? Tour", urgent: false, kind: "tour" };
   if (built.open.length > 0) return { label: `${built.open.length} need${built.open.length === 1 ? "s" : ""} you`, urgent: true, kind: "needs" };
-  return { label: header.stage ? `${header.title} · ${header.stage}` : "Ather", urgent: false, kind: "stage" };
+  return { label: header.pill || "Ather", urgent: false, kind: "stage" };
 }
 
 // ---------------------------------------------------------------- handing things to the agent
@@ -586,7 +598,14 @@ async function typed(ctx: Ctx, text: string) {
 }
 
 // What /ather understands after its name; a typo of one of these is read as it.
-const COMMAND_WORDS = ["tour", "skip", "pick", "issues", "issue", "intent", "role", "checked", "untrack"];
+const COMMAND_WORDS = ["tour", "skip", "pick", "issues", "issue", "intent", "role", "checked", "untrack", "simple", "advanced"];
+
+// Home's Simple or Advanced view, kept for the person (simple-view): the panel draws the parts it shows.
+async function pickView(ctx: Ctx, view: "simple" | "advanced") {
+  await state.setPaneView(ctx.io as never, (await laneOf(ctx)).me, view);
+  for (const agent of knownAgents()) stale(agent.id);
+  return viewText(view) as string;
+}
 
 async function atherCommand(ctx: Ctx, args: string): Promise<string> {
   const io = ctx.io as never;
@@ -599,6 +618,7 @@ async function atherCommand(ctx: Ctx, args: string): Promise<string> {
     return `Tour skipped (/ather tour brings it back). ${pack.roleHelp}`;
   }
   if (word === "untrack" && rest === "") return untrackHere(ctx);
+  if ((word === "simple" || word === "advanced") && rest === "") return pickView(ctx, word);
   if ((word === "intent" || word === "pick") && rest) return pickIntent(ctx, rest);
   if ((word === "issue" || word === "issues") && /^#?\d+$/.test(rest)) return startIssue(ctx, Number(rest.replace("#", "")), true);
   if (word === "role") {
@@ -730,6 +750,7 @@ const ACTS: Record<ActKind, Act> = {
   find: (ctx, _built, _id, text) => setSearch(ctx.agent.id, text ?? ""),
   sort: (ctx) => cycleSort(ctx.agent.id),
   group: async (ctx) => cycleGroup(ctx, (await laneOf(ctx)).me),
+  pane: async (ctx) => pickView(ctx, otherView(await state.readPaneView(ctx.io as never, (await laneOf(ctx)).me))),
   action: (ctx, _built, id) => {
     if (id !== "action:new-intent") throw new Error(`Unknown action ${id}.`);
     return sendIt(ctx, id, NEW_INTENT_PROMPT, "Sent to the agent: it interviews you first.");

@@ -8,6 +8,7 @@
 // each names only the others, `ageText` (written into the page too) and the language's own globals.
 
 import { aboutIntentPrompt, andList, isMine } from './model.mjs'
+import { readOverlaps } from './overlap.mjs'
 import { ageText } from './worklist.mjs'
 
 /**
@@ -20,6 +21,11 @@ import { ageText } from './worklist.mjs'
  * @template {string} [S=string]
  * @typedef {{ key: string, a: Party<S>, b: Party<S>, files: string[], spots: import('./overlap.mjs').Spot[], count: number, base: { at: number, via: string[] } | null }} Collision
  *   an overlap with its sides: `a` the base when it is one; `base`: when the base last changed the files, and the intents that change brought
+ */
+
+/**
+ * @typedef {{ base: string, at: number, collision: Collision | null }} MergeCheck this checkout's branch compared with origin's base at
+ *   `at`: `collision` where they no longer merge cleanly, null where they do (ship-pill D1)
  */
 
 /**
@@ -105,3 +111,34 @@ export const collisionActions = (collision, me, base) => {
   if (isBase) return [{ key: 'note', label: `Ask ${b.owner || 'the owner'}`, prompt: notePrompt(b, `origin/${base} moved under their ${b.slug}; it no longer merges cleanly.`, collision) }, about]
   return [{ key: 'note', label: `Ask ${a.owner || a.slug} and ${b.owner || b.slug} who goes first`, prompt: `Draft one short, friendly message to ${a.owner || 'the owner of ' + a.slug} and ${b.owner || 'the owner of ' + b.slug} about ${pairName(collision)}: they change the same lines (${spotsText(collision)}), so whichever merges second will conflict. Ask who goes first, or how both changes fit together. Show me the draft; do not send it.` }, about]
 }
+
+// ---------------------------------------------------------------- this checkout's own branch
+
+/**
+ * This checkout's branch against origin's base (collision-alert, ship-pill D1), through `job` (overlap.mjs overlapJob,
+ * one run at a time): its own tip is compared, so commits not pushed yet count. `onCheck` hears what each run found:
+ * null where there was nothing to compare (detached, on the base, nothing changed, the base not fetched). A run that
+ * ran out of time says nothing. The work is named by `slug`, the tracked intent's, else by its branch ('').
+ * @param {import('./team.mjs').Repo} repo @param {ReturnType<typeof import('./overlap.mjs').overlapJob>} job
+ * @param {{ base: string, slug: string, owner: string }} work @param {(merge: MergeCheck | null) => void} onCheck
+ */
+export const checkBranch = async (repo, job, { base, slug, owner }, onCheck) => {
+  // The tip, then the branch's name ('HEAD' when detached).
+  const head = await repo.git(['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'])
+  const [tip = '', branch = ''] = head.exitCode === 0 ? head.stdout.trim().split('\n') : []
+  if (!tip || branch === 'HEAD' || branch === base) return onCheck(null)
+  /** @type {Party} */
+  const here = { key: 'here', slug: slug || branch, owner, stage: '', branch }
+  await job.run(
+    cache => readOverlaps(repo, { base, sides: [{ key: here.key, branch, tip }], cache }),
+    read => {
+      if (read.isPartial) return
+      const collision = collisionsFor(read.overlaps, side => (side === here.key ? here : null), base)[0] ?? null
+      onCheck(read.compared.includes(here.key) ? { base, at: Date.now(), collision } : null)
+    },
+  )
+}
+
+// Whether two checks found the same, whenever they ran: only then is there nothing new to draw.
+/** @param {MergeCheck | null} one @param {MergeCheck | null} other */
+export const isSameCheck = (one, other) => JSON.stringify(one && { ...one, at: 0 }) === JSON.stringify(other && { ...other, at: 0 })
