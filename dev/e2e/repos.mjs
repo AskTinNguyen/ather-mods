@@ -1593,7 +1593,8 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
 
 {
   const parent = fs.mkdtempSync(join(BASE, 'collide-'))
-  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, 'src/a.js': 'export const scale = 1\n' } })
+  const FEAT = '# Scale\n\n- Rev: 1\n- Status: active\n- Area: Web\n- Owner: Tin Nguyen\n- Branch: `feat/x`\n\n## Acceptance\n\n- [x] A1: scale reads from config.\n- [ ] A2: scale shows in the HUD.\n'
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, 'docs/intent/feat-x/prompt.md': FEAT, 'src/a.js': 'export const scale = 1\n' } })
   git(web, 'checkout', '-q', '-b', 'feat/x')
   // A commit here, never pushed, and a teammate's push to main on the same line.
   fs.writeFileSync(join(web, 'src/a.js'), 'export const scale = 2\n')
@@ -1606,6 +1607,7 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   git(other, 'push', '-q', 'origin', 'main')
   const { engine } = await boot({ root: web, sessionId: 'harness-session-0060' })
   engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent feat-x')
   await engine.command('ather', '')
   const pane = (surface = 'terminal') => engine.render('Pane', { bodyColumns: 110 }, 'ather', surface)
   const ID = 'collide:feat/x:src/a.js:1'
@@ -1613,6 +1615,7 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   const home = await pane()
   const row = textIn(byKey(home, 'needs'))
   expect('after the fetch, Needs you says feat/x overlaps origin/main, with what changed it and where', seen && buttonOf(home, `item-${ID}`)?.props.label === 'Bring origin/main into feat/x' && /▲ 1 overlap: origin\/main changed these lines .*ago \(Lena Park\)\. src\/a\.js:1/.test(row), [buttonOf(home, `item-${ID}`)?.props.label, row])
+  expect('ship-pill D1: Advanced Home says it under the status, in amber', textIn(byKey(home, 'merge')) === '▲ 1 overlap with origin/main · see Needs you' && byKey(home, 'merge')?.props.color !== undefined, textIn(byKey(home, 'merge')))
   const band = textIn(await engine.render('AbovePrompt', {}, 'band'))
   expect('the line above the prompt says it with ▲', /▲ feat\/x no longer merges cleanly into origin\/main · \/ather/.test(band), band)
   if (OUT) {
@@ -1627,12 +1630,21 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   byKey(simple, `item-${ID}`)?.props.onPress()
   await engine.flush()
   const handed = engine.record.submits.slice(before).join('\n')
-  expect('the press hands the session the merge to do: origin/main into feat/x, each place named, nothing pushed', /^The branch feat\/x no longer merges cleanly into origin\/main: src\/a\.js:1 \(main: export const scale = 0\.5; feat\/x: export const scale = 2\)\. Merge origin\/main into feat\/x/.test(handed) && /Do not push until I say\.$/.test(handed), handed)
+  expect('the press hands the session the merge to do: origin/main into feat/x, each place named, nothing pushed', /^Intent feat-x's branch feat\/x no longer merges cleanly into origin\/main: src\/a\.js:1 \(main: export const scale = 0\.5; feat-x: export const scale = 2\)\. Merge origin\/main into feat\/x/.test(handed) && /Do not push until I say\.$/.test(handed), handed)
   // The session brings main in; the next read finds nothing to bring.
   spawnMerge(web)
   await engine.turnEnd()
   const cleared = await until(async () => !nodesOf(await pane()).some(node => /^item-collide:/.test(node.props?.key ?? '')))
   expect('once main is merged in, the item leaves Needs you', cleared, textIn(byKey(await pane(), 'needs')))
+  await engine.command('ather', 'advanced')
+  const clean = await until(async () => /^Merges cleanly into origin\/main · checked (just now|\dm ago)$/.test(textIn(byKey(await pane(), 'merge'))))
+  expect('ship-pill D1: … and Home says it merges cleanly, and when that was checked', clean, textIn(byKey(await pane(), 'merge')))
+  const pill = textIn(await engine.render('AbovePrompt', {}, 'band'))
+  expect('ship-pill D2: with nothing needing you, the band is the tracked intent\u2019s pill', /^● Build 1\/2 · feat-x/.test(pill), pill)
+  if (OUT) {
+    for (const width of [110, 72]) writeDrawn(OUT, 'clean-advanced', await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
+    writeDrawn(OUT, 'pill-band', await engine.render('AbovePrompt', {}, 'band'), 110)
+  }
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 }

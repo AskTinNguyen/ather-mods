@@ -1,0 +1,29 @@
+feat-x ›
+Build · 1 of 2 done                                 f: synced just now ↻
+Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○
+Role not set · /ather role
+▲ 1 overlap with origin/main · see Needs you
+
+Checklist 1/2 ━━━━━━━━━━ · Workers 0 · Needs you 1
+
+[ ＋ New intent ]
+
+N E E D S   Y O U   ·   1
+◆ 1: Bring origin/main into feat/x
+     ▲ 1 overlap: origin/main changed these lines 0m ago (Lena Park).
+     src/a.js:1
+
+N E X T
+n: Start the work
+   A background agent does the work in its own worktree.
+
+i: Everything open ›
+
+S T E P P I N G   O U T ?
+Keep the prompt cache warm while you are away from the keyboard, so your
+next turn reads the context instead of paying to write it again.
+w: Keep the cache warm
+
+v: Simple view
+
+Enter chooses · Esc closes
