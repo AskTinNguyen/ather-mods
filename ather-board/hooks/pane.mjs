@@ -26,7 +26,7 @@ import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, collisionFact,
  * @typedef {import('./views.mjs').View} View
  * @typedef {{
  *   onView: (view: View) => () => void, onFilter: (patch: Partial<Filter>) => void, onSort: () => void, onGroup: () => void, onBy: () => void,
- *   onPick: (by: 'owner' | 'area', value: string, count?: import('./views.mjs').CountKind) => void, onRow: (record: BoardRecord) => () => void, onOpenPage: () => void, onPublish: () => void, onSync: () => void,
+ *   onPick: (by: 'owner' | 'area', value: string, count: import('./views.mjs').CountKind) => void, onRow: (record: BoardRecord) => () => void, onOpenPage: () => void, onPublish: () => void, onSync: () => void,
  *   onAction: (kind: import('./act.mjs').ActionKind, records: readonly BoardRecord[]) => void, onDecide: (record: BoardRecord, call: import('./views.mjs').Call, letter: string) => void,
  *   onSuggestion: (suggestion: Suggestion) => void, onBriefAgain: () => void, onMapAgain: () => void, onAsk: (question: string) => void, onClearAsk: () => void,
  *   onPair: (collision: Collision) => () => void, onCollision: (action: { label: string, prompt: string }) => void,
@@ -228,7 +228,7 @@ const lineSection = (el, actions, part) => {
       flexDirection: 'row',
       gap: 2,
       children: [
-        el.Box({ key: `${part.key}-${line.key}-name`, width, flexShrink: 0, children: [el.Button({ key: `${part.key}-${line.key}-press`, label: fit(line.title, width), plain: true, onPress: () => actions.onPick(part.by, line.key) })] }),
+        el.Box({ key: `${part.key}-${line.key}-name`, width, flexShrink: 0, children: [el.Button({ key: `${part.key}-${line.key}-press`, label: fit(line.title, width), plain: true, onPress: () => actions.onPick(part.by, line.key, 'open') })] }),
         ...line.counts.map(count => el.Button({ key: `${part.key}-${line.key}-${count.kind}`, label: count.text, plain: true, dimColor: !count.isWarn, onPress: () => actions.onPick(part.by, line.key, count.kind) })),
         el.Text({ key: `${part.key}-${line.key}-age`, color: QUIET, wrap: 'truncate', children: line.age }),
       ],

@@ -179,7 +179,7 @@ describe('what each view shows, for the pane and the page alike (A3, A4, A6, A7)
   })
   test('board-counts D1: each count of a line opens what it counts, the other filters cleared', () => {
     const look = { ...DEFAULT_LOOK, view: /** @type {const} */ ('areas'), filter: { ...NO_FILTER, words: 'snow' } }
-    const opened = views.COUNT_KINDS.map(count => {
+    const opened = views.COUNTS.map(({ kind: count }) => {
       const { view, filter } = views.pickLook(look, 'area', 'VFX', count)
       return `${count}: ${view} ${filter.area} ${filter.stage || '-'} ${filter.showDone ? 'done shown' : ''}${filter.words}`.trim()
     })
@@ -272,7 +272,7 @@ return sectionsOf`)()
     }
   })
   test('a person or area picked opens the table of theirs, the other filters cleared, done as it was', () => {
-    expect(views.pickLook({ ...DEFAULT_LOOK, filter: { ...NO_FILTER, words: 'snow', showDone: true } }, 'area', 'VFX')).toEqual({ ...DEFAULT_LOOK, view: 'table', filter: { ...NO_FILTER, area: 'VFX', showDone: true } })
+    expect(views.pickLook({ ...DEFAULT_LOOK, filter: { ...NO_FILTER, words: 'snow', showDone: true } }, 'area', 'VFX', 'open')).toEqual({ ...DEFAULT_LOOK, view: 'table', filter: { ...NO_FILTER, area: 'VFX', showDone: true } })
   })
   test('the browser script compiles', () => {
     expect(typeof new Function(client)).toBe('function')
