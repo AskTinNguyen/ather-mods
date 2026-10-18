@@ -45,6 +45,7 @@ Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, o
 - Agents created before install get neither the tools nor the ask rules; the panel, pill and commands still work for them. Agents whose Claude `settings` option is a file path get the tools but not the ask rules.
 - Codex agents get the tools, question deferral and turn reading, but no ask rules: holds apply only when Codex asks on its own.
 - If the plugin stops, Claude agents created with its ask rules still prompt for those commands, and the prompts wait for you.
+- The panel has no Simple view yet (ather-automata 0.4.0): it always shows everything.
 - "Also tracked in … · active Nm ago" can be a little off: `state.mjs` keeps one "last active" time per process, and one plugin process serves every agent.
 - A worker's calls in flight are not seen (Paseo has no hook around a worker's tool calls), so the workers list has no "⏳ asking permission", "⏳ waiting on …" or "one call running N min" lines (0.1.9); a worker silent for three minutes reads quiet, as before.
 - Not here yet: the newcomer tour toast (the tour is the Next row and `/ather tour`).

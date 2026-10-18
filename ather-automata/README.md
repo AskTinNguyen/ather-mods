@@ -7,6 +7,7 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 - **Type `/ather`** whenever you wonder what to do. What needs you comes first, then the next step for your work, ready to send.
 - **New here?** `/ather tour` walks you through it in six short steps and ends with your first piece of work started. In a hurry, skip it; Ather just asks your role.
 - **Leaving?** `/away tonight` (or `8h`, `until 9am`, `until done`). The session keeps working; merges wait for you. When you are back, `/ather` → **I'm back: see what happened**.
+- **Too much on the pane?** Press `v` on Home (or **Simple view** at its foot) for just what needs you and what is next. `/ather advanced` brings everything back; Ather remembers your choice.
 - **Stepping out for a meeting?** `/warm on` keeps the session's prompt cache warm while you are idle, so your next turn reads the context instead of paying to write it again. Off unless you turn it on.
 
 ## What you see
@@ -67,6 +68,7 @@ Ather reads evidence from tool output, never from what the session says: an S2Ed
 | `/ather tour`, `/ather skip` | The tour, or skip it and just say your role |
 | `/ather pick [words]`, `/ather intent <name>` | Everything open; an exact intent name works on it here, other words show the intent they match |
 | `/ather untrack` | Stop tracking this session's intent (not while an away window runs) |
+| `/ather simple`, `/ather advanced` | Home in Simple view (what needs you and Next) or Advanced (everything); remembered for you |
 | `/ather issues`, `/ather issue <number>` | Your GitHub issues; start one |
 | `/ather role <in your words>` | Your role: designer, tech artist or engineer in S2; engineer, designer or product in a web repository |
 | `/ather checked` | Record your own Editor check (S2 only) |
@@ -187,6 +189,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/handoff.test.
 
 ## Changes
 
+- **0.4.0** Simple and Advanced views of Home. Simple shows the intent's title and status, Needs you, Needs attention and Next, and leaves out the stage track, the role and proof line, the summary strip, the quick actions, workers, the previews of your and your teammates' work, Heading off? and Stepping out?. Each is still a command away (`/ather pick`, `/away`, `/warm`). Toggle with `v` or the button at Home's foot, or `/ather simple` and `/ather advanced`; the choice is kept for you across sessions. Advanced, today's Home, is the default, so nothing changes until you choose. The Paseo panel does not have the toggle yet.
 - **0.3.5** Needs you counts each decision once. An intent that several worktrees hold (each branch that changed it shows its own copy) lists its open decisions once, from the tracked copy, else the session's own checkout's, else the freshest; a decision settled in any copy waits in none. A finding with inline "(a) … (b) …" choices is the worker's engineering note, not a call: a decision needs the intent template's **Options:** list, a decider in its status (`status: open (director)`) or words naming the director's call.
 - **0.3.4** A narrow terminal pane (about 40 columns) keeps each work row on one line. A title keeps at least 16 cells: the right-hand columns give way first (count, then age, then owner, then the bar), the same for every row of a list so they stay aligned, and a warning or a worktree's name is cut or left out rather than wrapped. A failed sync shows git's own error under `sync failed ↻`, so the cause can be read in the pane.
 - **0.3.2** Longer keep-warm caps from settings: `cacheKeepWarmHours` now offers 8, 10 and 12 hours (as `/warm` already allowed). `/warm 10 hours` and `/warm 90 min` work as `/warm 10h` and `/warm 90m` do; before, a space before the unit gave the usage message.

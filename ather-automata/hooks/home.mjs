@@ -49,6 +49,15 @@ export const CREATE_SHOWN = 3
 // Home's preview of teammates' intents: four rows, then "+N more ›" (D7).
 export const TEAM_SHOWN = 4
 
+// Home in two views, remembered per person (simple-view D1-D3): Advanced is all of it; Simple keeps the
+// title and its status, Needs you, Needs attention and Next. What Simple leaves out stays a command away.
+/** @typedef {'advanced' | 'simple'} PaneView */
+/** @param {unknown} value @returns {PaneView} */
+export const paneViewOf = value => (value === 'simple' ? 'simple' : 'advanced')
+const SIMPLE_LEAVES_OUT = new Set(['stages', 'meta', 'strip', 'actions', 'crew', 'preview', 'away', 'warm'])
+/** @param {PaneView} view @param {string} part a Home part's name */
+export const isShownIn = (view, part) => view === 'advanced' || !SIMPLE_LEAVES_OUT.has(part)
+
 /** @param {string} name */
 export const skillFolder = name => (name.includes('/') ? name : `.agents/skills/${name}`)
 
