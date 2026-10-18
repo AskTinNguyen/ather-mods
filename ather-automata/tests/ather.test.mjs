@@ -14,6 +14,7 @@ import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWork
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
 import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
 import { QUIET, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
+import { awayWindowRows, intentRows } from '../hooks/modes.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
@@ -2052,6 +2053,21 @@ describe('one pane over the workspace', () => {
   const keysOf = (/** @type {any} */ tree) => all({ children: tree }, one => typeof one.props?.key === 'string').map(one => one.props.key)
   const repeated = (/** @type {string[]} */ keys) => keys.filter((key, at) => keys.indexOf(key) !== at)
   const look = (/** @type {boolean} */ isClicked) => ({ isClicked, width: 100, now: NOON, isTagged: false, ownerColour: () => '#ffffff', onRow: () => () => undefined })
+
+  test("the modes past Home (modes.mjs): an intent's view offers work only where it is not tracked; the away window keeps its keys off the desktop", () => {
+    const press = () => undefined
+    const on = { onAsk: press, onWork: press, onChange: () => press, onStop: press, onBack: press }
+    const intent = /** @type {any} */ ({ goal: 'Snow that reads as fluid.', base: 'main' })
+    const view = { key: 'snow', intent, isHere: false, inCheckout: true, proof: '', heldBy: '', stands: [], today: [], next: null }
+    const terminal = { width: 70, surface: 'terminal', isClicked: false }
+    const looking = keysOf(intentRows(el, terminal, view, on))
+    expect(['intent-work', 'intent-ask', 'intent-back'].every(key => looking.includes(key)) && !looking.includes('intent-untrack') && !looking.includes('intent-next-step')).toBe(true)
+    const next = { label: 'Start the work', hint: 'A worker does it.', isSent: false, isQueued: false, onPress: press }
+    const here = keysOf(intentRows(el, terminal, { ...view, isHere: true, next }, on))
+    expect(['intent-untrack', 'intent-back', 'intent-next-step'].every(key => here.includes(key)) && !here.includes('intent-work')).toBe(true)
+    const away = (/** @type {boolean} */ isClicked) => awayWindowRows(el, { width: 70, surface: undefined, isClicked }, { title: 'Ather', progress: '2h left', sentence: 'nothing held', end: { title: 'End the window', onPress: press } })
+    expect([keysOf(away(false)).includes('foot'), keysOf(away(true)).includes('foot'), textOf({ children: away(true) }).includes('The session is working')]).toEqual([true, false, true])
+  })
 
   test("the status line draws git's error under it only when given one, cut to two lines in a terminal", () => {
     const line = { text: 'Build · 2/5', fresh: 'sync failed ↻', width: 40, onPress: () => undefined }

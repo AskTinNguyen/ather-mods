@@ -1,7 +1,7 @@
 # Ather Automata: the pane's modes out of console.mjs
 
 - Rev: 1
-- Status: active
+- Status: completed
 - Area: ather-automata
 - Owner: Tin Nguyen
 - Skill: `plugin-authoring`

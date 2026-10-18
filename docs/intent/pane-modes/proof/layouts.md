@@ -8,7 +8,8 @@ The S2 e2e (`dev/e2e/run.mjs --layouts <dir>`) lays out every pane and band it d
 | before, again | origin/main 25ccb0c | dbe55497f649cc20… | 124306ed18729e12… |
 | after | this branch | dbe55497f649cc20… | 124306ed18729e12… |
 | after, again | this branch | dbe55497f649cc20… | 124306ed18729e12… |
+| after the review's fixes | this branch | dbe55497f649cc20… | 124306ed18729e12… |
 
-One more run on the branch differed in two Home layouts (four at 110): the order of intents changed in the time sort and so the Next. Those intents' files were copied within the same millisecond, so they tie; the two runs after it, and both runs of main, match. No moved mode differs in any run.
+Two other runs on the branch (one before the review's fixes, one after) differed in two Home layouts (four at 110): the order of intents changed in the time sort and so the Next. Those intents' files were copied within the same millisecond, so they tie; the runs beside them, and both runs of main, match. The same two Home layouts (#85 and #87 at 72, #86 and #88–#90 at 110: Home with seven workers) differ each time, and no other. No moved mode differs in any run.
 
 `modes-72.png` and `modes-72-b.png` draw the six modes as laid out at 72 columns.

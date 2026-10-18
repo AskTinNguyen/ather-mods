@@ -16,22 +16,26 @@ import { GROUP_LABELS, SORT_LABELS } from './worklist.mjs'
  * @typedef {{ kind: import('./changes.mjs').Change['kind'], text: string, time: string }} TodayLine one of today's lines in an intent, at its local time
  */
 
-// Every mode's way back: a quiet Back on 0, in a section of its own (`at`, else the button's key).
-/** @param {any} el @param {Frame} frame @param {string} key @param {Press} onPress @param {string} [at] */
-const backRow = (el, frame, key, onPress, at = key) => section(el, at, [el.Button({ key, label: 'Back', hotkey: frame.isClicked ? undefined : '0', plain: true, dimColor: true, onPress })])
-
+// A key is drawn only where it is pressed: never on the desktop.
 /** @param {Frame} frame @param {string} hotkey */
 const keyOf = (frame, hotkey) => (frame.isClicked ? undefined : hotkey)
+
+// Every mode's way back: a quiet Back on 0, alone in a section (`at`, else the button's key) or beside another press.
+/** @param {any} el @param {Frame} frame @param {string} key @param {Press} onPress */
+const backButton = (el, frame, key, onPress) => el.Button({ key, label: 'Back', hotkey: keyOf(frame, '0'), plain: true, dimColor: true, onPress })
+/** @param {any} el @param {Frame} frame @param {string} key @param {Press} onPress @param {string} [at] */
+const backRow = (el, frame, key, onPress, at = key) => section(el, at, [backButton(el, frame, key, onPress)])
+
 
 /**
  * Everything open: its title and how fresh the list is, the search (a field while one is typed), Sort and
  * Group, the groups (rows.mjs workGroups), and Back.
  * @param {any} el @param {Frame} frame
- * @param {{ status: any, look: import('./rows.mjs').Look, groups: Parameters<typeof workGroups>[2] }} view
+ * @param {{ status: any, look: import('./rows.mjs').Look, groups: Parameters<typeof workGroups>[2] & { groupBy: import('./worklist.mjs').GroupBy, isFocusTaken: boolean } }} view
  * @param {{ onSearch: (words: string) => void, onSearchOpen: Press, onClear: Press, onSort: Press, onGroup: Press, onBack: Press }} on
  */
 export const pickRows = (el, frame, { status, look, groups }, on) => {
-  const { query, sort, groupBy = 'none', isFocusTaken = false } = groups
+  const { query, sort, groupBy, isFocusTaken } = groups
   const search = isFocusTaken
     ? el.Input({ key: 'pick-search-field', label: 'Search: ', placeholder: 'title, issue number, area or owner', value: query, submitLabel: 'search', autoFocus: true, onSubmit: on.onSearch })
     : el.Button({ key: 'pick-search', label: query ? `Search: ${fit(query, 24)}` : 'Search…', hotkey: keyOf(frame, 's'), plain: true, onPress: on.onSearchOpen })
@@ -75,8 +79,8 @@ export const issueRows = (el, frame, { issue, hint, open }, on) => [
  * here), where it stands, today's lines, the tracked intent's Next, then Stop tracking and Back.
  * @param {any} el @param {Frame} frame
  * @param {{ key: string, intent: import('./model.mjs').Intent, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string, stands: readonly string[],
- *   today: readonly TodayLine[], next: { label: string, hint: string, isSent: boolean, isQueued: boolean } | null }} view `next`: the tracked intent's step, null for none or another intent
- * @param {{ onAsk: Press, onWork: Press, onChange: (one: TodayLine) => Press, onNext: Press, onStop: Press, onBack: Press }} on
+ *   today: readonly TodayLine[], next: { label: string, hint: string, isSent: boolean, isQueued: boolean, onPress: Press } | null }} view `next`: the tracked intent's step, null for none or another intent
+ * @param {{ onAsk: Press, onWork: Press, onChange: (one: TodayLine) => Press, onStop: Press, onBack: Press }} on
  */
 export const intentRows = (el, frame, { key, intent, isHere, inCheckout, proof, heldBy, stands, today, next }, on) => {
   const { width } = frame
@@ -132,10 +136,10 @@ export const intentRows = (el, frame, { key, intent, isHere, inCheckout, proof, 
   )
   // The tracked intent's next step, pressed here as on Home.
   if (next) {
-    const card = el.Box({ key: 'intent-next-card', flexDirection: 'column', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [choiceRow(el, { key: 'intent-next-step', title: next.label, detail: next.hint, hotkey: 'n', isSent: next.isSent, isQueued: next.isQueued, width: width - 4, onPress: on.onNext }, frame.isClicked)] })
+    const card = el.Box({ key: 'intent-next-card', flexDirection: 'column', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [choiceRow(el, { key: 'intent-next-step', title: next.label, detail: next.hint, hotkey: 'n', isSent: next.isSent, isQueued: next.isQueued, width: width - 4, onPress: next.onPress }, frame.isClicked)] })
     rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), card]))
   }
-  const back = el.Button({ key: 'intent-back', label: 'Back', hotkey: keyOf(frame, '0'), plain: true, dimColor: true, onPress: on.onBack })
+  const back = backButton(el, frame, 'intent-back', on.onBack)
   // Stop tracking keeps the view on this intent, which then offers Work on this here again.
   const stop = el.Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: keyOf(frame, 's'), plain: true, dimColor: true, onPress: on.onStop })
   rows.push(section(el, 'intent-back', isHere ? [el.Box({ key: 'intent-back-row', flexDirection: 'row', gap: 3, children: [stop, back] })] : [back]))
@@ -215,11 +219,10 @@ export const awayRows = (el, frame, { mandate }, on) => [
  * While an away window runs: what the session is doing, what it did so far, and the press that ends the
  * window, with its own foot. Nothing is focused: one stray Enter must not end the window and lift its holds.
  * @param {any} el @param {Frame} frame
- * @param {{ title: string, progress: string, sentence: string, end: { title: string } | undefined }} view `title`: 'Ather' while nothing is tracked
- * @param {{ onEnd: Press }} on
+ * @param {{ title: string, progress: string, sentence: string, end: { title: string, onPress: Press } | null }} view `title`: 'Ather' while nothing is tracked; `end`: the press that ends the window
  */
-export const awayWindowRows = (el, frame, { title, progress, sentence, end }, on) => [
+export const awayWindowRows = (el, frame, { title, progress, sentence, end }) => [
   masthead(el, [label(el, 'brand', 'Away', frame.width), el.Text({ key: 'title', bold: true, children: fit(title === 'Ather' ? 'The session is working' : title, frame.width) }), el.Text({ key: 'status', children: fit(`🌙 ${progress}`, frame.width) }), el.Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: `So far: ${sentence}.` })], frame.surface),
-  ...(end ? [section(el, 'end', [choiceRow(el, { key: 'end', title: end.title, hotkey: 'e', width: frame.width, onPress: on.onEnd }, frame.isClicked)])] : []),
+  ...(end ? [section(el, 'end', [choiceRow(el, { key: 'end', title: end.title, hotkey: 'e', width: frame.width, onPress: end.onPress }, frame.isClicked)])] : []),
   ...(frame.isClicked ? [] : [section(el, 'foot', [el.Text({ key: 'foot', color: QUIET, children: 'Esc closes' })])]),
 ]

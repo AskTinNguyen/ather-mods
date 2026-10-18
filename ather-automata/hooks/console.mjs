@@ -1987,7 +1987,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
 
   if (header.stage === 'Away') {
     const [end] = model.items
-    return column(awayWindowRows(el, frame, { title: header.title, progress: header.progress, sentence: header.sentence, end }, { onEnd: end ? press($, () => act($, end), isReviewQueued) : () => undefined }))
+    return column(awayWindowRows(el, frame, { title: header.title, progress: header.progress, sentence: header.sentence, end: end ? { title: end.title, onPress: press($, () => act($, end), isReviewQueued) } : null }))
   }
 
   if (paneMode === 'issue') {
@@ -2009,13 +2009,12 @@ function paneView(el, $, model, columns, surface, crew = []) {
       if (isHere) intentSeenAt = Date.now()
       // The tracked intent's next step. A step that only looks at it is this view, so no card.
       const next = isHere && model.next && !model.next.look ? model.next : null
-      const view = { ...intentView, intent, today: intentToday, next: next && { label: next.label, hint: next.hint, isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id) } }
+      const view = { ...intentView, intent, today: intentToday, next: next && { label: next.label, hint: next.hint, isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id), onPress: press($, () => doNext($, next), next.work?.kind === 'intent') } }
       return column([
         ...intentRows(el, frame, view, {
           onAsk: press($, () => askAbout($, key, aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base), `asked the session about ${key}`), false),
           onWork: press($, () => trackKey($, key), true),
           onChange: one => press($, () => askAbout($, key, `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`, 'asked the session about that change'), false),
-          onNext: next ? press($, () => doNext($, next), next.work?.kind === 'intent') : () => undefined,
           onStop: press($, () => ((intentShown = key), untrackHere($)), true),
           onBack: show($, intentBack),
         }),
