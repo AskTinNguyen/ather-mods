@@ -49,6 +49,21 @@ export const CREATE_SHOWN = 3
 // Home's preview of teammates' intents: four rows, then "+N more ›" (D7).
 export const TEAM_SHOWN = 4
 
+// Home in two views, remembered per person (simple-view D1-D5): Advanced draws every part; Simple only the
+// title and its status, Needs you, Needs attention, Next and the toggle. The rest stays a command away.
+/** @typedef {'advanced' | 'simple'} PaneView */
+/** @typedef {'title' | 'status' | 'stages' | 'meta' | 'strip' | 'actions' | 'needs' | 'attention' | 'next' | 'crew' | 'preview' | 'away' | 'warm' | 'view'} HomePart */
+/** @param {unknown} value @returns {PaneView} */
+export const paneViewOf = value => (value === 'simple' ? 'simple' : 'advanced')
+/** @type {readonly HomePart[]} */
+export const SIMPLE_SHOWS = ['title', 'status', 'needs', 'attention', 'next', 'view']
+/** @param {PaneView} view @param {HomePart} part */
+export const isShownIn = (view, part) => view === 'advanced' || SIMPLE_SHOWS.includes(part)
+/** @param {PaneView} view @returns {PaneView} */
+export const otherView = view => (view === 'simple' ? 'advanced' : 'simple')
+/** @type {Record<PaneView, string>} */
+export const VIEW_LABELS = { simple: 'Simple view', advanced: 'Advanced view' }
+
 /** @param {string} name */
 export const skillFolder = name => (name.includes('/') ? name : `.agents/skills/${name}`)
 

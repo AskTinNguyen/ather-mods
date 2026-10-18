@@ -14,6 +14,7 @@ import { unreal } from './packs/unreal.mjs'
 import { baseOf } from './team.mjs'
 import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
+import { paneViewOf } from './home.mjs'
 
 /**
  * @typedef {{
@@ -60,6 +61,8 @@ const KEY = {
   nudged: (/** @type {string} */ me) => `nudged:${personId(me)}`,
   // How this person groups the teammates' intents in Everything open (person, area, stage or none).
   groupBy: (/** @type {string} */ me) => `groupBy:${personId(me)}`,
+  // Home's view for this person: advanced or simple.
+  view: (/** @type {string} */ me) => `view:${personId(me)}`,
   // The sessions holding an away window for this person, so a new session finds them without a scan.
   windows: (/** @type {string} */ person) => `windows:${person}`,
   // Kept per repository: gh reads a repository's issues and PRs, whichever of its checkouts asks.
@@ -518,6 +521,9 @@ export const readLast = async (io, me, root) => {
 // The person's grouping for Everything open; Person until they choose another.
 /** @param {Io} io @param {string} me */
 export const readGroupBy = async (io, me) => groupByOf(await io.get(KEY.groupBy(me)))
+// The person's Home view; Advanced until they choose Simple.
+/** @param {Io} io @param {string} me */
+export const readPaneView = async (io, me) => paneViewOf(await io.get(KEY.view(me)))
 /** @param {Io} io */
 export const readScore = async io => /** @type {Record<string, number>} */ ((await io.get(KEY.score)) ?? {})
 
@@ -598,6 +604,13 @@ export const setProfile = (io, me, fields, pack = unreal) =>
 export const setGroupBy = (io, me, by) =>
   serial(async () => {
     await io.set(KEY.groupBy(me), by)
+    changed(io)
+  })
+
+/** @param {Io} io @param {string} me @param {import('./home.mjs').PaneView} view */
+export const setPaneView = (io, me, view) =>
+  serial(async () => {
+    await io.set(KEY.view(me), view)
     changed(io)
   })
 

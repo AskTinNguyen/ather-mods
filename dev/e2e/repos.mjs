@@ -1532,6 +1532,62 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- Home in Simple and Advanced views (simple-view)
+
+{
+  const { web } = makeWorkspace()
+  writeIntent(web, 'login')
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0030' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', 'intent login')
+  await engine.command('ather')
+  const home = () => engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  const keysOf = tree => new Set(nodesOf(tree).map(node => node.props?.key).filter(Boolean))
+  const hotkeysOf = tree => nodesOf(tree).filter(node => node.type === 'Button' && node.props?.hotkey).map(node => node.props.hotkey)
+  // The parts this fixture draws in Advanced (no workers run here): the stage track, the meta line, the strip, quick actions, Everything open, Heading off?, Stepping out?.
+  const PARTS = ['stages', 'meta', 'strip', 'actions', 'all', 'away', 'warm']
+  const advanced = await home()
+  expect('A3: Home opens in Advanced with all those parts and Next, and a quiet "Simple view" button keyed v', PARTS.every(key => keysOf(advanced).has(key)) && keysOf(advanced).has('next-section') && buttonOf(advanced, 'view-toggle')?.props.label === 'Simple view' && buttonOf(advanced, 'view-toggle')?.props.hotkey === 'v', PARTS.filter(key => !keysOf(advanced).has(key)))
+
+  buttonOf(advanced, 'view-toggle').props.onPress()
+  await engine.flush()
+  const simple = await home()
+  expect('A2: Simple leaves out the strip, quick actions, the track, the meta line, workers, previews and Stepping out?; keeps the title and Next', PARTS.every(key => !keysOf(simple).has(key)) && keysOf(simple).has('title') && keysOf(simple).has('next-section') && buttonOf(simple, 'view-toggle')?.props.label === 'Advanced view', [...keysOf(simple)])
+  expect('A4: the press is kept for the person', engine.store.get('view:tinnguyen') === 'simple', engine.store.get('view:tinnguyen'))
+  expect('A6: every key on Simple and Advanced Home is drawn once', [advanced, simple].every(tree => new Set(hotkeysOf(tree)).size === hotkeysOf(tree).length), [hotkeysOf(advanced), hotkeysOf(simple)])
+
+  const next = await boot({ root: web, sessionId: 'harness-session-0031', kept: engine.store })
+  next.engine.setSurfaces(['terminal'])
+  await next.engine.command('ather')
+  const again = await next.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  expect('A4: a new session opens Home in the view the person chose', !keysOf(again).has('warm') && buttonOf(again, 'view-toggle')?.props.label === 'Advanced view', [...keysOf(again)])
+
+  const said = String((await next.engine.command('ather', 'advanced'))?.text ?? '')
+  const back = await next.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  expect('A5: /ather advanced brings everything back and says how to go simple', /\/ather simple/.test(said) && keysOf(back).has('warm') && next.engine.store.get('view:tinnguyen') === 'advanced', [said, next.engine.store.get('view:tinnguyen')])
+  const simpleSaid = String((await next.engine.command('ather', 'simple'))?.text ?? '')
+  expect('A5: /ather simple shows less and says how to go back', /\/ather advanced/.test(simpleSaid) && next.engine.store.get('view:tinnguyen') === 'simple', simpleSaid)
+
+  // Group in Everything open is remembered the same way (one shared helper): pressed, kept, read by the next session.
+  await next.engine.command('ather', 'pick')
+  const pick = () => next.engine.render('Pane', { bodyColumns: 110 }, 'ather')
+  buttonOf(await pick(), 'pick-group')?.props.onPress()
+  await next.engine.flush()
+  const grouped = buttonOf(await pick(), 'pick-group')?.props.label
+  const third = await boot({ root: web, sessionId: 'harness-session-0032', kept: next.engine.store })
+  third.engine.setSurfaces(['terminal'])
+  await third.engine.command('ather', 'pick')
+  const regrouped = buttonOf(await third.engine.render('Pane', { bodyColumns: 110 }, 'ather'), 'pick-group')?.props.label
+  expect('Group is kept for the person and read by a new session, as the view is', grouped === 'Group: Area' && next.engine.store.get('groupBy:tinnguyen') === 'area' && regrouped === 'Group: Area', [grouped, next.engine.store.get('groupBy:tinnguyen'), regrouped])
+  await third.engine.end('other')
+  await next.engine.command('ather')
+  const desk = await next.engine.render('Pane', { bodyColumns: 110 }, 'ather', 'desktop')
+  expect('A6: on the desktop the toggle is a button with no key drawn', buttonOf(desk, 'view-toggle')?.props.hotkey === undefined && buttonOf(desk, 'view-toggle')?.props.label === 'Advanced view', buttonOf(desk, 'view-toggle')?.props)
+  expect('no hook threw', engine.record.hookErrors.length === 0 && next.engine.record.hookErrors.length === 0, [engine.record.hookErrors, next.engine.record.hookErrors])
+  await engine.end('other')
+  await next.engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })

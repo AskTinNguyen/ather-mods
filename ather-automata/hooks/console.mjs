@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
+import { CREATE_SHOWN, VIEW_LABELS, isShownIn, otherView, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
@@ -81,10 +81,40 @@ let intentBack = /** @type {'home' | 'pick'} */ ('home')
 // (read from the person's stored choice once a session), and the heads pressed to fold or unfold.
 let pickQuery = ''
 let pickSort = /** @type {import('./worklist.mjs').Sort} */ ('recent')
-let pickGroup = /** @type {import('./worklist.mjs').GroupBy} */ ('person')
-let isGroupRead = false
-// Presses of Group: a stored choice read back after a press does not undo it.
-let groupPresses = 0
+// A choice remembered for the person (Group, Home's view): read from the store once a session; a press
+// made before the read lands is not undone by it.
+/** @template T @param {T} initial @param {(io: import('./state.mjs').Io, me: string) => Promise<T>} read @param {(io: import('./state.mjs').Io, me: string, value: T) => Promise<unknown>} write */
+const remembered = (initial, read, write) => {
+  let value = initial
+  let isRead = false
+  let presses = 0
+  return {
+    get value() {
+      return value
+    },
+    reset() {
+      value = initial
+      isRead = false
+    },
+    /** @param {import('./state.mjs').Io} store */
+    async readOnce(store) {
+      if (isRead) return
+      const before = presses
+      const stored = await read(store, me).catch(() => value)
+      if (presses === before) value = stored
+      isRead = true
+    },
+    /** @param {import('./state.mjs').Io} store @param {T} next */
+    pick(store, next) {
+      value = next
+      presses += 1
+      isRead = true
+      return write(store, me, next).catch(() => undefined)
+    },
+  }
+}
+const pickGroup = remembered(/** @type {import('./worklist.mjs').GroupBy} */ ('person'), state.readGroupBy, state.setGroupBy)
+const homeView = remembered(/** @type {import('./home.mjs').PaneView} */ ('advanced'), state.readPaneView, state.setPaneView)
 /** @type {Set<string>} */
 const pickFolded = new Set()
 // Needs you's intents opened to show each of their decisions.
@@ -469,7 +499,8 @@ async function drawPane($, e) {
   isDrawn = true
   void syncMain($)
   if (paneMode === 'intent') await readIntentView($)
-  if (paneMode === 'pick' && !isGroupRead) await readGroup($)
+  if (paneMode === 'pick') await pickGroup.readOnce(io($))
+  await homeView.readOnce(io($))
   return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
 }
 
@@ -498,8 +529,8 @@ async function openConsole($, folder) {
   pickQuery = ''
   pickSort = 'recent'
   pickFolded.clear()
-  pickGroup = 'person'
-  isGroupRead = false
+  pickGroup.reset()
+  homeView.reset()
   callsOpen.clear()
   answerState = { ...FRESH_ANSWERS }
   findingShown = ''
@@ -1353,7 +1384,7 @@ async function skipTour($) {
 }
 
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'simple', 'advanced']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -1362,6 +1393,7 @@ async function atherCommand($, args) {
   if (word === 'tour' || word === 'tours') return startTour($)
   if (word === 'skip') return skipTour($)
   if (word === 'untrack' && rest === '') return untrackHere($)
+  if ((word === 'simple' || word === 'advanced') && rest === '') return pickView($, word)
   if (word === 'find') {
     if (rest) setSearch($, rest)
     if (await hasPane($)) return openPane($, 'pick')
@@ -1620,19 +1652,17 @@ function setSearch($, text) {
 // Group: Person → Area → Stage → None, remembered for the person (folds are not).
 /** @param {Engine} $ */
 function cycleGroup($) {
-  pickGroup = nextGroup(pickGroup)
-  groupPresses += 1
-  isGroupRead = true
+  void pickGroup.pick(io($), nextGroup(pickGroup.value))
   $.ui.invalidate('ui.render')
-  void state.setGroupBy(io($), me, pickGroup).catch(() => undefined)
 }
 
-/** @param {Engine} $ */
-async function readGroup($) {
-  const pressesBefore = groupPresses
-  const stored = await state.readGroupBy(io($), me).catch(() => pickGroup)
-  if (groupPresses === pressesBefore) pickGroup = stored
-  isGroupRead = true
+// Simple or Advanced, remembered for the person.
+/** @param {Engine} $ @param {import('./home.mjs').PaneView} view */
+async function pickView($, view) {
+  const written = homeView.pick(io($), view)
+  $.ui.invalidate('ui.render')
+  await written
+  return view === 'simple' ? 'Simple view: what needs you and what is next. /ather advanced shows everything.' : 'Advanced view: everything Ather shows. /ather simple shows less.'
 }
 
 /** @param {Engine} $ */
@@ -1945,9 +1975,9 @@ function paneView(el, $, model, columns, surface, crew = []) {
       : Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: hasInput ? () => ((isSearchOpen = true), $.ui.invalidate('ui.render')) : press($, () => searchQuestion($), true) })
     const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
     const sort = Button({ key: 'pick-sort', label: `Sort: ${SORT_LABELS[pickSort]}`, hotkey: hotkeyFor('o'), plain: true, onPress: () => cycleSort($) })
-    const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
+    const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup.value]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
     rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
-    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
+    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup.value, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
     rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
     return Box({ flexDirection: 'column', children: rows })
   }
@@ -2125,40 +2155,47 @@ function paneView(el, $, model, columns, surface, crew = []) {
   const title = isUntracked ? (model.isNewcomer ? 'Welcome' : 'What next?') : header.title
   const status = [header.stage, header.progress, header.sentence === 'waiting on you' ? '' : header.sentence].filter(Boolean).join(' · ')
   const meta = [header.role, header.proof, header.lock, header.week].filter(Boolean).join(' · ')
+  // Home's parts by name, each drawn only when the person's view shows it (simple-view D2).
+  /** @type {[import('./home.mjs').HomePart, any[]][]} */
+  const parts = []
+  const shown = (/** @type {[import('./home.mjs').HomePart, any[]][]} */ list) => list.filter(([part]) => isShownIn(homeView.value, part)).flatMap(([, nodes]) => nodes)
   rows.push(
     masthead(
       el,
-      [
+      shown([
         // The pane's title bar names Ather: no brand line repeats it (D7).
-        isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') }),
-        headerLine(el, $, model.sync, status, width),
-        ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
-        ...(meta ? [metaRow(el, header)] : []),
-      ].filter(Boolean),
+        ['title', [isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') })]],
+        ['status', [headerLine(el, $, model.sync, status, width)]],
+        ['stages', header.stages.length > 0 ? [stageRow(el, header.stages)] : []],
+        ['meta', meta ? [metaRow(el, header)] : []],
+      ]).filter(Boolean),
       surface,
     ),
   )
-  rows.push(summaryStrip(el, model, crew, isClicked))
+  parts.push(['strip', [summaryStrip(el, model, crew, isClicked)]])
   // Needs you and Needs attention share the digit keys.
   let digits = 0
   const digit = () => (digits < 9 ? String(++digits) : undefined)
   if (model.actions.length > 0) {
     // Start something new, or run the skill that fits now: one press each.
-    rows.push(Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => toldText(handOff($, [one.id], one.prompt ?? ''), `sent to the session: ${one.label.replace(/^\S+ /, '')}`), false) })) }))
+    parts.push(['actions', [Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => toldText(handOff($, [one.id], one.prompt ?? ''), `sent to the session: ${one.label.replace(/^\S+ /, '')}`), false) })) })]])
   }
 
   if (model.items.length > 0) {
-    rows.push(
-      section(el, 'needs', [
+    parts.push([
+      'needs',
+      [
+        section(el, 'needs', [
         label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width, LIME),
         ...needsRows(el, isClicked, { items: model.items, open: model.open, queued: new Set(outbox.queued()), onNow: one => (one.kind === 'review' ? press($, () => sendNow($), true) : undefined), opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), one.kind === 'review' ? isReviewQueued : false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
-      ]),
-    )
+        ]),
+      ],
+    ])
   }
 
   if (model.attention.length > 0) {
     // The person's own intents that want a press; each opens its intent, nothing is done for them.
-    rows.push(section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.key, 'home') }))]))
+    parts.push(['attention', [section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.key, 'home') }))])]])
   }
 
   const next = model.next
@@ -2173,22 +2210,23 @@ function paneView(el, $, model, columns, surface, crew = []) {
       paddingX: 1,
       children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: next.look === undefined ? press($, () => doNext($, next), next.work?.kind === 'intent') : viewIntent($, next.look, 'home') })),
     })
-    rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card]))
+    parts.push(['next', [section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card])]])
   }
 
-  rows.push(...crewSections(el, { crew, width, isClicked, onWorker: one => askWorker($, one) }))
+  parts.push(['crew', crewSections(el, { crew, width, isClicked, onWorker: one => askWorker($, one) })])
 
-  rows.push(...homePreview(el, lookOf($, width, 'home'), { own: model.own, team: model.teamPreview, isNewcomer: model.isNewcomer, me, onAll: show($, 'pick') }))
+  parts.push(['preview', homePreview(el, lookOf($, width, 'home'), { own: model.own, team: model.teamPreview, isNewcomer: model.isNewcomer, me, onAll: show($, 'pick') })])
 
   if (model.offerAway) {
     const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: isClicked ? undefined : true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
-    rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
+    parts.push(['away', [section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })])]])
   }
 
   // Beside Heading off? and at any hour: keep the prompt cache warm while the person steps out, as the row's ◔ does.
   const warm = warmPaneText(warmStore.readWarmView())
-  rows.push(section(el, 'warm', [label(el, 'warm-label', 'Stepping out?', width), Text({ key: 'warm-pitch', color: warm.action === 'Stop keeping warm' ? undefined : QUIET, wrap: 'wrap', children: warm.text }), ...(warm.action ? [Button({ key: 'warm-toggle', label: warm.action, hotkey: hotkeyFor('w'), plain: isClicked ? undefined : true, onPress: () => void pressWarm($) })] : [])]))
+  parts.push(['warm', [section(el, 'warm', [label(el, 'warm-label', 'Stepping out?', width), Text({ key: 'warm-pitch', color: warm.action === 'Stop keeping warm' ? undefined : QUIET, wrap: 'wrap', children: warm.text }), ...(warm.action ? [Button({ key: 'warm-toggle', label: warm.action, hotkey: hotkeyFor('w'), plain: isClicked ? undefined : true, onPress: () => void pressWarm($) })] : [])])]])
+  parts.push(['view', [section(el, 'view', [Button({ key: 'view-toggle', label: VIEW_LABELS[otherView(homeView.value)], hotkey: hotkeyFor('v'), plain: true, dimColor: true, onPress: () => void pickView($, otherView(homeView.value)) })])]])
 
-  rows.push(...foot)
+  rows.push(...shown(parts), ...foot)
   return Box({ flexDirection: 'column', children: rows })
 }
