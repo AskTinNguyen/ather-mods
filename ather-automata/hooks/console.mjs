@@ -25,6 +25,8 @@ import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
 import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncError, syncSummary, syncText } from './team.mjs'
 import { checkoutNames, checkoutOf, normalFolder } from './workspace.mjs'
+import { overlapJob, readOverlaps } from './overlap.mjs'
+import { collisionsFor } from './collide.mjs'
 import { forBase } from './guards.mjs'
 import { withFolders } from './shell.mjs'
 import { nextGroup, nextSort } from './worklist.mjs'
@@ -610,6 +612,7 @@ function refresh($) {
     } finally {
       reading = null
     }
+    void checkCollision($).catch(error => $.ui.log(`Ather: the overlap check failed: ${String(error)}`, { to: 'debug' }))
     return drew
   })()
   return reading
@@ -748,6 +751,35 @@ async function syncMain($, isAsked = false) {
   }
 }
 
+// This checkout's own branch against origin's base (collision-alert), checked in the background after each read of
+// the intents (a turn's end, a fetch, /ather), one run at a time; Needs you shows what it last found. Its own tip
+// is compared, so commits not pushed yet count. Detached, on the base, or outside git: nothing to check.
+const collisions = overlapJob()
+/** @type {import('./collide.mjs').Collision | null} */
+let collision = null
+
+/** @param {Engine} $ */
+async function checkCollision($) {
+  const { root, base } = await wordsLane($)
+  // The tip, then the branch's name ('HEAD' when detached).
+  const head = await repo($, root).git(['rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'])
+  const [tip = '', branch = ''] = head.exitCode === 0 ? head.stdout.trim().split('\n') : []
+  if (!tip || branch === 'HEAD' || branch === base) return showCollision($, null)
+  // The work is named by the tracked intent when there is one, else by its branch.
+  const key = await trackedKey($)
+  const here = { key: 'here', slug: intents.find(one => one.key === key)?.slug ?? branch, owner: me, stage: '', branch }
+  await collisions.run(cache => readOverlaps(repo($, root), { base, sides: [{ key: here.key, branch, tip }], cache }), read => showCollision($, collisionsFor(read.overlaps, side => (side === here.key ? here : null), base)[0] ?? null))
+}
+
+// What the check found, drawn only when it changed.
+/** @param {Engine} $ @param {import('./collide.mjs').Collision | null} found */
+function showCollision($, found) {
+  if (JSON.stringify(found) === JSON.stringify(collision)) return
+  collision = found
+  stale()
+  $.ui.invalidate('ui.render')
+}
+
 // Where the pane's checkouts' fetches stand, as one: the sync line's.
 function syncShown() {
   return syncSummary(checkouts.map(({ root }) => syncs.get(root) ?? NO_SYNC))
@@ -863,6 +895,7 @@ async function buildView($) {
     away,
     ledger: away.phase === 'off' ? '' : ((await files.read(away.ledgerPath)) ?? ''),
     lost: await state.readLost(files),
+    collision,
     lock: await namedLock($, root, chosen.parseLock(chosen.lockFile ? await files.read(`${root}/${chosen.lockFile}`) : null, localMinutes(now, tz))),
     recurring: await state.readRecurring(files, chosen),
     issues: (await paneIssues($)).sort(issueOrder),
@@ -942,6 +975,8 @@ function bandHint(model) {
   // Handed over while a turn runs: the session has not read it yet.
   const queued = outbox.queued().length
   if (queued > 0) return `⏳ ${queued === 1 ? 'Your press is' : `${queued} presses are`} queued until this turn ends · /ather`
+  const collide = model.open.find(one => one.kind === 'collide')
+  if (collide) return `▲ ${collide.question} · /ather`
   if (model.isNewcomer) return '◆ New here? Take the tour'
   if (model.open.length > 0) return `◆ ${header.title} · ${model.open.length} need${model.open.length === 1 ? 's' : ''} you · /ather`
   return ''

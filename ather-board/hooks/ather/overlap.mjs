@@ -1,15 +1,17 @@
 // @ts-check
 // Ather Automata: open work that changes the same lines (overlap-check D1-D6). Which open intents'
 // branches to compare, with the base branch and with each other, and what `git merge-tree` says of
-// each pair: the files in conflict, where in them, and each side's first changed line. The board
-// draws it (ather-board). Pure: git comes through a Repo (team.mjs) built where `$` lives. Every call
-// here reads, never the working tree or the index; the one fetch writes only remote-tracking refs.
+// each pair: the files in conflict, where in them, and each side's first changed line. Ather Board
+// draws it, and so does Needs you for this checkout's own branch (collide.mjs words both). Pure: git
+// comes through a Repo (team.mjs) built where `$` lives. Every call here reads, never the working tree
+// or the index; the one fetch writes only remote-tracking refs.
 
 import { FETCH_TIMEOUT_MS, INTENTS, complaintOf, fetchArgs, slugOf } from './team.mjs'
 
 /**
  * @typedef {import('./team.mjs').Repo} Repo
- * @typedef {{ key: string, branch: string }} Side an open intent and the branch its work is on
+ * @typedef {{ key: string, branch: string, tip?: string }} Side a piece of open work and the branch it is on: an intent, or this checkout's
+ *   branch with its own `tip` (collision-alert), which needs no copy on origin
  * @typedef {{ path: string, line: number, kind: 'lines' | 'binary' | 'deleted', ours: string, theirs: string }} Spot one place both sides changed.
  *   'lines': `line` is where it starts in the first side's file, `ours` and `theirs` each side's first changed line;
  *   'binary': a file git cannot merge by lines; 'deleted': one side deleted the file the other changed (`ours`, `theirs`: 'changed' or 'deleted')
@@ -201,7 +203,7 @@ const broughtBy = async (repo, sha, base) => {
 
 /**
  * The overlaps among the sides and the base branch, from what this clone has fetched (D3, D6). A branch
- * origin does not have, or the base itself, is not compared. Each branch's files and each merge are kept by
+ * origin does not have (unless its side brings its own tip), or the base itself, is not compared. Each branch's files and each merge are kept by
  * their tips, so an unchanged pair is never merged twice. The git calls run one after another on purpose:
  * this runs in the background beside the person's own git, and a large checkout should feel none of it.
  * New git work starts only within `budgetMs` (overlap-hardening D1), counted from the first of it, so each run makes
@@ -215,10 +217,10 @@ export const readOverlaps = async (repo, { base, sides, cache, budgetMs = BUDGET
   if (!canMergeTree(known)) return { overlaps: [], note: known ? `git ${known.join('.')} cannot check overlaps (needs ${MIN_GIT.join('.')})` : '', cache: { ...cache, version: known ? version : '' }, isPartial: false }
   const tips = await remoteTips(repo)
   const baseTip = tips.get(base)
-  const present = sides.filter(side => side.branch !== base && tips.has(side.branch))
+  const present = sides.filter(side => side.branch !== base && (side.tip || tips.has(side.branch)))
   if (!baseTip || present.length === 0) return { overlaps: [], note: '', cache: { version, files: new Map(), merges: new Map() }, isPartial: false }
   /** @type {Map<string, string>} each side's tip, and the base's under '' */
-  const tipOf = new Map([['', baseTip], ...present.map(side => /** @type {[string, string]} */ ([side.key, tips.get(side.branch) ?? '']))])
+  const tipOf = new Map([['', baseTip], ...present.map(side => /** @type {[string, string]} */ ([side.key, side.tip || (tips.get(side.branch) ?? '')]))])
   const tip = (/** @type {string} */ key) => tipOf.get(key) ?? ''
   const started = now()
   const isOver = () => now() - started > budgetMs
@@ -248,6 +250,44 @@ export const readOverlaps = async (repo, { base, sides, cache, budgetMs = BUDGET
     if (merged) overlaps.push({ key: pairKey(a, b), a, b, ...merged })
   }
   return { overlaps, note: '', cache: { version, files, merges }, isPartial: byKey.size < present.length || merges.size < pairs.length }
+}
+
+/**
+ * The overlap check as a background job, one run at a time (D6): asked for while one runs, one more follows it,
+ * with the newest ask's `read` and `onRun`; a run that ran out of time (overlap-hardening D1) is followed by the
+ * next. Each run goes on from the last one's cache, and `onRun` hears it (to draw what it found). The promise
+ * settles with the last run's answer once no run is left, or with the error that stopped it.
+ * @returns {{ run: (read: (cache: OverlapCache) => Promise<OverlapRead>, onRun: (read: OverlapRead) => void) => Promise<OverlapRead>, last: () => OverlapRead }}
+ */
+export const overlapJob = () => {
+  /** @type {OverlapRead} */
+  let last = { overlaps: [], note: '', cache: EMPTY_OVERLAPS, isPartial: false }
+  /** @type {Promise<OverlapRead> | null} */
+  let running = null
+  /** @type {{ read: (cache: OverlapCache) => Promise<OverlapRead>, onRun: (read: OverlapRead) => void } | null} */
+  let asked = null
+  return {
+    run: (read, onRun) => {
+      if (running) {
+        asked = { read, onRun }
+        return running
+      }
+      running = (async () => {
+        try {
+          for (let ask = { read, onRun }; ; ask = asked ?? ask) {
+            asked = null
+            last = await ask.read(last.cache)
+            ask.onRun(last)
+            if (!asked && !last.isPartial) return last
+          }
+        } finally {
+          running = null
+        }
+      })()
+      return running
+    },
+    last: () => last,
+  }
 }
 
 /**

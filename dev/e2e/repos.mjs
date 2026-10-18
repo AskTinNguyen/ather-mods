@@ -1,13 +1,14 @@
 // End-to-end run of the Ather Automata hooks module over several real git checkouts: an S2
 // checkout and a web checkout side by side, each with a local bare origin, some with worktrees,
-// driven through the stand-in engine. Needs no S2_ROOT. `node repos.mjs [report.md]`.
+// driven through the stand-in engine. Needs no S2_ROOT. `node repos.mjs [report.md] [--out <dir>]`: `--out` writes
+// the pane and the band as text when this checkout's branch collides with origin/main (collision-alert).
 import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { aborts, createEngine } from './engine.mjs'
-import { byKey, checks, join, nodesOf, sandbox } from './harness.mjs'
+import { byKey, checks, join, nodesOf, runArgs, sandbox, until, writeDrawn } from './harness.mjs'
 
-const OUT = process.argv[2]
+const { report: REPORT, out: OUT } = runArgs()
 const { register } = await import('./out/hooks/ather.mjs')
 
 const BASE = sandbox('ather-checkouts-')
@@ -47,6 +48,16 @@ const advanceOrigin = root => {
   git(other, '-c', 'user.name=Lam Phung', '-c', 'user.email=lam@example.com', 'commit', '-q', '--allow-empty', '-m', 'teammate')
   git(other, 'push', '-q', 'origin', 'main')
   return git(other, 'rev-parse', 'HEAD')
+}
+
+// The session's merge of origin/main into the checkout's branch, the conflict resolved by hand.
+const spawnMerge = root => {
+  try {
+    git(root, 'merge', '-q', 'origin/main')
+  } catch {
+    fs.writeFileSync(join(root, 'src/a.js'), 'export const scale = 1\n')
+    git(root, 'commit', '-q', '-am', 'merge main')
+  }
 }
 
 // docs/intent with a file in it, so git keeps the folder.
@@ -1578,7 +1589,55 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await next.engine.end('other')
 }
 
+// ---------------------------------------------------------------- this checkout's branch against origin/main (collision-alert)
+
+{
+  const parent = fs.mkdtempSync(join(BASE, 'collide-'))
+  const web = makeCheckout(parent, 'web', { owner: 'AskTinNguyen', name: 'web', files: { ...INTENTS, 'src/a.js': 'export const scale = 1\n' } })
+  git(web, 'checkout', '-q', '-b', 'feat/x')
+  // A commit here, never pushed, and a teammate's push to main on the same line.
+  fs.writeFileSync(join(web, 'src/a.js'), 'export const scale = 2\n')
+  git(web, 'commit', '-q', '-am', 'scale up')
+  const origin = git(web, 'remote', 'get-url', 'origin')
+  const other = fs.mkdtempSync(join(BASE, 'other-'))
+  git(other, 'clone', '-q', origin, '.')
+  fs.writeFileSync(join(other, 'src/a.js'), 'export const scale = 0.5\n')
+  git(other, '-c', 'user.name=Lena Park', '-c', 'user.email=lena@example.com', 'commit', '-q', '-am', 'scale down')
+  git(other, 'push', '-q', 'origin', 'main')
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0060' })
+  engine.setSurfaces(['terminal'])
+  await engine.command('ather', '')
+  const pane = (surface = 'terminal') => engine.render('Pane', { bodyColumns: 110 }, 'ather', surface)
+  const ID = 'collide:feat/x:src/a.js:1'
+  const seen = await until(async () => Boolean(byKey(await pane(), `item-${ID}`)))
+  const home = await pane()
+  const row = textIn(byKey(home, 'needs'))
+  expect('after the fetch, Needs you says feat/x overlaps origin/main, with what changed it and where', seen && buttonOf(home, `item-${ID}`)?.props.label === 'Bring origin/main into feat/x' && /▲ 1 overlap: origin\/main changed these lines .*ago \(Lena Park\)\. src\/a\.js:1/.test(row), [buttonOf(home, `item-${ID}`)?.props.label, row])
+  const band = textIn(await engine.render('AbovePrompt', {}, 'band'))
+  expect('the line above the prompt says it with ▲', /▲ feat\/x no longer merges cleanly into origin\/main · \/ather/.test(band), band)
+  if (OUT) {
+    for (const width of [110, 72]) writeDrawn(OUT, 'collide-advanced', await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
+    writeDrawn(OUT, 'collide-band', await engine.render('AbovePrompt', {}, 'band'), 110)
+  }
+  await engine.command('ather', 'simple')
+  if (OUT) for (const width of [110, 72]) writeDrawn(OUT, 'collide-simple', await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
+  const simple = await pane()
+  expect('the Simple view shows it too', Boolean(byKey(simple, `item-${ID}`)), textIn(byKey(simple, 'needs')))
+  const before = engine.record.submits.length
+  byKey(simple, `item-${ID}`)?.props.onPress()
+  await engine.flush()
+  const handed = engine.record.submits.slice(before).join('\n')
+  expect('the press hands the session the merge to do: origin/main into feat/x, each place named, nothing pushed', /^The branch feat\/x no longer merges cleanly into origin\/main: src\/a\.js:1 \(main: export const scale = 0\.5; feat\/x: export const scale = 2\)\. Merge origin\/main into feat\/x/.test(handed) && /Do not push until I say\.$/.test(handed), handed)
+  // The session brings main in; the next read finds nothing to bring.
+  spawnMerge(web)
+  await engine.turnEnd()
+  const cleared = await until(async () => !nodesOf(await pane()).some(node => /^item-collide:/.test(node.props?.key ?? '')))
+  expect('once main is merged in, the item leaves Needs you', cleared, textIn(byKey(await pane(), 'needs')))
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 fs.rmSync(BASE, { recursive: true, force: true })
-finish({ title: 'Ather Automata across checkouts', report: OUT })
+finish({ title: 'Ather Automata across checkouts', report: REPORT })

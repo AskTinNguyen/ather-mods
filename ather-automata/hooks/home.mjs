@@ -3,6 +3,7 @@
 // the person picks something. Pure: no `$`.
 
 import { windowDecisions } from './away.mjs'
+import { bringPrompt, collisionFact, moreText, overlapCount, spotLabel } from './collide.mjs'
 import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
 import { issueId, issueLabel, issuePrompt } from './issues.mjs'
 import { STAGE_LABELS, clockText, currentStage, cutWords, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural, prStatusList, shortTitle, waitingCalls } from './model.mjs'
@@ -120,7 +121,7 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * says what else changes once it has been delivered (see settleItem in state.mjs).
  * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string, answers?: import('./decide.mjs').Answers }} ItemText `detail`: the pane's second line under `label`; `answers`: what answers it in place (0.2.0)
  * A call's `slug` is its intent's key in the pane.
- * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
+ * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'collide' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
 
 /**
@@ -136,10 +137,12 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * @typedef {{
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
+ *   collision?: import('./collide.mjs').Collision | null,
  *   lock: import('./model.mjs').EditorLock, recurring: readonly { id: string, title: string, fix: string, count: number }[],
  *   issues: readonly import('./issues.mjs').Issue[], last?: string | null, sent: readonly string[], workers: number, now: number, tz: number,
  *   skills?: readonly { name: string, description: string }[], prs?: import('./model.mjs').PrStates, week?: Week | null, pack?: Pack
- * }} HomeInput `pinned` and `last`: intents' keys (the tracked one, and the one the person last worked on)
+ * }} HomeInput `pinned` and `last`: intents' keys (the tracked one, and the one the person last worked on); `collision`: this checkout's
+ *   branch against origin's base, where they no longer merge cleanly (collision-alert)
  */
 
 /**
@@ -277,6 +280,15 @@ export const buildHome = input => {
     const paths = input.lost.paths
     const named = `${(paths[0] ?? '').split('/').pop()?.replace(/\.(uasset|umap)$/i, '') ?? ''}${paths.length > 1 ? ` and ${plural(paths.length - 1, 'more')}` : ''}`
     items.push({ kind: 'lost', id: 'lost', label: 'See what a merge lost', title: `A merge dropped your edits to ${named}`, question: `A merge dropped your edits to ${named}`, prompt: `The last merge kept the other side of these binary assets, so this branch's edits to them are gone: ${paths.join(', ')}. List them for me, itemised, each marked as a lost optimisation or a broken feature, and propose how to re-apply each.` })
+  }
+  // This checkout's branch no longer merges into origin's base: named by its places, the press brings the base in.
+  // Its id changes with the places, so one already handed over comes back only when they change.
+  const collision = input.collision
+  if (collision) {
+    const { a, b } = collision
+    const places = [...collision.spots.map(spot => spotLabel(collision, spot)), moreText(collision)].filter(Boolean).join(', ')
+    const name = `${b.branch} no longer merges cleanly into origin/${a.slug}`
+    items.push({ kind: 'collide', id: `collide:${b.branch}:${collision.files.join('|')}:${collision.count}`, label: `Bring origin/${a.slug} into ${b.branch}`, title: name, detail: `${overlapCount(collision.count)}: ${collisionFact(collision, now)} ${places}`, question: name, prompt: bringPrompt(collision) })
   }
   // A session that tracks an intent answers for that intent only: pressing another intent's call here would put it
   // in this session's chat. With nothing tracked, every call of yours is offered, each named by its intent.

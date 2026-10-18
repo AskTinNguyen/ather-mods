@@ -8,7 +8,8 @@
 
 import { AMBER, LIME, QUIET, fit, label, section, statusLine, workLine } from './ather/rows.mjs'
 import { BAR_CELLS, ageText, miniBar, rowColumns } from './ather/worklist.mjs'
-import { ACTION_LABELS, actionsFor, collisionActions } from './act.mjs'
+import { ACTION_LABELS, actionsFor } from './act.mjs'
+import { collisionActions } from './ather/collide.mjs'
 import { isMine } from './ather/model.mjs'
 import { paneView } from './focus.mjs'
 import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel, summaryText } from './views.mjs'

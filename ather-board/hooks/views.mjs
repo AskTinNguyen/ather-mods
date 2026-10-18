@@ -7,12 +7,14 @@
 // The HTML page runs these same functions in the browser: page.mjs writes each export into the
 // page by its source text, and each value as JSON. So every exported function is self-contained: it
 // names only other exports of this module, Ather's `ageText`, `miniBarSvg` and `BAR_CELLS` (imported,
-// and written into the page too, so both surfaces draw a row's age and bar alike) and the language's
-// own globals. The page test runs every one of them as written into the page.
+// and written into the page too, so both surfaces draw a row's age and bar alike), a collision's words
+// from Ather's collide.mjs (re-exported, so written into the page as well) and the language's own
+// globals. The page test runs every one of them as written into the page.
 
 import { BAR_CELLS, STAGE_BLOCKS, STAGE_GLYPHS, ageText, miniBarSvg } from './ather/worklist.mjs'
 
 export { BAR_CELLS, ageText, miniBarSvg }
+export { collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel } from './ather/collide.mjs'
 
 /**
  * @typedef {'plan' | 'build' | 'prove' | 'met' | 'parked' | 'done'} Stage
@@ -25,9 +27,9 @@ export { BAR_CELLS, ageText, miniBarSvg }
  *   source: 'main' | 'local', flags: Flag[], mentions: string[], branch: string, collisions: Collision[]
  * }} BoardRecord one intent as the board reads it (records.mjs); `calls`: its open findings waiting on a decision;
  *   `mentions`: the other intents its files name; `branch`: its Branch line; `collisions`: the overlaps it is a side of (records.mjs withCollisions)
- * @typedef {{ key: string, slug: string, owner: string, stage: Stage | '', branch: string }} Party one side of a collision: an intent, or the base
+ * @typedef {import('./ather/collide.mjs').Party<Stage>} Party one side of a collision: an intent, or the base
  *   branch (`key` '', `slug` the branch's name, `owner` its last author on the files, `stage` '')
- * @typedef {{ key: string, a: Party, b: Party, files: string[], spots: import('./ather/overlap.mjs').Spot[], count: number, base: { at: number, via: string[] } | null }} Collision
+ * @typedef {import('./ather/collide.mjs').Collision<Stage>} Collision
  *   two pieces of work that change the same lines (overlap.mjs): the base, when it is a side, is always `a`, and `base` says when it last
  *   changed the files and the intents whose merge brought that change (overlap-hardening D2); null for two intents
  * @typedef {{ id: string, title: string, options: { letter: string, label: string, text: string, isRecommended: boolean }[] }} Call a decision waiting: its options as the finding writes them (model.mjs parseOptions); none for an open question
@@ -294,31 +296,6 @@ export const withColliding = (groups, records, { key, note, isDecisions }) => {
 // How many collisions some groups list.
 /** @param {readonly (IntentGroup | PairGroup)[]} groups */
 export const pairCount = groups => groups.reduce((sum, group) => sum + (group.kind === 'pairs' ? group.pairs.length : 0), 0)
-
-// A collision's words, the same on the pane, the page and in the prompts (overlap-check D5).
-/** @param {number} count */
-export const overlapCount = count => `▲ ${count} ${count === 1 ? 'overlap' : 'overlaps'}`
-// Its people, the intent's owner first, each once.
-/** @param {Collision} collision */
-export const collisionOwners = collision => [collision.b.owner, collision.a.owner].filter((owner, at, all) => owner !== '' && all.indexOf(owner) === at).join(', ')
-// What happened, in one clause: the base's last change to the files, or that neither side is merged.
-/** @param {Collision} collision @param {number} now */
-export const collisionFact = (collision, now) => {
-  const { a, base } = collision
-  if (!base) return 'Neither is merged yet: whichever merges second will conflict.'
-  const subject = base.via.length > 0 ? `${base.via.join(', ')} changed these lines on origin/${a.slug}` : `origin/${a.slug} changed these lines`
-  return `${subject}${base.at ? ` ${ageText(base.at, now)} ago` : ''}${a.owner ? ` (${a.owner})` : ''}.`
-}
-// A side's first changed line as shown: '(blank)' for an empty one.
-/** @param {string} line */
-export const sideLine = line => line || '(blank)'
-// The places past those kept: "and 3 more", '' for none.
-/** @param {Collision} collision */
-export const moreText = collision => (collision.count > collision.spots.length ? `and ${collision.count - collision.spots.length} more` : '')
-// A place: "path:line", or the file and what each side did to it.
-/** @param {Collision} collision @param {import('./ather/overlap.mjs').Spot} spot */
-export const spotLabel = (collision, spot) =>
-  spot.kind === 'lines' ? `${spot.path}:${spot.line}` : `${spot.path} · ${spot.kind === 'binary' ? 'binary, both changed' : `${collision.a.slug} ${spot.ours} it, ${collision.b.slug} ${spot.theirs} it`}`
 
 /**
  * What a view shows, as sections both surfaces draw; [] for Pulse (the page's own chart). `records`: recordsFor's.

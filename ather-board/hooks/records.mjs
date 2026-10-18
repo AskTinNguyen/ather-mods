@@ -4,6 +4,7 @@
 
 import { directorCalls, parseIntent, plural } from './ather/model.mjs'
 import { listStage, ownerName } from './ather/worklist.mjs'
+import { collisionsFor } from './ather/collide.mjs'
 import { DAY_MS, STALE_DAYS } from './views.mjs'
 
 /**
@@ -13,7 +14,6 @@ import { DAY_MS, STALE_DAYS } from './views.mjs'
  * @typedef {import('./ather/model.mjs').IntentFiles} IntentFiles
  * @typedef {import('./ather/packs/index.mjs').Pack} Pack
  * @typedef {import('./views.mjs').Party} Party
- * @typedef {import('./views.mjs').Collision} Collision
  * @typedef {import('./ather/overlap.mjs').Overlap} Overlap
  */
 
@@ -107,12 +107,7 @@ export const withCollisions = (records, overlaps, base) => {
     const one = byKey.get(key)
     return one ? { key, slug: one.slug, owner: one.owner, stage: one.stage, branch: one.branch } : null
   }
-  /** @type {Collision[]} */
-  const collisions = overlaps.flatMap(one => {
-    const a = one.a === '' ? { key: '', slug: base, owner: one.base?.who ?? '', stage: /** @type {const} */ (''), branch: base } : party(one.a)
-    const b = party(one.b)
-    return a && b ? [{ key: one.key, a, b, files: one.files, spots: one.spots, count: one.count, base: one.base ? { at: one.base.at, via: one.base.via } : null }] : []
-  })
+  const collisions = collisionsFor(overlaps, party, base)
   return records.map(record => {
     const its = collisions.filter(one => one.a.key === record.key || one.b.key === record.key)
     if (its.length === 0) return record
