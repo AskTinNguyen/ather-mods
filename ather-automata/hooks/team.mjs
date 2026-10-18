@@ -36,8 +36,9 @@ const INTENTS = 'docs/intent'
 // The fetch (D2): origin's base into origin/<base> by an explicit refspec (a narrowed remote.origin.fetch
 // would not move it otherwise), no tags, no FETCH_HEAD, no submodules, and no automatic gc or
 // maintenance: a background fetch in a shared checkout must not start a repack.
-/** @param {string} base */
-export const fetchArgs = base => ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', `+refs/heads/${base}:refs/remotes/${refOf(base)}`]
+// Several branches in one fetch, each into its own remote-tracking ref (the overlap check's, overlap.mjs).
+/** @param {...string} branches */
+export const fetchArgs = (...branches) => ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', 'origin', ...branches.map(branch => `+refs/heads/${branch}:refs/remotes/${refOf(branch)}`)]
 export const FETCH_ARGS = fetchArgs('main')
 export const FETCH_EVERY_MS = 10 * 60 * 1000
 // As long as the engine lets a process run: a slow fetch is not a failed one.
@@ -262,6 +263,10 @@ export const lockOf = text => {
   return path.includes('/.git/') ? path.slice(path.lastIndexOf('/.git/') + 6) : path.split('/').pop() ?? ''
 }
 
+// What a git run that failed says: its last line of complaint, else its exit code.
+/** @param {Ran} ran @param {string} command */
+export const complaintOf = (ran, command) => ((ran.stderr ?? '').trim().split('\n').pop() || `${command} exited with ${ran.exitCode}`).slice(0, 200)
+
 // Fetches origin's main, or the `base` given. Synced means git said so and origin/<base> resolves after it (`moved`: it moved).
 // On a failure: git's last line of complaint, and the lock it ran into, if any. `isAborted`: the app took the
 // run back, so nothing was tried.
@@ -271,8 +276,7 @@ export const fetchMain = async (repo, base = 'main') => {
   const ran = await repo.git(base === 'main' ? FETCH_ARGS : fetchArgs(base), { timeoutMs: FETCH_TIMEOUT_MS })
   const after = await shaOf(repo, refOf(base))
   if (ran.exitCode === 0 && after) return { error: '', lock: '', moved: after !== before }
-  const stderr = ran.stderr ?? ''
-  return { error: (stderr.trim().split('\n').pop() || `git fetch exited with ${ran.exitCode}`).slice(0, 200), lock: lockOf(stderr), moved: false, ...(ran.isAborted ? { isAborted: /** @type {const} */ (true) } : {}) }
+  return { error: complaintOf(ran, 'git fetch'), lock: lockOf(ran.stderr ?? ''), moved: false, ...(ran.isAborted ? { isAborted: /** @type {const} */ (true) } : {}) }
 }
 
 // One sync line for several checkouts: a failed fetch in any of them, else one running, else the least

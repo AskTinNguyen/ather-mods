@@ -2,6 +2,7 @@
 // Editor lock, the four stages and the one next step. Pure: no `$`.
 
 import { unreal } from './packs/unreal.mjs'
+import { branchNamed } from './shell.mjs'
 
 // The Unreal pack's names, kept here for the modules and tests that read them from the model.
 export { ROLES, ROLE_LABELS, OWNERS, AREAS, parseRole, parseEditorLock } from './packs/unreal.mjs'
@@ -441,6 +442,8 @@ export const parseIntent = (input, pack = unreal) => {
     area: normalizeArea(field(prompt, 'Area'), pack),
     owner: field(prompt, 'Owner'),
     issue: issueNumber(field(prompt, 'Issue')),
+    // The branch its work is on ("- Branch: `intent/login`"); '' for none or a template's placeholder.
+    branch: branchNamed(field(prompt, 'Branch').replace(/`/g, '')),
     status,
     // Why it is parked (or blocked): what follows the status word.
     statusNote: field(prompt, 'Status').replace(/^[a-z]+\s*[:\-–—]?\s*/i, '').trim(),

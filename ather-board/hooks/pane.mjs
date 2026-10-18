@@ -8,10 +8,10 @@
 
 import { AMBER, LIME, QUIET, fit, label, section, statusLine, workLine } from './ather/rows.mjs'
 import { BAR_CELLS, ageText, miniBar, rowColumns } from './ather/worklist.mjs'
-import { ACTION_LABELS, actionsFor } from './act.mjs'
+import { ACTION_LABELS, actionsFor, collisionActions } from './act.mjs'
 import { isMine } from './ather/model.mjs'
 import { paneView } from './focus.mjs'
-import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, summaryText } from './views.mjs'
+import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel, summaryText } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
@@ -19,6 +19,8 @@ import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, summaryText } 
  * @typedef {import('./views.mjs').Look} Look
  * @typedef {import('./views.mjs').Section} Section
  * @typedef {import('./views.mjs').IntentGroup} IntentGroup
+ * @typedef {import('./views.mjs').PairGroup} PairGroup
+ * @typedef {import('./views.mjs').Collision} Collision
  * @typedef {ReturnType<typeof rowColumns>} Columns
  * @typedef {import('./views.mjs').View} View
  * @typedef {{
@@ -26,14 +28,17 @@ import { GROUPS, PANE_VIEWS, SORTS, STAGES, VIEW_LABELS, choices, summaryText } 
  *   onPick: (by: 'owner' | 'area', value: string) => void, onRow: (record: BoardRecord) => () => void, onOpenPage: () => void, onPublish: () => void, onSync: () => void,
  *   onAction: (kind: import('./act.mjs').ActionKind, records: readonly BoardRecord[]) => void, onDecide: (record: BoardRecord, call: import('./views.mjs').Call, letter: string) => void,
  *   onSuggestion: (suggestion: Suggestion) => void, onBriefAgain: () => void, onMapAgain: () => void, onAsk: (question: string) => void, onClearAsk: () => void,
+ *   onPair: (collision: Collision) => () => void, onCollision: (action: { label: string, prompt: string }) => void,
  * }} Actions
  * @typedef {import('./focus.mjs').Suggestion} Suggestion
  * @typedef {{
  *   records: BoardRecord[], look: Look, width: number, isDesktop: boolean, now: number, title: string, fresh: string, error: string, note: string,
- *   me: string, opened: string, suggestions: Suggestion[], modules: import('./modules.mjs').Module[],
+ *   me: string, base: string, overlapNote: string, opened: string, suggestions: Suggestion[], modules: import('./modules.mjs').Module[],
  *   brief: import('./assist.mjs').Job<import('./brief.mjs').Brief | null>, asked: import('./assist.mjs').Job<import('./brief.mjs').Answer | null>,
  *   mapped: import('./assist.mjs').Job<import('./assist.mjs').Mapped>,
- * }} PaneModel `opened`: the key of the intent opened in place ('' none); `suggestions`: the brief's and the board's own, merged;
+ * }} PaneModel `opened`: the key of the intent or collision opened in place ('' none); `base`: the branch the team merges into;
+ *   `overlapNote`: why the overlap check could not run ('' when it did);
+ *   `suggestions`: the brief's and the board's own, merged;
  *   `brief`, `asked`, `mapped`: the model's jobs (assist.mjs)
  */
 
@@ -59,6 +64,60 @@ const cellsOf = (model, part, { record, flags }) => ({
   age: ageText(record.updatedAt, model.now),
   owner: part.hide === 'owner' ? record.area : record.owner,
 })
+
+// A collision as a row (overlap-check D5): the intent's glyph and the pair, the places in amber, the first file
+// quiet beside them (left out in a narrow pane, where the pair's names need the room; opened, the row lists every
+// file), then the base's last change and the owners, in the columns every row has.
+/** @param {PaneModel} model @param {Collision} collision @returns {import('./ather/worklist.mjs').RowCells} */
+const pairCells = (model, collision) => ({
+  glyph: glyphOf(collision.b.stage),
+  title: `${collision.b.slug} ⇄ ${collision.a.key === '' ? collision.a.slug : `${glyphOf(collision.a.stage)} ${collision.a.slug}`}`,
+  warn: overlapCount(collision.count),
+  repo: model.width < 90 ? '' : `${(collision.files[0] ?? '').split('/').pop()}${collision.files.length > 1 ? ` +${collision.files.length - 1}` : ''}`,
+  bar: '',
+  count: '',
+  age: collision.at ? ageText(collision.at, model.now) : '',
+  owner: collisionOwners(collision),
+})
+
+// A collision opened in place: what happened, each place with both sides' first changed line, and what can be done.
+/** @param {any} el @param {PaneModel} model @param {Actions} actions @param {Collision} collision @param {string} at */
+const pairOpened = (el, model, actions, collision, at) => {
+  const { a, b } = collision
+  const key = `${at}-${collision.key}-open`
+  const [next, ...rest] = collisionActions(collision, model.me, model.base)
+  const width = Math.max(a.slug.length, b.slug.length)
+  return el.Box({
+    key,
+    flexDirection: 'column',
+    width: '100%',
+    paddingLeft: 2,
+    marginBottom: 1,
+    children: [
+      el.Text({ key: `${key}-fact`, color: QUIET, wrap: 'wrap', children: collisionFact(collision, model.now) }),
+      ...collision.spots.flatMap((spot, index) => [
+        el.Text({ key: `${key}-spot-${index}`, bold: true, wrap: 'truncate', children: spotLabel(collision, spot) }),
+        ...(spot.kind === 'lines' ? [[a.slug, spot.ours], [b.slug, spot.theirs]].map(([who = '', line = ''], side) => el.Text({ key: `${key}-spot-${index}-${side}`, color: side === 0 ? QUIET : undefined, wrap: 'truncate', children: fit(`  ${who.padEnd(width)}  ${sideLine(line)}`, model.width - 2) })) : []),
+      ]),
+      ...(moreText(collision) ? [el.Text({ key: `${key}-more`, color: QUIET, children: moreText(collision) })] : []),
+      el.Box({ key: `${key}-acts`, flexDirection: 'row', flexWrap: 'wrap', gap: 2, marginTop: 1, children: [
+        ...(next ? [el.Button({ key: `collide-${collision.key}-${next.key}`, label: next.label, variant: 'primary', onPress: () => actions.onCollision(next) })] : []),
+        ...rest.map(one => el.Button({ key: `collide-${collision.key}-${one.key}`, label: one.label, plain: true, dimColor: true, onPress: () => actions.onCollision(one) })),
+      ] }),
+    ],
+  })
+}
+
+// The collisions as lines: the head, then a row a pair, opened in place on a press; the note when none could be checked.
+/** @param {any} el @param {PaneModel} model @param {Actions} actions @param {PairGroup} part @param {Columns} cols */
+const pairLines = (el, model, actions, part, cols) => [
+  withMeta(el, `${part.key}-head`, el.Text({ key: `${part.key}-title`, bold: true, children: part.title }), part.meta),
+  ...part.pairs.flatMap(collision => [
+    workLine(el, { key: `${part.key}-${collision.key}`, cells: pairCells(model, collision), cols, width: model.width, ownerColour: QUIET, onPress: actions.onPair(collision), isClicked: model.isDesktop }),
+    ...(model.opened === collision.key ? [pairOpened(el, model, actions, collision, part.key)] : []),
+  ]),
+  ...(part.pairs.length === 0 && part.empty ? [el.Text({ key: `${part.key}-empty`, color: QUIET, wrap: 'wrap', children: part.empty })] : []),
+]
 
 // A group of intents as lines: its head, then one anatomy, the right-hand columns (`cols`) lined up across
 // every group the view shows; Open items lists each intent's items under its row.
@@ -154,7 +213,7 @@ const briefSection = (el, model, actions) => {
 const labelSection = (el, model, actions, part, cols) =>
   section(el, part.key, [
     withMeta(el, `${part.key}-head`, label(el, `${part.key}-label`, part.title, model.width - part.meta.length - 2, part.isLoud ? LIME : undefined), part.meta),
-    ...part.groups.map(group => el.Box({ key: group.key, flexDirection: 'column', width: '100%', children: groupLines(el, model, actions, group, cols) })),
+    ...part.groups.map(group => el.Box({ key: group.key, flexDirection: 'column', width: '100%', children: group.kind === 'pairs' ? pairLines(el, model, actions, group, cols) : groupLines(el, model, actions, group, cols) })),
   ])
 
 // People or Areas: a line each; pressing one opens the table of its intents.
@@ -214,11 +273,11 @@ const filters = (el, model, actions) => {
 /** @param {any} el @param {PaneModel} model @param {Actions} actions */
 export const boardPane = (el, model, actions) => {
   const { look } = model
-  const { shown: records, parts, extras } = paneView(model.records, look, { me: model.me, modules: model.modules, mapping: model.mapped.value.mapping, now: model.now })
+  const { shown: records, parts, extras } = paneView(model.records, look, { me: model.me, modules: model.modules, mapping: model.mapped.value.mapping, now: model.now, note: model.overlapNote })
   const { mapped } = model
   const mapStatus = mapped.state === 'running' ? `Sonnet is mapping ${mapped.value.missing} intents onto the modules\u2026` : mapped.state === 'failed' ? `Mapping stopped: ${mapped.error}` : ''
   const groups = parts.flatMap(part => (part.kind === 'label' ? part.groups : part.kind === 'intents' ? [part] : []))
-  const cols = rowColumns(groups.flatMap(group => group.rows.slice(0, ROW_CAP).map(one => cellsOf(model, group, one))), model.width < 90 ? 12 : 22)
+  const cols = rowColumns(groups.flatMap(group => (group.kind === 'pairs' ? group.pairs.map(one => pairCells(model, one)) : group.rows.slice(0, ROW_CAP).map(one => cellsOf(model, group, one)))), model.width < 90 ? 12 : 22)
   return el.Box({
     flexDirection: 'column',
     width: '100%',

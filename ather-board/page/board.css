@@ -71,7 +71,7 @@ main > :first-child { margin-top: 16px; }
 .row.done .slug, .row.done .glyph { color: var(--quiet); }
 
 /* What a row opens to, and the items listed under it, both in line with its name. */
-.details { padding: 0 14px 12px 42px; }
+.details { display: flow-root; padding: 0 14px 12px 42px; }
 .details p { margin: 6px 0; }
 .details .sub { color: var(--quiet); font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; margin: 12px 0 4px; }
 .refs { color: var(--quiet); font-size: 13px; }
@@ -80,6 +80,13 @@ main > :first-child { margin-top: 16px; }
 .items li b { color: var(--quiet); font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 6px; }
 .items.calls li b { color: var(--amber); }
 .items.under { padding: 0 14px 10px 42px; color: var(--quiet); font-size: 13px; }
+
+/* A collision opened: each place, then each side's first changed line on one grey ground, named by its side. */
+.versus-mark { color: var(--quiet); font-weight: 400; }
+.spot { margin: 10px 0 2px; font: 600 12.5px/1.4 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
+.versus { display: grid; grid-template-columns: max-content minmax(0, 1fr); overflow-x: auto; column-gap: 14px; row-gap: 2px; background: var(--well); border-radius: 4px; padding: 6px 10px; margin: 0 0 8px; font: 12.5px/1.45 ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace; }
+.versus span { color: var(--quiet); }
+.versus code { color: var(--ink); font: inherit; white-space: pre; }
 
 /* The Board: a column for each stage that has intents; the columns wrap to the width rather than run off it
    (four fit from 770 px, five with Done from 950), and a few stay at most 300 px wide (`--columns`: how many). */

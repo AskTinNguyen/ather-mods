@@ -4,7 +4,7 @@
 // columns, and Pulse is the page's own chart. page.mjs writes views.mjs's exports above this script and
 // the board's data into #board-data. The look (view, filters, sort, group) lives in the address's #hash,
 // so a link opens the same cut.
-/* global graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, summaryText, choices, ageText, miniBarSvg */
+/* global collisionFact, collisionOwners, moreText, overlapCount, sideLine, spotLabel, graphOf, layoutGraph, STAGES, SORTS, SORT_KEYS, GROUPS, GROUP_KEYS, VIEW_LABELS, HIDES_DONE, DEFAULT_LOOK, pickLook, recordsFor, sectionsOf, pulse, summaryText, choices, ageText, miniBarSvg */
 ;(function () {
   'use strict'
   var DATA = JSON.parse(document.getElementById('board-data').textContent)
@@ -123,6 +123,33 @@
       '</button>' + (opened[record.key] ? details(record) : '') + '</div>'
     )
   }
+  // A collision (overlap-check D5): the intent and what it collides with, the places in amber, the files beneath;
+  // opened, each place with both sides' first changed line.
+  function pairRow(collision) {
+    var a = collision.a, b = collision.b
+    var other = a.key === '' ? esc(a.slug) : glyph(a.stage) + ' ' + esc(a.slug)
+    var files = collision.files.map(function (f) { return f.split('/').pop() }).join(', ')
+    return (
+      '<div class="row pair">' + toggle({ key: collision.key }) + glyph(b.stage) +
+      '<span class="main"><span class="head"><span class="slug">' + esc(b.slug) + ' <span class="versus-mark">⇄</span> ' + other + '</span><span class="warn">' + esc(overlapCount(collision.count)) + '</span></span><span class="title">' + esc(files) + '</span></span>' +
+      '<span class="progress"></span>' +
+      '<span class="age" title="the base’s last change to these files">' + esc(collision.at ? ageText(collision.at, NOW) : '') + '</span>' +
+      '<span class="owner">' + esc(collisionOwners(collision)) + '</span>' +
+      '</button>' + (opened[collision.key] ? pairDetails(collision) : '') + '</div>'
+    )
+  }
+  function pairDetails(collision) {
+    var spots = collision.spots.map(function (spot) {
+      var label = '<p class="spot">' + esc(spotLabel(collision, spot)) + '</p>'
+      return spot.kind !== 'lines' ? label : label + '<div class="versus"><span>' + esc(collision.a.slug) + '</span><code>' + esc(sideLine(spot.ours)) + '</code><span>' + esc(collision.b.slug) + '</span><code>' + esc(sideLine(spot.theirs)) + '</code></div>'
+    }).join('')
+    var more = moreText(collision) ? '<p class="refs">' + esc(moreText(collision)) + '</p>' : ''
+    return '<div class="details"><p class="refs">' + esc(collisionFact(collision, NOW)) + '</p>' + spots + more + '</div>'
+  }
+  function pairGroup(part) {
+    var body = part.pairs.length ? '<div class="panel">' + part.pairs.map(pairRow).join('') + '</div>' : '<p class="empty">' + esc(part.empty) + '</p>'
+    return '<section class="group">' + groupHead(part) + body + '</section>'
+  }
   function heading(title, meta, isLoud) {
     return '<h2 class="label' + (isLoud ? ' loud' : '') + '"><span>' + esc(title) + '</span>' + (meta ? '<small>' + esc(meta) + '</small>' : '') + '</h2>'
   }
@@ -231,12 +258,12 @@
     var current = look()
     if (current.view === 'pulse') return pulseView(records)
     if (current.view === 'map') return mapView(records)
-    var parts = sectionsOf(records, current, NOW)
+    var parts = sectionsOf(records, current, NOW, DATA.overlapNote || '')
     if (current.view === 'board') return '<div class="kanban" style="--columns:' + parts.length + '">' + parts.map(column).join('') + '</div>'
     // Triage with no filter in force opens on the brief.
     var isPlain = !flat.words && !flat.area && !flat.owner && !flat.stage && !flat.keys
     var lead = current.view === 'triage' && isPlain ? briefView() : ''
-    return lead + parts.map(function (part) { return part.kind === 'label' ? heading(part.title, part.meta, part.isLoud) + part.groups.map(group).join('') : part.kind === 'lines' ? lines(part) : group(part) }).join('')
+    return lead + parts.map(function (part) { return part.kind === 'label' ? heading(part.title, part.meta, part.isLoud) + part.groups.map(function (g) { return g.kind === 'pairs' ? pairGroup(g) : group(g) }).join('') : part.kind === 'lines' ? lines(part) : group(part) }).join('')
   }
 
   function options(values, current, any, name) {

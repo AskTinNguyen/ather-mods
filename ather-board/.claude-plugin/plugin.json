@@ -1,6 +1,6 @@
 {
   "name": "ather-board",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Ather Board: the team's intents as a project board. /board shows what is stuck, every intent by owner, area or stage, the open acceptance items and each person's and area's load; /board open writes the full page with a kanban and the weekly pulse; /board publish shares it. Read-only.",
   "author": {
     "name": "Tin Nguyen"

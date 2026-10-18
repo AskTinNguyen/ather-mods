@@ -5,7 +5,7 @@ Claude Code mods for the S2 team. This repository is the `ather` plugin marketpl
 | Mod | What it does |
 |---|---|
 | [ather-automata](ather-automata/README.md) | Type `/ather` to see what needs you and what to do next. New here? `/ather tour`. Leaving? `/away tonight`. Too much on screen? `/ather simple` (or `v` on Home) shows only what needs you and what is next. |
-| [ather-board](ather-board/README.md) | Type `/board` to see the team's intents as a board: what is stuck, every intent by owner, area or stage, the open acceptance items. `/board open` for the full page, `/board publish` to share it. Read-only. |
+| [ather-board](ather-board/README.md) | Type `/board` to see the team's intents as a board: what is stuck, what collides (two branches changing the same lines), every intent by owner, area or stage, the open acceptance items. `/board open` for the full page, `/board publish` to share it. Read-only. |
 | [week-calendar](week-calendar/README.md) | For agent PCs: a weekly calendar of every session and a weekly report (PRs merged, productive agent time) pushed to the team's agent-reports repo. Install it only where sessions should be reported. |
 
 ## Install (once)

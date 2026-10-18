@@ -11,7 +11,7 @@ import path from 'path'
 import { unreal } from '../hooks/ather/packs/unreal.mjs'
 import { publishPrompt, webOf } from '../hooks/index.mjs'
 import { renderPage, viewsScript } from '../hooks/page.mjs'
-import { toRecord } from '../hooks/records.mjs'
+import { toRecord, withCollisions } from '../hooks/records.mjs'
 import { EMPTY_BOARD_CACHE, readBoard } from '../hooks/snapshot.mjs'
 import * as map from '../hooks/map.mjs'
 import * as views from '../hooks/views.mjs'
@@ -146,8 +146,8 @@ describe('what each view shows, for the pane and the page alike (A3, A4, A6, A7)
     expect(slugs(recordsFor(RECORDS, { ...DEFAULT_LOOK, view: 'triage', filter: tools }))).toEqual(['old-tool', 'parked-one', 'fresh-plan'])
     expect(slugs(recordsFor(RECORDS, { ...DEFAULT_LOOK, view: 'table', filter: tools }))).toEqual(['parked-one', 'fresh-plan'])
   })
-  test('a row warns with what its stage glyph does not say: decisions, stale, parked without a reason', () => {
-    expect(WARNINGS).toEqual(['decisions', 'stale', 'unparked'])
+  test('a row warns with what its stage glyph does not say: decisions, colliding, stale, parked without a reason', () => {
+    expect(WARNINGS).toEqual(['decisions', 'colliding', 'stale', 'unparked'])
   })
   test('Triage: a label over a group per reason, the worst first, each row leaving out what its group says (not how many decisions); then data hygiene', () => {
     /** @param {import('../hooks/views.mjs').Section} part @returns {string[]} */
@@ -195,6 +195,8 @@ describe('the page (A7) and publishing (A8)', () => {
   const MODULES = [{ key: 'vfx', name: 'VFX', hint: '' }, { key: 'combat', name: 'Combat', hint: '' }]
   const MAPPING = { 'snow-look': ['vfx'], 'quest-calls': ['combat', 'vfx'] }
   const GRAPH = map.graphOf(RECORDS, MODULES, MAPPING)
+  // Two records in a collision, as withCollisions leaves them.
+  const COLLIDING = withCollisions(RECORDS, [{ key: '|snow-look', a: '', b: 'snow-look', files: ['VFX/Snow.cpp'], spots: [{ path: 'VFX/Snow.cpp', line: 4, kind: 'lines', ours: 'a', theirs: 'b' }], count: 1, who: 'Lena Park', at: NOW }], 'main')
   /** @type {Record<string, unknown[]>} */
   const CALLS = {
     ageText: [NOW - 3 * DAY_MS, NOW],
@@ -221,6 +223,16 @@ describe('the page (A7) and publishing (A8)', () => {
     graphOf: [RECORDS, MODULES, MAPPING],
     seedOf: ['snow-look'],
     layoutGraph: [GRAPH, 1000, 660],
+    collisionsOf: [COLLIDING],
+    withColliding: [[], COLLIDING, { key: 'attention-colliding', note: '', isDecisions: () => false }],
+    pairCount: [[{ kind: 'pairs', pairs: [1, 2] }, { kind: 'intents', rows: [1] }]],
+    overlapCount: [3],
+    collisionOwners: [views.collisionsOf(COLLIDING)[0]],
+    collisionFact: [views.collisionsOf(COLLIDING)[0], NOW],
+    spotLabel: [views.collisionsOf(COLLIDING)[0], { path: 'a.umap', line: 0, kind: 'binary', ours: '', theirs: '' }],
+    isReason: [{ kind: 'colliding', label: '' }],
+    sideLine: [''],
+    moreText: [{ ...views.collisionsOf(COLLIDING)[0], count: 4 }],
   }
   test('every function the page is given answers there as it does here, and every one is checked', () => {
     const both = /** @type {Record<string, any>} */ ({ ...views, ...map })
@@ -229,12 +241,13 @@ describe('the page (A7) and publishing (A8)', () => {
     const inPage = new Function(`${viewsScript()}\nreturn { ${names.join(', ')} }`)()
     for (const name of names) expect(JSON.stringify(inPage[name](...(CALLS[name] ?? [])))).toBe(JSON.stringify(both[name](...(CALLS[name] ?? []))))
   })
-  test('every view’s sections, as written into the page, are the same', () => {
+  test('every view’s sections, as written into the page, are the same, collisions and the overlap note too', () => {
     const inPage = new Function(`${viewsScript()}
 return sectionsOf`)()
     for (const view of Object.keys(views.VIEW_LABELS)) {
       const look = { ...DEFAULT_LOOK, view: /** @type {import('../hooks/views.mjs').View} */ (view) }
       expect(JSON.stringify(inPage(RECORDS, look, NOW))).toBe(JSON.stringify(sectionsOf(RECORDS, look, NOW)))
+      expect(JSON.stringify(inPage(COLLIDING, look, NOW, 'a note'))).toBe(JSON.stringify(sectionsOf(COLLIDING, look, NOW, 'a note')))
     }
   })
   test('a person or area picked opens the table of theirs, the other filters cleared, done as it was', () => {

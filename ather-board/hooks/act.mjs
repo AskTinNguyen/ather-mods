@@ -6,12 +6,14 @@
 // Pure: no `$`.
 
 import { decidePrompt, explainPrompt } from './ather/decide.mjs'
-import { aboutIntentPrompt, andList, checklistPrompt, closePrompt, plural } from './ather/model.mjs'
-import { HYGIENE } from './views.mjs'
+import { aboutIntentPrompt, andList, checklistPrompt, closePrompt, isMine as isOwner, plural } from './ather/model.mjs'
+import { HYGIENE, isReason, moreText, sideLine, spotLabel } from './views.mjs'
 
 /**
  * @typedef {import('./views.mjs').BoardRecord} BoardRecord
  * @typedef {import('./views.mjs').Call} Call
+ * @typedef {import('./views.mjs').Collision} Collision
+ * @typedef {import('./views.mjs').Party} Party
  * @typedef {'decide' | 'close' | 'unstick' | 'reason' | 'checklist' | 'tidy' | 'ping' | 'about'} ActionKind
  */
 
@@ -51,7 +53,7 @@ export const actionsFor = (record, isMine) => {
   if (record.stage === 'done') return ['about']
   const kinds = new Set(record.flags.map(flag => flag.kind))
   /** @type {ActionKind[]} */
-  const offered = isMine ? OWN.filter(([flag]) => kinds.has(flag)).map(([, action]) => action) : record.flags.some(flag => !HYGIENE.includes(flag.kind)) ? ['ping'] : []
+  const offered = isMine ? OWN.filter(([flag]) => kinds.has(flag)).map(([, action]) => action) : record.flags.some(isReason) ? ['ping'] : []
   return [...new Set([...offered, /** @type {ActionKind} */ ('about')])]
 }
 
@@ -107,4 +109,41 @@ export const batchPrompt = (kind, records, base) =>
 export const decisionPrompt = (record, call, letter) => {
   const option = call.options.find(one => one.letter === letter)
   return option ? decidePrompt(record.slug, call.id, `${option.letter} — ${option.text}`) : explainPrompt(record.slug, call.id)
+}
+
+// ---------------------------------------------------------------- a collision (overlap-check D5)
+
+// "Combat/HitStop.cpp:42 (main: return FMath::Min…; dodge-cancel: return CanCancel…) and Map.umap · binary, both changed".
+/** @param {Collision} collision */
+export const spotsText = collision =>
+  andList(collision.spots.map(spot => (spot.kind === 'lines' ? `${spotLabel(collision, spot)} (${collision.a.slug}: ${sideLine(spot.ours)}; ${collision.b.slug}: ${sideLine(spot.theirs)})` : spotLabel(collision, spot)))) + (moreText(collision) ? `, ${moreText(collision)}` : '')
+
+// What the pair is, in words: "dodge-cancel and main", or two intents.
+/** @param {Collision} collision */
+const pairName = collision => `${collision.b.slug} and ${collision.a.key === '' ? `origin/${collision.a.slug}` : collision.a.slug}`
+
+/** @param {Party} party @param {string} words @param {Collision} collision */
+const notePrompt = (party, words, collision) =>
+  `Draft a short, friendly message to ${party.owner || 'the owner'} about ${pairName(collision)}: ${words} They change the same lines: ${spotsText(collision)}. Name the one thing that would help (who merges first, or how both changes fit together). Show me the draft; do not send it.`
+
+/**
+ * What can be done about a collision from the board, the first the one to do now: on your own intent against
+ * the base, bring the base in; with a teammate, a drafted note (never sent); else asking the owners, and
+ * where both intents stand. `me`: the person at the keyboard. Each is one prompt handed to the session.
+ * @param {Collision} collision @param {string} me @param {string} base
+ * @returns {{ key: string, label: string, prompt: string }[]}
+ */
+export const collisionActions = (collision, me, base) => {
+  const { a, b } = collision
+  const isBase = a.key === ''
+  const mine = [b, ...(isBase ? [] : [a])].find(party => isOwner(party, me))
+  const other = mine === b ? a : b
+  const about = { key: 'about', label: 'Where they stand', prompt: [a, b].filter(party => party.key !== '').map(party => aboutIntentPrompt(party.slug, true, '', base)).join('\n') }
+  if (isBase && mine) {
+    const bring = { key: 'bring', label: `Bring ${base} into ${b.slug}`, prompt: `Intent ${b.slug}'s branch ${b.branch} no longer merges cleanly into origin/${base}: ${spotsText(collision)}. Merge origin/${base} into ${b.branch} in a worktree on that branch (this checkout if it is on it, else a new one), resolve each place keeping what both changes are for, run the repository's gates, and show me each resolution and the diff before committing. Do not push until I say.` }
+    return a.owner && !isOwner(a, me) ? [bring, { key: 'note', label: `Draft a note to ${a.owner}`, prompt: notePrompt(a, `${a.owner} changed origin/${base} where my ${b.slug} works.`, collision) }] : [bring]
+  }
+  if (mine) return [{ key: 'note', label: `Draft a note to ${other.owner || 'the owner'}`, prompt: notePrompt(other, `my ${mine.slug} and their ${other.slug} will conflict when the second one merges.`, collision) }, about]
+  if (isBase) return [{ key: 'note', label: `Ask ${b.owner || 'the owner'}`, prompt: notePrompt(b, `origin/${base} moved under their ${b.slug}; it no longer merges cleanly.`, collision) }, about]
+  return [{ key: 'note', label: `Ask ${a.owner || a.slug} and ${b.owner || b.slug} who goes first`, prompt: `Draft one short, friendly message to ${a.owner || 'the owner of ' + a.slug} and ${b.owner || 'the owner of ' + b.slug} about ${pairName(collision)}: they change the same lines (${spotsText(collision)}), so whichever merges second will conflict. Ask who goes first, or how both changes fit together. Show me the draft; do not send it.` }, about]
 }
