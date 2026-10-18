@@ -71,7 +71,7 @@ main > :first-child { margin-top: 16px; }
 .row.done .slug, .row.done .glyph { color: var(--quiet); }
 
 /* What a row opens to, and the items listed under it, both in line with its name. */
-.details { padding: 0 14px 12px 42px; }
+.details { display: flow-root; padding: 0 14px 12px 42px; }
 .details p { margin: 6px 0; }
 .details .sub { color: var(--quiet); font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; margin: 12px 0 4px; }
 .refs { color: var(--quiet); font-size: 13px; }

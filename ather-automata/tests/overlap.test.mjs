@@ -23,7 +23,7 @@ describe('an intent’s branch (A1)', () => {
 
   test('this repository’s own intents, as written', () => {
     const read = (/** @type {string} */ slug) => intentOf(fs.readFileSync(new URL(`../../docs/intent/${slug}/prompt.md`, import.meta.url), 'utf8')).branch
-    expect([read('track-guard'), read('overlap-check'), read('decide-in-place')]).toEqual(['intent/track-guard', 'intent/overlap-check', 'intent/decide-in-place'])
+    expect([read('track-guard'), read('ather-board'), read('decide-in-place')]).toEqual(['intent/track-guard', 'intent/ather-board', 'intent/decide-in-place'])
   })
 })
 

@@ -1,0 +1,30 @@
+C L O N E   I N T E N T S
+5 intents · 4 open · 0 parked · 1 done · this week 5 opened, 1 closed                     f: synced just now ↻
+
+1: For you  2: Triage  3: Modules  4: Table  5: Open items  6: People  7: Areas  │  o: Open the page  p:
+Publish
+
+Ask[what is blocking combat? whose decisions are oldest?]
+
+Search[words from a name, title, area or owner]
+    
+Page written: /tmp/ather-board-dE1N9A/clone/.ather/local/board/index.html (open it in a browser)
+
+N E E D S   S O M E O N E  2
+Colliding  2
+● dodge-cancel ⇄ main ▲ 3 overlaps Arena.umap +2                                     0m  Tin Nguyen, Lena Park
+  origin/main changed these lines 0m ago (Lena Park); dodge-cancel no longer merges cleanly.
+  Content/Maps/Arena.umap · binary, both changed
+  Source/Combat/CombatComponent.cpp:3
+    main          HitStop.Apply(Target, FrameBudget());
+    dodge-cancel  if (!Dodge.IsCancelWindow()) HitStop.Apply(Target);
+  Source/Combat/HitStop.cpp:3
+    main          return FMath::Min(Budget, 0.070f);
+    dodge-cancel  return CanCancel(Dodge) ? 0.f : Budget;
+
+  [ Bring main into dodge-cancel ]  Draft a note to Lena Park
+● nine-tail-dash ⇄ ● mc-vault ▲ 1 overlap S2CharacterMove…                               Minh Le, Sam Vo      
+
+D A T A   H Y G I E N E  0 not fully readable
+Every intent reads cleanly.
+○ Plan  ● Building  ◐ Proving  ✓ Ready to close  ‖ Parked  ■ Done  ·  bar: ▰▰▰▰▰ items met
