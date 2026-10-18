@@ -30,7 +30,7 @@ import { collisionsFor } from './collide.mjs'
 import { forBase } from './guards.mjs'
 import { withFolders } from './shell.mjs'
 import { nextGroup, nextSort } from './worklist.mjs'
-import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
+import { LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, mergeRow, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
 import { awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
 import { createOutbox, holdersOf, routedText, toldText } from './handoff.mjs'
@@ -43,6 +43,8 @@ import { createOutbox, holdersOf, routedText, toldText } from './handoff.mjs'
 /** @typedef {import('./home.mjs').Work} Work */
 
 const PANE_ID = 'ather'
+// The band's words when it has nothing else to say.
+const NAME = '◆ Ather Automata'
 // Queued work goes out after the command hook returns: a hook holds the turn,
 // and the engine refuses a prompt queued from inside it.
 const AFTER_HOOK_MS = 50
@@ -471,13 +473,14 @@ async function drawBand($, e) {
   closedHint = null
   const { Box, Text, Button } = $.ui.resolve(e)
   const isAway = model.header.stage === 'Away'
+  // What needs you, in cyan; else the tracked intent's pill (ship-pill D2); else Ather's name, dim.
+  const words = hint || model.header.pill || NAME
   const warm = warmBadge(warmStore.readWarmView())
   return Box({
     flexDirection: 'row',
     gap: 2,
     children: [
-      // What needs you, in cyan; else the tracked intent's pill (ship-pill D2); else Ather's name, dim.
-      Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: hint || model.header.pill ? undefined : true, wrap: 'truncate', children: hint || model.header.pill || '◆ Ather Automata' })] }),
+      Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: words === NAME ? true : undefined, wrap: 'truncate', children: words })] }),
       ...(fresh.length > 0 ? [Button({ key: 'ather-intent-see', label: 'See', plain: true, onPress: () => void seeIntent($) })] : []),
       Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
       // Keep the prompt cache warm while idle: on or off for this session; the count of reads, in amber, while one is due.
@@ -775,7 +778,7 @@ async function checkCollision($) {
     read => {
       if (read.isPartial) return
       const collision = collisionsFor(read.overlaps, side => (side === here.key ? here : null), base)[0] ?? null
-      showMerge($, read.compared.includes(here.key) ? { branch, base, at: Date.now(), collision } : null)
+      showMerge($, read.compared.includes(here.key) ? { base, at: Date.now(), collision } : null)
     },
   )
 }
@@ -783,7 +786,7 @@ async function checkCollision($) {
 // What the check found, drawn again only when that changed; a check that found the same only moves "checked … ago".
 /** @param {Engine} $ @param {import('./home.mjs').MergeCheck | null} found */
 function showMerge($, found) {
-  const isSame = (found === null) === (merge === null) && JSON.stringify({ ...found, at: 0 }) === JSON.stringify({ ...merge, at: 0 })
+  const isSame = JSON.stringify(found && { ...found, at: 0 }) === JSON.stringify(merge && { ...merge, at: 0 })
   merge = found
   if (isSame) return
   stale()
@@ -2103,7 +2106,7 @@ function paneView(el, $, model, columns, surface, crew = []) {
         ['status', [headerLine(el, $, model.sync, status, width)]],
         ['stages', header.stages.length > 0 ? [stageRow(el, header.stages)] : []],
         ['meta', meta ? [metaRow(el, header)] : []],
-        ['merge', header.merge.text ? [Text({ key: 'merge', color: header.merge.isWarn ? AMBER : QUIET, wrap: 'truncate', children: fit(header.merge.text, width) })] : []],
+        ['merge', header.merge.text ? [mergeRow(el, header.merge, width)] : []],
       ]).filter(Boolean),
       surface,
     ),

@@ -7,7 +7,7 @@ import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
 import { issueId, issueLabel, issuePrompt } from './issues.mjs'
 import { STAGE_LABELS, clockText, currentStage, cutWords, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural, prStatusList, shortTitle, waitingCalls } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
-import { ageText, isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
+import { PLAN_GLYPH, SHIPPED_GLYPH, STAGE_GLYPHS, ageText, isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
 
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
 
@@ -124,7 +124,7 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  */
 
 /**
- * @typedef {{ branch: string, base: string, at: number, collision: import('./collide.mjs').Collision | null }} MergeCheck this checkout's branch
+ * @typedef {{ base: string, at: number, collision: import('./collide.mjs').Collision | null }} MergeCheck this checkout's branch
  *   compared with origin's base at `at`: `collision` where they no longer merge cleanly, null where they do (ship-pill D1)
  */
 
@@ -138,15 +138,15 @@ export const mergeLine = (merge, now) => {
   return { text: `Merges cleanly into origin/${merge.base} · checked ${age === '0m' ? 'just now' : `${age} ago`}`, isWarn: false }
 }
 
-// Each stage's glyph on the pill, as the work list draws them: begun or not, half there, met, shipped.
+// Each stage's glyph on the pill, the work list's (worklist.mjs): not begun, being built, half there, met, shipped.
 /** @type {Record<keyof typeof STAGE_LABELS, string>} */
-const PILL_GLYPHS = { plan: '○', build: '●', prove: '◐', ship: '◐', close: '✓', shipped: '■' }
+const PILL_GLYPHS = { plan: PLAN_GLYPH, build: STAGE_GLYPHS.build, prove: STAGE_GLYPHS.prove, ship: STAGE_GLYPHS.prove, close: STAGE_GLYPHS.met, shipped: SHIPPED_GLYPH }
 
 // The tracked intent as one pill above the prompt when nothing needs the person (ship-pill D2): its stage's glyph,
-// the stage ('Planned' before anything is done or anyone works), the items met, and its name.
-/** @param {keyof typeof STAGE_LABELS} stage @param {string} label @param {Intent} intent */
-const stagePill = (stage, label, intent) =>
-  `${label === 'Planned' ? '○' : PILL_GLYPHS[stage]} ${label}${intent.acceptanceTotal > 0 && stage !== 'shipped' ? ` ${intent.acceptanceDone}/${intent.acceptanceTotal}` : ''} · ${intent.key}`
+// the stage (planned before anything is done or anyone works), the items met, and its name.
+/** @param {keyof typeof STAGE_LABELS} stage @param {boolean} isPlanned @param {string} label @param {Intent} intent */
+const stagePill = (stage, isPlanned, label, intent) =>
+  `${isPlanned ? PLAN_GLYPH : PILL_GLYPHS[stage]} ${label}${intent.acceptanceTotal > 0 && stage !== 'shipped' ? ` ${intent.acceptanceDone}/${intent.acceptanceTotal}` : ''} · ${intent.key}`
 
 /**
  * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked', isLook?: boolean, look?: string }} Next
@@ -291,7 +291,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.key ?? 'Ather', stage: 'Away', pill: '', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week), merge: mergeLine(null, now) }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), own: [], teamPreview: { rows: [], total: 0 }, attention: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.key ?? 'Ather', stage: 'Away', pill: '', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week), merge: { text: '', isWarn: false } }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), own: [], teamPreview: { rows: [], total: 0 }, attention: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -391,7 +391,8 @@ export const buildHome = input => {
   if (skills.length > 0) actions.push({ id: 'action:skills', label: '▶ Skills', opens: 'skills' })
   if (create.length > 0) actions.push({ id: 'action:create', label: '✦ Create', opens: 'create' })
   // A checklist with nothing done and no one working yet is planned, not being built.
-  const stageLabel = !intent ? '' : stage === 'build' && intent.acceptanceDone === 0 && !intent.hasWorker && input.workers === 0 ? 'Planned' : STAGE_LABELS[stage]
+  const isPlanned = !!intent && stage === 'build' && intent.acceptanceDone === 0 && !intent.hasWorker && input.workers === 0
+  const stageLabel = !intent ? '' : isPlanned ? 'Planned' : STAGE_LABELS[stage]
   return {
     actions,
     skills,
@@ -400,7 +401,7 @@ export const buildHome = input => {
     header: {
       title: intent?.key ?? 'Ather',
       stage: stageLabel,
-      pill: intent ? stagePill(stage, stageLabel, intent) : '',
+      pill: intent ? stagePill(stage, isPlanned, stageLabel, intent) : '',
       progress: intent && intent.acceptanceTotal > 0 ? `${intent.acceptanceDone} of ${intent.acceptanceTotal} done` : '',
       track: intent ? stageTrack(stage) : '',
       stages: intent ? stageList(stage) : [],

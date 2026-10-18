@@ -19,6 +19,9 @@ export const listStage = (intent, prs = {}) =>
   intent.status === 'parked' ? 'parked' : !isAllMet(intent) ? 'build' : intent.prs.length === 0 || isReadyToClose(intent, prs) ? 'met' : 'prove'
 
 export const STAGE_GLYPHS = /** @type {const} */ ({ build: '●', prove: '◐', met: '✓', parked: '‖' })
+// Before the work begins, and once it has shipped: the pill above the prompt's ends (home.mjs stagePill).
+export const PLAN_GLYPH = '○'
+export const SHIPPED_GLYPH = '■'
 
 // The blocks "Ready to close" groups the list in, in order.
 export const STAGE_BLOCKS = /** @type {const} */ ([

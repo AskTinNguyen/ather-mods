@@ -422,6 +422,10 @@ export function summaryStrip(el, model, crew, isClicked) {
   })
 }
 
+// Whether this checkout's branch merges into origin's base (home.mjs mergeLine): amber when it does not.
+/** @param {any} el @param {{ text: string, isWarn: boolean }} merge @param {number} width */
+export const mergeRow = (el, merge, width) => el.Text({ key: 'merge', color: merge.isWarn ? AMBER : QUIET, wrap: 'truncate', children: fit(merge.text, width) })
+
 // Role, proof, the Editor lock and this week's figures; each proof is green when it passed and red when it failed.
 /** @param {any} el @param {{ role: string, proof: string, lock: string, week: string }} header */
 export function metaRow(el, header) {

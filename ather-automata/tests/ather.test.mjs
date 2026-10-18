@@ -605,7 +605,7 @@ describe('home', () => {
   test('collision-alert: this checkout\'s branch against origin\'s base waits in Needs you after lost edits, named by its places; its press brings the base in', () => {
     const party = (/** @type {string} */ key, /** @type {string} */ slug, /** @type {string} */ owner, /** @type {string} */ branch) => ({ key, slug, owner, stage: /** @type {const} */ (''), branch })
     const collision = { key: '|here', a: party('', 'main', 'Lena Park', 'main'), b: party('here', 'spawner', 'Tin Nguyen', 'feat/spawner'), files: ['Combat/HitStop.cpp'], spots: [{ path: 'Combat/HitStop.cpp', line: 3, kind: /** @type {const} */ ('lines'), ours: 'return Min;', theirs: 'return Scale;' }], count: 3, base: { at: NOON - 2 * 3600000, via: ['hitstop-retune'] } }
-    const merge = (/** @type {any} */ found) => ({ branch: found.b.branch, base: 'main', at: NOON - 60000, collision: found })
+    const merge = (/** @type {any} */ found) => ({ base: 'main', at: NOON - 60000, collision: found })
     const model = home({ lost: { paths: ['A.uasset'], isDisclosed: false }, merge: merge(collision) })
     const item = model.items.find(one => one.kind === 'collide')
     expect(model.items.map(one => one.kind).slice(0, 2)).toEqual(['lost', 'collide'])
