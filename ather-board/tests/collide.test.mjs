@@ -167,7 +167,7 @@ describe('the pane (A5)', () => {
   test('opened in place: what happened, each place with both sides, and its actions, the first primary; a press hands one prompt', () => {
     const open = nodes(draw({ opened: '|dodge-cancel' })).find(one => one.props?.key === 'attention-colliding-|dodge-cancel-open')
     const words = texts(open)
-    expect(words[0]).toBe('origin/main changed these lines 6m ago (Lena Park); dodge-cancel no longer merges cleanly.')
+    expect(words[0]).toBe('origin/main changed these lines 6m ago (Lena Park).')
     expect(words.slice(1, 5)).toEqual(['Combat/HitStop.cpp:42', '  main          return FMath::Min(Budget, 0.070f);', '  dodge-cancel  return CanCancel(Dodge) ? 0.f : Budget;', 'Maps/Arena.umap · binary, both changed'])
     const buttons = nodes(open).filter(one => one.type === 'Button')
     expect(buttons.map(one => [one.props.label, one.props.variant ?? ''])).toEqual([['Bring main into dodge-cancel', 'primary'], ['Draft a note to Lena Park', '']])

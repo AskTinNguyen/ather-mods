@@ -134,7 +134,7 @@ byKey(await pane(), 'tab-triage')?.props.onPress()
 nodesOf(await pane()).find(node => node.type === 'Button' && node.props.key === 'attention-colliding-|dodge-cancel')?.props.onPress()
 const opened = await pane()
 const openText = textOf(opened, 110)
-expect('A5: opened in place: what happened, each place with both sides’ lines, the binary map, the actions', /origin\/main changed these lines .* \(Lena Park\); dodge-cancel no longer merges cleanly\./.test(openText) && /Source\/Combat\/HitStop\.cpp:3/.test(openText) && /main +return FMath::Min\(Budget, 0\.070f\);/.test(openText) && /dodge-cancel +return CanCancel\(Dodge\) \? 0\.f : Budget;/.test(openText) && /Arena\.umap · binary, both changed/.test(openText) && /Bring main into dodge-cancel/.test(openText) && /Draft a note to Lena Park/.test(openText), openText)
+expect('A5: opened in place: what happened, each place with both sides’ lines, the binary map, the actions', /origin\/main changed these lines .* \(Lena Park\)\./.test(openText) && /Source\/Combat\/HitStop\.cpp:3/.test(openText) && /main +return FMath::Min\(Budget, 0\.070f\);/.test(openText) && /dodge-cancel +return CanCancel\(Dodge\) \? 0\.f : Budget;/.test(openText) && /Arena\.umap · binary, both changed/.test(openText) && /Bring main into dodge-cancel/.test(openText) && /Draft a note to Lena Park/.test(openText), openText)
 const submitsBefore = engine.record.submits.length
 byKey(opened, 'collide-|dodge-cancel-bring')?.props.onPress()
 await until(async () => engine.record.submits.length > submitsBefore, 3000)

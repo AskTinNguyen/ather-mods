@@ -86,7 +86,7 @@ const pairOpened = (el, model, actions, collision, at) => {
   const { a, b } = collision
   const key = `${at}-${collision.key}-open`
   const [next, ...rest] = collisionActions(collision, model.me, model.base)
-  const fact = a.key === '' ? `origin/${a.slug} changed these lines ${collision.at ? `${ageText(collision.at, model.now)} ago` : 'since'}${a.owner ? ` (${a.owner})` : ''}; ${b.slug} no longer merges cleanly.` : 'Neither is merged yet: whichever merges second will conflict.'
+  const fact = a.key === '' ? `origin/${a.slug} changed these lines${collision.at ? ` ${ageText(collision.at, model.now)} ago` : ''}${a.owner ? ` (${a.owner})` : ''}.` : 'Neither is merged yet: whichever merges second will conflict.'
   const width = Math.max(a.slug.length, b.slug.length)
   return el.Box({
     key,

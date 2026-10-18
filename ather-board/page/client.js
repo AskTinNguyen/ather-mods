@@ -142,7 +142,7 @@
   }
   function pairDetails(collision) {
     var a = collision.a, b = collision.b
-    var fact = a.key === '' ? 'origin/' + a.slug + ' changed these lines' + (collision.at ? ' ' + ageText(collision.at, NOW) + ' ago' : '') + (a.owner ? ' (' + a.owner + ')' : '') + '; ' + b.slug + ' no longer merges cleanly.' : 'Neither is merged yet: whichever merges second will conflict.'
+    var fact = a.key === '' ? 'origin/' + a.slug + ' changed these lines' + (collision.at ? ' ' + ageText(collision.at, NOW) + ' ago' : '') + (a.owner ? ' (' + a.owner + ')' : '') + '.' : 'Neither is merged yet: whichever merges second will conflict.'
     var spots = collision.spots.map(function (spot) {
       if (spot.kind !== 'lines') return '<p class="spot">' + esc(spot.path) + ' <span class="kind">' + esc(spot.kind === 'binary' ? 'binary, both changed' : a.slug + ' ' + spot.ours + ' it, ' + b.slug + ' ' + spot.theirs + ' it') + '</span></p>'
       return '<p class="spot">' + esc(spot.path) + '<span class="kind">:' + spot.line + '</span></p><div class="versus"><span>' + esc(a.slug) + '</span><code>' + esc(spot.ours || '(blank)') + '</code><span>' + esc(b.slug) + '</span><code>' + esc(spot.theirs || '(blank)') + '</code></div>'
