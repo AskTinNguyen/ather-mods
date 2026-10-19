@@ -240,3 +240,14 @@ With a screenshot of the A5R pane: the Orchestrate card lists 19:38 talab-upgrad
 ## L-36 (2026-10-19) | class: intent | -> rev 32
 
 Relayed by the S2 sync main session ("Hai asked me to send it"): the 11:10 sync worker merged 7b68b894 but ended while waiting for the build's Result: line with no SYNC line; A5R marked the sync aborted and broadcast it; sessions committed and one edited S2 C++ in the shared tree, breaking the running build. The holder's post-merge build request was queued 5th and capped at 45 min. Six times since 07/10; the worker never runs the post-merge headless tests. Evidence: Saved/A5R/sync.json (sync-20261019-1145-f41dc683), UBT log 11:14-11:50.
+
+## L-37 (2026-10-20) | class: intent | -> rev 33
+
+Sent to this session by the S2 sync main session (the sync conductor), verbatim:
+
+> A5R 0.19 field report from the sync conductor, night of 19-20/10:
+> (1) The 22:45 worker aborted on untracked files that main adds. Fine, but at 00:20 the worker aborted on a STAT-ONLY dirty file (git diff empty; update-index --refresh cleaned it). Run `git update-index --refresh` before judging a path dirty.
+> (2) Each abort released the lock and granted the Editor to the next lane within a minute (walker at 00:24, avian at 22:47). My manual merges then hit "unable to unlink" on files the open Editor held, and git aborted with "read-tree failed" partway. That left about 5,400 main files as untracked residue plus conflict-marker headers. One lane's tracked uncommitted edits (SipherDestructionRuntime GCBuilder/Build.cs/uplugin) also vanished in that window. Request: after a sync aborts, keep the Editor reserved for the holder (a short grace period) instead of granting the next lane, so the holder can merge by hand.
+> (3) The D1 guard blocks `git checkout --theirs -- <conflicted paths>` during a merge as "discard uncommitted changes". Conflicted paths during a merge the holder runs should be allowed.
+> (4) "owner unknown → abort" fires on every foreign conflict, even where the holder recorded a rule (Saved/SYNC_QUEUE.md). A way to pass resolution rules to the worker would avoid manual merges.
+> The sync completed by hand: 42644138, build OK, 291/0.
