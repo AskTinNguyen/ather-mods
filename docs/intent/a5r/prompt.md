@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 31
+- Rev: 32
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -136,6 +136,9 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A87 (rev 30): The merge-guard refusal names a step an agent can do (the holder ends it; when the holder is gone, a live session takes the sync over and runs `git merge --abort`), never "or Hai". README and rules text match the code: what still runs while A5R is off (the title clean-up, the off-state sync-slot release, a temp chain file), scope misses recorded (not asked), the switch being global for every session. Proof: unit test on the refusal text; review.
 - A88 (rev 30): Three suspected stalls are checked and fixed where real: (a) the acceptance diff of a long S2 branch (30 s / 4 MiB) refuses every PR attempt and is re-run every 5 minutes; (b) an editor request waits behind a sync dry-run on the same tick chain; (c) a failed RAM probe makes the launch gate wait while the PIE check lets it through. Each gets a measured verdict in progress.md and, where real, a fix with a test. Proof: gate per fix.
 - A89 (rev 31): The Orchestrate card shows the present, not old verdicts: it lists a verdict only while its incident is current (that holder still holds that lease or sync, or it ended less than 30 minutes ago), each with its date when not today; when none is current the card says so in one quiet line ("No stalled holder now", with the last verdict's date and time) or is left out. MEASURED 2026-10-16: the card showed three verdicts from 2026-10-09 (talab-upgrade 19:38, 1009-loco-ab2 17:25, mc-jump 16:37) with no date, read from `Saved/A5R/verdicts.json` with no check of age or current state. Proof: engine tests (an old verdict whose lease ended is not listed; a current one is; dates on another day); review on the pane.
+- A90 (rev 32): No session waits for the Editor or for memory without being queued: the rules text A5R injects (A5R on) says that a session or worker that cannot go on because the Editor is held or memory is short requests the Editor with the editor tool (minutes, pie, build, what) before it stops, and never ends its turn with "I will wait" alone; A5R wakes it when the slot is granted (the grant is already actionable and wakes an idle session since 0.13.1). Hai, 2026-10-19: tasks that could have run overnight while the Editor was free stopped for lack of a nudge. Proof: unit test on the injected text; engine test (a queued idle session is woken at its grant).
+- A91 (rev 32): A nudge when the Editor comes free and nobody is queued: A5R reads the transcript tails of the S2 sessions that are idle (no turn for 10 min, no running agent, not queued, not the holder, active in the last 24 h) and wakes at most 3 whose last assistant message says they are waiting for the Editor, PIE, a slot, the lock or memory, with one prompt: the Editor is free, the free memory now, and "if your task was waiting for it, request it with the editor tool; otherwise ignore this". Each session at most once per free window (from the moment the Editor came free until it is next held), logged in orchestrate.log. Proof: engine tests (a waiting idle session is nudged once; a session whose tail says nothing about waiting is not; never more than 3; not again in the same free window).
+- A92 (rev 32): A queued request held back only by memory is woken when memory allows it: when the launch or PIE gate was the only reason a queued session was not granted, A5R grants and wakes it as soon as a probe shows the gate met (no new request needed). Proof: engine test.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -149,6 +152,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 32 (2026-10-19): L-35: A90 queue before stopping, A91 a nudge to waiting idle sessions when the Editor comes free, A92 a memory-held request granted when memory allows. /warm (Ather) stays a suggestion, not code.
 - rev 31 (2026-10-16): L-34: A89 the Orchestrate card shows current incidents only.
 - rev 30 (2026-10-16): L-33: review of 0.17.1: A84 a hand-written lock never deadlocks, A85 the kit's checks run from anywhere, A86 A5R's judge never fails a PR, A87 no "or Hai" and README matches the code, A88 three suspected stalls checked.
 - rev 29 (2026-10-14): L-32: A83 no 🟥/⏯️ convention in A5R; decisions are Ather's.

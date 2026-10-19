@@ -229,3 +229,10 @@ Found from the S2 transcripts: A5R has been off since 2026-10-10 morning (one `/
 > A5R sao phần Orchestrate chứ dữ liệu cũ, thay vì các session thực tế đang có?
 
 With a screenshot of the A5R pane: the Orchestrate card lists 19:38 talab-upgrade, 17:25 1009-loco-ab2, 16:37 mc-jump-fall-triage (all from 2026-10-09).
+
+## L-35 (2026-10-19) | class: intent | -> rev 32
+
+> Khi tôi đi về, hoặc inactive (cỡ 9 10h PM tối) sẽ có khá nhiều task thực ra có thể tiếp tục chạy, nhưng chỉ vì thiếu một cú nudge để thực thi tiếp dù lúc đó Editor free.
+> Có cách nào để không bỏ sót?
+
+> Ok 1 và 2 tốt đấy. Còn vụ warm tôi mới biết thôi, chưa rõ khi nào cần bật khi nào không, cái đó để riêng, coi như suggestion.
