@@ -236,3 +236,7 @@ With a screenshot of the A5R pane: the Orchestrate card lists 19:38 talab-upgrad
 > Có cách nào để không bỏ sót?
 
 > Ok 1 và 2 tốt đấy. Còn vụ warm tôi mới biết thôi, chưa rõ khi nào cần bật khi nào không, cái đó để riêng, coi như suggestion.
+
+## L-36 (2026-10-19) | class: intent | -> rev 32
+
+Relayed by the S2 sync main session ("Hai asked me to send it"): the 11:10 sync worker merged 7b68b894 but ended while waiting for the build's Result: line with no SYNC line; A5R marked the sync aborted and broadcast it; sessions committed and one edited S2 C++ in the shared tree, breaking the running build. The holder's post-merge build request was queued 5th and capped at 45 min. Six times since 07/10; the worker never runs the post-merge headless tests. Evidence: Saved/A5R/sync.json (sync-20261019-1145-f41dc683), UBT log 11:14-11:50.
