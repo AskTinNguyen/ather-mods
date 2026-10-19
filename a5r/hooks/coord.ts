@@ -5,6 +5,7 @@
 // sync holder alone writes Saved/A5R/sync.json, and the head of the queue alone takes a free lock.
 // Files are the truth; a notice is only a doorbell.
 import { commandVerb, nestedCommand, segments, stripHeredocs, tokenize } from './a5r.ts'
+import { POST_MERGE_TESTS, testsLabel, type SyncStage } from './syncstage.ts'
 
 export const DIR = 'Saved/A5R'
 export const HEARTBEAT_STALE_MS = 3 * 60_000 // a session file not refreshed for 3 min: that session is gone
@@ -617,8 +618,8 @@ export const decide = (x: GrantInput): Decision => {
   // A61: no grant over a merge in progress (or left behind), whatever the sync's state says.
   if (x.mergeHead) return wait('merge', 'a merge is in progress in the shared checkout (.git/MERGE_HEAD)', 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
   const want = mine.want
-  const end = now + want.minutes * 60_000
   const phase = syncPhase(sync, now, isSyncHolderGone(sync, x.files, x.lanes, now))
+  const end = sync && isHolderInSync(sync, me8, phase) ? sync.hardEnd : now + want.minutes * 60_000 // A94: ends with the sync
   if (sync && phase === 'planned' && end > sync.at - CUTOFF_MS) {
     const room = Math.floor((sync.at - CUTOFF_MS - now) / 60_000)
     return wait('sync', `a ${want.minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
@@ -689,6 +690,14 @@ export type SyncFile = {
   endedAt: number | null
   note: string
   updatedAt: number
+  /** A93: after the merge, the stage the sync is in (null before it): the freeze holds through every stage. */
+  stage: SyncStage | null
+  /** A93: the HEAD the holder's a5r recorded before starting the worker, the merge commit, the build's log ('' unknown). */
+  preHead: string
+  mergeSha: string
+  buildLog: string
+  /** A93: the hard end was put back once while the build ran. */
+  extended: boolean
 }
 export type Phase = 'none' | 'planned' | 'cutoff' | 'frozen' | 'done' | 'aborted' | 'cancelled' | 'expired'
 
@@ -716,6 +725,11 @@ export const parseSyncFile = (text: string | null): SyncFile | null => {
       endedAt: v.endedAt ?? null,
       note: String(v.note ?? ''),
       updatedAt: Number(v.updatedAt ?? 0),
+      stage: v.stage === 'building' || v.stage === 'testing' ? v.stage : null,
+      preHead: String(v.preHead ?? ''),
+      mergeSha: String(v.mergeSha ?? ''),
+      buildLog: String(v.buildLog ?? ''),
+      extended: v.extended === true,
     }
   } catch {
     return null
@@ -733,6 +747,9 @@ export const syncPhase = (s: SyncFile | null, now: number, isHolderGone = false)
   return now >= s.hardEnd || isHolderGone ? 'expired' : 'frozen'
 }
 export const isOpenPhase = (p: Phase): boolean => p === 'planned' || p === 'cutoff' || p === 'frozen'
+/** A94: this session holds the sync and it is in its cutoff or freeze: its own Editor slot goes first, uncapped, and ends
+ * with the sync. */
+export const isHolderInSync = (s: SyncFile | null, me8: string, phase: Phase): boolean => Boolean(s && s.holder.id8 === me8 && (phase === 'cutoff' || phase === 'frozen'))
 
 export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: number, build = false, freezeMin = build ? SYNC_BUILD_MIN : SYNC_MERGE_MIN): SyncFile => ({
   v: 1,
@@ -753,6 +770,11 @@ export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: 
   endedAt: null,
   note: '',
   updatedAt: now,
+  stage: null,
+  preHead: '',
+  mergeSha: '',
+  buildLog: '',
+  extended: false,
 })
 /** A move keeps the sync's id and the length of its freeze; its notices are keyed by its time too, so a moved
  * sync gets them again. */
@@ -956,13 +978,23 @@ export const NOTICES = {
   frozen: (s: SyncFile): string => noticeText('Sync main', `frozen: ${s.holder.lane} merges origin/main since ${hhmm(s.at)}`, 'no git writes in the shared checkout and no Editor use until it is done; keep working without them (or in your own worktree); you will be told when it lifts'),
   frozenHolder: (s: SyncFile): string => noticeText('Sync main', `it is ${hhmm(s.at)}: every other session's git writes and Editor use are held for your sync, and the sync worker runs the merge in the background`, `leave git and the Editor in the shared checkout to it; it ends with done or abort (at the latest ${hhmm(s.hardEnd)}); you are told when it ends`),
   workerFailed: (s: SyncFile, why: string): string => noticeText('Sync main', `the sync worker for ${hhmm(s.at)} could not start (${why})`, `run the merge yourself by the sync procedure (git non-interactive, rule 11, abort on a logic or .uasset/.umap conflict), then call the sync tool with done or abort before ${hhmm(s.hardEnd)}`),
-  workerEnded: (s: SyncFile): string => noticeText('Sync main', `the sync worker ended without a SYNC DONE or SYNC ABORT line, so the sync at ${hhmm(s.at)} was aborted for it (${s.note})`, 'check the shared checkout (git status, .git/MERGE_HEAD) before anything else: a merge left in progress is yours to end (git merge --abort, or finish it: resolve, git add -- <paths>, git commit --no-edit); plan a new sync once it is clean'),
+  workerEnded: (s: SyncFile): string => noticeText('Sync main', `the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD, so the sync at ${hhmm(s.at)} was aborted for it (${s.note})`, 'check the shared checkout (git status, .git/MERGE_HEAD) before anything else: a merge left in progress is yours to end (git merge --abort, or finish it: resolve, git add -- <paths>, git commit --no-edit); plan a new sync once it is clean'),
   // A79: the worker's own last word, recorded by the holder's a5r (the Editor lock released with it).
   workerDone: (s: SyncFile): string => noticeText('Sync main', `the sync worker finished the sync at ${hhmm(s.at)}: done (${s.note}); the Editor lock is released`, 'git and the Editor are open again for every session; check the merge commit before trusting old measurements'),
   workerAborted: (s: SyncFile): string => noticeText('Sync main', `the sync worker aborted the sync at ${hhmm(s.at)} (${s.note}); the Editor lock is released`, 'check the shared checkout (git status, .git/MERGE_HEAD) before anything else; plan a new sync once the reason is fixed'),
+  /** A93: the merge is in and its build runs: the freeze holds; the holder hears when the build's Result line comes. */
+  syncBuilding: (s: SyncFile): string => noticeText('Sync main', `the merge ${s.mergeSha} is in and the build runs${s.buildLog ? ` (log ${s.buildLog})` : ' (its log is not known)'}; every other session stays frozen`, 'leave git and the Editor in the shared checkout alone; A5R wakes you at the build\'s own Result: line'),
+  /** A93 / A95: the build succeeded (or the sync does not build): the holder runs the post-merge tests, then done. */
+  syncTest: (s: SyncFile): string => noticeText('Sync main', `the merge ${s.mergeSha} is in${s.build ? ' and its build succeeded' : ''}; the post-merge headless tests are part of the sync`, `run them now with the S2 standard command: ${POST_MERGE_TESTS}; then call the sync tool done with the test result line in the note (or "tests skipped: <why>"); every other session stays frozen until then`),
+  /** A93: the build failed: the holder reverts the merge and aborts. */
+  syncBuildFailed: (s: SyncFile): string => noticeText('Sync main', `the build of the merge ${s.mergeSha} failed (its own Result: line)`, `revert it: git -C <checkout> revert -m 1 ${s.mergeSha} --no-edit, then call the sync tool abort with the first error lines`),
+  /** A93: no build log is known and no build process runs. */
+  syncBuildUnknown: (s: SyncFile): string => noticeText('Sync main', `the merge ${s.mergeSha} is in but its build log is not known and no build process runs`, 'read the build\'s own Result: line (or build now): Succeeded → run the post-merge tests and call done with their result line; Failed → git revert -m 1 <merge sha> --no-edit, then abort'),
+  /** A93: the hard end was put back once while the build ran. */
+  syncExtended: (s: SyncFile): string => noticeText('Sync main', `the build of the merge still runs, so the sync's hard end moved once to ${hhmm(s.hardEnd)}`, 'nothing to do: A5R wakes you at the build\'s Result: line'),
   lifted: (s: SyncFile): string =>
     s.state === 'done'
-      ? noticeText('Sync main', `done at ${hhmm(s.endedAt ?? s.updatedAt)}${s.note ? ` (${s.note})` : ''}`, 'git and the Editor are open again: resume from your resume note and re-check the files main changed before trusting old measurements')
+      ? noticeText('Sync main', `done at ${hhmm(s.endedAt ?? s.updatedAt)}${testsLabel(s.note) ? ` · ${testsLabel(s.note)}` : ''}${s.note ? ` (${s.note})` : ''}`, 'git and the Editor are open again: resume from your resume note and re-check the files main changed before trusting old measurements')
       : noticeText('Sync main', `${s.state} at ${hhmm(s.endedAt ?? s.updatedAt)}${s.note ? ` (${s.note})` : ''}`, 'git and the Editor are open again; your work stays as it is; the next sync is planned on the A5R panel'),
   holderConflicts: (s: SyncFile, rows: { c: Conflict; owners: string[] }[]): string => {
     const self = rows.filter(r => r.c.kind === 'self')
@@ -1108,11 +1140,11 @@ export const SYNC_WORKER_PROMPT = [
   '3. The Editor. Never write Saved/EDITOR_OWNER.txt. Read it before any merge: it must name the holder session given in your task (the sync\'s lock). If it names another lane: never close, kill or drive that Editor; never sleep or poll in a loop (a foreground sleep is refused here); read it once more after the fetch of rule 4 (the sync is first in the queue and is granted the moment it comes free), and if it still names another lane, end with SYNC ABORT naming that lane. If an Editor is open while the lock is the sync\'s (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone.',
   '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
   '5. Merge: `git merge --no-edit origin/main` (never rebase). For each conflicted path (`git diff --name-only --diff-filter=U`): rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
-  '6. Build, only when the sync builds: the engine root comes from the machine profile; a build succeeded only when its own `Result: Succeeded` line says so (Build.bat exits 0 on failure). A failed build: `git revert -m 1 <merge sha> --no-edit`, then abort with its first error lines.',
-  '7. End: your final answer is a short report whose last line is exactly one of these two lines (nothing after it, no other line starting with SYNC):',
-  '   SYNC DONE <merge sha> pre=<pre-merge HEAD> build=<Succeeded|skipped> conflicts=<none, or path:how; path:how>',
+  '6. Build, only when the sync builds: the engine root comes from the machine profile. Start the build in the background with its output written to a log file of its own (for example Build.bat … > E:/Projects/s2/Saved/Logs/sync-build-<HHMM>.log 2>&1, started so that it outlives your turn), then end at once with the SYNC MERGED line: never wait for the build (a build outlives your tool calls). The holder\'s a5r watches that log for the build\'s own `Result:` line (Build.bat exits 0 on failure), keeps every other session frozen meanwhile, and has the holder run the post-merge tests or revert.',
+  '7. End: your final answer is a short report whose last line is exactly one of these lines (nothing after it, no other line starting with SYNC):',
+  '   SYNC MERGED <merge sha> build-log=<path of the build log, or none when the sync does not build>',
   '   SYNC ABORT <why, one line> state=<the state the checkout is in: clean at <sha>, merge aborted, reverted <sha>, …>',
-  '   The holder\'s a5r records the first as done and the second as aborted; any other ending is recorded as an abort with your answer\'s first line.',
+  '   The holder\'s a5r takes the first as merged (the freeze holds through the build and the post-merge tests, until the holder calls done) and the second as aborted. An ending with no SYNC line while a merge commit sits on top of the pre-merge HEAD is taken as merged too; with no merge commit it is an abort.',
 ].join('\n')
 
 /** A79 (rev 28, review 2; 0.16.1): the sync worker's last word, read from the last three non-empty lines of its final
@@ -1121,8 +1153,8 @@ export const SYNC_WORKER_PROMPT = [
  * wins over any ABORT there ("SYNC ABORT was not needed" after it is prose); otherwise the last such line. A DONE whose
  * sha cannot be read is still done ("sha unread"); an ABORT without a reason is still an abort. Null: no such line, or
  * prose such as "Sync done: the merge finished". */
-export type SyncEnd = { kind: 'done'; sha: string; note: string } | { kind: 'abort'; why: string; note: string }
-const SYNC_LINE = /^SYNC[\s*`_:]+(DONE|ABORT)\b[\s*`_:]*(.*)$/
+export type SyncEnd = { kind: 'done'; sha: string; note: string } | { kind: 'abort'; why: string; note: string } | { kind: 'merged'; sha: string; buildLog: string; note: string }
+const SYNC_LINE = /^SYNC[\s*`_:]+(DONE|ABORT|MERGED)\b[\s*`_:]*(.*)$/
 const SHA_START = /^([0-9a-f]{7,40})\b/i
 export const parseSyncEnd = (answer: string): SyncEnd | null => {
   const tail = (answer ?? '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(-3)
@@ -1133,9 +1165,15 @@ export const parseSyncEnd = (answer: string): SyncEnd | null => {
       const m = SYNC_LINE.exec(l)
       return { kind: m?.[1] ?? '', rest: (m?.[2] ?? '').replace(/[`*]/g, '').trim() }
     })
-  const withSha = lines.filter(l => l.kind === 'DONE' && SHA_START.test(l.rest)).pop()
+  const withSha = lines.filter(l => (l.kind === 'DONE' || l.kind === 'MERGED') && SHA_START.test(l.rest)).pop()
   const line = withSha ?? lines[lines.length - 1]
   if (line === undefined) return null
+  if (line.kind === 'MERGED') {
+    // A93: the merge is in and its build runs in the background, writing the log named by build-log= (none: no build).
+    const sha = SHA_START.exec(line.rest)?.[1]?.toLowerCase() ?? ''
+    const log = /\bbuild-log=("[^"]+"|'[^']+'|\S+)/i.exec(line.rest)?.[1]?.replace(/^["']|["']$/g, '') ?? ''
+    return { kind: 'merged', sha, buildLog: /^(none|-)$/i.test(log) ? '' : log, note: `merged ${sha || '(sha unread)'}${log ? `; build log ${log}` : ''}`.slice(0, 300) }
+  }
   if (line.kind === 'DONE') {
     const sha = SHA_START.exec(line.rest)?.[1]?.toLowerCase() ?? ''
     return sha
@@ -1149,7 +1187,7 @@ export const parseSyncEnd = (answer: string): SyncEnd | null => {
 /** The task the holder's a5r hands the sync worker: this sync's facts. */
 export const syncWorkerTask = (s: SyncFile, checkout: string, lock: string): string =>
   [
-    `Run the sync of origin/main planned for ${hhmm(s.at)} in ${checkout} (holder ${s.holder.lane}, session ${s.holder.id8}). Hard end ${hhmm(s.hardEnd)}: end before it with the SYNC DONE or SYNC ABORT line. Build: ${s.build ? 'yes' : 'no'}.`,
+    `Run the sync of origin/main planned for ${hhmm(s.at)} in ${checkout} (holder ${s.holder.lane}, session ${s.holder.id8}). Hard end ${hhmm(s.hardEnd)}: end before it with the SYNC MERGED or SYNC ABORT line. Build: ${s.build ? 'yes' : 'no'}.`,
     `Dry-run at the cutoff: ${s.conflicts === null ? 'not run' : s.conflicts.length === 0 ? 'no conflicts' : s.conflicts.map(c => `${c.path} (${c.kind}${c.match ? `, main holds our ${c.match}` : ''})`).join('; ')}.`,
     `Untracked files origin/main adds: ${s.untracked === null ? 'not listed' : s.untracked.length === 0 ? 'none' : s.untracked.join('; ')}.`,
     `Editor lock now: ${lock || 'missing'} (the sync's lock names session ${s.holder.id8}).`,

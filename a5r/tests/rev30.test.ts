@@ -270,7 +270,7 @@ test('A88 (b): while the holder\'s cutoff dry-run (git merge-tree) is still runn
   ])
   release()
   expect(answer).not.toBe('STILL WAITING')
-  expect(answer).toContain('this session holds the Editor until 15:10')
+  expect(answer).toContain('this session holds the Editor until 16:15') // A94 (rev 32, by design): the holder's slot ends with its sync
   await sleep(50)
 })
 

@@ -98,8 +98,8 @@ test('A79: at T the holder\'s a5r takes the Editor lock for the sync in code, sp
   await idle($)
   await w.clock.advance(20 * MIN) // the worker runs: no lease or idle notice for the sync's slot
   expect(prompts(w).some(p => /Editor lease/.test(p))).toBe(false)
-  await workerEnds($, 'Merged origin/main, no conflicts.\nSYNC DONE 1a2b3c4d pre=9f8e7d6c build=skipped conflicts=none')
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c4d pre=9f8e7d6c build=skipped conflicts=none'])
+  await workerEnds($, 'Merged origin/main, no conflicts.\nSYNC DONE 1a2b3c4d pre=9f8e7d6c build=skipped conflicts=none tests: EXIT CODE: 0') // A95 (by design): done carries the tests
+  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c4d pre=9f8e7d6c build=skipped conflicts=none tests: EXIT CODE: 0'])
   expect(w.read(LOCK)).toMatch(/^FREE since=.* note=Editor closed; Sync main 14:45 ended /)
   expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync worker finished the sync at 14:45: done (merged 1a2b3c4d'))).toBe(true)
   expect(prompts(w).some(p => p.includes('without a SYNC DONE'))).toBe(false)
@@ -140,7 +140,7 @@ test('A79: with another lane on the lock at T, the sync\'s request waits first i
   expect(w.read(LOCK)).toContain(`note=Sync main 14:45`)
   expect(w.read(LOCK)).toContain(`session ${ME8}`)
   await workerEnds($, 'I stopped before the merge: the fetch failed.')
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['aborted', 'the sync worker ended without a SYNC DONE or SYNC ABORT line: I stopped before the merge: the fetch failed.'])
+  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['aborted', 'the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD: I stopped before the merge: the fetch failed.'])
   expect(w.read(LOCK)).toMatch(/^FREE since=/)
 })
 
@@ -376,8 +376,8 @@ test('A79 (review 5): a SYNC DONE that arrives after the hard end, before anyone
   await $.session.start(START)
   // The worker ran past the hard end and no tick has written the expiry yet.
   w.put(SYNC, JSON.stringify({ ...newSync(T(13, 50), MINE, 'me', NOW - 90 * MIN), workerId: 'w-sync', workerAt: T(13, 50) })) // hard end 14:35
-  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none'])
+  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none tests: EXIT CODE: 0')
+  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none tests: EXIT CODE: 0'])
 })
 
 test('A79 (review 5): /a5r off while the worker runs: its SYNC line is still recorded and the sync\'s lock released', opts(), async ($, on) => {
@@ -390,7 +390,7 @@ test('A79 (review 5): /a5r off while the worker runs: its SYNC line is still rec
   await w.clock.advance(5 * MIN)
   expect(w.read(LOCK)).toContain('note=Sync main 14:45')
   expect(await a5r($, 'off')).toContain('A5R off')
-  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')
+  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none tests: EXIT CODE: 0')
   expect(syncOf(w)?.state).toBe('done')
   expect(w.read(LOCK)).toMatch(/^FREE since=/)
 })
@@ -406,6 +406,6 @@ test('A79 (review 5): the holder still on the Editor at T: the sync takes that l
   await w.clock.advance(5 * MIN)
   expect(prompts(w).some(p => p.includes('the sync takes that lease: its worker uses or closes that Editor after a dirty-package check, and a5r releases it when the sync ends'))).toBe(true)
   expect(w.read(LOCK)).toContain(`session ${ME8}`)
-  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none')
+  await workerEnds($, 'SYNC DONE 1a2b3c4 pre=9f8e7d6 build=skipped conflicts=none tests: EXIT CODE: 0')
   expect(w.read(LOCK)).toMatch(/^FREE since=.*Sync main 14:45 ended/)
 })

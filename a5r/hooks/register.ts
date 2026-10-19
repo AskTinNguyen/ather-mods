@@ -4,7 +4,7 @@ import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent
 import { bareTitle, hasMark } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpCallKind, parseEditorLock } from './editor.ts'
 import {
-  CUTOFF_MS, DIR, HARD_END_WARN_MS, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
+  CUTOFF_MS, DIR, HARD_END_WARN_MS, isHolderInSync, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
@@ -14,6 +14,7 @@ import {
 } from './coord.ts'
 import { classifyGit, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
 import { NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
+import { POST_MERGE_TESTS, afterWorker, buildResultOf, mergeOnTop, stageNext, testsOf } from './syncstage.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -918,7 +919,10 @@ async function ensureTools($: Engine): Promise<void> {
 /** D7: at T the holder's a5r starts the sync worker, once per sync (sync.json records it before the spawn,
  * so a reload or a second tick never starts another). */
 async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
-  if (!(await writeSync($, opts, { ...s, workerAt: now, updatedAt: now }, s))) return
+  // A93: the HEAD before the merge, so a worker that ends with no SYNC line can still be read as merged or not.
+  const head = await $.process.run(['git', '-C', s2Root(opts), 'rev-parse', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
+  const preHead = head?.exitCode === 0 ? head.stdout.trim() : ''
+  if (!(await writeSync($, opts, { ...s, workerAt: now, preHead, updatedAt: now }, s))) return
   const claimed = syncFile ?? s
   // A79: the worker calls no a5r tool (a plugin's hooks never see the calls of an agent it spawned), so the holder's a5r
   // takes the Editor lock for the sync here, as the editor tool's request does, and releases it when the worker ends.
@@ -974,9 +978,27 @@ async function releaseLock($: Engine, opts: Opts, now: number, extra: string, do
   return { isWritten: true, line }
 }
 
-/** A12 / A79: the worker's turn ended. The sync's Editor lock is released (or its queued request withdrawn); then the
- * worker's last line is recorded through the sync tool's own path: `SYNC DONE …` → done, `SYNC ABORT …` → aborted;
- * any other ending aborts the sync with the answer's first line (the freeze must never outlive its worker). */
+/** A79: the sync's Editor lock given back when the sync ends (or its queued request withdrawn). */
+async function releaseSyncSlot($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
+  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lock = lockOf(lockRaw)
+  if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ended`)
+  else if (me && isSyncSlot(me.want)) {
+    me = { ...me, want: null }
+    await saveMe($, opts, now)
+  }
+}
+
+/** A93: the merge commit on top of the pre-merge HEAD the holder's a5r recorded, or null. */
+async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<string | null> {
+  const r = await $.process.run(['git', '-C', s2Root(opts), 'log', '-1', '--format=%H %P', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
+  return r?.exitCode === 0 ? mergeOnTop(r.stdout, s.preHead) : null
+}
+
+/** A12 / A79 / A93: the worker's turn ended. `SYNC ABORT …` → aborted; `SYNC DONE …` with the post-merge test line →
+ * done (A95); otherwise a merge (a `SYNC MERGED <sha> build-log=<path>` line, a DONE without tests, or no SYNC line with a
+ * merge commit on top of the pre-merge HEAD) moves the sync into its building or testing stage: the freeze and the sync's
+ * Editor lock stay until the holder calls done or abort (or the hard end). No merge commit at all → aborted. */
 async function workerEnded($: Engine, opts: Opts, agentId: string, answer: string): Promise<void> {
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   if (!s || s.workerAt === null || s.holder.id8 !== me8) return
@@ -988,32 +1010,47 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
   }
   const now = await $.clock.now()
   await restoreMe($, opts)
-  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
-  lock = lockOf(lockRaw)
-  if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ended`)
-  else if (me && isSyncSlot(me.want)) {
-    me = { ...me, want: null }
-    await saveMe($, opts, now)
-  }
-  if (s.state !== 'planned') return
+  if (s.state !== 'planned') return releaseSyncSlot($, opts, s, now)
   const end = parseSyncEnd(answer)
+  const after = afterWorker(end, end?.kind === 'abort' ? null : await mergeCommit($, opts, s), s.build)
+  if (after.kind === 'stage') {
+    const next: SyncFile = { ...s, stage: after.stage, mergeSha: after.mergeSha, buildLog: after.buildLog, note: after.note, updatedAt: now }
+    if (await writeSync($, opts, next, s)) push({ id: `sync:${s.id}:${s.at}:${after.stage}`, text: after.stage === 'building' ? NOTICES.syncBuilding(next) : NOTICES.syncTest(next), isActionable: after.stage === 'testing' })
+    return
+  }
+  await releaseSyncSlot($, opts, s, now)
   let refusal = ''
-  if (end) {
+  if (after.kind === 'end') {
     // The sync tool's own write (endSync), with or without the A5R flag, before or after the hard end (sync.json still planned).
-    const isWritten = await endSync($, opts, s, end.kind === 'done' ? 'done' : 'aborted', end.note, now)
-    const after = parseSyncFile(await readJson($, syncPath(opts)))
-    if (isWritten && after && after.id === s.id && after.state !== 'planned') {
-      push({ id: `sync:${s.id}:${s.at}:worker-${after.state}`, text: after.state === 'done' ? NOTICES.workerDone(after) : NOTICES.workerAborted(after), isActionable: true })
+    const isWritten = await endSync($, opts, s, after.state, after.note, now)
+    const ended = parseSyncFile(await readJson($, syncPath(opts)))
+    if (isWritten && ended && ended.id === s.id && ended.state !== 'planned') {
+      push({ id: `sync:${s.id}:${s.at}:worker-${ended.state}`, text: ended.state === 'done' ? NOTICES.workerDone(ended) : NOTICES.workerAborted(ended), isActionable: true })
       return
     }
-    refusal = `its ${end.kind === 'done' ? 'SYNC DONE' : 'SYNC ABORT'} line was not recorded (sync.json changed)`
+    refusal = `its ${after.state === 'done' ? 'SYNC DONE' : 'SYNC ABORT'} line was not recorded (sync.json changed)`
   }
   const first = (answer ?? '').split(/\r?\n/).map(l => l.trim()).find(Boolean) ?? ''
-  const ended = endedSync(s, 'aborted', `the sync worker ended without a SYNC DONE or SYNC ABORT line${refusal ? `; ${refusal}` : ''}${first ? `: ${first.slice(0, 140)}` : ''}`, now)
+  const ended = endedSync(s, 'aborted', `the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD${refusal ? `; ${refusal}` : ''}${first ? `: ${first.slice(0, 140)}` : ''}`, now)
   await $.fs.write(syncPath(opts), JSON.stringify(ended))
   syncFile = ended
   delivered.add(noticeIds.lifted(ended)) // the holder hears the worker's end instead of the lift
   push({ id: `sync:${s.id}:${s.at}:worker-ended`, text: NOTICES.workerEnded(ended), isActionable: true })
+}
+
+/** A93: the holder's a5r through the stages after the merge: the hard end put back once while the build runs near it;
+ * the build's own Result: line read from its log (Succeeded → the testing stage and the holder woken to run the
+ * post-merge tests; Failed → the holder woken to revert and abort); no log and no build process → the holder woken to
+ * read the result itself; in the testing stage the holder is woken once to run the tests and call done. */
+async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
+  const result = s.stage === 'building' && s.buildLog ? buildResultOf((await $.fs.read(s.buildLog).catch(() => '')) ?? '') : null
+  const move = stageNext(s, { result, isBuilding: buildProcs(probe).length > 0, now }, HARD_END_WARN_MS)
+  const changes: Partial<SyncFile> = { ...(move.extendTo === null ? {} : { hardEnd: move.extendTo, extended: true }), ...(move.next ? { stage: move.next, note: `${s.note}; build ${result}`.slice(0, 300) } : {}) }
+  const moved: SyncFile = { ...s, ...changes, updatedAt: now }
+  const isMoved = Object.keys(changes).length > 0 && (await writeSync($, opts, moved, s))
+  const cur = isMoved ? moved : s
+  if (isMoved && move.extendTo !== null) push({ id: `sync:${s.id}:${s.at}:extended`, text: NOTICES.syncExtended(cur), isActionable: false })
+  if (move.tell) push({ id: `sync:${s.id}:${s.at}:${move.tell}`, text: { testing: NOTICES.syncTest, 'build-failed': NOTICES.syncBuildFailed, 'build-unknown': NOTICES.syncBuildUnknown }[move.tell](cur), isActionable: true })
 }
 
 /** Review 5: with A5R off the tick does nothing else, but a lock this session still holds for a sync that is no longer
@@ -1676,6 +1713,10 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
     phase = phaseOf(s, now)
   }
   const isHolder = s.holder.id8 === me8
+  if (isHolder && phase === 'frozen' && s.stage) {
+    await stageStep($, opts, s, now) // A93
+    s = syncFile?.id === s.id ? syncFile : s
+  }
   if (isHolder && phase === 'frozen' && now >= s.hardEnd - HARD_END_WARN_MS) push({ id: noticeIds.hardEndSoon(s), text: NOTICES.hardEndSoon(s), isActionable: true })
   if (isHolder && isOpenPhase(phase) && !s.plannedBy.includes(me8)) push({ id: noticeIds.holderNamed(s), text: NOTICES.syncHolderNamed(s), isActionable: true })
   // A82: the cutoff concerns the holder and the sessions with uncommitted changes in the shared checkout (their touch
@@ -1780,8 +1821,11 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     return `${when(s)}: ${phase}${isOpenPhase(phase) ? ` (freeze ${clockOf(s.at)}–${clockOf(s.hardEnd)}${s.build ? ', with a build' : ''})` : ''}${isGone && isOpenPhase(phase) ? ' (its holder is gone: take it over from the panel or with /a5r sync takeover)' : ''}${s.conflicts ? ` · conflicts: ${s.conflicts.length ? s.conflicts.map(c => `${c.path} (${c.kind})`).join(', ') : 'none'}` : ''}${s.untracked ? ` · untracked main would overwrite: ${s.untracked.length ? s.untracked.join(', ') : 'none'}` : ''}${s.note ? ` · ${s.note}` : ''}`
   }
   // Review 5: a done or abort from the holder after the hard end but before anyone wrote the expiry is still recorded.
+  // A95: the post-merge headless tests are part of the sync: done carries their result line, or "tests skipped: <why>".
+  const untested = action === 'done' && testsOf(a.note ?? '') === null ? blocked(gate, 'done needs the post-merge test result line in its note', `run the post-merge headless tests (${POST_MERGE_TESTS}) and call done with their result line (for example "tests: TEST COMPLETE. EXIT CODE: 0"), or with "tests skipped: <why>"`) : null
   const isLate = Boolean(s && s.state === 'planned' && isMine && phase === 'expired' && now >= s.at && (action === 'done' || action === 'abort'))
   if (s && isLate) {
+    if (untested) return untested
     if (!(await endSync($, opts, s, action === 'done' ? 'done' : 'aborted', a.note ?? '', now))) return blocked(gate, 'sync.json changed', 'read it with status')
     return `${action === 'done' ? 'done' : 'aborted'} (after its hard end ${clockOf(s.hardEnd)}): git and the Editor are open again for every session; each one is told at its next tick`
   }
@@ -1825,6 +1869,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   }
   if (action === 'done' || action === 'abort') {
     if (action === 'done' && now < s.at) return blocked(gate, `${when(s)} has not started (it starts at ${clockOf(s.at)})`, 'move or cancel it instead')
+    if (untested) return untested
     if (!(await endSync($, opts, mine, action === 'done' ? 'done' : 'aborted', a.note ?? '', now, s))) return blocked(gate, 'sync.json changed', 'read it with status')
     return `${action === 'done' ? 'done' : 'aborted'}: git and the Editor are open again for every session; each one is told at its next tick`
   }
@@ -2562,6 +2607,7 @@ function wantFrom(e: Input, now: number): Want {
  * sync cutoff falls inside it; with someone queued the 45-minute cap stays. Read after a fresh tick. */
 function buildWindowProblem(want: Want, now: number): string | null {
   if (!want.build || want.minutes <= BUILD_WINDOW_MIN) return null
+  if (isHolderInSync(syncFile, me8, phaseOf(syncFile, now))) return null // A94: the holder's build for its sync is not capped
   const others = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile).filter(f => f.id8 !== me8)
   if (others.length > 0)
     return blocked('Editor', `${others.length} session${others.length === 1 ? ' is' : 's are'} queued for the Editor (${others.map(f => f.lane).join(', ')}), so a build window is at most ${BUILD_WINDOW_MIN} min (S2 standard); ${want.minutes} asked`, `batch the code changes into one window of ≤ ${BUILD_WINDOW_MIN} min and ask again`)

@@ -188,8 +188,8 @@ test('the holder is not frozen: its worker runs the merge (D7), then the sync en
   expect(prompts(w).length).toBe(1)
   expect(syncOf(w)?.workerId).toBe('w-sync')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 merge origin/main', agentId: 'w-sync' } as never))).toBeUndefined()
-  expect(out(await $.tool.call({ tool: 'mcp__a5r__sync', action: 'done', note: 'merged 1a2b3c' } as never))).toContain('done: git and the Editor are open again')
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c'])
+  expect(out(await $.tool.call({ tool: 'mcp__a5r__sync', action: 'done', note: 'merged 1a2b3c; tests: EXIT CODE: 0' } as never))).toContain('done: git and the Editor are open again')
+  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c; tests: EXIT CODE: 0'])
 })
 
 test('a planned sync whose holder is gone can be taken over before its freeze', opts(), async ($, on) => {

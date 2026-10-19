@@ -84,8 +84,8 @@ test('A12: at T the holder\'s a5r spawns the sync worker once, with the non-inte
   await $.session.start(START)
   const spec = (w.calls['agent.register'] ?? [])[0] as Rec
   expect([spec?.name, spec?.background]).toEqual(['sync', true])
-  // A79 (rev 28): the worker calls no a5r tool; it ends with one SYNC DONE / SYNC ABORT line (changed by design).
-  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'SYNC DONE <merge sha> pre=<pre-merge HEAD> build=<Succeeded|skipped> conflicts=', 'SYNC ABORT <why, one line> state='])
+  // A79 (rev 28): the worker calls no a5r tool; A93 (rev 32, by design): it ends with one SYNC MERGED / SYNC ABORT line.
+  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'SYNC MERGED <merge sha> build-log=', 'never wait for the build', 'SYNC ABORT <why, one line> state='])
     expect([must, String(spec?.prompt).includes(must)]).toEqual([must, true])
   expect(String(spec?.prompt).includes('mcp__a5r__')).toBe(false)
   expect(await $.agent.offer({ agent: 'a5r:sync', description: 'x', source: 'plugin', provider: { plugin: 'a5r', tier: 'user' } } as never)).toEqual({ isOffered: false })
@@ -112,8 +112,8 @@ test('A12: a worker that ends without done or abort aborts the sync for it; the 
   await idle($)
   await $.turn.complete({ agentId: 'w-sync', answer: 'Stopped: git reset --hard was refused.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
   expect(syncOf(w)?.state).toBe('aborted')
-  expect(syncOf(w)?.note).toBe('the sync worker ended without a SYNC DONE or SYNC ABORT line: Stopped: git reset --hard was refused.')
-  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync worker ended without a SYNC DONE or SYNC ABORT line, so the sync at 14:45 was aborted for it'))).toBe(true)
+  expect(syncOf(w)?.note).toBe('the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD: Stopped: git reset --hard was refused.')
+  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD, so the sync at 14:45 was aborted for it'))).toBe(true)
 })
 
 test('A12: the worker ends the sync with done: the sync is done and its end is no abort', opts(), async ($, on) => {
@@ -123,9 +123,9 @@ test('A12: the worker ends the sync with done: the sync is done and its end is n
   await $.session.start(START)
   await planMine($, w)
   await w.clock.advance(5 * MIN)
-  expect(out(await $.tool.call({ tool: 'mcp__a5r__sync', action: 'done', note: 'merged 1a2b3c (pre-merge 9f8e7d)', agentId: 'w-sync' } as never))).toContain('done: git and the Editor are open again')
+  expect(out(await $.tool.call({ tool: 'mcp__a5r__sync', action: 'done', note: 'merged 1a2b3c (pre-merge 9f8e7d); tests: EXIT CODE: 0', agentId: 'w-sync' } as never))).toContain('done: git and the Editor are open again')
   await $.turn.complete({ agentId: 'w-sync', answer: 'Merged 1a2b3c.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c (pre-merge 9f8e7d)'])
+  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['done', 'merged 1a2b3c (pre-merge 9f8e7d); tests: EXIT CODE: 0'])
   expect(prompts(w).some(p => p.includes('worker ended without done'))).toBe(false)
 })
 
