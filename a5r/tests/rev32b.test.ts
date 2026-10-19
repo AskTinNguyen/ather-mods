@@ -53,8 +53,6 @@ test('A93: unit: the MERGED line, the build\'s own Result line, a merge commit o
   expect(parseSyncEnd('SYNC MERGED 7b68b894 build-log=none')).toMatchObject({ kind: 'merged', buildLog: '' })
   expect(parseSyncEnd('Template: SYNC MERGED <merge sha> build-log=<path>')).toBe(null)
   expect([buildResultOf('Building...\nResult: Failed (OtherCompilationError)\n...\nResult: Succeeded\n'), buildResultOf('Building 43 actions...'), buildResultOf('Result: Failed (x)')]).toEqual(['Succeeded', null, 'Failed'])
-  // Review: a Result line before the last build start belongs to an earlier run.
-  expect(buildResultOf('Running UnrealBuildTool ...\nResult: Succeeded\nRunning UnrealBuildTool ...\nBuilding 4127 actions...\n')).toBe(null)
   expect(syncBuildLog('E:/s2', 'sync-20261006-1445-ab12cd34')).toBe('E:/s2/Saved/A5R/sync-20261006-1445-ab12cd34-build.log')
   // Git's three answers: merged on top of the pre-merge HEAD; positive no merge (HEAD still the pre-merge HEAD); unknown.
   expect(readMerge(`7b68b894aaaa ${PRE} 1c153b41bbbb\n`, PRE)).toEqual({ state: 'merged', sha: '7b68b894aaaa' })
@@ -225,18 +223,15 @@ for (const [what, procs, deny] of [['an UnrealEditor-Cmd test run', [{ name: 'Un
     expect([syncOf(w)?.state, syncOf(w)?.hardEnd, syncOf(w)?.extended]).toEqual(['planned', T(15, 18), true])
   })
 
-test('A93 (review): a stale Result line is ignored: a log older than the stage, or a Result before the last build start', opts(), async ($, on) => {
+test('A93 (review): a stale Result line is ignored: a log written before the stage began does not count; this run\'s does', opts(), async ($, on) => {
   const w = world(on, { ram: '40', procs: [UBT] })
   w.put('E:/s2/.git/HEAD', 'ref: refs/heads/HaiHuynh/20261005')
   staged(w, {})
-  w.put(LOG, 'Running UnrealBuildTool\nResult: Succeeded\n', T(14, 0)) // an earlier run's log, before the stage began
+  w.put(LOG, 'Building 4127 actions...\nResult: Succeeded\n', T(14, 0)) // an earlier run's log, before the stage began
   await $.session.start(START)
-  await minutes(w, 1)
+  await minutes(w, 2)
   expect(syncOf(w)?.stage).toBe('building')
-  w.put(LOG, 'Running UnrealBuildTool\nResult: Succeeded\nRunning UnrealBuildTool\nBuilding 4127 actions...\n', w.clock.now()) // this run has not ended
-  await minutes(w, 1)
-  expect(syncOf(w)?.stage).toBe('building')
-  w.put(LOG, 'Running UnrealBuildTool\nResult: Succeeded\nRunning UnrealBuildTool\nBuilding 4127 actions...\nResult: Succeeded\n', w.clock.now())
+  w.put(LOG, 'Building 4127 actions...\nResult: Succeeded\n', w.clock.now()) // this run, written fresh with >
   await minutes(w, 1)
   expect(syncOf(w)?.stage).toBe('testing')
 })

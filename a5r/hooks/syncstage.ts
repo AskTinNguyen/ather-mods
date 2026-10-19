@@ -33,16 +33,12 @@ export const testsLabel = (note: string): string | null => {
   return t === null ? null : /^tests\b/i.test(t) ? t : `tests: ${t}`
 }
 
-/** A93: where a build run begins in its log (UBT's own start lines): a `Result:` line before the last of them belongs to
- * an earlier run (review of rev 32: a stale Result). */
-const BUILD_START = /Running UnrealBuildTool|Using bundled DotNet SDK|Building \d+ actions?|Determining max actions to execute/gi
-/** A93: the build's own last `Result:` line in its log after the last build start (Build.bat exits 0 on failure, so only
- * this line counts); a log with no start line is read whole (it is the sync's own fresh file). */
+/** A93: the build's own last `Result:` line in its log (Build.bat exits 0 on failure, so only this line counts). The log is
+ * the sync's own fresh file (named by A5R, written with `>`), and register.ts reads it only when written after the stage
+ * began, so an earlier run's Result cannot reach here. */
 export const buildResultOf = (log: string): 'Succeeded' | 'Failed' | null => {
-  const starts = [...log.matchAll(BUILD_START)]
-  const from = starts.length > 0 ? (starts[starts.length - 1]?.index ?? 0) : 0
   let last: 'Succeeded' | 'Failed' | null = null
-  for (const m of log.slice(from).matchAll(/\bResult:\s*(Succeeded|Failed)\b/g)) last = m[1] === 'Succeeded' ? 'Succeeded' : 'Failed'
+  for (const m of log.matchAll(/\bResult:\s*(Succeeded|Failed)\b/g)) last = m[1] === 'Succeeded' ? 'Succeeded' : 'Failed'
   return last
 }
 
