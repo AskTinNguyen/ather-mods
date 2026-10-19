@@ -29,7 +29,7 @@ test('A58: unit: the probe lists build and game processes; a build process or a 
   for (const n of ['dotnet.exe', 'UnrealBuildTool.exe', 'cl.exe', 'link.exe', 'MSBuild.exe', 'UnrealGame.exe', 'S2.exe']) expect([n, argv.includes(`'${n}'`)]).toEqual([n, true])
   const lock = parseLockLine(held('bbbbbbbb', T(13, 30), T(14, 0)))
   const files = [JSON.parse(peer('bbbbbbbb', { heartbeatAt: NOW - 10 * MIN })) as SessionFile]
-  const x = { lock, files, lanes: [], now: NOW, waiting: [] }
+  const x = { lock, files, lanes: [], now: NOW, waiting: [], sync: null }
   expect(lapseOf({ ...x, probe: { freeGb: 40, diskGb: 50, procs: [] } })?.kind).toBe('lapsed')
   for (const name of BUILD_NAMES) expect([name, lapseOf({ ...x, probe: { freeGb: 40, diskGb: 50, procs: [proc(name, 50)] } })]).toEqual([name, null])
   const buildWant = [JSON.parse(peer('bbbbbbbb', { heartbeatAt: NOW - 10 * MIN, want: { minutes: 60, pie: false, build: true, what: 'build', mode: 'unattended', pausable: false, nextSafe: 'after save', requestedAt: T(13, 0) } })) as SessionFile]

@@ -66,13 +66,14 @@ test('A93: unit: the MERGED line, the build\'s own Result line, a merge commit o
   expect([step({}, { now: T(14, 51), isBuilding: false }).tell, step({}, { now: T(14, 53), isBuilding: false }).tell]).toEqual([null, 'build-unknown'])
   // Git, not the worker, says whether the merge happened.
   const merged = { state: 'merged' as const, sha: '7b68b894' }
-  expect(afterWorker(parseSyncEnd(MERGED), merged, true)).toEqual({ kind: 'stage', stage: 'building', mergeSha: '7b68b894', buildLog: LOG, note: `merged 7b68b894; build log ${LOG}` })
-  // Aborted only on positive evidence of no merge and no MERGED line; an unreadable HEAD, or the worker's MERGED, keeps the stage.
-  expect(afterWorker(null, { state: 'none' }, true)).toEqual({ kind: 'no-merge' })
+  expect(afterWorker(parseSyncEnd(MERGED), merged, true)).toEqual({ kind: 'stage', stage: 'building', mergeSha: '7b68b894', note: `merged 7b68b894; build log ${LOG}` })
+  // Given up only on positive evidence of no merge and no MERGED line; an unreadable HEAD, or the worker's MERGED, keeps the
+  // stage. A96 (rev 33, by design): giving up is the manual stage, not an end.
+  expect(afterWorker(null, { state: 'none' }, true)).toMatchObject({ kind: 'stage', stage: 'manual' })
   expect(afterWorker(parseSyncEnd(MERGED), { state: 'none' }, true)).toMatchObject({ kind: 'stage', stage: 'building', mergeSha: '' })
   expect(afterWorker(null, { state: 'unknown' }, true)).toMatchObject({ kind: 'stage', stage: 'building', mergeSha: '' })
   expect(afterWorker(parseSyncEnd('SYNC DONE 7b68b894 pre=x build=Succeeded conflicts=none'), merged, true)).toMatchObject({ kind: 'stage', stage: 'testing' })
-  expect(afterWorker(parseSyncEnd('SYNC ABORT conflict in X.uasset state=merge aborted'), merged, true)).toMatchObject({ kind: 'end', state: 'aborted' })
+  expect(afterWorker(parseSyncEnd('SYNC ABORT conflict in X.uasset state=merge aborted'), merged, true)).toMatchObject({ kind: 'stage', stage: 'manual' })
 })
 
 test('A93 / A95: the worker ends with SYNC MERGED: still frozen through the build; Result: Succeeded wakes the holder to test; done needs the test line, then lifts', opts(), async ($, on) => {
@@ -126,10 +127,11 @@ test('A93: a worker ending with no SYNC line while a merge commit sits on top of
   expect(syncOf(w)?.state).toBe('planned')
 })
 
-test('A93: no SYNC line and no merge commit on top of the pre-merge HEAD → aborted, as before', opts(), async ($, on) => {
+// A96 (rev 33, by design): no longer aborted: handed back to the holder in the manual stage.
+test('A93 / A96: no SYNC line and no merge commit on top of the pre-merge HEAD → the manual stage', opts(), async ($, on) => {
   const w = await atT($, on, { 'log -1 --format=%H %P HEAD': { stdout: `${PRE} 111111\n` } })
   await workerEnds($, 'Stopped: the fetch failed.')
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['aborted', 'the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD: Stopped: the fetch failed.'])
+  expect([syncOf(w)?.state, syncOf(w)?.stage, syncOf(w)?.note]).toEqual(['planned', 'manual', 'the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD: Stopped: the fetch failed.'])
 })
 
 test('A93: the hard end moves once by 30 min while the build still runs near it; the sync expires only past the new end', opts(), async ($, on) => {

@@ -1,12 +1,22 @@
 // A93-A95 (rev 32): after the merge, a sync goes on in stages until a real end: building (the merge is in, its build runs,
 // often longer than a worker's tool calls) → testing (the build succeeded, or the sync does not build; the holder runs the
-// post-merge headless tests) → done (with the test result line, A95) or aborted (an abort, or no merge commit). Every
-// other session stays frozen through every stage; the lift goes out only at done, abort or expiry. Pure: no `$`;
-// register.ts gathers the facts (the worker's last line, git's HEAD, the build log, the build processes) and applies the
-// moves decided here.
-import type { SyncEnd } from './coord.ts'
+// post-merge headless tests) → done (with the test result line, A95) or aborted (the holder's abort). A96 (rev 33): a
+// worker that aborts, or ends with no merge commit, hands the sync back to its holder in the manual stage (finish it by
+// hand, or abort). Every other session stays frozen through every stage; the lift goes out only at done, abort or
+// expiry. Pure: no `$`; register.ts gathers the facts (the worker's last line, git's HEAD, the build log, the build
+// processes) and applies the moves decided here.
+import type { SyncEnd, SyncFile } from './coord.ts'
 
-export type SyncStage = 'building' | 'testing'
+export type SyncStage = 'building' | 'testing' | 'manual'
+
+/** A93 / A96: the stages after a merge commit (a gone holder hands them to a live session); before the merge, and in the
+ * manual stage, a gone holder expires the sync. */
+export const isMergedStage = (stage: SyncStage | null): boolean => stage === 'building' || stage === 'testing'
+/** The stage as the panel and status name what the holder does. */
+export const stageWord = (stage: SyncStage | null): string => (stage === null ? 'merging' : stage === 'manual' ? 'finishing by hand' : stage)
+
+/** A96: the time the holder has at least, from when the worker hands the sync back, to finish it by hand or abort. */
+export const MANUAL_MIN_MS = 30 * 60_000
 
 /** A93: how long the hard end is put back, once, while the build process still runs near it. */
 export const BUILD_EXTEND_MS = 30 * 60_000
@@ -58,36 +68,55 @@ export const readMerge = (headLine: string | null, preHead: string): MergeRead =
   return sha && pre && sha === pre ? { state: 'none' } : { state: 'unknown' }
 }
 
-/** A93: what the worker's end makes of the sync: an end (an abort; a done that carries the post-merge tests), a stage
- * (git shows the merge: building when the sync builds and the worker did not report its build done, else testing), or
- * an abort for want of a merge commit. */
-export type AfterWorker =
-  | { kind: 'end'; state: 'done' | 'aborted'; note: string }
-  | { kind: 'stage'; stage: SyncStage; mergeSha: string; buildLog: string; note: string }
-  | { kind: 'no-merge' }
-export const afterWorker = (end: SyncEnd | null, git: MergeRead, isBuildSync: boolean): AfterWorker => {
-  if (end?.kind === 'abort') return { kind: 'end', state: 'aborted', note: end.note }
+/** A93 / A96: what the worker's end makes of the sync: done (a SYNC DONE that carries the post-merge tests), or a stage:
+ * git shows the merge (building when the sync builds and the worker did not report its build done, else testing), or the
+ * worker gave up (its SYNC ABORT, or positive evidence of no merge commit): manual, the sync back in the holder's hands
+ * with the worker's reason (`lastWords`: the first line of its answer, for an ending without a SYNC line). */
+export type AfterWorker = { kind: 'done'; note: string } | { kind: 'stage'; stage: SyncStage; mergeSha: string; note: string }
+export const afterWorker = (end: SyncEnd | null, git: MergeRead, isBuildSync: boolean, lastWords = ''): AfterWorker => {
+  if (end?.kind === 'abort') return { kind: 'stage', stage: 'manual', mergeSha: '', note: `the sync worker aborted: ${end.note}` }
   // A SYNC DONE line (the worker prompt before rev 32 asked for it) that carries the post-merge tests still ends the sync.
-  if (end?.kind === 'done' && testsOf(end.note) !== null) return { kind: 'end', state: 'done', note: end.note }
-  // Aborted only on positive evidence of no merge, and never against the worker's own MERGED line.
-  if (git.state === 'none' && end?.kind !== 'merged') return { kind: 'no-merge' }
+  if (end?.kind === 'done' && testsOf(end.note) !== null) return { kind: 'done', note: end.note }
+  // Given up only on positive evidence of no merge, and never against the worker's own MERGED line.
+  if (git.state === 'none' && end?.kind !== 'merged') return { kind: 'stage', stage: 'manual', mergeSha: '', note: `the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD${lastWords ? `: ${lastWords}` : ''}` }
   const mergeSha = git.state === 'merged' ? git.sha : ''
   const buildLog = end?.kind === 'merged' ? end.buildLog : ''
   const stage = isBuildSync && end?.kind !== 'done' ? 'building' : 'testing'
-  return { kind: 'stage', stage, mergeSha, buildLog, note: `merged ${mergeSha || '(git did not answer yet)'}${buildLog ? `; build log ${buildLog}` : ''}${end ? '' : '; the worker ended without a SYNC line'}` }
+  return { kind: 'stage', stage, mergeSha, note: `merged ${mergeSha || '(git did not answer yet)'}${buildLog ? `; build log ${buildLog}` : ''}${end ? '' : '; the worker ended without a SYNC line'}` }
 }
+
+/** A93 / A96: the sync as it enters a stage (`buildLog`: the sync's own log when it builds); entering the manual stage puts
+ * the hard end back so that at least MANUAL_MIN_MS remain. */
+export const enterStage = (s: SyncFile, to: { stage: SyncStage; mergeSha: string; note: string }, buildLog: string, now: number): SyncFile => ({
+  ...s,
+  stage: to.stage,
+  mergeSha: to.mergeSha,
+  buildLog,
+  note: to.note.slice(0, 300),
+  hardEnd: to.stage === 'manual' ? Math.max(s.hardEnd, now + MANUAL_MIN_MS) : s.hardEnd,
+  stageAt: now,
+  updatedAt: now,
+})
 
 /** A93: the merge as a notice names it, or the step to read it while git has not answered. */
 export const mergeLabel = (mergeSha: string): string => mergeSha || '(its sha not read yet: git -C <checkout> log -1 --format=%H)'
 
-/** A93: one step of the holder's watch over a sync in a stage: the hard end put back once by 30 min, in either stage, while
- * a build, test or Editor process runs within `warnMs` of it, or the processes cannot be read (`isBusy`); the next stage;
- * what the holder is told (each said once, by its key). `stageAt`: when the stage began (the build-unknown grace). */
-export type StageMove = { extendTo: number | null; next: SyncStage | null; tell: 'testing' | 'build-failed' | 'build-unknown' | null }
+/** A93: one step of the holder's watch over a sync in a stage: the hard end put back once by 30 min, in any stage, while
+ * a build, test or Editor process runs within `warnMs` of it, or the processes cannot be read (`isBusy`); then, by stage,
+ * the next stage and what the holder is told (each said once, by its key). `stageAt`: when the stage began (the
+ * build-unknown grace). The manual stage moves on only by the holder's own done or abort (A96: told once, at the hand-back). */
+export type StageTell = 'testing' | 'build-failed' | 'build-unknown'
+export type StageMove = { extendTo: number | null; next: SyncStage | null; tell: StageTell | null }
 export const stageNext = (s: { stage: SyncStage | null; extended: boolean; hardEnd: number; stageAt: number }, f: { result: 'Succeeded' | 'Failed' | null; isBuilding: boolean; isBusy: boolean; now: number }, warnMs: number): StageMove => {
   const extendTo = s.stage !== null && f.isBusy && !s.extended && f.now >= s.hardEnd - warnMs ? s.hardEnd + BUILD_EXTEND_MS : null
-  if (s.stage === 'testing') return { extendTo, next: null, tell: 'testing' }
-  if (f.result === 'Succeeded') return { extendTo, next: 'testing', tell: 'testing' }
-  if (f.result === 'Failed') return { extendTo, next: null, tell: 'build-failed' }
-  return { extendTo, next: null, tell: !f.isBuilding && f.now - s.stageAt >= STAGE_GRACE_MS ? 'build-unknown' : null }
+  switch (s.stage) {
+    case 'building':
+      if (f.result === 'Succeeded') return { extendTo, next: 'testing', tell: 'testing' }
+      if (f.result === 'Failed') return { extendTo, next: null, tell: 'build-failed' }
+      return { extendTo, next: null, tell: !f.isBuilding && f.now - s.stageAt >= STAGE_GRACE_MS ? 'build-unknown' : null }
+    case 'testing':
+      return { extendTo, next: null, tell: 'testing' }
+    default:
+      return { extendTo, next: null, tell: null }
+  }
 }

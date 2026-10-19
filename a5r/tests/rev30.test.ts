@@ -37,7 +37,7 @@ test('A84: unit: the hand-written line is read for its holder (9b53d3, avian win
   expect(resolveLock(lock, [holder], [], D(11, 0)).id8).toBe('9b53d3e1')
   expect(resolveLock(lock, [], [{ sessionId: HOLDER, hasEnded: false, mtimeMs: D(11, 0) }], D(11, 0)).id8).toBe('9b53d3e1')
   // Re-review (orchestrator): a holder that resolves to no session lapses 30 min past its end with nothing running.
-  const x = { lock, files: [], lanes: [], waiting: [] }
+  const x = { lock, files: [], lanes: [], waiting: [], sync: null }
   expect(lapseOf({ ...x, now: D(13, 36), probe: probe([]) })?.kind).toBe('lapsed') // past 13:06 + 30 min, PID 21832 gone
   expect(lapseOf({ ...x, now: D(13, 30), probe: probe([]) })).toBeNull() // inside the 30 min
   expect(lapseOf({ ...x, now: D(13, 40), probe: probe([UE]) })).toBeNull() // its Editor still runs

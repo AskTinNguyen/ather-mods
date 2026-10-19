@@ -280,6 +280,22 @@ export const globMatch = (text: string, glob: string): boolean => {
   return hit.test(text.replace(/\\/g, '/'))
 }
 
+/** A path glob as git writes one (A99, the sync's conflict rules): `*` within one folder, `**` across folders (`**` then a
+ * slash also matches no folder at all), a trailing `/` everything under that folder; no case. */
+const pathGlobs = new Map<string, RegExp>()
+export const pathGlobMatch = (path: string, glob: string): boolean => {
+  let hit = pathGlobs.get(glob)
+  if (!hit) {
+    const body = glob
+      .split(/(\*\*\/|\*\*|\*)/)
+      .map(part => (part === '**/' ? '(?:.*/)?' : part === '**' ? '.*' : part === '*' ? '[^/]*' : part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')))
+      .join('')
+    hit = new RegExp(`^${body}${glob.endsWith('/') ? '' : '$'}`, 'i')
+    pathGlobs.set(glob, hit)
+  }
+  return hit.test(path.replace(/\\/g, '/').replace(/^\.\//, ''))
+}
+
 /** Globs with '/' match the project-relative path (or the path as typed); others the file name. */
 export const matchRel = (rel: string | null, raw: string | null, list: readonly string[]): string | null => {
   const names = [rel, raw].filter((x): x is string => Boolean(x))

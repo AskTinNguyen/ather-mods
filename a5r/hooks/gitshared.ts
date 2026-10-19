@@ -64,7 +64,8 @@ export const gitPlace = (seg: Seg): { dir: string; args: string[] } => {
 export type GitAct =
   | null
   | { kind: 'refuse'; why: string; alt: string }
-  | { kind: 'check'; sub: string; paths: string[]; untracked: boolean }
+  /** `side`: a `checkout --ours|--theirs` (A97: on an unmerged path during a merge it resolves, it does not discard). */
+  | { kind: 'check'; sub: string; paths: string[]; untracked: boolean; side?: 'ours' | 'theirs' }
   | { kind: 'stash-drop' }
   /** rev 27 follow-up: a stash comes back over exactly the paths it holds (`git stash show --name-only <ref>`). */
   | { kind: 'stash-apply'; verb: string; ref: string }
@@ -101,6 +102,9 @@ export const classifyGit = (args: string[]): GitAct => {
       if (has(rest, '-b', '-B', '--orphan')) return refuse('git checkout -b/-B moves the shared working tree (and -B resets a branch)', `create the branch in ${WORKTREE.replace('<branch>', '-b <name> <start>')}`)
       const dash = rest.indexOf('--')
       const words = pathsOf(rest.slice(0, dash >= 0 ? dash : rest.length))
+      // A97: --ours/--theirs take no ref: every word is a path.
+      const side = has(rest, '--ours') ? 'ours' : has(rest, '--theirs') ? 'theirs' : undefined
+      if (side) return { kind: 'check', sub: 'checkout', paths: pathsOf(rest), untracked: false, side }
       if (dash < 0 && words.length === 1 && words[0] !== '.') return { kind: 'checkout-word', word: words[0] ?? '' }
       const paths = dash >= 0 ? rest.slice(dash + 1) : words.length > 1 ? words.slice(1) : words
       return { kind: 'check', sub: 'checkout', paths, untracked: false }
@@ -145,6 +149,18 @@ export const classifyGit = (args: string[]): GitAct => {
       return null
   }
 }
+
+/** A97: porcelain XY codes of an unmerged path (git status's "Unmerged paths"). */
+const UNMERGED = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
+/** The changed paths a discard would lose, from `git status --porcelain=v1 -z` (`XY path` entries, NUL-separated; a rename's
+ * source follows as an entry of its own, without XY). A97: while a merge is in progress (`isResolving`: a
+ * `checkout --ours|--theirs` with `.git/MERGE_HEAD` present) an unmerged path is being resolved, not discarded. */
+export const discardedPaths = (statusZ: string, isResolving: boolean): string[] =>
+  statusZ
+    .split(/\0|\r?\n/)
+    .filter(e => /^.. \S/.test(e) && !(isResolving && UNMERGED.has(e.slice(0, 2))))
+    .map(e => e.slice(3).trim())
+    .filter(Boolean)
 
 /** The alternative for a discard that names no paths (or `.`, or a top folder, which a status cannot read in time on
  * the shared checkout): the same command with exact paths. */

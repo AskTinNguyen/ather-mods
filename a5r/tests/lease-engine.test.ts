@@ -102,7 +102,8 @@ test('A12: at T the holder\'s a5r spawns the sync worker once, with the non-inte
   expect(spawns(w).length).toBe(1)
 })
 
-test('A12: a worker that ends without done or abort aborts the sync for it; the holder is told; the freeze lifts', opts(), async ($, on) => {
+// A96 (rev 33, by design): such a worker hands the sync back to its holder (the manual stage) instead of aborting it.
+test('A12 / A96: a worker that ends without done or abort and no merge commit hands the sync back to its holder; still frozen', opts(), async ($, on) => {
   // A93 (by design): git shows HEAD still at the pre-merge HEAD (positive evidence of no merge).
   const w = world(on, { git: { 'rev-parse HEAD': { stdout: '9f8e7d6c0000\n' }, 'log -1 --format=%H %P HEAD': { stdout: '9f8e7d6c0000 1111aaaa\n' } } })
   on('turn.complete', async () => ({ text: '' }))
@@ -112,9 +113,10 @@ test('A12: a worker that ends without done or abort aborts the sync for it; the 
   await w.clock.advance(5 * MIN) // 14:45: the worker runs
   await idle($)
   await $.turn.complete({ agentId: 'w-sync', answer: 'Stopped: git reset --hard was refused.', durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
-  expect(syncOf(w)?.state).toBe('aborted')
+  expect([syncOf(w)?.state, syncOf(w)?.stage]).toEqual(['planned', 'manual'])
   expect(syncOf(w)?.note).toBe('the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD: Stopped: git reset --hard was refused.')
-  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD, so the sync at 14:45 was aborted for it'))).toBe(true)
+  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync at 14:45 is back in your hands (the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD'))).toBe(true)
+  expect(prompts(w).some(p => /was aborted for it|the Editor lock is released/.test(p))).toBe(false)
 })
 
 test('A12: the worker ends the sync with done: the sync is done and its end is no abort', opts(), async ($, on) => {

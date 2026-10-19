@@ -105,7 +105,8 @@ test('A79: at T the holder\'s a5r takes the Editor lock for the sync in code, sp
   expect(prompts(w).some(p => p.includes('without a SYNC DONE'))).toBe(false)
 })
 
-test('A79: a SYNC ABORT answer aborts the sync with its reason and releases the lock; a build sync asks for its window with build', opts(), async ($, on) => {
+// A96 (rev 33, by design): a SYNC ABORT hands the sync back to its holder with the lock; the holder's abort ends it.
+test('A79 / A96: a SYNC ABORT answer hands the sync back to its holder with its reason, the lock kept; a build sync asks for its window with build', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
@@ -117,12 +118,14 @@ test('A79: a SYNC ABORT answer aborts the sync with its reason and releases the 
   expect(w.read(LOCK)).toContain('note=Sync main 14:45 (build)')
   expect(w.read(LOCK)).toContain('until 16:15') // T + 90 with a build
   await workerEnds($, 'The merge hit a binary conflict.\nSYNC ABORT Content/S2/X.uasset conflicts (binary, owner level-lane) state=merge aborted, clean at 9f8e7d6')
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['aborted', 'Content/S2/X.uasset conflicts (binary, owner level-lane) state=merge aborted, clean at 9f8e7d6'])
+  expect([syncOf(w)?.state, syncOf(w)?.stage, syncOf(w)?.note]).toEqual(['planned', 'manual', 'the sync worker aborted: Content/S2/X.uasset conflicts (binary, owner level-lane) state=merge aborted, clean at 9f8e7d6'])
+  expect(w.read(LOCK)).toContain('note=Sync main 14:45 (build)')
+  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync at 14:45 is back in your hands (the sync worker aborted: Content/S2/X.uasset conflicts'))).toBe(true)
+  expect(out(await $.tool.call({ tool: 'mcp__a5r__sync', action: 'abort', note: 'binary conflict, owner level-lane resolves it after' } as never))).toContain('aborted')
   expect(w.read(LOCK)).toMatch(/^FREE since=/)
-  expect(prompts(w).some(p => p.includes('A5R · Sync main — the sync worker aborted the sync at 14:45 (Content/S2/X.uasset conflicts'))).toBe(true)
 })
 
-test('A79: with another lane on the lock at T, the sync\'s request waits first in the queue and is granted when it comes free; any other answer aborts with its first line', opts(), async ($, on) => {
+test('A79: with another lane on the lock at T, the sync\'s request waits first in the queue and is granted when it comes free; any other answer hands the sync back with its first line (A96)', opts(), async ($, on) => {
   // A93 (by design): git shows HEAD still at the pre-merge HEAD (positive evidence of no merge).
   const w = world(on, { ram: '40', git: { 'rev-parse HEAD': { stdout: '9f8e7d6c0000\n' }, 'log -1 --format=%H %P HEAD': { stdout: '9f8e7d6c0000 1111aaaa\n' } } })
   on('turn.complete', async () => ({ text: '' }))
@@ -141,8 +144,9 @@ test('A79: with another lane on the lock at T, the sync\'s request waits first i
   expect(w.read(LOCK)).toContain(`note=Sync main 14:45`)
   expect(w.read(LOCK)).toContain(`session ${ME8}`)
   await workerEnds($, 'I stopped before the merge: the fetch failed.')
-  expect([syncOf(w)?.state, syncOf(w)?.note]).toEqual(['aborted', 'the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD: I stopped before the merge: the fetch failed.'])
-  expect(w.read(LOCK)).toMatch(/^FREE since=/)
+  // A96 (rev 33, by design): the manual stage, the sync's lock kept for the holder.
+  expect([syncOf(w)?.state, syncOf(w)?.stage, syncOf(w)?.note]).toEqual(['planned', 'manual', 'the sync worker ended without a SYNC line and no merge commit sits on top of the pre-merge HEAD: I stopped before the merge: the fetch failed.'])
+  expect(w.read(LOCK)).toContain(`note=Sync main 14:45`)
 })
 
 // Review 6: the engine never delivers a plugin-spawned agent's calls to that plugin's tool.call hook (F-7), so this test covers
