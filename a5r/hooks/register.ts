@@ -13,6 +13,7 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { classifyGit, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
+import { NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -810,9 +811,12 @@ async function refreshNames($: Engine, opts: Opts, ids: string[]): Promise<void>
   }
 }
 
+/** A notice not yet said or queued in this session. */
+const isUnsaid = (id: string): boolean => !delivered.has(id) && !pending.some(n => n.id === id)
+
 /** Queues a notice for this session, once per id (D6). */
 function push(n: Notice): void {
-  if (delivered.has(n.id) || pending.some(p => p.id === n.id)) return
+  if (!isUnsaid(n.id)) return
   pending.push(n)
 }
 
@@ -1088,6 +1092,9 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await editorSerial(() => editorPass($, opts, now))
   await refreshClients($, opts, now)
   await judgeStep($, opts, now).catch(err => $.ui.log(`a5r: judge: ${String(err)}`, { to: 'debug' }))
+  const window = freeWindowOf(lock, phaseOf(syncFile, now)) // A91: the free window, if the Editor is free
+  await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
+  await nudgeStep($, opts, now, window).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
   await syncStep($, opts, now)
   await mergeGuardStep($, opts, now)
   currentVerdicts(now) // A89: note which verdicts' incidents are current, so an ended one stays 30 min
@@ -1183,18 +1190,27 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
   decision = holdsLock() ? { kind: 'mine' } : d
 }
 
-/** A60: Saved/A5R/released/<id8>.json: the releases other sessions made of this holder's lease (A54, A55). Its
- * writers are the releasing sessions only; the holder reads it and acknowledges each release by its notice id (kept
- * in its own file's delivered list), so the holder's own saves can never erase one. */
-const releasedPath = (opts: Opts, id8: string): string => `${hfDir(opts)}/released/${id8}.json`
-const readReleases = async ($: Engine, opts: Opts, id8: string): Promise<Released[]> => {
+/** A60 / A91: a session's inbox, Saved/A5R/<folder>/<id8>.json: what other sessions' a5r tell it (the last 10 items,
+ * appended by their writers only); its owner reads it and acknowledges each item by its notice id (kept in its own
+ * file's delivered list), so its own saves never erase one and no session prompts another directly. */
+type Inbox<T> = { folder: string; field: string; isItem: (x: T) => boolean }
+async function readInbox<T>($: Engine, opts: Opts, box: Inbox<T>, id8: string): Promise<T[]> {
   try {
-    const v = JSON.parse((await readJson($, releasedPath(opts, id8))) ?? '') as { releases?: unknown }
-    return Array.isArray(v.releases) ? (v.releases as Released[]).filter(r => r && typeof r.since === 'number' && (r.kind === 'lapsed' || r.kind === 'unseen')) : []
+    const items = (JSON.parse((await readJson($, `${hfDir(opts)}/${box.folder}/${id8}.json`)) ?? '') as Record<string, unknown>)[box.field]
+    return Array.isArray(items) ? (items as T[]).filter(x => x && box.isItem(x)) : []
   } catch {
     return []
   }
 }
+async function appendInbox<T>($: Engine, opts: Opts, box: Inbox<T>, id8: string, item: T): Promise<void> {
+  const items = [...(await readInbox($, opts, box, id8)), item].slice(-10)
+  await $.fs.write(`${hfDir(opts)}/${box.folder}/${id8}.json`, JSON.stringify({ v: 1, [box.field]: items })).catch(err => $.ui.log(`a5r: ${box.folder}/${id8}.json not written: ${String(err)}`, { to: 'debug' }))
+}
+/** A60: the releases other sessions made of this holder's lease (A54, A55). */
+const releases: Inbox<Released> = { folder: 'released', field: 'releases', isItem: r => typeof r.since === 'number' && (r.kind === 'lapsed' || r.kind === 'unseen') }
+/** A91: the nudges other sessions sent this session when the Editor came free. */
+type Nudge = { window: string; at: number; by: string; freeGb: number | null }
+const nudges: Inbox<Nudge> = { folder: 'nudges', field: 'nudges', isItem: n => typeof n.window === 'string' }
 
 /** A62: one line in Saved/A5R/orchestrate.log (rotated past about 1 MB into orchestrate.log.1). */
 async function orchestrateLog($: Engine, opts: Opts, e: OrchestrateEvent): Promise<void> {
@@ -1239,9 +1255,9 @@ async function logCandidates($: Engine, opts: Opts, now: number): Promise<void> 
  * closed or killed. */
 async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (!me) return
-  for (const r of await readReleases($, opts, me8)) {
+  for (const r of await readInbox($, opts, releases, me8)) {
     const id = noticeIds.released(r)
-    if (delivered.has(id) || pending.some(n => n.id === id)) continue
+    if (!isUnsaid(id)) continue
     push({ id, text: r.kind === 'lapsed' ? NOTICES.lapsed(r) : NOTICES.passedOn(r), isActionable: true })
     // The lease (or, once it is dropped, the request it served) is the released one: drop both; a newer request stays.
     const isThat = me.holding ? Math.abs(me.holding.since - r.since) < 60_000 : (me.want?.requestedAt ?? 0) <= r.since
@@ -1265,9 +1281,51 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   const released: Released = { ...r, by: me.lane }
   await orchestrateLog($, opts, { ...holderFacts(held, now, fresh), at: now, rule: r.kind === 'lapsed' ? 'A54-lapsed' : 'A55-unseen', acted: true, note: releasedNote(r, held) }).catch(() => undefined)
   if (held.id8.length !== 8) return // A84: a hand-written line naming no session has no holder file to tell
-  const list = await readReleases($, opts, held.id8)
-  await $.fs.write(releasedPath(opts, held.id8), JSON.stringify({ v: 1, releases: [...list, released].slice(-10) })).catch(err => $.ui.log(`a5r: released file not written: ${String(err)}`, { to: 'debug' }))
+  await appendInbox($, opts, releases, held.id8, released)
   if (held.id8 === me8) me = { ...me, holding: null, want: null }
+}
+
+// ---------- A91: a nudge to waiting idle sessions when the Editor comes free ----------
+/** Tails already read in the current free window, by session and its last turn: an idle session is read once a window. */
+let nudgeRead = { window: '', seen: new Set<string>() }
+
+/** A91: while the Editor is free and nobody is queued, the idle S2 sessions whose last assistant message says they wait
+ * for the Editor, PIE, a slot, the lock or memory get one nudge each per free window, at most 3 in a window: each target
+ * and each of the 3 slots is claimed (one writer, an exact cap), the nudge goes to the target's inbox and is logged. */
+async function nudgeStep($: Engine, opts: Opts, now: number, window: string | null): Promise<void> {
+  if (!me) return
+  const all = [{ ...me, agents: agentsNow ?? me.agents }, ...peers]
+  if (!window || queueOf(all, lanes, now, syncFile).length > 0) return
+  if (nudgeRead.window !== window) nudgeRead = { window, seen: new Set() }
+  const pool = nudgeCandidates(all, lanes, now).filter(f => !nudgeRead.seen.has(`${f.id8}:${f.lastTurnAt}`))
+  const dir = pool.length > 0 ? await recordsDir($, opts) : ''
+  for (const f of pool) {
+    nudgeRead.seen.add(`${f.id8}:${f.lastTurnAt}`)
+    const last = parseTail(dir && f.session ? await transcriptTail($, `${dir}/${f.session}.jsonl`) : '').filter(e => e.role === 'assistant' && e.text).pop()
+    if (!last || !saysWaitingForEditor(last.text) || !(await claimAlert($, opts, `nudge-${window}-${f.id8}`))) continue
+    // The target's claim above is spent even when no slot is left: harmless, the window's cap is reached anyway.
+    if (!(await claimNudgeSlot($, opts, window))) return // 3 sent in this window
+    await appendInbox($, opts, nudges, f.id8, { window, at: now, by: me8, freeGb: probe?.freeGb ?? null })
+    await orchestrateLog($, opts, { at: now, rule: 'A91-nudge', lane: f.lane, id8: f.id8, procs: (probe?.procs ?? []).map(p => p.name), liveness: 'alive', lastTurnAt: f.lastTurnAt ?? null, agents: f.agents ?? null, build: false, acted: true, note: `the Editor is free (window ${window}), nobody queued; its last message: ${last.text.replace(/\s+/g, ' ').slice(0, 100)}` }).catch(() => undefined)
+  }
+}
+
+/** A91: one of the NUDGE_MAX nudges of a free window, claimed like an alert; false when all are taken. */
+async function claimNudgeSlot($: Engine, opts: Opts, window: string): Promise<boolean> {
+  for (let k = 0; k < NUDGE_MAX; k += 1) if (await claimAlert($, opts, `nudge-${window}-slot-${k}`)) return true
+  return false
+}
+
+/** A91: this session's nudges (another session's a5r wrote them): one actionable notice each while that free window is
+ * still open and this session neither asks for nor holds the Editor; otherwise it is dropped unsaid. */
+async function nudgeInbox($: Engine, opts: Opts, open: string | null): Promise<void> {
+  if (!me) return
+  for (const n of await readInbox($, opts, nudges, me8)) {
+    const id = noticeIds.nudge(n.window)
+    if (!isUnsaid(id)) continue
+    if (n.window !== open || me.want || holdsLock()) delivered.add(id)
+    else push({ id, text: NOTICES.nudge(n.freeGb), isActionable: true })
+  }
 }
 
 // ---------- A65: the advisory judge ----------

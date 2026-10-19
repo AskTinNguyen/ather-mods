@@ -8,6 +8,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXCEPTIONS, oldNamesIn, uncovered } from './old-names.ts'
 import { DECISION_EXCEPTIONS, decisionNamesIn } from './decision-names.ts'
+import { REQUIRED_RULES_TEXT } from './rules-text.ts'
 
 const mod = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const skip = new Set(['.claude-plugin/types', 'node_modules'])
@@ -50,4 +51,9 @@ for (const rel of outside) {
 const dStale = DECISION_EXCEPTIONS.filter((_, i) => !dUsed.has(i)).map(x => `stale exception: ${x.file}: ${x.name}: ${x.line}`)
 console.log(`scanned ${outside.length} files outside tests/: ${dHits.length} decision-convention strings outside the exceptions, ${dUsed.size} of ${DECISION_EXCEPTIONS.length} exceptions in use`)
 for (const s of [...dHits, ...dStale]) console.log(s)
-process.exit(hits.length + stale.length + dHits.length + dStale.length > 0 ? 1 : 0)
+
+// A90 (rev 32): the sentences the injected rules must carry are in the real files.
+const missing = REQUIRED_RULES_TEXT.filter(r => !fs.readFileSync(path.join(mod, r.file), 'utf8').includes(r.text)).map(r => `missing rules text (${r.row}): ${r.file}: ${r.text.slice(0, 80)}`)
+console.log(`checked ${REQUIRED_RULES_TEXT.length} required rules sentences: ${missing.length} missing`)
+for (const s of missing) console.log(s)
+process.exit(hits.length + stale.length + dHits.length + dStale.length + missing.length > 0 ? 1 : 0)

@@ -421,7 +421,7 @@ export type OrchestrateEvent = {
   at: number
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
    * running), holder-gone; or A65-judge (a verdict, advisory). A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied'
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge'
   lane: string
   id8: string
   procs: readonly string[]
@@ -942,6 +942,8 @@ export const NOTICES = {
   yield: (lane: string, minutes: number): string => noticeText('Editor yield', `${lane} asks for the Editor for ~${minutes} min, no build`, 'at your next safe point (≤ 10 min): stop PIE, save only your own assets, release with the editor tool; if you cannot pause, keep it and finish by your end time'),
   recovered: (holder: string): string => noticeText('Editor', `the lease of session ${holder} was stale (its lane is gone, no UnrealEditor runs) and was freed`, 'nothing to do: the queue goes on'),
   lapsed: (r: Released): string => noticeText('Editor lease', `your lease (${hhmm(r.since)}–${hhmm(r.end)}) lapsed: ${Math.round((r.at - r.end) / 60_000)} min past its end with no Editor running, so ${r.by || 'another session'} released it at ${hhmm(r.at)} and the queue went on`, 'nothing of yours was closed; request the Editor again with the editor tool if you still need it'),
+  /** A91: the Editor came free with nobody queued, and this session's last message said it was waiting for it. */
+  nudge: (freeGb: number | null): string => noticeText('Editor', `the Editor is free now (free memory ${freeGb === null ? '?' : freeGb} GB)`, 'if your task was waiting for it, request it with the editor tool; otherwise ignore this'),
   passedOn: (r: Released): string => noticeText('Editor', `the Editor was granted to this session at ${hhmm(r.since)}, but this session ran no turn in the next ${Math.round((r.at - r.since) / 60_000)} min and launched no Editor, so ${r.by || 'another session'} passed it to the next in the queue at ${hhmm(r.at)}`, 'request it again with the editor tool when you are ready to use it'),
   goneEditor: (who: string, pid: number): string => noticeText('Editor', `${who} is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (the lease is freed once no UnrealEditor runs); if it is hung, add a finding for Ather\'s Needs you (AGENTS.md: force-kill only a hung Editor whose holder is confirmed gone)'),
   pieAbort: (free: number): string => noticeText('RAM', `free RAM is ${free} GB, under the ${PIE_ABORT_GB} GB abort line, while this session's PIE runs`, 'stop PIE now, then free memory before starting it again'),
@@ -1008,6 +1010,7 @@ export const noticeIds = {
   yield: (asker: string, at: number) => `editor:yield:${asker}:${at}`,
   recovered: (holder: string, at: number) => `editor:recovered:${holder}:${Math.floor(at / 60_000)}`,
   released: (r: Released) => `editor:released:${r.kind}:${r.since}`,
+  nudge: (window: string) => `editor:nudge:${window}`,
   goneEditor: (holder: string, pid: number) => `editor:gone:${holder}:${pid}`,
   pieAbort: (n: number) => `ram:pie-abort:${n}`,
   disk: (day: string) => `disk:${day}`,
