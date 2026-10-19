@@ -2,7 +2,7 @@
 // The tools reach the agent through the MCP bridge (server/bridge.ts).
 
 import { clampHours, windowEndText } from "./ather/away.mjs";
-import { HELD_LABELS, HELD_NOUNS, heldKindsOf } from "./ather/guards.mjs";
+import { forBase, heldKindsOf, heldLabel, heldNoun } from "./ather/guards.mjs";
 import { STAGE_LABELS, currentStage, directorCalls, prStatusList } from "./ather/model.mjs";
 import { untrackText } from "./ather/home.mjs";
 import * as state from "./ather/state.mjs";
@@ -24,8 +24,9 @@ export async function hold(ctx: Ctx, kind: string, command: string) {
   if (held === null) return null;
   void state.bump(ctx.io as never, "heldParked").catch(() => undefined);
   const id = (held as { parked: { id: string } }).parked.id;
-  void note(ctx.agent.id, "warn", `Held ${HELD_NOUNS[kind as keyof typeof HELD_NOUNS] ?? kind} until you review the away window (${id}): ${command.slice(0, 200)}`);
-  return `Held by the Ather away window until the user reviews it: ${HELD_LABELS[kind as keyof typeof HELD_LABELS] ?? kind}. Recorded as ${id}. Do not retry it; continue with other work.`;
+  const { pack, base } = await laneOf(ctx);
+  void note(ctx.agent.id, "warn", `Held ${heldNoun(kind, pack, base)} until you review the away window (${id}): ${command.slice(0, 200)}`);
+  return `Held by the Ather away window until the user reviews it: ${heldLabel(kind, pack, base)}. Recorded as ${id}. Do not retry it; continue with other work.`;
 }
 
 // With-proof merges (D2): every rung the profile requires passed in tool output in this session.
@@ -43,13 +44,13 @@ export async function awayTool(ctx: Ctx, input: Record<string, unknown>) {
   const action = String(input.action ?? "");
   const tz = await state.readTz(io);
   if (action === "start") {
-    const { root, me, pack } = await laneOf(ctx);
+    const { root, me, pack, base } = await laneOf(ctx);
     const held = Array.isArray(input.held) ? (heldKindsOf(pack) as string[]).filter((kind) => (input.held as unknown[]).includes(kind)) : undefined;
     const choice = { hours: clampHours(Number(input.hours) || 8), untilDone: input.untilDone === true, goal: typeof input.goal === "string" ? input.goal.trim() : "", held };
-    const started = await state.startAway(io, choice as never, { root, me, tz, now: Date.now(), pack });
+    const started = await state.startAway(io, choice as never, { root, me, tz, now: Date.now(), pack, base });
     if (started === null) return "An away window is already running or waiting for the user's review.";
     void note(ctx.agent.id, "info", `Away window running ${windowEndText(started, tz)}.`);
-    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map((kind: string) => HELD_LABELS[kind as keyof typeof HELD_LABELS] ?? kind).join(", ")}. Questions to the user are now recorded in the ledger instead of asked.\n\n${await laneText(ctx)}`;
+    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${forBase(pack.mandate.allowed, base)}. Ledger: ${started.ledgerPath}. Held: ${started.held.map((kind: string) => heldLabel(kind, pack, base)).join(", ")}. Questions to the user are now recorded in the ledger instead of asked.\n\n${await laneText(ctx)}`;
   }
   if (action === "end") return (await state.endAway(io)) ? "Autonomy window ended; the user reviews it with /ather." : "No autonomy window is running.";
   if (action === "close") return (await state.closeAway(io)) ? "Autonomy window closed." : "No autonomy window to close.";

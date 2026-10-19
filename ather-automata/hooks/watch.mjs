@@ -8,15 +8,19 @@
 // The host reads on(...) and $.noun.method(...) from source, so they are
 // spelled literally, and helpers that take $ are top-level functions.
 
-import { clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
-import { HELD_LABELS, HELD_NOUNS, briefIssues, explainGuard, gitFolders, heldKindsOf, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
-import { STAGE_LABELS, andList, clockText, currentStage, directorCalls, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
+import { awayReason, clampHours, isHolding, mandateText, offAway, windowEndText } from './away.mjs'
+import { briefIssues, explainGuard, forBase, gitFolders, heldKindsOf, heldLabel, heldNoun, heldShellAt, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from './guards.mjs'
+import { STAGE_LABELS, andList, currentStage, directorCalls, isPersonOrigin, localMinutes, parseIntent, parseTzOffset, prStatusList } from './model.mjs'
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
-import { heldByLine, untrackText } from './home.mjs'
+import { trackedByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
+import { withFolders } from './shell.mjs'
+import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
+import { IDLE_ENV, PING_PROMPT, initialWarm, stepWarm } from './warm.mjs'
+import * as warmStore from './warm-store.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
@@ -34,6 +38,11 @@ let lastPersonAt = 0
 // A hot reload starts it again, which only makes the rule stricter.
 let sessionStartedAt = Date.now()
 
+// Keeping the prompt cache warm: its state (warm.mjs's stepWarm moves it on) and the timer it armed.
+let warm = initialWarm('off', 3)
+/** @type {import('claude-code').Timer | null} */
+let warmTimer = null
+
 // The store, files and session as closures: `$` cannot be handed to state.mjs itself.
 /** @param {Engine} $ @returns {import('./state.mjs').Io} */
 function io($) {
@@ -47,10 +56,31 @@ function io($) {
     exists: path => $.fs.exists(path).catch(() => false),
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
-    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitUser: async root => ((await $.process.run(['git', 'config', 'user.name'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitEmail: async root => ((await $.process.run(['git', 'config', 'user.email'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
+    origin: root => readOrigin($, root),
+    repo: async () => (await laneOf($)).repo,
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
+    worktrees: root => readWorktrees($, root),
   }
+}
+
+// The origin URL of the checkout at `root` ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readOrigin($, root) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  // Exit 1: no such key.
+  return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
+}
+
+// What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
+// could not say (the app aborted the run, it ran out of time): the workspace asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readWorktrees($, root) {
+  const run = await $.process.run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '') : ''
 }
 
 /** @param {Engine} $ */
@@ -61,9 +91,11 @@ function laneOf($) {
 /** @param {import('claude-code').On} on @param {import('claude-code').PluginOptions} options */
 export function register(on, options) {
   briefGate = String(options?.briefGate ?? 'warn')
+  warm = initialWarm(options?.cacheKeepWarm, options?.cacheKeepWarmHours)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    await startWarm($, e.isInteractive || e.surface !== null).catch(error => $.ui.log(`Ather warm: start failed: ${String(error)}`, { to: 'debug' }))
     seenTraps.clear()
     idleWarned.clear()
     resetWorkers()
@@ -78,6 +110,8 @@ export function register(on, options) {
       // A repository set up in this session has a new pack: the tools are registered again under the
       // same names, which replaces them, so they carry its areas, roles and held kinds.
       state.onSetUp('watch', setUp => registerTools($, setUp))
+      // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
+      void state.workspace(io($), root || cwd, line => $.ui.log(line, { to: 'debug' })).catch(() => undefined)
       await state.migrateRole(io($), me)
       const adopted = isS2 && e.isInteractive ? await state.adoptWindow(io($), { me, root, isAlive: sid => isLaneAlive($, sid) }).catch(() => null) : null
       if (isS2) void state.prune(io($), sid => isLaneGone($, sid)).catch(() => undefined)
@@ -96,17 +130,32 @@ export function register(on, options) {
   // the process goes on under a new session id (no session.start fires): the lane moves to it.
   on('session.end', async ($, e, next) => {
     await heartbeat($, true).catch(() => undefined)
+    endWarm($)
     if (e.reason === 'clear') followClear($, e.sessionId, 25)
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
-    // Typed at the terminal or the desktop, or sent from a phone over Remote Control: the person is back.
-    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') lastPersonAt = Date.now()
+    // The person is back (isPersonOrigin says who that is).
+    if (isPersonOrigin(e.origin)) lastPersonAt = Date.now()
     // Any prompt, or any tool call below, is the lane's last activity (its heartbeat says when).
     state.markActive()
+    // Delivered into a running turn, it starts none.
+    if (e.turnId === undefined) await warmDispatch($, { type: 'turnStart', isPerson: isPersonOrigin(e.origin) }).catch(() => '')
     return next(e)
   })
+
+  // A drawing client attached: the desktop app's sessions start as the SDK's do, with no surface yet.
+  on('session.attach', async ($, e, next) => {
+    await warmDispatch($, { type: 'attach' }).catch(() => '')
+    return next(e)
+  })
+
+  // Under two matchers that cover every turn: console.mjs holds the event's unmatched hook.
+  on('turn.complete', { isAborted: false }, turnEnded)
+  on('turn.complete', { isAborted: true }, turnEnded)
+
+  on('command.run', { command: 'warm' }, async ($, e) => ({ text: await warmDispatch($, { type: 'command', args: e.args, ledger: await warmStore.readWarmLedger(io($)) }).catch(error => `Keep-warm could not answer: ${String(error)}`) }))
 
   on('tool.call', { tool: 'mcp__ather-automata__status' }, async $ => ({ result: await statusText($) }))
   on('tool.call', { tool: 'mcp__ather-automata__away' }, async ($, e) => ({ result: await awayTool($, /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))) }))
@@ -115,7 +164,8 @@ export function register(on, options) {
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e)
     try {
-      const text = (await laneOf($)).isS2 ? await laneText($) : ''
+      // A session whose folder has no intents is still told about an intent it tracks in a workspace checkout.
+      const text = (await laneOf($)).isS2 || (await state.readTracked(io($))) !== null ? await laneText($) : ''
       return text === '' ? result : { ...result, sections: [...result.sections, { id: 'ather-automata:lane', text, scope: /** @type {const} */ ('session') }] }
     } catch {
       return result
@@ -123,7 +173,9 @@ export function register(on, options) {
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => shell($, e.command, e, next))
-  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => shell($, e.command, e, next))
+  // PowerShell is a tool on Windows only, so the engine's types written on another machine do not list
+  // it. It takes `command` as Bash does, and is typed as Bash here.
+  on('tool.call', { tool: /** @type {'Bash'} */ (/** @type {string} */ ('PowerShell')) }, async ($, e, next) => shell($, e.command, e, next))
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const issues = briefGate === 'off' ? [] : briefIssues(e.prompt, e.subagent_type, (await laneOf($).catch(() => null))?.pack)
@@ -149,7 +201,7 @@ export function register(on, options) {
     void state.bump(io($), 'decisionsLedgered').catch(() => undefined)
     $.ui.toast(`Ather: ${ids.join(', ')} recorded for your review instead of waiting.`)
     return {
-      deny: `${away.phase === 'review' ? 'The user has not reviewed the away window yet' : `The user is away until ${clockText(away.wakeAt, await state.readTz(io($)))}`} (Ather autonomy window). Do not wait. Take the recommended option for ${ids.join(', ')}, complete ${ids.length === 1 ? 'its entry' : 'their entries'} in ${away.ledgerPath} (Choice, Why, Evidence, Revert), and continue. Exception: if the question is about a destructive, production, credential, cost or CI-global action, do not take it; set the entry's Choice to "parked for the director" and move on to other work.`,
+      deny: `${awayReason(away, await state.readTz(io($)))} (Ather autonomy window). Do not wait. Take the recommended option for ${ids.join(', ')}, complete ${ids.length === 1 ? 'its entry' : 'their entries'} in ${away.ledgerPath} (Choice, Why, Evidence, Revert), and continue. Exception: if the question is about a destructive, production, credential, cost or CI-global action, do not take it; set the entry's Choice to "parked for the director" and move on to other work.`,
     }
   })
 
@@ -183,7 +235,8 @@ export function register(on, options) {
     const path = /** @type {{ file_path?: unknown }} */ (e).file_path
     const isWrite = /^(Write|Edit|MultiEdit)$/.test(tool)
     // The session's own orchestration (its main thread, never a worker) writing an intent's prompt.md or log.md
-    // tracks that intent once the write has gone through; creating a prompt.md switches to the new intent.
+    // tracks that intent, in the checkout the write lands in, once the write has gone through; creating a
+    // prompt.md switches to the new intent.
     const orchestrated = isWrite && e.agentId === undefined ? orchestrationFileOf(path) : null
     const isNewIntent = orchestrated?.file === 'prompt.md' && !(await io($).exists(await fullPath($, String(path))))
     // An edit to an intent's prompt, findings or progress: what it changed, read off the file before and after.
@@ -194,7 +247,7 @@ export function register(on, options) {
     const settled = () => (e.agentId ? recordHeard(e.agentId, Date.now()) : undefined)
     const ran = await during({ loop: e.agentId ?? '', toolUseId: String(e.tool_use_id ?? ''), tool, input: /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), at: Date.now() }, () => next(e), settled, next.signal)
     const hasRun = ran.deny === undefined && ran.isError !== true
-    if (orchestrated && hasRun) void laneOf($).then(({ root }) => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
+    if (orchestrated && hasRun) void intentRootOf($, String(path)).then(root => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
     if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
     return ran
@@ -203,10 +256,16 @@ export function register(on, options) {
 
 // ---------------------------------------------------------------- what an intent edit recorded
 
-// A tool's file path as written, or relative to the checkout.
+// A tool's file path as written, or relative to the session folder.
 /** @param {Engine} $ @param {string} path */
 async function fullPath($, path) {
-  return /^([A-Za-z]:|[\\/])/.test(path) ? path : `${(await laneOf($)).root}/${path}`
+  return /^([A-Za-z]:|[\\/])/.test(path) ? path : `${cwd || (await laneOf($)).root}/${path}`
+}
+
+// The folder holding the docs/intent an intent file is in: the checkout it lands in.
+/** @param {Engine} $ @param {string} path */
+async function intentRootOf($, path) {
+  return normalFolder((await fullPath($, path)).replace(/[\\/]docs[\\/]intent[\\/][^\\/]+[\\/][^\\/]+$/i, ''))
 }
 
 /** @param {Engine} $ @param {string} path */
@@ -220,14 +279,15 @@ async function noteIntentEdit($, target, path, before) {
   // The edited file's sibling, as it is now: prompt.md for findings and progress, progress.md for prompt.
   const sibling = async (/** @type {string} */ name) => (await readFile($, path.replace(/[^\\/]+\.md$/i, name))) ?? ''
   const intent = target.file === 'prompt.md' ? { progress: await sibling('progress.md') } : { prompt: await sibling('prompt.md') }
-  await state.noteChanges(io($), target.slug, intentChanges(target.file, before, after, intent), Date.now())
+  await state.noteChanges(io($), target.slug, intentChanges(target.file, before, after, intent), Date.now(), await intentRootOf($, path))
 }
 
 // ---------------------------------------------------------------- intents and the lane
 
-/** @param {Engine} $ @param {string} slug */
-async function readIntent($, slug) {
-  const { root, pack } = await laneOf($)
+// The tracked intent's files, read in its own checkout with that checkout's pack.
+/** @param {Engine} $ @param {{ slug: string, lane: import('./state.mjs').Checkout }} tracked */
+async function readIntent($, { slug, lane }) {
+  const { root, pack } = lane
   const dir = `${root}/docs/intent/${slug}`
   const files = io($)
   const prompt = await files.read(`${dir}/prompt.md`)
@@ -252,18 +312,10 @@ async function readBranch($, folder = null) {
   const { root } = await laneOf($)
   const base = folder === null ? root : /^([A-Za-z]:[\\/]|[\\/])/.test(folder) ? folder : `${root}/${folder}`
   const files = io($)
-  let head = null
-  // Walk up to the checkout the folder is in: `cd Plugins/X && git push` pushes the checkout's branch.
-  for (let folderAt = base.replace(/[\\/]+$/, ''), depth = 0; head === null && folderAt !== '' && depth < 12; depth += 1) {
-    head = await files.read(`${folderAt}/.git/HEAD`)
-    if (head === null) {
-      // A worktree: .git is a file naming its gitdir.
-      const gitdir = /gitdir:\s*(.+)/.exec((await files.read(`${folderAt}/.git`)) ?? '')?.[1]?.trim()
-      if (gitdir) head = await files.read(`${gitdir}/HEAD`)
-    }
-    const parent = folderAt.replace(/[\\/][^\\/]*$/, '')
-    folderAt = parent === folderAt ? '' : parent
-  }
+  // The checkout the folder is in: `cd Plugins/X && git push` pushes the checkout's branch.
+  const checkout = await checkoutOf(files, base)
+  const gitDir = checkout === null ? null : await gitDirOf(files, checkout)
+  const head = gitDir === null ? null : await files.read(`${gitDir}/HEAD`)
   return /ref:\s*refs\/heads\/(.+)/.exec(head ?? '')?.[1]?.trim() ?? (head ?? '').trim().slice(0, 12)
 }
 
@@ -275,11 +327,17 @@ async function branchesFor($, command) {
   return (/** @type {string | null} */ folder) => branches.get(folder) ?? ''
 }
 
+// The heartbeat, in the session's checkout and in the tracked intent's when that is another. A session
+// whose folder has no intents (a parent folder) writes only to the tracked intent's checkout, and to the
+// checkouts it wrote to before.
 /** @param {Engine} $ @param {boolean} hasEnded */
 async function heartbeat($, hasEnded) {
   const { root, isS2, pack } = await laneOf($)
-  if (!isS2) return
-  await state.writeHeartbeat(io($), { root, localDir: pack.localDir, branch: await readBranch($), hasEnded })
+  const tracked = await state.trackedLane(io($), cwd)
+  const other = tracked && !tracked.isOwn ? tracked.lane : null
+  if (!isS2 && !other && !state.hasHeartbeats()) return
+  const also = other ? { root: other.root, localDir: other.pack.localDir, branch: await readBranch($, other.root).catch(() => '') } : null
+  await state.writeHeartbeat(io($), { root: isS2 ? root : '', localDir: pack.localDir, branch: isS2 ? await readBranch($) : '', hasEnded, also })
 }
 
 // A session this checkout can vouch has gone: its heartbeat is here and says ended, or is stale.
@@ -299,40 +357,52 @@ async function isLaneAlive($, sid) {
   return lane !== null && state.isLaneLive(lane)
 }
 
-// Where this session's evidence goes: the tracked intent at its current commit, or the session.
+// Where proof seen in the session's own checkout goes: the tracked intent when it lives here, else the session.
 /** @param {Engine} $ */
 async function scopeOf($) {
-  return state.evidenceScope(io($))
+  return state.checkoutScope(io($), { isOwn: true, repo: '' })
 }
 
-/** @param {Engine} $ */
-async function peers($) {
-  const { root, pack } = await laneOf($)
+// The checkout a command's folder runs in (null: the session folder) and its lane. `isOwn`: it is the
+// session's own checkout, or in no checkout at all; both use the session's lane.
+/** @param {Engine} $ @param {string | null} folder @returns {Promise<{ lane: import('./state.mjs').Checkout, isOwn: boolean }>} */
+async function checkoutLane($, folder) {
+  return state.folderLane(io($), await laneOf($), folder)
+}
+
+// The other live sessions in a checkout: the session's own unless a lane is given.
+/** @param {Engine} $ @param {import('./state.mjs').Checkout} [lane] */
+async function peers($, lane) {
+  const { root, pack } = lane ?? (await laneOf($))
   return state.readPeers(io($), root, pack.localDir)
 }
 
 // What every prompt is told about this lane: the tracked intent, the Editor lock, live peers, the window's mandate.
 /** @param {Engine} $ */
 async function laneText($) {
-  const { root, me, pack } = await laneOf($)
+  const { root, me, pack, base } = await laneOf($)
   const lines = []
   const tz = await state.readTz(io($))
-  const slug = await state.readPinned(io($))
-  const intent = slug ? await readIntent($, slug) : undefined
+  const tracked = await state.trackedLane(io($), cwd)
+  const intent = tracked ? await readIntent($, tracked) : undefined
   const live = await peers($)
-  if (intent) {
-    const { role } = await state.readProfile(io($), me, pack)
-    const prs = await state.readPrStates(io($))
-    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), pack), role, prs, pack)]
-    lines.push(`Tracked intent: ${intent.slug} (docs/intent/${intent.slug}/), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
-    const held = heldByLine(live, intent.slug, Date.now())
+  if (tracked && intent) {
+    const { pack: its } = tracked.lane
+    const { role } = await state.readProfile(io($), me, its)
+    const prs = await state.readPrStates(io($), tracked.isOwn ? undefined : tracked.lane.repo)
+    const stage = STAGE_LABELS[currentStage(intent, await state.readEvidence(io($), await state.evidenceScope(io($)), its), role, prs, its)]
+    const folder = tracked.isOwn ? `docs/intent/${intent.slug}/` : `${tracked.lane.root}/docs/intent/${intent.slug}/`
+    lines.push(`Tracked intent: ${intent.slug} (${folder}), status ${intent.status}, stage ${stage} (Plan, Build, Prove, Ship), checklist ${intent.acceptanceDone}/${intent.acceptanceTotal}${intent.prs.length > 0 ? `, PRs ${prStatusList(intent, prs).join(', ')}` : ''}, open director calls ${directorCalls(intent).length}.`)
+    // Without the age the pane shows: the session keeps this text as first read for the whole
+    // conversation, so an age would soon be wrong.
+    const held = trackedByLine(tracked.isOwn ? live : await peers($, tracked.lane), intent.slug)
     if (held) lines.push(`${held}.`)
   }
   const lock = pack.parseLock(pack.lockFile ? await io($).read(`${root}/${pack.lockFile}`) : null, localMinutes(Date.now(), tz))
   if (lock.state === 'held') lines.push(`Editor owner lock: held by ${lock.holder || 'another lane'}${lock.until ? ` until ${lock.until}` : ''}.`)
   if (live.length > 0) lines.push(`Live peer lanes on this checkout: ${live.map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`).join('; ')}.`)
   const away = await state.readAway(io($))
-  if (isHolding(away)) lines.push(mandateText(away, tz, pack))
+  if (isHolding(away)) lines.push(mandateText(away, tz, pack, base))
   return lines.length > 0 ? `Ather Automata lane state (live, read-only):\n${lines.join('\n')}` : ''
 }
 
@@ -395,14 +465,18 @@ async function detectTz($) {
 
 // ---------------------------------------------------------------- the model's tools
 
-// A held action, parked for the person's review; null when no window holds it.
-/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command */
-async function hold($, kind, command) {
-  const held = await state.park(io($), kind, command, Date.now())
+// A held action, parked for the person's review; null when no window holds it. `heldHere`: the kinds
+// held where it runs, when that is more than the window's own. `base`: the branch the checkout it runs in
+// merges into, for what is said of it; the session's own checkout's unless given.
+/** @param {Engine} $ @param {import('./guards.mjs').HeldKind} kind @param {string} command @param {readonly string[]} [heldHere] @param {string} [base] */
+async function hold($, kind, command, heldHere, base) {
+  const held = await state.park(io($), kind, command, Date.now(), heldHere)
   if (held === null) return null
   void state.bump(io($), 'heldParked').catch(() => undefined)
-  $.ui.toast(`Ather: held ${HELD_NOUNS[kind]} until you review the away window (${held.parked.id}).`)
-  return `Held by the Ather away window until the user reviews it: ${HELD_LABELS[kind]}. Recorded as ${held.parked.id}. Do not retry it; continue with other work.`
+  const lane = await laneOf($).catch(() => undefined)
+  base ??= lane?.base
+  $.ui.toast(`Ather: held ${heldNoun(kind, lane?.pack, base)} until you review the away window (${held.parked.id}).`)
+  return `Held by the Ather away window until the user reviews it: ${heldLabel(kind, lane?.pack, base)}. Recorded as ${held.parked.id}. Do not retry it; continue with other work.`
 }
 
 /** @param {Engine} $ @param {Record<string, unknown>} input */
@@ -410,13 +484,13 @@ async function awayTool($, input) {
   const action = String(input.action ?? '')
   const tz = await state.readTz(io($))
   if (action === 'start') {
-    const { root, me, pack } = await laneOf($)
+    const { root, me, pack, base } = await laneOf($)
     const held = Array.isArray(input.held) ? heldKindsOf(pack).filter(kind => /** @type {unknown[]} */ (input.held).includes(kind)) : undefined
     const choice = { hours: clampHours(Number(input.hours) || 8), untilDone: input.untilDone === true, goal: typeof input.goal === 'string' ? input.goal.trim() : '', held }
-    const started = await state.startAway(io($), choice, { root, me, tz, now: Date.now(), pack })
+    const started = await state.startAway(io($), choice, { root, me, tz, now: Date.now(), pack, base })
     if (started === null) return 'An away window is already running or waiting for the user\'s review.'
     $.ui.toast(`Ather: away window running ${windowEndText(started, tz)}.`)
-    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${pack.mandate.allowed}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => HELD_LABELS[/** @type {import('./guards.mjs').HeldKind} */ (kind)] ?? kind).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
+    return `Autonomy window open ${windowEndText(started, tz)}. Allowed without asking: ${forBase(pack.mandate.allowed, base)}. Ledger: ${started.ledgerPath}. Held: ${started.held.map(kind => heldLabel(kind, pack, base)).join(', ')}. Questions to the user are now recorded in the ledger instead of asked.`
   }
   if (action === 'end') return (await state.endAway(io($))) ? 'Autonomy window ended; the user reviews it with /ather.' : 'No autonomy window is running.'
   if (action === 'close') return (await state.closeAway(io($))) ? 'Autonomy window closed.' : 'No autonomy window to close.'
@@ -439,7 +513,10 @@ async function profileTool($, input) {
     done.push(untrackText(await state.untrack(io($), me)))
   } else if (typeof input.track === 'string' && input.track.trim() !== '') {
     const slug = input.track.trim()
-    if (!(await state.track(io($), root, slug))) return `No intent named "${slug}" in docs/intent.`
+    // `folder`: another checkout holding the intent, absolute or from the session folder.
+    const folder = typeof input.folder === 'string' ? input.folder.trim() : ''
+    const at = folder === '' ? root : normalFolder(/^([A-Za-z]:|[\\/])/.test(folder) ? folder : `${cwd || root}/${folder}`)
+    if (!(await state.track(io($), at, slug))) return `No intent named "${slug}" in ${folder === '' ? '' : `${folder}/`}docs/intent.`
     done.push(`This session now tracks intent ${slug}.`)
   }
   return done.join(' ') || 'Nothing to change: pass role, area or track.'
@@ -448,24 +525,27 @@ async function profileTool($, input) {
 /** @param {Engine} $ */
 async function statusText($) {
   const { root, me, pack } = await laneOf($)
-  const slug = await state.readPinned(io($))
-  const intent = slug ? await readIntent($, slug) : undefined
-  const { role, area } = await state.readProfile(io($), me, pack)
-  const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)), pack)
+  const tracked = await state.trackedLane(io($), cwd)
+  const intent = tracked ? await readIntent($, tracked) : undefined
+  // The tracked intent is read, staged and proved with its own checkout's pack.
+  const its = tracked?.lane.pack ?? pack
+  const { role, area } = await state.readProfile(io($), me, its)
+  const evidence = await state.readEvidence(io($), await state.evidenceScope(io($)), its)
   const away = await state.readAway(io($))
   const tz = await state.readTz(io($))
-  const prs = await state.readPrStates(io($))
+  const prs = await state.readPrStates(io($), tracked && !tracked.isOwn ? tracked.lane.repo : undefined)
   return JSON.stringify(
     {
       me,
       role,
       area,
       tracked: intent
-        ? { slug: intent.slug, status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer', prs, pack)], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, prs: prStatusList(intent, prs), directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) }
+        ? { slug: intent.slug, ...(tracked?.isOwn === false ? { checkout: tracked.lane.root } : {}), status: intent.status, stage: STAGE_LABELS[currentStage(intent, evidence, role || 'engineer', prs, its)], checklist: `${intent.acceptanceDone}/${intent.acceptanceTotal}`, prs: prStatusList(intent, prs), directorCalls: directorCalls(intent).map(one => `${one.id}: ${one.title}`) }
         : null,
       evidence,
       ...(pack.lockFile ? { editorLock: pack.parseLock(await io($).read(`${root}/${pack.lockFile}`), localMinutes(Date.now(), tz)).raw } : {}),
-      ...(pack.id === 'unreal' ? {} : { pack: pack.id, gates: pack.gates.map(gate => `${gate.command}: ${gate.proofs.join(', ')}`), mergePolicy: pack.mergePolicy }),
+      // The tracked intent's checkout's gates and merge policy: what proves it.
+      ...(its.id === 'unreal' ? {} : { pack: its.id, gates: its.gates.map(gate => `${gate.command}: ${gate.proofs.join(', ')}`), mergePolicy: its.mergePolicy }),
       peers: (await peers($)).map(lane => `${lane.intent ?? 'no intent'} on ${lane.branch}`),
       away: { phase: away.phase, until: away.phase === 'off' ? '' : windowEndText(away, tz), ledger: away.ledgerPath, parked: away.parked.map(one => `${one.id}: ${one.command}`) },
       recurringGotchas: (await state.readRecurring(io($), pack)).map(one => `${one.title} (${one.count} sessions)`),
@@ -508,6 +588,7 @@ async function registerTools($, pack) {
         role: { type: 'string', enum: [...pack.roles] },
         ...(pack.areas.length > 0 ? { area: { type: 'string', enum: [...pack.areas] } } : { area: { type: 'string' } }),
         track: { type: 'string', description: 'The folder name of an intent under docs/intent for this session to track, or "none" to stop tracking.' },
+        folder: { type: 'string', description: 'With track: another checkout holding that docs/intent, absolute or relative to the session folder. Default: this checkout.' },
       },
     },
   })
@@ -518,10 +599,9 @@ async function registerTools($, pack) {
 /** @param {Engine} $ @param {string} command @param {any} e @param {any} next */
 async function shell($, command, e, next) {
   const away = await state.readAway(io($)).catch(() => offAway())
-  const { pack } = isHolding(away) ? await laneOf($) : { pack: null }
-  const kind = pack ? heldShell(command, away.held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack) }) : null
-  if (kind) {
-    const denied = await hold($, kind, command).catch(() => null)
+  const found = isHolding(away) ? await heldIn($, command, away.held) : null
+  if (found) {
+    const denied = await hold($, found.kind, command, found.held, found.base).catch(() => null)
     if (denied) return { deny: denied }
   }
   const ran = await next(e)
@@ -533,11 +613,30 @@ async function shell($, command, e, next) {
   }
 }
 
-// With-proof merges (D2): every rung the profile requires passed in tool output in this session.
-/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack */
-async function isMergeProven($, pack) {
+// What the window holds in a command, each segment judged by the checkout it runs in. Another checkout
+// holds the window's kinds and its own pack's defaults, so a window never holds less there than that
+// repository would, and counts only proof this session saw in that checkout. Resolves the kind held and the
+// base of the checkout it was held in, with every kind held across the command's checkouts for parking it, or null.
+/** @param {Engine} $ @param {string} command @param {readonly string[]} held @returns {Promise<{ kind: string, base: string, held: string[] } | null>} */
+async function heldIn($, command, held) {
+  const { pack, base } = await laneOf($)
+  /** @type {Map<string | null, import('./packs/index.mjs').HeldAt | null>} */
+  const at = new Map()
+  for (const { folder } of withFolders(command)) {
+    if (at.has(folder)) continue
+    const { lane, isOwn } = await checkoutLane($, folder)
+    if (isOwn) at.set(folder, null)
+    else at.set(folder, { pack: lane.pack, held: [...new Set([...held, ...lane.pack.held.defaults])], isProven: await isMergeProven($, lane.pack, await state.checkoutScope(io($), { isOwn, repo: lane.repo, root: lane.root })), base: lane.base })
+  }
+  const found = heldShellAt(command, held, await branchesFor($, command), pack, { isProven: await isMergeProven($, pack, await scopeOf($)), base, at: folder => at.get(folder) ?? null })
+  return found ? { ...found, held: [...new Set([...held, ...[...at.values()].flatMap(one => one?.held ?? [])])] } : null
+}
+
+// With-proof merges (D2): every rung the profile requires passed in tool output in this session, in `scope`.
+/** @param {Engine} $ @param {import('./packs/index.mjs').Pack} pack @param {string} scope */
+async function isMergeProven($, pack, scope) {
   if (pack.mergePolicy !== 'with-proof') return false
-  const evidence = await state.readEvidence(io($), await scopeOf($), pack)
+  const evidence = await state.readEvidence(io($), scope, pack)
   const rungs = pack.mergeRungs ?? []
   const seen = /** @type {Record<string, { state: string, at?: number }>} */ (evidence)
   return rungs.length > 0 && rungs.every(rung => seen[rung]?.state === 'pass' && (seen[rung]?.at ?? 0) >= sessionStartedAt)
@@ -547,17 +646,20 @@ async function isMergeProven($, pack) {
 async function afterShell($, command, ran) {
   const context = []
   const text = ran.text ?? ''
-  const { pack } = await laneOf($)
+  // The checkout the command ran in is its last segment's: its pack reads the output, and its proof is kept there.
+  const { lane, isOwn } = await checkoutLane($, withFolders(command).at(-1)?.folder ?? null)
+  const { pack } = lane
+  const scope = await state.checkoutScope(io($), { isOwn, repo: lane.repo, root: lane.root })
   if (!isSearchCommand(command)) await noteTraps($, text, pack)
   const guard = explainGuard(command)
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
   const reading = pack.readShell(command, text, ran)
-  for (const one of reading.rungs) await state.setRung(io($), await scopeOf($), one.rung, one.value)
+  for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value, one.gates)
   context.push(...reading.context)
   for (const toast of reading.toasts) $.ui.toast(toast.text, toast.timeoutMs === undefined ? undefined : { timeoutMs: toast.timeoutMs })
   for (const key of reading.bumps) void state.bump(io($), key).catch(() => undefined)
   if (isMergeCommand(command) && ran.deny === undefined && ran.isError !== true) {
-    const lost = await auditMerge($).catch(() => [])
+    const lost = await auditMerge($, lane.root, pack).catch(() => [])
     if (lost.length > 0) {
       await state.flagLost(io($), lost)
       void state.bump(io($), 'lostWorkFlags').catch(() => undefined)
@@ -588,9 +690,8 @@ async function noteMcp($, tool, input, ran) {
 }
 
 // After a merge: binary assets byte-identical to the merged-in side lost this branch's edits.
-/** @param {Engine} $ */
-async function auditMerge($) {
-  const { root, pack } = await laneOf($)
+/** @param {Engine} $ @param {string} root the checkout merged in @param {import('./packs/index.mjs').Pack} pack */
+async function auditMerge($, root, pack) {
   const binary = pack.binaryAssets
   if (!binary) return []
   const git = (/** @type {string[]} */ args) => $.process.run(['git', '-C', root, ...args], { env: GIT_ENV, timeoutMs: 30000 })
@@ -612,4 +713,94 @@ async function auditMerge($) {
   }
   const [merged, mine, other] = await Promise.all([blobs('HEAD'), blobs(ours), blobs(theirs)])
   return touched.filter(path => merged.get(path) !== undefined && merged.get(path) === other.get(path) && merged.get(path) !== mine.get(path))
+}
+
+// ---------------------------------------------------------------- keeping the prompt cache warm
+// warm.mjs decides (stepWarm); this section reads what each step needs and carries out what it returns.
+
+// A main-thread turn ended (a worker's reads its own cache, not the session's).
+/** @type {import('claude-code').Hook<'turn.complete'>} */
+async function turnEnded($, e, next) {
+  const result = await next(e)
+  if (e.agentId === undefined) void warmDispatch($, { type: 'turnEnd', usage: e.usage ?? null }).catch(() => '')
+  return result
+}
+
+/** @param {Engine} $ @param {boolean} attended */
+async function startWarm($, attended) {
+  await warmDispatch($, { type: 'start', attended, choice: await warmStore.readWarm(io($)) })
+  // The row's ◔ and the pane's button (console.mjs) turn it on and off through here, where it runs.
+  warmStore.onWarmToggle(isOn => warmDispatch($, { type: 'toggle', isOn }))
+  await $.command.register({ name: 'warm', description: 'Ather Automata: keep the prompt cache warm while you are idle', argumentHint: '[on | off | <n>h]' })
+}
+
+// At the session's end, without waiting on anything (F-1): its step needs nothing read, and its effects run behind it.
+/** @param {Engine} $ */
+function endWarm($) {
+  const { state: next, effects } = stepWarm(warm, { type: 'end' }, IDLE_ENV)
+  warm = next
+  for (const effect of effects) void runWarm($, effect).catch(() => undefined)
+}
+
+// What the session tells each step, read at once.
+/** @param {Engine} $ @returns {Promise<import('./warm.mjs').WarmEnv>} */
+async function warmEnv($) {
+  const [now, tz, away, usage] = await Promise.all([$.clock.now(), state.readTz(io($)), state.readAway(io($)).catch(() => null), $.session.usage().catch(() => null)])
+  return {
+    now,
+    tz,
+    away: { phase: away?.phase ?? 'off', untilDone: away?.untilDone ?? false, startedAt: away?.startedAt ?? 0, wakeAt: away?.wakeAt ?? 0 },
+    quota: Math.max(0, ...(usage?.rateLimits ?? []).map(one => one.percentUsed)),
+    context: usage?.context.tokens ?? 0,
+  }
+}
+
+// One event: the step decides, its effects are carried out in order, and its reply is what /warm and the ◔ say.
+/** @param {Engine} $ @param {import('./warm.mjs').WarmEvent} event @returns {Promise<string>} */
+async function warmDispatch($, event) {
+  const env = await warmEnv($)
+  const { state: next, effects, reply } = stepWarm(warm, event, env)
+  warm = next
+  for (const effect of effects) await runWarm($, effect).catch(error => $.ui.log(`Ather warm: ${effect.type}: ${String(error)}`, { to: 'debug' }))
+  return reply
+}
+
+/** @param {Engine} $ @param {import('./warm.mjs').WarmEffect} effect */
+async function runWarm($, effect) {
+  switch (effect.type) {
+    case 'cancel':
+      warmTimer?.cancel()
+      warmTimer = null
+      return
+    case 'arm':
+      warmTimer = $.clock.after(effect.delay, () => void warmDispatch($, { type: 'fire', id: effect.id }).catch(() => ''))
+      return
+    case 'fork':
+      // Not awaited: a read takes seconds, and the session's next event must not wait on it.
+      void readCache($, effect.id, effect.context).catch(error => $.ui.log(`Ather warm: read failed: ${String(error)}`, { to: 'debug' }))
+      return
+    case 'status':
+      return $.ui.status(effect.text)
+    case 'view':
+      return warmStore.showWarm(io($), effect.view)
+    case 'toast':
+      return $.ui.toast(`Ather: ${effect.text}`, { timeoutMs: effect.ms })
+    case 'note':
+      return warmStore.noteWarm(io($), effect.change)
+    case 'save':
+      return warmStore.setWarm(io($), effect.fields)
+  }
+}
+
+// Reads the cache once with a tool-less fork of the session's last request, which starts its hour again; what it cost
+// is the change in the session's cost around it.
+/** @param {Engine} $ @param {number} id @param {number} context */
+async function readCache($, id, context) {
+  const before = (await $.session.usage().catch(() => null))?.cost?.usd ?? 0
+  const reply = await $.model.fork({ prompt: PING_PROMPT })
+  const usd = Math.max(0, ((await $.session.usage().catch(() => null))?.cost?.usd ?? before) - before)
+  const usage = 'usage' in reply ? reply.usage : null
+  const reason = reply.isAnswered ? '' : reply.reason
+  $.ui.log(`Ather warm: read ${JSON.stringify({ ...usage, context, usd, reason })}`, { to: 'debug' })
+  await warmDispatch($, { type: 'read', id, context, usage, reason, usd })
 }

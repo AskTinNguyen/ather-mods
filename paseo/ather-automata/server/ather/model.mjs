@@ -2,6 +2,7 @@
 // Editor lock, the four stages and the one next step. Pure: no `$`.
 
 import { unreal } from './packs/unreal.mjs'
+import { branchNamed } from './shell.mjs'
 
 // The Unreal pack's names, kept here for the modules and tests that read them from the model.
 export { ROLES, ROLE_LABELS, OWNERS, AREAS, parseRole, parseEditorLock } from './packs/unreal.mjs'
@@ -20,15 +21,34 @@ const issueNumber = text => {
 /** @param {string} text @param {Pack} [pack] */
 export const normalizeArea = (text, pack = unreal) => pack.normalizeArea(text)
 
+// The key a person's stored records are filed under (personId). It drops accented letters ("Hoàng Vũ" is
+// "hongv"); kept so, since changing it would lose those records.
 /** @param {string} name */
 const personKey = name => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 
-// "Tin Nguyen" matches "TinNguyen"; "TienPham" matches "TienPhamProducerAther".
+// The key two names are compared by: accents dropped, the letters kept ("Hoàng Vũ" is "hoangvu").
+/** @param {string} name */
+const matchKey = name => personKey(name.normalize('NFD').replace(/\p{M}/gu, '').replace(/[đĐ]/g, 'd'))
+
+// Other names a person goes by, by match key: git's email name ("vu.le" for "Hoàng Vũ"), learnt from the checkout.
+/** @type {Map<string, Set<string>>} */
+const aliases = new Map()
+
+/** @param {string} name @param {string} alias */
+export const addPersonAlias = (name, alias) => {
+  const key = matchKey(name)
+  const other = matchKey(alias)
+  if (key === '' || other === '' || key === other) return
+  aliases.set(key, new Set([...(aliases.get(key) ?? []), other]))
+}
+
+// "Tin Nguyen" matches "TinNguyen"; "TienPham" matches "TienPhamProducerAther"; "Hoàng Vũ" matches "Hoang Vu",
+// and "vu.le" once git's email says vu.le@… is Hoàng Vũ. An email name matches only whole: "tin@…" is not Tin Nguyen.
 /** @param {string} a @param {string} b */
 export const isSamePerson = (a, b) => {
-  const x = personKey(a)
-  const y = personKey(b)
-  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x))
+  const x = matchKey(a)
+  const y = matchKey(b)
+  return x !== '' && y !== '' && (x.startsWith(y) || y.startsWith(x) || Boolean(aliases.get(x)?.has(y)) || Boolean(aliases.get(y)?.has(x)))
 }
 
 // "a", "a and b", "a, b and c".
@@ -113,14 +133,13 @@ export const section = (text, heading) => {
   return end ? rest.slice(0, end.index) : rest
 }
 
-// Every section headed so, in order: "## Acceptance" and a later "## Acceptance, rev 2" both count.
+// Every section headed so, in order, each on its own: "## Acceptance" and a later "## Acceptance, rev 2" both count.
 /** @param {string} text @param {string} heading */
 const sections = (text, heading) =>
   text
     .split(/^(?=##\s)/m)
     .filter(part => new RegExp(`^##\\s+${heading}\\b`, 'i').test(part))
     .map(part => part.replace(/^.*$/m, ''))
-    .join('\n')
 
 const CLOSED = /\b(accepted|rejected|resolved|closed|superseded|withdrawn|answered)\b/i
 
@@ -166,7 +185,7 @@ export const parseOptions = body => {
   /** @type {{ letter: string, text: string, isMarked: boolean }[]} */
   let found = []
   // The list format: an "Options:" line on its own, then "- <Letter>[ (recommended)]: <text>" items and their indented continuations.
-  const head = lines.findLastIndex(line => /^\s*[-*]?\s*\**\s*options(?:\s+\w+)?\s*\**\s*:\s*\**\s*$/i.test(line))
+  const head = lines.findLastIndex(line => OPTIONS_HEAD.test(line))
   if (head >= 0) {
     for (const line of lines.slice(head + 1)) {
       const item = /^\s*[-*]\s+\**\s*([A-Za-z])\b\s*(?:\(([^)]*)\))?\s*\**\s*[:.)]\s*\**\s*(.*)$/.exec(line)
@@ -216,6 +235,9 @@ export const parseOptions = body => {
   })
 }
 
+// The intent template's "**Options:**" line, on its own above its lettered list.
+const OPTIONS_HEAD = /^\s*[-*]?\s*\**\s*options(?:\s+\w+)?\s*\**\s*:\s*\**\s*$/i
+
 // A finding's lines about itself: "Status: …", "**Resolution:** …", "- Resolution (orchestrator, 2026-10-05): …".
 const SELF_LINE = /^[ \t]*[-*]?[ \t]*\**[ \t]*(status|resolution)[ \t]*(?:\([^)\n]*\))?[ \t]*\**[ \t]*:[ \t]*\**[ \t]*(.*)$/gim
 
@@ -223,9 +245,9 @@ const SELF_LINE = /^[ \t]*[-*]?[ \t]*\**[ \t]*(status|resolution)[ \t]*(?:\([^)\
 // "partly addressed …", "not yet", "pending", "tbd", a template's "<pending owner>", "-".
 const UNSETTLED = /^(open|pending|partly|not yet|tbd)\b|^[<\-—–]/i
 
-// Open findings. Template heading: "## F-<n> (date, rev r) | blocking: yes|no | status: open (owner)".
+// Every finding, open or not. Template heading: "## F-<n> (date, rev r) | blocking: yes|no | status: open (owner)".
 /** @param {string} findings @param {string} prompt */
-export const parseFindings = (findings, prompt) => {
+const readFindings = (findings, prompt) => {
   const decisions = section(prompt, 'Decisions')
   return findings
     .split(/^(?=##\s+F)/m)
@@ -252,7 +274,9 @@ export const parseFindings = (findings, prompt) => {
           : CLOSED.test(rest) || (statusLine !== undefined && CLOSED.test(statusLine.text)) || new RegExp(`\\b${id.replace(/-/g, '\\-')}\\b`).test(decisions)
       // "(open, not blocking)" and "non-blocking for this change" say it does not block.
       const isBlocking = headBlocking ? headBlocking[1]?.toLowerCase() === 'yes' : /blocking:\s*yes/i.test(part) || (/\bblocking\b/i.test(rest) && !/\b(non|not)[\s-]+blocking\b/i.test(rest))
-      const isDirectorCall = owner ? /director|producer|design|production|user/i.test(owner) : /\(a\)\s/.test(body) || /director|design lead|production call/i.test(body)
+      // Without a decider in the status, the template's Options list (written only when the user decides) or
+      // words naming a director's call make it one; inline "(a) … (b) …" choices are the worker's engineering notes.
+      const isDirectorCall = owner ? /director|producer|design|production|user/i.test(owner) : body.split(/\r?\n/).some(line => OPTIONS_HEAD.test(line)) || /director|design lead|production call/i.test(body)
       const headTitle = shortTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
       const bodyTitle = shortTitle(body.trim().split('\n').find(line => line.trim() !== '' && !line.trim().startsWith('#')) ?? '')
       const headFull = fullTitle(rest.replace(/\|\s*(blocking|status):.*$/i, '').replace(/^\([^)]*\)\s*:?\s*/, '').replace(/^:\s*/, ''))
@@ -260,29 +284,36 @@ export const parseFindings = (findings, prompt) => {
       // `source`: the finding as written (capped), for the pane's finding view.
       return { id, title: headTitle || bodyTitle || id, full: headFull || bodyFull || id, isBlocking, isDirectorCall, options: parseOptions(body), source: part.trim().slice(0, 6000), isOpen: !isClosed }
     })
-    .filter(one => one.isOpen)
-    .map(({ isOpen: _open, ...one }) => one)
 }
+
+/** @param {ReturnType<typeof readFindings>} all */
+const openOnes = all => all.filter(one => one.isOpen).map(({ isOpen: _open, ...one }) => one)
+
+// Open findings.
+/** @param {string} findings @param {string} prompt */
+export const parseFindings = (findings, prompt) => openOnes(readFindings(findings, prompt))
 
 // ---------------------------------------------------------------- acceptance and PRs
 //
 // One writer per fact (.agents/skills/intent/SKILL.md): prompt.md's Acceptance lists the items
-// ("- A1: ..."), progress.md's Acceptance table says which are met, progress.md's "- PR:" line
-// names the PRs. Intents from before that rule tick "- [x]" boxes in prompt.md instead.
+// ("- A1: ...", or rows "| A1 | ... | <proof> |"), progress.md's Acceptance table says which are met,
+// progress.md's "- PR:" line names the PRs. Intents from before that rule tick "- [x]" boxes in
+// prompt.md instead.
 
 // "A1", "B3", "SL15", "A12a": an acceptance id at the start of an item or a table cell.
 const ITEM_ID = /^\**([A-Z]{1,3}[0-9]+[a-z]?)\**(?=[\s:.(]|$)/
 // A verdict that counts as met: its leading word ("met on main", "Pass", "passed", "done", "✓", "✅").
 const MET = /^(met|pass|passed|done|✓|✔|✅)(?![\p{L}\p{N}])/iu
 
+// The table rows among some lines, each as its cells: "| A1 | Snow look. | Unit. |" → ['A1', 'Snow look.', 'Unit.'].
+/** @param {readonly string[]} lines */
+const tableRows = lines => lines.filter(line => /^\s*\|/.test(line)).map(line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim()))
+
 // progress.md's Acceptance table as id → verdict, or null when it has none (or no rows yet).
 // The verdict column is the one headed Verdict, Status or Result, else the second.
 /** @param {string} progress */
 const acceptanceVerdicts = progress => {
-  const rows = section(progress, 'Acceptance')
-    .split(/\r?\n/)
-    .filter(line => /^\s*\|/.test(line))
-    .map(line => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => plainText(cell)))
+  const rows = tableRows(section(progress, 'Acceptance').split(/\r?\n/)).map(row => row.map(cell => plainText(cell)))
   const header = rows[0]
   if (!header) return null
   const named = header.findIndex(cell => /^(verdict|status|result)$/i.test(cell))
@@ -305,25 +336,40 @@ const splitItem = line => {
   return { id: match?.[1] ?? '', text: match ? line.slice(match[0].length).trim() : line }
 }
 
-// The acceptance items and which are done. Ids come from prompt.md's top-level items; met-ness
-// from progress.md's table, whose rows for ids prompt.md does not list are ignored. Without a
-// table, legacy "- [x]" boxes count as before; without either, every listed item is open.
+// The acceptance items and which are done. Ids come from prompt.md's top-level items, or, in a
+// section with no list, from its table's rows (the id in the first cell, the text in the second);
+// each Acceptance section is read on its own, so a table in one and a list in a later one both
+// count. Met-ness comes from progress.md's table, whose rows for ids prompt.md does not list are
+// ignored. Without that table, legacy "- [x]" boxes count as before; without either, every listed
+// item is open.
 /** @param {string} prompt @param {string} progress @returns {AcceptanceItem[]} */
 export const acceptanceItems = (prompt, progress) => {
-  const lines = sections(prompt, 'Acceptance').split(/\r?\n/)
   /** @type {Map<string, string>} */
   const listed = new Map()
-  for (const line of lines) {
-    const item = splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')
-    if (item.id !== '' && !listed.has(item.id)) listed.set(item.id, item.text)
+  // What counts without a verdict table once any section has boxes: the boxes, and the rows of the sections written as tables.
+  /** @type {AcceptanceItem[]} */
+  const legacy = []
+  let hasBoxes = false
+  for (const part of sections(prompt, 'Acceptance')) {
+    const lines = part.split(/\r?\n/)
+    const items = lines.map(line => splitItem(/^-\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1] ?? '')).filter(item => item.id !== '')
+    const boxes = lines.flatMap(line => {
+      const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
+      return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
+    })
+    const isTable = items.length === 0 && boxes.length === 0
+    const rows = isTable ? tableRows(lines).map(row => ({ id: ITEM_ID.exec(row[0] ?? '')?.[1] ?? '', text: row[1] ?? '' })).filter(item => item.id !== '') : items
+    for (const item of rows) {
+      if (listed.has(item.id)) continue
+      listed.set(item.id, item.text)
+      if (isTable) legacy.push({ ...item, isDone: false })
+    }
+    legacy.push(...boxes)
+    hasBoxes ||= boxes.length > 0
   }
   const verdicts = acceptanceVerdicts(progress)
   if (verdicts && listed.size > 0) return [...listed].map(([id, text]) => ({ id, text, isDone: MET.test(verdicts.get(id) ?? '') }))
-  const boxes = lines.flatMap(line => {
-    const box = /^\s*-\s*\[( |x|X)\]\s*(.*)$/.exec(line)
-    return box ? [{ ...splitItem(box[2] ?? ''), isDone: box[1] !== ' ' }] : []
-  })
-  if (boxes.length > 0) return boxes
+  if (hasBoxes) return legacy
   return [...listed].map(([id, text]) => ({ id, text, isDone: false }))
 }
 
@@ -343,7 +389,7 @@ export const intentPrs = (progress, prompt) => {
 
 /**
  * @typedef {'MERGED' | 'OPEN' | 'CLOSED' | 'UNREAD'} PrState what gh last said about a PR; UNREAD when it could not say
- * @typedef {Readonly<Record<string, PrState>>} PrStates PR number → its last read state
+ * @typedef {Readonly<Record<string, PrState>>} PrStates PR number (prKey) → its last read state
  */
 
 // Open, with a checklist whose every item is met: the only intents whose PRs decide anything.
@@ -353,17 +399,34 @@ export const isAllMet = intent => intent.status !== 'completed' && intent.accept
 // Every item met and every named PR merged, yet not closed: the orchestrator's Close step is owed.
 // An intent with no PR named is not ready: nothing says the work has landed.
 /** @param {Intent} intent @param {PrStates} prs */
-export const isReadyToClose = (intent, prs) => isAllMet(intent) && intent.prs.length > 0 && intent.prs.every(number => prs[number] === 'MERGED')
+export const isReadyToClose = (intent, prs) => isAllMet(intent) && intent.prs.length > 0 && intent.prs.every(number => prs[prKey(intent, number)] === 'MERGED')
 
 // "#32372 MERGED", "#32398 not read yet": each PR the intent names, with what gh last said.
 /** @param {Intent} intent @param {PrStates} prs */
-export const prStatusList = (intent, prs) => intent.prs.map(number => `#${number} ${prs[number] === 'UNREAD' ? 'could not be read' : (prs[number] ?? 'not read yet')}`)
+export const prStatusList = (intent, prs) =>
+  intent.prs.map(number => {
+    const state = prs[prKey(intent, number)]
+    return `#${number} ${state === 'UNREAD' ? 'could not be read' : (state ?? 'not read yet')}`
+  })
+
+// Where an intent's PR is in a PrStates that holds several checkouts' PRs: its number for the session's
+// own checkout, `<root>#<number>` for another (the same number names another PR in another repository).
+/** @param {{ slug: string, key: string, root: string }} intent @param {number} number */
+export const prKey = (intent, number) => (otherRoot(intent) ? `${otherRoot(intent)}#${number}` : String(number))
 
 /**
- * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string }} IntentFiles
- * `updatedAt`: when it last changed (its last commit on main, or its files'); `source`: where it was read; `firstAuthor`: who first committed its folder
+ * @typedef {{ slug: string, prompt: string, findings: string, progress: string, files: readonly string[], hasDebrief: boolean, updatedAt: number, source: 'main' | 'local', firstAuthor: string,
+ *   key?: string, root?: string, repo?: string, repoName?: string, base?: string }} IntentFiles
+ * `updatedAt`: when it last changed (its last commit on main, or its files'); `source`: where it was read; `firstAuthor`: who first committed its folder.
+ * Read from one of several checkouts: `key` names it in the pane (its slug in the session's own checkout,
+ * `<repoName>/<slug>` in another), `root` is the checkout holding it, `repo` its repository's id ('' unknown), `repoName` the short name of its repository,
+ * `base` the branch that checkout's team merges into (main unless said).
  * @typedef {ReturnType<typeof parseIntent>} Intent
  */
+
+// A "- Current step:" or "- Next step:" line of progress.md, short; '' for none, a template's "<none>" or a dash.
+/** @param {string} text */
+const stepNote = text => (/^(<|none\b|n\/a\b|[-–—]\s*$)/i.test(text) ? '' : shortTitle(text, 110))
 
 /** @param {IntentFiles} input @param {Pack} [pack] */
 export const parseIntent = (input, pack = unreal) => {
@@ -371,6 +434,7 @@ export const parseIntent = (input, pack = unreal) => {
   // "parked: weather presets merged…" is a status too: take the leading word.
   const status = /^[a-z]+/.exec(field(prompt, 'Status').toLowerCase())?.[0] ?? 'unknown'
   const items = acceptanceItems(prompt, progress)
+  const findings = readFindings(input.findings, prompt)
   return {
     slug: input.slug,
     title: /^#\s+(.+)$/m.exec(prompt)?.[1]?.trim() ?? input.slug,
@@ -378,33 +442,72 @@ export const parseIntent = (input, pack = unreal) => {
     area: normalizeArea(field(prompt, 'Area'), pack),
     owner: field(prompt, 'Owner'),
     issue: issueNumber(field(prompt, 'Issue')),
+    // The branch its work is on ("- Branch: `intent/login`"); '' for none or a template's placeholder.
+    branch: branchNamed(field(prompt, 'Branch').replace(/`/g, '')),
     status,
     // Why it is parked (or blocked): what follows the status word.
     statusNote: field(prompt, 'Status').replace(/^[a-z]+\s*[:\-–—]?\s*/i, '').trim(),
     acceptanceDone: items.filter(item => item.isDone).length,
     acceptanceTotal: items.length,
+    // What the intent's view says of where it stands, with no prompt to the session: the items not yet
+    // met ("A2 (owed): Sand look." and "A2: (owed) Sand look." both read "Sand look"), and progress.md's own
+    // lines for the step in hand and the one after.
+    openItems: items.filter(item => !item.isDone).map(item => ({ id: item.id, text: shortTitle(item.text.replace(/^[\s:]*(?:\([^)]*\)[\s:]*)?/, ''), 90) })),
+    currentStep: stepNote(field(progress, 'Current step')),
+    thenStep: stepNote(field(progress, 'Next step')),
     prs: intentPrs(progress, prompt),
-    findings: parseFindings(input.findings, prompt),
+    findings: openOnes(findings),
+    // The ids of its findings that are settled here: another checkout's copy may still say open (waitingCalls).
+    settled: findings.filter(one => !one.isOpen).map(one => one.id),
     hasReview: input.files.some(name => /review/i.test(name)) || /\b(plan|opus|design)[- ]review\b|reviewed by|after (an? )?(opus )?review/i.test(prompt + progress.slice(0, 20000)),
     hasWorker: /^\s*[-*]?\s*\**worker\**\s*[:=-]\s*\S/im.test(progress) || /^(###\s+S\d+|-\s+S\d+\b)/m.test(progress),
     hasDebrief: input.hasDebrief,
     updatedAt: input.updatedAt,
     source: input.source,
     firstAuthor: input.firstAuthor,
+    key: input.key ?? input.slug,
+    root: input.root ?? '',
+    repo: input.repo ?? '',
+    repoName: input.repoName ?? '',
+    base: input.base ?? 'main',
   }
 }
+
+// The checkout an intent lives in when it is not the session's own (its key is not its slug), else ''.
+/** @param {{ slug: string, key: string, root: string }} intent */
+export const otherRoot = intent => (intent.key === intent.slug ? '' : intent.root)
 
 /** @param {Intent | undefined} intent */
 export const directorCalls = intent => (intent && intent.status !== 'completed' ? intent.findings.filter(one => one.isDirectorCall || one.isBlocking) : [])
 
+// The calls that wait, each once however many checkouts hold its intent. Copies of one intent (one repository,
+// one slug: each worktree whose branch changed it shows its own) share their findings: one settled in any copy
+// waits in none, and the rest are offered from the tracked copy, else the session's own checkout's, else the
+// freshest (`intents` comes freshest first).
+/** @param {readonly Intent[]} intents @param {string | null} pinned @returns {{ intent: Intent, finding: Intent['findings'][number] }[]} */
+export const waitingCalls = (intents, pinned) => {
+  const copyOf = (/** @type {Intent} */ one) => `${one.repo || one.root}|${one.slug}`
+  const settled = new Set(intents.flatMap(one => one.settled.map(id => `${copyOf(one)}|${id}`)))
+  const rank = (/** @type {Intent} */ one) => (one.key === pinned ? 0 : otherRoot(one) === '' ? 1 : 2)
+  /** @type {Map<string, { intent: Intent, finding: Intent['findings'][number] }>} */
+  const waiting = new Map()
+  for (const intent of [...intents].sort((a, b) => rank(a) - rank(b))) {
+    for (const finding of directorCalls(intent)) {
+      const id = `${copyOf(intent)}|${finding.id}`
+      if (!settled.has(id) && !waiting.has(id)) waiting.set(id, { intent, finding })
+    }
+  }
+  return [...waiting.values()]
+}
+
 /** @param {{ owner: string }} intent @param {string} me */
 export const isMine = (intent, me) => me !== '' && isSamePerson(intent.owner, me)
 
-// The open intents that are yours, the tracked one first.
+// The open intents that are yours, the tracked one (by key) first.
 /** @param {readonly Intent[]} intents @param {string} me @param {string | null} pinned */
 export const ownedIntents = (intents, me, pinned) => {
   const mine = intents.filter(one => one.status !== 'completed' && isMine(one, me))
-  return [...mine.filter(one => one.slug === pinned), ...mine.filter(one => one.slug !== pinned)]
+  return [...mine.filter(one => one.key === pinned), ...mine.filter(one => one.key !== pinned)]
 }
 
 // The Owner line of an intent's prompt.md.
@@ -422,7 +525,7 @@ export const pickCandidates = (intents, me, area) => {
 export const searchIntents = (intents, text) => {
   const words = text.toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length >= 3)
   return intents.filter(one => {
-    const hay = `${one.slug} ${one.title} ${one.area} ${one.owner}`.toLowerCase().split(/[^a-z0-9]+/)
+    const hay = `${one.key} ${one.title} ${one.area} ${one.owner}`.toLowerCase().split(/[^a-z0-9]+/)
     return one.status !== 'completed' && words.length > 0 && words.every(word => hay.some(part => part.startsWith(word)))
   })
 }
@@ -448,6 +551,11 @@ export const clockText = (ms, tz) => {
   const minutes = localMinutes(ms, tz)
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
 }
+
+// A prompt the person sent: typed at the terminal or the desktop (`composer`), or from a phone over Remote Control
+// (`bridge`). Not a schedule, a wakeup, a task's notice, another session, or a plugin's own prompt (an away window's work).
+/** @param {{ kind: string } | undefined} origin */
+export const isPersonOrigin = origin => origin?.kind === 'composer' || origin?.kind === 'bridge'
 
 /** @param {number} ms */
 export const durationText = ms => {
@@ -512,26 +620,45 @@ export const currentStage = (intent, evidence, role, prs = {}, pack = unreal) =>
 }
 
 // Asking the session what an intent is and where it stands, changing nothing. One that this checkout
-// does not have (or has as it is on main) is read from origin/main itself, read-only.
-/** @param {string} slug @param {boolean} fromMain */
-export const aboutIntentPrompt = (slug, fromMain) => {
+// does not have (or has as it is on main) is read from origin/main itself, read-only. `root`: the checkout
+// holding it, when that is not the session's own; git and the files are then read there. `base`: the branch
+// its team merges into, read in place of main.
+/** @param {string} slug @param {boolean} fromMain @param {string} [root] @param {string} [base] */
+export const aboutIntentPrompt = (slug, fromMain, root = '', base = 'main') => {
   const files = ['prompt.md', 'findings.md', 'progress.md', 'log.md']
+  const git = root ? `git -C ${root}` : 'git'
   const read = fromMain
-    ? `Read it from GitHub main, since this checkout may not have it or may be behind: use \`git show origin/main:docs/intent/${slug}/<file>\` for ${files.join(', ')} (those that exist) and \`git log -5 --format="%cs %an %s" origin/main -- docs/intent/${slug}\` for its recent history, with GIT_OPTIONAL_LOCKS=0. Do not fetch, pull, check out, track it or write anything.`
-    : `Read docs/intent/${slug}/ only; change nothing.`
-  return `Tell me about intent ${slug} in under ten lines: what it is for, who owns it, its status and stage (Plan, Build, Prove, Ship) and why, its checklist progress, which decisions are open and whose they are, and what the next step would be. ${read}`
+    ? `Read it from GitHub ${base}, since this checkout may not have it or may be behind: use \`${git} show origin/${base}:docs/intent/${slug}/<file>\` for ${files.join(', ')} (those that exist) and \`${git} log -5 --format="%cs %an %s" origin/${base} -- docs/intent/${slug}\` for its recent history, with GIT_OPTIONAL_LOCKS=0. Do not fetch, pull, check out, track it or write anything.`
+    : `Read ${root ? `${root}/` : ''}docs/intent/${slug}/ only; change nothing.`
+  return `Tell me about intent ${slug}${root ? ` in the checkout at ${root}` : ''} in under ten lines: what it is for, who owns it, its status and stage (Plan, Build, Prove, Ship) and why, its checklist progress, which decisions are open and whose they are, and what the next step would be. ${read}`
 }
+
+// Closing an intent, step 5 of the intent skill: what was read (every item met, and the PRs it names
+// merged; none named, the items alone) is confirmed first. `commit`: how the close ends.
+/** @param {string} slug @param {readonly number[]} prs @param {string} [commit] */
+export const closePrompt = (slug, prs, commit = 'commit as the skill says') => {
+  const named = andList(prs.map(number => `#${number}`))
+  const merged = prs.length === 0 ? '' : ` and ${prs.length === 1 ? `PR ${named} as` : `PRs ${named} as`} merged`
+  return `Close intent ${slug} as step 5 (Close) of .agents/skills/intent/SKILL.md says. Ather reads every acceptance row in docs/intent/${slug}/progress.md as met${merged}: confirm ${prs.length === 0 ? 'it from the files' : 'both from the files and gh'} first, and stop and tell me if ${prs.length === 0 ? 'it is' : 'either is'} not so. Then set Status: completed in prompt.md, add the changelog line, and ${commit}.`
+}
+
+// Drafting an intent's "done" checklist, shown before any work starts.
+/** @param {string} slug */
+export const checklistPrompt = slug =>
+  `Draft the acceptance checklist for intent ${slug} in docs/intent/${slug}/prompt.md: items with ids (A1, A2, ...), each with the proof that will show it is done, and no checkboxes (whether an item is met lives in progress.md). Show it to me before the worker starts.`
 
 /**
  * The one next step for the tracked intent and the person's role.
  * @param {string} role @param {Intent | undefined} intent @param {Evidence} evidence @param {number} workers @param {string} me @param {PrStates} [prs] @param {Pack} [pack]
- * @returns {{ key: string, label: string, prompt: string, hint: string, isDraft?: boolean } | undefined}
+ * `isLook`: a step that only reads where the intent stands. Its files answer it, so the pane shows the
+ * intent's view and nothing goes to the session; `prompt` is for a surface that cannot (the Paseo version).
+ * @returns {{ key: string, label: string, prompt: string, hint: string, isDraft?: boolean, isLook?: boolean } | undefined}
  */
 export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = unreal) => {
   if (!intent) return { key: 'start', label: 'Start an intent', prompt: '/intent ', hint: 'Type what you want after /intent; the intent skill takes it from there.', isDraft: true }
   const slug = intent.slug
   if (!isMine(intent, me)) {
-    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: a short summary, nothing is changed.`, prompt: aboutIntentPrompt(slug, intent.source === 'main') }
+    return { key: 'follow', label: 'See where it stands', hint: `${intent.owner || 'Its owner'}'s intent: where it stands, nothing is changed.`, isLook: true, prompt: aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base) }
   }
   const stage = currentStage(intent, evidence, role, prs, pack)
   if (stage === 'close') {
@@ -540,18 +667,18 @@ export const nextStep = (role, intent, evidence, workers, me, prs = {}, pack = u
       key: 'close',
       label: 'Close the intent',
       hint: `Every item is met and ${intent.prs.length === 1 ? `PR ${named} is` : `PRs ${named} are`} merged; the session closes it the intent skill's way.`,
-      prompt: `Close intent ${slug} as step 5 (Close) of .agents/skills/intent/SKILL.md says. Ather reads every acceptance row in docs/intent/${slug}/progress.md as met and ${intent.prs.length === 1 ? `PR ${named} as` : `PRs ${named} as`} merged: confirm both from the files and gh first, and stop and tell me if either is not so. Then set Status: completed in prompt.md, add the changelog line, and commit as the skill says.`,
+      prompt: closePrompt(slug, intent.prs),
     }
   }
   if (stage === 'plan') {
-    return { key: 'checklist', label: 'Write the "done" checklist', hint: 'The session drafts it and shows you before any work starts.', prompt: `Draft the acceptance checklist for intent ${slug} in docs/intent/${slug}/prompt.md: items with ids (A1, A2, ...), each with the proof that will show it is done, and no checkboxes (whether an item is met lives in progress.md). Show it to me before the worker starts.` }
+    return { key: 'checklist', label: 'Write the "done" checklist', hint: 'The session drafts it and shows you before any work starts.', prompt: checklistPrompt(slug) }
   }
   if (stage === 'build') {
     if (!intent.hasReview && !intent.hasWorker && intent.acceptanceDone === 0 && workers === 0) {
       return { key: 'review', label: 'Get the plan checked', hint: 'A second agent looks for gaps and wrong assumptions before anyone builds.', prompt: `Have an Opus agent review the plan for intent ${slug} (docs/intent/${slug}/prompt.md) against the repository before any worker starts: gaps, risks, wrong assumptions. Fold the accepted findings into the intent and show me what changed.` }
     }
     if (intent.hasWorker || workers > 0) {
-      return { key: 'progress', label: 'See how the work is going', hint: 'A five-line status against the checklist.', prompt: `Summarise intent ${slug} against its checklist: what is done with evidence, what is next, what is blocked. Five lines.` }
+      return { key: 'progress', label: 'See how the work is going', hint: 'Where it stands against its checklist.', isLook: true, prompt: `Summarise intent ${slug} against its checklist: what is done with evidence, what is next, what is blocked. Five lines.` }
     }
     return { key: 'brief', label: 'Start the work', hint: pack.prompts.briefHint, prompt: pack.prompts.brief(role, slug) }
   }

@@ -46,7 +46,7 @@ Set them in Claude Code's plugin config menu (each is optional):
 
 - "what did I do this week" or "write my weekly report": the week-calendar agent rebuilds the calendar, Claude writes a three-line report, then asks the weekly survey (rating, most valuable and most wasted session, why no-commit sessions stopped) and publishes the report.
 - "exclude the git polling session from the week calendar" (or "include it"): changes what counts, permanently.
-- The calendar is `~/.calendar/latest.html`. The first time, the agent asks for a style: dark or light, an accent color, color by project or task type, and the first day of the week.
+- The calendar is `~/.calendar/latest.html`. The first time, the agent asks for a style: dark or light, color by project or task type, and the first day of the week. The accent is always Ather's lime.
 
 ## How it measures
 
@@ -56,7 +56,9 @@ Set them in Claude Code's plugin config menu (each is optional):
 - **Busy time**: every gap between consecutive log records of a session or its subagents, unless the later record starts a turn; one step counts for at most 90 minutes. **Waiting on a person**: from the record before a typed prompt to that prompt, up to 8 hours.
 - **Outliers**: a session of 4+ hours where 80%+ of turns started by themselves (schedules, loops, plugin or SDK drivers) is excluded from totals.
 - **Routine runs**: a commitless session of 3 minutes or less whose title recurs 5+ times that week (butlers, schedulers), or in which nobody typed, is automated: left out of totals and no-commit counts, counted as automated hours, and drawn as ticks on each day's edge.
-- **The calendar** leads with agent-busy hours. With one project it colors sessions by workstream (sessions sharing a PR or a title); pieces of a session under 30 minutes apart are one bar; clicking a bar opens its details; on a phone it shows one day at a time.
+- **The calendar** leads with agent-busy hours, then four measures per day (session time, productive time, your PRs merged, no-commit time) beside last week's, read from last week's saved calendar (`~/.calendar/week-<start>.json`, which the Monday job writes). Below that, a card per day opens its sessions and a 24-hour ring with the night side (19:00 to 07:00) shaded; routine runs are ticks outside the ring.
+- **No-commit sessions** take a reason (blocked, exploratory, abandoned, parked) or Exclude right in the list. The page is a local file and cannot save to your PC: it keeps the picks in the browser and copies one line to paste to Claude, which saves them.
+- **The week grid**: with one project it colors sessions by workstream (sessions sharing a PR or a title); pieces of a session under 30 minutes apart are one bar; a day without sessions takes a narrow column; three or more sessions at once draw as thin strips under one "N at once" label that lists them; clicking a bar opens its details, growing out of the bar; on a phone it shows one day at a time.
 - Weeks in reports are ISO weeks (Monday start) in the PC's local time.
 
 ## Files

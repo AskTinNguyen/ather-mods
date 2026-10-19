@@ -1,6 +1,6 @@
 {
   "name": "ather-automata",
-  "version": "0.2.3",
+  "version": "0.6.1",
   "description": "Ather Automata: what needs you and what is next in every S2 session and web app repository (Plan, Build, Prove, Ship), a newcomer tour, autonomy windows, and guards that catch false build passes and lost merge edits.",
   "author": {
     "name": "Tin Nguyen"
@@ -12,6 +12,20 @@
       "description": "What happens when a worker brief lacks paths, acceptance checks or the shared-tree rule: warn adds a reminder, enforce refuses the Agent call, off does nothing. Read-only agents (Explore, Plan) are never gated.",
       "default": "warn",
       "options": ["warn", "enforce", "off"]
+    },
+    "cacheKeepWarm": {
+      "type": "string",
+      "title": "Keep the prompt cache warm",
+      "description": "While you are idle, read the session's cached context once shortly before it would lapse (an hour after the last read), so your next turn does not re-write the whole context at twice the price. off never does; ask suggests /warm on once per session; on does it within the cap below. /warm changes it for one session.",
+      "default": "off",
+      "options": ["off", "ask", "on"]
+    },
+    "cacheKeepWarmHours": {
+      "type": "string",
+      "title": "Keep warm for at most",
+      "description": "Hours of idle time to keep the cache warm for (one read each 55 minutes), up to 12. Past it, the cache lapses as usual. Longer pays off only if you come back to the session: each read costs a tenth of the context, the re-write it saves twice it.",
+      "default": "3",
+      "options": ["1", "2", "3", "4", "6", "8", "10", "12"]
     }
   }
 }

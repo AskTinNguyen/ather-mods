@@ -34,7 +34,6 @@ async function writeIfChanged(path: string, text: string) {
 export async function install(settings: CalendarSettings) {
   const config: Record<string, unknown> = {
     theme: settings.theme,
-    accent: settings.accent,
     colorBy: settings.colorBy,
     weekStart: settings.weekStart,
   };

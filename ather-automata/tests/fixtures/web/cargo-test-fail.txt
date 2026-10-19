@@ -1,0 +1,25 @@
+   Compiling tally v0.1.0 (<repo>)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (target/debug/deps/tally-8f08ac73ce885ce3)
+
+running 3 tests
+test tests::sum_of_none ... ok
+test tests::sums ... ok
+test tests::finds_max ... FAILED
+
+failures:
+
+---- tests::finds_max stdout ----
+thread 'tests::finds_max' panicked at src/lib.rs:27:9:
+assertion `left == right` failed
+  left: 9
+ right: 8
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::finds_max
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

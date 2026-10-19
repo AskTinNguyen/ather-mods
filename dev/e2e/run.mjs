@@ -6,6 +6,7 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import { AFK, createEngine } from './engine.mjs'
 import { check, draw, layouts } from './screen.mjs'
+import { repoId } from './out/hooks/state.mjs'
 
 const OUT = process.argv[2]
 // --layouts <dir>: write every pane and band laid out at 72 and 110 columns, to diff two runs.
@@ -26,7 +27,8 @@ const tzFor = hour => {
 }
 
 const sandbox = () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-e2e-'))
+  // The folder's real path: a checkout's id is made from it (macOS's temporary folder is behind a link).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ather-e2e-')))
   fs.cpSync(path.join(S2_ROOT, 'docs/intent'), path.join(root, 'docs/intent'), { recursive: true })
   // The skills the quick actions may name.
   fs.mkdirSync(path.join(root, '.agents/skill-library/visuals/show-me'), { recursive: true })
@@ -44,8 +46,12 @@ const sandbox = () => {
   return root
 }
 
-const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env } = {}) => {
+// `ownFindingsOnly`: the copied intents come without their findings, so the only decisions that wait are the
+// ones a block writes itself. Needs you draws nine rows, and a checkout whose person has that many open
+// decisions would leave a block's own rows undrawn.
+const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env, ownFindingsOnly = false } = {}) => {
   const root = sandbox()
+  if (ownFindingsOnly) for (const entry of fs.readdirSync(path.join(root, 'docs/intent'), { withFileTypes: true })) if (entry.isDirectory()) fs.rmSync(path.join(root, 'docs/intent', entry.name, 'findings.md'), { force: true })
   const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues, ghPrs, env })
   for (const [key, value] of Object.entries({ tz: tzFor(hour), ...store })) engine.store.set(key, value)
   register(engine.on, { briefGate: 'warn' })
@@ -63,10 +69,14 @@ const dialogText = dialogs =>
 
 const pick = label => question => question.options.find(option => option.label === label || option.label.startsWith(label))?.label ?? `__missing:${label}__ among ${question.options.map(o => o.label).join(' | ')}`
 const typed = text => () => text
+// What the mod keeps per repository (an intent's proof, a person's "Continue …") is under `<prefix>:<repo>|<id>`;
+// the sandboxes have no origin, so their repository is their folder.
+const scopedKey = (engine, prefix, id) => [...engine.store.keys()].find(key => key === `${prefix}:${id}` || (key.startsWith(`${prefix}:`) && key.endsWith(`|${id}`)))
+const scoped = (engine, prefix, id) => engine.store.get(scopedKey(engine, prefix, id) ?? '')
 // Where a session's evidence is: its tracked intent (no commit in the sandbox, which has no refs), or the session.
 const evidenceOf = (engine, sid = 'harness-session-0001') => {
   const pinned = engine.store.get(`pinned:${sid}`)
-  return engine.store.get(`evidence:${pinned ?? sid}`)
+  return pinned === undefined ? engine.store.get(`evidence:${sid}`) : scoped(engine, 'evidence', pinned)
 }
 const dismiss = () => null
 
@@ -127,7 +137,7 @@ const pressIn = (tree, label) => {
 
 {
   const { engine, done } = await boot()
-  expect('two commands: /ather and /away', engine.record.commands.join(',') === 'ather,away', engine.record.commands)
+  expect('three commands: /ather, /away and /warm', engine.record.commands.join(',') === 'ather,away,warm', engine.record.commands)
   expect('three model tools: status, away, profile', engine.record.registeredTools.join(',') === 'status,away,profile', engine.record.registeredTools)
   done()
   const quiet = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen' })
@@ -137,17 +147,20 @@ const pressIn = (tree, label) => {
   // there at once, and the console's reading starts the first time it is drawn, never before.
   const quietReads = () => quiet.record.logs.length + quiet.record.invalidations
   const before = quietReads()
-  expect('a session the desktop app starts (not interactive) still gets /ather and /away, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away' && quiet.record.registeredTools.length === 3 && quietReads() === before, quiet.record.commands)
+  expect('a session the desktop app starts (not interactive) still gets /ather, /away and /warm, and reads nothing until drawn', quiet.record.commands.join(',') === 'ather,away,warm' && quiet.record.registeredTools.join(',') === 'status,away,profile' && quietReads() === before, quiet.record.commands)
   const desk = createEngine({ root: sandbox(), surfaces: [], user: 'Tin Nguyen', ghIssues: [{ number: 28887, title: '[BUG][GAS] Dodge cancels the wrong montage', url: 'https://github.com/sipherxyz/s2/issues/28887', labels: [{ name: 'combat' }], updatedAt: new Date().toISOString() }] })
   register(desk.on, {})
   await desk.start(false)
   await desk.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band', 'desktop')
   await new Promise(resolve => setTimeout(resolve, 1500))
+  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
+  // Home previews five of the person's own rows, and on a checkout where they own that many intents the issue
+  // is not one of them: it is looked for where every row is, in Everything open.
+  findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'all')?.props.onPress({})
   const deskPane = check(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 70)
   const narrow = check(await desk.render('Pane', { bodyColumns: 30 }, 'ather', 'desktop'), 1000)
-  expect('on the desktop nothing is cut by column count: the full issue title shows, and rows span the panel', narrow.lines.some(line => line.includes('#28887')) && narrow.lines.some(line => line.includes('Dodge cancels the wrong montage')) &&narrow.lines.some(line => /^\s+In the snow\/sand lab/.test(line) && line.length > 60), narrow.lines)
-  const findKey = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => findKey(child, key)).find(Boolean) ?? null)
-  findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'work-issue:28887')?.props.onPress({})
+  expect('on the desktop nothing is cut by column count: the full issue title shows, and rows span the panel', narrow.lines.some(line => line.includes('#28887') && line.includes('Dodge cancels the wrong montage') && line.length > 30), narrow.lines)
+  findKey(await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop'), 'pick-issue:28887')?.props.onPress({})
   const deskCard = await desk.render('Pane', { bodyColumns: 70 }, 'ather', 'desktop')
   expect("the desktop's issue card opens GitHub with a real link", findKey(deskCard, 'issue-open')?.type === 'Link' && findKey(deskCard, 'issue-open')?.props.href === 'https://github.com/sipherxyz/s2/issues/28887', findKey(deskCard, 'issue-open'))
   expect('on the desktop, the first draw starts the console: the assigned issue shows in the pane', /Dodge cancels the wrong montage/.test(deskPane.lines.join('\n')), deskPane.lines)
@@ -189,7 +202,7 @@ const pressIn = (tree, label) => {
   const [, workQ, follow] = work.dialogs
   expect("each Work-question choice says what it does: an intent's works on it here, with the consequence", workQ?.header === 'Work' && (workQ?.options ?? []).length > 0 && workQ.options.every(o => o.description.endsWith(consequence) || o.description.endsWith('Drafts an intent with you first.')), workQ?.options)
   expect('a name typed in the Work question opens one follow-up: the slug, where it stands, what working on it here means, three choices', follow?.header === 'fluid-snow-s' && new RegExp(`^fluid-snow-sand-look: [A-Z][a-z ]+, \\d+/\\d+ done, [^.]+\\. Work on it here\\? ${consequence.replace(/[.?/()]/g, '\\$&')}$`).test(follow?.question ?? '') && (follow?.options ?? []).map(o => o.label).join('|') === 'Work on it here|Just look|Pick something else', follow)
-  expect('… Work on it here tracks it and moves "Continue …" to it', pinnedNow() === 'fluid-snow-sand-look' && engine.store.get('last:tinnguyen') === 'fluid-snow-sand-look' && work.out === 'Now tracking fluid-snow-sand-look.' && work.sent.length === 0, work.out)
+  expect('… Work on it here tracks it and moves "Continue …" to it', pinnedNow() === 'fluid-snow-sand-look' && scoped(engine, 'last', 'tinnguyen') === 'fluid-snow-sand-look' && /^Now tracking fluid-snow-sand-look\. Next: .+\.$/.test(work.out) && work.sent.length === 0, work.out)
   await run(engine, [], 'ather', 'untrack')
   const look = await run(engine, [pick('Pick something to work on'), typed('fluid'), pick('Just look')])
   expect('… Just look says where it stands and its next step, and tracks nothing', pinnedNow() === undefined && /^fluid-snow-sand-look: .+ Its next step: .+\. Not tracked here; \/ather intent fluid-snow-sand-look works on it in this session\.$/.test(look.out) && look.sent.length === 0, look.out)
@@ -207,7 +220,7 @@ const pressIn = (tree, label) => {
   for (const slug of ['zz-guard-alpha', 'zz-guard-beta']) fs.rmSync(path.join(sandbox, 'docs/intent', slug), { recursive: true, force: true })
   await run(engine, [], 'ather', 'untrack')
   const exact = await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
-  expect('/ather intent with the exact name tracks it at once, with no dialog, without a pane too', engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && exact.out === 'Now tracking fluid-snow-sand-look.' && exact.dialogs.length === 0, exact.out)
+  expect('/ather intent with the exact name tracks it at once, with no dialog, without a pane too', engine.store.get('pinned:harness-session-0001') === 'fluid-snow-sand-look' && /^Now tracking fluid-snow-sand-look\. Next: .+\.$/.test(exact.out) && exact.dialogs.length === 0, exact.out)
   const tracked = await run(engine, [dismiss])
   expect('with an intent tracked, the question leads with it', /^fluid-snow-sand-look: /.test(tracked.dialogs[0]?.question ?? ''), tracked.dialogs[0]?.question)
   const switched = await run(engine, [pick('Switch to other work'), question => question.options[0].label])
@@ -540,9 +553,11 @@ const GH_ISSUES = [
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, 'prompt.md'), '# Time dilation ownership\n\n- Status: active\n- Area: Combat\n- Owner: Tin Nguyen\n- Issue: #28887\n\n## Acceptance\n\n- [ ] fixed\n')
   await new Promise(resolve => setTimeout(resolve, 300))
-  const work = await run(engine, [pick('Pick something to work on'), dismiss])
-  const labels = work.dialogs[1]?.options.map(o => o.label) ?? []
-  expect('an issue that already has an intent is listed as that intent only', !labels.some(label => /#28887/.test(label)) && labels.includes('time-dilation-ownership'), labels)
+  // The Work question offers four rows, fewer than a person with many intents has: Everything open lists every one.
+  engine.setSurfaces(['terminal'])
+  await run(engine, [], 'ather', 'pick')
+  const labels = check(await engine.render('Pane', { bodyColumns: 110 }, 'ather', 'terminal'), 110).lines
+  expect('an issue that already has an intent is listed as that intent only', !labels.some(label => /#28887/.test(label)) && labels.some(label => /time-dilation-ownership/.test(label)) && labels.some(label => /#31360/.test(label)), labels)
   done()
 }
 
@@ -730,14 +745,16 @@ const GH_ISSUES = [
   engine.setSessionId('harness-session-tomorrow')
   await engine.start()
   await run(engine, [], 'ather', 'intent box-scale-tool')
-  const evidence = engine.store.get('evidence:box-scale-tool')
+  const evidence = scoped(engine, 'evidence', 'box-scale-tool')
   expect("yesterday's build and tests still count today", evidence?.build?.state === 'pass' && evidence?.automation?.state === 'pass', [...engine.store.keys()].filter(key => key.startsWith('evidence:')))
   done()
 }
 
 {
   // While a merge's losses are unreviewed, Next waits; the pane shows what needs you first.
-  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer', 'lost:harness-session-0001': { paths: ['Content/S2/BP_Sash.uasset'], isDisclosed: false } } })
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer', 'lost:harness-session-0001': { paths: ['Content/S2/BP_Sash.uasset'], isDisclosed: false } } })
+  // The tracked intent has a decision of its own waiting: the loss comes before it.
+  fs.appendFileSync(path.join(root, 'docs/intent/box-scale-tool/findings.md'), '\n## F-9 (2026-10-07) | blocking: no | status: open (director)\n\nWhich handle should scale from the centre?\n')
   await run(engine, [], 'ather', 'intent box-scale-tool')
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · a merge lost an edit (72 columns)', pane.lines.join('\n')])
@@ -787,7 +804,7 @@ const hasFocus = tree => {
   expect('"I checked it in the Editor" is never focused by default in the pane', nextButton && /I checked it in the Editor/.test(nextButton.props.label) && !nextButton.props.autoFocus, nextButton?.props)
   engine.setSurfaces?.([])
   const menu = await run(engine, [pick('I checked it in the Editor')])
-  expect("a tech artist's last proof is offered as one press, and recorded", (menu.dialogs[0]?.options ?? []).some(o => o.label === 'I checked it in the Editor') && engine.store.get('evidence:snow-trail-lod-pop')?.editor?.state === 'pass', menu.dialogs[0]?.options.map(o => o.label))
+  expect("a tech artist's last proof is offered as one press, and recorded", (menu.dialogs[0]?.options ?? []).some(o => o.label === 'I checked it in the Editor') && scoped(engine, 'evidence', 'snow-trail-lod-pop')?.editor?.state === 'pass', menu.dialogs[0]?.options.map(o => o.label))
   // The next session offers to continue it.
   await engine.end('exit')
   engine.setSessionId('harness-session-hana-2')
@@ -860,8 +877,10 @@ const hasFocus = tree => {
   expect('Heading off says what it is for: let AI work while you zZz', /H E A D I N G   O F F \?\nLet AI work while you zZz\n/.test(home), home)
   expect("a teammate's name sits in its own column at the right edge, out of the detail line", (() => {
     // Whichever teammates the checkout has: the first row under the heading ends in a name at column 110, and its detail line does not repeat it.
+    // The first row under the teammates' heading: rows of yours (an issue under Also yours) may take the letters before it.
     const lines = home.split('\n')
-    const at = lines.findIndex(line => /^a: /.test(line))
+    const heading = lines.findIndex(line => /^T E A M M A T E S/.test(line))
+    const at = heading < 0 ? -1 : lines.findIndex((line, index) => index > heading && /^[a-z]: /.test(line))
     const name = /\s{2,}(\S.*)$/.exec(lines[at] ?? '')?.[1] ?? ''
     return at > 0 && lines[at].length === 110 && name !== '' && !(lines[at + 1] ?? '').includes(name)
   })(), home)
@@ -891,11 +910,11 @@ const hasFocus = tree => {
 // ---------------------------------------------------------------- decide in place (0.2.0)
 
 {
-  // Two fixture intents of Tin's. zz-decide, tracked so it comes first: F-1 in the list format (A recommended)
-  // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended) and F-4 with no options,
+  // Two fixture intents of Tin's. zz-decide, the newer so it comes first: F-1 in the list format (A recommended)
+  // and F-3 resolved (inline, Resolution filled). zz-group: F-2 inline (B recommended, a director call by its words) and F-4 with no options,
   // two decisions that wait as one block. A trap seen in three sessions waits too, and the Editor is held
-  // (a designer's Ask for the Editor: an item with nothing to answer).
-  const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
+  // (a designer's Ask for the Editor: an item with nothing to answer, offered while an intent is tracked).
+  const { engine, root, done } = await boot({ surfaces: ['terminal'], ownFindingsOnly: true, store: { 'role:tinnguyen': 'designer', gotchaHits: { 'live-coding': { title: 'A running Editor blocks the build (Live Coding)', fix: 'Close the Editor.', count: 3 } } } })
   const fixture = (slug, findings) => {
     fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
     fs.writeFileSync(path.join(root, 'docs/intent', slug, 'prompt.md'), `# ${slug}\n\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: one\n- A2: two\n`)
@@ -920,6 +939,7 @@ const hasFocus = tree => {
   fixture('zz-group', [
     '## F-2 (open, not blocking): restart one quest also restores every flow-owned actor',
     '',
+    "A director call: inline choices alone would be the worker's engineering notes.",
     '- Options: (a) keep it as is, with the confirmation; (b) add a runtime hook that restores only the restarted quest; (c) re-run the',
     "  other quests' entry actions. Recommendation: (b).",
     '',
@@ -928,13 +948,22 @@ const hasFocus = tree => {
     'Which pool size should the spawner use?',
   ])
   fs.writeFileSync(path.join(root, 'Saved/EDITOR_OWNER.txt'), 'held by lane-7')
+  // With nothing tracked the intents come newest first: zz-group is a second older, and still newer than the copied ones.
+  const earlier = new Date(Date.now() - 1000)
+  for (const file of fs.readdirSync(path.join(root, 'docs/intent/zz-group'))) fs.utimesSync(path.join(root, 'docs/intent/zz-group', file), earlier, earlier)
   await run(engine, [], 'ather', 'intent zz-decide')
   const pane = (cols = 72, surface = 'terminal') => engine.render('Pane', { bodyColumns: cols }, 'ather', surface)
   const text = async (cols = 72) => check(await pane(cols), cols).lines.join('\n')
   const id = n => `call:${n === 1 || n === 3 ? 'zz-decide' : 'zz-group'}:F-${n}`
-  const waiting = async () => Number(/N E E D S   Y O U   ·   (\d+)/.exec(await text(110))?.[1] ?? -1)
+  // A section label is spaced out, its count too: "N E E D S   Y O U   ·   1 2" is twelve.
+  const waiting = async () => Number((/N E E D S   Y O U   ·   (\d(?: \d)*)/.exec(await text(110))?.[1] ?? '-1').replace(/ /g, ''))
 
+  // A session answers for the intent it tracks: another intent's decisions wait for a session that tracks it, or none.
+  const tracked = await pane(72)
+  expect("tracking zz-decide, Needs you offers its decision and not zz-group's; the repeated problem and Ask for the Editor stay", Boolean(nodeOf(tracked, `item-${id(1)}`)) && !nodeOf(tracked, 'calls-zz-group') && !nodeOf(tracked, `item-${id(2)}`) && !nodeOf(tracked, `item-${id(4)}`) && Boolean(nodeOf(tracked, 'item-rule:live-coding')) && Boolean(nodeOf(tracked, 'item-editor')) && (await waiting()) === 3, check(tracked, 72).lines)
+  await run(engine, [], 'ather', 'untrack')
   const first = await pane(72)
+  expect("after /ather untrack, zz-group's decisions are offered again, beside zz-decide's", Boolean(nodeOf(first, `item-${id(1)}`)) && Boolean(nodeOf(first, 'calls-zz-group')), check(first, 72).lines)
   const first72 = check(first, 72)
   screens.push(['Terminal · Needs you, the first decision opened with its answers (72 columns)', first72.lines.join('\n')])
   const shown72 = first72.lines.join('\n')
@@ -1035,8 +1064,8 @@ const hasFocus = tree => {
   const asked = engine.record.dialogs.at(-1)
   expect('A6: without a text field, Type an answer asks one question (2-4 answers) and the words typed under Other decide', asked?.header === 'Answer' && asked.options.length >= 2 && asked.options.length <= 4 && !nodeOf(await pane(72, 'mobile'), `typed-${id(4)}`) && engine.record.submits.at(-1) === `Decide F-4 on zz-group: "a pool of eight" (my own answer, in my words). Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.`, [asked, engine.record.submits.at(-1)])
 
-  // D8: "make it a rule?" answers in place too.
-  pressKey(await pane(), 'item-rule:live-coding')
+  // D8: "make it a rule?" answers in place too. Every decision above is answered, so it is the one item left
+  // waiting, and the one Needs you has opened.
   const rule = await pane(72)
   expect('A8: the repeated-problem item opens with Make it a rule / No, leave it, Explain and Type an answer (no Open findings)', /^A: Make it a rule$/.test(nodeOf(rule, 'option-rule:live-coding-A')?.props.label ?? '') && /^B: No, leave it$/.test(nodeOf(rule, 'option-rule:live-coding-B')?.props.label ?? '') && Boolean(nodeOf(rule, 'explain-rule:live-coding')) && !nodeOf(rule, 'findings-rule:live-coding') && check(rule, 72).problems.length === 0, check(rule, 72).lines)
   pressKey(rule, 'option-rule:live-coding-A')
@@ -1044,9 +1073,12 @@ const hasFocus = tree => {
   expect('A8: Make it a rule hands the draft request (never a commit) and shows "✓ Decided: A" in place', /These traps keep coming back: "A running Editor blocks the build \(Live Coding\)", 3 sessions; its fix each time: Close the Editor\. Make it a rule: for each, draft the change that prevents it/.test(engine.record.submits.at(-1) ?? '') && /do not commit\.$/.test(engine.record.submits.at(-1) ?? '') && /✓ Decided: A · Turn a repeated problem into a rule\?/.test(await text(110)), engine.record.submits.at(-1))
 
   // An item with nothing to answer keeps today's press: it goes to the session and the pane closes.
+  // Ask for the Editor is for the tracked intent's next step.
+  await run(engine, [], 'ather', 'intent zz-decide')
+  const closesTracked = engine.record.closes.length
   pressKey(await pane(), 'item-editor')
   await engine.flush()
-  expect('D8: an item without options (Ask for the Editor) still hands over on its press and closes the pane', /^Find the session that holds the Editor owner lock/.test(engine.record.submits.at(-1) ?? '') && engine.record.closes.length > closesBefore, engine.record.submits.at(-1))
+  expect('D8: an item without options (Ask for the Editor) still hands over on its press and closes the pane', /^Find the session that holds the Editor owner lock/.test(engine.record.submits.at(-1) ?? '') && engine.record.closes.length > closesTracked, engine.record.submits.at(-1))
   expect('no hook threw while deciding in place', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }
@@ -1107,11 +1139,23 @@ const hasFocus = tree => {
   const viewTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
   const view = check(viewTree, 72)
   screens.push(['Terminal · the Intent view (72 columns)', view.lines.join('\n')])
-  expect('See opens the Intent view: the goal, today\'s line with its time, and Next', /I N T E N T\nfluid-snow-sand-look/.test(view.lines.join('\n')) && new RegExp(`T O D A Y\\n✓ Ticked ${unticked[1]} · .+ \\d\\d:\\d\\d`).test(view.lines.join('\n')) && /N E X T/.test(view.lines.join('\n')) && view.problems.length === 0, view.lines)
+  // With a worker on it the next step is a look ("See how the work is going"): the view itself answers it, so no Next card repeats it.
+  expect('See opens the Intent view: the goal, where it stands as its files say, and today\'s line with its time', /I N T E N T\nfluid-snow-sand-look/.test(view.lines.join('\n')) && /W H E R E   I T   S T A N D S\nBuild · \d+\/\d+ met · yours/.test(view.lines.join('\n')) && /\nStill open: A\d+ /.test(view.lines.join('\n')) && /\nFrom its files; what is met is what progress\.md says\.\n/.test(view.lines.join('\n')) && new RegExp(`T O D A Y\\n✓ Ticked ${unticked[1]} · .+ \\d\\d:\\d\\d`).test(view.lines.join('\n')) && !/N E X T/.test(view.lines.join('\n')) && view.problems.length === 0, view.lines)
   expect('once seen, the notice leaves the band', !/◆ Intent:/.test(check(await engine.render('AbovePrompt', props, 'band'), 110).lines.join('')))
   findKey(viewTree, 'change-0-press').props.onPress({})
   await engine.flush()
   expect('pressing a line asks the session to explain it, briefly, with your own words as the why', engine.record.submits.some(text => new RegExp(`explain in at most four lines what "Ticked ${unticked[1]}`).test(text) && /Quote what I said/.test(text)), engine.record.submits)
+  // Home's Next for it: a press shows the same view and sends the session nothing.
+  pressKey(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'intent-back')
+  await engine.flush()
+  const homeTree = await engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  const homeLines = check(homeTree, 72).lines.join('\n')
+  const sentBefore = engine.record.submits.length
+  const closedBefore = engine.record.closes.length
+  pressKey(homeTree, 'next')
+  await engine.flush()
+  const looked = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72).lines.join('\n')
+  expect('"See how the work is going" opens the Intent view from the files: no prompt goes to the session, and the pane stays', /See how the work is going/.test(homeLines) && /^I N T E N T\nfluid-snow-sand-look$/m.test(looked) && /W H E R E   I T   S T A N D S/.test(looked) && engine.record.submits.length === sentBefore && engine.record.closes.length === closedBefore, [homeLines.split('\n').slice(0, 30), looked.split('\n').slice(0, 8), engine.record.submits.slice(sentBefore)])
   done()
 }
 
@@ -1152,9 +1196,9 @@ const hasFocus = tree => {
   const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
   const band = await engine.render('AbovePrompt', props, 'band')
   const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
-  const icons = ['ather-away', 'ather-open', 'ather-close'].map(key => find(band, key))
-  expect('the band carries three icons, away, open and close, and nothing more', icons.every(Boolean) && icons.map(one => one.props.label).join('') === '☾⤢✕' && icons[2].props.role === 'dismiss' && check(band, 110).problems.length === 0, icons.map(one => one?.props.label))
-  icons[2].props.onPress({})
+  const icons = ['ather-away', 'ather-warm-toggle', 'ather-open', 'ather-close'].map(key => find(band, key))
+  expect('the band carries four icons, away, keep-warm, open and close, and nothing more', icons.every(Boolean) && icons.map(one => one.props.label).join('') === '☾◔⤢✕' && icons[3].props.role === 'dismiss' && icons[1].props.dimColor === true && check(band, 110).problems.length === 0, icons.map(one => one?.props.label))
+  icons[3].props.onPress({})
   expect('✕ hides the band while it has nothing new to say', (await engine.render('AbovePrompt', props, 'band')) === null)
   engine.setSurfaces?.(['desktop'])
   const reopened = await run(engine, [], 'ather')
@@ -1165,6 +1209,77 @@ const hasFocus = tree => {
   const away = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · the band ☾ opens the away choices (72 columns)', away.lines.join('\n')])
   expect('☾ opens the pane on the away choices', engine.record.opens.some(one => one.id === 'ather') && /Heading off\?/.test(away.lines.join('\n')) && /Until done/.test(away.lines.join('\n')) && /8 hours/.test(away.lines.join('\n')) && away.problems.length === 0, away.lines)
+  done()
+}
+
+{
+  // Keep-warm from the band's ◔ and from the pane's Stepping out?: on and off for this session, the count while a read is due.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
+  const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
+  const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
+  // A press, until its toast is up; the redraw it asked for has happened by then.
+  const said = async element => {
+    const before = engine.record.toasts.length
+    element?.props.onPress({})
+    for (let tries = 0; tries < 50 && engine.record.toasts.length === before; tries += 1) await engine.flush()
+    await engine.flush()
+    return engine.record.toasts.slice(before).join('\n')
+  }
+  const home = async () => {
+    await engine.command('ather', '')
+    return engine.render('Pane', { bodyColumns: 72 }, 'ather')
+  }
+
+  const off = await home()
+  expect("the pane's Stepping out? offers to keep the cache warm, at any hour", /S T E P P I N G {3}O U T \?/.test(check(off, 72).lines.join('\n')) && find(off, 'warm-toggle')?.props.label === 'Keep the cache warm' && check(off, 72).problems.length === 0, check(off, 72).lines)
+
+  const turnedOn = await said(find(await engine.render('AbovePrompt', props, 'band'), 'ather-warm-toggle'))
+  expect("the band's ◔ turns keep-warm on for the session and says so", /Keep-warm on for this session, for up to 3 hours: waiting for the first turn to end\./.test(turnedOn) && engine.store.get('warm:harness-session-0001')?.mode === 'on', [turnedOn, engine.store.get('warm:harness-session-0001')])
+
+  // Two turns end: past the session's first turn, a read is due 55 minutes after the last.
+  await engine.turnEnd()
+  await engine.turnEnd()
+  for (let tries = 0; tries < 20; tries += 1) await engine.flush()
+  const armed = await engine.render('AbovePrompt', props, 'band')
+  expect('once a read is due, ◔ is at full strength with the count in amber beside it', find(armed, 'ather-warm-toggle')?.props.dimColor === undefined && find(armed, 'ather-warm-count')?.children?.[0]?.props.children === '0/3' && find(armed, 'ather-warm-count')?.children?.[0]?.props.color === 'yellow' && check(armed, 110).problems.length === 0, check(armed, 110).lines)
+  expect('the status line names the next read', /^◔ warm 0\/3 · next \d\d:\d\d$/.test(engine.record.status.filter(Boolean).at(-1) ?? ''), engine.record.status)
+  const pane = await home()
+  const paneText = check(pane, 72)
+  screens.push(['Terminal · Home with keep-warm on (72 columns)', paneText.lines.join('\n')])
+  expect("the pane says what is kept and when it is read next, with Stop keeping warm", /Kept warm: 0 of 3 reads done, the next at \d\d:\d\d\./.test(paneText.lines.join(' ')) && find(pane, 'warm-toggle')?.props.label === 'Stop keeping warm' && find(pane, 'warm-toggle')?.props.hotkey === 'w' && paneText.problems.length === 0, paneText.lines)
+
+  const turnedOff = await said(find(pane, 'warm-toggle'))
+  const after = await engine.render('AbovePrompt', props, 'band')
+  expect("the pane's button turns it off: the toast, the dim ◔ without a count, the status line cleared", /Keep-warm off\. The cache lapses an hour after your last turn\./.test(turnedOff) && engine.store.get('warm:harness-session-0001')?.mode === 'off' && find(after, 'ather-warm-toggle')?.props.dimColor === true && !find(after, 'ather-warm-count') && engine.record.status.at(-1) === undefined, [turnedOff, engine.record.status.slice(-2)])
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  done()
+}
+
+{
+  // An away window of so many hours hands keep-warm over with the session: on, its cap stretched over the window.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
+  const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }
+  const find = (node, key) => (!node || typeof node !== 'object' ? null : node.props?.key === key ? node : (node.children ?? []).map(child => find(child, key)).find(Boolean) ?? null)
+  const started = await engine.command('away', '8h')
+  expect('/away 8h says the prompt cache is kept warm until you are back', /The prompt cache is kept warm until you are back; \/warm off stops it\./.test(started.text ?? ''), started.text)
+  await engine.turnEnd()
+  await engine.turnEnd()
+  for (let tries = 0; tries < 20; tries += 1) await engine.flush()
+  const report = (await engine.command('warm', '')).text ?? ''
+  expect('/warm says it is on with the away window, nine reads at most (the window and an hour)', /^Keep the cache warm: on; next read at \d\d:\d\d \(0 of 9 this idle period\)\. Cap 9 hours, with your away window, until you have reviewed it\./.test(report), report)
+  expect("the band's ◔ shows it, the count of nine", find(await engine.render('AbovePrompt', props, 'band'), 'ather-warm-count')?.children?.[0]?.props.children === '0/9')
+  done()
+}
+
+{
+  // Until done hands nothing over: the return is unknown, and a day of reads costs more than the re-write it saves.
+  const { engine, done } = await boot({ surfaces: ['terminal'], store: { 'tour:lanvo': { isDone: true } }, user: 'Lan Vo' })
+  const started = await engine.command('away', 'until done')
+  await engine.turnEnd()
+  await engine.turnEnd()
+  for (let tries = 0; tries < 20; tries += 1) await engine.flush()
+  const report = (await engine.command('warm', '')).text ?? ''
+  expect('/away until done leaves keep-warm as it was (off), and says nothing of it', !/kept warm/.test(started.text ?? '') && /^Keep the cache warm: off\./.test(report), [started.text, report])
   done()
 }
 
@@ -1272,11 +1387,12 @@ const hasFocus = tree => {
   const laneFile = path.join(root, 'Saved/AtherAutomata/lanes/harness-session-0001.json')
   const lane = () => JSON.parse(fs.readFileSync(laneFile, 'utf8'))
   await engine.timers()
+  // What waits with nothing tracked: a session that tracks an intent is offered that intent's decisions only.
+  const waiting = async () => /Waiting on you: [^.]*\./.exec((await run(engine, [dismiss])).dialogs[0]?.question ?? '')?.[0] ?? ''
+  const before = await waiting()
   await run(engine, [], 'ather', 'intent box-scale-tool')
   expect('tracking writes the lane heartbeat at once, with the last activity', lane().intent === 'box-scale-tool' && typeof lane().lastActiveAt === 'number', lane())
   await engine.modelTool({ tool: 'Bash', command: 'Build.bat S2Editor Win64 Development', __text: 'Result: Succeeded' })
-  const waiting = async () => /Waiting on you: [^.]*\./.exec((await run(engine, [dismiss])).dialogs[0]?.question ?? '')?.[0] ?? ''
-  const before = await waiting()
   await engine.spawn({ agentId: 'w-guard', description: 'A2 worker', prompt: 'Implement A2.' })
   await run(engine, [], 'away', '4h')
   const refused = await run(engine, [], 'ather', 'untrack')
@@ -1284,7 +1400,7 @@ const hasFocus = tree => {
   await run(engine, [], 'away', 'end')
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
   const untracked = await run(engine, [], 'ather', 'untrack')
-  expect('/ather untrack stops tracking: the pin and "Continue …" go, the heartbeat says so at once, the proof stays with the intent', untracked.out === 'Stopped tracking box-scale-tool. Its proof so far stays with the intent.' && pinned() === undefined && engine.store.get('last:tinnguyen') === undefined && lane().intent === null && engine.store.get('evidence:box-scale-tool')?.build?.state === 'pass', [untracked.out, pinned(), lane().intent])
+  expect('/ather untrack stops tracking: the pin and "Continue …" go, the heartbeat says so at once, the proof stays with the intent', untracked.out === 'Stopped tracking box-scale-tool. Its proof so far stays with the intent.' && pinned() === undefined && scoped(engine, 'last', 'tinnguyen') === undefined && lane().intent === null && scoped(engine, 'evidence', 'box-scale-tool')?.build?.state === 'pass', [untracked.out, pinned(), lane().intent])
   expect('untracking leaves running workers and Needs you as they were', (await engine.$.agent.list()).some(one => one.id === 'w-guard' && one.status === 'running') && before !== '' && (await waiting()) === before, before)
   const nothing = await run(engine, [], 'ather', 'untrack')
   expect('/ather untrack with nothing tracked says so', nothing.out === 'Nothing is tracked in this session.', nothing.out)
@@ -1353,11 +1469,15 @@ const hasFocus = tree => {
   findKey(viewTree, 'intent-work')?.props.onPress({})
   await engine.flush()
   const trackedTree = await pane()
-  expect('Work on this here tracks it and moves "Continue …" to it; the view then offers Stop tracking', pinned() === slug && engine.store.get('last:tinnguyen') === slug && Boolean(findKey(trackedTree, 'intent-untrack')) && !findKey(trackedTree, 'intent-work') && engine.record.toasts.includes(`Ather: Now tracking ${slug}.`), [pinned(), engine.record.toasts.slice(-2)])
+  expect('Work on this here tracks it and moves "Continue …" to it; the view then offers Stop tracking', pinned() === slug && scoped(engine, 'last', 'tinnguyen') === slug && Boolean(findKey(trackedTree, 'intent-untrack')) && !findKey(trackedTree, 'intent-work') && engine.record.toasts.some(toast => toast.startsWith(`Ather: Now tracking ${slug}. Next: `)), [pinned(), engine.record.toasts.slice(-2)])
+  const trackedNext = findKey(trackedTree, 'intent-next-step')
+  const trackedView = check(trackedTree, 72)
+  screens.push(['Terminal · the Intent view after Work on this here, its next step a press (72 columns)', trackedView.lines.join('\n')])
+  expect('… and its next step is a press in the view, named in the toast', Boolean(trackedNext) && typeof trackedNext?.props.onPress === 'function' && /N E X T/.test(trackedView.lines.join('\n')) && trackedView.problems.length === 0 && engine.record.toasts.some(toast => toast.includes(`Next: ${String(trackedNext?.props.label ?? '').trim()}.`)), [trackedNext?.props.label, engine.record.toasts.slice(-1), trackedView.problems])
   findKey(trackedTree, 'intent-untrack')?.props.onPress({})
   await engine.flush()
   const stoppedTree = await pane()
-  expect('Stop tracking in the Intent view stops tracking, says the proof stays, and keeps the view on the intent with Work on this here', pinned() === undefined && engine.store.get('last:tinnguyen') === undefined && Boolean(findKey(stoppedTree, 'intent-work')) && new RegExp(`^I N T E N T\\n${slug}$`, 'm').test(check(stoppedTree, 72).lines.join('\n')) && engine.record.toasts.includes(`Ather: Stopped tracking ${slug}. Its proof so far stays with the intent.`), engine.record.toasts.slice(-2))
+  expect('Stop tracking in the Intent view stops tracking, says the proof stays, and keeps the view on the intent with Work on this here', pinned() === undefined && scoped(engine, 'last', 'tinnguyen') === undefined && Boolean(findKey(stoppedTree, 'intent-work')) && new RegExp(`^I N T E N T\\n${slug}$`, 'm').test(check(stoppedTree, 72).lines.join('\n')) && engine.record.toasts.includes(`Ather: Stopped tracking ${slug}. Its proof so far stays with the intent.`), engine.record.toasts.slice(-2))
   pressIn(stoppedTree, 'Back')
   // Every home row, under Also yours and under Follow a teammate alike.
   const homeTree = await pane()
@@ -1392,14 +1512,14 @@ const hasFocus = tree => {
   const now = Date.now()
   fs.writeFileSync(path.join(lanes, '1a2b3c4d-0000-4000-8000-000000000000.json'), JSON.stringify({ sessionId: '1a2b3c4d-0000-4000-8000-000000000000', intent: 'fluid-snow-sand-look', branch: 'main', updatedAt: now, lastActiveAt: now - 3 * 60000, away: 'off', hasEnded: false }))
   fs.writeFileSync(path.join(lanes, '5e6f7a8b-0000-4000-8000-000000000000.json'), JSON.stringify({ sessionId: '5e6f7a8b-0000-4000-8000-000000000000', intent: 'fluid-snow-sand-look', branch: 'main', updatedAt: now, lastActiveAt: now, away: 'off', hasEnded: true }))
-  engine.store.set('evidence:fluid-snow-sand-look', { build: { state: 'pass', detail: 'Result: Succeeded', at: now, by: '1a2b3c4d' } })
+  engine.store.set(`evidence:${repoId('', root)}|fluid-snow-sand-look`, { build: { state: 'pass', detail: 'Result: Succeeded', at: now, by: '1a2b3c4d' } })
   const peerView = check(await pane(), 72)
   screens.push(['Terminal · the Intent view with another session on it and its proof (72 columns)', peerView.lines.join('\n')])
   expect('the Intent view says how many other live sessions track the intent, and when the latest was active; an ended one does not count', /^Also tracked in 1 other session · active 3m ago$/m.test(peerView.lines.join('\n')) && peerView.problems.length === 0, peerView.lines.slice(0, 8))
   expect('the Intent view names the session that produced proof when it is not this one', /^Proof: build ✓ by session 1a2b3c4d$/m.test(peerView.lines.join('\n')), peerView.lines.slice(0, 8))
   await run(engine, [], 'ather', 'intent fluid-snow-sand-look')
   const laneText = (await engine.compose()).sections.find(one => one.id === 'ather-automata:lane')?.text ?? ''
-  expect('the lane text carries the same line for the tracked intent', /\nAlso tracked in 1 other session · active 3m ago\.\n/.test(laneText), laneText)
+  expect('the lane text says so for the tracked intent, without the age: the session keeps this text for the whole conversation, where an age would go stale', /\nAlso tracked in 1 other session\.\n/.test(laneText) && !/active \d+m ago|active now/.test(laneText), laneText)
   fs.rmSync(path.join(lanes, '1a2b3c4d-0000-4000-8000-000000000000.json'))
   const alone = (await engine.compose()).sections.find(one => one.id === 'ather-automata:lane')?.text ?? ''
   const aloneView = check(await pane(), 72).lines.join('\n')
@@ -1485,12 +1605,19 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   engine.store.set('role:web:tinnguyen', 'engineer')
   // Outputs captured from han-viet runs, the unit tests' fixtures.
   const fixture = name => fs.readFileSync(new URL(`../../ather-automata/tests/fixtures/web/${name}`, import.meta.url), 'utf8')
+  // Every gate of the profile: a rung passes when each gate that declares it has.
   await engine.modelTool({ tool: 'Bash', command: 'npm test', __text: fixture('node-test-pass.txt') })
   await engine.modelTool({ tool: 'Bash', command: 'npm run lint', __text: fixture('eslint-pass.txt') })
+  expect('tests are not proven by npm test alone: the curriculum and learner gates declare them too', evidenceOf(engine)?.tests?.state === 'none', evidenceOf(engine))
+  // han-viet's curriculum:verify prints no counts: run by itself, the gate passes on its exit code.
+  await engine.modelTool({ tool: 'Bash', command: 'npm run curriculum:verify', __text: 'curriculum ok\nstudy layer ok\ncharacter layer ok\n' })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run learner:test', __text: fixture('node-test-pass.txt') })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run build', __text: fixture('vinext-build-pass.txt') })
+  await engine.modelTool({ tool: 'Bash', command: 'npm run build:next', __text: fixture('next-build-pass.txt') })
   await engine.modelTool({ tool: 'Bash', command: 'npm run ui:verify', __text: fixture('playwright-pass.txt') })
   await engine.flush()
   const evidence = evidenceOf(engine)
-  expect('npm test, lint and ui:verify outputs are read as tests, build, lint and ui passed', ['tests', 'build', 'lint', 'ui'].every(rung => evidence?.[rung]?.state === 'pass'), evidence)
+  expect("every gate's output read, tests, build, lint and ui passed", ['tests', 'build', 'lint', 'ui'].every(rung => evidence?.[rung]?.state === 'pass'), evidence)
   await run(engine, [], 'ather', 'intent zz-web-lens')
   for (const width of [72, 110]) {
     const pane = check(await engine.render('Pane', { bodyColumns: width }, 'ather'), width)
@@ -1516,8 +1643,10 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   const merge = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
   expect('while away, a production deploy is held and a merge with every gate proven goes through (with-proof)', typeof deploy.deny === 'string' && /Production deploys/.test(deploy.deny) && merge.deny === undefined, [deploy.deny, merge.deny])
   // Proof from before this session (an hour old, still within the day evidence is kept) does not let a merge through.
-  const stored = engine.store.get('evidence:zz-web-lens')
-  engine.store.set('evidence:zz-web-lens', Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...value, at: Date.now() - 3600000 }])))
+  const lensKey = scopedKey(engine, 'evidence', 'zz-web-lens') ?? ''
+  const stored = engine.store.get(lensKey)
+  const hourOld = value => ({ ...value, at: Date.now() - 3600000 })
+  engine.store.set(lensKey, Object.fromEntries(Object.entries(stored).map(([rung, value]) => [rung, { ...hourOld(value), gates: Object.fromEntries(Object.entries(value.gates ?? {}).map(([gate, result]) => [gate, hourOld(result)])) }])))
   const stale = await engine.modelTool({ tool: 'Bash', command: 'gh pr merge 21 --squash' })
   expect("a merge on proof from before this session is held (D2: passed in this session's tool output)", typeof stale.deny === 'string' && /Merges/.test(stale.deny), stale.deny)
   expect('no hook threw in the web scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
@@ -1526,15 +1655,13 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   expect('HANVIET_ROOT names a han-viet checkout with .ather/profile.json', false, HANVIET_ROOT)
 }
 
-// ---------------------------------------------------------------- setting a repository up for intents
+// ---------------------------------------------------------------- a repository without intents
 //
-// A repository with a package.json and no docs/intent: /ather offers the setup, /ather setup hands the
-// session one prompt naming the bundle's zip and the pieces to add. The test then writes the pieces,
-// standing in for the session. Nothing here is laid out: the layouts stay those of the blocks above.
+// A repository with a package.json and no docs/intent: /ather answers as /away does, whatever is typed
+// after it, and asks, sends and opens nothing. The test then writes the structure, standing in for the
+// person. Nothing here is laid out: the layouts stay those of the blocks above.
 
 {
-  const { SETUP_PIECES } = await import('./out/hooks/setup.mjs')
-  const paths = SETUP_PIECES.map(one => one.path)
   const start = async root => {
     fs.mkdirSync(path.join(root, '.git'), { recursive: true })
     fs.writeFileSync(path.join(root, '.git/HEAD'), 'ref: refs/heads/main\n')
@@ -1550,28 +1677,18 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true })
     fs.writeFileSync(path.join(root, name), text)
   }
-  // The one prompt: it names the zip, and which of the five target paths.
-  const names = (sent, wanted) => sent.length === 1 && /intent-setup\.zip/.test(sent[0]) && paths.every(one => sent[0].includes(one) === wanted.includes(one))
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-setup-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-bare-'))
   put(root, 'package.json', '{ "name": "new-here", "scripts": { "test": "node --test" } }\n')
   const engine = await start(root)
   const away = await run(engine, [], 'away', 'tonight')
-  expect('setup: /away in a repository without intents asks nothing, sends nothing and says there are none here', away.dialogs.length === 0 && away.sent.length === 0 && /none here/.test(away.out) && !/\/ather setup/.test(away.out), away)
-  const later = await run(engine, [pick('Not now')])
-  expect('setup: /ather in a repository without intents asks one question, Set up intents here or Not now', later.dialogs.length === 1 && later.left === 0 && later.dialogs[0].options.map(option => option.label).join('|') === 'Set up intents here|Not now', dialogText(later.dialogs))
-  expect('setup: "Not now" sends nothing and answers as /away does, with the command that sets up later', later.sent.length === 0 && later.filled.length === 0 && later.out.startsWith(away.out) && /\/ather setup/.test(later.out) && engine.record.opens.length === 0, later)
-  const dismissed = await run(engine, [dismiss])
-  expect('setup: the question dismissed sends nothing', dismissed.dialogs.length === 1 && dismissed.sent.length === 0 && dismissed.out === later.out, dismissed)
-  const chosen = await run(engine, [pick('Set up intents here')])
-  expect('setup: "Set up intents here" submits exactly one prompt, naming the zip and the five target paths', chosen.dialogs.length === 1 && names(chosen.sent, paths), chosen)
-  for (const word of ['setup', 'init']) {
-    const typedOut = await run(engine, [], 'ather', word)
-    expect(`setup: /ather ${word} asks nothing and submits exactly one prompt, naming the zip and the five target paths`, typedOut.dialogs.length === 0 && names(typedOut.sent, paths) && paths.every(one => typedOut.out.includes(one)), typedOut)
+  expect('no intents: /away in a repository without intents asks nothing, sends nothing and says there are none here', away.dialogs.length === 0 && away.sent.length === 0 && /none here/.test(away.out), away)
+  for (const args of ['', 'setup', 'init']) {
+    const typedOut = await run(engine, [], 'ather', args)
+    expect(`no intents: /ather${args && ` ${args}`} asks nothing, submits nothing, opens no pane and answers as /away does`, typedOut.dialogs.length === 0 && typedOut.sent.length === 0 && typedOut.filled.length === 0 && engine.record.opens.length === 0 && typedOut.out === away.out, [typedOut, engine.record.opens])
   }
-  expect('setup: the prompt names the web pack beside a package.json', / web\b/.test(chosen.sent[0] ?? '') && !/unreal/.test(chosen.sent[0] ?? ''), chosen.sent)
 
-  // The session's writing, done here: the five pieces, with a profile whose gate no default names.
+  // The person's writing, done here: the structure, with a profile whose gate no default names.
   const write = folder => {
     put(folder, '.agents/skills/intent/SKILL.md', '---\nname: intent\ndescription: Run a feature as an intent.\n---\n')
     put(folder, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n- `api`: the server.\n')
@@ -1584,27 +1701,23 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   const areasBefore = toolAreas(engine)
   write(root)
   const opened = await run(engine, [])
-  expect('setup: with the five pieces written, /ather in the same session opens Home and asks no setup question', opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather'), [opened, engine.record.opens])
-  expect("setup: the profile tool is registered again with the new profile's areas (app, api), which it did not list before", toolAreas(engine).join(',') === 'app,api' && areasBefore.join(',') !== 'app,api' && engine.record.registeredTools.join(',') === 'status,away,profile,status,away,profile', [areasBefore, toolAreas(engine), engine.record.registeredTools])
+  expect('no intents: with the structure added by hand, /ather in the same session opens Home, asks nothing and submits nothing', opened.dialogs.length === 0 && opened.sent.length === 0 && engine.record.opens.some(pane => pane.id === 'ather'), [opened, engine.record.opens])
+  expect("no intents: the profile tool is registered again with the new profile's areas (app, api), which it did not list before", toolAreas(engine).join(',') === 'app,api' && areasBefore.join(',') !== 'app,api' && engine.record.registeredTools.join(',') === 'status,away,profile,status,away,profile', [areasBefore, toolAreas(engine), engine.record.registeredTools])
   const tree = JSON.stringify(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), (key, value) => (typeof value === 'function' ? undefined : value))
-  expect('setup: Home is drawn for the repository, with the tour as the next step', /tour/i.test(tree), tree.slice(0, 600))
+  expect('no intents: Home is drawn for the repository, with the tour as the next step', /tour/i.test(tree), tree.slice(0, 600))
   const role = await run(engine, [], 'ather', 'skip')
-  expect("setup: the same session reads the new profile (the role question names the profile's gate)", role.dialogs.some(dialog => dialog.options.some(option => /npm run zz-proof/.test(option.description))), dialogText(role.dialogs))
-  const again = await run(engine, [], 'ather', 'setup')
-  expect('setup: with nothing missing, /ather setup submits nothing and reads the profile back (web, 1 gate, 2 areas)', again.sent.length === 0 && again.dialogs.length === 0 && /\bweb\b/.test(again.out) && /\b1 gate\b/.test(again.out) && /\b2 areas\b/.test(again.out), again)
-  expect('no hook threw in the setup scenario', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  expect("no intents: the same session reads the new profile (the role question names the profile's gate)", role.dialogs.some(dialog => dialog.options.some(option => /npm run zz-proof/.test(option.description))), dialogText(role.dialogs))
+  expect('no hook threw in the scenario without intents', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   fs.rmSync(root, { recursive: true, force: true })
 
-  // A repository that already runs intents, with its readme and no profile: only what is missing is named.
-  const partial = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-setup-'))
+  // A repository that already runs intents, with its readme and no profile.
+  const partial = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-bare-'))
   put(partial, 'package.json', '{ "name": "runs-intents" }\n')
   put(partial, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n')
   const second = await start(partial)
-  const some = await run(second, [], 'ather', 'setup')
-  expect('setup: where docs/intent/README.md is there and the profile is not, the prompt names .ather/profile.json and not the readme', names(some.sent, paths.filter(one => one !== 'docs/intent/README.md')) && some.dialogs.length === 0, some)
   const home = await run(second, [])
-  expect('setup: a repository that runs intents with pieces missing still opens Home on /ather, with no setup question', home.dialogs.length === 0 && home.sent.length === 0 && second.record.opens.some(pane => pane.id === 'ather'), [home, second.record.opens])
-  expect('no hook threw in the partial setup scenario', second.record.hookErrors.length === 0, second.record.hookErrors)
+  expect('no intents: a repository that runs intents with pieces missing still opens Home on /ather, with no dialog and no prompt', home.dialogs.length === 0 && home.sent.length === 0 && second.record.opens.some(pane => pane.id === 'ather'), [home, second.record.opens])
+  expect('no hook threw in the scenario with pieces missing', second.record.hookErrors.length === 0, second.record.hookErrors)
   fs.rmSync(partial, { recursive: true, force: true })
 }
 

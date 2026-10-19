@@ -1,0 +1,17 @@
+C L O N E   I N T E N T S
+5 intents · 4 open · 0 parked · 1 done · this week 5 opened, 1 closed                     f: synced just now ↻
+
+1: For you  2: Triage  3: Modules  4: Table  5: Open items  6: People  7: Areas  │  o: Open the page  p:
+Publish
+
+Ask[what is blocking combat? whose decisions are oldest?]
+
+Search[words from a name, title, area or owner]
+    
+Handed to the session: bring main into dodge-cancel. It asks before changing anything.
+
+Sam Vo  2 open  5 items  0m
+Minh Le  1 open  2 items  0m
+Tin Nguyen  1 open  1 item  0m
+Lena Park  0 open  1 done  0m
+○ Plan  ● Building  ◐ Proving  ✓ Ready to close  ‖ Parked  ■ Done  ·  bar: ▰▰▰▰▰ items met

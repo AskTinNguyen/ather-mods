@@ -2,11 +2,12 @@
 // the person picks something. Pure: no `$`.
 
 import { windowDecisions } from './away.mjs'
+import { bringPrompt, collisionFact, moreText, overlapCount, spotLabel } from './collide.mjs'
 import { callId, findingAnswers, ruleAnswers, rulePrompt } from './decide.mjs'
-import { issueLabel, issuePrompt } from './issues.mjs'
-import { STAGE_LABELS, clockText, currentStage, directorCalls, durationText, intentLabel, isEvening, isMine, nextStep, ownedIntents, pickCandidates, plural } from './model.mjs'
+import { issueId, issueLabel, issuePrompt } from './issues.mjs'
+import { STAGE_LABELS, clockText, currentStage, cutWords, durationText, intentLabel, isEvening, isMine, nextStep, otherRoot, ownedIntents, pickCandidates, plural, prStatusList, shortTitle, waitingCalls } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
-import { isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
+import { PLAN_GLYPH, SHIPPED_GLYPH, STAGE_GLYPHS, ageText, isParkedBare, listStage, needsAttention, ownerName } from './worklist.mjs'
 
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
 
@@ -19,8 +20,17 @@ export { CREATE_GROUPS, SKILL_GROUPS, TOUR_PROMPT } from './packs/unreal.mjs'
 // ---------------------------------------------------------------- what the session is asked
 
 /** @param {Intent} intent @param {{ id: string }} finding */
-const callPrompt = (intent, finding) =>
-  `Walk me through decision ${finding.id} on intent ${intent.slug} (docs/intent/${intent.slug}/findings.md): what it is about, the options and your recommendation. Then ask me to choose with a question dialog, and record my answer in the intent.`
+const callPrompt = (intent, finding) => {
+  const root = otherRoot(intent)
+  return `Walk me through decision ${finding.id} on intent ${intent.slug} (${root ? `${root}/` : ''}docs/intent/${intent.slug}/findings.md): what it is about, the options and your recommendation. Then ask me to choose with a question dialog, and record my answer in the intent.`
+}
+
+// How an answer given in place names the intent to the session: its key, with its findings file when it lives in another checkout.
+/** @param {Intent} intent */
+const callName = intent => {
+  const root = otherRoot(intent)
+  return root ? `${intent.key} (${root}/docs/intent/${intent.slug}/findings.md)` : intent.key
+}
 
 /** @param {Away} away @param {readonly { id: string, question: string }[]} decisions */
 const reviewPrompt = (away, decisions) =>
@@ -38,6 +48,26 @@ export const NEW_INTENT_PROMPT =
 export const CREATE_SHOWN = 3
 // Home's preview of teammates' intents: four rows, then "+N more ›" (D7).
 export const TEAM_SHOWN = 4
+
+// Home in two views, remembered per person (simple-view D1-D5): Advanced draws every part; Simple only the
+// title and its status, Needs you, Needs attention, Next and the toggle. The rest stays a command away.
+/** @typedef {'advanced' | 'simple'} PaneView */
+// Home's parts, top to bottom.
+export const HOME_PARTS = /** @type {const} */ (['title', 'status', 'stages', 'meta', 'merge', 'strip', 'actions', 'needs', 'attention', 'next', 'crew', 'preview', 'away', 'warm', 'view'])
+/** @typedef {(typeof HOME_PARTS)[number]} HomePart */
+/** @param {unknown} value @returns {PaneView} */
+export const paneViewOf = value => (value === 'simple' ? 'simple' : 'advanced')
+/** @type {readonly HomePart[]} */
+export const SIMPLE_SHOWS = ['title', 'status', 'needs', 'attention', 'next', 'view']
+/** @param {PaneView} view @param {HomePart} part */
+export const isShownIn = (view, part) => view === 'advanced' || SIMPLE_SHOWS.includes(part)
+/** @param {PaneView} view @returns {PaneView} */
+export const otherView = view => (view === 'simple' ? 'advanced' : 'simple')
+// What choosing a view says, and how to go back.
+/** @param {PaneView} view */
+export const viewText = view => (view === 'simple' ? 'Simple view: what needs you and what is next. /ather advanced shows everything.' : 'Advanced view: everything Ather shows. /ather simple shows less.')
+/** @type {Record<PaneView, string>} */
+export const VIEW_LABELS = { simple: 'Simple view', advanced: 'Advanced view' }
 
 /** @param {string} name */
 export const skillFolder = name => (name.includes('/') ? name : `.agents/skills/${name}`)
@@ -60,6 +90,26 @@ export const trackConsequence = (pack = unreal) =>
 export const intentStands = (intent, stage, me, heldBy = '') =>
   `${intent.slug}: ${stage}, ${intent.acceptanceTotal > 0 ? `${intent.acceptanceDone}/${intent.acceptanceTotal} done` : 'no checklist yet'}, ${isMine(intent, me) ? 'yours' : intent.owner ? `${intent.owner}'s` : 'no owner named'}.${heldBy ? ` ${heldBy}.` : ''}`
 
+// Where an intent stands, as its own files say it: the lines under "Where it stands" in its view, and
+// the reply on a surface without a pane. All of it is read from prompt.md, progress.md and findings.md
+// when the list was read, so showing it costs the session nothing. What is met is what progress.md says.
+/** @param {Intent} intent @param {string} stage @param {string} me @param {import('./model.mjs').PrStates} [prs] */
+export const standsLines = (intent, stage, me, prs = {}) => {
+  const checklist = intent.acceptanceTotal > 0 ? `${intent.acceptanceDone}/${intent.acceptanceTotal} met` : 'no checklist yet'
+  const whose = isMine(intent, me) ? 'yours' : intent.owner ? `${intent.owner}'s` : 'no owner named'
+  const parked = intent.status === 'parked' ? ` · parked${intent.statusNote ? `: ${shortTitle(intent.statusNote, 90)}` : ''}` : ''
+  /** @param {readonly string[]} all @param {number} shown */
+  const some = (all, shown) => `${all.slice(0, shown).join(' · ')}${all.length > shown ? ` · +${all.length - shown} more` : ''}`
+  return [
+    `${stage} · ${checklist} · ${whose}${parked}`,
+    intent.currentStep ? `Now: ${intent.currentStep}` : '',
+    intent.thenStep ? `Then: ${intent.thenStep}` : '',
+    intent.openItems.length > 0 ? `Still open: ${some(intent.openItems.map(one => [one.id, one.text].filter(Boolean).join(' ')), 4)}` : '',
+    intent.findings.length > 0 ? `Open decisions: ${some(intent.findings.map(one => `${one.id} ${cutWords(one.title, 48)}${one.isBlocking ? ' (blocking)' : ''}`), 3)}` : '',
+    intent.prs.length > 0 ? `PRs: ${prStatusList(intent, prs).join(', ')}` : '',
+  ].filter(line => line !== '')
+}
+
 // What stopping tracking said: done (proof stays with the intent), nothing tracked, or refused while away.
 /** @param {{ result: 'untracked' | 'none' | 'away', slug: string }} outcome */
 export const untrackText = outcome =>
@@ -74,24 +124,51 @@ export const batchPrompt = items => `Take me through these one at a time, with a
  * What waits on the person. Every item goes to the session with its prompt; `kind`
  * says what else changes once it has been delivered (see settleItem in state.mjs).
  * @typedef {{ id: string, label: string, title: string, question: string, prompt: string, detail?: string, answers?: import('./decide.mjs').Answers }} ItemText `detail`: the pane's second line under `label`; `answers`: what answers it in place (0.2.0)
- * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
+ * A call's `slug` is its intent's key in the pane.
+ * @typedef {ItemText & ({ kind: 'call', slug: string } | { kind: 'review' } | { kind: 'lost' } | { kind: 'collide' } | { kind: 'editor' } | { kind: 'rule', ruleIds: string[] } | { kind: 'away-end' })} Item
  */
 
+/** @typedef {import('./collide.mjs').MergeCheck} MergeCheck */
+
+// Whether this checkout's branch merges into origin's base, as Home's masthead says it (ship-pill D1): '' when it was
+// not compared (on the base, detached, nothing changed, origin's base not fetched).
+/** @param {MergeCheck | null} merge @param {number} now @returns {{ text: string, isWarn: boolean }} */
+export const mergeLine = (merge, now) => {
+  if (!merge) return { text: '', isWarn: false }
+  if (merge.collision) return { text: `${overlapCount(merge.collision.count)} with origin/${merge.base} · see Needs you`, isWarn: true }
+  const age = ageText(merge.at, now)
+  return { text: `Merges cleanly into origin/${merge.base} · checked ${age === '0m' ? 'just now' : `${age} ago`}`, isWarn: false }
+}
+
+// Each stage's glyph on the pill, the work list's (worklist.mjs): not begun, being built, half there, met, shipped.
+/** @type {Record<keyof typeof STAGE_LABELS, string>} */
+const PILL_GLYPHS = { plan: PLAN_GLYPH, build: STAGE_GLYPHS.build, prove: STAGE_GLYPHS.prove, ship: STAGE_GLYPHS.prove, close: STAGE_GLYPHS.met, shipped: SHIPPED_GLYPH }
+
+// The tracked intent as one pill above the prompt when nothing needs the person (ship-pill D2): its stage's glyph,
+// the stage (planned before anything is done or anyone works), the items met, and its name.
+/** @param {keyof typeof STAGE_LABELS} stage @param {boolean} isPlanned @param {string} label @param {Intent} intent */
+const stagePill = (stage, isPlanned, label, intent) =>
+  `${isPlanned ? PLAN_GLYPH : PILL_GLYPHS[stage]} ${label}${intent.acceptanceTotal > 0 && stage !== 'shipped' ? ` ${intent.acceptanceDone}/${intent.acceptanceTotal}` : ''} · ${intent.key}`
+
 /**
- * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked' }} Next
+ * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked', isLook?: boolean, look?: string }} Next
+ * `look`: the key of the intent whose view answers a step that only reads (model.mjs's `isLook`).
  * Something to work on: an open intent to track, or an assigned GitHub issue to start an intent from.
  * An intent's `owner` is its Owner line as written (people are matched on it), `who` the name shown,
- * `stage` where it stands in the list, `source` where it was read (origin/main, or only this checkout).
- * @typedef {{ id: string, kind: 'intent', slug: string, label: string, hint: string, isMine: boolean, area: string, owner: string, who: string, updatedAt: number,
+ * `stage` where it stands in the list, `source` where it was read (origin/main, or only this checkout), `key` its name
+ * in the pane (model.mjs's Intent), `repoName` its repository's short name when the list holds several checkouts' intents.
+ * @typedef {{ id: string, kind: 'intent', slug: string, key: string, root: string, repoName: string, label: string, hint: string, isMine: boolean, area: string, owner: string, who: string, updatedAt: number,
  *   stage: import('./worklist.mjs').ListStage, done: number, total: number, source: 'main' | 'local', warn: string }
- *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, label: string, hint: string, prompt: string, isMine: true, area: string, updatedAt: number, stage: '' }} Work
+ *   | { id: string, kind: 'issue', issue: import('./issues.mjs').Issue, repoName: string, label: string, hint: string, prompt: string, isMine: true, area: string, updatedAt: number, stage: '' }} Work
  * @typedef {{
  *   intents: readonly Intent[], pinned: string | null, me: string, role: string, area: string, tourDone: boolean,
  *   evidence: import('./model.mjs').Evidence, away: Away, ledger: string, lost: { paths: string[], isDisclosed: boolean } | null,
+ *   merge?: MergeCheck | null,
  *   lock: import('./model.mjs').EditorLock, recurring: readonly { id: string, title: string, fix: string, count: number }[],
  *   issues: readonly import('./issues.mjs').Issue[], last?: string | null, sent: readonly string[], workers: number, now: number, tz: number,
  *   skills?: readonly { name: string, description: string }[], prs?: import('./model.mjs').PrStates, week?: Week | null, pack?: Pack
- * }} HomeInput
+ * }} HomeInput `pinned` and `last`: intents' keys (the tracked one, and the one the person last worked on); `merge`: this checkout's
+ *   branch as last compared with origin's base (collision-alert, ship-pill)
  */
 
 /**
@@ -120,20 +197,25 @@ export const weekText = week =>
   week ? [`This week: ${plural(week.prsMerged, 'PR')} merged`, week.productive === null ? '' : `${Math.round(week.productive * 100)}% productive`].filter(Boolean).join(' · ') : ''
 
 // What to work on, in one list: your open intents, then your GitHub issues that have no intent
-// yet (most urgent, then most recent), then teammates' intents you could follow.
+// yet (most urgent, then most recent), then teammates' intents you could follow. Intents and issues
+// from more than one checkout each carry their repository's short name.
 /** @param {readonly Intent[]} intents @param {readonly import('./issues.mjs').Issue[]} issues @param {string} me @param {string} area @param {number} now @param {string} [role] @param {import('./model.mjs').PrStates} [prs] @param {Pack} [pack] @returns {Work[]} */
 export const workList = (intents, issues, me, area, now, role = 'set', prs = {}, pack = unreal) => {
-  const linked = new Set(intents.map(one => one.issue).filter(Boolean))
+  // An issue already started is hidden behind its intent: one in the same checkout.
+  const linked = new Set(intents.filter(one => one.issue).map(one => `${one.root}#${one.issue}`))
   const ranked = pickCandidates(intents, me, area)
+  const isMany = new Set([...intents.map(one => one.root), ...issues.map(issue => issue.root ?? '')]).size > 1
   /** @param {Intent} one @returns {Work} */
   const toIntent = one => ({
-    id: `intent:${one.slug}`, kind: 'intent', slug: one.slug, label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area,
+    id: `intent:${one.key}`, kind: 'intent', slug: one.slug, key: one.key, root: one.root, repoName: isMany ? one.repoName : '', label: one.slug, hint: intentLabel(one, me, prs), isMine: isMine(one, me), area: one.area,
     owner: one.owner, who: ownerName(one.owner, one.firstAuthor, pack), updatedAt: one.updatedAt, stage: listStage(one, prs), done: one.acceptanceDone, total: one.acceptanceTotal, source: one.source,
     warn: isParkedBare(one) ? 'parked, no reason' : '',
   })
   return [
     ...ranked.filter(one => isMine(one, me)).map(toIntent),
-    ...issues.filter(issue => !linked.has(issue.number)).map(issue => (/** @type {Work} */ ({ id: `issue:${issue.number}`, kind: 'issue', issue, label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area, updatedAt: issue.updatedAt, stage: '' }))),
+    ...issues
+      .filter(issue => !linked.has(`${issue.root ?? ''}#${issue.number}`))
+      .map(issue => (/** @type {Work} */ ({ id: issueId(issue), kind: 'issue', issue, repoName: isMany ? (issue.repoName ?? '') : '', label: `#${issue.number} ${issue.name}`, hint: issueLabel(issue, now), prompt: issuePrompt(issue, me, role, pack.roleWords), isMine: true, area: issue.area, updatedAt: issue.updatedAt, stage: '' }))),
     ...ranked.filter(one => !isMine(one, me)).map(toIntent),
   ]
 }
@@ -151,12 +233,12 @@ export const WORK_GROUPS = /** @type {const} */ ([
 export const workGroup = one => (one.kind === 'issue' ? 'issues' : one.isMine ? 'mine' : 'others')
 
 // The work that matches every word of `query`: in its title, area, an issue's own title, or an intent's
-// owner as written or as shown.
+// owner as written or as shown, or its key.
 /** @param {readonly Work[]} work @param {string} query */
 export const filterWork = (work, query) => {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   return work.filter(one => {
-    const text = `${one.label} ${one.area} ${one.kind === 'issue' ? one.issue.title : `${one.owner} ${one.who}`}`.toLowerCase()
+    const text = `${one.label} ${one.area} ${one.kind === 'issue' ? one.issue.title : `${one.owner} ${one.who} ${one.key}`}`.toLowerCase()
     return words.every(word => text.includes(word))
   })
 }
@@ -196,7 +278,7 @@ export const buildHome = input => {
   const pack = input.pack ?? unreal
   // Unset ('') until the person says it: then any role's proof counts, and the Editor is assumed not needed.
   const role = input.role
-  const intent = intents.find(one => one.slug === pinned)
+  const intent = intents.find(one => one.key === pinned)
   const owned = ownedIntents(intents, me, pinned)
   // New until they take the tour, skip it or say their role, and while they own no intent.
   const isNewcomer = me !== '' && !input.tourDone && input.role === '' && owned.length === 0
@@ -211,7 +293,7 @@ export const buildHome = input => {
     /** @type {Item} */
     const end = { kind: 'away-end', id: 'away-end', label: "I'm back: end the window", title: "End the window (I'm back)", question: `End the away window and review it (${so})`, prompt: '' }
     const progress = away.untilDone ? 'until done' : `until ${clockText(away.wakeAt, tz)}`
-    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.slug ?? 'Ather', stage: 'Away', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week) }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), own: [], teamPreview: { rows: [], total: 0 }, attention: [], isNewcomer: false, offerAway: false }
+    return { actions: [], skills: [], create: [], editor: { isHeld: false, isFree: false, holder: '', until: '' }, header: { title: intent?.key ?? 'Ather', stage: 'Away', pill: '', progress, track: '', stages: [], proof: '', done: 0, total: 0, sentence: so, lock: lockText, role: roleText, week: weekText(input.week), merge: { text: '', isWarn: false } }, items: [end], open: [end], next: undefined, work: workList(intents, input.issues, me, input.area, now, 'set', {}, pack), own: [], teamPreview: { rows: [], total: 0 }, attention: [], isNewcomer: false, offerAway: false }
   }
 
   /** @type {Item[]} */
@@ -225,12 +307,21 @@ export const buildHome = input => {
     const named = `${(paths[0] ?? '').split('/').pop()?.replace(/\.(uasset|umap)$/i, '') ?? ''}${paths.length > 1 ? ` and ${plural(paths.length - 1, 'more')}` : ''}`
     items.push({ kind: 'lost', id: 'lost', label: 'See what a merge lost', title: `A merge dropped your edits to ${named}`, question: `A merge dropped your edits to ${named}`, prompt: `The last merge kept the other side of these binary assets, so this branch's edits to them are gone: ${paths.join(', ')}. List them for me, itemised, each marked as a lost optimisation or a broken feature, and propose how to re-apply each.` })
   }
+  // This checkout's branch no longer merges into origin's base: named by its places, the press brings the base in.
+  // Its id changes with the places, so one already handed over comes back only when they change.
+  const collision = input.merge?.collision
+  if (collision) {
+    const { a, b } = collision
+    const places = [...collision.spots.map(spot => spotLabel(collision, spot)), moreText(collision)].filter(Boolean).join(', ')
+    const name = `${b.branch} no longer merges cleanly into origin/${a.slug}`
+    items.push({ kind: 'collide', id: `collide:${b.branch}:${collision.files.join('|')}:${collision.count}`, label: `Bring origin/${a.slug} into ${b.branch}`, title: name, detail: `${overlapCount(collision.count)}: ${collisionFact(collision, now)} ${places}`, question: name, prompt: bringPrompt(collision) })
+  }
   // A session that tracks an intent answers for that intent only: pressing another intent's call here would put it
   // in this session's chat. With nothing tracked, every call of yours is offered, each named by its intent.
-  for (const one of intent ? owned.filter(each => each.slug === pinned) : owned) {
-    for (const finding of directorCalls(one)) {
-      items.push({ kind: 'call', slug: one.slug, id: callId(one.slug, finding.id), label: `Decide ${finding.id} on ${one.slug}`, title: `${finding.id} · ${one.slug === pinned ? '' : `${one.slug} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.slug}: ${finding.title}`, prompt: callPrompt(one, finding), answers: findingAnswers(one.slug, finding) })
-    }
+  // Each call once across the checkouts holding a copy of its intent; tracked, the other copies only settle the tracked one's.
+  const calls = waitingCalls(owned, pinned).filter(call => !intent || call.intent.key === pinned)
+  for (const { intent: one, finding } of calls) {
+    items.push({ kind: 'call', slug: one.key, id: callId(one.key, finding.id), label: `Decide ${finding.id} on ${one.key}`, title: `${finding.id} · ${one.key === pinned ? '' : `${one.key} · `}${finding.title}`, detail: finding.full, question: `${finding.id} on ${one.key}: ${finding.title}`, prompt: callPrompt(one, finding), answers: findingAnswers(callName(one), finding) })
   }
   if (intent && pack.lockRoles.includes(role) && (stage === 'build' || stage === 'prove') && lock.state === 'held' && !lock.isStale) {
     const holder = lock.holder || 'another lane'
@@ -268,7 +359,7 @@ export const buildHome = input => {
   // Work handed to the session in this session (an issue being started) leaves the list.
   const work = workList(intents, input.issues, me, input.area, now, role, prs, pack).filter(one => !input.sent.includes(one.id))
   const step = nextStep(role, intent, evidence, input.workers, me, prs, pack)
-  const lastWork = work.find(one => one.kind === 'intent' && one.slug === input.last && one.isMine)
+  const lastWork = work.find(one => one.kind === 'intent' && one.key === input.last && one.isMine)
   /** @type {Next | undefined} */
   let next
   const own = pack.ownCheck
@@ -276,11 +367,11 @@ export const buildHome = input => {
   if (isLostOpen) next = undefined
   else if (isNewcomer && !intent) next = { id: 'next:tour', label: 'Take the tour', hint: 'Six short steps. Ends with your first intent started.', prompt: pack.prompts.tour, isTour: true }
   // A tech artist with PIE proven has one proof left that only they can give: their own Editor check.
-  else if (intent && stage === 'prove' && own && role === own.role && evidence[own.after]?.state === 'pass' && evidence[own.rung]?.state !== 'pass') next = { id: `next:${intent.slug}:checked`, label: own.label, hint: own.hint, prompt: '', action: 'checked' }
-  else if (intent && step) next = { id: `next:${intent.slug}:${step.key}`, ...step }
+  else if (intent && stage === 'prove' && own && role === own.role && evidence[own.after]?.state === 'pass' && evidence[own.rung]?.state !== 'pass') next = { id: `next:${intent.key}:checked`, label: own.label, hint: own.hint, prompt: '', action: 'checked' }
+  else if (intent && step) next = { id: `next:${intent.key}:${step.key}`, ...step, ...(step.isLook ? { look: intent.key } : {}) }
   // Nothing tracked in this session: offer to continue the intent the person last worked on.
-  else if (!intent && lastWork) next = { id: lastWork.id, label: `Continue ${lastWork.label}`, hint: lastWork.hint, prompt: '', work: lastWork }
-  else if (!intent && work[0]?.kind === 'intent') next = { id: work[0].id, label: `Pick up ${work[0].slug}`, hint: work[0].hint, prompt: '', work: work[0] }
+  else if (!intent && lastWork?.kind === 'intent') next = { id: lastWork.id, label: `Continue ${lastWork.key}`, hint: lastWork.hint, prompt: '', work: lastWork }
+  else if (!intent && work[0]?.kind === 'intent') next = { id: work[0].id, label: `Pick up ${work[0].key}`, hint: work[0].hint, prompt: '', work: work[0] }
   else if (!intent && work[0]?.kind === 'issue') next = { id: work[0].id, label: `Start issue #${work[0].issue.number}`, hint: `${work[0].issue.name} · ${work[0].hint}`, prompt: work[0].prompt, work: work[0] }
   else if (step) next = { id: 'next:start', ...step }
   // The quick actions under the header: start something new, or pick a skill from the short list.
@@ -301,15 +392,18 @@ export const buildHome = input => {
   const actions = [{ id: 'action:new-intent', label: '＋ New intent', prompt: NEW_INTENT_PROMPT, isPrimary: true }]
   if (skills.length > 0) actions.push({ id: 'action:skills', label: '▶ Skills', opens: 'skills' })
   if (create.length > 0) actions.push({ id: 'action:create', label: '✦ Create', opens: 'create' })
+  // A checklist with nothing done and no one working yet is planned, not being built.
+  const isPlanned = !!intent && stage === 'build' && intent.acceptanceDone === 0 && !intent.hasWorker && input.workers === 0
+  const stageLabel = !intent ? '' : isPlanned ? 'Planned' : STAGE_LABELS[stage]
   return {
     actions,
     skills,
     create,
     editor,
     header: {
-      title: intent?.slug ?? 'Ather',
-      // A checklist with nothing done and no one working yet is planned, not being built.
-      stage: !intent ? '' : stage === 'build' && intent.acceptanceDone === 0 && !intent.hasWorker && input.workers === 0 ? 'Planned' : STAGE_LABELS[stage],
+      title: intent?.key ?? 'Ather',
+      stage: stageLabel,
+      pill: intent ? stagePill(stage, isPlanned, stageLabel, intent) : '',
       progress: intent && intent.acceptanceTotal > 0 ? `${intent.acceptanceDone} of ${intent.acceptanceTotal} done` : '',
       track: intent ? stageTrack(stage) : '',
       stages: intent ? stageList(stage) : [],
@@ -320,6 +414,7 @@ export const buildHome = input => {
       lock: lockText,
       role: roleText,
       week: weekText(input.week),
+      merge: mergeLine(input.merge ?? null, now),
     },
     items,
     open,
@@ -367,14 +462,24 @@ export const proofLine = (evidence, pack, mine, names = {}) =>
     })
     .join(' · ')
 
-// "Also tracked in 2 other sessions · active 4m ago": the live sessions on this checkout that track
-// the same intent, and when the latest of them last did something; '' when there are none.
+// "Also tracked in 2 other sessions": the live sessions on this checkout that track the same intent;
+// '' when there are none. This is the line the session itself is told, so it carries no age: Claude Code
+// keeps the lane section as it first read it for the whole conversation (seen on 2.1.296), where
+// "active 4m ago" would stay long after it stopped being true.
+/** @param {readonly { intent: string | null }[]} peers @param {string} slug */
+export const trackedByLine = (peers, slug) => {
+  const same = peers.filter(lane => slug !== '' && lane.intent === slug)
+  return same.length === 0 ? '' : `Also tracked in ${plural(same.length, 'other session')}`
+}
+
+// "Also tracked in 2 other sessions · active 4m ago": the same line for a person, with when the latest
+// of those sessions last did something. For the pane and the dialogs, never for the session's prompt.
 /** @param {readonly { intent: string | null, updatedAt: number, lastActiveAt?: number }[]} peers @param {string} slug @param {number} now */
 export const heldByLine = (peers, slug, now) => {
-  const same = peers.filter(lane => slug !== '' && lane.intent === slug)
-  if (same.length === 0) return ''
-  const ago = now - Math.max(...same.map(lane => Number(lane.lastActiveAt ?? lane.updatedAt) || 0))
-  return `Also tracked in ${plural(same.length, 'other session')} · ${ago < 60000 ? 'active now' : `active ${durationText(ago)} ago`}`
+  const line = trackedByLine(peers, slug)
+  if (line === '') return ''
+  const ago = now - Math.max(...peers.filter(lane => lane.intent === slug).map(lane => Number(lane.lastActiveAt ?? lane.updatedAt) || 0))
+  return `${line} · ${ago < 60000 ? 'active now' : `active ${durationText(ago)} ago`}`
 }
 
 // "build ✓ · tests ✗": the proof seen so far, so a failed test is never hidden.

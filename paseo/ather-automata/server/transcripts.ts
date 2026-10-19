@@ -22,6 +22,8 @@ export type WorkerRecord = {
   startedAt: number;
   endedAt: number;
   outcome: string;
+  // The Agent calls it made (their tool-use ids): a worker it started has one of them as its own toolUseId.
+  spawned: string[];
 };
 
 // A worker that has written nothing for this long is waiting on something (a prompt, a lock).
@@ -56,7 +58,7 @@ function kindOf(agentType: string, brief: string, description: string): string {
   return kind;
 }
 
-type Block = { type: string; name?: string; input?: Record<string, unknown>; text?: string };
+type Block = { type: string; id?: string; name?: string; input?: Record<string, unknown>; text?: string };
 type Line = { type?: string; timestamp?: string; message?: { model?: string; stop_reason?: string | null; content?: string | Block[] } };
 
 async function readWorker(dir: string, base: string): Promise<WorkerRecord | null> {
@@ -80,6 +82,7 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
   };
   const lines = (await readFile(file, "utf8")).split("\n").filter(Boolean);
   const tools: { name: string; input: Record<string, unknown> }[] = [];
+  const spawned: string[] = [];
   let model = meta.model ?? "";
   let startedAt = 0;
   let endedAt = 0;
@@ -114,6 +117,7 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
     for (const block of content) {
       if (block.type === "tool_use" && block.name) {
         tools.push({ name: block.name, input: block.input ?? {} });
+        if ((block.name === "Agent" || block.name === "Task") && block.id) spawned.push(block.id);
         if (block.name === "SubagentHandback") handback = String(block.input?.message ?? block.input?.summary ?? "");
       }
       if (block.type === "text" && block.text?.trim()) lastText = block.text;
@@ -145,6 +149,7 @@ async function readWorker(dir: string, base: string): Promise<WorkerRecord | nul
     startedAt,
     endedAt,
     outcome: isStopped ? "stopped by the user" : sentence(handback || lastText),
+    spawned,
   };
   cache.set(file, { key, record });
   return refreshState(record, info.mtimeMs);

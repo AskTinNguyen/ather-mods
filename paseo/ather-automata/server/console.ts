@@ -3,17 +3,20 @@
 // as a message. Where the original asked a question dialog, the panel lists the choices.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
-import { NEW_INTENT_PROMPT, askPrompt, batchPrompt, buildHome, heldByLine, parseWeek, proofLine, skillFolder, untrackText } from "./ather/home.mjs";
+import { HOME_PARTS, NEW_INTENT_PROMPT, VIEW_LABELS, askPrompt, batchPrompt, buildHome, heldByLine, isShownIn, otherView, parseWeek, proofLine, skillFolder, standsLines, untrackText, viewText } from "./ather/home.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
-import { STAGE_LABELS, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
 import * as state from "./ather/state.mjs";
-import type { HomeView } from "../shared/contracts";
+import type { ActKind, HomeView } from "../shared/contracts";
 import { knownAgents, note, send } from "./agents";
 import { governedRoot } from "./agentConfig";
-import { USER_HOME, list, mtime, readText, run } from "./io";
+import { USER_HOME, list, readText, run } from "./io";
 import { ctxOf, laneOf, peers, readLock, type Ctx, type Pack } from "./lane";
+import { needsOf, openDecision, recordAnswer, toggleBlock } from "./needs";
 import { crewOf, githubLogin } from "./squad";
+import { checkMerge, mergeOf, readTeamIntents, syncLine, syncMain } from "./team";
+import { cycleGroup, cycleSort, setSearch, workListOf } from "./worklist";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
@@ -48,34 +51,17 @@ const sentOf = (agentId: string) => {
 };
 const stale = (agentId: string) => views.delete(agentId);
 
+
 // ---------------------------------------------------------------- reading the checkout
 
-async function readIntents(root: string, pinned: string | null, pack: Pack) {
+// The team's intents (origin/<base>, server/team.ts) with the checkout's own folders; the tracked one from the checkout.
+async function readIntents(root: string, pinned: string | null, pack: Pack, base: string) {
   const read: Any[] = [];
-  for (const entry of await list(`${root}/docs/intent`).catch(() => [])) {
-    if (entry.kind !== "dir") continue;
-    const dir = `${root}/docs/intent/${entry.name}`;
-    const prompt = await readText(`${dir}/prompt.md`);
-    if (prompt === null) continue;
-    const isOpen = !/^\s*-\s*Status:\s*completed/im.test(prompt);
-    const isPinned = entry.name === pinned;
-    const stats = await Promise.all(["prompt.md", "progress.md", "log.md"].map((name) => mtime(`${dir}/${name}`)));
-    read.push(
-      parseIntent(
-        {
-          slug: entry.name,
-          prompt,
-          findings: isOpen ? ((await readText(`${dir}/findings.md`)) ?? "") : "",
-          progress: isOpen || isPinned ? ((await readText(`${dir}/progress.md`)) ?? "") : "",
-          files: isPinned ? (await list(dir).catch(() => [])).map((one) => one.name) : [],
-          hasDebrief: isPinned && (await readText(`${root}/${pack.debriefPath(entry.name)}`)) !== null,
-          updatedAt: Math.max(...stats),
-          source: "local",
-          firstAuthor: "",
-        },
-        pack,
-      ),
-    );
+  for (const files of await readTeamIntents(root, pinned, base)) {
+    const hasDebrief = files.slug === pinned && (await readText(`${root}/${pack.debriefPath(files.slug)}`)) !== null;
+    // One only on origin/<base> (this checkout has no folder for it yet) can be asked about, not worked on here.
+    const inCheckout = files.source === "local" || (await readText(`${root}/docs/intent/${files.slug}/prompt.md`)) !== null;
+    read.push({ ...parseIntent({ ...files, hasDebrief }, pack), inCheckout });
   }
   return read.sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -95,16 +81,17 @@ async function readSkills(root: string, pack: Pack) {
   return found;
 }
 
-// Intents and skills for a checkout, read again at most once a minute (or when asked).
-async function refreshRoot(ctx: Ctx, force = false) {
-  const { root, pack } = await laneOf(ctx);
+// Intents and skills for a checkout, read again at most once a minute (or when asked). Once read, origin/<base>
+// is fetched in the background when that is due (or at once, `fetchNow`: ↻), and read again when it lands.
+async function refreshRoot(ctx: Ctx, force = false, fetchNow = false) {
+  const { root, pack, base } = await laneOf(ctx);
   const cache = roots.get(root) ?? { at: 0, intents: [], skills: [], reading: null };
   roots.set(root, cache);
   if (!force && Date.now() - cache.at < INTENTS_TTL_MS) return cache;
   if (!cache.reading) {
     cache.reading = (async () => {
       const pinned = await state.readPinned(ctx.io as never);
-      cache.intents = await readIntents(root, pinned, pack);
+      cache.intents = await readIntents(root, pinned, pack, base);
       cache.skills = await readSkills(root, pack);
       cache.at = Date.now();
       for (const agent of knownAgents()) stale(agent.id);
@@ -114,6 +101,7 @@ async function refreshRoot(ctx: Ctx, force = false) {
   }
   await cache.reading;
   void refreshPrs(ctx, cache.intents).catch(() => undefined);
+  if (syncMain(root, base, () => refreshRoot(ctx, true), fetchNow)) for (const agent of knownAgents()) stale(agent.id);
   return cache;
 }
 
@@ -186,13 +174,17 @@ async function proofOf(ctx: Ctx, slug: string) {
 
 // ---------------------------------------------------------------- the model
 
-async function model(ctx: Ctx, force = false) {
+// `force`: read the files again; `fetchNow`: also fetch origin now (only Refresh and the sync line ask).
+async function model(ctx: Ctx, force = false, fetchNow = false) {
   const version = state.stateVersion();
   const hit = views.get(ctx.agent.id);
   if (!force && hit && hit.version === version && Date.now() - hit.at < VIEW_TTL_MS) return hit.model;
   const io = ctx.io as never;
-  const { root, me, pack } = await laneOf(ctx);
-  const cache = await refreshRoot(ctx, force);
+  const { root, me, pack, base } = await laneOf(ctx);
+  const cache = await refreshRoot(ctx, force, fetchNow);
+  const pinned = await state.readPinned(io);
+  // A new answer redraws every agent.
+  checkMerge(root, base, pinned ?? "", me, () => knownAgents().forEach((agent) => stale(agent.id)));
   void refreshIssues(ctx).catch(() => undefined);
   const tz = await state.readTz(io);
   const now = Date.now();
@@ -201,13 +193,14 @@ async function model(ctx: Ctx, force = false) {
   const workers = knownAgents().filter((agent) => agent.parentAgentId === ctx.agent.id).length;
   const built = buildHome({
     intents: cache.intents,
-    pinned: await state.readPinned(io),
+    pinned,
     me,
     ...profile,
     evidence: await state.readEvidence(io, await state.evidenceScope(io), pack),
     away,
     ledger: away.phase === "off" ? "" : ((await readText(away.ledgerPath)) ?? ""),
     lost: await state.readLost(io),
+    merge: mergeOf(root),
     lock: await namedLock(root, await readLock(ctx)),
     recurring: await state.readRecurring(io, pack),
     issues: await state.readIssues(io, me),
@@ -225,34 +218,32 @@ async function model(ctx: Ctx, force = false) {
   return built;
 }
 
-const workTitle = (one: Any) => (one.kind === "intent" ? one.slug : one.label);
-const workDetail = (one: Any) => {
-  const detail = one.kind === "intent" ? String(one.hint).replace(`${one.slug} · `, "") : one.hint;
-  // A teammate's intent names its owner at the end of the line; the owner is sent on its own (drawn as a name chip).
-  return one.kind === "intent" && !one.isMine && one.owner ? String(detail).replace(` · ${one.owner}`, "") : detail;
-};
-
 export async function homeView(agentId: string, cwd: string, force = false): Promise<HomeView> {
   const ctx = ctxOf((knownAgents().find((one) => one.id === agentId) ?? { id: agentId, cwd, provider: "", workspaceId: null, parentAgentId: null, title: null }));
   const empty: HomeView = {
     isHere: false,
     notHere: "",
     title: "Ather",
+    sync: "",
     stage: "",
     progress: "",
     stages: [],
     proof: "",
     heldBy: "",
     sentence: "",
+    merge: { text: "", isWarn: false },
+    shows: [...HOME_PARTS],
+    viewToggle: VIEW_LABELS.simple,
     lock: "",
     role: "",
     week: "",
     done: 0,
     total: 0,
     away: { phase: "off", until: "", ledger: "", parked: [] },
-    items: [],
+    needs: { open: 0, decisions: 0, blocks: [], folded: [] },
     next: null,
-    work: [],
+    workList: { total: 0, shown: 0, query: "", sort: "", groupBy: "", legend: "", people: [], groups: [] },
+    attention: [],
     actions: [],
     skills: [],
     create: [],
@@ -263,6 +254,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     sent: [],
     githubLogin: "",
     crew: [],
+    crewTree: { heading: "", live: [], done: [] },
     intentView: null,
     issueView: null,
     message: Date.now() - (messages.get(agentId)?.at ?? 0) < MESSAGE_MS ? (messages.get(agentId)?.text ?? "") : "",
@@ -270,48 +262,48 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
   const lane = (await governedRoot(cwd)) ? await laneOf(ctx) : null;
   if (!lane?.isS2) return { ...empty, notHere: lane?.pack.notHere ?? "Ather Automata works in checkouts that run intents (a docs/intent folder); none here." };
   const io = ctx.io as never;
-  const built = await model(ctx, force);
+  const built = await model(ctx, force, force);
   const tz = await state.readTz(io);
   const away = await state.readAway(io);
   const slug = await state.readPinned(io);
   const now = Date.now();
-  const changes = slug ? ((await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[]) : [];
+  const paneView = await state.readPaneView(io, lane.me);
+  const changes = slug ? await changesToday(ctx, slug) : [];
   const next = built.next;
-  const intentsBySlug = new Map<string, Any>(((await refreshRoot(ctx)).intents as Any[]).map((one) => [one.slug, one]));
   const ledger = away.ledgerPath && away.ledgerPath.startsWith(lane.root) ? away.ledgerPath.slice(lane.root.length + 1) : away.ledgerPath;
   return {
     ...empty,
     isHere: true,
     title: built.header.title,
+    sync: syncLine(lane.root),
     stage: built.header.stage,
     progress: built.header.progress,
     stages: built.header.stages,
     proof: slug ? await proofOf(ctx, slug) : built.header.proof,
     heldBy: slug ? heldByLine(await peers(ctx), slug, now) : "",
     sentence: built.header.sentence,
+    merge: built.header.merge,
+    shows: HOME_PARTS.filter((part) => isShownIn(paneView, part)),
+    viewToggle: VIEW_LABELS[otherView(paneView)],
     lock: built.header.lock,
     role: built.header.role,
     week: built.header.week,
     done: built.header.done,
     total: built.header.total,
     away: { phase: away.phase, until: away.phase === "off" ? "" : windowEndText(away, tz), ledger, parked: away.parked.map((one: Any) => `${one.id}: ${one.command}`) },
-    items: built.items.map((one: Any) => ({ id: one.id, label: one.title || one.label, hint: one.label, detail: one.detail, kind: one.kind })),
+    needs: needsOf(agentId, built),
     next: next
       ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isTour ? "tour" : next.work ? "work" : next.action ?? "step" }
       : null,
     // Other work: never the intent already tracked, nor the one Next already offers.
-    work: built.work
-      .filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug))
-      .slice(0, 300)
-      .map((one: Any) => ({
-        id: one.id,
-        label: workTitle(one),
-        hint: workDetail(one),
-        kind: one.kind,
-        group: one.kind === "issue" ? ("issues" as const) : one.isMine ? ("mine" as const) : ("others" as const),
-        owner: one.kind === "intent" && !one.isMine ? String(one.owner ?? "") : "",
-        updatedAt: one.kind === "issue" ? Number(one.issue.updatedAt) || 0 : Number(intentsBySlug.get(one.slug)?.updatedAt) || 0,
-      })),
+    workList: await workListOf(
+      ctx,
+      lane.me,
+      lane.pack,
+      built.work.filter((one: Any) => one !== next?.work && !(one.kind === "intent" && one.slug === slug)).slice(0, 300),
+      now,
+    ),
+    attention: built.attention.map((one: Any) => ({ id: one.id, slug: one.slug, title: one.title, ask: one.ask, kind: one.kind })),
     actions: built.actions.filter((one: Any) => one.prompt).map((one: Any) => ({ id: one.id, label: one.label })),
     skills: built.skills.map((one: Any) => ({ id: one.id, label: one.name, hint: one.description, group: one.group })),
     create: built.create.map((group: Any) => ({ group: group.group, items: group.items.map((item: Any) => ({ id: item.id, label: item.verb, hint: item.description || item.name })) })),
@@ -320,10 +312,25 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     isNewcomer: built.isNewcomer,
     sent: [...sentOf(agentId)],
     githubLogin: await githubLogin().catch(() => ""),
-    crew: await crewOf(agentId).catch(() => []),
+    ...(await crewOf(agentId).catch(() => ({ crew: [], crewTree: { heading: "", live: [], done: [] } }))),
     intentView: await intentViewOf(ctx, built, slug),
     issueView: await issueViewOf(ctx),
   };
+}
+
+// An answer given in place: the row shows "✓ Decided" a while, then folds. The agent gets `prompt` ('' gives it
+// nothing: the press only closes the item); the item settles once the row has shown.
+async function answerItem(ctx: Ctx, one: Any, answer: string, prompt: string) {
+  const sent = sentOf(ctx.agent.id);
+  if (sent.has(one.id)) return `Already answered: ${answer}.`;
+  const { settle, unanswer } = recordAnswer(ctx.agent.id, ctx.io, one, answer);
+  if (!prompt) {
+    sent.add(one.id);
+    await settle();
+    return `Closed: ${answer}.`;
+  }
+  await handOff(ctx, [one.id], prompt, settle, unanswer);
+  return `Sent your answer to the agent: ${answer}.`;
 }
 
 // The open intent's view: where it stands, its proof by session, who else tracks it, today's lines.
@@ -332,7 +339,7 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   const slug = viewing.get(ctx.agent.id) ?? "";
   if (!slug) return null;
   const io = ctx.io as never;
-  const { me, pack } = await laneOf(ctx);
+  const { me, pack, base } = await laneOf(ctx);
   const cache = await refreshRoot(ctx);
   const intent = cache.intents.find((one: Any) => one.slug === slug);
   if (!intent) {
@@ -343,9 +350,12 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
   const now = Date.now();
   const { role } = await state.readProfile(io, me, pack);
   const evidence = await state.readEvidence(io, slug, pack);
-  const stage = STAGE_LABELS[currentStage(intent, evidence, role, await state.readPrStates(io), pack) as keyof typeof STAGE_LABELS];
-  const today = (await state.readChanges(io, slug, now - localMinutes(now, tz) * 60000)) as Any[];
+  const prs = await state.readPrStates(io);
+  const stage = STAGE_LABELS[currentStage(intent, evidence, role, prs, pack) as keyof typeof STAGE_LABELS];
+  const today = await todayOf(ctx, slug);
   const isHere = slug === pinned;
+  // A step that only looks at the intent is this view, so it has no card.
+  const next = isHere && built.next && !built.next.look ? built.next : null;
   return {
     slug,
     goal: String(intent.goal ?? ""),
@@ -355,9 +365,38 @@ async function intentViewOf(ctx: Ctx, built: Any, pinned: string | null): Promis
     proof: await proofOf(ctx, slug),
     heldBy: heldByLine(await peers(ctx), slug, now),
     isHere,
-    next: isHere && built.next ? String(built.next.label) : "",
-    today: today.slice(0, 8).map((one) => ({ kind: one.kind, time: clockText(one.at, tz), text: one.text })),
+    inCheckout: intent.inCheckout === true,
+    base,
+    stands: standsLines(intent, stage, me, prs) as string[],
+    next: next ? { id: next.id, label: next.label, hint: next.hint } : null,
+    today: today.map((one) => ({ kind: one.kind, time: clockText(one.at, tz), text: one.text })),
   };
+}
+
+// An intent's changes since local midnight, newest first.
+async function changesToday(ctx: Ctx, slug: string): Promise<Any[]> {
+  const io = ctx.io as never;
+  const now = Date.now();
+  return (await state.readChanges(io, slug, now - localMinutes(now, await state.readTz(io)) * 60000)) as Any[];
+}
+
+// What an intent's view lists of today (the first eight); a press on one asks about it by its place here.
+const todayOf = async (ctx: Ctx, slug: string) => (await changesToday(ctx, slug)).slice(0, 8);
+
+// Ask about it, and a press on one of today's changes: a question for the agent; nothing is decided or tracked.
+async function askAbout(ctx: Ctx, slug: string, change?: string) {
+  if (change === undefined) {
+    // Its text is read where the list read it: from origin/<base> with git show when that copy is the one listed
+    // (this checkout may lack it or be behind), else from the folder here. Nothing is fetched or changed.
+    const intent = (await refreshRoot(ctx)).intents.find((one: Any) => one.slug === slug);
+    await handOff(ctx, [], aboutIntentPrompt(slug, intent?.source === "main", "", (await laneOf(ctx)).base));
+    return `Asked the agent about ${slug}.`;
+  }
+  const one = (await todayOf(ctx, slug))[Number(change)];
+  if (!one) throw new Error("That change is no longer listed.");
+  const time = clockText(one.at, await state.readTz(ctx.io as never));
+  await handOff(ctx, [], `In intent ${slug}, explain in at most four lines what "${one.text}" (${time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`);
+  return "Asked the agent about that change.";
 }
 
 // The composer pill: what needs the person, a running window, or nothing.
@@ -373,7 +412,7 @@ export async function bandOf(agentId: string, cwd: string): Promise<Band | null>
   if (built.open.some((one: Any) => one.kind === "review")) return { label: "Review away window", urgent: true, kind: "review" };
   if (built.isNewcomer) return { label: "New here? Tour", urgent: false, kind: "tour" };
   if (built.open.length > 0) return { label: `${built.open.length} need${built.open.length === 1 ? "s" : ""} you`, urgent: true, kind: "needs" };
-  return { label: header.stage ? `${header.title} · ${header.stage}` : "Ather", urgent: false, kind: "stage" };
+  return { label: header.pill || "Ather", urgent: false, kind: "stage" };
 }
 
 // ---------------------------------------------------------------- handing things to the agent
@@ -413,7 +452,7 @@ async function actItem(ctx: Ctx, one: Any): Promise<string> {
 async function comeBack(ctx: Ctx) {
   await state.endAway(ctx.io as never);
   stale(ctx.agent.id);
-  const review = (await model(ctx, true)).open.find((one: Any) => one.kind === "review");
+  const review = (await model(ctx)).open.find((one: Any) => one.kind === "review");
   return review ? actItem(ctx, review) : "No away window is running.";
 }
 
@@ -430,6 +469,8 @@ async function doNext(ctx: Ctx, next: Any): Promise<string> {
     return "Starting the Ather tour.";
   }
   if (next.work) return startWork(ctx, next.work);
+  // A step that only reads where the intent stands: its view answers it, from its files (0.2.8).
+  if (next.look) return view(ctx, next.look);
   if (next.action === "checked") return atherCommand(ctx, "checked");
   await handOff(ctx, [next.id], next.prompt);
   return "Sent to the agent.";
@@ -512,21 +553,27 @@ async function untrackHere(ctx: Ctx) {
 
 // Tracks an intent by its folder name: the deliberate act (Work on this here, Next, /ather intent <name>).
 async function track(ctx: Ctx, text: string) {
-  const { root, me } = await laneOf(ctx);
+  const { root, me, base } = await laneOf(ctx);
   const { intents } = await refreshRoot(ctx);
   const matches = searchIntents(intents, text) as Any[];
   const slug = intents.some((one: Any) => one.slug === text) ? text : matches.length === 1 && matches[0] ? matches[0].slug : null;
   if (slug === null) return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map((one) => one.slug).join(", ")}.` : `No open intent matches "${text}".`;
+  // A folder pulled since the list was read counts: the list is read again before saying it is missing.
+  if (intents.find((one: Any) => one.slug === slug)?.inCheckout === false && (await refreshRoot(ctx, true)).intents.find((one: Any) => one.slug === slug)?.inCheckout === false)
+    return `${slug} is on origin/${base} but not in this checkout yet: pull ${base} to work on it here, or use Ask about it in its view to hear where it stands.`;
   if (!(await state.track(ctx.io as never, root, slug, { me }))) return `No intent named "${slug}" in docs/intent.`;
   await refreshRoot(ctx, true);
-  return `Now tracking ${slug}.`;
+  // Tracking sends nothing to the agent, so the reply says what comes next.
+  stale(ctx.agent.id);
+  const { next } = await model(ctx);
+  return `Now tracking ${slug}.${next && !next.isTour && !next.work ? ` Next: ${next.label}.` : ""}`;
 }
 
 async function startAway(ctx: Ctx, choice: { hours: number; untilDone: boolean; goal?: string }) {
   const io = ctx.io as never;
-  const { root, me, pack } = await laneOf(ctx);
+  const { root, me, pack, base } = await laneOf(ctx);
   const tz = await state.readTz(io);
-  const away = await state.startAway(io, { ...choice, goal: choice.goal ?? "" } as never, { root, me, tz, now: Date.now(), pack });
+  const away = await state.startAway(io, { ...choice, goal: choice.goal ?? "" } as never, { root, me, tz, now: Date.now(), pack, base });
   if (away === null) return "An away window is already running or waiting for your review: the Ather panel shows it.";
   const ledger = away.ledgerPath.startsWith(root) ? away.ledgerPath.slice(root.length + 1) : away.ledgerPath;
   await handOff(
@@ -551,7 +598,14 @@ async function typed(ctx: Ctx, text: string) {
 }
 
 // What /ather understands after its name; a typo of one of these is read as it.
-const COMMAND_WORDS = ["tour", "skip", "pick", "issues", "issue", "intent", "role", "checked", "untrack"];
+const COMMAND_WORDS = ["tour", "skip", "pick", "issues", "issue", "intent", "role", "checked", "untrack", "simple", "advanced"];
+
+// Home's Simple or Advanced view, kept for the person (simple-view): the panel draws the parts it shows.
+async function pickView(ctx: Ctx, view: "simple" | "advanced") {
+  await state.setPaneView(ctx.io as never, (await laneOf(ctx)).me, view);
+  for (const agent of knownAgents()) stale(agent.id);
+  return viewText(view) as string;
+}
 
 async function atherCommand(ctx: Ctx, args: string): Promise<string> {
   const io = ctx.io as never;
@@ -564,6 +618,7 @@ async function atherCommand(ctx: Ctx, args: string): Promise<string> {
     return `Tour skipped (/ather tour brings it back). ${pack.roleHelp}`;
   }
   if (word === "untrack" && rest === "") return untrackHere(ctx);
+  if ((word === "simple" || word === "advanced") && rest === "") return pickView(ctx, word);
   if ((word === "intent" || word === "pick") && rest) return pickIntent(ctx, rest);
   if ((word === "issue" || word === "issues") && /^#?\d+$/.test(rest)) return startIssue(ctx, Number(rest.replace("#", "")), true);
   if (word === "role") {
@@ -628,71 +683,101 @@ export async function runCommand(agentId: string, cwd: string, command: "ather" 
   return remember(ctx, message);
 }
 
-export async function act(agentId: string, cwd: string, kind: string, id: string, text?: string) {
-  const ctx = await governed(agentId, cwd);
-  const built = await model(ctx);
-  let message = "";
-  if (kind === "item") {
-    const one = built.items.find((item: Any) => item.id === id);
-    if (!one) throw new Error("That item is no longer waiting.");
-    message = await actItem(ctx, one);
-  } else if (kind === "all") {
+type Built = Awaited<ReturnType<typeof model>>;
+// What a press does, by kind; each returns what is said of it. `id` and `text` are as shared/contracts.ts says per kind.
+type Act = (ctx: Ctx, built: Built, id: string, text: string | undefined) => Promise<string> | string;
+
+const found = <T>(one: T | undefined, missing: string): T => {
+  if (one === undefined) throw new Error(missing);
+  return one;
+};
+const decision = (built: Built, id: string): Any => {
+  const one = built.items.find((item: Any) => item.id === id);
+  if (!one?.answers) throw new Error("That decision is no longer waiting.");
+  return one;
+};
+const sendIt = async (ctx: Ctx, id: string, prompt: string, said: string) => {
+  await handOff(ctx, [id], prompt);
+  return said;
+};
+
+const ACTS: Record<ActKind, Act> = {
+  item: (ctx, built, id) => actItem(ctx, found(built.items.find((item: Any) => item.id === id), "That item is no longer waiting.")),
+  all: async (ctx, built) => {
     const open = built.open.filter((one: Any) => one.kind !== "away-end");
     if (open.length === 0) throw new Error("Nothing is waiting on you.");
     await handOff(ctx, open.map((one: Any) => one.id), batchPrompt(open), async () => {
       for (const one of open) await state.settleItem(ctx.io as never, one);
     });
-    message = `Sent ${open.length} things to the agent; it takes you through them one at a time.`;
-  } else if (kind === "next") {
+    return `Sent ${open.length} things to the agent; it takes you through them one at a time.`;
+  },
+  next: (ctx, built, id) => {
     if (!built.next || built.next.id !== id) throw new Error("Next has changed; look again.");
-    message = await doNext(ctx, built.next);
-  } else if (kind === "work") {
-    const one = built.work.find((item: Any) => item.id === id);
-    if (!one) throw new Error("That work is no longer listed.");
-    message = one.kind === "intent" ? view(ctx, one.slug) : viewIssue(ctx, one.issue.number);
-  } else if (kind === "start") {
-    // The one press that hands an issue to the agent: from the issue's card.
-    const one = built.work.find((item: Any) => item.id === id);
-    if (!one || one.kind !== "issue") throw new Error("That issue is no longer listed.");
-    message = await startWork(ctx, one);
-  } else if (kind === "view") {
-    message = view(ctx, id);
-  } else if (kind === "back") {
+    return doNext(ctx, built.next);
+  },
+  work: (ctx, built, id) => {
+    const one = found(built.work.find((item: Any) => item.id === id), "That work is no longer listed.");
+    return one.kind === "intent" ? view(ctx, one.slug) : viewIssue(ctx, one.issue.number);
+  },
+  // The one press that hands an issue to the agent: from the issue's card.
+  start: (ctx, built, id) => startWork(ctx, found(built.work.find((item: Any) => item.id === id && item.kind === "issue"), "That issue is no longer listed.")),
+  view: (ctx, _built, id) => view(ctx, id),
+  back: (ctx) => {
     viewing.delete(ctx.agent.id);
     viewingIssue.delete(ctx.agent.id);
-    stale(ctx.agent.id);
-  } else if (kind === "track") {
-    message = await track(ctx, id);
-  } else if (kind === "untrack") {
-    message = await untrackHere(ctx);
-  } else if (kind === "action") {
+    return "";
+  },
+  track: (ctx, _built, id) => track(ctx, id),
+  untrack: (ctx) => untrackHere(ctx),
+  ask: (ctx, _built, id, text) => askAbout(ctx, id, text),
+  open: (ctx, _built, id) => (openDecision(ctx.agent.id, id), ""),
+  calls: (ctx, _built, id) => (toggleBlock(ctx.agent.id, id), ""),
+  answer: (ctx, built, id, text) => {
+    const one = decision(built, id);
+    const option = found(one.answers.options.find((each: Any) => each.letter === text), `No option ${text ?? ""} on that decision.`);
+    return answerItem(ctx, one, option.letter, option.prompt);
+  },
+  typed: (ctx, built, id, text) => {
+    const words = text?.trim() ?? "";
+    if (!words) throw new Error("Nothing answered.");
+    const one = decision(built, id);
+    return answerItem(ctx, one, words, one.answers.typed(words));
+  },
+  explain: async (ctx, built, id) => {
+    await handOff(ctx, [], decision(built, id).answers.explain);
+    return "Asked the agent to explain it; nothing is decided.";
+  },
+  find: (ctx, _built, _id, text) => setSearch(ctx.agent.id, text ?? ""),
+  sort: (ctx) => cycleSort(ctx.agent.id),
+  group: async (ctx) => cycleGroup(ctx, (await laneOf(ctx)).me),
+  pane: async (ctx) => pickView(ctx, otherView(await state.readPaneView(ctx.io as never, (await laneOf(ctx)).me))),
+  action: (ctx, _built, id) => {
     if (id !== "action:new-intent") throw new Error(`Unknown action ${id}.`);
-    await handOff(ctx, [id], NEW_INTENT_PROMPT);
-    message = "Sent to the agent: it interviews you first.";
-  } else if (kind === "skill") {
-    const one = built.skills.find((item: Any) => item.id === id);
-    if (!one) throw new Error("That skill is not in this checkout.");
-    await handOff(ctx, [id], one.prompt);
-    message = `Sent ${one.name} to the agent.`;
-  } else if (kind === "create") {
-    const one = built.create.flatMap((group: Any) => group.items).find((item: Any) => item.id === id);
-    if (!one) throw new Error("That is not in this checkout.");
-    await handOff(ctx, [id], one.prompt);
-    message = `Sent to the agent: ${one.verb}.`;
-  } else if (kind === "away") {
-    if (id === "stop") message = await awayCommand(ctx, "stop");
-    else if (id === "back") message = await comeBack(ctx);
-    else {
-      const preset = AWAY_PRESETS[Number(id)];
-      if (!preset) throw new Error(`Unknown away preset ${id}.`);
-      message = await startAway(ctx, { ...preset.choice, goal: text ?? "" });
-    }
-  } else if (kind === "draft") {
+    return sendIt(ctx, id, NEW_INTENT_PROMPT, "Sent to the agent: it interviews you first.");
+  },
+  skill: (ctx, built, id) => {
+    const one = found(built.skills.find((item: Any) => item.id === id), "That skill is not in this checkout.");
+    return sendIt(ctx, id, one.prompt, `Sent ${one.name} to the agent.`);
+  },
+  create: (ctx, built, id) => {
+    const one = found(built.create.flatMap((group: Any) => group.items).find((item: Any) => item.id === id), "That is not in this checkout.");
+    return sendIt(ctx, id, one.prompt, `Sent to the agent: ${one.verb}.`);
+  },
+  away: (ctx, _built, id, text) => {
+    if (id === "stop") return awayCommand(ctx, "stop");
+    if (id === "back") return comeBack(ctx);
+    const preset = found(AWAY_PRESETS[Number(id)], `Unknown away preset ${id}.`);
+    return startAway(ctx, { ...preset.choice, goal: text ?? "" });
+  },
+  draft: (ctx, _built, id, text) => {
     if (!text?.trim()) throw new Error("Nothing to send.");
-    await handOff(ctx, [id], text.trim());
-    message = "Sent to the agent.";
-  }
-  return remember(ctx, message);
+    return sendIt(ctx, id, text.trim(), "Sent to the agent.");
+  },
+};
+
+export async function act(agentId: string, cwd: string, kind: ActKind, id: string, text?: string) {
+  const ctx = await governed(agentId, cwd);
+  return remember(ctx, await ACTS[kind](ctx, await model(ctx), id, text));
 }
 
 export const AWAY_CHOICES = AWAY_PRESETS.map((preset: Any, index: number) => ({ id: String(index), label: preset.label }));

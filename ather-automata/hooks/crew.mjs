@@ -25,17 +25,35 @@ import { adoptWorker, workerElapsed, workerOf } from './workers.mjs'
 
 const IDLE_MS = 90000
 
-/** @param {Host} host @param {string} root @param {string} session @param {CrewPack} [pack] @returns {Promise<Crew[]>} */
-export async function crewOf(host, root, session, pack = {}) {
+/**
+ * `root`, `pack`: the session's own checkout. `where`: the checkout a shell command runs in, when the session
+ * works with several (without it, every command is the session's own checkout's).
+ * @param {Host} host @param {string} root @param {string} session @param {CrewPack} [pack]
+ * @param {(command: string) => Promise<{ root: string, pack: CrewPack }>} [where] @returns {Promise<Crew[]>}
+ */
+export async function crewOf(host, root, session, pack = {}, where = async () => ({ root, pack })) {
   const now = Date.now()
   const agents = await host.agents()
   /** @param {string} id */
   const titleOf = id => workerOf(id)?.title ?? agents.find(one => one.id === id)?.description ?? 'a worker'
-  // The lock file is read once, and only when a long shell call is in flight and the pack reads a line from it.
-  const hasLongShell = agents.some(agent => longShell(callsIn(agent.id), now) !== undefined)
-  const lockRaw = pack.lockLine && pack.lockFile && hasLongShell ? await host.read(`${root}/${pack.lockFile}`) : null
+  // A long shell call's lock line is read in the checkout the call runs in, with that checkout's pack: each
+  // lock file once, and only when such a call is in flight and the pack reads a line from it.
+  /** @type {Map<string, string | null>} */
+  const lockFiles = new Map()
+  /** @type {Map<string, string>} */
+  const lockLines = new Map()
+  for (const agent of agents) {
+    const command = longShell(callsIn(agent.id), now)?.command
+    if (!command || lockLines.has(command)) continue
+    const at = await where(command)
+    if (!at.pack.lockLine || !at.pack.lockFile) continue
+    const path = `${at.root}/${at.pack.lockFile}`
+    if (!lockFiles.has(path)) lockFiles.set(path, await host.read(path))
+    const raw = lockFiles.get(path) ?? null
+    if (raw !== null) lockLines.set(command, at.pack.lockLine(command, raw))
+  }
   /** @param {string} command */
-  const lockOf = command => (pack.lockLine && lockRaw !== null ? pack.lockLine(command, lockRaw) : '')
+  const lockOf = command => lockLines.get(command) ?? ''
   /** @type {Crew[]} */
   const crew = []
   for (const agent of agents) {

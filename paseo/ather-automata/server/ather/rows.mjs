@@ -29,6 +29,12 @@ export const fit = (text, width) => {
   return clean.length <= width ? clean : `${clean.slice(0, Math.max(1, width - 1))}…`
 }
 
+// A checkout's name after a row's title: a worktree's folder can be longer than the title it sits beside, so it is cut.
+const REPO_CELLS = 16
+// A row's title (its glyph included) keeps this many cells in a narrow terminal pane: the right-hand columns are left out for it, in this order.
+const TITLE_MIN = 16
+const LEFT_OUT = ['count', 'age', 'owner', 'bar']
+
 // A top-level section label, spaced out as the studio's are ("N E E D S   Y O U"), plain when too wide.
 /** @param {any} el @param {string} key @param {string} text @param {number} width @param {string} [colour] */
 export const label = (el, key, text, width, colour = INK) => {
@@ -40,16 +46,17 @@ export const label = (el, key, text, width, colour = INK) => {
 export const section = (el, key, children) => el.Box({ key, flexDirection: 'column', width: '100%', marginTop: 1, children })
 
 /**
- * @typedef {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQuiet?: boolean, autoFocus?: boolean, lead?: string, mark?: string, marginTop?: number, width: number, onPress: () => void, below?: any }} Choice
- * `below`: drawn under the row's text, beside its mark (an opened decision's answers)
+ * @typedef {{ key: string, hotkey?: string, title: string, detail?: string, isSent?: boolean, isQueued?: boolean, isQuiet?: boolean, autoFocus?: boolean, lead?: string, mark?: string, marginTop?: number, width: number, onPress: () => void, below?: any }} Choice
+ * `below`: drawn under the row's text, beside its mark (an opened decision's answers). `isQueued`: handed over
+ * while a turn runs, so the session does not have it yet (handoff.mjs); it reads "queued", not "sent".
  */
 
 // One choice: its key and what it does, then one quiet line of detail beneath. On the desktop
 // (`isClicked`) no key is drawn and the detail wraps whole; the terminal keeps it to three lines.
 /** @param {any} el @param {Choice} row @param {boolean} isClicked */
 export const choiceRow = (el, row, isClicked) => {
-  const title = `${row.isSent ? '✓ sent · ' : ''}${row.title}`
-  const button = el.Button({ key: row.key, label: fit(title, row.width - 3 - (row.mark ? 2 : 0)), hotkey: isClicked ? undefined : row.hotkey, plain: true, dimColor: row.isSent || row.isQuiet ? true : undefined, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress })
+  const title = `${row.isQueued ? '⏳ queued · ' : row.isSent ? '✓ sent · ' : ''}${row.title}`
+  const button = el.Button({ key: row.key, label: fit(title, row.width - 3 - (row.mark ? 2 : 0)), hotkey: isClicked ? undefined : row.hotkey, plain: true, dimColor: row.isSent || row.isQueued || row.isQuiet ? true : undefined, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress })
   const body = [
     button,
     // The whole name, wrapped, where a button's one line would cut it (the desktop).
@@ -62,32 +69,45 @@ export const choiceRow = (el, row, isClicked) => {
   return el.Box({ key: `row-${row.key}`, flexDirection: 'column', width: '100%', marginTop: row.marginTop, children: body })
 }
 
-// One row of work, the same in every list (D7): stage glyph and title (and its warning), then the
+// One row of work, the same in every list (D7): stage glyph and title (its warning, then its repository's
+// name, dim, when the pane lists several), then the
 // progress bar and count, age and owner, each in a column as wide as the list's widest. `hotkey`:
 // as the surface draws it (none on the desktop).
 // On the desktop (`isClicked`) the bar is drawn as an SVG, the count sits at its column's right
 // edge with room for the font's wider digits, and a long title is clipped in its own box, so
-// the right-hand columns stay where they are.
+// the right-hand columns stay where they are; its warning and repository's name are in that box too.
 /** @param {any} el @param {{ key: string, cells: RowCells, cols: Columns, width: number, ownerColour: string, hotkey?: string, autoFocus?: boolean, onPress: () => void, isClicked?: boolean }} row */
 export const workLine = (el, row) => {
   const { cells, cols } = row
   if (row.isClicked) return deskLine(el, row)
-  const columns = /** @type {[string, string, string | undefined, number][]} */ ([
-    ['bar', cells.bar, INK, BAR_CELLS],
-    ['count', cells.count.padStart(cols.count), undefined, cols.count],
-    ['age', cells.age.padStart(cols.age), QUIET, cols.age],
-    ['owner', fit(cells.owner, cols.owner).padEnd(cols.owner), row.ownerColour, cols.owner],
-  ]).filter(([, , , size]) => size > 0)
-  const right = columns.reduce((sum, [, , , size]) => sum + size + 2, 0)
-  const warn = cells.warn ? ` ${cells.warn}` : ''
-  const title = fit(`${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, Math.max(8, row.width - right - warn.length - (row.hotkey ? 3 : 0)))
+  /** @param {[string, string, string | undefined, number][]} list */
+  const sizeOf = list => list.reduce((sum, [, , , size]) => sum + size + 2, 0)
+  // Every row counts a hotkey's 3 cells here, with one or not, so a list's rows leave out the same columns.
+  const columns = LEFT_OUT.reduce(
+    (kept, name) => (row.width - 3 - sizeOf(kept) >= TITLE_MIN ? kept : kept.filter(([key]) => key !== name)),
+    /** @type {[string, string, string | undefined, number][]} */ ([
+      ['bar', cells.bar, INK, BAR_CELLS],
+      ['count', cells.count.padStart(cols.count), undefined, cols.count],
+      ['age', cells.age.padStart(cols.age), QUIET, cols.age],
+      ['owner', fit(cells.owner, cols.owner).padEnd(cols.owner), row.ownerColour, cols.owner],
+    ]).filter(([, , , size]) => size > 0),
+  )
+  const whole = `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`
+  const space = row.width - sizeOf(columns) - (row.hotkey ? 3 : 0)
+  // What the title's own cells leave goes to the warning, then to the name; one left fewer than 4 cells is not drawn.
+  const spare = space - Math.min(TITLE_MIN, whole.length)
+  /** @param {string} text @param {number} size */
+  const after = (text, size) => (text && size >= 4 ? fit(` ${text}`, size) : '')
+  const warn = after(cells.warn, spare)
+  const repo = after(fit(cells.repo, REPO_CELLS), spare - warn.length)
+  const title = fit(whole, Math.max(8, space - warn.length - repo.length))
   return el.Box({
     key: `row-${row.key}`,
     flexDirection: 'row',
     justifyContent: 'space-between',
     width: '100%',
     children: [
-      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, children: [el.Button({ key: row.key, label: title, hotkey: row.hotkey, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: warn })] : [])] }),
+      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, children: [el.Button({ key: row.key, label: title, hotkey: row.hotkey, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: warn })] : []), ...(repo ? [el.Text({ key: `${row.key}-repo`, color: QUIET, children: repo })] : [])] }),
       el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, children: columns.map(([name, text, color, size]) => el.Box({ key: `${row.key}-${name}`, width: size, children: [el.Text({ key: `${row.key}-${name}-text`, color, children: text })] })) }),
     ],
   })
@@ -105,36 +125,47 @@ const deskLine = (el, row) => {
     ...(cols.age > 0 ? [column('age', cols.age + 1, el.Text({ key: `${row.key}-age-text`, color: QUIET, children: cells.age }), true)] : []),
     ...(cols.owner > 0 ? [column('owner', cols.owner, el.Text({ key: `${row.key}-owner-text`, color: row.ownerColour, wrap: 'truncate', children: cells.owner }))] : []),
   ]
+  const title = [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : [])]
+  // With a repository's name the title alone gives way in a narrow pane: the name is what tells two checkouts' rows of one intent apart.
+  const main = cells.repo
+    ? [el.Box({ key: `${row.key}-title`, flexDirection: 'row', flexShrink: 1, overflow: 'hidden', children: title }), el.Box({ key: `${row.key}-repo`, flexShrink: 0, paddingRight: 1, children: [el.Text({ key: `${row.key}-repo-text`, color: QUIET, children: ` ${fit(cells.repo, REPO_CELLS)}` })] })]
+    : title
   return el.Box({
     key: `row-${row.key}`,
     flexDirection: 'row',
     width: '100%',
     alignItems: 'center',
     children: [
-      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: [el.Button({ key: row.key, label: `${cells.glyph ? `${cells.glyph} ` : ''}${cells.title}`, plain: true, autoFocus: row.autoFocus ? true : undefined, onPress: row.onPress }), ...(cells.warn ? [el.Text({ key: `${row.key}-warn`, color: AMBER, children: ` ${cells.warn}` })] : [])] }),
+      el.Box({ key: `${row.key}-main`, flexDirection: 'row', flexGrow: 1, flexShrink: 1, overflow: 'hidden', children: main }),
       el.Box({ key: `${row.key}-cols`, flexDirection: 'row', gap: 2, flexShrink: 0, alignItems: 'center', children: columns }),
     ],
   })
 }
 
 // The header's one status line: where things stand, and at its right how fresh the team's list is
-// (`fresh`, a press that fetches now); without it, the words alone.
-/** @param {any} el @param {{ text: string, fresh: string, width: number, hotkey?: string, onPress: () => void }} line */
-export const statusLine = (el, { text, fresh, width, hotkey, onPress }) => {
-  if (!fresh) return text ? el.Text({ key: 'status', children: fit(text, width) }) : null
-  return el.Box({
-    key: 'status',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    children: [el.Text({ key: 'status-words', children: fit(text, Math.max(1, width - fresh.length - 6)) }), el.Button({ key: 'sync', label: fresh, hotkey, plain: true, dimColor: true, onPress })],
-  })
+// (`fresh`, a press that fetches now); without it, the words alone. A failed sync's `error` (git's own
+// words) is drawn under it, cut to two lines of the width (the desktop's width leaves it whole).
+/** @param {any} el @param {{ text: string, fresh: string, width: number, hotkey?: string, onPress: () => void, error?: string }} line */
+export const statusLine = (el, { text, fresh, width, hotkey, onPress, error = '' }) => {
+  const line = fresh
+    ? el.Box({
+        key: 'status',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        width: '100%',
+        children: [el.Text({ key: 'status-words', children: fit(text, Math.max(1, width - fresh.length - 6)) }), el.Button({ key: 'sync', label: fresh, hotkey, plain: true, dimColor: true, onPress })],
+      })
+    : text
+      ? el.Text({ key: 'status', children: fit(text, width) })
+      : null
+  if (!error) return line
+  return el.Box({ key: 'status-lines', flexDirection: 'column', width: '100%', children: [line, el.Text({ key: 'status-error', color: QUIET, wrap: 'wrap', children: fit(error, 2 * width) })] })
 }
 
 /**
  * How a pane draws work rows: on which surface and how wide, whether rows carry a `local` tag, each
  * owner's colour, and what a press on a row does.
- * @typedef {{ isClicked: boolean, width: number, now: number, isTagged: boolean, ownerColour: (name: string) => string, onRow: (one: Work) => () => void }} Look
+ * @typedef {{ isClicked: boolean, width: number, now: number, isTagged: boolean | ((one: import('./worklist.mjs').RowWork) => boolean), ownerColour: (name: string) => string, onRow: (one: Work) => () => void }} Look
  */
 
 /** @param {any} el @param {Look} look @param {Work} one @param {Map<string, RowCells>} cells @param {Columns} cols @param {string} key @param {string | undefined} hotkey @param {boolean} [autoFocus] */
@@ -200,11 +231,13 @@ const decisionBody = (el, isClicked, one, answers, width, answer) => {
 // Needs you's rows, as decide.mjs needsView lays them out: one per thing, except an intent's several
 // decisions, which wait as one row that opens them (D7); each row "✓ Decided" in place, opened with its
 // answers, or its one line; then "▸ N decided". `key`: the next digit, shared with Needs attention.
+// `queued`: the ids handed over while a turn runs, which the session does not have yet. `onNow`: for such a
+// row, the press that stops the running turn so the session reads it now, where that is offered (the review).
 /**
  * @param {any} el @param {boolean} isClicked
- * @param {{ items: readonly Item[], open: readonly Item[], opened: ReadonlySet<string>, width: number, key: () => string | undefined, onAct: (one: Item) => () => void, onToggle: (slug: string) => () => void, answer: Answering }} spec
+ * @param {{ items: readonly Item[], open: readonly Item[], queued?: ReadonlySet<string>, onNow?: (one: Item) => (() => void) | undefined, opened: ReadonlySet<string>, width: number, key: () => string | undefined, onAct: (one: Item) => () => void, onToggle: (slug: string) => () => void, answer: Answering }} spec
  */
-export const needsRows = (el, isClicked, { items, open, opened, width, key, onAct, onToggle, answer }) => {
+export const needsRows = (el, isClicked, { items, open, queued = new Set(), onNow, opened, width, key, onAct, onToggle, answer }) => {
   const { view } = answer
   const fresh = new Map(view.fresh.map(one => [one.id, one]))
   /** @param {Item} one @param {boolean} isFirst @param {string} [slug] */
@@ -212,10 +245,13 @@ export const needsRows = (el, isClicked, { items, open, opened, width, key, onAc
     const rowWidth = slug ? width - 2 : width
     const marginTop = isFirst || slug ? undefined : 1
     const state = view.states[one.id] ?? 'line'
-    if (state === 'decided') return el.Box({ key: `row-item-${one.id}`, marginTop, children: [el.Text({ key: `item-${one.id}-done`, color: DONE, children: fit(`${decidedText(fresh.get(one.id)?.answer ?? '')} · ${answeredName(one)}`, rowWidth) })] })
+    if (state === 'decided') return el.Box({ key: `row-item-${one.id}`, marginTop, children: [el.Text({ key: `item-${one.id}-done`, color: DONE, children: fit(`${decidedText(fresh.get(one.id)?.answer ?? '')} · ${answeredName(one)}${queued.has(one.id) ? ' · queued until this turn ends' : ''}`, rowWidth) })] })
     const isShown = state === 'opened' && one.answers
     const press = view.opens.has(one.id) ? answer.onOpen(isShown ? NONE_OPEN : one.id) : onAct(one)
-    return choiceRow(el, { key: `item-${one.id}`, title: slug ? one.title.replace(`${slug} · `, '') : one.label, detail: isShown ? undefined : slug ? one.detail : (one.detail ?? (one.title === one.label ? '' : one.title)), mark: slug ? '·' : '◆', marginTop, hotkey: key(), isSent: !open.includes(one), autoFocus: view.isFocusFree && one === open[0], width: rowWidth, onPress: press, below: isShown && one.answers ? decisionBody(el, isClicked, one, one.answers, rowWidth - 2, answer) : undefined }, isClicked)
+    // Never done for the person: stopping a turn is their own press.
+    const now = queued.has(one.id) ? onNow?.(one) : undefined
+    const sendNow = now ? el.Box({ key: `now-${one.id}`, children: [el.Button({ key: `now-${one.id}-press`, label: 'Stop the running turn and send now', onPress: now })] }) : undefined
+    return choiceRow(el, { key: `item-${one.id}`, title: slug ? one.title.replace(`${slug} · `, '') : one.label, detail: isShown ? undefined : slug ? one.detail : (one.detail ?? (one.title === one.label ? '' : one.title)), mark: slug ? '·' : '◆', marginTop, hotkey: key(), isSent: !open.includes(one), isQueued: queued.has(one.id), autoFocus: view.isFocusFree && one === open[0], width: rowWidth, onPress: press, below: isShown && one.answers ? decisionBody(el, isClicked, one, one.answers, rowWidth - 2, answer) : sendNow }, isClicked)
   }
   const rows = view.blocks.flatMap((block, at) => {
     const [only] = block.items
@@ -384,6 +420,10 @@ export function summaryStrip(el, model, crew, isClicked) {
     ],
   })
 }
+
+// Whether this checkout's branch merges into origin's base (home.mjs mergeLine): amber when it does not.
+/** @param {any} el @param {{ text: string, isWarn: boolean }} merge @param {number} width */
+export const mergeRow = (el, merge, width) => el.Text({ key: 'merge', color: merge.isWarn ? AMBER : QUIET, wrap: 'truncate', children: fit(merge.text, width) })
 
 // Role, proof, the Editor lock and this week's figures; each proof is green when it passed and red when it failed.
 /** @param {any} el @param {{ role: string, proof: string, lock: string, week: string }} header */

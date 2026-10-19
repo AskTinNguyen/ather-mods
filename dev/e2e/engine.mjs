@@ -15,18 +15,34 @@ const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select',
 // The mobile app's table: no Input or Select (the app draws no field yet), as claude-code.d.ts says.
 const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => name !== 'Input' && name !== 'Select'))
 
-export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => {
-  const store = new Map()
+// `writable`: more folders the model's Write and Edit may change (a sibling checkout); with it, a relative path is taken from `root`.
+// `kept`: what the store already holds (an earlier session's on this machine).
+// The next `times` runs whose command line starts with `argv` are rejected, as the app aborts a run. For every
+// engine of the run: an earlier session's timers still fire, and their runs must not answer for the one under test.
+export const aborts = { argv: '', times: 0 }
+
+export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable, kept }) => {
+  const store = new Map(kept)
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
+  // The plugin's panes that are up, by id, as $.ui.panes() reports them: each one shown.
+  const panesUp = new Set()
   const hooks = []
   const timers = []
-  const record = { ghRuns: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], status: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
+  const record = { sends: [], aborts: [], ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], forks: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
   let sessionId = 'harness-session-0001'
   let submitFails = false
+  // What $.session.send answers: delivered, unless a test says the other session is gone.
+  let sendResult = { isDelivered: true }
+  // The model turn running now, and the prompts the plugin submitted while it ran. The engine starts a turn of
+  // its own with them once the session is idle, and $.prompt.submit resolves as that turn starts, not when the
+  // prompt is queued (seen on Claude Code 2.1.296: two prompts queued behind one turn started one turn together).
+  let turn = ''
+  let turns = 0
+  const queue = []
   // The engine refuses a prompt or a command queued from inside a command hook.
   const holdingTurn = what => {
     if (holding > 0) throw new Error(`ather-automata: ${what}: called from a command.run hook, it would wait on the turn this hook is holding`)
@@ -63,10 +79,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
   }
 
   const toolBottom = input => {
-    if ((input.tool === 'Write' || input.tool === 'Edit') && typeof input.file_path === 'string' && input.file_path.startsWith(root)) {
+    const file = typeof input.file_path === 'string' && writable && !path.isAbsolute(input.file_path) ? path.resolve(root, input.file_path).split(path.sep).join('/') : input.file_path
+    if ((input.tool === 'Write' || input.tool === 'Edit') && typeof file === 'string' && [root, ...(writable ?? [])].some(dir => file.startsWith(dir))) {
       // Write makes the folder it writes into, as the real tool does.
-      if (input.tool === 'Write') fs.mkdirSync(path.dirname(input.file_path), { recursive: true }), fs.writeFileSync(input.file_path, input.content ?? '')
-      else fs.writeFileSync(input.file_path, fs.readFileSync(input.file_path, 'utf8').replace(input.old_string, input.new_string))
+      if (input.tool === 'Write') fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, input.content ?? '')
+      else fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(input.old_string, input.new_string))
       return { result: 'ok', text: 'ok' }
     }
     if (input.tool === 'AskUserQuestion') {
@@ -82,6 +99,26 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     return { result: 'ok', text: input.__text ?? 'ok', isError: input.__isError ?? undefined }
   }
 
+  const startTurn = async text => {
+    turn = `turn-${++turns}`
+    await dispatch('turn.start', { text, turnId: turn }, e => ({ turnId: e.turnId }))
+    return turn
+  }
+  const endTurn = async reason => {
+    const turnId = turn
+    turn = ''
+    const result = await dispatch('turn.complete', { reason, isAborted: reason === 'aborted', answer: '', ...(turnId ? { turnId } : {}) }, () => ({ text: '' }))
+    const waiting = queue.splice(0)
+    if (waiting.length > 0) {
+      await startTurn(waiting.at(-1).text)
+      for (const one of waiting) {
+        record.submits.push(one.text)
+        one.resolve({ text: one.text })
+      }
+    }
+    return result
+  }
+
   const $ = {
     plugin: { name: 'ather-automata', root: '' },
     clock: {
@@ -91,6 +128,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
         return { cancel: () => undefined }
       },
       after: (ms, fn) => {
+        record.afters.push(ms)
         const timer = setTimeout(fn, ms)
         // A long timer (a retry a minute out) must not keep the run alive after the checks.
         if (ms >= 10000) timer.unref?.()
@@ -113,9 +151,10 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
           return { name: entry.name, kind: entry.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false }
         }),
       exists: async file => fs.existsSync(file),
-      stat: async file => {
+      // `resolve`: with the path the file really is at, behind any symbolic link.
+      stat: async (file, { resolve = false } = {}) => {
         const stat = fs.statSync(file)
-        return { kind: stat.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false }
+        return { kind: stat.isDirectory() ? 'dir' : 'file', size: stat.size, mtimeMs: stat.mtimeMs, isLink: false, ...(resolve ? { realPath: fs.realpathSync(file) } : {}) }
       },
     },
     store: {
@@ -129,13 +168,24 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     process: {
       run: async (argv, init = {}) => {
         if (user !== undefined && argv.join(' ') === 'git config user.name') return { exitCode: 0, stdout: `${user}\n`, stderr: '' }
+        // The person the test names has no email: the real one (or a fixture repository's) would name someone else.
+        if (user !== undefined && argv.join(' ') === 'git config user.email') return { exitCode: 1, stdout: '', stderr: '' }
+        if (aborts.times > 0 && aborts.argv !== '' && argv.join(' ').startsWith(aborts.argv)) {
+          aborts.times -= 1
+          throw new Error(`$.process.run(${argv[0]}) aborted`)
+        }
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
         if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
+        if (argv[0] === 'gh') record.ghAt.push({ argv: argv.join(' '), cwd: init.cwd ?? root })
+        // `ghAt` ({ [folder]: { issues, prs, fails } }): each checkout's own fixtures, by the folder gh runs in.
+        // `fails`: what gh says on stderr as it exits 1 there, whatever it was asked.
+        const { issues: ghIssuesHere, prs: ghPrsHere, fails } = ghAt ? (ghAt[init.cwd ?? root] ?? {}) : { issues: ghIssues, prs: ghPrs }
+        if (argv[0] === 'gh' && fails !== undefined) return { exitCode: 1, stdout: '', stderr: fails }
         // Every git call, with the variables it was given: the checks read its argv and env.
         if (argv[0] === 'git') record.gitRuns.push({ argv: [...argv], env: { ...(init.env ?? {}) } })
         // `gh pr view <n>`: the PR states are a fixture too ({ [n]: 'MERGED' | 'OPEN' }); an unknown PR is not found.
-        if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return ghPrs?.[argv[3]] ? { exitCode: 0, stdout: JSON.stringify({ state: ghPrs[argv[3]], mergedAt: ghPrs[argv[3]] === 'MERGED' ? '2026-10-04T01:31:16Z' : null }), stderr: '' } : { exitCode: 1, stdout: '', stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${argv[3]}.` }
-        if (argv[0] === 'gh') return ghIssues === undefined ? { exitCode: 1, stdout: '', stderr: 'gh: To get started with GitHub CLI, please run: gh auth login' } : { exitCode: 0, stdout: JSON.stringify(ghIssues), stderr: '' }
+        if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') return ghPrsHere?.[argv[3]] ? { exitCode: 0, stdout: JSON.stringify({ state: ghPrsHere[argv[3]], mergedAt: ghPrsHere[argv[3]] === 'MERGED' ? '2026-10-04T01:31:16Z' : null }), stderr: '' } : { exitCode: 1, stdout: '', stderr: `GraphQL: Could not resolve to a PullRequest with the number of ${argv[3]}.` }
+        if (argv[0] === 'gh') return ghIssuesHere === undefined ? { exitCode: 1, stdout: '', stderr: 'gh: To get started with GitHub CLI, please run: gh auth login' } : { exitCode: 0, stdout: JSON.stringify(ghIssuesHere), stderr: '' }
         try {
           const stdout = execFileSync(argv[0], argv.slice(1), { cwd: init.cwd ?? root, env: { ...process.env, ...(init.env ?? {}) }, encoding: 'utf8', timeout: init.timeoutMs ?? 30000, input: init.stdin, stdio: [init.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] })
           return { exitCode: 0, stdout, stderr: '' }
@@ -146,9 +196,23 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     },
     session: {
       id: async () => sessionId,
+      // To another of the person's sessions, by its id: resolves once queued there, or says why not.
+      send: async input => {
+        record.sends.push(input)
+        return sendResult
+      },
       root: async () => root,
       cwd: async () => root,
       surfaces: async () => surfaces.slice(),
+      // The status line's figures: a context large enough to keep warm, no rate limits, no cost.
+      usage: async () => ({ startedAt: 0, context: { tokens: 120000, window: 200000 }, rateLimits: [], cost: { usd: 0 } }),
+    },
+    model: {
+      // A fork reads the whole context from the cache, as a session's does past its first request.
+      fork: async ({ prompt }) => {
+        record.forks.push(prompt)
+        return { isAnswered: true, text: '.', usage: { input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 120000, cache_creation_input_tokens: 0 } }
+      },
     },
     ui: {
       resolve: e => (e?.surface === 'mobile' ? MOBILE : ELEMENTS),
@@ -164,10 +228,14 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
       },
       open: async pane => {
         record.opens.push(pane)
+        panesUp.add(pane.id)
         return { isPlaced }
       },
-      close: async pane => void record.closes.push(pane),
-      panes: async () => [],
+      close: async pane => {
+        record.closes.push(pane)
+        panesUp.delete(pane.id)
+      },
+      panes: async () => [...panesUp].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced })),
       // The engine's own dialog: a tool.call of AskUserQuestion through the hooks (the plugin's own see it, origin the
       // plugin), labels only, fewer than two padded with Yes/No. Resolves to the answer; rejects when there is none.
       ask: async (question, options = {}) => {
@@ -183,6 +251,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
       submit: async input => {
         holdingTurn('prompt.submit')
         if (submitFails) throw new Error('the prompt box is busy')
+        if (turn !== '') return new Promise(resolve => queue.push({ text: input.text, resolve }))
         record.submits.push(input.text)
         return {}
       },
@@ -190,6 +259,14 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
         holdingTurn('prompt.fill')
         record.fills.push(input.text)
         return { isFilled: true }
+      },
+    },
+    turn: {
+      // Cancels the running turn; the prompts queued behind it then start their own.
+      abort: async ({ turnId } = {}) => {
+        if (!turnId || turnId !== turn) throw new Error(`ather-automata: $.turn.abort: ${turnId} is not the running turn (${turn || 'none'})`)
+        record.aborts.push(turnId)
+        await endTurn('aborted')
       },
     },
     command: {
@@ -263,7 +340,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     // A worker already running when the plugin loaded: listed, but no spawn event was seen.
     addAgent: agent => void agents.push({ status: 'running', type: 'general-purpose', ...agent }),
     // A worker's own turn ends (its answer), as Claude Code reports it.
-    agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', agentId }, () => ({ text: '' })),
+    agentTurnEnd: agentId => dispatch('turn.complete', { reason: 'answer', isAborted: false, agentId }, () => ({ text: '' })),
     agentTool: (agentId, input) => dispatch('tool.call', { ...input, agentId }, toolBottom, 'engine'),
     // A tool call held in flight: it reaches the tool (`reached`) and stays there until released (it runs),
     // refused (the tool answers with a deny) or failed (the tool throws). `agentId` undefined: the main loop.
@@ -300,9 +377,24 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, env }) => 
     // The person types a prompt and presses Enter.
     type: text => dispatch('prompt.submit', { text, wait: false, origin: { kind: 'composer' } }, e => ({ text: e.text })),
     compose: () => dispatch('prompt.compose', {}, () => ({ sections: [{ id: 'intro', text: 'engine', scope: 'shared' }] })),
-    start: (isInteractive = true) => dispatch('session.start', { cwd: root, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
-    turnEnd: () => dispatch('turn.complete', { reason: 'answer' }, () => ({ text: '' })),
+    // `cwd`: the shell's folder as the session starts (a resume after a `cd`), when it is not the session's root.
+    start: (isInteractive = true, cwd = root) => dispatch('session.start', { cwd, surface: surfaces[0] ?? null, isInteractive }, e => ({ cwd: e.cwd })),
+    // A model turn begins (the person typed a prompt); it ends with turnEnd, and the prompts the plugin
+    // submitted meanwhile then start a turn of their own.
+    turnStart: (text = 'a typed prompt') => startTurn(text),
+    turnEnd: () => endTurn('answer'),
+    // The prompts waiting for the running turn to end.
+    queued: () => queue.map(one => one.text),
+    setSend: value => {
+      sendResult = value
+    },
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
-    close: id => dispatch('ui.close', { id, origin: { kind: 'person' } }, () => ({ value: undefined, closed: true })),
+    // Whether the plugin's matchers on `event` may select `e`: the instances its $.ui.invalidate draws again.
+    selects: (event, e) => hooks.some(one => one.event === event && matches(one.matcher, e)),
+    close: id =>
+      dispatch('ui.close', { id, origin: { kind: 'person' } }, () => {
+        panesUp.delete(id)
+        return { value: undefined, closed: true }
+      }),
   }
 }

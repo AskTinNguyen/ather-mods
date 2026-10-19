@@ -9,33 +9,42 @@
 // The host reads on(...) and $.noun.method(...) from source, so they are
 // spelled literally, and helpers that take $ are top-level functions.
 
-import { ALLOWED_TEXT, AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
-import { CREATE_SHOWN, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
-import { issueLink, issuePrompt, parseIssues } from './issues.mjs'
+import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
+import { VIEW_LABELS, isShownIn, otherView, viewText, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
+import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
+import { awayHours, warmBadge, warmPaneText } from './warm.mjs'
+import * as warmStore from './warm-store.mjs'
 import { crewOf } from './crew.mjs'
 import { crewSections } from './crew-rows.mjs'
 import { homeDir, resetTranscripts, sessionName } from './transcripts.mjs'
 import { recordEnd } from './workers.mjs'
 import { endLoop } from './inflight.mjs'
-import { changeGlyph } from './changes.mjs'
-import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncText } from './team.mjs'
-import { GROUP_LABELS, SORT_LABELS, nextGroup, nextSort } from './worklist.mjs'
-import { AMBER, LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, metaRow, needsRows, section, stageRow, statusLine, summaryStrip, workGroups } from './rows.mjs'
+import { EMPTY_CACHE, GIT_ENV, NO_SYNC, canFetchNow, fetchMain, isFetchDue, readTeam, syncError, syncSummary, syncText } from './team.mjs'
+import { checkoutNames, checkoutOf, normalFolder } from './workspace.mjs'
+import { overlapJob } from './overlap.mjs'
+import { checkBranch, isSameCheck } from './collide.mjs'
+import { forBase } from './guards.mjs'
+import { withFolders } from './shell.mjs'
+import { nextGroup, nextSort } from './worklist.mjs'
+import { LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, mergeRow, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
+import { awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
-import { SETUP_PIECES, readSetup, setupPrompt, setupSummary, suggestPack } from './setup.mjs'
+import { createOutbox, holdersOf, routedText, toldText } from './handoff.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
-/** @typedef {ReturnType<typeof buildHome>} Home */
+/** @typedef {ReturnType<typeof buildHome> & { sync: import('./team.mjs').Sync }} Home */
 /** @typedef {import('./home.mjs').Item} Item */
 /** @typedef {import('./home.mjs').Next} Next */
 /** @typedef {import('./home.mjs').Work} Work */
 
 const PANE_ID = 'ather'
+// The band's words when it has nothing else to say.
+const NAME = '◆ Ather Automata'
 // Queued work goes out after the command hook returns: a hook holds the turn,
 // and the engine refuses a prompt queued from inside it.
 const AFTER_HOOK_MS = 50
@@ -50,6 +59,16 @@ let me = ''
 let intents = []
 // Items handed to the session in this session, shown as sent instead of offered twice.
 const sent = new Set()
+// Those the session does not have yet (handoff.mjs): a press while a turn runs waits for the turn's end.
+const outbox = createOutbox()
+// The model turn running now in the main conversation ('' between turns), as turn.start named it.
+let turnRunning = ''
+// Another of the person's live sessions, which tracks the intent a press is about (`slug`, in its checkout).
+/** @typedef {{ sessionId: string, name: string, slug: string }} Target */
+// The presses whose "Send where?" question is open: pressed again, they ask nothing more.
+/** @type {Set<string>} */
+const routing = new Set()
+const NOT_SENT = 'Not sent: it was not said where it should go.'
 let paneMode = /** @type {Mode} */ ('home')
 // Create groups opened past their first three.
 /** @type {Set<string>} */
@@ -57,19 +76,49 @@ const createOpen = new Set()
 // Intent changes after this were not seen yet: they make the band's notice.
 let intentSeenAt = 0
 // The issue whose card is open (paneMode 'issue'), and the view to go back to.
-let issueShown = 0
+let issueShown = ''
 let issueBack = /** @type {'home' | 'pick'} */ ('home')
-// The intent whose view is open (paneMode 'intent'; '' is the tracked one), and the view to go back to.
+// The intent whose view is open (paneMode 'intent'; its key, '' for the tracked one), and the view to go back to.
 let intentShown = ''
 let intentBack = /** @type {'home' | 'pick'} */ ('home')
 // The "Everything open" list: the words searched, its sort, how the teammates' intents are grouped
 // (read from the person's stored choice once a session), and the heads pressed to fold or unfold.
 let pickQuery = ''
 let pickSort = /** @type {import('./worklist.mjs').Sort} */ ('recent')
-let pickGroup = /** @type {import('./worklist.mjs').GroupBy} */ ('person')
-let isGroupRead = false
-// Presses of Group: a stored choice read back after a press does not undo it.
-let groupPresses = 0
+// A choice remembered for the person (Group, Home's view): read from the store once a session; a press
+// made before the read lands is not undone by it.
+/** @template T @param {T} initial @param {(io: import('./state.mjs').Io, me: string) => Promise<T>} read @param {(io: import('./state.mjs').Io, me: string, value: T) => Promise<unknown>} write */
+const remembered = (initial, read, write) => {
+  let value = initial
+  let isRead = false
+  let presses = 0
+  return {
+    get value() {
+      return value
+    },
+    reset() {
+      value = initial
+      isRead = false
+    },
+    /** @param {import('./state.mjs').Io} store */
+    async readOnce(store) {
+      if (isRead) return
+      const before = presses
+      const stored = await read(store, me).catch(() => value)
+      if (presses === before) value = stored
+      isRead = true
+    },
+    /** @param {import('./state.mjs').Io} store @param {T} next */
+    pick(store, next) {
+      value = next
+      presses += 1
+      isRead = true
+      return write(store, me, next).catch(() => undefined)
+    },
+  }
+}
+const pickGroup = remembered(/** @type {import('./worklist.mjs').GroupBy} */ ('person'), state.readGroupBy, state.setGroupBy)
+const homeView = remembered(/** @type {import('./home.mjs').PaneView} */ ('advanced'), state.readPaneView, state.setPaneView)
 /** @type {Set<string>} */
 const pickFolded = new Set()
 // Needs you's intents opened to show each of their decisions.
@@ -82,16 +131,27 @@ const callsOpen = new Set()
 let answerState = { ...FRESH_ANSWERS }
 let findingShown = ''
 let isSearchOpen = false
-// What the last read of the team's intents learned (team.mjs reads each part again only when it moved),
-// and where the background fetch stands. Both, and `intents`, change together, in readIntents.
-let teamCache = EMPTY_CACHE
-let sync = NO_SYNC
-// A fetch that ended (the `count`th), for the first read that began after it to apply with what it brought in.
-/** @type {{ count: number, sync: Partial<import('./team.mjs').Sync> } | null} */
-let fetched = null
+// Per checkout root: what the last read of its team's intents learned (team.mjs reads each part again
+// only when it moved), and where its background fetch stands. Both, and `intents`, change together, in readIntents.
+/** @type {Map<string, import('./team.mjs').TeamCache>} */
+const teamCaches = new Map()
+/** @type {Map<string, import('./team.mjs').Sync>} */
+const syncs = new Map()
+// Per checkout root, a fetch that ended (the `count`th), for the first read that began after it to apply with what it brought in.
+/** @type {Map<string, { count: number, sync: Partial<import('./team.mjs').Sync> }>} */
+const fetched = new Map()
 let fetchesEnded = 0
-// The read running now, and whether another was asked for while it ran.
-/** @type {Promise<void> | null} */
+// A fetch is running: one at a time over every checkout.
+let isSyncing = false
+// The pane's checkouts, as last read (paneLanes): the workspace checkouts that have intents.
+/** @type {import('./state.mjs').Checkout[]} */
+let checkouts = []
+// The workspace checkouts other than the session's own, read once per session (null: the session folder is in
+// no checkout, so there is no workspace): a read git could not answer in full is not kept, so the next one asks again.
+/** @type {Promise<string[] | null> | null} */
+let otherRoots = null
+// The read running now (resolving whether it drew again), and whether another was asked for while it ran.
+/** @type {Promise<boolean> | null} */
 let reading = null
 let isRereadAsked = false
 // The pane has been drawn: from then on the fetch runs on its own, at most every ten minutes.
@@ -109,11 +169,21 @@ let isPrsReading = false
 let isIssuesRefreshing = false
 /** @type {Promise<void> | null} */
 let isAwake = null
-/** @type {{ version: number, at: number, model: Home | null }} */
-let view = { version: -1, at: 0, model: null }
-// The pack this checkout's lane chose (packs/index.mjs), for the drawing; set whenever the view is rebuilt.
+// The view model (home), built or being built, by the state version and stale count it was begun at.
+/** @type {{ key: string, at: number, model: Promise<Home> } | null} */
+let view = null
+// What the last read of the intents found (readIntents), as text: a read that finds the same draws nothing again.
+let readPrint = ''
+// The band's hint as last drawn (bandOf); null while the band is not Ather's to draw (a survey shows).
+/** @type {string | null} */
+let bandDrawn = null
+// How many times the view was marked stale: a view begun before is built again.
+let staled = 0
+// The pack whose words the pane uses (packs/index.mjs, wordsLane); set whenever the view is rebuilt.
 /** @type {import('./packs/index.mjs').Pack} */
 let pack = unreal
+// The branch that lane's team merges into, for the pane's words about what waits.
+let paneBase = 'main'
 
 // The store, files and session as closures: `$` cannot be handed to state.mjs itself.
 /** @param {Engine} $ @returns {import('./state.mjs').Io} */
@@ -128,21 +198,44 @@ function io($) {
     exists: path => $.fs.exists(path).catch(() => false),
     sessionId: () => $.session.id(),
     root: () => $.session.root(),
-    gitUser: async () => ((await $.process.run(['git', 'config', 'user.name'], { cwd: cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitUser: async root => ((await $.process.run(['git', 'config', 'user.name'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
+    gitEmail: async root => ((await $.process.run(['git', 'config', 'user.email'], { cwd: root || cwd || (await $.session.root()), timeoutMs: 10000 })).stdout ?? '').trim(),
     redraw: () => $.ui.invalidate('ui.render'),
     list: path => $.fs.list(path),
+    origin: root => readOrigin($, root),
+    repo: async () => (await laneOf($)).repo,
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
+    worktrees: root => readWorktrees($, root),
   }
 }
 
-// Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV.
+// The origin URL of the checkout at `root` ('' without one), or null when git could not say: the lane asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readOrigin($, root) {
+  const run = await $.process.run(['git', 'config', '--get', 'remote.origin.url'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  // Exit 1: no such key.
+  return run?.exitCode === 0 ? (run.stdout ?? '').trim() : run?.exitCode === 1 ? '' : null
+}
+
+// What `git worktree list --porcelain` prints in the checkout at `root` ('' when git refused), or null when git
+// could not say (the app aborted the run, it ran out of time): the workspace asks again.
+/** @param {Engine} $ @param {string} root @returns {Promise<string | null>} */
+async function readWorktrees($, root) {
+  const run = await $.process.run(['git', 'worktree', 'list', '--porcelain'], { cwd: root, env: GIT_ENV, timeoutMs: 10000 }).catch(() => undefined)
+  return run === undefined ? null : run.exitCode === 0 ? (run.stdout ?? '') : ''
+}
+
+// Git and the checkout's files for team.mjs: git runs in `root` with GIT_ENV. A run the app took back (the hook
+// call that started it was abandoned) is marked: the engine rejects it with a message ending in "aborted".
 /** @param {Engine} $ @param {string} root @returns {import('./team.mjs').Repo} */
 function repo($, root) {
   return {
     git: (args, { stdin, timeoutMs = 120000 } = {}) =>
-      $.process.run(['git', '-C', root, ...args], { cwd: root, env: GIT_ENV, timeoutMs, ...(stdin === undefined ? {} : { stdin }) }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error) })),
+      $.process.run(['git', '-C', root, ...args], { cwd: root, env: GIT_ENV, timeoutMs, ...(stdin === undefined ? {} : { stdin }) }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error), isAborted: /aborted$/.test(String(error)) })),
     read: path => $.fs.read(path).then(text => (typeof text === 'string' ? text : null), () => null),
     list: path => $.fs.list(path),
     mtime: path => $.fs.stat(path).then(stat => stat.mtimeMs, () => 0),
+    real: async folder => (await $.fs.stat(folder, { resolve: true })).realPath ?? folder,
   }
 }
 
@@ -165,11 +258,95 @@ function laneOf($) {
   return state.lane(io($), cwd)
 }
 
+// The pane's checkouts: the workspace checkouts that have intents, in workspace order, the session's own
+// (its lane) first.
+/** @param {Engine} $ @returns {Promise<import('./state.mjs').Checkout[]>} */
+async function paneLanes($) {
+  return (await workspaceLanes($)).filter(lane => lane.isS2)
+}
+
+/** @param {Engine} $ @param {string} root the session lane's root @returns {Promise<string[] | null>} */
+async function readOtherRoots($, root) {
+  const files = io($)
+  const own = new Set([normalFolder(root), normalFolder((await checkoutOf(files, root)) ?? root)])
+  // From the session's root, not the shell's folder: a `cd` before a resume must not move the workspace.
+  const { roots, isSure } = await state.workspace(files, root || cwd, line => $.ui.log(line, { to: 'debug' }))
+  if (!isSure) otherRoots = null
+  if (roots.length === 0) return null
+  // The session's lane is its folder's, which may be inside its checkout.
+  return roots.filter(one => !own.has(normalFolder(one)))
+}
+
+// The lane an intent's checkout has in the pane (the session's for its own).
+/** @param {Engine} $ @param {string} root */
+async function laneFor($, root) {
+  return checkouts.find(one => normalFolder(one.root) === normalFolder(root)) ?? (await laneOf($))
+}
+
+// The lane of the checkout a worker's shell command runs in: its last segment's, as its proof is read (watch.mjs afterShell).
+/** @param {Engine} $ @param {string} command */
+async function commandLane($, command) {
+  return (await state.folderLane(io($), await laneOf($), withFolders(command).at(-1)?.folder ?? null)).lane
+}
+
+// The lane whose pack gives the pane its words (Next, Create, Prove, the role): the tracked intent's
+// checkout, else the session's own when it has intents, else the first pane checkout.
+/** @param {Engine} $ */
+async function wordsLane($) {
+  const tracked = await state.trackedLane(io($), cwd)
+  const session = await laneOf($)
+  return tracked ? tracked.lane : session.isS2 ? session : (checkouts[0] ?? session)
+}
+
+// Whether a pane checkout is the session's own (the session lane is read again until git's answers are sure,
+// so it is matched by root, not by object).
+/** @param {import('./state.mjs').Checkout} session @param {import('./state.mjs').Checkout} lane */
+function isOwnLane(session, lane) {
+  return session.isS2 && normalFolder(lane.root) === normalFolder(session.root)
+}
+
+// An intent's key in the pane: its slug in the session's own checkout, `<its checkout's short name>/<slug>` in another.
+/** @param {string} name @param {boolean} isOwn @param {string} slug */
+function keyOf(name, isOwn, slug) {
+  return isOwn ? slug : `${name}/${slug}`
+}
+
+// The short name of each checkout the pane works with, by its folder: the workspace's checkouts in order, then
+// the tracked intent's when it is outside them. Each is different (checkoutNames), so keys and lookups by name agree;
+// the workspace's never change in a session, whatever is tracked, so a key built earlier still names its intent.
+/** @param {Engine} $ @returns {Promise<Map<string, string>>} */
+async function laneNames($) {
+  const lanes = await workspaceLanes($)
+  const tracked = await state.trackedLane(io($), cwd)
+  const outside = tracked && !lanes.some(one => normalFolder(one.root) === normalFolder(tracked.lane.root)) ? [tracked.lane] : []
+  const names = checkoutNames(lanes, outside)
+  return new Map([...lanes, ...outside].map((lane, at) => [normalFolder(lane.root), names[at] ?? '']))
+}
+
+/** @param {Engine} $ @param {import('./state.mjs').Checkout} lane */
+async function shortName($, lane) {
+  return (await laneNames($)).get(normalFolder(lane.root)) ?? ''
+}
+
+// The tracked intent's key, '' when nothing is tracked.
+/** @param {Engine} $ */
+async function trackedKey($) {
+  const tracked = await state.trackedLane(io($), cwd)
+  if (!tracked) return ''
+  return tracked.isOwn ? tracked.slug : keyOf(await shortName($, tracked.lane), false, tracked.slug)
+}
+
+/** @param {Engine} $ */
+async function hasIntents($) {
+  return (await paneLanes($)).length > 0
+}
+
 /** @param {import('claude-code').On} on */
 export function register(on) {
   // A repository set up in this session: the console's work, skipped at the start, begins with the next wake.
+  // Where another checkout's intents began it already, it goes on and reads the new ones.
   state.onSetUp('console', () => {
-    isAwake = null
+    if (checkouts.length === 0) isAwake = null
   })
 
   // The desktop app runs sessions the way the SDK does: not interactive at start, no surface yet.
@@ -189,10 +366,18 @@ export function register(on) {
     return result
   })
 
+  // A prompt handed over while a turn runs is queued by the engine until the turn ends: the pane says so.
+  on('turn.start', async ($, e, next) => {
+    turnRunning = e.turnId
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId && e.turnId === turnRunning) turnRunning = ''
+    if (!e.agentId) outbox.idle()
     const result = await next(e)
     // Read again in the background: the turn's end never waits on git.
-    if (!e.agentId && (await laneOf($)).isS2) void refresh($).catch(() => undefined)
+    if (!e.agentId && (await hasIntents($))) void refresh($).catch(() => undefined)
     // A worker's turn ended: it finished now, not when the pane is next drawn.
     if (e.agentId) recordEnd(e.agentId, Date.now())
     // Its turn is over: nothing in its loop is in flight, whatever did not settle.
@@ -202,17 +387,17 @@ export function register(on) {
   })
 
   on('command.run', { command: 'ather' }, async ($, e) => {
-    // Setting up is for a repository without intents too, so it is answered before the check below.
-    if (/^(setup|init)$/i.test(e.args.trim())) return { text: await setupCommand($) }
-    // A checkout without intents is read again: /ather setup may have added them in this session.
-    if (!(await state.laneAgain(io($), cwd)).isS2) return { text: await setupQuestion($) }
+    // A checkout without intents is read again: the person may have added them in this session. The
+    // pack's sentence is for a pane that would have nothing: another workspace checkout's intents open it.
+    await state.laneAgain(io($), cwd)
+    if (!(await hasIntents($))) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     await refresh($).catch(() => undefined)
     return { text: await atherCommand($, e.args.trim()) }
   })
 
   on('command.run', { command: 'away' }, async ($, e) => {
-    if (!(await laneOf($)).isS2) return { text: (await laneOf($)).pack.notHere }
+    if (!(await hasIntents($))) return { text: (await laneOf($)).pack.notHere }
     await wake($)
     return { text: await awayCommand($, e.args.trim()) }
   })
@@ -230,44 +415,12 @@ export function register(on) {
     return ran
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !(await laneOf($)).isS2) return next(e)
-    void wake($)
-    const model = await home($)
-    const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
-    const hint = fresh.length > 0 ? `◆ Intent: ${fresh.slice(0, 2).map(one => one.text.split(' · ')[0].replace(/^./, first => first.toLowerCase())).join(' · ')}${fresh.length > 2 ? ` · +${fresh.length - 2}` : ''}` : bandHint(model)
-    // Closed with ✕: stays away until there is something new to say.
-    if (closedHint !== null && (hint === '' || hint === closedHint)) return next(e)
-    closedHint = null
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const isAway = model.header.stage === 'Away'
-    return Box({
-      flexDirection: 'row',
-      gap: 2,
-      children: [
-        Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: hint ? undefined : true, wrap: 'truncate', children: hint || '◆ Ather Automata' })] }),
-        ...(fresh.length > 0 ? [Button({ key: 'ather-intent-see', label: 'See', plain: true, onPress: () => void seeIntent($) })] : []),
-        Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
-        Button({ key: 'ather-open', label: '⤢', plain: true, dimColor: true, onPress: () => void openPane($, 'home') }),
-        Button({ key: 'ather-close', label: '✕', plain: true, dimColor: true, role: 'dismiss', onPress: () => {
-          closedHint = hint
-          intentSeenAt = Date.now()
-          $.ui.invalidate('ui.render')
-          $.ui.toast('Ather hidden until something needs you. /ather brings it back.')
-        } }),
-      ],
-    })
-  })
+  // Drawings of one site leave their hook in the order they were asked for (inOrder).
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => inOrder(e, next.signal, drawBand($, e).then(tree => tree ?? next(e))))
 
-  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== PANE_ID) return next(e)
-    void wake($)
-    isDrawn = true
-    void syncMain($)
-    if (paneMode === 'intent') await readIntentView($)
-    if (paneMode === 'pick' && !isGroupRead) await readGroup($)
-    return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack))
-  })
+  // Ather's own pane only (PANE_ID): a matcher without it would have every invalidate of Ather's redraw every
+  // plugin's pane, and lose the presses on its way there (see redrawAged).
+  on('ui.render', { component: 'Pane', requestId: 'ather' }, async ($, e, next) => inOrder(e, next.signal, drawPane($, e)))
 
   on('ui.close', ($, e, next) => {
     if (e.id === PANE_ID) {
@@ -280,19 +433,101 @@ export function register(on) {
   })
 }
 
+// ---------------------------------------------------------------- drawing
+
+// Each drawing of a site (the band, the pane) leaves its hook in the order it was asked for. Claude Code stamps a
+// drawing's press handles as it leaves the hook and retires the ones before them, while a surface shows the drawing
+// it asked for last. Drawings run side by side: one that read more (the Intent view's files) could leave after a
+// newer one, and then the only live handles would be in a drawing no surface shows, and every press there is lost.
+/** @type {Map<string, Promise<unknown>>} */
+const drawings = new Map()
+
+// `signal`: the hook's own (next.signal), aborted once the engine goes on without it.
+/** @template T @param {{ component: string, requestId: string }} e @param {AbortSignal} signal @param {Promise<T>} drawing @returns {Promise<T>} */
+function inOrder(e, signal, drawing) {
+  const site = `${e.component}:${e.requestId}`
+  const before = drawings.get(site) ?? Promise.resolve()
+  // Its turn is over once it ends, either way, or once the engine has gone on without it: watched from now on, so
+  // one that fails while it waits is never an unhandled rejection, and one given up on holds up none after it.
+  const done = new Promise(resolve => {
+    void drawing.then(resolve, resolve)
+    if (signal.aborted) resolve(undefined)
+    else signal.addEventListener('abort', () => resolve(undefined), { once: true })
+  })
+  drawings.set(site, before.then(() => done))
+  return before.then(() => drawing)
+}
+
+// The band above the prompt; null when it is not Ather's to draw (a survey shows, no intents, closed with ✕).
+/** @param {Engine} $ @param {import('claude-code').Frozen<import('claude-code').RenderInput<'AbovePrompt'>>} e */
+async function drawBand($, e) {
+  if (e.props.hasSurvey || !(await hasIntents($))) {
+    bandDrawn = null
+    return null
+  }
+  void wake($)
+  const { model, fresh, hint } = await bandOf($)
+  bandDrawn = hint
+  // Closed with ✕: stays away until there is something new to say.
+  if (closedHint !== null && (hint === '' || hint === closedHint)) return null
+  closedHint = null
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const isAway = model.header.stage === 'Away'
+  // What needs you, in cyan; else the tracked intent's pill (ship-pill D2); else Ather's name, dim.
+  const words = hint || model.header.pill || NAME
+  const warm = warmBadge(warmStore.readWarmView())
+  return Box({
+    flexDirection: 'row',
+    gap: 2,
+    children: [
+      Box({ key: 'ather-band-words', flexGrow: 1, children: [Text({ color: hint ? 'cyan' : undefined, dimColor: words === NAME ? true : undefined, wrap: 'truncate', children: words })] }),
+      ...(fresh.length > 0 ? [Button({ key: 'ather-intent-see', label: 'See', plain: true, onPress: () => void seeIntent($) })] : []),
+      Button({ key: 'ather-away', label: '☾', plain: true, dimColor: isAway ? undefined : true, onPress: () => void openPane($, 'away') }),
+      // Keep the prompt cache warm while idle: on or off for this session; the count of reads, in amber, while one is due.
+      Box({ key: 'ather-warm', flexDirection: 'row', gap: 1, children: [
+        Button({ key: 'ather-warm-toggle', label: warm.label, plain: true, dimColor: warm.isDim ? true : undefined, onPress: () => void pressWarm($) }),
+        ...(warm.count ? [Box({ key: 'ather-warm-count', children: [Text({ color: 'yellow', children: warm.count })] })] : []),
+      ] }),
+      Button({ key: 'ather-open', label: '⤢', plain: true, dimColor: true, onPress: () => void openPane($, 'home') }),
+      Button({ key: 'ather-close', label: '✕', plain: true, dimColor: true, role: 'dismiss', onPress: () => {
+        closedHint = hint
+        intentSeenAt = Date.now()
+        $.ui.invalidate('ui.render')
+        $.ui.toast('Ather hidden until something needs you. /ather brings it back.')
+      } }),
+    ],
+  })
+}
+
+/** @param {Engine} $ @param {import('claude-code').Frozen<import('claude-code').RenderInput<'Pane'>>} e */
+async function drawPane($, e) {
+  void wake($)
+  isDrawn = true
+  void syncMain($)
+  if (paneMode === 'intent') await readIntentView($)
+  if (paneMode === 'pick') await pickGroup.readOnce(io($))
+  await homeView.readOnce(io($))
+  return paneView($.ui.resolve(e), $, await home($), e.props.bodyColumns ?? 80, e.surface, await crewOf(host($), (await laneOf($)).root, await state.sessionId(io($)), (await laneOf($)).pack, command => commandLane($, command)))
+}
+
 // ---------------------------------------------------------------- starting
 
 // Every session: fresh module state and the two commands.
 /** @param {Engine} $ @param {string} folder */
 async function openConsole($, folder) {
   sent.clear()
+  outbox.reset()
+  // No turn has been seen to start in this session yet: one already running shows a late prompt as queued (LATE_MS).
+  turnRunning = ''
   paneMode = 'home'
   isIssuesWarned = false
   isWhoWarned = false
   issueRetries = 0
   resetTranscripts()
   isAwake = null
-  view = { version: -1, at: 0, model: null }
+  view = null
+  readPrint = ''
+  bandDrawn = null
   closedHint = null
   intentSeenAt = Date.now()
   intentShown = ''
@@ -300,21 +535,24 @@ async function openConsole($, folder) {
   pickQuery = ''
   pickSort = 'recent'
   pickFolded.clear()
-  pickGroup = 'person'
-  isGroupRead = false
+  pickGroup.reset()
+  homeView.reset()
   callsOpen.clear()
   answerState = { ...FRESH_ANSWERS }
   findingShown = ''
   isSearchOpen = false
-  teamCache = EMPTY_CACHE
-  sync = NO_SYNC
-  fetched = null
+  teamCaches.clear()
+  syncs.clear()
+  fetched.clear()
+  isSyncing = false
+  checkouts = []
+  otherRoots = null
   fetchesEnded = 0
   isDrawn = false
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack | setup]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -333,21 +571,26 @@ function wake($) {
 /** @param {Engine} $ */
 async function startConsoleWork($) {
   const lane = await laneOf($)
+  await state.workspace(io($), lane.root || cwd, line => $.ui.log(line, { to: 'debug' }))
   if (lane.me !== '') me = lane.me
   pack = lane.pack
-  if (!lane.isS2) return
+  paneBase = lane.base
+  if (!(await hasIntents($))) return
   await refresh($)
-  $.clock.every(60000, () => void refresh($).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
-  // A running worker's clock: redrawn every five seconds while one runs, never otherwise.
+  // The minute's read; when it drew nothing again, what time alone changed.
+  $.clock.every(60000, () => void refresh($).then(drew => (drew ? undefined : redrawAged($))).then(() => (isDrawn ? syncMain($) : undefined)).catch(() => undefined))
+  // The worker clock, and the fetches still due once the pane has been drawn: one the app took back with the draw
+  // that started it is asked again here.
   $.clock.every(5000, () => {
-    void $.agent.list().then(agents => agents.some(agent => agent.status === 'running') && $.ui.invalidate('ui.render')).catch(() => undefined)
+    if (isDrawn) void syncMain($).catch(() => undefined)
+    void redrawWorkers($).catch(() => undefined)
   })
   // watch.mjs may pick up last night's window just after this; show it.
   $.clock.after(1500, () => void refresh($).catch(() => undefined))
   void refreshIssues($).catch(() => undefined)
   $.clock.every(ISSUES_EVERY_MS, () => void refreshIssues($).catch(() => undefined))
   if ((await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
-    $.ui.toast(lane.pack.prompts.tourToast, { timeoutMs: 12000 })
+    $.ui.toast(pack.prompts.tourToast, { timeoutMs: 12000 })
     await state.setProfile(io($), me, { isNudged: true })
   }
 }
@@ -356,48 +599,72 @@ async function startConsoleWork($) {
 
 // Re-reads the intents (origin/main's and this checkout's, team.mjs), one read at a time: a call while
 // one runs asks for one more after it and waits for that, so the last read to land is the newest.
-// The rest comes from shared state when the view is rebuilt.
-/** @param {Engine} $ @returns {Promise<void>} */
+// The rest comes from shared state when the view is rebuilt. Resolves whether a read drew again.
+/** @param {Engine} $ @returns {Promise<boolean>} */
 function refresh($) {
   if (reading) {
     isRereadAsked = true
     return reading
   }
   reading = (async () => {
+    let drew = false
     try {
       do {
         isRereadAsked = false
-        await readIntents($)
+        drew = (await readIntents($)) || drew
       } while (isRereadAsked)
     } finally {
       reading = null
     }
+    void checkCollision($).catch(error => $.ui.log(`Ather: the overlap check failed: ${String(error)}`, { to: 'debug' }))
+    return drew
   })()
   return reading
 }
 
-/** @param {Engine} $ */
+/** @param {Engine} $ @returns {Promise<boolean>} whether it drew again */
 async function readIntents($) {
   // Only a fetch that ended before this read began is applied with what this read finds.
   const seen = fetchesEnded
-  const { root, me: who, pack: chosen } = await laneOf($)
-  if (who !== me) stale()
-  me = who
-  pack = chosen
+  const session = await laneOf($)
+  if (session.me !== me) stale()
+  me = session.me
   const files = io($)
-  const pinned = await state.readPinned(files)
-  const team = await readTeam(repo($, root), root, { cache: teamCache, pinned })
+  const lanes = await paneLanes($)
+  const tracked = await state.readTracked(files)
+  const names = await laneNames($)
   const read = []
-  for (const one of team.intents) read.push(parseIntent({ ...one, hasDebrief: one.slug === pinned && (await files.exists(`${root}/${chosen.debriefPath(one.slug)}`)) }, chosen))
-  const ended = fetched && fetched.count <= seen ? fetched : null
-  if (ended) fetched = null
-  teamCache = team.cache
+  // What the first pane checkout on each base read of it: the other worktrees on the same base share it, and
+  // list only their own. A worktree whose team merges into another branch reads that branch for itself.
+  /** @type {Map<string, import('./team.mjs').MainSnapshot | null>} */
+  const mains = new Map()
+  for (const lane of lanes) {
+    const { root, pack: its, base } = lane
+    const isOwn = isOwnLane(session, lane)
+    const name = names.get(normalFolder(root)) ?? ''
+    // Its intents: one tracked in another checkout is not one of them.
+    const pinned = tracked && normalFolder(tracked.root) === normalFolder(root) ? tracked.slug : null
+    const isFirst = !mains.has(base)
+    const kept = teamCaches.get(root) ?? EMPTY_CACHE
+    const team = await readTeam(repo($, root), root, { cache: isFirst ? kept : { ...kept, main: mains.get(base) ?? kept.main }, pinned, base })
+    if (isFirst) mains.set(base, team.cache.main)
+    const tag = { root, repo: lane.repo, repoName: name, base }
+    for (const one of isFirst ? team.intents : team.intents.filter(listed => listed.source === 'local')) read.push(parseIntent({ ...one, ...tag, key: keyOf(name, isOwn, one.slug), hasDebrief: one.slug === pinned && (await files.exists(`${root}/${its.debriefPath(one.slug)}`)) }, its))
+    const ended = fetched.get(root)
+    const isApplied = ended !== undefined && ended.count <= seen
+    if (isApplied) fetched.delete(root)
+    teamCaches.set(root, team.cache)
+    syncs.set(root, { ...(syncs.get(root) ?? NO_SYNC), ...(isApplied ? ended.sync : {}), isRepo: team.isRepo, hasMain: team.cache.main !== null, base })
+  }
+  checkouts = lanes
   intents = read.sort((a, b) => b.updatedAt - a.updatedAt)
   // This session's answers to decisions are kept until the files read them resolved; an answer to
   // anything else (a rule) has no file to settle it, so it stays for the session.
-  const waiting = new Set(intents.flatMap(one => directorCalls(one).map(finding => callId(one.slug, finding.id))))
+  const waiting = new Set(intents.flatMap(one => directorCalls(one).map(finding => callId(one.key, finding.id))))
   answerState = { ...answerState, decided: pruneDecided(answerState.decided, id => waiting.has(id) || !id.startsWith('call:'), Date.now()) }
-  sync = { ...sync, ...ended?.sync, isRepo: team.isRepo, hasMain: team.cache.main !== null }
+  const { root, pack: chosen, base: its } = await wordsLane($)
+  pack = chosen
+  paneBase = its
   // The listed skills that exist here, each with the first sentence of its own description.
   const found = []
   for (const name of new Set([...chosen.skillGroups.flatMap(one => one.names), ...chosen.createGroups.flatMap(one => one.items.filter(item => !item.isGlobal).map(item => item.name))])) {
@@ -407,9 +674,15 @@ async function readIntents($) {
     found.push({ name, description: /^(.+?[.!?])(\s|$)/.exec(description)?.[1] ?? description })
   }
   skills = found
+  void refreshPrs($).catch(() => undefined)
+  // Drawn again only when the read found something new (see redrawAged): all a read sets that a drawing shows (the
+  // pack, the base and the checkouts follow from the intents and who is reading).
+  const print = JSON.stringify([me, intents, skills, syncShown()])
+  if (print === readPrint) return false
+  readPrint = print
   stale()
   $.ui.invalidate('ui.render')
-  void refreshPrs($).catch(() => undefined)
+  return true
 }
 
 // Whether the PRs of intents with every item met are merged, read with gh in the background.
@@ -419,75 +692,190 @@ async function refreshPrs($) {
   if (isPrsReading) return
   isPrsReading = true
   try {
-    const { root } = await laneOf($)
-    /** @type {Record<string, import('./model.mjs').PrState>} */
-    const read = {}
-    for (const number of prsToRead(intents, await state.readPrRecords(io($)), Date.now())) {
-      const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
-      read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
+    // Each checkout's intents: their PRs are its repository's, read with gh there.
+    for (const { root, repo: scope } of await paneLanes($)) {
+      const its = intents.filter(one => normalFolder(one.root) === normalFolder(root))
+      /** @type {Record<string, import('./model.mjs').PrState>} */
+      const read = {}
+      for (const number of prsToRead(its, await state.readPrRecords(io($), scope), Date.now())) {
+        const run = await $.process.run(['gh', 'pr', 'view', String(number), '--json', 'state,mergedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
+        read[number] = (run && run.exitCode === 0 ? parsePrState(run.stdout) : null) ?? 'UNREAD'
+      }
+      await state.setPrStates(io($), read, Date.now(), scope)
     }
-    await state.setPrStates(io($), read, Date.now())
   } finally {
     isPrsReading = false
   }
 }
 
-// Fetches origin's main in the background (D2): once the pane is drawn, then at most every ten minutes,
-// or at once from ↻ (after a git lock, only at the next due time); one at a time. The sync line says
-// synced once the read after the fetch has landed; a failure keeps the last list and says so.
+// Fetches the pane's origin main (its base, where the team merges into another branch) in the background (D2): once the pane is drawn, then at most
+// every ten minutes, or at once from ↻ (after a git lock, only at the next due time); one fetch at a time
+// over every checkout. The sync line says synced once the read after the fetch has landed; a failure keeps
+// the last list and says so. A fetch the app took back is no try: the sync stands as it stood and stays due.
 /** @param {Engine} $ @param {boolean} [isAsked] */
 async function syncMain($, isAsked = false) {
-  if (!(isAsked ? canFetchNow : isFetchDue)(sync, Date.now())) return
-  sync = { ...sync, isFetching: true, triedAt: Date.now() }
-  $.ui.invalidate('ui.render')
-  const { error, lock, moved } = await fetchMain(repo($, (await laneOf($)).root))
-  $.ui.log(error ? `Ather: git fetch failed: ${error}` : `Ather: origin/main ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
-  fetchesEnded += 1
-  fetched = { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } }
-  await refresh($).catch(() => undefined)
-  // The reads failed: the fetch's outcome is still said.
-  if (fetched) {
-    sync = { ...sync, ...fetched.sync }
-    fetched = null
-    $.ui.invalidate('ui.render')
+  if (isSyncing) return
+  isSyncing = true
+  try {
+    const lanes = await paneLanes($)
+    for (const { root, base } of lanes) {
+      // A base is fetched once, in the first pane checkout on it: the outcome is that of every one of them.
+      const roots = lanes.filter(one => one.base === base).map(one => one.root)
+      if (roots[0] !== root) continue
+      const before = syncs.get(root) ?? NO_SYNC
+      if (!(isAsked ? canFetchNow : isFetchDue)(before, Date.now())) continue
+      for (const one of roots) syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), isFetching: true, triedAt: Date.now() })
+      stale()
+      $.ui.invalidate('ui.render')
+      const { error, lock, moved, isAborted } = await fetchMain(repo($, root), base)
+      const where = checkouts.length > 1 ? ` (${root})` : ''
+      if (isAborted) {
+        // No redraw here: a draw starts a fetch, and a newer draw is what takes one back.
+        for (const one of roots) syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), isFetching: false, triedAt: before.triedAt })
+        stale()
+        $.ui.log(`Ather: the app took the git fetch back${where}; it stays due.`, { to: 'debug' })
+        continue
+      }
+      $.ui.log(error ? `Ather: git fetch failed${where}: ${error}` : `Ather: origin/${base}${where} ${moved ? 'moved' : 'is up to date'}.`, { to: 'debug' })
+      fetchesEnded += 1
+      for (const one of roots) fetched.set(one, { count: fetchesEnded, sync: { isFetching: false, error, lock, ...(error ? { failedAt: Date.now() } : { fetchedAt: Date.now() }) } })
+      await refresh($).catch(() => undefined)
+      // The reads failed: the fetch's outcome is still said.
+      for (const one of roots) {
+        const ended = fetched.get(one)
+        if (!ended) continue
+        syncs.set(one, { ...(syncs.get(one) ?? NO_SYNC), ...ended.sync })
+        fetched.delete(one)
+        stale()
+        $.ui.invalidate('ui.render')
+      }
+    }
+  } finally {
+    isSyncing = false
   }
 }
 
+// This checkout's own branch against origin's base (collision-alert), checked in the background after each read of
+// the intents (a turn's end, a fetch, /ather), one run at a time; Needs you and Home's merge line show what it last
+// found (ship-pill D1). Its own tip is compared, so commits not pushed yet count. Detached, on the base, or outside
+// git: nothing to check. A run that ran out of time leaves the last answer as it was.
+const collisions = overlapJob()
+/** @type {import('./collide.mjs').MergeCheck | null} */
+let merge = null
+
+/** @param {Engine} $ */
+async function checkCollision($) {
+  const { root, base } = await wordsLane($)
+  const key = await trackedKey($)
+  await checkBranch(repo($, root), collisions, { base, slug: intents.find(one => one.key === key)?.slug ?? '', owner: me }, found => showMerge($, found))
+}
+
+// What the check found, drawn again only when that changed; a check that found the same only moves "checked … ago".
+/** @param {Engine} $ @param {import('./collide.mjs').MergeCheck | null} found */
+function showMerge($, found) {
+  const isSame = isSameCheck(found, merge)
+  merge = found
+  if (isSame) return
+  stale()
+  $.ui.invalidate('ui.render')
+}
+
+// Where the pane's checkouts' fetches stand, as one: the sync line's.
+function syncShown() {
+  return syncSummary(checkouts.map(({ root }) => syncs.get(root) ?? NO_SYNC))
+}
+
 function stale() {
-  view = { ...view, version: -1 }
+  staled += 1
 }
 
 // The GitHub issues assigned to the person, read with gh. Without gh, or signed out, there are
 // simply none: one line in the debug log, never an error on screen. Never writes to GitHub.
+// The repository is read in the session's checkout, and its list kept under it.
 /** @param {Engine} $ @returns {Promise<string>} why the read failed, or '' when it worked */
 async function refreshIssues($) {
-  const { root } = await laneOf($)
+  const { root, repo: scope } = await laneOf($)
   const run = await $.process.run(['gh', 'issue', 'list', '--assignee', '@me', '--state', 'open', '--limit', '30', '--json', 'number,title,url,labels,updatedAt'], { cwd: root, timeoutMs: 30000 }).catch(() => undefined)
-  if (!run || run.exitCode !== 0) {
-    // Signed out: the last list may be stale, so none is shown.
-    if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [])
-    if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
-    isIssuesWarned = true
-    // A slow first start or a network blip is tried again in a minute, three times at most:
-    // without gh at all, the 15-minute refresh is enough.
-    if (issueRetries < 3) {
-      issueRetries += 1
-      $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
-    }
-    return (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
+  if (run && run.exitCode === 0) {
+    await state.setIssues(io($), me, parseIssues(run.stdout), scope)
+    issueRetries = 0
+    return ''
   }
-  issueRetries = 0
-  await state.setIssues(io($), me, parseIssues(run.stdout))
-  return ''
+  // Signed out: the last list may be stale, so none is shown.
+  if (/auth login|not logged in|authentication/i.test(run?.stderr ?? '')) await state.setIssues(io($), me, [], scope)
+  if (!isIssuesWarned) $.ui.log(`Ather: could not read your GitHub issues (is gh installed and signed in?) ${run?.stderr?.slice(0, 200) ?? ''}`, { to: 'debug' })
+  isIssuesWarned = true
+  // A slow first start or a network blip is tried again in a minute, three times at most:
+  // without gh at all, the 15-minute refresh is enough.
+  if (issueRetries < 3) {
+    issueRetries += 1
+    $.clock.after(60000, () => void refreshIssues($).catch(() => undefined))
+  }
+  return (run?.stderr || (run ? `gh exited with ${run.exitCode}` : 'gh could not be started (is it installed and on PATH?)')).trim().slice(0, 300)
+}
+
+// Every workspace checkout's lane, intents or not, the session's own first. A session folder in no checkout has
+// no workspace, whatever docs/intent it holds: no lane.
+/** @param {Engine} $ */
+async function workspaceLanes($) {
+  const session = await laneOf($)
+  if (!otherRoots) otherRoots = readOtherRoots($, session.root)
+  const roots = await otherRoots
+  if (roots === null) return []
+  const others = []
+  for (const root of roots) others.push(await state.laneAt(io($), root))
+  return [session, ...others]
+}
+
+// An issue as a checkout lists it: its key is its number in the session's own checkout and `<short name>#<number>` in another.
+/** @param {import('./issues.mjs').Issue} issue @param {import('./state.mjs').Checkout} lane @param {string} name @param {boolean} isOwn @returns {import('./issues.mjs').Issue} */
+function issueAt(issue, lane, name, isOwn) {
+  return { ...issue, root: lane.root, repo: lane.repo, repoName: name, key: isOwn ? String(issue.number) : `${name}#${issue.number}` }
+}
+
+// The assigned issues of the workspace's repository, each tagged with the session's checkout, which lists them.
+/** @param {Engine} $ @returns {Promise<import('./issues.mjs').Issue[]>} */
+async function paneIssues($) {
+  const session = await laneOf($)
+  const name = await shortName($, session)
+  return (await state.readIssues(io($), me, session.repo)).map(issue => issueAt(issue, session, name, true))
+}
+
+// Every pane checkout's PR states in one map: the session's own by number, another's by `<root>#<number>` (prKey).
+/** @param {Engine} $ @returns {Promise<import('./model.mjs').PrStates>} */
+async function panePrs($) {
+  const session = await laneOf($)
+  /** @type {Record<string, import('./model.mjs').PrState>} */
+  const all = {}
+  for (const lane of await paneLanes($)) {
+    const isOwn = normalFolder(lane.root) === normalFolder(session.root)
+    for (const [number, value] of Object.entries(await state.readPrStates(io($), lane.repo))) all[isOwn ? number : `${lane.root}#${number}`] = value
+  }
+  return all
+}
+
+// The view model, kept while shared state stands where it was when its build began and for VIEW_TTL_MS at most:
+// the drawings of one redraw (the band's, the pane's) share one build. A build that failed is not kept.
+/** @param {Engine} $ @returns {Promise<Home>} */
+function home($) {
+  const key = `${state.stateVersion()}:${staled}`
+  if (view?.key === key && Date.now() - view.at < VIEW_TTL_MS) return view.model
+  const kept = { key, at: Date.now(), model: buildView($) }
+  view = kept
+  kept.model.catch(() => {
+    if (view === kept) view = null
+  })
+  return kept.model
 }
 
 /** @param {Engine} $ @returns {Promise<Home>} */
-async function home($) {
-  const version = state.stateVersion()
-  if (view.model && view.version === version && Date.now() - view.at < VIEW_TTL_MS) return view.model
+async function buildView($) {
   const files = io($)
-  const { root, me: who, pack: chosen } = await laneOf($)
+  const { me: who } = await laneOf($)
+  // The tracked intent's checkout gives the stage its pack, the role and the Editor lock.
+  const { root, pack: chosen, base } = await wordsLane($)
   pack = chosen
+  paneBase = base
   if (who !== '') me = who
   else if (!isWhoWarned && (isWhoWarned = true)) $.ui.log('Ather: git user.name could not be read; the pane treats nobody as you until it is.', { to: 'debug' })
   const tz = await state.readTz(files)
@@ -496,21 +884,24 @@ async function home($) {
   const profile = await state.readProfile(files, me, chosen)
   // The week-calendar plugin keeps this week's figures in ~/.calendar/latest.json.
   const userHome = await homeDir(host($))
-  const model = buildHome({
+  // The list and its sync line are taken together.
+  const sync = syncShown()
+  const built = buildHome({
     intents,
-    pinned: await state.readPinned(files),
+    pinned: (await trackedKey($)) || null,
     me,
     ...profile,
     evidence: await state.readEvidence(files, await state.evidenceScope(files), chosen),
     away,
     ledger: away.phase === 'off' ? '' : ((await files.read(away.ledgerPath)) ?? ''),
     lost: await state.readLost(files),
+    merge,
     lock: await namedLock($, root, chosen.parseLock(chosen.lockFile ? await files.read(`${root}/${chosen.lockFile}`) : null, localMinutes(now, tz))),
     recurring: await state.readRecurring(files, chosen),
-    issues: await state.readIssues(files, me),
-    prs: await state.readPrStates(files),
+    issues: (await paneIssues($)).sort(issueOrder),
+    prs: await panePrs($),
     week: userHome ? parseWeek(await files.read(`${userHome}/.calendar/latest.json`), now) : null,
-    last: await state.readLast(files, me),
+    last: await lastKey($),
     sent: [...sent],
     skills,
     workers: (await $.agent.list().catch(() => [])).filter(agent => agent.status === 'running').length,
@@ -518,8 +909,21 @@ async function home($) {
     tz,
     pack: chosen,
   })
-  view = { version, at: now, model }
-  return model
+  return { ...built, sync }
+}
+
+// The intent the person last worked on, by key: the "Continue …" kept for each pane checkout,
+// the session's own first. With one checkout, its slug as kept.
+/** @param {Engine} $ */
+async function lastKey($) {
+  const session = await laneOf($)
+  if (checkouts.length <= 1 && session.isS2) return state.readLast(io($), me)
+  for (const lane of checkouts) {
+    const isOwn = isOwnLane(session, lane)
+    const slug = await state.readLast(io($), me, isOwn ? undefined : lane.root)
+    if (slug && intents.some(one => one.slug === slug && normalFolder(one.root) === normalFolder(lane.root))) return keyOf(await shortName($, lane), isOwn, slug)
+  }
+  return null
 }
 
 // A held lock that names a Claude session shows that session's name, as its tab shows it.
@@ -530,11 +934,49 @@ async function namedLock($, root, lock) {
   return { ...lock, holder: name ? `"${name}"` : `session ${lock.session}` }
 }
 
+// What the band above the prompt says: the tracked intent's changes this session has not shown, else what needs
+// you ('' for nothing). The hint is all it draws that changes with them (an away window's words say it is away).
+/** @param {Engine} $ */
+async function bandOf($) {
+  const model = await home($)
+  const fresh = model.header.stage === 'Away' || model.open.some(one => one.kind === 'review') ? [] : await unseenChanges($)
+  const hint = fresh.length > 0 ? `◆ Intent: ${fresh.slice(0, 2).map(one => one.text.split(' · ')[0].replace(/^./, first => first.toLowerCase())).join(' · ')}${fresh.length > 2 ? ` · +${fresh.length - 2}` : ''}` : bandHint(model)
+  return { model, fresh, hint }
+}
+
+// Claude Code gives each control a press handle per drawing, and a redraw hands out new ones: a desktop press
+// that names an older handle is answered "not handled" and lost. So Ather draws again only what changed: a read
+// that found something new (readIntents), a change to shared state (state.mjs), and the clocks below.
+
+// Once a minute, what time alone changes (ages such as "3m" and "synced 4 min ago", an Editor lock that lapsed),
+// read afresh: the pane is drawn again while it is up, the band only when its hint changed.
+/** @param {Engine} $ */
+async function redrawAged($) {
+  stale()
+  if (isPaneUp(await $.ui.panes()) || (bandDrawn !== null && (await bandOf($)).hint !== bandDrawn)) $.ui.invalidate('ui.render')
+}
+
+// A running worker's clock, every five seconds while Home shows it in the pane (the other views draw no workers).
+/** @param {Engine} $ */
+async function redrawWorkers($) {
+  const [panes, agents] = await Promise.all([$.ui.panes(), $.agent.list()])
+  // Asked after the reads: a press may have left Home meanwhile.
+  if (paneMode === 'home' && isPaneUp(panes) && agents.some(agent => agent.status === 'running')) $.ui.invalidate('ui.render')
+}
+
+/** @param {readonly import('claude-code').UiPane[]} panes */
+const isPaneUp = panes => panes.some(pane => pane.id === PANE_ID && pane.isShown)
+
 /** @param {Home} model */
 function bandHint(model) {
   const { header } = model
   if (header.stage === 'Away') return `🌙 Away ${header.progress} · ${header.sentence} · /ather`
   if (model.open.some(one => one.kind === 'review')) return '☀ Welcome back · review the away window · /ather'
+  // Handed over while a turn runs: the session has not read it yet.
+  const queued = outbox.queued().length
+  if (queued > 0) return `⏳ ${queued === 1 ? 'Your press is' : `${queued} presses are`} queued until this turn ends · /ather`
+  const collide = model.open.find(one => one.kind === 'collide')
+  if (collide) return `▲ ${collide.question} · /ather`
   if (model.isNewcomer) return '◆ New here? Take the tour'
   if (model.open.length > 0) return `◆ ${header.title} · ${model.open.length} need${model.open.length === 1 ? 's' : ''} you · /ather`
   return ''
@@ -561,37 +1003,146 @@ function fill($, text) {
   })
 }
 
-// The one way things go to the session: shown as sent at once, `onDelivered` once the
-// session has the prompt, offered again if delivery fails.
-/** @param {Engine} $ @param {readonly string[]} ids @param {string} text @param {() => Promise<unknown>} [onDelivered] @param {() => Promise<unknown>} [onFailed] */
-function handOff($, ids, text, onDelivered, onFailed) {
-  for (const id of ids) sent.add(id)
-  stale()
-  void deliver($, text).then(
-    () => onDelivered?.(),
-    error => {
-      for (const id of ids) sent.delete(id)
-      void onFailed?.()
+// What the outbox (handoff.mjs) needs of the engine, for one press.
+/** @param {Engine} $ @returns {import('./handoff.mjs').Host} */
+function outboxHost($) {
+  return {
+    submit: text => deliver($, text),
+    after: (ms, run) => $.clock.after(ms, run),
+    isBusy: () => turnRunning !== '',
+    onChange: () => {
       stale()
       $.ui.invalidate('ui.render')
-      $.ui.toast(`Ather: could not send to the session: ${String(error)}`)
     },
-  )
+    say: text => $.ui.toast(`Ather: ${text}`),
+    log: line => $.ui.log(`Ather hand-off: ${line}`, { to: 'debug' }),
+  }
+}
+
+// The one way things go to the session: shown as sent, or as queued while a turn runs (the engine starts a
+// prompt's turn only once the session is idle); `onDelivered` once the session has the prompt, offered
+// again if delivery fails. A press for something that still waits sends nothing. Resolves what the press did.
+/** @param {Engine} $ @param {readonly string[]} ids @param {string} text @param {() => Promise<unknown>} [onDelivered] @param {() => Promise<unknown>} [onFailed] */
+function handOff($, ids, text, onDelivered, onFailed) {
+  const handed = outbox.hand(outboxHost($), ids, text, onDelivered, async () => {
+    for (const id of ids) sent.delete(id)
+    await onFailed?.()
+  })
+  if (handed !== 'pending') for (const id of ids) sent.add(id)
+  stale()
+  return handed
+}
+
+// To another of the person's sessions, by its id. The engine frames it there as a message from this session,
+// in a turn of its own once that session is idle; `onDelivered` once it is queued there, offered again here
+// when that session could not be reached. Resolves what the press says.
+/** @param {Engine} $ @param {Target} target @param {readonly string[]} ids @param {string} text @param {() => Promise<unknown>} [onDelivered] @param {() => Promise<unknown>} [onFailed] */
+async function sendTo($, target, ids, text, onDelivered, onFailed) {
+  for (const id of ids) sent.add(id)
+  stale()
+  const own = await state.sessionId(io($))
+  const from = (await sessionName(host($), (await laneOf($)).root, own).catch(() => '')) || `session ${state.shortSession(own)}`
+  const result = await $.session.send({ to: { sessionId: target.sessionId }, text: routedText({ from: `"${from}"`, slug: target.slug, text }) }).catch(error => ({ isDelivered: false, reason: String(error) }))
+  $.ui.log(`Ather hand-off: to session ${target.sessionId} for intent ${target.slug}: ${result.isDelivered ? 'queued there' : `not delivered (${result.reason})`}`, { to: 'debug' })
+  // What follows may take its time (an answered row settles after it has shown): the press does not wait on it.
+  if (result.isDelivered) void Promise.resolve().then(() => onDelivered?.()).catch(error => $.ui.log(`Ather hand-off: after the send to ${target.sessionId}: ${String(error)}`, { to: 'debug' }))
+  else {
+    for (const id of ids) sent.delete(id)
+    await onFailed?.()
+  }
+  stale()
+  $.ui.invalidate('ui.render')
+  return result.isDelivered ? `sent to ${target.name}, which tracks ${target.slug}. It reads it once its own turn ends.` : `could not reach ${target.name}: ${result.reason}. Nothing was sent; press it again to send it here.`
+}
+
+// A press handed to this session, or sent to the one the person chose (whereTo): resolves what the press says,
+// `words` when this session has it at once.
+/** @param {Engine} $ @param {Target | 'here'} target @param {readonly string[]} ids @param {string} text @param {string} words @param {() => Promise<unknown>} [onDelivered] */
+async function handTo($, target, ids, text, words, onDelivered) {
+  return target === 'here' ? toldText(handOff($, ids, text, onDelivered), words) : sendTo($, target, ids, text, onDelivered)
+}
+
+// Where a press about an intent goes. Here, when this session tracks the intent or no other live session
+// does. When this one does not and another on the intent's checkout does, the person says: that session
+// (by its id, as its heartbeat names it; never "the latest"), or here all the same. A decision put unasked
+// into a session that does not track the intent has two sessions changing one intent folder.
+// null: they closed the question, or it is still open; nothing is sent.
+/** @param {Engine} $ @param {string} key the intent's key in the pane @param {string} what the press, in a few words @returns {Promise<Target | 'here' | null>} */
+async function whereTo($, key, what) {
+  const intent = intents.find(one => one.key === key)
+  if (!intent) return 'here'
+  const { root, pack: chosen } = await laneFor($, intent.root)
+  const holders = holdersOf(intent.slug, key === (await trackedKey($)), await state.readPeers(io($), root, chosen.localDir))
+  if (holders.length === 0) return 'here'
+  const asked = `${key}|${what}`
+  if (routing.has(asked)) return null
+  routing.add(asked)
+  const pick = { to: /** @type {Target | 'here' | null} */ (null) }
+  try {
+    /** @type {Target[]} */
+    const targets = []
+    for (const lane of holders.slice(0, 2)) {
+      const name = await sessionName(host($), root, lane.sessionId).catch(() => '')
+      targets.push({ sessionId: lane.sessionId, slug: intent.slug, name: name ? `"${cutWords(name, 36)}"` : `session ${state.shortSession(lane.sessionId)}` })
+    }
+    await ask($, {
+      header: 'Send where?',
+      question: `${key} is tracked in ${holders.length === 1 ? 'another session' : `${holders.length} other sessions`}, not in this one. Where should "${what}" go?`,
+      choices: [
+        ...targets.map((target, at) => ({ label: `Send to ${target.name}${at === 0 ? ' (Recommended)' : ''}`, description: `It tracks ${key}. It reads this as a message from this session, in a turn of its own.`, run: async () => ((pick.to = target), '') })),
+        { label: 'Send here', description: `This session answers it without tracking ${key}: two sessions may then change the same intent folder.`, run: async () => ((pick.to = 'here'), '') },
+      ],
+      fallback: '',
+      onTyped: async () => '',
+    })
+  } finally {
+    routing.delete(asked)
+  }
+  return pick.to
+}
+
+// A question about an intent (its view's Ask about it, one of today's changes), sent where whereTo says.
+/** @param {Engine} $ @param {string} key @param {string} text @param {string} words what the press says once sent */
+async function askAbout($, key, text, words) {
+  const target = await whereTo($, key, 'your question about it')
+  return target === null ? NOT_SENT : handTo($, target, [], text, words)
+}
+
+// Explain, on a decision: nothing is decided; the session that explains is the one whereTo says.
+/** @param {Engine} $ @param {Item} one @param {import('./decide.mjs').Answers} answers @param {string} words */
+async function explainItem($, one, answers, words) {
+  const target = one.kind === 'call' ? await whereTo($, one.slug, `Explain ${one.label.replace(/^Decide /, '')}`) : 'here'
+  return target === null ? NOT_SENT : handTo($, target, [], answers.explain, words)
 }
 
 /** @param {Engine} $ @param {Item} one */
 async function act($, one) {
   if (one.kind === 'away-end') return comeBack($)
   if (one.kind === 'review') {
-    // The review is the person walking through the window: holds end as it is handed over, so the
-    // session's questions reach them. The prompt carries every decision and held action.
-    const saved = await state.readAway(io($))
-    await state.closeAway(io($))
-    handOff($, [one.id], one.prompt, undefined, () => state.restoreAway(io($), saved))
-    return 'Sent to the session.'
+    // The review is the person walking through the window. The window closes when the session has the
+    // review, not at the press: a press while a turn runs waits for that turn's end, and until then the
+    // session has not read "I am back", so merges stay held and its questions still go to the ledger.
+    const handed = handOff($, [one.id], one.prompt, () => state.closeAway(io($)))
+    return handed === 'queued' ? `Queued until this turn ends. The away window stays as it is until the session has it: merges are still held.${(await hasPane($)) ? ' To send it now, stop the running turn here.' : ''}` : toldText(handed, 'Sent to the session.')
   }
-  handOff($, [one.id], one.prompt, () => state.settleItem(io($), one))
-  return 'Sent to the session.'
+  const target = one.kind === 'call' ? await whereTo($, one.slug, one.label) : 'here'
+  if (target === null) return NOT_SENT
+  return handTo($, target, [one.id], one.prompt, 'Sent to the session.', () => state.settleItem(io($), one))
+}
+
+// "I'm back" waits behind a running turn: on the person's own press, and only then, that turn is stopped.
+// The engine then starts the turn of the review that already waits; nothing is submitted a second time.
+/** @param {Engine} $ */
+async function sendNow($) {
+  const turnId = turnRunning
+  if (turnId === '') return 'No turn is running now: there is nothing to stop.'
+  await $.turn.abort({ turnId })
+  return 'Stopped the running turn: the session reads "I am back" now.'
+}
+
+// The review waits behind a running turn: the pane stays, since it has the way to send it now.
+function isReviewQueued() {
+  return outbox.queued().some(id => id.startsWith('review:'))
 }
 
 // "I'm back": ends the window and hands its review to the session in one step.
@@ -605,10 +1156,10 @@ async function comeBack($) {
 
 /** @param {Engine} $ @param {readonly Item[]} items */
 async function actAll($, items) {
-  handOff($, items.map(one => one.id), batchPrompt(items), async () => {
+  const handed = handOff($, items.map(one => one.id), batchPrompt(items), async () => {
     for (const one of items) await state.settleItem(io($), one)
   })
-  return `Sent ${items.length} things to the session; it takes you through them one at a time.`
+  return toldText(handed, `Sent ${items.length} things to the session; it takes you through them one at a time.`)
 }
 
 // An answer given in place: the row shows "✓ Decided" for a while, then folds. The session gets
@@ -617,18 +1168,27 @@ async function actAll($, items) {
 async function answerItem($, one, answer, prompt) {
   // A double click or a second Enter before the redraw: one answer, one prompt, one timer.
   if (sent.has(one.id)) return `already answered: ${answer}`
+  const target = prompt && one.kind === 'call' ? await whereTo($, one.slug, `your answer to ${one.label.replace(/^Decide /, '')}`) : 'here'
+  if (target === null) return `${NOT_SENT} Nothing is decided.`
+  // The second of two presses, back from the same question: still one answer.
+  if (sent.has(one.id)) return `already answered: ${answer}`
   answerState = { ...answerState, opened: '', typing: '', decided: withDecided(answerState.decided, { id: one.id, answer, at: Date.now() }) }
   $.clock.after(DECIDED_SHOWN_MS + 100, () => $.ui.invalidate('ui.render'))
   const settle = () => new Promise(resolve => $.clock.after(DECIDED_SHOWN_MS, () => resolve(state.settleItem(io($), one))))
   const unanswer = async () => void (answerState = { ...answerState, decided: answerState.decided.filter(each => each.id !== one.id) })
-  if (prompt) handOff($, [one.id], prompt, settle, unanswer)
-  else {
+  if (prompt && target !== 'here') {
+    const told = await sendTo($, target, [one.id], prompt, settle, unanswer)
+    $.ui.invalidate('ui.render')
+    return told
+  }
+  const handed = prompt ? handOff($, [one.id], prompt, settle, unanswer) : null
+  if (handed === null) {
     sent.add(one.id)
     stale()
     void settle()
   }
   $.ui.invalidate('ui.render')
-  return prompt ? `sent your answer to the session: ${answer}` : `closed: ${answer}`
+  return handed === null ? `closed: ${answer}` : handed === 'queued' ? `your answer (${answer}) is queued until this turn ends; the session gets it then.` : toldText(handed, `sent your answer to the session: ${answer}`)
 }
 
 // A typed answer, from the field or the dialog's Other: the person's words are the choice.
@@ -648,7 +1208,7 @@ async function typeAnswer($, one, answers, hasInput) {
   }
   /** @type {Choice[]} */
   const choices = answers.options.slice(0, 4).map(option => ({ label: cutWords(`${option.letter}: ${option.label}${option.isRecommended ? ' (Recommended)' : ''}`, 60), description: cutWords(option.text, 200), run: () => answerItem($, one, option.letter, option.prompt) }))
-  if (choices.length === 0) choices.push({ label: 'Explain it first', description: 'The session explains it; nothing is decided.', run: async () => (handOff($, [], answers.explain), 'asked the session to explain it.') })
+  if (choices.length === 0) choices.push({ label: 'Explain it first', description: 'The session explains it; nothing is decided.', run: () => explainItem($, one, answers, 'asked the session to explain it.') })
   return ask($, { header: 'Answer', question: `${one.question}. Pick one, or type your own answer under Other.`, choices, fallback: 'Nothing answered.', onTyped: words => answerTyped($, one, answers, words) })
 }
 
@@ -657,44 +1217,51 @@ async function doNext($, next) {
   if (next.isTour) return startTour($)
   if (next.work) return startWork($, next.work)
   if (next.action === 'checked') return atherCommand($, 'checked')
+  // A step that only reads where the intent stands: its files answer it, so nothing goes to the session.
+  if (next.look) return (await hasPane($)) ? showIntent($, next.look) : standsText($, next.look)
   if (next.isDraft) {
     fill($, next.prompt)
     return 'It is in the prompt box: finish it and press Enter.'
   }
-  handOff($, [next.id], next.prompt)
-  return 'Sent to the session.'
+  return toldText(handOff($, [next.id], next.prompt), 'Sent to the session.')
 }
 
 /** @param {Engine} $ */
 async function startTour($) {
-  handOff($, ['next:tour'], pack.prompts.tour, () => state.setProfile(io($), me, { tourDone: true }))
-  return 'Starting the Ather tour.'
+  return toldText(handOff($, ['next:tour'], pack.prompts.tour, () => state.setProfile(io($), me, { tourDone: true })), 'Starting the Ather tour.')
 }
 
 /** @param {Engine} $ @param {Work} work */
 async function startWork($, work) {
-  if (work.kind === 'intent') return trackSlug($, work.slug)
-  handOff($, [work.id], work.prompt)
-  return `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`
+  if (work.kind === 'intent') return trackKey($, work.key)
+  return toldText(handOff($, [work.id], work.prompt), `Sent issue #${work.issue.number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
 }
 
-// An issue by number, from the assigned list or not.
-/** @param {Engine} $ @param {number} number @param {boolean} [isInQuestion] */
-async function startIssue($, number, isInQuestion = false) {
-  const assigned = (await state.readIssues(io($), me)).find(one => one.number === number)
+// An issue by number, from the assigned list or not: `7` or `#7` the repository's issue 7, started in the session's
+// checkout; `wt#7` the same issue started in the worktree named wt.
+/** @param {Engine} $ @param {string} ref @param {boolean} [isInQuestion] */
+async function startIssue($, ref, isInQuestion = false) {
+  const [, name, digits] = /^(?:([\w.-]+)#|#)?(\d+)$/.exec(ref.trim()) ?? []
+  const number = Number(digits)
+  const session = await laneOf($)
+  const names = await laneNames($)
+  const lane = name ? (await workspaceLanes($)).find(one => names.get(normalFolder(one.root)) === name) : undefined
+  if (name && !lane) return `No checkout here is named ${name}.`
+  const isOwn = lane !== undefined && normalFolder(lane.root) === normalFolder(session.root)
+  const found = (await paneIssues($)).find(one => one.number === number)
+  const assigned = found && lane ? issueAt(found, lane, name ?? '', isOwn) : found
   if (assigned) {
-    handOff($, [`issue:${number}`], issuePrompt(assigned, me))
-    return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
+    return toldText(handOff($, [issueId(assigned)], issuePrompt(assigned, me)), `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
   }
-  const issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
+  /** @type {import('./issues.mjs').Issue} */
+  let issue = { number, title: '', name: '', url: '', labels: [], updatedAt: 0, area: 'Unsorted', isUrgent: false }
+  if (lane && !isOwn) issue = issueAt(issue, lane, name ?? '', false)
   const go = async () => {
-    handOff($, [`issue:${number}`], issuePrompt(issue, me))
-    return `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`
+    return toldText(handOff($, [issueId(issue)], issuePrompt(issue, me)), `Sent issue #${number} to the session: it checks for overlapping work first, then drafts the intent with you.`)
   }
   // Already inside a question: the session confirms instead of a third dialog.
   if (isInQuestion) {
-    handOff($, [`issue:${number}`], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`)
-    return `Sent issue #${number} to the session; it confirms with you first, since it is not assigned to you.`
+    return toldText(handOff($, [issueId(issue)], `Issue #${number} is not assigned to me. Ask me to confirm before starting it; then: ${issuePrompt(issue, me)}`), `Sent issue #${number} to the session; it confirms with you first, since it is not assigned to you.`)
   }
   return ask($, {
     header: 'Issue',
@@ -706,19 +1273,41 @@ async function startIssue($, number, isInQuestion = false) {
 }
 
 // Tracks an intent by its folder name: the deliberate act (Work on this here, Next, /ather intent <name>).
-/** @param {Engine} $ @param {string} slug */
-async function trackSlug($, slug) {
+// `at`: another workspace checkout holding it.
+/** @param {Engine} $ @param {string} slug @param {string} [at] */
+async function trackSlug($, slug, at) {
   const { root } = await laneOf($)
   // An intent read from origin/main that this checkout does not have yet cannot be worked on here.
-  if (!(await state.track(io($), root, slug, { me }))) return intents.some(one => one.slug === slug) ? `${slug} is on origin/main but not in this checkout yet: pull main to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
+  const listed = intents.find(one => one.slug === slug && normalFolder(one.root) === normalFolder(at ?? root)) ?? intents.find(one => one.slug === slug)
+  if (!(await state.track(io($), at ?? root, slug, { me }))) return listed ? `${slug} is on origin/${listed.base} but not in this checkout yet: pull ${listed.base} to work on it here, or use Ask about it in its view to hear where it stands.` : `No intent named "${slug}" in docs/intent.`
   await refresh($)
-  return `Now tracking ${slug}.`
+  // Its key names the checkout when it is another's: "web/login". Tracking sends nothing to the session,
+  // so the reply says what comes next.
+  const { next } = await home($)
+  const then = next && !next.isTour && !next.work ? ` Next: ${next.label}.` : ''
+  return `Now tracking ${(await trackedKey($)) || slug}.${then}`
 }
 
-// /ather intent <name> and /ather pick <name>: an exact folder name tracks it; words show the one intent they match.
+// Tracks a listed intent by its key, in its own checkout.
+/** @param {Engine} $ @param {string} key */
+async function trackKey($, key) {
+  const intent = intents.find(one => one.key === key)
+  return intent ? trackSlug($, intent.slug, otherRoot(intent) || undefined) : trackSlug($, key)
+}
+
+// /ather intent <name> and /ather pick <name>: an exact key or folder name tracks it; words show the one intent
+// they match. A name only another workspace checkout has is tracked there (this checkout first, then workspace order).
 /** @param {Engine} $ @param {string} text */
 async function pickIntent($, text) {
-  return intents.some(one => one.slug === text) ? trackSlug($, text) : lookUp($, text)
+  const { root } = await laneOf($)
+  if (intents.some(one => one.key === text)) return trackKey($, text)
+  if (intents.some(one => one.slug === text && otherRoot(one) === '') || (await state.hasIntentFolder(io($), root, text))) return trackSlug($, text)
+  for (const other of (await state.workspace(io($), root || cwd)).roots) {
+    if (await state.hasIntentFolder(io($), other, text)) return trackSlug($, text, other)
+  }
+  // Only on origin/main: tracking says it is not here yet.
+  if (intents.some(one => one.slug === text)) return trackSlug($, text)
+  return lookUp($, text)
 }
 
 // Words that match one intent show it and never track it; several are listed; none is said.
@@ -726,36 +1315,49 @@ async function pickIntent($, text) {
 async function lookUp($, text) {
   const matches = searchIntents(intents, text)
   const [only] = matches
-  if (matches.length === 1 && only) return showIntent($, only.slug)
-  return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.slug).join(', ')}.` : `No open intent matches "${text}".`
+  if (matches.length === 1 && only) return showIntent($, only.key)
+  return matches.length > 1 ? `${matches.length} intents match "${text}": ${matches.slice(0, 8).map(one => one.key).join(', ')}.` : `No open intent matches "${text}".`
 }
 
 // Looking at an intent: its view in the pane, where Work on this here tracks it. Without a pane,
 // where it stands and the command that tracks it.
-/** @param {Engine} $ @param {string} slug */
-async function showIntent($, slug) {
+/** @param {Engine} $ @param {string} key */
+async function showIntent($, key) {
   if (await hasPane($)) {
-    intentShown = slug
+    intentShown = key
     intentBack = 'home'
     return openPane($, 'intent')
   }
-  return whereText($, slug)
+  return whereText($, key)
+}
+
+// Without a pane: where an intent stands, as its files say it, in a few lines.
+/** @param {Engine} $ @param {string} key */
+async function standsText($, key) {
+  const intent = intents.find(one => one.key === key)
+  if (!intent) return whereText($, key)
+  const files = io($)
+  const { pack: chosen } = await laneFor($, intent.root)
+  const { role } = await state.readProfile(files, me, chosen)
+  const evidence = await state.readEvidence(files, await state.intentScope(files, intent.slug, otherRoot(intent) || undefined), chosen)
+  const prs = await panePrs($)
+  return `${key}: ${standsLines(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, prs).join('. ')}.`
 }
 
 // Without a pane or a dialog: where an intent stands, and the command that works on it here.
-/** @param {Engine} $ @param {string} slug */
-async function whereText($, slug) {
-  const pinned = await state.readPinned(io($))
-  const one = (await home($)).work.find(work => work.kind === 'intent' && work.slug === slug)
-  const where = one ? one.hint : slug
-  return slug === pinned ? `${where}. This session tracks it.` : `${where}. To work on it in this session: /ather intent ${slug}`
+/** @param {Engine} $ @param {string} key */
+async function whereText($, key) {
+  const pinned = await trackedKey($)
+  const one = (await home($)).work.find(work => work.kind === 'intent' && work.key === key)
+  const where = one ? one.hint : key
+  return key === pinned ? `${where}. This session tracks it.` : `${where}. To work on it in this session: /ather intent ${key}`
 }
 
-// A row's press: the intent's view, never tracking it.
-/** @param {Engine} $ @param {string} slug @param {'home' | 'pick'} back */
-function viewIntent($, slug, back) {
+// A row's press: the intent's view (by key), never tracking it.
+/** @param {Engine} $ @param {string} key @param {'home' | 'pick'} back */
+function viewIntent($, key, back) {
   return () => {
-    intentShown = slug
+    intentShown = key
     intentBack = back
     paneMode = 'intent'
     $.ui.invalidate('ui.render')
@@ -773,12 +1375,16 @@ async function untrackHere($) {
 /** @param {Engine} $ @param {import('./away.mjs').WindowChoice} choice */
 async function startAway($, choice) {
   const tz = await state.readTz(io($))
-  const away = await state.startAway(io($), choice, { root: (await laneOf($)).root, me, tz, now: Date.now(), pack })
+  const session = await laneOf($)
+  const away = await state.startAway(io($), choice, { root: session.root, me, tz, now: Date.now(), pack, base: session.base })
   if (away === null) return 'An away window is already running or waiting for your review: /ather shows it.'
   const { root } = await laneOf($)
   const ledger = away.ledgerPath.startsWith(root) ? away.ledgerPath.slice(root.length + 1) : away.ledgerPath
-  handOff($, ['away-start'], `I am away ${windowEndText(away, tz)}. Goal: ${choice.goal || 'continue the active work'}. Work through it without waiting for me and record every decision you take for me in ${ledger}.`)
-  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}`
+  // The window holds from now; what the session is told may wait for its turn to end.
+  const handed = handOff($, ['away-start'], `I am away ${windowEndText(away, tz)}. Goal: ${choice.goal || 'continue the active work'}. Work through it without waiting for me and record every decision you take for me in ${ledger}.`)
+  // The prompt cache comes with the handover (watch.mjs keeps it), unless /warm off was said here or there is no end.
+  const warm = awayHours(away) > 0 && (await warmStore.readWarm(io($))).mode !== 'off' ? ' The prompt cache is kept warm until you are back; /warm off stops it.' : ''
+  return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}${handed === 'queued' ? ' The session is told when this turn ends.' : ''}${warm}`
 }
 
 // Text typed instead of picking: an intent, a question for the session, or nothing.
@@ -786,11 +1392,10 @@ async function startAway($, choice) {
 async function typed($, text, isInQuestion = true) {
   if (/^tours?$/i.test(text.trim())) return startTour($)
   const number = /^#(\d+)$|^(\d{3,7})$/.exec(text.trim())
-  if (number) return startIssue($, Number(number[1] ?? number[2]), isInQuestion)
+  if (number) return startIssue($, number[1] ?? number[2] ?? '', isInQuestion)
   if (searchIntents(intents, text).length > 0) return lookUp($, text)
   const question = /^(help|\?)$/i.test(text.trim()) ? 'What can Ather do for me?' : text
-  void deliver($, askPrompt(question, pack)).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
-  return 'Sent your question to the session.'
+  return toldText(handOff($, [], askPrompt(question, pack)), 'Sent your question to the session.')
 }
 
 // ---------------------------------------------------------------- commands
@@ -813,41 +1418,8 @@ async function skipTour($) {
   })
 }
 
-// ---------------------------------------------------------------- setting a repository up
-
-// /ather setup (setup.mjs): the session is handed the bundle and what is missing here, and does the
-// writing itself. With nothing missing it answers with what the profile reads as, and sends nothing.
-/** @param {Engine} $ */
-async function setupCommand($) {
-  const { root } = await laneOf($)
-  const setup = await readSetup(io($), root)
-  if (setup.isComplete) return setupSummary(setup)
-  // The bundle ships in the plugin, beside hooks/.
-  const zip = `${$.plugin.root.replace(/\\/g, '/')}/templates/intent-setup.zip`
-  const pack = suggestPack(await $.fs.list(root).catch(() => []))
-  void deliver($, setupPrompt({ zip, missing: setup.missing, pack })).catch(error => $.ui.toast(`Ather: could not send to the session: ${String(error)}`))
-  return `Asked the session to set up intents here. To add: ${SETUP_PIECES.filter(one => setup.missing.includes(one.id)).map(one => one.path).join(', ')}. It asks you before it writes anything.`
-}
-
-// /ather where there are no intents: one question, never the setup itself. Unanswered, it says where
-// Ather works and names the way in.
-/** @param {Engine} $ */
-async function setupQuestion($) {
-  const notHere = `${(await laneOf($)).pack.notHere} /ather setup adds the structure.`
-  return ask($, {
-    header: 'Intents',
-    question: 'This repository has no intents yet (no docs/intent folder). Set them up?',
-    choices: [
-      { label: 'Set up intents here', description: 'This session reads the repository, proposes areas and gates, and asks you before it writes.', run: () => setupCommand($) },
-      { label: 'Not now', description: 'Nothing changes. /ather setup does it later.', run: async () => notHere },
-    ],
-    fallback: notHere,
-    onTyped: async () => notHere,
-  })
-}
-
 // What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'setup', 'init']
+const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'simple', 'advanced']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -856,13 +1428,14 @@ async function atherCommand($, args) {
   if (word === 'tour' || word === 'tours') return startTour($)
   if (word === 'skip') return skipTour($)
   if (word === 'untrack' && rest === '') return untrackHere($)
+  if ((word === 'simple' || word === 'advanced') && rest === '') return pickView($, word)
   if (word === 'find') {
     if (rest) setSearch($, rest)
     if (await hasPane($)) return openPane($, 'pick')
     return rest ? findText($) : searchQuestion($)
   }
   if ((word === 'intent' || word === 'pick') && rest) return pickIntent($, rest)
-  if ((word === 'issue' || word === 'issues') && /^#?\d+$/.test(rest)) return startIssue($, Number(rest.replace('#', '')))
+  if ((word === 'issue' || word === 'issues') && /^(?:[\w.-]+#|#)?\d+$/.test(rest)) return startIssue($, rest)
   if (word === 'role') {
     const role = pack.parseRole(rest)
     if (!role) return pack.roleHelp
@@ -879,7 +1452,7 @@ async function atherCommand($, args) {
     // Read them now: a list that never showed up is explained here instead of staying empty.
     const failure = await refreshIssues($).catch(error => String(error))
     if (failure) return `Could not read your GitHub issues: ${failure}`
-    if ((await state.readIssues(io($), me)).length === 0) return 'No open GitHub issues are assigned to you.'
+    if ((await paneIssues($)).length === 0) return 'No open GitHub issues are assigned to you.'
     return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
   }
   if (word === 'pick') return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
@@ -960,7 +1533,7 @@ async function menuQuestion($) {
   if (next?.isTour) {
     choices.push({ label: 'Take the tour (Recommended)', description: next.hint, run: () => doNext($, next) })
     const [mine] = model.work.filter(one => one.isMine)
-    if (mine) choices.push({ label: cutWords(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.slug}`, 40), description: mine.hint, run: () => startWork($, mine) })
+    if (mine) choices.push({ label: cutWords(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.key}`, 40), description: mine.hint, run: () => startWork($, mine) })
     choices.push({ label: 'Skip the tour', description: 'You know your way around; Ather asks your role instead.', run: () => skipTour($) })
   }
   // What happened while the person was away is reviewed on its own, before anything else.
@@ -992,6 +1565,12 @@ async function menuQuestion($) {
   return ask($, { header: 'Ather', question: `${lead}${waiting} What now?`, choices: choices.slice(0, 4), fallback: status, onTyped: text => typed($, text) })
 }
 
+// What a piece of work is called in a line or a choice: an intent by its key, since two checkouts may hold one slug.
+/** @param {Work} one */
+function workName(one) {
+  return one.kind === 'intent' ? one.key : one.label
+}
+
 /** @param {Engine} $ */
 async function workQuestion($) {
   const work = (await home($)).work.slice(0, 4)
@@ -1000,7 +1579,7 @@ async function workQuestion($) {
     header: 'Work',
     question: 'What should this session work on? Your intents and your GitHub issues come first. Or type a name, or an issue #number.',
     // The question is the verb: a choice works on it at once, and says so (D5).
-    choices: work.map(one => ({ label: cutWords(one.label, 40), description: workChoiceText(one), run: () => startWork($, one) })),
+    choices: work.map(one => ({ label: cutWords(workName(one), 40), description: workChoiceText(one), run: () => startWork($, one) })),
     fallback: 'Nothing chosen.',
     onTyped: text => typedWork($, text),
   })
@@ -1023,17 +1602,19 @@ async function typedWork($, text) {
   const words = text.trim()
   // The tour and an issue number mean what they mean anywhere.
   if (/^tours?$/i.test(words) || /^#?\d+$/.test(words)) return typed($, text)
-  const matches = intents.some(one => one.slug === words) ? intents.filter(one => one.slug === words) : searchIntents(intents, words)
+  const exact = intents.filter(one => one.key === words)
+  const named = exact.length > 0 ? exact : intents.filter(one => one.slug === words)
+  const matches = named.length > 0 ? named : searchIntents(intents, words)
   const [only] = matches
-  if (matches.length === 1 && only) return intentQuestion($, only.slug)
+  if (matches.length === 1 && only) return intentQuestion($, only.key)
   if (matches.length > 1 && matches.length <= 4) {
     const work = (await home($)).work
     return ask($, {
       header: 'Work',
       question: `${matches.length} intents match "${words}". Which one should this session work on?`,
       choices: matches.map(one => {
-        const row = work.find(item => item.kind === 'intent' && item.slug === one.slug)
-        return { label: cutWords(one.slug, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackSlug($, one.slug) }
+        const row = work.find(item => item.kind === 'intent' && item.key === one.key)
+        return { label: cutWords(one.key, 40), description: `${row ? `${ended(workDetail(row))} ` : ''}${trackConsequence(pack)}`, run: () => trackKey($, one.key) }
       }),
       fallback: await lookUp($, words),
       onTyped: more => typed($, more),
@@ -1044,29 +1625,31 @@ async function typedWork($, text) {
 
 // One intent named in the Work question, without a pane: where it stands, what working on it here
 // means, and three ways on. Where no dialog can be asked, the reply says how to work on it instead.
-/** @param {Engine} $ @param {string} slug */
-async function intentQuestion($, slug) {
-  const intent = intents.find(one => one.slug === slug)
-  if (!intent) return lookUp($, slug)
+/** @param {Engine} $ @param {string} key */
+async function intentQuestion($, key) {
+  const intent = intents.find(one => one.key === key)
+  if (!intent) return lookUp($, key)
+  const { slug } = intent
   const files = io($)
-  const { root, pack: chosen } = await laneOf($)
+  // Read in its own checkout, with that checkout's pack and the person's role there.
+  const { root, pack: chosen } = await laneFor($, intent.root)
   const { role } = await state.readProfile(files, me, chosen)
-  const evidence = await state.readEvidence(files, slug, chosen)
-  const prs = await state.readPrStates(files)
+  const evidence = await state.readEvidence(files, await state.intentScope(files, slug, otherRoot(intent) || undefined), chosen)
+  const prs = await panePrs($)
   const stands = intentStands(intent, STAGE_LABELS[currentStage(intent, evidence, role, prs, chosen)], me, heldByLine(await state.readPeers(files, root, chosen.localDir), slug, Date.now()))
   const look = async () => {
     const step = nextStep(role, intent, evidence, 0, me, prs, chosen)
-    return `${stands}${step ? ` Its next step: ${step.label}.` : ''} Not tracked here; /ather intent ${slug} works on it in this session.`
+    return `${stands}${step ? ` Its next step: ${step.label}.` : ''} Not tracked here; /ather intent ${key} works on it in this session.`
   }
   return ask($, {
-    header: slug,
+    header: key,
     question: `${stands} Work on it here? ${trackConsequence(chosen)}`,
     choices: [
-      { label: 'Work on it here', description: 'Tracks it in this session now.', run: () => trackSlug($, slug) },
+      { label: 'Work on it here', description: 'Tracks it in this session now.', run: () => trackKey($, key) },
       { label: 'Just look', description: 'Says where it stands and its next step; tracks nothing.', run: look },
       { label: 'Pick something else', description: 'Back to what this session could work on.', run: () => workQuestion($) },
     ],
-    fallback: await whereText($, slug),
+    fallback: await whereText($, key),
     onTyped: more => typed($, more),
   })
 }
@@ -1104,19 +1687,17 @@ function setSearch($, text) {
 // Group: Person → Area → Stage → None, remembered for the person (folds are not).
 /** @param {Engine} $ */
 function cycleGroup($) {
-  pickGroup = nextGroup(pickGroup)
-  groupPresses += 1
-  isGroupRead = true
+  void pickGroup.pick(io($), nextGroup(pickGroup.value))
   $.ui.invalidate('ui.render')
-  void state.setGroupBy(io($), me, pickGroup).catch(() => undefined)
 }
 
-/** @param {Engine} $ */
-async function readGroup($) {
-  const pressesBefore = groupPresses
-  const stored = await state.readGroupBy(io($), me).catch(() => pickGroup)
-  if (groupPresses === pressesBefore) pickGroup = stored
-  isGroupRead = true
+// Simple or Advanced, remembered for the person.
+/** @param {Engine} $ @param {import('./home.mjs').PaneView} view */
+async function pickView($, view) {
+  const written = homeView.pick(io($), view)
+  $.ui.invalidate('ui.render')
+  await written
+  return viewText(view)
 }
 
 /** @param {Engine} $ */
@@ -1136,7 +1717,7 @@ function toggleIn($, opened, key) {
 /** @param {Engine} $ */
 async function findText($) {
   const found = filterWork((await home($)).work, pickQuery)
-  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(one => one.label).join(', ')}${found.length > 8 ? ', …' : ''}.`
+  return found.length === 0 ? `Nothing matches "${pickQuery}".` : `${found.length} match "${pickQuery}": ${found.slice(0, 8).map(workName).join(', ')}${found.length > 8 ? ', …' : ''}.`
 }
 
 // Where the surface draws no text field (and for /ather find without words): one question, and what is typed under Other is the search.
@@ -1161,12 +1742,13 @@ async function openPane($, mode) {
   return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
 }
 
-/** @param {Engine} $ @param {() => Promise<string>} run @param {boolean} keepOpen */
+// `keepOpen`: the pane stays after the press; a function is asked once the press has run.
+/** @param {Engine} $ @param {() => Promise<string>} run @param {boolean | (() => boolean)} keepOpen */
 function press($, run, keepOpen) {
   return () =>
     void run()
       .then(async text => {
-        if (!keepOpen) await $.ui.close({ id: PANE_ID }).catch(() => undefined)
+        if (!(typeof keepOpen === 'function' ? keepOpen() : keepOpen)) await $.ui.close({ id: PANE_ID }).catch(() => undefined)
         $.ui.toast(`Ather: ${text}`)
       })
       .catch(error => $.ui.toast(`Ather: ${String(error)}`))
@@ -1182,7 +1764,7 @@ function refreshIssuesButton(el, $) {
     void refreshIssues($)
       .catch(error => String(error))
       .then(async failure => {
-        const count = failure ? 0 : (await state.readIssues(io($), me)).length
+        const count = failure ? 0 : (await paneIssues($)).length
         $.ui.toast(failure ? `Ather: could not read your GitHub issues: ${failure}` : `Ather: ${count === 0 ? 'no open GitHub issues are assigned to you' : `${count} open GitHub issue${count === 1 ? '' : 's'} assigned to you`}.`)
       })
       .finally(() => {
@@ -1218,11 +1800,12 @@ const hotkeyFor = hotkey => (isClicked ? undefined : hotkey)
 /** @param {any} el @param {import('./rows.mjs').Choice} row */
 const choice = (el, row) => choiceRow(el, row, isClicked)
 
-/** @param {Engine} $ @param {number} number @param {string} link */
-function openIssue($, number, link) {
+// gh opens it from the checkout it was read in.
+/** @param {Engine} $ @param {import('./issues.mjs').Issue} issue @param {string} link */
+function openIssue($, { number, root }, link) {
   return () =>
-    void laneOf($)
-      .then(({ root }) => $.process.run(['gh', 'issue', 'view', String(number), '--web'], { cwd: root, timeoutMs: 20000 }))
+    void (root ? Promise.resolve({ root }) : laneOf($))
+      .then(({ root: at }) => $.process.run(['gh', 'issue', 'view', String(number), '--web'], { cwd: at, timeoutMs: 20000 }))
       .then(run => $.ui.toast(run.exitCode === 0 ? `Ather: opened issue #${number} in your browser.` : `Ather: could not open the browser; the link is ${link}`))
       .catch(() => $.ui.toast(`Ather: could not open the browser; the link is ${link}`))
 }
@@ -1230,7 +1813,7 @@ function openIssue($, number, link) {
 // Open on GitHub: a link the desktop opens on a click; in the terminal, a button.
 /** @param {any} el @param {Engine} $ @param {import('./issues.mjs').Issue} issue @param {string} link @param {{ key: string, label: string, hotkey?: string, isQuiet?: boolean }} look */
 function openControl(el, $, issue, link, look) {
-  return isClicked ? el.Link({ key: look.key, href: link, label: look.label }) : el.Button({ key: look.key, label: look.label, plain: true, hotkey: look.hotkey, dimColor: look.isQuiet ? true : undefined, onPress: openIssue($, issue.number, link) })
+  return isClicked ? el.Link({ key: look.key, href: link, label: look.label }) : el.Button({ key: look.key, label: look.label, plain: true, hotkey: look.hotkey, dimColor: look.isQuiet ? true : undefined, onPress: openIssue($, issue, link) })
 }
 
 /** @param {Engine} $ @param {string} link */
@@ -1242,10 +1825,10 @@ function copyLink($, link) {
       .catch(error => $.ui.toast(`Ather: could not copy the link: ${String(error)}`))
 }
 
-/** @param {Engine} $ @param {number} number @param {'home' | 'pick'} back */
-function showIssue($, number, back) {
+/** @param {Engine} $ @param {string} id the issue's work id @param {'home' | 'pick'} back */
+function showIssue($, id, back) {
   return () => {
-    issueShown = number
+    issueShown = id
     issueBack = back
     paneMode = 'issue'
     $.ui.invalidate('ui.render')
@@ -1270,13 +1853,13 @@ const workDetail = one => (one.kind === 'intent' ? one.hint.replace(`${one.slug}
 // press that shows the intent (or the issue's card), never tracking it.
 /** @param {Engine} $ @param {number} width @param {'home' | 'pick'} back @returns {import('./rows.mjs').Look} */
 function lookOf($, width, back) {
-  return { isClicked, width, now: Date.now(), isTagged: sync.hasMain, ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.issue.number, back) : viewIntent($, one.slug, back)) }
+  return { isClicked, width, now: Date.now(), isTagged: one => (one.root ? syncs.get(one.root)?.hasMain : checkouts.some(({ root }) => syncs.get(root)?.hasMain)) === true, ownerColour: name => dimColour(peopleColours[name] ?? QUIET, 0.3), onRow: one => (one.kind === 'issue' ? showIssue($, one.id, back) : viewIntent($, one.key, back)) }
 }
 
 // The header's status line, with how fresh the team's list is at its right: ↻ (f) fetches now.
-/** @param {any} el @param {Engine} $ @param {string} text @param {number} width */
-function headerLine(el, $, text, width) {
-  return statusLine(el, { text, fresh: syncText(sync, Date.now()), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
+/** @param {any} el @param {Engine} $ @param {import('./team.mjs').Sync} sync @param {string} text @param {number} width */
+function headerLine(el, $, sync, text, width) {
+  return statusLine(el, { text, fresh: syncText(sync, Date.now()), error: syncError(sync), width, hotkey: hotkeyFor('f'), onPress: () => void syncMain($, true) })
 }
 
 // ---------------------------------------------------------------- what the intent recorded
@@ -1285,37 +1868,79 @@ function headerLine(el, $, text, width) {
 let intentToday = []
 
 // What the Intent view shows beside the intent's files: whether this session tracks it, its proof
-// (each record another session wrote named by it), the other live sessions tracking it.
-/** @type {{ slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string }} */
-let intentView = { slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '' }
+// (each record another session wrote named by it), the other live sessions tracking it. `intent`: the
+// tracked intent read from its own files when its checkout is not one the pane lists.
+// `stands`: where it stands as its files say it (home.mjs's standsLines), drawn with no prompt to the session.
+/** @type {{ key: string, slug: string, isHere: boolean, inCheckout: boolean, proof: string, heldBy: string, intent: import('./model.mjs').Intent | null, stands: string[] }} */
+let intentView = { key: '', slug: '', isHere: false, inCheckout: true, proof: '', heldBy: '', intent: null, stands: [] }
 
 // The shown intent (the tracked one unless a row or words chose another): its lines since the start
-// of the person's day, newest first, with their time; and the rest of what its view shows.
+// of the person's day, newest first, with their time; and the rest of what its view shows, read in
+// its own checkout.
 /** @param {Engine} $ */
 async function readIntentView($) {
   const files = io($)
-  const { root, pack: chosen } = await laneOf($)
-  const pinned = await state.readPinned(files)
-  const slug = intentShown || pinned || ''
+  const tracked = await state.trackedLane(files, cwd)
+  const pinned = await trackedKey($)
+  const key = intentShown || pinned
+  const shown = intents.find(one => one.key === key)
+  const isTracked = tracked !== null && key === pinned
+  const slug = isTracked ? tracked.slug : (shown?.slug ?? key)
+  const { root, pack: chosen } = isTracked ? tracked.lane : shown ? await laneFor($, shown.root) : await laneOf($)
   const tz = await state.readTz(files)
   const now = Date.now()
-  const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000) : []
+  const lines = slug ? await state.readChanges(files, slug, now - localMinutes(now, tz) * 60000, root) : []
   intentToday = lines.map(one => ({ kind: one.kind, text: one.text, time: clockText(one.at, tz) }))
   const mine = state.shortSession(await state.sessionId(files))
-  const evidence = await state.readEvidence(files, slug || mine, chosen)
+  const evidence = await state.readEvidence(files, slug ? await state.intentScope(files, slug, root) : mine, chosen)
   const others = [...new Set(Object.values(evidence).map(rung => rung?.by ?? '').filter(by => by !== '' && by !== mine))]
   const names = Object.fromEntries(await Promise.all(others.map(async by => [by, await sessionName(host($), root, by).catch(() => '')])))
-  // Working on it here needs its folder in this checkout; asking about it does not.
+  // Working on it here needs its folder in its checkout; asking about it does not.
   const inCheckout = slug === '' || (await state.hasIntentFolder(files, root, slug))
-  intentView = { slug, isHere: slug !== '' && slug === pinned, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now) }
+  const intent = isTracked && !shown ? await readTrackedIntent($, tracked, key) : null
+  const read = shown ?? intent
+  const prs = await panePrs($)
+  const stands = read ? standsLines(read, STAGE_LABELS[currentStage(read, evidence, (await state.readProfile(files, me, chosen)).role, prs, chosen)], me, prs) : []
+  intentView = { key, slug, isHere: isTracked, inCheckout, proof: slug ? proofLine(evidence, chosen, mine, names) : '', heldBy: heldByLine(await state.readPeers(files, root, chosen.localDir), slug, now), intent, stands }
+}
+
+// The tracked intent from its own files, for a checkout outside the pane's (a write into a folder the
+// workspace does not name); undefined when its prompt is gone.
+/** @param {Engine} $ @param {{ slug: string, lane: import('./state.mjs').Checkout }} tracked @param {string} key */
+async function readTrackedIntent($, { slug, lane }, key) {
+  const files = io($)
+  const dir = `${lane.root}/docs/intent/${slug}`
+  const prompt = await files.read(`${dir}/prompt.md`)
+  if (prompt === null) return null
+  return parseIntent({
+    slug,
+    key,
+    root: lane.root,
+    repoName: await shortName($, lane),
+    base: lane.base,
+    prompt,
+    findings: (await files.read(`${dir}/findings.md`)) ?? '',
+    progress: (await files.read(`${dir}/progress.md`)) ?? '',
+    files: (await $.fs.list(dir).catch(() => [])).map(entry => entry.name),
+    hasDebrief: await files.exists(`${lane.root}/${lane.pack.debriefPath(slug)}`),
+    updatedAt: 0,
+    source: 'local',
+    firstAuthor: '',
+  }, lane.pack)
 }
 
 // The tracked intent's lines this session has not shown yet: the band's notice.
 /** @param {Engine} $ */
 async function unseenChanges($) {
-  const files = io($)
-  const slug = await state.readPinned(files)
-  return slug ? state.readChanges(files, slug, intentSeenAt + 1) : []
+  const tracked = await state.trackedLane(io($), cwd)
+  return tracked ? state.readChanges(io($), tracked.slug, intentSeenAt + 1, tracked.lane.root) : []
+}
+
+// The row's ◔: keep-warm on or off for this session, said in a toast (watch.mjs runs the timer and answers).
+/** @param {Engine} $ */
+async function pressWarm($) {
+  const text = await warmStore.toggleWarm(!warmStore.readWarmView().isOn).catch(error => `Keep-warm could not change: ${String(error)}`)
+  if (text) $.ui.toast(`Ather: ${text}`, { timeoutMs: 8000 })
 }
 
 /** @param {Engine} $ */
@@ -1333,7 +1958,7 @@ async function seeIntent($) {
 // A press on a worker: the session gives its status, without stopping or redirecting it.
 /** @param {Engine} $ @param {Crew} one */
 function askWorker($, one) {
-  return press($, async () => { handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`); return `asked the session about ${one.title}` }, false)
+  return press($, async () => toldText(handOff($, [], `Give me a five-line status of the background worker "${one.title}" (agent ${one.id}): what it has done, what it is doing now, what is left, and any blocker. Do not stop or redirect it.`), `asked the session about ${one.title}`), false)
 }
 
 // How Needs you answers in place (rows.mjs Answering): this session's state, and each press as a closure.
@@ -1348,7 +1973,7 @@ function answering($, model, hasInput) {
     view: needsView(model.items, model.open, answerState, callsOpen, Date.now(), hasInput),
     onOpen: id => () => change({ opened: id, typing: '' }),
     onAnswer: (one, option) => press($, () => answerItem($, one, option.letter, option.prompt), true),
-    onExplain: (_one, answers) => press($, async () => (handOff($, [], answers.explain), 'asked the session to explain it; nothing is decided.'), true),
+    onExplain: (one, answers) => press($, () => explainItem($, one, answers, 'asked the session to explain it; nothing is decided.'), true),
     onType: (one, answers) => press($, () => typeAnswer($, one, answers, hasInput), true),
     onTyped: (one, answers) => words => press($, () => answerTyped($, one, answers, words), true)(),
     // Leaving the row's view closes its typed answer: Back does not land in the field again.
@@ -1375,215 +2000,128 @@ function paneView(el, $, model, columns, surface, crew = []) {
     paneMode = 'home'
   }
 
+  const frame = { width, surface, isClicked }
+  const column = (/** @type {any[]} */ children) => Box({ flexDirection: 'column', children })
+
   if (paneMode === 'pick') {
-    const shown = filterWork(model.work, pickQuery)
-    rows.push(masthead(el, [Text({ key: 'title', bold: true, children: 'Everything open' }), headerLine(el, $, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)].filter(Boolean), surface))
     // Search opens a field (without one, a question whose Other is the words). Sort cycles Recent, Ready to close, Oldest; Group cycles Person, Area, Stage, None.
-    const field = isSearchOpen && hasInput
-    const search = field
-      ? el.Input({ key: 'pick-search-field', label: 'Search: ', placeholder: 'title, issue number, area or owner', value: pickQuery, submitLabel: 'search', autoFocus: true, onSubmit: (/** @type {string} */ words) => ((isSearchOpen = false), void setSearch($, words)) })
-      : Button({ key: 'pick-search', label: pickQuery ? `Search: ${fit(pickQuery, 24)}` : 'Search…', hotkey: hotkeyFor('s'), plain: true, onPress: hasInput ? () => ((isSearchOpen = true), $.ui.invalidate('ui.render')) : press($, () => searchQuestion($), true) })
-    const clear = pickQuery ? [Button({ key: 'pick-search-clear', label: '✕ Clear', plain: true, dimColor: true, onPress: () => setSearch($, '') })] : []
-    const sort = Button({ key: 'pick-sort', label: `Sort: ${SORT_LABELS[pickSort]}`, hotkey: hotkeyFor('o'), plain: true, onPress: () => cycleSort($) })
-    const group = Button({ key: 'pick-group', label: `Group: ${GROUP_LABELS[pickGroup]}`, hotkey: hotkeyFor('g'), plain: true, onPress: () => cycleGroup($) })
-    rows.push(Box({ key: 'pick-search-row', flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 1, children: [search, ...clear, sort, group] }))
-    rows.push(...workGroups(el, lookOf($, width, 'pick'), { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup, areas: pack.areas, folded: pickFolded, me, isFocusTaken: field, onFold: key => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }))
-    rows.push(section(el, 'back', [Button({ key: 'pick-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    return Box({ flexDirection: 'column', children: rows })
+    const shown = filterWork(model.work, pickQuery)
+    const status = headerLine(el, $, model.sync, pickQuery ? `${shown.length} of ${model.work.length}` : `${model.work.length} open · yours first`, width)
+    const groups = { work: model.work, shown, query: pickQuery, sort: pickSort, groupBy: pickGroup.value, areas: pack.areas, folded: pickFolded, me, isFocusTaken: isSearchOpen && hasInput, onFold: (/** @type {string} */ key) => () => toggleIn($, pickFolded, key), issuesFoot: [refreshIssuesButton(el, $)] }
+    return column(
+      pickRows(el, frame, { status, look: lookOf($, width, 'pick'), groups }, {
+        onSearch: words => ((isSearchOpen = false), void setSearch($, words)),
+        onSearchOpen: hasInput ? () => ((isSearchOpen = true), $.ui.invalidate('ui.render')) : press($, () => searchQuestion($), true),
+        onClear: () => setSearch($, ''),
+        onSort: () => cycleSort($),
+        onGroup: () => cycleGroup($),
+        onBack: show($, 'home'),
+      }),
+    )
   }
 
   if (header.stage === 'Away') {
-    // Nothing is focused: one stray Enter must not end the window and lift its holds.
     const [end] = model.items
-    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: fit(header.title === 'Ather' ? 'The session is working' : header.title, width) }), Text({ key: 'status', children: fit(`🌙 ${header.progress}`, width) }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: `So far: ${header.sentence}.` })], surface))
-    if (end) rows.push(section(el, 'end', [choice(el, { key: 'end', title: end.title, hotkey: 'e', width, onPress: press($, () => act($, end), false) })]))
-    if (!isClicked) rows.push(section(el, 'foot', [Text({ key: 'foot', color: QUIET, children: 'Esc closes' })]))
-    return Box({ flexDirection: 'column', children: rows })
+    return column(awayWindowRows(el, frame, { title: header.title, progress: header.progress, sentence: header.sentence, end: end ? { title: end.title, onPress: press($, () => act($, end), isReviewQueued) } : null }))
   }
 
   if (paneMode === 'issue') {
-    const one = model.work.find(work => work.kind === 'issue' && work.issue.number === issueShown)
+    const one = model.work.find(work => work.kind === 'issue' && work.id === issueShown)
     if (one?.kind === 'issue') {
       const { issue } = one
-      rows.push(masthead(el, [label(el, 'brand', `Issue #${issue.number}`, width), Text({ key: 'title', bold: true, wrap: 'wrap', children: issue.name }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: one.hint })], surface))
       const link = issueLink(issue.url)
-      rows.push(
-        section(el, 'issue-actions', [
-          Box({
-            key: 'issue-buttons',
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: 3,
-            children: [
-              Button({ key: 'issue-start', label: '＋ Start an intent', variant: 'primary', hotkey: hotkeyFor('1'), autoFocus: true, onPress: press($, () => startWork($, one), false) }),
-              ...(link ? [openControl(el, $, issue, link, { key: 'issue-open', label: '↗ Open on GitHub', hotkey: '2' }), Button({ key: 'issue-copy', label: '⧉ Copy link', plain: true, hotkey: hotkeyFor('3'), onPress: copyLink($, link) })] : []),
-            ],
-          }),
-          Text({ key: 'issue-note', color: QUIET, wrap: 'wrap', children: 'Start an intent: the session checks for overlapping work first, then drafts an intent linked to this issue and shows you the plan. Nothing is written to GitHub.' }),
-        ]),
-      )
-      rows.push(section(el, 'issue-back', [Button({ key: 'issue-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, issueBack) })]))
-      rows.push(...foot)
-      return Box({ flexDirection: 'column', children: rows })
+      const open = link ? openControl(el, $, issue, link, { key: 'issue-open', label: '↗ Open on GitHub', hotkey: '2' }) : null
+      return column([...issueRows(el, frame, { issue, hint: one.hint, open }, { onStart: press($, () => startWork($, one), false), onCopy: copyLink($, link), onBack: show($, issueBack) }), ...foot])
     }
     paneMode = 'home'
   }
 
   if (paneMode === 'intent') {
-    const { slug, isHere } = intentView
-    const intent = intents.find(one => one.slug === slug)
+    const { key, slug, isHere } = intentView
+    const intent = intents.find(one => one.key === key) ?? (intentView.intent?.key === key ? intentView.intent : undefined)
     if (intent) {
       // Seeing the tracked intent's view settles the band's notice; another intent's view does not.
       if (isHere) intentSeenAt = Date.now()
-      rows.push(
-        masthead(
-          el,
-          [
-            label(el, 'brand', 'Intent', width),
-            Text({ key: 'title', bold: true, children: fit(slug, width) }),
-            ...(intent.goal ? [Text({ key: 'goal', wrap: 'wrap', children: intent.goal })] : []),
-            ...(intentView.proof ? [Text({ key: 'proof', color: QUIET, wrap: 'wrap', children: `Proof: ${intentView.proof}` })] : []),
-            ...(intentView.heldBy ? [Text({ key: 'held-by', color: AMBER, wrap: 'wrap', children: intentView.heldBy })] : []),
-          ],
-          surface,
-        ),
-      )
-      // Looking never tracks: working on it here is its own press, and needs its folder in this
-      // checkout. Asking about it never needs one: the session reads it from origin/main if it must.
-      const askButton = Button({ key: 'intent-ask', label: 'Ask about it', variant: intentView.inCheckout ? undefined : 'primary', hotkey: hotkeyFor('a'), onPress: press($, async () => { handOff($, [], aboutIntentPrompt(slug, intent.source === 'main')); return `asked the session about ${slug}` }, false) })
-      const work = intentView.inCheckout ? [Button({ key: 'intent-work', label: 'Work on this here', variant: 'primary', hotkey: hotkeyFor('w'), onPress: press($, () => trackSlug($, slug), true) })] : []
-      if (!isHere) rows.push(Box({ key: 'intent-actions', flexDirection: 'row', gap: 2, marginTop: 1, children: [...work, askButton] }))
-      if (!isHere && !intentView.inCheckout) rows.push(Text({ key: 'intent-not-here', color: QUIET, wrap: 'wrap', children: 'Not in this checkout yet: pull main to work on it here.' }))
-      const today = intentToday.slice(0, 5)
-      rows.push(
-        section(el, 'intent-today', [
-          label(el, 'intent-today-label', 'Today', width),
-          ...(today.length === 0
-            ? [Text({ key: 'intent-none', color: QUIET, children: 'Nothing recorded yet today.' })]
-            : today.map((one, index) =>
-                Box({
-                  key: `change-${index}`,
-                  flexDirection: 'row',
-                  gap: 1,
-                  width: '100%',
-                  children: [
-                    Text({ color: one.kind === 'done' ? '#3ccf7a' : one.kind === 'yours' ? LIME : '#8fb8ff', children: changeGlyph(one.kind) }),
-                    Box({ key: `change-${index}-words`, flexGrow: 1, children: [Button({ key: `change-${index}-press`, label: fit(one.text, width - 10), plain: true, onPress: press($, async () => { handOff($, [], `In intent ${slug}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`); return 'asked the session about that change' }, false) })] }),
-                    Text({ color: QUIET, children: one.time }),
-                  ],
-                }),
-              )),
-        ]),
-      )
-      if (isHere && model.next) rows.push(section(el, 'intent-next', [label(el, 'intent-next-label', 'Next', width, LIME), Box({ key: 'intent-next-card', width: '100%', borderStyle: 'round', borderColor: LIME, paddingX: 1, children: [Text({ children: fit(model.next.label, width - 4) })] })]))
-      const back = Button({ key: 'intent-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, intentBack) })
-      // Stop tracking keeps the view on this intent, which then offers Work on this here again.
-      const stop = Button({ key: 'intent-untrack', label: 'Stop tracking', hotkey: hotkeyFor('s'), plain: true, dimColor: true, onPress: press($, () => ((intentShown = slug), untrackHere($)), true) })
-      rows.push(section(el, 'intent-back', isHere ? [Box({ key: 'intent-back-row', flexDirection: 'row', gap: 3, children: [stop, back] })] : [back]))
-      rows.push(...foot)
-      return Box({ flexDirection: 'column', children: rows })
+      // The tracked intent's next step. A step that only looks at it is this view, so no card.
+      const next = isHere && model.next && !model.next.look ? model.next : null
+      const view = { ...intentView, intent, today: intentToday, next: next && { label: next.label, hint: next.hint, isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id), onPress: press($, () => doNext($, next), next.work?.kind === 'intent') } }
+      return column([
+        ...intentRows(el, frame, view, {
+          onAsk: press($, () => askAbout($, key, aboutIntentPrompt(slug, intent.source === 'main', otherRoot(intent), intent.base), `asked the session about ${key}`), false),
+          onWork: press($, () => trackKey($, key), true),
+          onChange: one => press($, () => askAbout($, key, `In intent ${key}, explain in at most four lines what "${one.text}" (${one.time}) changed: what it means, the proof if there is any, and why. Quote what I said if it came from me.`, 'asked the session about that change'), false),
+          onStop: press($, () => ((intentShown = key), untrackHere($)), true),
+          onBack: show($, intentBack),
+        }),
+        ...foot,
+      ])
     }
     paneMode = 'home'
   }
 
   if (paneMode === 'create') {
     const { editor } = model
-    const editorLine = pack.createMeta(editor)
-    rows.push(masthead(el, [label(el, 'brand', 'Create', width), Text({ key: 'title', bold: true, children: pack.createTitle }), Text({ key: 'meta', color: editor.isHeld ? '#f2a516' : QUIET, wrap: 'wrap', children: editorLine })], surface))
-    let index = 0
-    for (const { group, items } of model.create) {
-      const isOpen = createOpen.has(group)
-      const shown = isOpen ? items : items.slice(0, CREATE_SHOWN)
-      const more = items.length - shown.length
-      rows.push(
-        section(el, `create-${group}`, [
-          label(el, `create-${group}-label`, group, width),
-          ...shown.map(one => {
-            index += 1
-            return choice(el, { key: one.id, title: one.verb, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => { handOff($, [], one.prompt); return `sent to the session: ${one.verb}` }, false) })
-          }),
-          ...(more > 0
-            ? [Button({ key: `create-${group}-more`, label: `More… (${more})`, plain: true, dimColor: true, onPress: () => { createOpen.add(group); $.ui.invalidate('ui.render') } })]
-            : []),
-        ]),
-      )
-    }
-    rows.push(section(el, 'create-back', [Button({ key: 'create-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    rows.push(...foot)
-    return Box({ flexDirection: 'column', children: rows })
+    const view = { title: pack.createTitle, meta: pack.createMeta(editor), isHeld: editor.isHeld, groups: model.create, opened: createOpen }
+    const onItem = (/** @type {Home['create'][number]['items'][number]} */ one) => press($, async () => toldText(handOff($, [], one.prompt), `sent to the session: ${one.verb}`), false)
+    return column([...createRows(el, frame, view, { onItem, onMore: group => () => { createOpen.add(group); $.ui.invalidate('ui.render') }, onBack: show($, 'home') }), ...foot])
   }
 
   if (paneMode === 'skills') {
-    rows.push(masthead(el, [label(el, 'brand', 'Skills', width), Text({ key: 'title', bold: true, children: 'Run a skill' }), Text({ key: 'meta', color: QUIET, children: header.title === 'Ather' ? 'The session reads it, says what it will do, then follows it.' : `For ${header.title}: the session reads it, says what it will do, then follows it.` })], surface))
-    let index = 0
-    for (const { group } of pack.skillGroups) {
-      const list = model.skills.filter(one => one.group === group)
-      if (list.length === 0) continue
-      rows.push(
-        section(el, `skills-${group}`, [
-          label(el, `skills-${group}-label`, group, width),
-          ...list.map(one => {
-            index += 1
-            return choice(el, { key: one.id, title: one.name, detail: one.description, hotkey: index < 10 ? String(index) : undefined, autoFocus: index === 1, width, onPress: press($, async () => { handOff($, [one.id], one.prompt); return `sent to the session: ${one.name}` }, false) })
-          }),
-        ]),
-      )
-    }
-    rows.push(section(el, 'skills-back', [Button({ key: 'skills-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    rows.push(...foot)
-    return Box({ flexDirection: 'column', children: rows })
+    const meta = header.title === 'Ather' ? 'The session reads it, says what it will do, then follows it.' : `For ${header.title}: the session reads it, says what it will do, then follows it.`
+    const onSkill = (/** @type {Home['skills'][number]} */ one) => press($, async () => toldText(handOff($, [one.id], one.prompt), `sent to the session: ${one.name}`), false)
+    return column([...skillsRows(el, frame, { meta, groups: pack.skillGroups, skills: model.skills }, { onSkill, onBack: show($, 'home') }), ...foot])
   }
 
   if (paneMode === 'away') {
-    rows.push(masthead(el, [label(el, 'brand', 'Away', width), Text({ key: 'title', bold: true, children: 'Heading off?' }), Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: pack.mandate.pane })], surface))
-    rows.push(
-      section(el, 'away-choices', [
-        ...AWAY_PRESETS.map((preset, index) => choice(el, { key: `away-${preset.hotkey}`, title: preset.label, detail: preset.choice.untilDone ? 'Ends when the work is done, 24 hours at most.' : `Ends in ${preset.label}.`, hotkey: String(index + 1), autoFocus: index === 0, width, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) })),
-      ]),
-    )
-    rows.push(section(el, 'away-back', [Button({ key: 'away-back', label: 'Back', hotkey: hotkeyFor('0'), plain: true, dimColor: true, onPress: show($, 'home') })]))
-    rows.push(...foot)
-    return Box({ flexDirection: 'column', children: rows })
+    return column([...awayRows(el, frame, { mandate: forBase(pack.mandate.pane, paneBase) }, { onPreset: preset => press($, () => startAway($, { ...preset.choice, goal: '' }), false), onBack: show($, 'home') }), ...foot])
   }
 
   const isUntracked = header.title === 'Ather'
   const title = isUntracked ? (model.isNewcomer ? 'Welcome' : 'What next?') : header.title
   const status = [header.stage, header.progress, header.sentence === 'waiting on you' ? '' : header.sentence].filter(Boolean).join(' · ')
   const meta = [header.role, header.proof, header.lock, header.week].filter(Boolean).join(' · ')
+  // Home's parts by name, each drawn only when the person's view shows it (simple-view D2).
+  /** @type {[import('./home.mjs').HomePart, any[]][]} */
+  const parts = []
+  const shown = (/** @type {[import('./home.mjs').HomePart, any[]][]} */ list) => list.filter(([part]) => isShownIn(homeView.value, part)).flatMap(([, nodes]) => nodes)
   rows.push(
     masthead(
       el,
-      [
+      shown([
         // The pane's title bar names Ather: no brand line repeats it (D7).
-        isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') }),
-        headerLine(el, $, status, width),
-        ...(header.stages.length > 0 ? [stageRow(el, header.stages)] : []),
-        ...(meta ? [metaRow(el, header)] : []),
-      ].filter(Boolean),
+        ['title', [isUntracked ? Text({ key: 'title', bold: true, children: fit(title, width) }) : Button({ key: 'title', label: fit(`${title} ›`, width), plain: true, onPress: viewIntent($, header.title, 'home') })]],
+        ['status', [headerLine(el, $, model.sync, status, width)]],
+        ['stages', header.stages.length > 0 ? [stageRow(el, header.stages)] : []],
+        ['meta', meta ? [metaRow(el, header)] : []],
+        ['merge', header.merge.text ? [mergeRow(el, header.merge, width)] : []],
+      ]).filter(Boolean),
       surface,
     ),
   )
-  rows.push(summaryStrip(el, model, crew, isClicked))
+  parts.push(['strip', [summaryStrip(el, model, crew, isClicked)]])
   // Needs you and Needs attention share the digit keys.
   let digits = 0
   const digit = () => (digits < 9 ? String(++digits) : undefined)
   if (model.actions.length > 0) {
     // Start something new, or run the skill that fits now: one press each.
-    rows.push(Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => { handOff($, [one.id], one.prompt ?? ''); return `sent to the session: ${one.label.replace(/^\S+ /, '')}` }, false) })) }))
+    parts.push(['actions', [Box({ key: 'actions', flexDirection: 'row', gap: 2, marginTop: 1, children: model.actions.map(one => Button({ key: one.id, label: one.label, variant: one.isPrimary ? 'primary' : undefined, onPress: one.opens ? show($, one.opens) : press($, async () => toldText(handOff($, [one.id], one.prompt ?? ''), `sent to the session: ${one.label.replace(/^\S+ /, '')}`), false) })) })]])
   }
 
   if (model.items.length > 0) {
-    rows.push(
-      section(el, 'needs', [
+    parts.push([
+      'needs',
+      [
+        section(el, 'needs', [
         label(el, 'needs-label', model.open.length > 0 ? `Needs you · ${model.open.length}` : 'Needs you', width, LIME),
-        ...needsRows(el, isClicked, { items: model.items, open: model.open, opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
-      ]),
-    )
+        ...needsRows(el, isClicked, { items: model.items, open: model.open, queued: new Set(outbox.queued()), onNow: one => (one.kind === 'review' ? press($, () => sendNow($), true) : undefined), opened: callsOpen, width, key: digit, onAct: one => press($, () => act($, one), one.kind === 'review' ? isReviewQueued : false), onToggle: slug => () => toggleIn($, callsOpen, slug), answer: answering($, model, hasInput) }),
+        ]),
+      ],
+    ])
   }
 
   if (model.attention.length > 0) {
     // The person's own intents that want a press; each opens its intent, nothing is done for them.
-    rows.push(section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.slug, 'home') }))]))
+    parts.push(['attention', [section(el, 'attention', [label(el, 'attention-label', `Needs attention · ${model.attention.length}`, width, LIME), ...model.attention.map(one => choice(el, { key: one.id, title: `${one.title} · ${one.ask}`, mark: one.kind === 'close' ? '✓' : '‖', hotkey: digit(), width, onPress: viewIntent($, one.key, 'home') }))])]])
   }
 
   const next = model.next
@@ -1596,20 +2134,25 @@ function paneView(el, $, model, columns, surface, crew = []) {
       borderStyle: 'round',
       borderColor: LIME,
       paddingX: 1,
-      children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: press($, () => doNext($, next), next.work?.kind === 'intent') })),
+      children: withIssueIcons(el, $, next.work?.kind === 'issue' ? next.work.issue : null, choice(el, { key: 'next', title: next.label, detail: next.work?.kind === 'intent' ? workDetail(next.work) : next.hint, hotkey: 'n', isSent: sent.has(next.id), isQueued: outbox.isQueued(next.id), autoFocus: model.open.length === 0 && !next.action, width: width - 4, onPress: next.look === undefined ? press($, () => doNext($, next), next.work?.kind === 'intent') : viewIntent($, next.look, 'home') })),
     })
-    rows.push(section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card]))
+    parts.push(['next', [section(el, 'next-section', [label(el, 'next-label', 'Next', width, LIME), card])]])
   }
 
-  rows.push(...crewSections(el, { crew, width, isClicked, onWorker: one => askWorker($, one) }))
+  parts.push(['crew', crewSections(el, { crew, width, isClicked, onWorker: one => askWorker($, one) })])
 
-  rows.push(...homePreview(el, lookOf($, width, 'home'), { own: model.own, team: model.teamPreview, isNewcomer: model.isNewcomer, me, onAll: show($, 'pick') }))
+  parts.push(['preview', homePreview(el, lookOf($, width, 'home'), { own: model.own, team: model.teamPreview, isNewcomer: model.isNewcomer, me, onAll: show($, 'pick') })])
 
   if (model.offerAway) {
     const presets = AWAY_PRESETS.map(preset => Button({ key: `away-${preset.hotkey}`, label: preset.label, hotkey: hotkeyFor(preset.hotkey === 'u' ? 'u' : undefined), plain: isClicked ? undefined : true, onPress: press($, () => startAway($, { ...preset.choice, goal: '' }), false) }))
-    rows.push(section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })]))
+    parts.push(['away', [section(el, 'away', [label(el, 'away-label', 'Heading off?', width), Text({ key: 'away-pitch', children: 'Let AI work while you zZz' }), Box({ key: 'away-presets', flexDirection: 'row', gap: 3, children: presets })])]])
   }
 
-  rows.push(...foot)
+  // Beside Heading off? and at any hour: keep the prompt cache warm while the person steps out, as the row's ◔ does.
+  const warm = warmPaneText(warmStore.readWarmView())
+  parts.push(['warm', [section(el, 'warm', [label(el, 'warm-label', 'Stepping out?', width), Text({ key: 'warm-pitch', color: warm.action === 'Stop keeping warm' ? undefined : QUIET, wrap: 'wrap', children: warm.text }), ...(warm.action ? [Button({ key: 'warm-toggle', label: warm.action, hotkey: hotkeyFor('w'), plain: isClicked ? undefined : true, onPress: () => void pressWarm($) })] : [])])]])
+  parts.push(['view', [section(el, 'view', [Button({ key: 'view-toggle', label: VIEW_LABELS[otherView(homeView.value)], hotkey: hotkeyFor('v'), plain: true, dimColor: true, onPress: () => void pickView($, otherView(homeView.value)) })])]])
+
+  rows.push(...shown(parts), ...foot)
   return Box({ flexDirection: 'column', children: rows })
 }

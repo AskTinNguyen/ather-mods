@@ -7,15 +7,23 @@
     {
       "name": "ather-automata",
       "description": "What needs you, what to do next, and a safe pair of hands while you are away: the S2 way of working with Claude Code.",
-      "version": "0.2.3",
+      "version": "0.6.1",
       "author": { "name": "Tin Nguyen" },
       "category": "productivity",
       "source": "./ather-automata"
     },
     {
+      "name": "ather-board",
+      "description": "The team's intents as a project board: what is stuck, what collides, every intent by owner, area or stage, the open acceptance items, and a page to share. Read-only.",
+      "version": "0.3.0",
+      "author": { "name": "Tin Nguyen" },
+      "category": "productivity",
+      "source": "./ather-board"
+    },
+    {
       "name": "week-calendar",
       "description": "Weekly calendar and agent-effectiveness report for agent PCs: PRs merged and productive agent time, published to the team's agent-reports repo.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": { "name": "Tin Nguyen" },
       "category": "productivity",
       "source": "./week-calendar"

@@ -19,6 +19,8 @@ export const homeView = z.object({
   isHere: z.boolean(),
   notHere: z.string(),
   title: z.string(),
+  // "synced 4 min ago ↻": how fresh the team's intents are (origin/<base>, fetched in the background); '' outside git.
+  sync: z.string(),
   stage: z.string(),
   progress: z.string(),
   stages: z.array(z.object({ label: z.string(), state: z.enum(["done", "now", "todo"]) })),
@@ -26,6 +28,12 @@ export const homeView = z.object({
   // "Also tracked in 1 other session · active 3m ago"; '' when no other session tracks it.
   heldBy: z.string(),
   sentence: z.string(),
+  // Whether this checkout's branch merges into origin's base (home.mjs mergeLine): '' when it was not compared.
+  merge: z.object({ text: z.string(), isWarn: z.boolean() }),
+  // Home's parts the person's view shows (home.mjs HOME_PARTS, isShownIn): every one in Advanced, a few in Simple.
+  shows: z.array(z.string()),
+  // The toggle's words: "Simple view" or "Advanced view".
+  viewToggle: z.string(),
   lock: z.string(),
   role: z.string(),
   week: z.string(),
@@ -37,11 +45,80 @@ export const homeView = z.object({
     ledger: z.string(),
     parked: z.array(z.string()),
   }),
-  items: z.array(row),
+  // Needs you as decide.mjs needsView lays it out (0.2.0): an intent's several decisions wait as one block, a
+  // decision opens in place with its options as buttons, an answer shows "✓ Decided" a while, then folds.
+  needs: z.object({
+    // How many things wait on the person (the away window's own end is not one).
+    open: z.number(),
+    // How many of them are decisions on an intent.
+    decisions: z.number(),
+    blocks: z.array(
+      z.object({
+        slug: z.string(),
+        isOpen: z.boolean(),
+        items: z.array(
+          row.extend({
+            state: z.enum(["decided", "opened", "line"]),
+            // A press opens (or closes) it instead of handing it over.
+            opens: z.boolean(),
+            decided: z.string(),
+            answers: z
+              .object({
+                options: z.array(z.object({ letter: z.string(), label: z.string(), text: z.string(), isRecommended: z.boolean() })),
+                // The finding as written ('' none), for Open findings.
+                source: z.string(),
+              })
+              .nullable(),
+          }),
+        ),
+      }),
+    ),
+    folded: z.array(z.object({ id: z.string(), text: z.string() })),
+  }),
   next: row.nullable(),
-  // What to work on, with where each row comes from (mine: your intents, issues: your assigned GitHub
-  // issues with no intent yet, others: teammates' intents) and when it last changed (ms; 0 unknown).
-  work: z.array(row.extend({ group: z.enum(["mine", "issues", "others"]), updatedAt: z.number(), owner: z.string() })),
+  // What to work on (server/worklist.ts): by where it comes from (mine: your intents, issues: your assigned GitHub
+  // issues with no intent yet, others: teammates' intents), searched, sorted, the teammates' intents sub-grouped,
+  // parked intents in a folded block at each group's end. Counts read "2 of 5" while searching.
+  workList: z.object({
+    total: z.number(),
+    shown: z.number(),
+    query: z.string(),
+    sort: z.string(),
+    groupBy: z.string(),
+    legend: z.string(),
+    people: z.array(z.string()),
+    groups: z.array(
+      z.object({
+        key: z.enum(["mine", "issues", "others"]),
+        title: z.string(),
+        count: z.string(),
+        blocks: z.array(
+          z.object({
+            // What a press on its head folds (a sub-group, a stage block, Parked); a plain block has no head.
+            key: z.string(),
+            title: z.string(),
+            kind: z.enum(["sub", "stage", "plain"]),
+            count: z.string(),
+            startsFolded: z.boolean(),
+            items: z.array(
+              row.extend({
+                glyph: z.string(),
+                stage: z.string(),
+                done: z.number(),
+                total: z.number(),
+                age: z.string(),
+                // A teammate's intent: its owner, as people know them ('' otherwise).
+                who: z.string(),
+                warn: z.string(),
+              }),
+            ),
+          }),
+        ),
+      }),
+    ),
+  }),
+  // Your own intents that want a press: every item met (Close it?), or parked with no reason (Add one?).
+  attention: z.array(z.object({ id: z.string(), slug: z.string(), title: z.string(), ask: z.string(), kind: z.enum(["close", "reason"]) })),
   actions: z.array(row),
   skills: z.array(row.extend({ group: z.string() })),
   create: z.array(z.object({ group: z.string(), items: z.array(row) })),
@@ -73,6 +150,14 @@ export const homeView = z.object({
       source: z.enum(["worker", "agent"]),
     }),
   ),
+  // The workers as drawn (crew.mjs crewTree): each under the worker that started it, the live ones then the last
+  // finished. A line is a worker of `crew` by id (`fold` 0), or "+N finished" (`fold` N); `via`: "started by …"
+  // when the one that started it is not right above.
+  crewTree: z.object({
+    heading: z.string(),
+    live: z.array(z.object({ id: z.string(), depth: z.number(), via: z.string(), fold: z.number() })),
+    done: z.array(z.object({ id: z.string(), depth: z.number(), via: z.string(), fold: z.number() })),
+  }),
   // An intent opened to look at (rows and matching words open it; looking never tracks), or null.
   intentView: z
     .object({
@@ -85,7 +170,13 @@ export const homeView = z.object({
       heldBy: z.string(),
       // Whether this agent tracks it: Stop tracking instead of Work on this here.
       isHere: z.boolean(),
-      next: z.string(),
+      // Whether this checkout has its folder: one only on origin/<base> is asked about, not worked on here (pull first).
+      inCheckout: z.boolean(),
+      base: z.string(),
+      // Where it stands, as its own files say it (home.mjs standsLines): shown, nothing asked of the agent.
+      stands: z.array(z.string()),
+      // The tracked intent's next step, pressed here as on home; null when untracked or the step only looks.
+      next: row.nullable(),
       today: z.array(z.object({ kind: z.enum(["done", "yours", "changed"]), time: z.string(), text: z.string() })),
     })
     .nullable(),
@@ -115,14 +206,21 @@ export const atherHome = defineRpc({
   output: homeView,
 });
 
+const actKind = z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start", "ask", "open", "calls", "answer", "explain", "typed", "find", "sort", "group", "pane"]);
+export type ActKind = z.infer<typeof actKind>;
+
 export const atherAct = defineRpc({
   name: "ather.act",
   input: z.object({
     agentId: z.string(),
     cwd: z.string(),
     // item: something that needs you; next; work: an intent or issue; action/skill/create: quick actions;
-    // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send.
-    kind: z.enum(["item", "next", "work", "action", "skill", "create", "all", "away", "draft", "view", "back", "track", "untrack", "start"]),
+    // all: every open item at once; away: a preset ("tonight", "8h", "until done", "stop"); draft: edited text to send;
+    // ask: a question about intent `id` (Ask about it), or about its change of today number `text`;
+    // open: the decision `id` opened in place ("-" none); calls: an intent's block of decisions folded or not;
+    // answer: decision `id` answered with option `text`; explain: asked about, nothing decided; typed: answered in words `text`;
+    // find: the work list searched for `text`; sort and group: the next sort, the next grouping.
+    kind: actKind,
     id: z.string(),
     text: z.string().optional(),
   }),

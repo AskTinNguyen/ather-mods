@@ -4,7 +4,20 @@
 
 import { durationText } from './model.mjs'
 
-/** @typedef {{ number: number, title: string, name: string, url: string, labels: string[], updatedAt: number, area: string, isUrgent: boolean }} Issue */
+/**
+ * @typedef {{ number: number, title: string, name: string, url: string, labels: string[], updatedAt: number, area: string, isUrgent: boolean,
+ *   key?: string, root?: string, repo?: string, repoName?: string }} Issue
+ * Read from one of several checkouts: `key` names it in the pane (its number in the session's own checkout,
+ * `<repoName>#<number>` in another), `root` is the checkout it was read in, `repo` and `repoName` its repository.
+ */
+
+// An issue's id in the pane and in what was sent to the session.
+/** @param {Issue} issue */
+export const issueId = issue => `issue:${issue.key ?? issue.number}`
+
+// The checkout an issue was read in when it is not the session's own, else ''.
+/** @param {Issue} issue */
+export const issueOtherRoot = issue => (issue.key !== undefined && issue.key !== String(issue.number) ? (issue.root ?? '') : '')
 
 // Labels to studio areas (docs/intent/README.md#areas): the first label that names one wins.
 const AREA_LABELS = [
@@ -72,8 +85,12 @@ export const parseIssues = json => {
         isUrgent: labels.some(label => /priority:\s*(high|urgent|critical)|\bP0\b|\bP1\b|blocker/i.test(label)),
       }
     })
-    .sort((a, b) => Number(b.isUrgent) - Number(a.isUrgent) || b.updatedAt - a.updatedAt)
+    .sort(issueOrder)
 }
+
+// Most urgent, then most recent first.
+/** @param {Issue} a @param {Issue} b */
+export const issueOrder = (a, b) => Number(b.isUrgent) - Number(a.isUrgent) || b.updatedAt - a.updatedAt
 
 // "high priority · Combat · 3 months ago": what matters first, so a cut row keeps it.
 /** @param {Issue} issue @param {number} now */
@@ -88,6 +105,7 @@ export const issueLabel = (issue, now) => {
 /** @param {Issue} issue @param {string} me @param {string} [role] '' when the person has not said it @param {string} [roleWords] the pack's roles, in words */
 export const issuePrompt = (issue, me, role = 'set', roleWords = 'designer, tech artist or engineer') =>
   [
+    issueOtherRoot(issue) ? `The issue is in the checkout at ${issueOtherRoot(issue)}: run gh and its skills there, and create the intent under ${issueOtherRoot(issue)}/docs/intent.` : '',
     `Start an intent from GitHub issue #${issue.number} ("${issue.title}"${issue.url ? `, ${issue.url}` : ''}).`,
     `First run the issue preflight (.agents/skills/issue-preflight/SKILL.md) with --issue ${issue.number}; if it finds overlapping work, stop and tell me what it found.`,
     `Otherwise start the intent with the intent skill (.agents/skills/intent/SKILL.md): Owner: ${me || 'me'}, Area: ${issue.area === 'Unsorted' ? 'ask me' : issue.area}, and the header line "- Issue: #${issue.number}". Draft the goal and the done checklist from the issue (gh issue view ${issue.number}).`,
