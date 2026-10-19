@@ -33,7 +33,7 @@ import { nextGroup, nextSort } from './worklist.mjs'
 import { LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, mergeRow, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
 import { awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
-import { createOutbox, holdersOf, routedText, toldText } from './handoff.mjs'
+import { NO_PLACE, appTool, createOutbox, isSentReply, placeOf, routedText, toldText } from './handoff.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
@@ -64,11 +64,10 @@ const outbox = createOutbox()
 // The model turn running now in the main conversation ('' between turns), as turn.start named it.
 let turnRunning = ''
 // Another of the person's live sessions, which tracks the intent a press is about (`slug`, in its checkout).
-/** @typedef {{ sessionId: string, name: string, slug: string }} Target */
-// The presses whose "Send where?" question is open: pressed again, they ask nothing more.
-/** @type {Set<string>} */
-const routing = new Set()
-const NOT_SENT = 'Not sent: it was not said where it should go.'
+/** @typedef {Extract<import('./handoff.mjs').Place, { kind: 'other' }>} Target */
+// Where each intent with a decision waiting is worked on (handoff.mjs placeOf), by its key, as last read.
+/** @type {Map<string, import('./handoff.mjs').Place>} */
+let places = new Map()
 let paneMode = /** @type {Mode} */ ('home')
 // Create groups opened past their first three.
 /** @type {Set<string>} */
@@ -658,6 +657,7 @@ async function readIntents($) {
   }
   checkouts = lanes
   intents = read.sort((a, b) => b.updatedAt - a.updatedAt)
+  places = await readPlaces($)
   // This session's answers to decisions are kept until the files read them resolved; an answer to
   // anything else (a rule) has no file to settle it, so it stays for the session.
   const waiting = new Set(intents.flatMap(one => directorCalls(one).map(finding => callId(one.key, finding.id))))
@@ -677,7 +677,7 @@ async function readIntents($) {
   void refreshPrs($).catch(() => undefined)
   // Drawn again only when the read found something new (see redrawAged): all a read sets that a drawing shows (the
   // pack, the base and the checkouts follow from the intents and who is reading).
-  const print = JSON.stringify([me, intents, skills, syncShown()])
+  const print = JSON.stringify([me, intents, skills, syncShown(), [...places]])
   if (print === readPrint) return false
   readPrint = print
   stale()
@@ -1041,8 +1041,8 @@ async function sendTo($, target, ids, text, onDelivered, onFailed) {
   for (const id of ids) sent.add(id)
   stale()
   const own = await state.sessionId(io($))
-  const from = (await sessionName(host($), (await laneOf($)).root, own).catch(() => '')) || `session ${state.shortSession(own)}`
-  const result = await $.session.send({ to: { sessionId: target.sessionId }, text: routedText({ from: `"${from}"`, slug: target.slug, text }) }).catch(error => ({ isDelivered: false, reason: String(error) }))
+  const from = state.appSession()?.title || (await sessionName(host($), (await laneOf($)).root, own).catch(() => '')) || `session ${state.shortSession(own)}`
+  const result = await deliverTo($, target, routedText({ from: `"${from}"`, slug: target.slug, text }))
   $.ui.log(`Ather hand-off: to session ${target.sessionId} for intent ${target.slug}: ${result.isDelivered ? 'queued there' : `not delivered (${result.reason})`}`, { to: 'debug' })
   // What follows may take its time (an answered row settles after it has shown): the press does not wait on it.
   if (result.isDelivered) void Promise.resolve().then(() => onDelivered?.()).catch(error => $.ui.log(`Ather hand-off: after the send to ${target.sessionId}: ${String(error)}`, { to: 'debug' }))
@@ -1052,67 +1052,94 @@ async function sendTo($, target, ids, text, onDelivered, onFailed) {
   }
   stale()
   $.ui.invalidate('ui.render')
-  return result.isDelivered ? `sent to ${target.name}, which tracks ${target.slug}. It reads it once its own turn ends.` : `could not reach ${target.name}: ${result.reason}. Nothing was sent; press it again to send it here.`
+  return result.isDelivered ? `sent to ${target.name}, which tracks ${target.slug}. It reads it once its own turn ends.` : `could not reach ${target.name}: ${result.reason}. Nothing was sent; press it again to try once more.`
 }
 
-// A press handed to this session, or sent to the one the person chose (whereTo): resolves what the press says,
+// Into the other session (A3): through the desktop app's session tool when both sessions run in the app (the other
+// recorded its app id, and this one could ask the app for its own), else the engine's send by its CLI id.
+/** @param {Engine} $ @param {Target} target @param {string} message @returns {Promise<{ isDelivered: boolean, reason?: string }>} */
+async function deliverTo($, target, message) {
+  if (!target.appId || !state.appSession()) return $.session.send({ to: { sessionId: target.sessionId }, text: message }).catch(error => ({ isDelivered: false, reason: String(error) }))
+  const sent = await appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__send_message', session_id: target.appId, message }))
+  return sent.isDone && isSentReply(sent.text) ? { isDelivered: true } : { isDelivered: false, reason: cutWords(sent.text, 200) || 'the app did not say why' }
+}
+
+// A press handed to this session, or sent to the one that tracks its intent (whereTo): resolves what the press says,
 // `words` when this session has it at once.
 /** @param {Engine} $ @param {Target | 'here'} target @param {readonly string[]} ids @param {string} text @param {string} words @param {() => Promise<unknown>} [onDelivered] */
 async function handTo($, target, ids, text, words, onDelivered) {
   return target === 'here' ? toldText(handOff($, ids, text, onDelivered), words) : sendTo($, target, ids, text, onDelivered)
 }
 
-// Where a press about an intent goes. Here, when this session tracks the intent or no other live session
-// does. When this one does not and another on the intent's checkout does, the person says: that session
-// (by its id, as its heartbeat names it; never "the latest"), or here all the same. A decision put unasked
-// into a session that does not track the intent has two sessions changing one intent folder.
-// null: they closed the question, or it is still open; nothing is sent.
-/** @param {Engine} $ @param {string} key the intent's key in the pane @param {string} what the press, in a few words @returns {Promise<Target | 'here' | null>} */
-async function whereTo($, key, what) {
-  const intent = intents.find(one => one.key === key)
-  if (!intent) return 'here'
+// Where an intent is worked on (A1). `tracked`: the key of the intent this session tracks; `peersOf`: the live
+// sessions of a checkout.
+/** @param {Engine} $ @param {import('./model.mjs').Intent} intent @param {string} tracked @param {(root: string, localDir: string) => Promise<import('./state.mjs').Lane[]>} peersOf */
+async function placeFor($, intent, tracked, peersOf) {
   const { root, pack: chosen } = await laneFor($, intent.root)
-  const holders = holdersOf(intent.slug, key === (await trackedKey($)), await state.readPeers(io($), root, chosen.localDir))
-  if (holders.length === 0) return 'here'
-  const asked = `${key}|${what}`
-  if (routing.has(asked)) return null
-  routing.add(asked)
-  const pick = { to: /** @type {Target | 'here' | null} */ (null) }
-  try {
-    /** @type {Target[]} */
-    const targets = []
-    for (const lane of holders.slice(0, 2)) {
-      const name = await sessionName(host($), root, lane.sessionId).catch(() => '')
-      targets.push({ sessionId: lane.sessionId, slug: intent.slug, name: name ? `"${cutWords(name, 36)}"` : `session ${state.shortSession(lane.sessionId)}` })
-    }
-    await ask($, {
-      header: 'Send where?',
-      question: `${key} is tracked in ${holders.length === 1 ? 'another session' : `${holders.length} other sessions`}, not in this one. Where should "${what}" go?`,
-      choices: [
-        ...targets.map((target, at) => ({ label: `Send to ${target.name}${at === 0 ? ' (Recommended)' : ''}`, description: `It tracks ${key}. It reads this as a message from this session, in a turn of its own.`, run: async () => ((pick.to = target), '') })),
-        { label: 'Send here', description: `This session answers it without tracking ${key}: two sessions may then change the same intent folder.`, run: async () => ((pick.to = 'here'), '') },
-      ],
-      fallback: '',
-      onTyped: async () => '',
-    })
-  } finally {
-    routing.delete(asked)
+  return placeOf(intent.slug, intent.key === tracked, await peersOf(root, chosen.localDir))
+}
+
+// Where each intent with a decision waiting is worked on, what Needs you's rows say (A1): each checkout's live
+// sessions read once.
+/** @param {Engine} $ */
+async function readPlaces($) {
+  const tracked = await trackedKey($)
+  /** @type {Map<string, Promise<import('./state.mjs').Lane[]>>} */
+  const read = new Map()
+  const peersOf = (/** @type {string} */ root, /** @type {string} */ localDir) => {
+    const kept = read.get(root) ?? state.readPeers(io($), root, localDir)
+    read.set(root, kept)
+    return kept
   }
-  return pick.to
+  const waiting = intents.filter(one => directorCalls(one).length > 0)
+  return new Map(await Promise.all(waiting.map(async one => /** @type {const} */ ([one.key, await placeFor($, one, tracked, peersOf)]))))
+}
+
+// Where a press about an intent goes (A3): to the live session that tracks it when that is another one, else here
+// (this session tracks it, or none does). Never asked: a decision put into a session that does not track its
+// intent has two sessions changing one intent folder. Read at the press, not from the rows' last read: a session
+// may have ended, or started on the intent, since.
+/** @param {Engine} $ @param {string} key the intent's key in the pane @returns {Promise<Target | 'here'>} */
+async function whereTo($, key) {
+  const intent = intents.find(one => one.key === key)
+  const place = intent ? await placeFor($, intent, await trackedKey($), (root, localDir) => state.readPeers(io($), root, localDir)) : undefined
+  return place?.kind === 'other' ? place : 'here'
+}
+
+// The row's "Sent to <title>" once the session that tracks its intent has a press of it (A3).
+/** @param {Engine} $ @param {string} id @param {Target} target */
+function noteSent($, id, target) {
+  answerState = { ...answerState, sentTo: { ...answerState.sentTo, [id]: { sessionId: target.sessionId, name: target.name } } }
+  $.ui.invalidate('ui.render')
+}
+
+// Go to session (A2), where the app can show the session that tracks the intent: both sessions run in the app.
+/** @param {Engine} $ @param {string} key the intent's key in the pane */
+function jumpOf($, key) {
+  const place = places.get(key)
+  return place?.kind === 'other' && place.appId && state.appSession() ? press($, () => goTo($, place), true) : undefined
+}
+
+// The app shows that session. It may decline (it opens only some sessions from another); then, as where its tool is
+// absent, the person switches to it by its title.
+/** @param {Engine} $ @param {Target} place */
+async function goTo($, place) {
+  const shown = await appTool(() => $.tool.call({ tool: 'mcp__ccd_window__open_session_in', session_id: place.appId, target: 'focus' }))
+  const said = cutWords(shown.text, 160)
+  return shown.isDone ? `the app says: ${said || `${place.name} is shown.`}` : `open ${place.name} from the app's sidebar: the app did not open it here${said ? ` (${said})` : ''}.`
 }
 
 // A question about an intent (its view's Ask about it, one of today's changes), sent where whereTo says.
 /** @param {Engine} $ @param {string} key @param {string} text @param {string} words what the press says once sent */
 async function askAbout($, key, text, words) {
-  const target = await whereTo($, key, 'your question about it')
-  return target === null ? NOT_SENT : handTo($, target, [], text, words)
+  return handTo($, await whereTo($, key), [], text, words)
 }
 
 // Explain, on a decision: nothing is decided; the session that explains is the one whereTo says.
 /** @param {Engine} $ @param {Item} one @param {import('./decide.mjs').Answers} answers @param {string} words */
 async function explainItem($, one, answers, words) {
-  const target = one.kind === 'call' ? await whereTo($, one.slug, `Explain ${one.label.replace(/^Decide /, '')}`) : 'here'
-  return target === null ? NOT_SENT : handTo($, target, [], answers.explain, words)
+  const target = one.kind === 'call' ? await whereTo($, one.slug) : 'here'
+  return handTo($, target, [], answers.explain, words, target === 'here' ? undefined : async () => noteSent($, one.id, target))
 }
 
 /** @param {Engine} $ @param {Item} one */
@@ -1125,8 +1152,7 @@ async function act($, one) {
     const handed = handOff($, [one.id], one.prompt, () => state.closeAway(io($)))
     return handed === 'queued' ? `Queued until this turn ends. The away window stays as it is until the session has it: merges are still held.${(await hasPane($)) ? ' To send it now, stop the running turn here.' : ''}` : toldText(handed, 'Sent to the session.')
   }
-  const target = one.kind === 'call' ? await whereTo($, one.slug, one.label) : 'here'
-  if (target === null) return NOT_SENT
+  const target = one.kind === 'call' ? await whereTo($, one.slug) : 'here'
   return handTo($, target, [one.id], one.prompt, 'Sent to the session.', () => state.settleItem(io($), one))
 }
 
@@ -1168,16 +1194,15 @@ async function actAll($, items) {
 async function answerItem($, one, answer, prompt) {
   // A double click or a second Enter before the redraw: one answer, one prompt, one timer.
   if (sent.has(one.id)) return `already answered: ${answer}`
-  const target = prompt && one.kind === 'call' ? await whereTo($, one.slug, `your answer to ${one.label.replace(/^Decide /, '')}`) : 'here'
-  if (target === null) return `${NOT_SENT} Nothing is decided.`
-  // The second of two presses, back from the same question: still one answer.
+  const target = prompt && one.kind === 'call' ? await whereTo($, one.slug) : 'here'
+  // The second of two presses, both back from reading where it goes: still one answer.
   if (sent.has(one.id)) return `already answered: ${answer}`
   answerState = { ...answerState, opened: '', typing: '', decided: withDecided(answerState.decided, { id: one.id, answer, at: Date.now() }) }
   $.clock.after(DECIDED_SHOWN_MS + 100, () => $.ui.invalidate('ui.render'))
   const settle = () => new Promise(resolve => $.clock.after(DECIDED_SHOWN_MS, () => resolve(state.settleItem(io($), one))))
   const unanswer = async () => void (answerState = { ...answerState, decided: answerState.decided.filter(each => each.id !== one.id) })
   if (prompt && target !== 'here') {
-    const told = await sendTo($, target, [one.id], prompt, settle, unanswer)
+    const told = await sendTo($, target, [one.id], prompt, () => (noteSent($, one.id, target), settle()), unanswer)
     $.ui.invalidate('ui.render')
     return told
   }
@@ -1979,6 +2004,8 @@ function answering($, model, hasInput) {
     // Leaving the row's view closes its typed answer: Back does not land in the field again.
     onFindings: one => () => ((findingShown = one.id), (paneMode = 'finding'), change({ typing: '' })),
     onFold: () => change({ isFoldOpen: !answerState.isFoldOpen }),
+    whereOf: slug => places.get(slug) ?? NO_PLACE,
+    jumpOf: slug => jumpOf($, slug),
   }
 }
 

@@ -8,6 +8,8 @@
 // does, and no plugin can shorten that. The outbox knows what waits: the pane says queued, not sent; a
 // second press of the same thing sends nothing; and what follows a prompt happens when the session has it.
 
+import { cutWords } from './model.mjs'
+
 /**
  * What a press did: 'sent' with the session idle, 'queued' behind a running turn, 'pending' nothing (it
  * already waits).
@@ -125,23 +127,77 @@ export const createOutbox = () => {
 
 // ---------------------------------------------------------------- which session
 
-// The live sessions a press about an intent could go to instead of this one: those on the intent's checkout
-// that track it, most recently active first. None when this session tracks it itself (it answers for its own
-// intent) or no other does (the press goes here, as before). When there are some, the person is asked: a
-// decision put into a session that does not track the intent has two sessions editing one intent folder.
+/**
+ * A session as the desktop app knows it: its id there (`local_…`, not the CLI's session id) and its title.
+ * @typedef {{ id: string, title: string }} AppSession
+ */
+
+// One of the desktop app's tools (mcp__ccd_…), called by Ather itself (`call`: console.mjs's or watch.mjs's
+// `$.tool.call` of it): whether it did what was asked, and its words. Outside the app the tool is absent and the call
+// rejects; that, a refusal and an error all read as not done.
+/** @param {() => Promise<{ deny?: string, text?: string, isError?: boolean }>} call @returns {Promise<{ isDone: boolean, text: string }>} */
+export const appTool = async call => {
+  /** @type {{ deny?: string, text?: string, isError?: boolean }} */
+  const ran = await call().catch(error => ({ deny: String(error) }))
+  return { isDone: ran.deny === undefined && ran.isError !== true, text: (ran.deny ?? ran.text ?? '').trim() }
+}
+
+// The app's answer to its session tool's `get_session` (JSON with `sessionId` and `title`); null when it is
+// not one (another client, a refusal, an error's words).
+/** @param {string} text @returns {AppSession | null} */
+export const appSessionOf = text => {
+  try {
+    const { sessionId, title } = JSON.parse(text)
+    return typeof sessionId === 'string' && sessionId !== '' ? { id: sessionId, title: typeof title === 'string' ? title.trim() : '' } : null
+  } catch {
+    return null
+  }
+}
+
+// Whether the app's `send_message` took the message: every answer ends "(delivery: …; message_id: …)", and only
+// delivered (its turn started) or queued (behind its current work) means it is there.
+/** @param {string} text */
+export const isSentReply = text => /\(delivery:\s*(delivered|queued)\b/i.test(text)
+
+/**
+ * Where an intent is worked on, for a press about it (A1): this session, another live session that tracks it
+ * (its CLI id, its app id or '' when it recorded none, and its name as the row says it), or none.
+ * @typedef {{ kind: 'here' } | { kind: 'none' } | { kind: 'other', sessionId: string, appId: string, name: string, slug: string }} Place
+ */
+
+/** @type {Place} */
+const HERE = Object.freeze({ kind: 'here' })
+// No session works on it (and an intent the pane has not read).
+/** @type {Place} */
+export const NO_PLACE = Object.freeze({ kind: 'none' })
+
+// The session that works on an intent. This one when it tracks the intent; else the live session on the intent's
+// checkout that tracks it, the most recently active of several, named by its app title (never its CLI id), else
+// by its branch; else none. A press about the intent goes to that other session (console.mjs): a decision put
+// into a session that does not track the intent has two sessions editing one intent folder.
 /**
  * @param {string} slug the intent's slug in its checkout @param {boolean} isTrackedHere
- * @param {readonly { sessionId: string, intent: string | null, updatedAt: number, lastActiveAt?: number }[]} peers the other live sessions on that checkout (state.readPeers)
+ * @param {readonly { sessionId: string, intent: string | null, branch?: string, updatedAt: number, lastActiveAt?: number, app?: AppSession }[]} peers the other live sessions on that checkout (state.readPeers)
+ * @returns {Place}
  */
-export const holdersOf = (slug, isTrackedHere, peers) =>
-  isTrackedHere || slug === ''
-    ? []
-    : peers
-        .filter(lane => lane.intent === slug && typeof lane.sessionId === 'string' && lane.sessionId !== '')
-        .sort((a, b) => Number(b.lastActiveAt ?? b.updatedAt) - Number(a.lastActiveAt ?? a.updatedAt))
+export const placeOf = (slug, isTrackedHere, peers) => {
+  if (isTrackedHere) return HERE
+  const [lane] = peers
+    .filter(one => slug !== '' && one.intent === slug && typeof one.sessionId === 'string' && one.sessionId !== '')
+    .sort((a, b) => Number(b.lastActiveAt ?? b.updatedAt) - Number(a.lastActiveAt ?? a.updatedAt))
+  if (!lane) return NO_PLACE
+  const title = lane.app?.title ?? ''
+  return { kind: 'other', sessionId: lane.sessionId, appId: lane.app?.id ?? '', name: title ? `"${cutWords(title, 36)}"` : lane.branch ? `a session on ${lane.branch}` : 'another session', slug }
+}
+
+// What a decision's row says of its place: where it is worked on, "Sent to …" once a press of it went to the
+// session that still works on it (`sentTo`: the CLI id of the session it went to).
+/** @param {Place} place @param {string} [sentTo] */
+export const placeText = (place, sentTo = '') =>
+  place.kind === 'here' ? 'in this session' : place.kind === 'none' ? 'no session tracks it' : `${sentTo === place.sessionId ? 'Sent to' : 'in'} ${place.name}`
 
 // What the other session reads. The engine frames it as a message from another session and that session
 // decides what it makes of one: this only says where the press was made and why it came there.
 /** @param {{ from: string, slug: string, text: string }} press `from`: this session, as its tab names it */
 export const routedText = ({ from, slug, text }) =>
-  `From the Ather pane of ${from}: the person pressed this there, and chose to send it to your session because it tracks intent ${slug} and that one does not.\n\n${text}`
+  `From the Ather pane of ${from}: the person pressed this there, and it came to your session because it tracks intent ${slug} and that one does not.\n\n${text}`

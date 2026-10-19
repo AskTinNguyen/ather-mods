@@ -977,10 +977,10 @@ const hasFocus = tree => {
       nodeOf(first, `option-${id(1)}-B`)?.props.variant === undefined,
     first72.lines,
   )
-  expect('A3: an intent with several decisions keeps its one folded row; a finding with a filled Resolution is not offered (A2)', /◆ \d: ▸ zz-group · 2 decisions\n/.test(shown72) && !nodeOf(first, `item-${id(2)}`) && !/F-3/.test(shown72), shown72)
+  expect('A3: an intent with several decisions keeps its one folded row; a finding with a filled Resolution is not offered (A2)', /◆ \d: ▸ zz-group · 2 decisions · no session tracks it\n/.test(shown72) && !nodeOf(first, `item-${id(2)}`) && !/F-3/.test(shown72), shown72)
   pressKey(first, 'calls-zz-group')
   const block = await text(72)
-  expect('A3: opened, the block shows its decisions one line each, the first decision still the one opened', /▾ zz-group · 2 decisions\n {2}· \d: F-2 · Restart one quest also restores every flow-owned actor\n(?: {3,}[^\n]*\n)*? {2}· \d: F-4 · Which pool size should the spawner use\?/.test(block) && Boolean(nodeOf(await pane(), `option-${id(1)}-A`)) && !nodeOf(await pane(), `option-${id(2)}-A`), block)
+  expect('A3: opened, the block shows its decisions one line each, the first decision still the one opened', /▾ zz-group · 2 decisions · no session tracks it\n {2}· \d: F-2 · Restart one quest also restores every flow-owned actor\n(?: {3,}[^\n]*\n)*? {2}· \d: F-4 · Which pool size should the spawner use\?/.test(block) && Boolean(nodeOf(await pane(), `option-${id(1)}-A`)) && !nodeOf(await pane(), `option-${id(2)}-A`), block)
   for (const cols of [72, 110]) {
     const drawn = check(await pane(cols), cols)
     expect(`A3: Needs you with a decision opened lays out cleanly at ${cols} columns, every hotkey unique`, drawn.problems.length === 0, drawn.problems)

@@ -4,6 +4,7 @@
 // arrives as a closure from console.mjs.
 
 import { NONE_OPEN, decidedText } from './decide.mjs'
+import { placeText } from './handoff.mjs'
 import { WORK_GROUPS, workGroup } from './home.mjs'
 import { BAR_CELLS, LEGEND, PARKED_KEY, blocksOf, countText, listCells, miniBarSvg } from './worklist.mjs'
 
@@ -181,17 +182,26 @@ const DONE = '#3ccf7a'
 /**
  * How Needs you answers in place (0.2.0): what to draw (decide.mjs needsView) and what each press does.
  * The presses that act on an answer are handed the item's answers, so none needs to look them up.
+ * `whereOf`: where an intent is worked on, by its key (0.6.2); `jumpOf`: the press that shows that session in the
+ * app, where it can be shown from here.
  * @typedef {{ view: NeedsView,
  *   onOpen: (id: string) => () => void, onAnswer: (one: Item, option: Option) => () => void, onExplain: (one: Item, answers: Answers) => () => void,
- *   onType: (one: Item, answers: Answers) => () => void, onTyped: (one: Item, answers: Answers) => (words: string) => void, onFindings: (one: Item) => () => void, onFold: () => void }} Answering
+ *   onType: (one: Item, answers: Answers) => () => void, onTyped: (one: Item, answers: Answers) => (words: string) => void, onFindings: (one: Item) => () => void, onFold: () => void,
+ *   whereOf: (slug: string) => Place, jumpOf: (slug: string) => (() => void) | undefined }} Answering
  * @typedef {import('./decide.mjs').NeedsView<Item>} NeedsView
  * @typedef {import('./decide.mjs').Answers} Answers
  * @typedef {Answers['options'][number]} Option
+ * @typedef {import('./handoff.mjs').Place} Place
  */
 
 // What an item is called once answered: "F-10 on fluid-snow-sand-look", or its label.
 /** @param {Item} one */
 const answeredName = one => (one.kind === 'call' ? one.question.split(':')[0] ?? one.label : one.label)
+
+// Where a decision is answered (A1): "in "S2 sync main"", "in this session", "no session tracks it", or "Sent to …"
+// once a press of it went to another session; '' for anything that is no decision.
+/** @param {Item} one @param {Answering} answer */
+const placeLine = (one, answer) => (one.kind === 'call' ? placeText(answer.whereOf(one.slug), answer.view.sentTo[one.id]?.sessionId) : '')
 
 // "A: Prove both on a map … (recommended)", the label cut so the mark always shows.
 /** @param {Option} option @param {number} width */
@@ -206,12 +216,15 @@ const optionText = (option, width) => {
 const decisionBody = (el, isClicked, one, answers, width, answer) => {
   const pad = isClicked ? 1 : 3
   const inner = width - pad - 4
+  const where = placeLine(one, answer)
+  const jump = one.kind === 'call' ? answer.jumpOf(one.slug) : undefined
   return el.Box({
     key: `answers-${one.id}`,
     flexDirection: 'column',
     paddingLeft: pad,
     children: [
       ...(one.detail ? [el.Text({ key: `answers-${one.id}-question`, wrap: 'wrap', children: one.detail })] : []),
+      ...(where ? [el.Text({ key: `answers-${one.id}-place`, color: QUIET, children: fit(where, inner) })] : []),
       ...answers.options.map(option => el.Box({ key: `option-${one.id}-${option.letter}-row`, children: [el.Button({ key: `option-${one.id}-${option.letter}`, label: optionText(option, inner), variant: option.isRecommended ? 'primary' : undefined, onPress: answer.onAnswer(one, option) })] })),
       el.Box({
         key: `answers-${one.id}-more`,
@@ -222,6 +235,7 @@ const decisionBody = (el, isClicked, one, answers, width, answer) => {
           el.Button({ key: `explain-${one.id}`, label: 'Explain', hotkey: isClicked ? undefined : 'x', plain: true, onPress: answer.onExplain(one, answers) }),
           el.Button({ key: `type-${one.id}`, label: 'Type an answer', hotkey: isClicked ? undefined : 't', plain: true, onPress: answer.onType(one, answers) }),
           ...(answers.source ? [el.Button({ key: `findings-${one.id}`, label: 'Open findings ›', plain: true, dimColor: true, onPress: answer.onFindings(one) })] : []),
+          ...(jump ? [el.Button({ key: `jump-${one.id}`, label: 'Go to session ›', plain: true, onPress: jump })] : []),
         ],
       }),
       ...(answer.view.typingId === one.id ? [el.Input({ key: `typed-${one.id}`, placeholder: `Your answer to ${answeredName(one)}`, submitLabel: 'send', autoFocus: true, onSubmit: answer.onTyped(one, answers) })] : []),
@@ -246,19 +260,23 @@ export const needsRows = (el, isClicked, { items, open, queued = new Set(), onNo
     const rowWidth = slug ? width - 2 : width
     const marginTop = isFirst || slug ? undefined : 1
     const state = view.states[one.id] ?? 'line'
-    if (state === 'decided') return el.Box({ key: `row-item-${one.id}`, marginTop, children: [el.Text({ key: `item-${one.id}-done`, color: DONE, children: fit(`${decidedText(fresh.get(one.id)?.answer ?? '')} · ${answeredName(one)}${queued.has(one.id) ? ' · queued until this turn ends' : ''}`, rowWidth) })] })
+    const sentTo = view.sentTo[one.id]
+    if (state === 'decided') return el.Box({ key: `row-item-${one.id}`, marginTop, children: [el.Text({ key: `item-${one.id}-done`, color: DONE, children: fit(`${decidedText(fresh.get(one.id)?.answer ?? '')} · ${answeredName(one)}${sentTo ? ` · sent to ${sentTo.name}` : ''}${queued.has(one.id) ? ' · queued until this turn ends' : ''}`, rowWidth) })] })
     const isShown = state === 'opened' && one.answers
     const press = view.opens.has(one.id) ? answer.onOpen(isShown ? NONE_OPEN : one.id) : onAct(one)
     // Never done for the person: stopping a turn is their own press.
     const now = queued.has(one.id) ? onNow?.(one) : undefined
     const sendNow = now ? el.Box({ key: `now-${one.id}`, children: [el.Button({ key: `now-${one.id}-press`, label: 'Stop the running turn and send now', onPress: now })] }) : undefined
-    return choiceRow(el, { key: `item-${one.id}`, title: slug ? one.title.replace(`${slug} · `, '') : one.label, detail: isShown ? undefined : slug ? one.detail : (one.detail ?? (one.title === one.label ? '' : one.title)), mark: slug ? '·' : '◆', marginTop, hotkey: key(), isSent: !open.includes(one), isQueued: queued.has(one.id), autoFocus: view.isFocusFree && one === open[0], width: rowWidth, onPress: press, below: isShown && one.answers ? decisionBody(el, isClicked, one, one.answers, rowWidth - 2, answer) : sendNow }, isClicked)
+    // Inside an intent's block the head says where; opened, the row says it under the question.
+    const where = slug ? '' : placeLine(one, answer)
+    const detail = slug ? one.detail : (one.detail ?? (one.title === one.label ? '' : one.title))
+    return choiceRow(el, { key: `item-${one.id}`, title: slug ? one.title.replace(`${slug} · `, '') : one.label, detail: isShown ? undefined : [where, detail].filter(Boolean).join(' · '), mark: slug ? '·' : '◆', marginTop, hotkey: key(), isSent: !open.includes(one), isQueued: queued.has(one.id), autoFocus: view.isFocusFree && one === open[0], width: rowWidth, onPress: press, below: isShown && one.answers ? decisionBody(el, isClicked, one, one.answers, rowWidth - 2, answer) : sendNow }, isClicked)
   }
   const rows = view.blocks.flatMap((block, at) => {
     const [only] = block.items
     if (block.items.length === 1 && only) return [row(only, at === 0)]
     const isOpen = opened.has(block.slug)
-    const head = choiceRow(el, { key: `calls-${block.slug}`, title: `${isOpen ? '▾' : '▸'} ${block.slug} · ${block.items.length} decisions`, mark: '◆', marginTop: at === 0 ? undefined : 1, hotkey: key(), isSent: !block.items.some(one => open.includes(one)), autoFocus: view.isFocusFree && !isOpen && block.items.some(one => one === open[0]), width, onPress: onToggle(block.slug) }, isClicked)
+    const head = choiceRow(el, { key: `calls-${block.slug}`, title: `${isOpen ? '▾' : '▸'} ${block.slug} · ${block.items.length} decisions · ${placeText(answer.whereOf(block.slug))}`, mark: '◆', marginTop: at === 0 ? undefined : 1, hotkey: key(), isSent: !block.items.some(one => open.includes(one)), autoFocus: view.isFocusFree && !isOpen && block.items.some(one => one === open[0]), width, onPress: onToggle(block.slug) }, isClicked)
     return [head, ...(isOpen ? [el.Box({ key: `calls-${block.slug}-list`, flexDirection: 'column', paddingLeft: 2, children: block.items.map(one => row(one, false, block.slug)) })] : [])]
   })
   if (view.folded.length === 0) return rows
