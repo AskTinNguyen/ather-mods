@@ -231,14 +231,30 @@ async function isSharedRoot($: Engine, root: string | null): Promise<boolean> {
   return isLinked.get(k) !== true
 }
 
-/** For a shell command: is each folder its git segments run in (the working directory, each `-C`) shared? */
-async function sharedTest($: Engine, a5r: A5R, command: string, cwd: string): Promise<(dir: string) => boolean> {
+/** 0.18.3: whether git run in `dir` (whose repository root is `root`) runs in THE shared checkout: the configured S2
+ * checkout's own main working tree, never another repository (ather-mods, …) nor a worktree elsewhere. A folder whose
+ * repository cannot be found counts as shared only inside the S2 checkout. */
+async function isS2Shared($: Engine, opts: Opts, root: string | null, dir: string | null): Promise<boolean> {
+  const s2 = s2Root(opts)
+  if (!root) return dir !== null && under(norm(dir), s2)
+  return sameRoot(root, s2) && (await isSharedRoot($, root))
+}
+
+/** For a shell command: is each folder its git segments run in (the working directory, each `-C`) the shared S2 checkout? */
+async function sharedTest($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<(dir: string) => boolean> {
   const known = new Map<string, boolean>()
   for (const dir of [cwd, ...gitTargets(command)]) {
     const p = norm(dir, cwd)
-    known.set(p.toLowerCase(), await isSharedRoot($, (await locate($, a5r, `${p}/_`)).root))
+    known.set(p.toLowerCase(), await isS2Shared($, opts, (await locate($, a5r, `${p}/_`)).root, p))
   }
-  return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? true
+  // A rule reads a segment's folder from its `-C` or the working directory; a `cd` into the S2 checkout counts too.
+  const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
+  for (const seg of walk(command, cwd, home)) {
+    if (!isGit(seg)) continue
+    const dir = gitPlace(seg).dir
+    if (dir && (await isS2Shared($, opts, (await locate($, a5r, `${dir}/_`)).root, dir))) known.set(norm(cwd, cwd).toLowerCase(), true)
+  }
+  return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? under(norm(dir || cwd, cwd), s2Root(opts))
 }
 
 type AtherStatus = { role?: string; pack?: string; gates?: string[]; tracked?: { slug?: string; stage?: string; checklist?: string; directorCalls?: string[]; prs?: string[] } | null; evidence?: Proof['evidence'] }
@@ -361,7 +377,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     let act = classifyGit(args)
     if (!act) continue
     const root = (await locate($, a5r, `${dir}/_`)).root
-    if (!root || !(await isSharedRoot($, root))) continue
+    if (!root || !(await isS2Shared($, opts, root, dir))) continue // 0.18.3: only the S2 checkout's own working tree
     // rev 27 follow-up: `git checkout <word>` is `checkout -- <word>` when the word is an existing file and no commit.
     if (act.kind === 'checkout-word') {
       const word = act.word
@@ -369,7 +385,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
       const isRef = isFile ? (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${word}^{commit}`], { timeoutMs: 8_000 }).catch(() => null))?.exitCode === 0 : true
       act = isFile && !isRef ? { kind: 'check', sub: 'checkout', paths: [word], untracked: false } : { kind: 'refuse', why: 'git checkout <branch> moves the shared working tree under every session', alt: 'work in a worktree of your own (git worktree add <dir> <branch>)' }
     }
-    if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared checkout)`, act.alt)
+    if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared S2 checkout ${s2Root(opts)})`, act.alt)
     if (act.kind === 'stash-drop') {
       const list = await $.process.run(['git', '-C', root, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
       const n = list?.exitCode === 0 ? list.stdout.split(/\r?\n/).filter(Boolean).length : null
@@ -2871,7 +2887,13 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   const root = tree as unknown as { children?: unknown[] }
   if (!Array.isArray(root.children)) return recolor(tree)
   let kids = [...root.children]
-  const stripAt = kids.findIndex(k => keyOf(k) === 'strip')
+  // A30 (0.18.3): on Home, right under Ather's summary strip; Ather 0.4.0+'s Simple view of Home leaves the strip out (its
+  // `view` toggle section is there in both views), so then right under its head block (`head`, else the block holding
+  // `head-words`, else after the first block). Other views of Ather's pane carry no line, as before. The reads run on Home.
+  const hasKey = (node: unknown, key: string): boolean => keyOf(node) === key || (Array.isArray((node as { children?: unknown[] } | null)?.children) && (node as { children: unknown[] }).children.some(c => hasKey(c, key)))
+  const stripIdx = kids.findIndex(k => keyOf(k) === 'strip')
+  const isHome = stripIdx >= 0 || kids.some(k => hasKey(k, 'view'))
+  const stripAt = !isHome ? -1 : stripIdx >= 0 ? stripIdx : ([kids.findIndex(k => keyOf(k) === 'head'), kids.findIndex(k => hasKey(k, 'head-words'))].find(i => i >= 0) ?? 0)
   if (isS2 && stripAt >= 0) {
     scheduleReads($, opts, now)
     // A30: "★ A5R ›" on the seal red (a Button has no colour of its own: the red is its box's background).
@@ -3171,7 +3193,7 @@ export const register: Register = (on, options) => {
       what = str(input.command)
       if (isOn) {
         const cwd = await $.session.cwd()
-        d = a5r.preShell(what, cwd, places, 0, await sharedTest($, a5r, what, cwd))
+        d = a5r.preShell(what, cwd, places, 0, await sharedTest($, opts, a5r, what, cwd))
         // A15: the sync's own git work passes A5R's asks for its holder and worker, during their frozen phase only.
         if (d?.kind === 'ask' && isSyncCommandOnly(what) && (await isFrozenHolder($, opts))) d = null
         // A80: `git add .`/`-A` is refused only in the shared S2 checkout; another repository or a worktree is its own.

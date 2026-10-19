@@ -76,6 +76,42 @@ export const writesFiles = (raw: string, verb: string, all: readonly string[], i
   return false
 }
 const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
+/** 0.18.3: where a copy writes (cp, copy, Copy-Item, robocopy, xcopy), or null when the command is no copy or its
+ * destination cannot be read. A move is no copy (it removes its source). */
+const copyDestinations = (verb: string, args: readonly string[]): string[] | null => {
+  const positional = (a: string) => !a.startsWith('-') && !(verb === 'robocopy' || verb === 'xcopy' || verb === 'copy' ? a.startsWith('/') : false)
+  const valueOf = (names: RegExp): string | null => {
+    for (let n = 0; n < args.length; n += 1) {
+      const a = args[n] ?? ''
+      const eq = /^(-{1,2}[\w-]+)[=:](.+)$/.exec(a)
+      if (eq && names.test(eq[1] ?? '')) return eq[2] ?? null
+      if (names.test(a)) return args[n + 1] ?? null
+    }
+    return null
+  }
+  if (verb === 'cp') {
+    const t = valueOf(/^(-t|--target-directory)$/i)
+    if (t) return [t]
+    const pos = args.filter(positional)
+    return pos.length >= 2 ? [pos[pos.length - 1] ?? ''] : null
+  }
+  if (verb === 'copy-item' || verb === 'cpi') {
+    const d = valueOf(/^-dest(ination)?$/i)
+    if (d) return [d]
+    const pos = args.filter((a, n) => positional(a) && !/^-(path|literalpath|filter|include|exclude)$/i.test(args[n - 1] ?? ''))
+    return pos.length >= 2 ? [pos[1] ?? ''] : null
+  }
+  if (verb === 'robocopy' || verb === 'xcopy') {
+    const pos = args.filter(positional)
+    return pos.length >= 2 ? [pos[1] ?? ''] : null
+  }
+  if (verb === 'copy') {
+    const pos = args.filter(positional)
+    return pos.length >= 2 ? [pos[pos.length - 1] ?? ''] : null
+  }
+  return null
+}
+
 /** A85 (orchestrator, re-review): the kit's read-only checks that may name the live kit: `claude plugin test|validate`,
  * `tsc -p`/`--noEmit` (bare or through npx), `bun test`, `node --test`, `git log|status|diff|show` (after `-C <dir>`).
  * The readers (rg, grep, cat, ls, head, tail, Get-Content, Select-String …) pass through READERS before this. Anything
@@ -374,7 +410,8 @@ export class A5R {
         continue
       }
       const kitHere = (t: string) => !isAbs(t.replace(/\\/g, '/')) || this.kitMentions.some(([re]) => re.test(norm(t).toLowerCase()))
-      if (inKit && writesFiles(raw, verb, args, kitHere)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
+      const outOnly = (copyDestinations(verb, args) ?? []).length > 0 && (copyDestinations(verb, args) ?? []).every(d => !kitHere(d)) // 0.18.3: a copy out of the kit
+      if (inKit && !outOnly && writesFiles(raw, verb, args, kitHere)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
       const hit = this.writesProtected(raw, verb, args)
       if (hit) return decision('deny', 'D1', `This command touches the A5R kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
       if (NESTED_SHELLS.has(verb) && depth < 2) {
@@ -404,7 +441,11 @@ export class A5R {
     // allow-list of the kit's own read-only checks; a redirect or tee into the kit is refused even for them.
     if (redirected && inKit(redirected[1] ?? '')) return hit[1]
     if ((verb === 'tee' || verb === 'tee-object') && args.some(a => !a.startsWith('-') && inKit(a))) return hit[1]
-    return isKitCheck(verb, args) ? null : hit[1]
+    if (isKitCheck(verb, args)) return null
+    // 0.18.3: a copy OUT of the live kit only reads it: allowed when every destination lies outside the kit.
+    const dests = copyDestinations(verb, args)
+    if (dests && dests.length > 0 && dests.every(d => !inKit(d))) return null
+    return hit[1]
   }
 
   /** True when every delete target resolves inside a temp folder (delete_safe_roots). */

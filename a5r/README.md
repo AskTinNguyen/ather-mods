@@ -1,6 +1,8 @@
-# A5R 0.18.2
+# A5R 0.18.3
 
 Flow riêng của Hai, chạy **cạnh** Ather Automata và không sửa code của Ather.
+
+0.18.3 (Ather 0.6.1 merged in): dòng gọn `★ A5R ›` hiện cả ở Home dạng Simple của Ather (không có thanh tóm tắt): nằm ngay dưới khối tiêu đề, và a5r vẫn đọc nhánh/điểm như ở Advanced; các kiểm tra git của "checkout chung" chỉ áp cho checkout S2 đã cấu hình (`E:/Projects/s2`) và working tree chính của nó, không cho repo khác (ather-mods) hay worktree ở chỗ khác, lời từ chối nêu rõ checkout S2 nào; chép file **ra khỏi** kit sống (`cp|copy|Copy-Item|robocopy|xcopy <kit>/… <đích ngoài kit>`) được phép vì chỉ đọc kit, chép **vào** kit vẫn bị từ chối.
 
 0.18.2 (hotfix, A84): tool `editor` và `sync` của a5r luôn trả lời: lỗi bên trong thành kết quả nêu lỗi và bước tiếp theo (thử lại; vẫn lỗi thì `/a5r off` và giữ lock bằng tay), hook `tool.call` có `.catch` (ném lỗi hay quá giờ thì lời gọi khác đi tiếp như không có a5r, tool của a5r vẫn trả lời); dòng HELD chuẩn không nêu `session <id8>` (`session=` là tên) được xác định holder theo lane như dòng viết tay.
 

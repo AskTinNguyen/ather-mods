@@ -82,13 +82,14 @@ test('A75: a shared config edit in a git project runs and is recorded', opts(), 
 test('A17: no per-turn report: a turn with edits, a failed build and no report ends; the action gates still hold', opts(), async ($, on) => {
   const w = world(on, { out: { [BAT]: 'Building...\nResult: Failed (OtherCompilationError)' }, git: { 'status --porcelain': { stdout: ' M Source/S2/Other.cpp\0' } } })
   w.put(`${PROJ}/Source/S2/Foo.cpp`, 'int x = 1;\n')
+  w.put('E:/s2/.git/HEAD', 'ref: refs/heads/HaiHuynh/20261005') // 0.18.3 (by design): the shared checkout is the configured S2 one
   await $.tool.call({ tool: 'Edit', file_path: `${PROJ}/Source/S2/Foo.cpp`, old_string: 'int x = 1;', new_string: 'int x = 2; // A5RTMP' })
   await $.tool.call({ tool: 'Bash', command: BAT })
   expect((await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Xong.' })).block).toBeUndefined()
   // What cannot be undone is still checked at the action (D10).
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' }))).toContain('A5R · D1/D5')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git checkout HEAD -- Source/S2/Other.cpp' }))).toContain('Source/S2/Other.cpp (no session claims it)') // A74: a fact, not a dialog
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git reset --hard' }))).toContain('use git checkout <ref> -- <paths>')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 checkout HEAD -- Source/S2/Other.cpp' }))).toContain('Source/S2/Other.cpp (no session claims it)') // A74: a fact, not a dialog
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 reset --hard' }))).toContain('use git checkout <ref> -- <paths>')
   expect(refused(await $.tool.call({ tool: 'Write', file_path: `${PROJ}/Source/S2/Key.cpp`, content: `k = 'ghp_${'a'.repeat(36)}'` }))).toContain('secret')
   expect(refused(await $.tool.call({ tool: 'Write', file_path: LOCK, content: 'free since 15:00' }))).toContain('mcp__a5r__editor')
 })
@@ -100,11 +101,12 @@ const status = (o: Rec) => JSON.stringify({ me: 'hai', role: 'techart', area: 'V
 
 test('a worker\'s own worktree: git and repository config there are its own (the shared checkout is checked on facts)', opts(), async ($, on) => {
   const w = world(on, { git: { 'status --porcelain': { stdout: ' M Config/DefaultGame.ini\0' } } })
-  w.put('E:/wt/x/.git', 'gitdir: E:/proj/.git/worktrees/x')
+  w.put('E:/wt/x/.git', 'gitdir: E:/s2/.git/worktrees/x')
+  w.put('E:/s2/.git/HEAD', 'ref: refs/heads/HaiHuynh/20261005') // 0.18.3 (by design): the shared checkout is the configured S2 one
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x checkout -b HaiHuynh/tail-vfx origin/main' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x reset --hard' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'Write', file_path: 'E:/wt/x/Config/DefaultGame.ini', content: '[x]' }))).toBeUndefined()
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git checkout HEAD -- Config/DefaultGame.ini' }))).toContain('Config/DefaultGame.ini (no session claims it)')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 checkout HEAD -- Config/DefaultGame.ini' }))).toContain('Config/DefaultGame.ini (no session claims it)')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x add .' }))).toBeUndefined() // A80 (rev 28): its own worktree
 })
 
