@@ -4,7 +4,7 @@
 - Worker: needs-you worker (Claude Opus 5.5 subagent)
 - Current step: none (stopped for the orchestrator)
 - Next step: orchestrator opens the PR (A5), with the body in the worker's scratchpad (`needs-you-pr-body.md`); a live look in the desktop app is owed (S3), including whether the app's session tools run from a background read without a permission dialog
-- PR: none
+- PR: #78 (https://github.com/AskTinNguyen/ather-mods/pull/78), opened 2026-10-19 by the orchestrator
 
 ## Acceptance
 
