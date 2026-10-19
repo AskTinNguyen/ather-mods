@@ -152,15 +152,25 @@ export const classifyGit = (args: string[]): GitAct => {
 
 /** A97: porcelain XY codes of an unmerged path (git status's "Unmerged paths"). */
 const UNMERGED = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
+/** A97 (review F3): the files git leaves while a conflicted merge, revert or cherry-pick waits to be resolved. */
+export const CONFLICT_HEADS = ['MERGE_HEAD', 'REVERT_HEAD', 'CHERRY_PICK_HEAD'] as const
+
 /** The changed paths a discard would lose, from `git status --porcelain=v1 -z` (`XY path` entries, NUL-separated; a rename's
- * source follows as an entry of its own, without XY). A97: while a merge is in progress (`isResolving`: a
- * `checkout --ours|--theirs` with `.git/MERGE_HEAD` present) an unmerged path is being resolved, not discarded. */
-export const discardedPaths = (statusZ: string, isResolving: boolean): string[] =>
-  statusZ
-    .split(/\0|\r?\n/)
-    .filter(e => /^.. \S/.test(e) && !(isResolving && UNMERGED.has(e.slice(0, 2))))
-    .map(e => e.slice(3).trim())
-    .filter(Boolean)
+ * or copy's source path follows its entry as a field of its own, without XY, and is skipped: review F5). A97: while a
+ * conflict waits to be resolved (`isResolving`: a `checkout --ours|--theirs` with one of CONFLICT_HEADS present) an
+ * unmerged path is being resolved, not discarded. */
+export const discardedPaths = (statusZ: string, isResolving: boolean): string[] => {
+  const fields = statusZ.split(/\0|\r?\n/)
+  const out: string[] = []
+  for (let i = 0; i < fields.length; i += 1) {
+    const e = fields[i] ?? ''
+    if (!/^.. \S/.test(e)) continue
+    const xy = e.slice(0, 2)
+    if (/[RC]/.test(xy)) i += 1 // the source path
+    if (!(isResolving && UNMERGED.has(xy))) out.push(e.slice(3).trim())
+  }
+  return out.filter(Boolean)
+}
 
 /** The alternative for a discard that names no paths (or `.`, or a top folder, which a status cannot read in time on
  * the shared checkout): the same command with exact paths. */

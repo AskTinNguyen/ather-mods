@@ -10,9 +10,9 @@ import {
   PROBE_FRESH_MS,
   lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
-  type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
+  type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
+import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { POST_MERGE_TESTS, afterWorker, buildResultOf, enterStage, isMergedStage, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type MergeRead } from './syncstage.ts'
@@ -420,8 +420,9 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     }
     const ran = await $.process.run(['git', '-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${untracked ? 'all' : 'no'}`, '--', ...rels], { timeoutMs: 8_000 }).catch(() => null)
     if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would discard is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
-    // A97: resolving a conflict is not a discard: `checkout --ours|--theirs` passes the unmerged paths during a merge.
-    const isResolving = act.kind === 'check' && act.side !== undefined && (await $.fs.exists(`${root}/.git/MERGE_HEAD`))
+    // A97: resolving a conflict is not a discard: `checkout --ours|--theirs` passes the unmerged paths while a merge, revert
+    // or cherry-pick waits to be resolved.
+    const isResolving = act.kind === 'check' && act.side !== undefined && (await Promise.all(CONFLICT_HEADS.map(h => $.fs.exists(`${root}/.git/${h}`).catch(() => false)))).some(Boolean)
     const changed = discardedPaths(ran.stdout, isResolving)
     const now = await $.clock.now()
     const mine = new Set([...touched].map(p => p.toLowerCase()))
@@ -935,7 +936,9 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
   if (ran.deny !== undefined) {
     // A96: a worker that could not start hands the sync back like one that gave up (the manual stage).
     const back = enterStage(claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}` }, '', now)
-    if (await writeSync($, opts, back, claimed)) push({ id: `sync:${s.id}:${s.at}:manual`, text: SYNC_TELL.manual(back), isActionable: true })
+    if (!(await writeSync($, opts, back, claimed))) return
+    await syncLockUntil($, opts, back, now)
+    push({ id: `sync:${s.id}:${s.at}:manual`, text: SYNC_TELL.manual(back), isActionable: true })
     return
   }
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
@@ -950,6 +953,8 @@ const SYNC_SLOT = 'Sync main '
 const isSyncSlot = (w: Want | null | undefined): boolean => Boolean(w?.sync) || Boolean(w?.what.startsWith(SYNC_SLOT))
 /** The worker's own slot, which wakes nobody (A94: the holder's own request for its sync is granted with a notice). */
 const isWorkerSlot = (w: Want | null | undefined): boolean => (w?.sync ? w.sync.role === 'worker' : Boolean(w?.what.startsWith(SYNC_SLOT)))
+/** This session holds the Editor lock for a sync (its slot is a sync's). */
+const holdsSyncLock = (): boolean => holdsLock() && isSyncSlot(me?.want)
 
 /** A79: the holder's a5r requests the Editor for the sync in code (the editor tool's request: launch false, build per the
  * sync, unattended, up to the hard end) and is granted at once when the lock is free (the sync holder is first in the
@@ -998,6 +1003,40 @@ async function releaseSyncSlot($: Engine, opts: Opts, s: SyncFile, now: number):
   }
 }
 
+/** Review of rev 33 (F1): the sync's Editor lock is the sync's while its holder's sync is open: done or abort gives it back
+ * (endSync), never the editor tool (a FREE line mid-merge lets a session without A5R open the Editor). Null otherwise. */
+function syncLockRefusal(now: number): string | null {
+  if (!syncFile || !isSyncSlot(me?.want) || !isHolderInSync(syncFile, me8, phaseOf(syncFile, now))) return null
+  return blocked('Editor', `this lock is the Editor lock of the sync at ${clockOf(syncFile.at)}, which is still open (until done, abort or ${clockOf(syncFile.hardEnd)})`, "the sync's Editor lock is given back by the sync tool's done or abort; closing the Editor process is fine, the lock stays this session's")
+}
+
+/** This session's lease as it holds it (its file, else the lock line's times). */
+function heldNow(now: number): Holding {
+  return me?.holding ?? { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? now, extended: 0 }
+}
+
+/** The HELD line of this session's lease rewritten with a new end (the editor tool's extend, and the sync's moved hard end):
+ * the line written, or null when the lock changed meanwhile. */
+async function rewriteLease($: Engine, opts: Opts, h: Holding, end: number, now: number, extended = h.extended): Promise<string | null> {
+  if (!me) return null
+  const w = me.want
+  const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid: lock.pid ?? editorPid(probe), end, mode: w?.mode ?? 'interactive', pausable: w?.pausable ?? true, nextSafe: w?.nextSafe ?? 'after save', note: lock.note || w?.what || 'Editor work' })
+  if (!(await writeLock($, opts, line))) return null
+  me = { ...me, holding: { ...h, end, extended } }
+  await saveMe($, opts, now)
+  return line
+}
+
+/** Review of rev 33 (F2): when the sync's hard end moves (the manual stage, the A93 extension), the sync's Editor lock this
+ * session holds says the new end too. */
+async function syncLockUntil($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
+  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lock = lockOf(lockRaw)
+  if (!holdsSyncLock()) return
+  const h = heldNow(now)
+  if (h.end !== s.hardEnd) await rewriteLease($, opts, h, s.hardEnd, now)
+}
+
 /** A93: the merge commit on top of the pre-merge HEAD the holder's a5r recorded, or null. */
 async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<MergeRead> {
   const r = await $.process.run(['git', '-C', s2Root(opts), 'log', '-1', '--format=%H %P', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
@@ -1032,7 +1071,9 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
   }
   // The build log is the sync's own (A5R named it in the worker's task), whatever path the worker's line gives.
   const next = enterStage(s, after, s.build ? syncBuildLog(s2Root(opts), s.id) : '', now)
-  if (await writeSync($, opts, next, s)) push({ id: `sync:${s.id}:${s.at}:${after.stage}`, text: SYNC_TELL[after.stage](next), isActionable: after.stage !== 'building' })
+  if (!(await writeSync($, opts, next, s))) return
+  await syncLockUntil($, opts, next, now)
+  push({ id: `sync:${s.id}:${s.at}:${after.stage}`, text: SYNC_TELL[after.stage](next), isActionable: after.stage !== 'building' })
 }
 
 /** A93: the holder's a5r through the stages after the merge: the hard end put back once while the build runs near it;
@@ -1057,7 +1098,10 @@ async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promi
   const moved: SyncFile = { ...s, ...changes, updatedAt: now }
   const isMoved = Object.keys(changes).length > 0 && (await writeSync($, opts, moved, s))
   const cur = isMoved ? moved : s
-  if (isMoved && move.extendTo !== null) push({ id: `sync:${s.id}:${s.at}:extended`, text: NOTICES.syncExtended(cur), isActionable: false })
+  if (isMoved && move.extendTo !== null) {
+    await syncLockUntil($, opts, cur, now)
+    push({ id: `sync:${s.id}:${s.at}:extended`, text: NOTICES.syncExtended(cur), isActionable: false })
+  }
   if (move.tell) push({ id: `sync:${s.id}:${s.at}:${move.tell}`, text: SYNC_TELL[move.tell](cur), isActionable: true })
 }
 
@@ -1768,7 +1812,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   }
   if (!isOpenPhase(phase)) {
     // A79: a sync that ended or expired while its worker still held the Editor for it gives the lock back.
-    if (isHolder && holdsLock() && isSyncSlot(me?.want)) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ${s.state}`)
+    if (isHolder && holdsSyncLock()) await releaseLock($, opts, now, `${SYNC_SLOT}${clockOf(s.at)} ${s.state}`)
     // A83: an expired sync is one notice to its holder (no mark on a title), whether or not it heard the cutoff.
     if (isHolder && s.state === 'expired' && now - (s.endedAt ?? s.updatedAt) < 6 * 3_600_000) push({ id: noticeIds.lifted(s), text: NOTICES.expired(s), isActionable: true })
     // The lift reaches the sessions that were told of this sync, and only for a while after it ended.
@@ -1832,7 +1876,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   const notHolder = (x: SyncFile) => blocked(gate, `${when(x)} is held by another live session; only its holder changes it`, `ask that session (${x.holder.lane}) to ${action === 'cancel' ? 'cancel' : action === 'move' || action === 'plan' ? 'move' : 'end'} it`)
   // A99: the holder's conflict rules for the worker, read by plan, move and the rules action (null: none given).
   const ruled = a.rules === undefined ? { rules: null } : parseRules(a.rules)
-  const badRules = 'bad' in ruled ? blocked(gate, `"${ruled.bad}" is not a conflict rule`, `write ${RULE_FORM}`) : null
+  const badRules = 'bad' in ruled ? blocked(gate, `the conflict rule "${ruled.bad.slice(0, 120)}" ${ruled.why}`, `give ${ruled.alt}`) : null
   const rules: SyncRule[] | null = 'rules' in ruled ? ruled.rules : null
   const planned = (x: SyncFile) =>
     `${when(x)}${x.build ? ', with a build' : ''}: cutoff ${clockOf(x.at - CUTOFF_MS)} (every session commits its own paths, writes its resume note, releases the Editor by ${clockOf(x.at - RELEASE_BEFORE_MS)}); from ${clockOf(x.at)} git writes and the Editor freeze for everyone but the holder until done or abort, at the latest until ${clockOf(x.hardEnd)} (its hard end: then it expires and every session is told).${x.rules.length ? ` Conflict rules for the worker: ${rulesLabel(x.rules)}.` : ''}`
@@ -2742,6 +2786,8 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       await saveMe($, opts, now)
       return tail(blocked('Editor', 'the lock does not name this session', 'nothing to release (any request of this session is withdrawn)'))
     }
+    const refusal = syncLockRefusal(now)
+    if (refusal) return refusal
     if (isPieRunning && e.pie_stopped !== true) return blocked('Editor', 'this session started PIE and no stop was seen', 'stop PIE first (or call release with pie_stopped: true once it has ended)')
     const dont = Array.isArray(e.dont_save) ? e.dont_save.map(String).filter(Boolean) : []
     const { isWritten, line } = await releaseLock($, opts, now, str(e.note), dont)
@@ -2752,7 +2798,9 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   if (action === 'extend') {
     await readWorld($, opts) // the lock and who waits, as they are now
     if (!holdsLock() || !me) return blocked('Editor', 'the lock does not name this session', 'ask for a slot with action request')
-    const h = me.holding ?? { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? now, extended: 0 }
+    const refusal = syncLockRefusal(now)
+    if (refusal) return refusal
+    const h = heldNow(now)
     // A68: past its end a lease may still be extended while nobody waits; with someone waiting it may not.
     const queued = queueOf([me, ...peers], lanes, now, syncFile).length
     if (now >= h.end && queued > 0) return blocked('Editor', `the lease ended at ${clockOf(h.end)} and ${queued} session${queued === 1 ? '' : 's'} wait${queued === 1 ? 's' : ''}`, 'release now and ask again for the rest')
@@ -2767,12 +2815,8 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     if ((me.want?.build || /\(build\)/.test(lock.note)) && waiting > 0 && total > BUILD_WINDOW_MIN)
       return blocked('Editor', `${waiting} session${waiting === 1 ? ' is' : 's are'} queued for the Editor, so a build window is at most ${BUILD_WINDOW_MIN} min (S2 standard); extended to ${clockOf(end)} it would be ${total} min`, `finish the build by ${clockOf(h.end)}, release, and ask again for the rest`)
     if (waiting > 0 && h.extended >= 1) return blocked('Editor', `${waiting} session${waiting === 1 ? '' : 's'} wait and this lease was extended once already`, `release by ${clockOf(h.end)} and ask again`)
-    const w = me.want
-    const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid: lock.pid ?? editorPid(probe), end, mode: w?.mode ?? 'interactive', pausable: w?.pausable ?? true, nextSafe: w?.nextSafe ?? 'after save', note: lock.note || w?.what || 'Editor work' })
-    if (!(await writeLock($, opts, line))) return blocked('Editor', 'the lock changed while extending', 'read it with action status, then try again')
-    me = { ...me, holding: { ...h, end, extended: h.extended + 1 } }
-    await saveMe($, opts, now)
-    return tail(`extended until ${clockOf(end)}: ${line}`)
+    const line = await rewriteLease($, opts, h, end, now, h.extended + 1)
+    return line === null ? blocked('Editor', 'the lock changed while extending', 'read it with action status, then try again') : tail(`extended until ${clockOf(end)}: ${line}`)
   }
   await runTick($, opts)
   const queue = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile)
