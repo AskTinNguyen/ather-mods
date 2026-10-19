@@ -4,7 +4,7 @@
 // arrives as a closure from console.mjs.
 
 import { NONE_OPEN, decidedText } from './decide.mjs'
-import { placeText } from './handoff.mjs'
+import { placeLink, placeText } from './handoff.mjs'
 import { WORK_GROUPS, workGroup } from './home.mjs'
 import { BAR_CELLS, LEGEND, PARKED_KEY, blocksOf, countText, listCells, miniBarSvg } from './worklist.mjs'
 
@@ -182,12 +182,11 @@ const DONE = '#3ccf7a'
 /**
  * How Needs you answers in place (0.2.0): what to draw (decide.mjs needsView) and what each press does.
  * The presses that act on an answer are handed the item's answers, so none needs to look them up.
- * `whereOf`: where an intent is worked on, by its key (0.6.2); `jumpOf`: the press that shows that session in the
- * app, where it can be shown from here.
+ * `whereOf`: where an intent is worked on, by its key (0.6.2).
  * @typedef {{ view: NeedsView,
  *   onOpen: (id: string) => () => void, onAnswer: (one: Item, option: Option) => () => void, onExplain: (one: Item, answers: Answers) => () => void,
  *   onType: (one: Item, answers: Answers) => () => void, onTyped: (one: Item, answers: Answers) => (words: string) => void, onFindings: (one: Item) => () => void, onFold: () => void,
- *   whereOf: (slug: string) => Place, jumpOf: (slug: string) => (() => void) | undefined }} Answering
+ *   whereOf: (slug: string) => Place }} Answering
  * @typedef {import('./decide.mjs').NeedsView<Item>} NeedsView
  * @typedef {import('./decide.mjs').Answers} Answers
  * @typedef {Answers['options'][number]} Option
@@ -198,8 +197,8 @@ const DONE = '#3ccf7a'
 /** @param {Item} one */
 const answeredName = one => (one.kind === 'call' ? one.question.split(':')[0] ?? one.label : one.label)
 
-// Where a decision is answered (A1): "in "S2 sync main"", "in this session", "no session tracks it", or "Sent to …"
-// once a press of it went to another session; '' for anything that is no decision.
+// Where a decision is answered (A1): "in "S2 sync main"", "in this session", "no session tracks it", "probably in …"
+// (A3b), or "Sent to …" once a press of it went to another session; '' for anything that is no decision.
 /** @param {Item} one @param {Answering} answer */
 const placeLine = (one, answer) => (one.kind === 'call' ? placeText(answer.whereOf(one.slug), answer.view.sentTo[one.id]?.sessionId) : '')
 
@@ -217,7 +216,8 @@ const decisionBody = (el, isClicked, one, answers, width, answer) => {
   const pad = isClicked ? 1 : 3
   const inner = width - pad - 4
   const where = placeLine(one, answer)
-  const jump = one.kind === 'call' ? answer.jumpOf(one.slug) : undefined
+  // Go to session (A2): the app's own link to that session, which opens it from any session.
+  const link = one.kind === 'call' ? placeLink(answer.whereOf(one.slug)) : ''
   return el.Box({
     key: `answers-${one.id}`,
     flexDirection: 'column',
@@ -235,7 +235,7 @@ const decisionBody = (el, isClicked, one, answers, width, answer) => {
           el.Button({ key: `explain-${one.id}`, label: 'Explain', hotkey: isClicked ? undefined : 'x', plain: true, onPress: answer.onExplain(one, answers) }),
           el.Button({ key: `type-${one.id}`, label: 'Type an answer', hotkey: isClicked ? undefined : 't', plain: true, onPress: answer.onType(one, answers) }),
           ...(answers.source ? [el.Button({ key: `findings-${one.id}`, label: 'Open findings ›', plain: true, dimColor: true, onPress: answer.onFindings(one) })] : []),
-          ...(jump ? [el.Button({ key: `jump-${one.id}`, label: 'Go to session ›', plain: true, onPress: jump })] : []),
+          ...(link ? [el.Link({ key: `jump-${one.id}`, href: link, label: 'Go to session ›' })] : []),
         ],
       }),
       ...(answer.view.typingId === one.id ? [el.Input({ key: `typed-${one.id}`, placeholder: `Your answer to ${answeredName(one)}`, submitLabel: 'send', autoFocus: true, onSubmit: answer.onTyped(one, answers) })] : []),

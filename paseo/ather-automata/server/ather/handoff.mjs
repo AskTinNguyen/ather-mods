@@ -128,8 +128,9 @@ export const createOutbox = () => {
 // ---------------------------------------------------------------- which session
 
 /**
- * A session as the desktop app knows it: its id there (`local_…`, not the CLI's session id) and its title.
- * @typedef {{ id: string, title: string }} AppSession
+ * A session as the desktop app knows it: its id there (`local_…`, not the CLI's session id), its title, and the
+ * link that opens it in the app from anywhere ('' where the app gives none).
+ * @typedef {{ id: string, title: string, link: string }} AppSession
  */
 
 // One of the desktop app's tools (mcp__ccd_…), called by Ather itself (`call`: console.mjs's or watch.mjs's
@@ -142,16 +143,42 @@ export const appTool = async call => {
   return { isDone: ran.deny === undefined && ran.isError !== true, text: (ran.deny ?? ran.text ?? '').trim() }
 }
 
-// The app's answer to its session tool's `get_session` (JSON with `sessionId` and `title`); null when it is
+/** @param {unknown} value */
+const textOf = value => (typeof value === 'string' ? value.trim() : '')
+
+// The app's answer to its session tool's `get_session` (JSON with `sessionId`, `title` and `link`); null when it is
 // not one (another client, a refusal, an error's words).
 /** @param {string} text @returns {AppSession | null} */
 export const appSessionOf = text => {
   try {
-    const { sessionId, title } = JSON.parse(text)
-    return typeof sessionId === 'string' && sessionId !== '' ? { id: sessionId, title: typeof title === 'string' ? title.trim() : '' } : null
+    const { sessionId, title, link } = JSON.parse(text)
+    return typeof sessionId === 'string' && sessionId !== '' ? { id: sessionId, title: textOf(title), link: textOf(link) } : null
   } catch {
     return null
   }
+}
+
+// The best guess for an intent no live session tracks (A3b), from the app's `search_session_transcripts` for its
+// folder name: of the sessions whose transcript mentions it, the most recently active one that is not archived and is
+// not this one (`selfId`, its app id); '' when there is none. The app answers a line of words, then the hits as a JSON
+// list (`sessionId`, `title`, `isArchived`, `lastActivityAt`, and a `snippet` of the transcript, never read here);
+// with none, only words ("No matching sessions found.").
+/** @param {string} text @param {string} selfId */
+export const guessedSession = (text, selfId) => {
+  /** @type {unknown} */
+  let hits = []
+  try {
+    hits = JSON.parse(text.slice(text.indexOf('[')))
+  } catch {
+    return ''
+  }
+  if (!Array.isArray(hits)) return ''
+  return (
+    hits
+      .map(hit => ({ id: textOf(hit?.sessionId), at: Date.parse(String(hit?.lastActivityAt ?? '')) || 0, isArchived: hit?.isArchived === true }))
+      .filter(hit => hit.id !== '' && hit.id !== selfId && !hit.isArchived)
+      .sort((a, b) => b.at - a.at)[0]?.id ?? ''
+  )
 }
 
 // Whether the app's `send_message` took the message: every answer ends "(delivery: …; message_id: …)", and only
@@ -160,9 +187,10 @@ export const appSessionOf = text => {
 export const isSentReply = text => /\(delivery:\s*(delivered|queued)\b/i.test(text)
 
 /**
- * Where an intent is worked on, for a press about it (A1): this session, another live session that tracks it
- * (its CLI id, its app id or '' when it recorded none, and its name as the row says it), or none.
- * @typedef {{ kind: 'here' } | { kind: 'none' } | { kind: 'other', sessionId: string, appId: string, name: string, slug: string }} Place
+ * Where an intent is worked on (A1): this session; another live session that tracks it (its CLI id, its app id and
+ * link, '' when it recorded none, and its name as the row says it); a session that probably works on it, found by the
+ * app's transcript search (A3b: shown, never sent to); or none.
+ * @typedef {{ kind: 'here' } | { kind: 'none' } | { kind: 'other', sessionId: string, appId: string, link: string, name: string, slug: string } | { kind: 'guess', link: string, name: string }} Place
  */
 
 /** @type {Place} */
@@ -171,13 +199,17 @@ const HERE = Object.freeze({ kind: 'here' })
 /** @type {Place} */
 export const NO_PLACE = Object.freeze({ kind: 'none' })
 
+// A session's name as a row says it: its app title, cut and quoted; `fallback` without one.
+/** @param {string} title @param {string} fallback */
+const sessionName = (title, fallback) => (title ? `"${cutWords(title, 36)}"` : fallback)
+
 // The session that works on an intent. This one when it tracks the intent; else the live session on the intent's
 // checkout that tracks it, the most recently active of several, named by its app title (never its CLI id), else
 // by its branch; else none. A press about the intent goes to that other session (console.mjs): a decision put
 // into a session that does not track the intent has two sessions editing one intent folder.
 /**
  * @param {string} slug the intent's slug in its checkout @param {boolean} isTrackedHere
- * @param {readonly { sessionId: string, intent: string | null, branch?: string, updatedAt: number, lastActiveAt?: number, app?: AppSession }[]} peers the other live sessions on that checkout (state.readPeers)
+ * @param {readonly { sessionId: string, intent: string | null, branch?: string, updatedAt: number, lastActiveAt?: number, app?: Partial<AppSession> }[]} peers the other live sessions on that checkout (state.readPeers)
  * @returns {Place}
  */
 export const placeOf = (slug, isTrackedHere, peers) => {
@@ -186,15 +218,27 @@ export const placeOf = (slug, isTrackedHere, peers) => {
     .filter(one => slug !== '' && one.intent === slug && typeof one.sessionId === 'string' && one.sessionId !== '')
     .sort((a, b) => Number(b.lastActiveAt ?? b.updatedAt) - Number(a.lastActiveAt ?? a.updatedAt))
   if (!lane) return NO_PLACE
-  const title = lane.app?.title ?? ''
-  return { kind: 'other', sessionId: lane.sessionId, appId: lane.app?.id ?? '', name: title ? `"${cutWords(title, 36)}"` : lane.branch ? `a session on ${lane.branch}` : 'another session', slug }
+  const { id = '', title = '', link = '' } = lane.app ?? {}
+  return { kind: 'other', sessionId: lane.sessionId, appId: id, link, name: sessionName(title, lane.branch ? `a session on ${lane.branch}` : 'another session'), slug }
 }
 
+// The guess (A3b) as a place: the session the app found, by its title and link.
+/** @param {AppSession} app @returns {Place} */
+export const guessPlace = app => ({ kind: 'guess', link: app.link, name: sessionName(app.title, 'another session') })
+
+// The link that opens a place's session in the app ('' for this session, none, or a session that recorded none).
+/** @param {Place} place */
+export const placeLink = place => (place.kind === 'other' || place.kind === 'guess' ? place.link : '')
+
 // What a decision's row says of its place: where it is worked on, "Sent to …" once a press of it went to the
-// session that still works on it (`sentTo`: the CLI id of the session it went to).
+// session that still works on it (`sentTo`: the CLI id of the session it went to), "probably in …" for a guess.
 /** @param {Place} place @param {string} [sentTo] */
-export const placeText = (place, sentTo = '') =>
-  place.kind === 'here' ? 'in this session' : place.kind === 'none' ? 'no session tracks it' : `${sentTo === place.sessionId ? 'Sent to' : 'in'} ${place.name}`
+export const placeText = (place, sentTo = '') => {
+  if (place.kind === 'here') return 'in this session'
+  if (place.kind === 'none') return 'no session tracks it'
+  if (place.kind === 'guess') return `probably in ${place.name}`
+  return `${sentTo === place.sessionId ? 'Sent to' : 'in'} ${place.name}`
+}
 
 // What the other session reads. The engine frames it as a message from another session and that session
 // decides what it makes of one: this only says where the press was made and why it came there.

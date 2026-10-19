@@ -2217,7 +2217,7 @@ describe('one pane over the workspace', () => {
     expect(pruneDecided([...decided, { id: 'call:login:F-1', answer: 'B', at: now }], id => waiting.has(id), now + 60000).map(one => one.id)).toEqual(['call:login:F-1'])
     // Drawn: both heads and every row, no element key twice.
     const press = () => () => undefined
-    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined, whereOf: () => NO_PLACE, jumpOf: () => undefined }
+    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined, whereOf: () => NO_PLACE }
     const keys = keysOf(needsRows(el, false, { items: model.items, open: model.open, opened: new Set(['web/login', 'login']), width: 100, key: () => undefined, onAct: press, onToggle: press, answer: /** @type {any} */ (answer) }))
     expect(repeated(keys)).toEqual([])
     expect(['calls-login', 'calls-web/login', 'item-call:login:F-1', 'item-call:web/login:F-1'].every(key => keys.includes(key))).toBe(true)

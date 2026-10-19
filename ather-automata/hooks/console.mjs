@@ -33,7 +33,7 @@ import { nextGroup, nextSort } from './worklist.mjs'
 import { LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, mergeRow, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
 import { awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
-import { NO_PLACE, appTool, createOutbox, isSentReply, placeOf, routedText, toldText } from './handoff.mjs'
+import { NO_PLACE, appSessionOf, appTool, createOutbox, guessPlace, guessedSession, isSentReply, placeOf, routedText, toldText } from './handoff.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
@@ -68,6 +68,10 @@ let turnRunning = ''
 // Where each intent with a decision waiting is worked on (handoff.mjs placeOf), by its key, as last read.
 /** @type {Map<string, import('./handoff.mjs').Place>} */
 let places = new Map()
+// The guesses for intents no live session tracks (A3b), by key, each asked of the app at most every GUESS_MS.
+/** @type {Map<string, { at: number, place: Promise<import('./handoff.mjs').Place> }>} */
+const guesses = new Map()
+const GUESS_MS = 10 * 60 * 1000
 let paneMode = /** @type {Mode} */ ('home')
 // Create groups opened past their first three.
 /** @type {Set<string>} */
@@ -538,6 +542,7 @@ async function openConsole($, folder) {
   homeView.reset()
   callsOpen.clear()
   answerState = { ...FRESH_ANSWERS }
+  guesses.clear()
   findingShown = ''
   isSearchOpen = false
   teamCaches.clear()
@@ -1092,7 +1097,33 @@ async function readPlaces($) {
     return kept
   }
   const waiting = intents.filter(one => directorCalls(one).length > 0)
-  return new Map(await Promise.all(waiting.map(async one => /** @type {const} */ ([one.key, await placeFor($, one, tracked, peersOf)]))))
+  return new Map(
+    await Promise.all(
+      waiting.map(async one => {
+        const place = await placeFor($, one, tracked, peersOf)
+        return /** @type {const} */ ([one.key, place.kind === 'none' ? await guessFor($, one) : place])
+      }),
+    ),
+  )
+}
+
+// For an intent no live session tracks, the session that probably works on it (A3b): the app's transcript search
+// for its folder name, then that session's title and link. Shown with its link only; presses still go here.
+// Without the app's tools, or with no hit, none.
+/** @param {Engine} $ @param {import('./model.mjs').Intent} intent */
+function guessFor($, intent) {
+  const kept = guesses.get(intent.key)
+  if (kept && Date.now() - kept.at < GUESS_MS) return kept.place
+  const place = (async () => {
+    const found = await appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__search_session_transcripts', query: intent.slug, limit: 20 }))
+    const id = found.isDone ? guessedSession(found.text, state.appSession()?.id ?? '') : ''
+    if (!id) return NO_PLACE
+    const got = await appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__get_session', session_id: id }))
+    const app = got.isDone ? appSessionOf(got.text) : null
+    return app ? guessPlace(app) : NO_PLACE
+  })()
+  guesses.set(intent.key, { at: Date.now(), place })
+  return place
 }
 
 // Where a press about an intent goes (A3): to the live session that tracks it when that is another one, else here
@@ -1111,22 +1142,6 @@ async function whereTo($, key) {
 function noteSent($, id, target) {
   answerState = { ...answerState, sentTo: { ...answerState.sentTo, [id]: { sessionId: target.sessionId, name: target.name } } }
   $.ui.invalidate('ui.render')
-}
-
-// Go to session (A2), where the app can show the session that tracks the intent: both sessions run in the app.
-/** @param {Engine} $ @param {string} key the intent's key in the pane */
-function jumpOf($, key) {
-  const place = places.get(key)
-  return place?.kind === 'other' && place.appId && state.appSession() ? press($, () => goTo($, place), true) : undefined
-}
-
-// The app shows that session. It may decline (it opens only some sessions from another); then, as where its tool is
-// absent, the person switches to it by its title.
-/** @param {Engine} $ @param {Target} place */
-async function goTo($, place) {
-  const shown = await appTool(() => $.tool.call({ tool: 'mcp__ccd_window__open_session_in', session_id: place.appId, target: 'focus' }))
-  const said = cutWords(shown.text, 160)
-  return shown.isDone ? `the app says: ${said || `${place.name} is shown.`}` : `open ${place.name} from the app's sidebar: the app did not open it here${said ? ` (${said})` : ''}.`
 }
 
 // A question about an intent (its view's Ask about it, one of today's changes), sent where whereTo says.
@@ -2005,7 +2020,6 @@ function answering($, model, hasInput) {
     onFindings: one => () => ((findingShown = one.id), (paneMode = 'finding'), change({ typing: '' })),
     onFold: () => change({ isFoldOpen: !answerState.isFoldOpen }),
     whereOf: slug => places.get(slug) ?? NO_PLACE,
-    jumpOf: slug => jumpOf($, slug),
   }
 }
 
