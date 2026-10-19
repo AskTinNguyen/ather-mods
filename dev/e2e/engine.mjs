@@ -21,6 +21,9 @@ const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => na
 // engine of the run: an earlier session's timers still fire, and their runs must not answer for the one under test.
 export const aborts = { argv: '', times: 0 }
 
+// A run of the system's own handler, which opens a file or link in its app: `cmd /c start` on Windows, `open` on macOS, `xdg-open` on Linux.
+const isHandler = argv => argv[0] === 'open' || argv[0] === 'xdg-open' || (argv[0] === 'cmd' && argv[1] === '/c' && argv[2] === 'start')
+
 export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable, kept }) => {
   const store = new Map(kept)
   // Background workers the session dispatched, as $.agent.list() reports them.
@@ -29,7 +32,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   const panesUp = new Set()
   const hooks = []
   const timers = []
-  const record = { sends: [], aborts: [], ghRuns: [], ghAt: [], gitRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], forks: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
+  const record = { sends: [], aborts: [], ghRuns: [], ghAt: [], gitRuns: [], handlerRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], forks: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -173,6 +176,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
         if (aborts.times > 0 && aborts.argv !== '' && argv.join(' ').startsWith(aborts.argv)) {
           aborts.times -= 1
           throw new Error(`$.process.run(${argv[0]}) aborted`)
+        }
+        // The system's own handler never runs for real: it would open a browser on the developer's screen. Answered as opened.
+        if (isHandler(argv)) {
+          record.handlerRuns.push([...argv])
+          return { exitCode: 0, stdout: '', stderr: '' }
         }
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
         if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
