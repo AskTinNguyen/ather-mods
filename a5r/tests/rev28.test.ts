@@ -123,7 +123,8 @@ test('A79: a SYNC ABORT answer aborts the sync with its reason and releases the 
 })
 
 test('A79: with another lane on the lock at T, the sync\'s request waits first in the queue and is granted when it comes free; any other answer aborts with its first line', opts(), async ($, on) => {
-  const w = world(on, { ram: '40' })
+  // A93 (by design): git shows HEAD still at the pre-merge HEAD (positive evidence of no merge).
+  const w = world(on, { ram: '40', git: { 'rev-parse HEAD': { stdout: '9f8e7d6c0000\n' }, 'log -1 --format=%H %P HEAD': { stdout: '9f8e7d6c0000 1111aaaa\n' } } })
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
   w.put(LOCK, 'HELD lane=lane-cccccccc session=lane-cccccccc since=14:30 2026-10-06 pid=none end=14:50 mode=interactive pausable=yes next_safe=after save note=capture · held by lane-cccccccc, session cccccccc, until 14:50\n')

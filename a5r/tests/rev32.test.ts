@@ -129,3 +129,25 @@ test('A92: a queued request held back only by the launch gate is granted and wok
   expect(parseLockLine(w.read(LOCK)).id8).toBe(ME8)
   expect(prompts(w).filter(p => p.includes('granted to this session')).length).toBe(1)
 })
+
+// ---------- review of rev 32 (A91) ----------
+test('A91 (review): a long record is read by its last 64 KB only (never whole), and the waiting session is still nudged', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', git: { '[IO.File]::Open': { stdout: said(WAITING) } } })
+  w.put(LOCK, FREE)
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lastTurnAt: NOW - 20 * MIN, agents: 0 }))
+  w.put(`${RECORDS}/${SID('cccccccc')}.jsonl`, `${'x'.repeat(70 * 1024)}\n${said(DONE)}`) // read whole it would say DONE: the tail answers
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(w.runs.some(r => r.includes('[IO.File]::Open') && r.includes('Seek(-65536'))).toBe(true)
+  expect(nudgedTo(w, 'cccccccc')).toEqual(['14:30 2026-10-06'])
+})
+
+test('A91 (review): a session nudged less than an hour ago is not nudged again, whatever the window', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, FREE)
+  idlePeer(w, 'cccccccc', WAITING)
+  w.put(`${HF}/nudges/cccccccc.json`, JSON.stringify({ v: 1, nudges: [{ window: '13:40 2026-10-06', at: NOW - 30 * MIN, by: 'dddddddd', freeGb: 40 }] }))
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(nudgedTo(w, 'cccccccc')).toEqual(['13:40 2026-10-06'])
+})

@@ -33,21 +33,33 @@ export const testsLabel = (note: string): string | null => {
   return t === null ? null : /^tests\b/i.test(t) ? t : `tests: ${t}`
 }
 
-/** A93: the build's own last `Result:` line in its log (Build.bat exits 0 on failure, so only this line counts). */
+/** A93: where a build run begins in its log (UBT's own start lines): a `Result:` line before the last of them belongs to
+ * an earlier run (review of rev 32: a stale Result). */
+const BUILD_START = /Running UnrealBuildTool|Using bundled DotNet SDK|Building \d+ actions?|Determining max actions to execute/gi
+/** A93: the build's own last `Result:` line in its log after the last build start (Build.bat exits 0 on failure, so only
+ * this line counts); a log with no start line is read whole (it is the sync's own fresh file). */
 export const buildResultOf = (log: string): 'Succeeded' | 'Failed' | null => {
+  const starts = [...log.matchAll(BUILD_START)]
+  const from = starts.length > 0 ? (starts[starts.length - 1]?.index ?? 0) : 0
   let last: 'Succeeded' | 'Failed' | null = null
-  for (const m of log.matchAll(/\bResult:\s*(Succeeded|Failed)\b/g)) last = m[1] === 'Succeeded' ? 'Succeeded' : 'Failed'
+  for (const m of log.slice(from).matchAll(/\bResult:\s*(Succeeded|Failed)\b/g)) last = m[1] === 'Succeeded' ? 'Succeeded' : 'Failed'
   return last
 }
 
-/** A93: the merge commit `git log -1 --format="%H %P" HEAD` shows on top of the pre-merge HEAD the holder's a5r recorded,
- * else null. Git, not the worker's word, says whether the merge happened. With no record (its rev-parse failed) any merge
- * commit counts: wrongly keeping the freeze until the holder looks is the safe side of wrongly lifting it under a build.
- * (The shared branch always carries its own commits, so origin/main never fast-forwards it.) */
-export const mergeOnTop = (headLine: string, preHead: string): string | null => {
+/** A93: the sync's own build log, a fresh file per sync (written with `>`, never appended to). */
+export const syncBuildLog = (checkout: string, syncId: string): string => `${checkout}/Saved/A5R/${syncId}-build.log`
+
+/** A93: what git says of the merge. `merged`: a merge commit on top of the pre-merge HEAD the holder's a5r recorded (no
+ * record: any merge commit). `none`: POSITIVE evidence of no merge, HEAD readable and still the pre-merge HEAD. `unknown`:
+ * anything else (git timed out or failed, HEAD moved some other way): never read as no merge (review of rev 32: a slow git
+ * must not lift a freeze under a running build). */
+export type MergeRead = { state: 'merged'; sha: string } | { state: 'none' } | { state: 'unknown' }
+export const readMerge = (headLine: string | null, preHead: string): MergeRead => {
+  if (headLine === null) return { state: 'unknown' }
   const [sha, first, second] = headLine.trim().toLowerCase().split(/\s+/)
-  if (!sha || !first || !second) return null
-  return !preHead || first === preHead.trim().toLowerCase() ? sha : null
+  const pre = preHead.trim().toLowerCase()
+  if (sha && first && second && (!pre || first === pre)) return { state: 'merged', sha }
+  return sha && pre && sha === pre ? { state: 'none' } : { state: 'unknown' }
 }
 
 /** A93: what the worker's end makes of the sync: an end (an abort; a done that carries the post-merge tests), a stage
@@ -57,22 +69,29 @@ export type AfterWorker =
   | { kind: 'end'; state: 'done' | 'aborted'; note: string }
   | { kind: 'stage'; stage: SyncStage; mergeSha: string; buildLog: string; note: string }
   | { kind: 'no-merge' }
-export const afterWorker = (end: SyncEnd | null, mergeSha: string | null, isBuildSync: boolean): AfterWorker => {
+export const afterWorker = (end: SyncEnd | null, git: MergeRead, isBuildSync: boolean): AfterWorker => {
   if (end?.kind === 'abort') return { kind: 'end', state: 'aborted', note: end.note }
   // A SYNC DONE line (the worker prompt before rev 32 asked for it) that carries the post-merge tests still ends the sync.
   if (end?.kind === 'done' && testsOf(end.note) !== null) return { kind: 'end', state: 'done', note: end.note }
-  if (mergeSha === null) return { kind: 'no-merge' }
+  // Aborted only on positive evidence of no merge, and never against the worker's own MERGED line.
+  if (git.state === 'none' && end?.kind !== 'merged') return { kind: 'no-merge' }
+  const mergeSha = git.state === 'merged' ? git.sha : ''
   const buildLog = end?.kind === 'merged' ? end.buildLog : ''
-  return { kind: 'stage', stage: isBuildSync && end?.kind !== 'done' ? 'building' : 'testing', mergeSha, buildLog, note: `merged ${mergeSha}${buildLog ? `; build log ${buildLog}` : ''}${end ? '' : '; the worker ended without a SYNC line'}` }
+  const stage = isBuildSync && end?.kind !== 'done' ? 'building' : 'testing'
+  return { kind: 'stage', stage, mergeSha, buildLog, note: `merged ${mergeSha || '(git did not answer yet)'}${buildLog ? `; build log ${buildLog}` : ''}${end ? '' : '; the worker ended without a SYNC line'}` }
 }
 
-/** A93: one step of the holder's watch over a sync in a stage: the hard end put back once by 30 min while the build runs
- * within `warnMs` of it; the next stage; what the holder is told (each said once, by its key). */
+/** A93: the merge as a notice names it, or the step to read it while git has not answered. */
+export const mergeLabel = (mergeSha: string): string => mergeSha || '(its sha not read yet: git -C <checkout> log -1 --format=%H)'
+
+/** A93: one step of the holder's watch over a sync in a stage: the hard end put back once by 30 min, in either stage, while
+ * a build, test or Editor process runs within `warnMs` of it, or the processes cannot be read (`isBusy`); the next stage;
+ * what the holder is told (each said once, by its key). `stageAt`: when the stage began (the build-unknown grace). */
 export type StageMove = { extendTo: number | null; next: SyncStage | null; tell: 'testing' | 'build-failed' | 'build-unknown' | null }
-export const stageNext = (s: { stage: SyncStage | null; extended: boolean; hardEnd: number; updatedAt: number }, f: { result: 'Succeeded' | 'Failed' | null; isBuilding: boolean; now: number }, warnMs: number): StageMove => {
-  const extendTo = s.stage === 'building' && f.isBuilding && !s.extended && f.now >= s.hardEnd - warnMs ? s.hardEnd + BUILD_EXTEND_MS : null
+export const stageNext = (s: { stage: SyncStage | null; extended: boolean; hardEnd: number; stageAt: number }, f: { result: 'Succeeded' | 'Failed' | null; isBuilding: boolean; isBusy: boolean; now: number }, warnMs: number): StageMove => {
+  const extendTo = s.stage !== null && f.isBusy && !s.extended && f.now >= s.hardEnd - warnMs ? s.hardEnd + BUILD_EXTEND_MS : null
   if (s.stage === 'testing') return { extendTo, next: null, tell: 'testing' }
   if (f.result === 'Succeeded') return { extendTo, next: 'testing', tell: 'testing' }
   if (f.result === 'Failed') return { extendTo, next: null, tell: 'build-failed' }
-  return { extendTo, next: null, tell: !f.isBuilding && f.now - s.updatedAt >= STAGE_GRACE_MS ? 'build-unknown' : null }
+  return { extendTo, next: null, tell: !f.isBuilding && f.now - s.stageAt >= STAGE_GRACE_MS ? 'build-unknown' : null }
 }

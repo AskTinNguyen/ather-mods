@@ -13,8 +13,8 @@ import {
   type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { classifyGit, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
-import { NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
-import { POST_MERGE_TESTS, afterWorker, buildResultOf, mergeOnTop, stageNext, testsOf } from './syncstage.ts'
+import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
+import { POST_MERGE_TESTS, afterWorker, buildResultOf, readMerge, stageNext, syncBuildLog, testsOf, type MergeRead } from './syncstage.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -940,7 +940,10 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
 /** A79: the Editor slot the sync takes for its worker (its `what` names it, so the grant, lease and idle notices that are
  * meant for a person's own slot skip it). */
 const SYNC_SLOT = 'Sync main '
-const isSyncSlot = (w: Want | null | undefined): boolean => Boolean(w?.what.startsWith(SYNC_SLOT))
+// A session file from before rev 32 marks the worker's slot only by its `what` (`Sync main HH:MM`).
+const isSyncSlot = (w: Want | null | undefined): boolean => Boolean(w?.sync) || Boolean(w?.what.startsWith(SYNC_SLOT))
+/** The worker's own slot, which wakes nobody (A94: the holder's own request for its sync is granted with a notice). */
+const isWorkerSlot = (w: Want | null | undefined): boolean => (w?.sync ? w.sync.role === 'worker' : Boolean(w?.what.startsWith(SYNC_SLOT)))
 
 /** A79: the holder's a5r requests the Editor for the sync in code (the editor tool's request: launch false, build per the
  * sync, unattended, up to the hard end) and is granted at once when the lock is free (the sync holder is first in the
@@ -951,7 +954,7 @@ async function takeSyncLock($: Engine, opts: Opts, s: SyncFile, now: number): Pr
   lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
   lock = lockOf(lockRaw)
   const minutes = Math.ceil((s.hardEnd - now) / 60_000)
-  const want: Want = { ...wantFrom({ action: 'request', minutes, build: s.build, launch: false, mode: 'unattended', pausable: false, what: `${SYNC_SLOT}${clockOf(s.at)}`, next_safe: 'after the merge' } as unknown as Input, now), requestedAt: now }
+  const want: Want = { sync: { at: s.at, role: 'worker' }, ...wantFrom({ action: 'request', minutes, build: s.build, launch: false, mode: 'unattended', pausable: false, what: `${SYNC_SLOT}${clockOf(s.at)}`, next_safe: 'after the merge' } as unknown as Input, now), requestedAt: now }
   if (holdsLock()) {
     // Review 5: the holder still holds the Editor at T (its cutoff notice said so): the lease becomes the sync's, so the
     // worker may use or close that Editor and a5r releases it when the sync ends.
@@ -990,9 +993,9 @@ async function releaseSyncSlot($: Engine, opts: Opts, s: SyncFile, now: number):
 }
 
 /** A93: the merge commit on top of the pre-merge HEAD the holder's a5r recorded, or null. */
-async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<string | null> {
+async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<MergeRead> {
   const r = await $.process.run(['git', '-C', s2Root(opts), 'log', '-1', '--format=%H %P', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
-  return r?.exitCode === 0 ? mergeOnTop(r.stdout, s.preHead) : null
+  return readMerge(r?.exitCode === 0 ? r.stdout : null, s.preHead)
 }
 
 /** A12 / A79 / A93: the worker's turn ended. `SYNC ABORT …` → aborted; `SYNC DONE …` with the post-merge test line →
@@ -1012,9 +1015,10 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
   await restoreMe($, opts)
   if (s.state !== 'planned') return releaseSyncSlot($, opts, s, now)
   const end = parseSyncEnd(answer)
-  const after = afterWorker(end, end?.kind === 'abort' ? null : await mergeCommit($, opts, s), s.build)
+  const after = afterWorker(end, end?.kind === 'abort' ? { state: 'unknown' } : await mergeCommit($, opts, s), s.build)
   if (after.kind === 'stage') {
-    const next: SyncFile = { ...s, stage: after.stage, mergeSha: after.mergeSha, buildLog: after.buildLog, note: after.note, updatedAt: now }
+    // The build log is the sync's own (A5R named it in the worker's task), whatever path the worker's line gives.
+    const next: SyncFile = { ...s, stage: after.stage, mergeSha: after.mergeSha, buildLog: s.build ? syncBuildLog(s2Root(opts), s.id) : '', note: after.note, stageAt: now, updatedAt: now }
     if (await writeSync($, opts, next, s)) push({ id: `sync:${s.id}:${s.at}:${after.stage}`, text: after.stage === 'building' ? NOTICES.syncBuilding(next) : NOTICES.syncTest(next), isActionable: after.stage === 'testing' })
     return
   }
@@ -1043,14 +1047,43 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
  * post-merge tests; Failed → the holder woken to revert and abort); no log and no build process → the holder woken to
  * read the result itself; in the testing stage the holder is woken once to run the tests and call done. */
 async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
-  const result = s.stage === 'building' && s.buildLog ? buildResultOf((await $.fs.read(s.buildLog).catch(() => '')) ?? '') : null
-  const move = stageNext(s, { result, isBuilding: buildProcs(probe).length > 0, now }, HARD_END_WARN_MS)
-  const changes: Partial<SyncFile> = { ...(move.extendTo === null ? {} : { hardEnd: move.extendTo, extended: true }), ...(move.next ? { stage: move.next, note: `${s.note}; build ${result}`.slice(0, 300) } : {}) }
+  const git = s.mergeSha ? null : await mergeCommit($, opts, s) // git did not answer at the worker's end: ask again
+  const log = s.stage === 'building' && s.buildLog ? await $.fs.stat(s.buildLog).catch(() => null) : null
+  const result = log && log.mtimeMs > s.stageAt ? buildResultOf((await $.fs.read(s.buildLog).catch(() => '')) ?? '') : null
+  // Near the hard end the processes are read fresh: a build, test or Editor run (or no reading at all) puts it back once.
+  const nearEnd = !s.extended && now >= s.hardEnd - HARD_END_WARN_MS
+  const reading = nearEnd && !probe ? await freshProbe($, opts) : probe // the shared reading is at most 50 s old
+  const isBuilding = buildProcs(reading).length > 0
+  const move = stageNext(s, { result, isBuilding, isBusy: reading === null || isBuilding || unrealPids(reading).length > 0, now }, HARD_END_WARN_MS)
+  const changes: Partial<SyncFile> = {
+    ...(git?.state === 'merged' ? { mergeSha: git.sha } : {}),
+    ...(move.extendTo === null ? {} : { hardEnd: move.extendTo, extended: true }),
+    ...(move.next ? { stage: move.next, stageAt: now, note: `${s.note}; build ${result}`.slice(0, 300) } : {}),
+  }
   const moved: SyncFile = { ...s, ...changes, updatedAt: now }
   const isMoved = Object.keys(changes).length > 0 && (await writeSync($, opts, moved, s))
   const cur = isMoved ? moved : s
   if (isMoved && move.extendTo !== null) push({ id: `sync:${s.id}:${s.at}:extended`, text: NOTICES.syncExtended(cur), isActionable: false })
   if (move.tell) push({ id: `sync:${s.id}:${s.at}:${move.tell}`, text: { testing: NOTICES.syncTest, 'build-failed': NOTICES.syncBuildFailed, 'build-unknown': NOTICES.syncBuildUnknown }[move.tell](cur), isActionable: true })
+}
+
+/** The live session that takes over what a gone holder left (a merge left behind, a sync after its merge): the first
+ * live one in the queue order, else the first live one by id (this session counts as live). */
+function takerOf(now: number): string | null {
+  const all = me ? [me, ...peers] : peers
+  const alive = all.filter(f => f.id8 === me8 || livenessOf(f.id8, all, lanes, now) === 'alive')
+  const queued = queueOf(alive, lanes, now, syncFile).map(f => f.id8)
+  return [...queued, ...alive.map(f => f.id8).filter(id => !queued.includes(id)).sort()][0] ?? null
+}
+
+/** A93 (review): a holder gone after the merge never expires the sync: the taker (takerOf) becomes its holder, the freeze
+ * stays, and it is told the stage and the build log. Only the taker writes (one writer). */
+async function handOverSync($: Engine, opts: Opts, s: SyncFile, now: number): Promise<SyncFile> {
+  if (!me || s.holder.id8 === me8 || isLive(s.holder.id8, now) || takerOf(now) !== me8) return s
+  const taken: SyncFile = { ...s, holder: { session: me.session, id8: me8, lane: me.lane }, note: `${s.note}; handed from ${s.holder.lane} (gone) to ${me.lane} at ${clockOf(now)}`.slice(0, 300), updatedAt: now }
+  if (!(await writeSync($, opts, taken, s))) return s
+  push({ id: `sync:${s.id}:${s.at}:handed:${me8}`, text: NOTICES.syncHandedOver(taken, s.holder.lane), isActionable: true })
+  return taken
 }
 
 /** Review 5: with A5R off the tick does nothing else, but a lock this session still holds for a sync that is no longer
@@ -1338,13 +1371,27 @@ async function nudgeStep($: Engine, opts: Opts, now: number, window: string | nu
   const dir = pool.length > 0 ? await recordsDir($, opts) : ''
   for (const f of pool) {
     nudgeRead.seen.add(`${f.id8}:${f.lastTurnAt}`)
-    const last = parseTail(dir && f.session ? await transcriptTail($, `${dir}/${f.session}.jsonl`) : '').filter(e => e.role === 'assistant' && e.text).pop()
+    // Review: at most one nudge an hour per session, whatever the window.
+    if ((await readInbox($, opts, nudges, f.id8)).some(n => now - n.at < NUDGE_EVERY_MS)) continue
+    const last = parseTail(dir && f.session ? await recordTail($, `${dir}/${f.session}.jsonl`) : '').filter(e => e.role === 'assistant' && e.text).pop()
     if (!last || !saysWaitingForEditor(last.text) || !(await claimAlert($, opts, `nudge-${window}-${f.id8}`))) continue
     // The target's claim above is spent even when no slot is left: harmless, the window's cap is reached anyway.
     if (!(await claimNudgeSlot($, opts, window))) return // 3 sent in this window
     await appendInbox($, opts, nudges, f.id8, { window, at: now, by: me8, freeGb: probe?.freeGb ?? null })
     await orchestrateLog($, opts, { at: now, rule: 'A91-nudge', lane: f.lane, id8: f.id8, procs: (probe?.procs ?? []).map(p => p.name), liveness: 'alive', lastTurnAt: f.lastTurnAt ?? null, agents: f.agents ?? null, build: false, acted: true, note: `the Editor is free (window ${window}), nobody queued; its last message: ${last.text.replace(/\s+/g, ' ').slice(0, 100)}` }).catch(() => undefined)
   }
+}
+
+/** A65 / A91 (review): the last 64 KB of a session's record, never the whole file (a record runs to tens of MB): read whole
+ * only when that small, else its last bytes by PowerShell (the first, partial line is dropped by parseTail). */
+const RECORD_TAIL_BYTES = 64 * 1024
+async function recordTail($: Engine, path: string): Promise<string> {
+  const size = (await $.fs.stat(path).catch(() => null))?.size
+  if (size === undefined) return ''
+  if (size <= RECORD_TAIL_BYTES) return (await $.fs.read(path).catch(() => '')) ?? ''
+  const ps = `$f = [IO.File]::Open('${path.replace(/'/g, "''")}', 'Open', 'Read', 'ReadWrite'); [void]$f.Seek(-${RECORD_TAIL_BYTES}, 'End'); $b = New-Object byte[] ${RECORD_TAIL_BYTES}; $n = $f.Read($b, 0, ${RECORD_TAIL_BYTES}); $f.Close(); [Console]::OutputEncoding = [Text.Encoding]::UTF8; [Text.Encoding]::UTF8.GetString($b, 0, $n)`
+  const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps], { timeoutMs: 20_000 }).catch(() => null)
+  return r?.exitCode === 0 ? r.stdout : ''
 }
 
 /** A91: one of the NUDGE_MAX nudges of a free window, claimed like an alert; false when all are taken. */
@@ -1377,15 +1424,6 @@ async function readVerdicts($: Engine, opts: Opts): Promise<VerdictRow[]> {
   } catch {
     return []
   }
-}
-
-/** A65: the last `max` lines of the holder's transcript: read whole when it is small enough, else its tail by PowerShell. */
-async function transcriptTail($: Engine, path: string, max = 200): Promise<string> {
-  if (!path) return ''
-  const whole = await $.fs.read(path).catch(() => null)
-  if (whole !== null) return whole.split(/\r?\n/).slice(-max).join('\n')
-  const ps = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Content -LiteralPath '${path.replace(/'/g, "''")}' -Tail ${max} -Encoding UTF8`], { timeoutMs: 20_000 }).catch(() => null)
-  return ps?.exitCode === 0 ? ps.stdout : ''
 }
 
 /** A65: one incident to judge, if any: the Editor lease past its end or its holder silent 10 min while holding; the
@@ -1426,7 +1464,7 @@ async function judgeStep($: Engine, opts: Opts, now: number): Promise<void> {
   const f = all.find(x => x.id8 === inc.id8)
   const dir = await recordsDir($, opts)
   const transcript = dir && inc.session ? `${dir}/${inc.session}.jsonl` : ''
-  const events = parseTail(await transcriptTail($, transcript))
+  const events = parseTail(await recordTail($, transcript))
   const facts: JudgeFacts = { now, ...inc, liveness: livenessOf(inc.id8, all, lanes, now), lastTurnAt: f?.lastTurnAt ?? null, agents: f?.agents ?? null, procs: (fresh?.procs ?? []).map(p => p.name), hasEditor: unrealPids(fresh).length > 0, hasBuild: buildProcs(fresh).length > 0, transcript, agentKinds: f?.agentKinds ?? [], ...(inc.kind === 'editor' ? { lockPid: lock.pid, lockPidRunning: lock.pid !== null && Boolean(fresh?.procs.some(p => p.pid === lock.pid)) } : {}) }
   const hint = hintOf(facts, events)
   const ran = await $.agent.spawn({ subagentType: JUDGE_AGENT, description: `Judge ${inc.lane || inc.id8}`, prompt: judgePrompt(facts, hint, digestOf(events, 40, now)) }).catch(err => ({ deny: String(err) }))
@@ -1545,7 +1583,7 @@ async function takeLock($: Engine, opts: Opts, d: { end: number; reuse: number |
   me = { ...me, holding: { since: now, end: d.end, extended: 0 } }
   lastEditorUseAt = now
   // A79: the sync's own slot is its worker's; the holder's model is not woken to launch an Editor for it.
-  if (!isSyncSlot(w)) push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : ''), isActionable: true })
+  if (!isWorkerSlot(w)) push({ id: noticeIds.granted(now), text: NOTICES.granted(d.end, w.pie, d.reuse, now - cleanupAt < 60_000 ? cleanupNote : ''), isActionable: true })
 }
 
 /** A short request without a build asks the holder to yield, once per holder per hour: through the holder's own
@@ -1712,6 +1750,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
     s = await expireSync($, opts, s, now)
     phase = phaseOf(s, now)
   }
+  if (phase === 'frozen' && s.stage) s = await handOverSync($, opts, s, now) // A93 (review)
   const isHolder = s.holder.id8 === me8
   if (isHolder && phase === 'frozen' && s.stage) {
     await stageStep($, opts, s, now) // A93
@@ -2505,10 +2544,7 @@ async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void>
   // 0.17.1: the last sync's holder ends it while it lives; when it is gone (or there is none), the first live session in
   // the queue (else the first live one by id) takes it over, so a left merge never waits on a gone session.
   const holderAlive = syncFile !== null && livenessOf(syncFile.holder.id8, all, lanes, now) !== 'gone' && syncFile.holder.id8 !== ''
-  const alive = all.filter(f => f.id8 === me8 || livenessOf(f.id8, all, lanes, now) === 'alive')
-  const queued = queueOf(alive, lanes, now, syncFile).map(f => f.id8)
-  const order = [...queued, ...alive.map(f => f.id8).filter(id => !queued.includes(id)).sort()]
-  const takerId = holderAlive ? null : (order[0] ?? null)
+  const takerId = holderAlive ? null : takerOf(now)
   const taker = takerId === null ? null : { lane: all.find(f => f.id8 === takerId)?.lane ?? takerId, isMe: takerId === me8 }
   const id = `merge-head:${Math.round(head.mtimeMs)}:${takerId ?? syncFile?.holder.id8 ?? ''}`
   push({ id, text: NOTICES.mergeLeft(head.mtimeMs, syncFile, taker, s2Root(opts)), isActionable: holderAlive ? syncFile?.holder.id8 === me8 : taker?.isMe === true })
@@ -2671,7 +2707,9 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       await editorPass($, opts, now)
       if (!me) return 'no session file'
       if (holdsLock()) return tail(`this session already holds the Editor until ${me.holding ? clockOf(me.holding.end) : lock.end} → use it; extend if you need more`)
-      const want = wantFrom(e, now)
+      // A94: the holder's own request while its sync is open is the sync's slot (released with the sync).
+      const forSync = syncFile && isHolderInSync(syncFile, me8, phaseOf(syncFile, now)) ? syncFile : null
+      const want: Want = { ...wantFrom(e, now), ...(forSync ? { sync: { at: forSync.at, role: 'holder' as const } } : {}) }
       const long = buildWindowProblem(want, now)
       if (long) return long
       me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }

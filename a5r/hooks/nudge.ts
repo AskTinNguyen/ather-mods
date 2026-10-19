@@ -5,6 +5,7 @@ import { hash, livenessOf, type LaneBeat, type LockLine, type Phase, type Sessio
 export const NUDGE_IDLE_MS = 10 * 60_000 // no turn for this long
 export const NUDGE_ACTIVE_MS = 24 * 3_600_000 // and a turn within this long
 export const NUDGE_MAX = 3 // nudges in one free window
+export const NUDGE_EVERY_MS = 60 * 60_000 // at most one nudge an hour per session, across windows
 
 /** The free window a FREE lock line opens (its since stamp, else the line itself), or null while the Editor is held, the
  * lock is missing, or a sync is in its cutoff or freeze (grants wait then). */
