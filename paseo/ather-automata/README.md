@@ -4,7 +4,7 @@ The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://pa
 
 ## Install
 
-Paseo 0.11.1 or later (below 0.12), with plugins enabled (Settings → Plugins). Node, git and `gh` on the daemon's PATH.
+Paseo 0.11.1 or later, with plugins enabled (Settings → Plugins). Node, git and `gh` on the daemon's PATH.
 
 ```bash
 paseo plugin install github:AskTinNguyen/ather-mods:paseo/ather-automata
