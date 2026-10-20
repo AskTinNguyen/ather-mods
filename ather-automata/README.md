@@ -190,6 +190,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/handoff.test.
 
 ## Changes
 
+- **0.6.3** The Paseo plugin no longer caps the Paseo version it accepts (it needs 0.11.1 or later), so a new Paseo release does not stop it installing (Paseo 0.6.3).
 - **0.6.2** A piped build is no longer warned about as "the exit code is the filter's" when the command sets `pipefail` or the call already failed (Paseo 0.6.2).
 - **0.6.1** No change to what you see: the check of this checkout's branch (`checkBranch`), Home's parts (`HOME_PARTS`) and the views' replies (`viewText`) are shared code now, so the Paseo panel uses the same (Paseo 0.6.1).
 - **0.6.0** Home says whether your branch merges cleanly into origin's base, under the status line: `Merges cleanly into origin/main · checked 2m ago`, or in amber `▲ 2 overlaps with origin/main · see Needs you` (Advanced view). With nothing needing you, the line above the prompt is the tracked intent's stage, items met and name (`● Build 1/2 · feat-x`) instead of Ather's name. This is mockups A and C without the Ship card: each of its states already has a place (docs/intent/ship-pill).
