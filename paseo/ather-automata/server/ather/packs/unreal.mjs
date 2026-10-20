@@ -124,7 +124,7 @@ export const readShell = (command, text, ran) => {
       out.context.push('Ather Automata: the build printed "Result: Failed" although the command exited 0. The exit code is the pipe\'s, not the build\'s. Treat this build as failed.')
       out.toasts.push({ text: 'Ather: piped build reported success but its Result line says Failed.', timeoutMs: 10000 })
       out.bumps.push('buildsCorrected')
-    } else if (isPiped(command) && result === null) {
+    } else if (isPiped(command) && result === null && ran.isError !== true) {
       out.context.push('Ather Automata: this build was piped through a filter, so its exit code is the filter\'s. Read the build\'s own "Result:" line from the log before claiming the build passed.')
     }
   }
