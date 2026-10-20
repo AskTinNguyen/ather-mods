@@ -176,6 +176,9 @@ export const segments = (cmd: string): string[] => {
   return out.map(s => s.trim()).filter(Boolean)
 }
 
+/** A PowerShell single-quoted string (a `'` inside is doubled). */
+export const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`
+
 /** Drop quoted text holding spaces (commit messages); keep quoted single words and paths. */
 export const blankQuotes = (seg: string): string => seg.replace(/"[^"]*"|'[^']*'/g, m => (/\s/.test(m.slice(1, -1)) ? '""' : m))
 

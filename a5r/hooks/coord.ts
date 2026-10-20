@@ -4,11 +4,12 @@
 // alive: each session writes only its own files (Saved/A5R/editor/<id8>.json, touch/<id8>.json), the
 // sync holder alone writes Saved/A5R/sync.json, and the head of the queue alone takes a free lock.
 // Files are the truth; a notice is only a doorbell.
-import { commandVerb, gitTarget, nestedCommand, segments, stripHeredocs, tokenize, under } from './a5r.ts'
+import { commandVerb, gitTarget, nestedCommand, psQuote, segments, stripHeredocs, tokenize, under } from './a5r.ts'
 import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from './syncrules.ts'
 import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
-import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type StageTell, type SyncStage } from './syncstage.ts'
+import { buildStep, runLabel } from './buildscript.ts'
+import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type EntryTell, type StageTell, type SyncStage } from './syncstage.ts'
 
 export const DIR = 'Saved/A5R'
 export const HEARTBEAT_STALE_MS = 3 * 60_000 // a session file not refreshed for 3 min: that session is gone
@@ -755,6 +756,9 @@ export type SyncFile = {
   preHead: string
   mergeSha: string
   buildLog: string
+  /** A109: the one command that starts the sync's build script, as the worker's task gave it ('' none: the sync does not
+   * build, its worker has not started, or the script could not be written). */
+  buildRun: string
   /** A93: the hard end was put back once while the build ran. */
   extended: boolean
   /** A93: when the current stage began (a build log older than this is an earlier run's). */
@@ -795,6 +799,7 @@ export const parseSyncFile = (text: string | null): SyncFile | null => {
       preHead: String(v.preHead ?? ''),
       mergeSha: String(v.mergeSha ?? ''),
       buildLog: String(v.buildLog ?? ''),
+      buildRun: String(v.buildRun ?? ''),
       extended: v.extended === true,
       stageAt: typeof v.stageAt === 'number' ? v.stageAt : 0,
       rules: storedRules(v.rules),
@@ -849,6 +854,7 @@ export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: 
   preHead: '',
   mergeSha: '',
   buildLog: '',
+  buildRun: '',
   extended: false,
   stageAt: 0,
   rules: [],
@@ -1063,16 +1069,21 @@ export const NOTICES = {
    * still frozen. */
   syncManual: (s: SyncFile, busy = NO_GIT_BUSY): string => {
     const git = gitBusyNote(busy) // A108: the checkout's git and its index.lock when the worker handed the sync back
-    return noticeText('Sync main', `the sync at ${hhmm(s.at)} is back in your hands (${s.note}); every other session stays frozen and the sync's Editor lock stays this session's until done, abort or ${hhmm(s.hardEnd)}${git.fact}`, `keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); ${git.step ? `${git.step}; then ` : ''}either finish it by hand: close the Editor process first (an open Editor holds files git must replace: "unable to unlink"), check git status and .git/MERGE_HEAD, merge with git non-interactive (git -C <checkout> merge --no-edit origin/main), resolve (rule 11 and your conflict rules)${s.build ? ', build' : ''}, run the post-merge headless tests (${POST_MERGE_TESTS}) and call the sync tool done with their result line; or call the sync tool abort with why, which lifts the freeze and frees the Editor at once`)
+    return noticeText('Sync main', `the sync at ${hhmm(s.at)} is back in your hands (${s.note}); every other session stays frozen and the sync's Editor lock stays this session's until done, abort or ${hhmm(s.hardEnd)}${git.fact}`, `keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); ${git.step ? `${git.step}; then ` : ''}either finish it by hand: close the Editor process first (an open Editor holds files git must replace: "unable to unlink"), check git status and .git/MERGE_HEAD, merge with git non-interactive (git -C <checkout> merge --no-edit origin/main), resolve (rule 11 and your conflict rules)${s.build ? `, build (${buildStep(s.buildRun)})` : ''}, run the post-merge headless tests (${POST_MERGE_TESTS}) and call the sync tool done with their result line; or call the sync tool abort with why, which lifts the freeze and frees the Editor at once`)
   },
-  /** A93: the merge is in and its build runs: the freeze holds; the holder hears when the build's Result line comes. */
+  /** A93: the merge is in and its build runs (A109: its log of this run or a build process seen): the freeze holds; the
+   * holder hears when the build's Result line comes. */
   syncBuilding: (s: SyncFile): string => noticeText('Sync main', `the merge ${mergeLabel(s.mergeSha)} is in and the build runs${s.buildLog ? ` (log ${s.buildLog})` : ''}; every other session stays frozen`, 'leave git and the Editor in the shared checkout alone; A5R wakes you at the build\'s own Result: line'),
+  /** A109: the worker ended with its build reported started, but neither its log nor a build process is seen yet. */
+  syncBuildReported: (s: SyncFile): string => noticeText('Sync main', `the merge ${mergeLabel(s.mergeSha)} is in; the worker reports it started the build; A5R confirms when its log appears${s.buildLog ? ` (${s.buildLog})` : ''}; every other session stays frozen`, 'leave git and the Editor in the shared checkout alone; A5R wakes you at the build\'s own Result: line, or at once if the build did not start'),
   /** A93 / A95: the build succeeded (or the sync does not build): the holder runs the post-merge tests, then done. */
   syncTest: (s: SyncFile): string => noticeText('Sync main', `the merge ${mergeLabel(s.mergeSha)} is in${s.build ? ' and its build succeeded' : ''}; the post-merge headless tests are part of the sync`, `run them now with the S2 standard command: ${POST_MERGE_TESTS}; then call the sync tool done with the test result line in the note (or "tests skipped: <why>"); every other session stays frozen until then`),
   /** A93: the build failed: the holder reverts the merge and aborts. */
   syncBuildFailed: (s: SyncFile): string => noticeText('Sync main', `the build of the merge ${mergeLabel(s.mergeSha)} failed (its own Result: line)`, `revert it: git -C <checkout> revert -m 1 ${s.mergeSha || '<merge sha>'} --no-edit, then call the sync tool abort with the first error lines`),
-  /** A93: no build log is known and no build process runs. */
-  syncBuildUnknown: (s: SyncFile): string => noticeText('Sync main', `the merge ${mergeLabel(s.mergeSha)} is in but no build process runs and its build log ${s.buildLog ? `(${s.buildLog}) ` : ''}has no Result: line of this run`, 'read the build\'s own Result: line (or build now): Succeeded → run the post-merge tests and call done with their result line; Failed → git revert -m 1 <merge sha> --no-edit, then abort'),
+  /** A93: no build log is known and no build process runs. A109: told at once when the worker did not start the build
+   * (`build-log=none`) or the build script ended with no Result: line, else when nothing is seen past the grace; the holder
+   * starts the script itself, with the one command the worker was given. */
+  syncBuildUnknown: (s: SyncFile): string => noticeText('Sync main', `the merge ${mergeLabel(s.mergeSha)} is in but its build log ${s.buildLog ? `(${s.buildLog}) ` : ''}has no Result: line of this run: the build did not start (no log of this run), or its script ended without one`, `start the build yourself now with ${buildStep(s.buildRun)} (A5R watches the log and wakes you at its Result: line); if the log does hold a Result: line of this run: Succeeded → run the post-merge tests and call done with their result line; Failed → git revert -m 1 <merge sha> --no-edit, then abort`),
   /** A93 (review): the holder went away after the merge: this live session now holds the sync, still frozen. */
   syncHandedOver: (s: SyncFile, from: string): string => noticeText('Sync main', `the sync at ${hhmm(s.at)} was held by ${from}, which is gone; the merge ${mergeLabel(s.mergeSha)} is in, so this session now holds it, in its ${s.stage ?? 'merge'} stage${s.buildLog ? ` (build log ${s.buildLog})` : ''}, frozen until ${hhmm(s.hardEnd)} at the latest`, s.stage === 'testing' ? `run the post-merge headless tests (${POST_MERGE_TESTS}), then call the sync tool done with their result line (or "tests skipped: <why>"); abort if they fail` : 'A5R watches the build log for its own Result: line and wakes you; then run the post-merge tests and call done, or revert (git revert -m 1 <merge sha> --no-edit) and abort'),
   /** A93: the hard end was put back once while a build, test or Editor process ran near it. */
@@ -1126,12 +1137,13 @@ export const NOTICES = {
 } as const
 
 /** A93 / A96: what the holder is told as its sync enters a stage (the worker's end) or moves within one (the watch). */
-export const SYNC_TELL: Record<SyncStage | StageTell, (s: SyncFile) => string> = {
+export const SYNC_TELL: Record<StageTell | EntryTell, (s: SyncFile) => string> = {
   building: NOTICES.syncBuilding,
   testing: NOTICES.syncTest,
   manual: NOTICES.syncManual,
   'build-failed': NOTICES.syncBuildFailed,
   'build-unknown': NOTICES.syncBuildUnknown,
+  'build-reported': NOTICES.syncBuildReported,
 }
 
 export const noticeIds = {
@@ -1240,7 +1252,7 @@ export const SYNC_WORKER_PROMPT = [
   '3. The Editor. Never write Saved/EDITOR_OWNER.txt. Read it before any merge: it must name the holder session given in your task (the sync\'s lock). If it names another lane: never close, kill or drive that Editor; never sleep or poll in a loop (a foreground sleep is refused here); read it once more after the fetch of rule 4 (the sync is first in the queue and is granted the moment it comes free), and if it still names another lane, end with SYNC ABORT naming that lane. If an Editor is open while the lock is the sync\'s (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone.',
   '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. Before you judge any path dirty or untracked in the way, run `git -C <checkout> update-index -q --refresh` and read `git status` again: a path git no longer lists after it is clean (a stat-only change), never a reason to abort. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
   '5. Merge: `git merge --no-edit origin/main` (never rebase). The dry-run list in your task may be older than your merge (main can move after it): the merge\'s own unmerged paths (`git diff --name-only --diff-filter=U`) decide, listed or not. For each conflicted path: first the holder\'s conflict rules in your task (the first rule whose pattern matches the path wins): a path a rule matches is resolved with that rule\'s side whatever its kind, .uasset and .umap included: `git checkout --<side> -- <path>` then `git add -- <path>`, and your report names each such path with its rule. A path no rule matches: rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
-  '6. Build, only when the sync builds: the engine root comes from the machine profile. Start the build in the background with its output written to the build log your task names (a fresh file for this sync), with `>` and never `>>` (for example Build.bat … > <build log> 2>&1, started so that it outlives your turn), then end at once with the SYNC MERGED line naming that log: never wait for the build (a build outlives your tool calls). The holder\'s a5r watches that log for the build\'s own `Result:` line (Build.bat exits 0 on failure), keeps every other session frozen meanwhile, and has the holder run the post-merge tests or revert.',
+  '6. Build, only when the sync builds: the holder\'s a5r wrote a build script (it runs Build.bat with the right arguments and writes the build log your task names, fresh). Start the build only with the one PowerShell command your task gives, exactly as given (only the engine root from the machine profile goes where it says <engine root>); never your own cmd, Build.bat or redirection line (cmd /c strips the quotes of such a line and exits at once, with no log and no build). Within 60 seconds, check both that the build log exists and that a build process runs (dotnet, UnrealBuildTool, cl or link: Get-Process), or that the log already holds the build\'s `Result:` line (a quick build). Both → end at once with the SYNC MERGED line naming that log: never wait for the build (a build outlives your tool calls). Either missing → start it no other way: end with `SYNC MERGED <merge sha> build-log=none` and say in your report that the build did not start, with what you saw (the log\'s lines if it exists, the processes). The holder\'s a5r watches that log for the build\'s own `Result:` line (Build.bat exits 0 on failure), keeps every other session frozen meanwhile, and has the holder run the post-merge tests or revert, or start the script itself.',
   '7. End: never end your turn while a command you started (other than the build of rule 6) still runs, and never end with "waiting" or "until … finishes": wait for each such command in the foreground first. Your final answer is a short report whose last line is exactly one of these lines (nothing after it, no other line starting with SYNC):',
   '   SYNC MERGED <merge sha> build-log=<path of the build log, or none when the sync does not build>',
   '   SYNC ABORT <why, one line> state=<the state the checkout is in: clean at <sha>, merge aborted, reverted <sha>, …>',
@@ -1291,10 +1303,16 @@ const listLabel = (s: SyncFile): string => {
   return `That list: ${made}${s.dry?.stale ? `, STALE: ${s.dry.stale}` : ''}. It may be older than your merge: the merge's own unmerged paths (git diff --name-only --diff-filter=U) decide.`
 }
 
+/** A109: the task's build line: the log, and the one command that starts the script A5R wrote (rule 6). */
+const buildLine = (s: SyncFile, checkout: string): string =>
+  !s.build ? 'no'
+    : s.buildRun ? `yes; build log: ${syncBuildLog(checkout, s.id)}; start the build (after the merge commit) only with ${runLabel(s.buildRun)}`
+      : 'yes, but A5R could not write its build script: start no build, and end with SYNC MERGED <merge sha> build-log=none'
+
 /** The task the holder's a5r hands the sync worker: this sync's facts. */
 export const syncWorkerTask = (s: SyncFile, checkout: string, lock: string): string =>
   [
-    `Run the sync of origin/main planned for ${hhmm(s.at)} in ${checkout} (holder ${s.holder.lane}, session ${s.holder.id8}). Hard end ${hhmm(s.hardEnd)}: end before it with the SYNC MERGED or SYNC ABORT line. Build: ${s.build ? `yes; build log: ${syncBuildLog(checkout, s.id)} (write it with >, never >>)` : 'no'}.`,
+    `Run the sync of origin/main planned for ${hhmm(s.at)} in ${checkout} (holder ${s.holder.lane}, session ${s.holder.id8}). Hard end ${hhmm(s.hardEnd)}: end before it with the SYNC MERGED or SYNC ABORT line. Build: ${buildLine(s, checkout)}.`,
     `Holder's conflict rules (rule 5, the first match wins): ${rulesLabel(s.rules)}.`,
     `Dry-run at ${isListAtT(s) ? 'T' : 'the cutoff'}: ${s.conflicts === null ? 'not run' : s.conflicts.length === 0 ? 'no conflicts' : s.conflicts.map(c => conflictLabel(c, s.rules)).join('; ')}.`,
     `Untracked files origin/main adds: ${s.untracked === null ? 'not listed' : s.untracked.length === 0 ? 'none' : s.untracked.join('; ')}.`,
@@ -1426,5 +1444,5 @@ export const titleSearchPs = (path: string): string[] => [
   '-NoProfile',
   '-NonInteractive',
   '-Command',
-  `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Select-String -LiteralPath '${path.replace(/'/g, "''")}' -Pattern '${TITLE_PATTERN}' -Encoding UTF8 -AllMatches | ForEach-Object { $_.Matches.Value }`,
+  `[Console]::OutputEncoding = [Text.Encoding]::UTF8; Select-String -LiteralPath ${psQuote(path)} -Pattern '${TITLE_PATTERN}' -Encoding UTF8 -AllMatches | ForEach-Object { $_.Matches.Value }`,
 ]

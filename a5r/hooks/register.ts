@@ -1,5 +1,5 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5R, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
+import { A5R, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, lockProblem, mcpCallKind, parseEditorLock } from './editor.ts'
@@ -17,7 +17,8 @@ import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHol
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
-import { POST_MERGE_TESTS, afterWorker, buildResultOf, enterStage, isMergedStage, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type MergeRead, type SyncStage } from './syncstage.ts'
+import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type BuildLogRead, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
+import { buildScriptText, buildStartCommand, syncBuildScript } from './buildscript.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -44,7 +45,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, queueBox, sessionsBox, edit
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number }
+type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -942,17 +943,30 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
   // A93: the HEAD before the merge, so a worker that ends with no SYNC line can still be read as merged or not.
   const head = await $.process.run(['git', '-C', s2Root(opts), 'rev-parse', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
   const preHead = head?.exitCode === 0 ? head.stdout.trim() : ''
-  if (!(await writeSync($, opts, { ...s, workerAt: now, preHead, updatedAt: now }, s))) return
+  const buildRun = s.build ? await writeBuildScript($, opts, s) : ''
+  if (!(await writeSync($, opts, { ...s, workerAt: now, preHead, buildRun, updatedAt: now }, s))) return
   const claimed = syncFile ?? s
   // A79: the worker calls no a5r tool (a plugin's hooks never see the calls of an agent it spawned), so the holder's a5r
   // takes the Editor lock for the sync here, as the editor tool's request does, and releases it when the worker ends.
   await takeSyncLock($, opts, claimed, now).catch(err => $.ui.log(`a5r: sync lock: ${String(err)}`, { to: 'debug' }))
   const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(opts), (lockRaw ?? '').trim()) }).catch(err => ({ deny: String(err) }))
   // A96: a worker that could not start hands the sync back like one that gave up (the manual stage).
-  if (ran.deny !== undefined) return enterSyncStage($, opts, claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}` }, now)
+  if (ran.deny !== undefined) return enterSyncStage($, opts, claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}`, isBuildNone: false }, now)
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
   const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'a5r').pop()?.id
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
+}
+
+/** A109: the sync's build script written fresh (over any earlier one of this sync); the one command that starts it, or ''
+ * when it could not be written (the worker's task then says to start no build). */
+async function writeBuildScript($: Engine, opts: Opts, s: SyncFile): Promise<string> {
+  const [checkout, root] = [s2Root(opts), String(opts.engineRoot ?? '')]
+  const script = syncBuildScript(checkout, s.id)
+  const isWritten = await $.fs.write(script, buildScriptText(checkout, syncBuildLog(checkout, s.id), root)).then(() => true, err => {
+    $.ui.log(`a5r: build script not written: ${String(err)}`, { to: 'debug' })
+    return false
+  })
+  return isWritten ? buildStartCommand(script, root) : ''
 }
 
 /** A79: the Editor slot the sync takes for its worker (its `what` names it, so the grant, lease and idle notices that are
@@ -1119,13 +1133,23 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
 /** A93 / A96: the sync enters a stage (the worker's end, or a worker that could not start): written, the sync's lock
  * follows its hard end, the holder told. The build log is the sync's own (A5R named it in the worker's task), whatever
  * path the worker's line gives. A108: a hand-back names the git processes still running (a fresh probe; the worker's own
- * commands may be among them) and the checkout's .git/index.lock. */
-async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: { stage: SyncStage; mergeSha: string; note: string }, now: number): Promise<void> {
+ * commands may be among them) and the checkout's .git/index.lock. A109: what a building stage says of its build is
+ * syncstage.ts `entryTell`'s (the build runs only once its log or a build process is seen). */
+async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: StageEntry, now: number): Promise<void> {
   const next = enterStage(s, to, s.build ? syncBuildLog(s2Root(opts), s.id) : '', now)
   if (!(await writeSync($, opts, next, s))) return
   await syncLockUntil($, opts, next, now)
+  const tell = entryTell(to, await readSyncLog($, next), buildProcs(probe).length > 0)
   const busy = to.stage === 'manual' ? await gitBusy($, opts) : null
-  push({ id: `sync:${s.id}:${s.at}:${to.stage}`, text: busy ? NOTICES.syncManual(next, busy) : SYNC_TELL[to.stage](next), isActionable: to.stage !== 'building' })
+  if (tell) push({ id: `sync:${s.id}:${s.at}:${tell}`, text: busy ? NOTICES.syncManual(next, busy) : SYNC_TELL[tell](next), isActionable: !isQuietTell(tell) })
+}
+
+/** A93 / A109: the build log of this run of a sync in its building stage (written since the worker started: a quick build
+ * can end before the worker does, and an earlier run's log is older; the worker's end is the only way into that stage, so
+ * workerAt is set there, and stageAt only stands in for a file written by hand). */
+async function readSyncLog($: Engine, s: SyncFile): Promise<BuildLogRead> {
+  const stat = s.stage === 'building' && s.buildLog ? await $.fs.stat(s.buildLog).catch(() => null) : null
+  return readBuildLog(stat && stat.mtimeMs >= (s.workerAt ?? s.stageAt) ? ((await $.fs.read(s.buildLog).catch(() => '')) ?? '') : null)
 }
 
 /** A108: the checkout's git processes now (a fresh probe) and the age of its .git/index.lock. */
@@ -1137,22 +1161,22 @@ async function gitBusy($: Engine, opts: Opts): Promise<GitBusy> {
 
 /** A93: the holder's a5r through the stages after the merge: the hard end put back once while the build runs near it;
  * the build's own Result: line read from its log (Succeeded → the testing stage and the holder woken to run the
- * post-merge tests; Failed → the holder woken to revert and abort); no log and no build process → the holder woken to
- * read the result itself; in the testing stage the holder is woken once to run the tests and call done. */
+ * post-merge tests; Failed → the holder woken to revert and abort); no log and no build process past the grace, or the
+ * build script's own end with no Result: line → the holder woken to start the script itself (A109; a log or process seen
+ * first → told quietly that the build runs); in the testing stage the holder is woken once to run the tests and call done. */
 async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   // After the merge, git did not answer at the worker's end: ask again (a manual stage is the holder's to finish, A96).
   const git = isMergedStage(s.stage) && !s.mergeSha ? await mergeCommit($, opts, s) : null
-  const log = s.stage === 'building' && s.buildLog ? await $.fs.stat(s.buildLog).catch(() => null) : null
-  const result = log && log.mtimeMs > s.stageAt ? buildResultOf((await $.fs.read(s.buildLog).catch(() => '')) ?? '') : null
+  const log = await readSyncLog($, s)
   // Near the hard end the processes are read fresh: a build, test or Editor run (or no reading at all) puts it back once.
   const nearEnd = !s.extended && now >= s.hardEnd - HARD_END_WARN_MS
   const reading = nearEnd && !probe ? await freshProbe($, opts) : probe // the shared reading is at most 50 s old
   const isBuilding = buildProcs(reading).length > 0
-  const move = stageNext(s, { result, isBuilding, isBusy: reading === null || isBuilding || unrealPids(reading).length > 0, now }, HARD_END_WARN_MS)
+  const move = stageNext(s, { log, isBuilding, isBusy: reading === null || isBuilding || unrealPids(reading).length > 0, now }, HARD_END_WARN_MS)
   const changes: Partial<SyncFile> = {
     ...(git?.state === 'merged' ? { mergeSha: git.sha } : {}),
     ...(move.extendTo === null ? {} : { hardEnd: move.extendTo, extended: true }),
-    ...(move.next ? { stage: move.next, stageAt: now, note: `${s.note}; build ${result}`.slice(0, 300) } : {}),
+    ...(move.next ? { stage: move.next, stageAt: now, note: `${s.note}; build ${log}`.slice(0, 300) } : {}),
   }
   const moved: SyncFile = { ...s, ...changes, updatedAt: now }
   const isMoved = Object.keys(changes).length > 0 && (await writeSync($, opts, moved, s))
@@ -1161,7 +1185,7 @@ async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promi
     await syncLockUntil($, opts, cur, now)
     push({ id: `sync:${s.id}:${s.at}:extended`, text: NOTICES.syncExtended(cur), isActionable: false })
   }
-  if (move.tell) push({ id: `sync:${s.id}:${s.at}:${move.tell}`, text: SYNC_TELL[move.tell](cur), isActionable: true })
+  if (move.tell) push({ id: `sync:${s.id}:${s.at}:${move.tell}`, text: SYNC_TELL[move.tell](cur), isActionable: !isQuietTell(move.tell) })
 }
 
 /** The live session that takes over what a gone holder left (a merge left behind, a sync after its merge): the first
@@ -1499,7 +1523,7 @@ async function recordTail($: Engine, path: string): Promise<string> {
   const size = (await $.fs.stat(path).catch(() => null))?.size
   if (size === undefined) return ''
   if (size <= RECORD_TAIL_BYTES) return (await $.fs.read(path).catch(() => '')) ?? ''
-  const ps = `$f = [IO.File]::Open('${path.replace(/'/g, "''")}', 'Open', 'Read', 'ReadWrite'); [void]$f.Seek(-${RECORD_TAIL_BYTES}, 'End'); $b = New-Object byte[] ${RECORD_TAIL_BYTES}; $n = $f.Read($b, 0, ${RECORD_TAIL_BYTES}); $f.Close(); [Console]::OutputEncoding = [Text.Encoding]::UTF8; [Text.Encoding]::UTF8.GetString($b, 0, $n)`
+  const ps = `$f = [IO.File]::Open(${psQuote(path)}, 'Open', 'Read', 'ReadWrite'); [void]$f.Seek(-${RECORD_TAIL_BYTES}, 'End'); $b = New-Object byte[] ${RECORD_TAIL_BYTES}; $n = $f.Read($b, 0, ${RECORD_TAIL_BYTES}); $f.Close(); [Console]::OutputEncoding = [Text.Encoding]::UTF8; [Text.Encoding]::UTF8.GetString($b, 0, $n)`
   const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps], { timeoutMs: 20_000 }).catch(() => null)
   return r?.exitCode === 0 ? r.stdout : ''
 }
