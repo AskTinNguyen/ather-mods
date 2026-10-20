@@ -234,7 +234,7 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   if (context_.length > 0 && settings().followUps && event.outcome.kind === "completed") {
     const seen = told.get(agentId) ?? new Map<string, number>();
     told.set(agentId, seen);
-    const fresh = context_.filter((text) => Date.now() - (seen.get(text) ?? 0) > 30 * 60 * 1000);
+    const fresh = [...new Set(context_)].filter((text) => Date.now() - (seen.get(text) ?? 0) > 30 * 60 * 1000);
     if (fresh.length > 0) {
       for (const text of fresh) seen.set(text, Date.now());
       await send(agentId, `Ather Automata, from this turn's tool output:\n${fresh.map((text) => `- ${text}`).join("\n")}`).catch((error) =>
