@@ -18,7 +18,7 @@ import { awayWindowRows, intentRows } from '../hooks/modes.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
-import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
+import { editorLockLine, readShell, unreal } from '../hooks/packs/unreal.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncError, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
@@ -219,6 +219,15 @@ describe('guards and evidence', () => {
     expect(isEditorBuild('Build.bat ShaderCompileWorker Win64 Development')).toBe(false)
     expect(isEditorBuild('Build.bat S2Editor Win64 Development')).toBe(true)
     expect(isBuildCommand("node - <<'EOF'\nconsole.log('Build.bat S2Editor | tail')\nEOF")).toBe(false)
+  })
+
+  test('a piped build warns that its exit is the filters, but not under pipefail or after an error', () => {
+    const build = 'Build.bat S2Editor Win64 Development'
+    const warns = (command, ran = {}) => readShell(command, 'compiling...', ran).context.length
+    expect(warns(`${build} | tail -5`)).toBe(1)
+    expect(warns(`set -o pipefail; ${build} | tail -5`)).toBe(0)
+    expect(warns(`${build} | tail -5`, { isError: true })).toBe(0)
+    expect(warns(build)).toBe(0)
   })
 
   test('tests pass only when tests ran and passed; no tests or a non-zero exit is a fail', () => {
