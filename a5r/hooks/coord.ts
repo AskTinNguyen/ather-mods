@@ -4,7 +4,7 @@
 // alive: each session writes only its own files (Saved/A5R/editor/<id8>.json, touch/<id8>.json), the
 // sync holder alone writes Saved/A5R/sync.json, and the head of the queue alone takes a free lock.
 // Files are the truth; a notice is only a doorbell.
-import { commandVerb, nestedCommand, segments, stripHeredocs, tokenize } from './a5r.ts'
+import { commandVerb, gitTarget, nestedCommand, segments, stripHeredocs, tokenize, under } from './a5r.ts'
 import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from './syncrules.ts'
 import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
@@ -366,19 +366,33 @@ export const unrealPids = (probe: Probe | null): number[] => (probe?.procs ?? []
 export const BUILD_NAMES = ['dotnet', 'UnrealBuildTool', 'cl', 'link', 'MSBuild', 'UnrealGame', 'S2'] as const
 export const buildProcs = (probe: Probe | null): Proc[] => (probe?.procs ?? []).filter(p => BUILD_NAMES.some(n => isName(p, n)))
 
-/** A108: the git processes a fresh probe saw (null: no reading; the probe cannot tell their checkout) and whether the shared
- * checkout's .git/index.lock exists, when the worker hands the sync back. */
-export type GitBusy = { gitPids: number[] | null; isIndexLocked: boolean }
-export const gitPids = (probe: Probe | null): number[] | null => (probe ? probe.procs.filter(p => isName(p, 'git')).map(p => p.pid) : null)
-/** A108: what the manual-stage notice says of git still running ('' when nothing is seen). */
-export const NO_GIT_BUSY: GitBusy = { gitPids: [], isIndexLocked: false }
-export const gitBusyLabel = (b: GitBusy): string => {
+/** A108: git in the shared checkout when the worker hands the sync back: the git processes whose command line names the
+ * checkout (null: no reading) and the age of its .git/index.lock (null: none). */
+export type GitBusy = { gitPids: number[] | null; lockAgeMs: number | null }
+export const NO_GIT_BUSY: GitBusy = { gitPids: [], lockAgeMs: null }
+/** An index.lock this old with no git of the checkout running was left behind by git (the worker's rule 4 too). */
+export const INDEX_LOCK_STALE_MS = 10 * 60_000
+/** A108 (review of rev 35): the git processes that work in the checkout: a command line whose `-C <path>` is in it (as the
+ * worker runs every git command), never git's own fsmonitor daemon, which runs as long as the checkout has core.fsmonitor
+ * on. A git started inside the checkout without -C is not seen (the index.lock still is). */
+export const checkoutGitPids = (probe: Probe | null, checkout: string): number[] | null => {
+  if (!probe) return null
+  const isCheckout = (cmd: string): boolean => {
+    const dir = gitTarget(cmd, '')
+    return dir !== '' && under(dir, checkout)
+  }
+  return probe.procs.filter(p => isName(p, 'git') && p.cmd && !/fsmonitor--daemon/i.test(p.cmd) && isCheckout(p.cmd)).map(p => p.pid)
+}
+/** A108: what the hand-back says of git in the checkout: the facts ('' when none), and the one step they ask for ('' when
+ * none). Only .git/index.lock makes the holder wait; the checkout's git processes are named as information; a lock 10 min
+ * old with no git of the checkout running, or none known (the process list unread), is stale and may be removed. */
+export const gitBusyNote = (b: GitBusy): { fact: string; step: string } => {
   const n = b.gitPids?.length ?? 0
-  const parts = [
-    b.gitPids === null ? 'the process list could not be read (look for git.exe yourself)' : n ? `${n} git process${n === 1 ? ' still runs' : 'es still run'} (PID ${b.gitPids.slice(0, 5).join(', ')}${n > 5 ? ', …' : ''}; A5R cannot tell their checkout)` : '',
-    b.isIndexLocked ? '.git/index.lock exists in the checkout' : '',
-  ].filter(Boolean)
-  return parts.length ? `; ${parts.join(' and ')}` : ''
+  const pids = b.gitPids === null ? 'the process list could not be read' : n ? `${n} git process${n === 1 ? '' : 'es'} of the checkout still run${n === 1 ? 's' : ''} (PID ${b.gitPids.slice(0, 5).join(', ')}${n > 5 ? ', …' : ''})` : ''
+  if (b.lockAgeMs === null) return { fact: pids ? `; ${pids}` : '', step: '' }
+  const lock = `.git/index.lock exists (${Math.floor(b.lockAgeMs / 60_000)} min old)`
+  if (b.lockAgeMs >= INDEX_LOCK_STALE_MS && n === 0) return { fact: `; ${lock} and ${pids || 'no git of the checkout runs'}: git left it behind`, step: 'remove that stale lock first (rm <checkout>/.git/index.lock)' }
+  return { fact: `; ${[pids, lock].filter(Boolean).join(' and ')}`, step: 'wait until .git/index.lock is gone before you touch the index (git still works there; a lock 10 min old with no git of the checkout running is stale: remove it then)' }
 }
 
 /** A58: whether the lease is a build: the holder asked with build, or its lock line's note says so. */
@@ -492,7 +506,8 @@ export const gatesOf = (stored: unknown, pieOpt: unknown, nopieOpt: unknown): Ga
   return { ...fromOpts, source: 'options' }
 }
 
-export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean }
+/** `cmd`: a git process's command line (A108: whose checkout it works in). */
+export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean; cmd?: string }
 export type Probe = { freeGb: number; diskGb: number | null; procs: Proc[] }
 
 const isName = (p: Proc, name: string) => p.name.toLowerCase().replace(/\.exe$/, '') === name.toLowerCase()
@@ -512,7 +527,7 @@ export const parseProbe = (stdout: string): Probe | null => {
     const raw = Array.isArray(v.procs) ? v.procs : v.procs && typeof v.procs === 'object' ? [v.procs] : []
     const procs = raw
       .map(p => p as Record<string, unknown>)
-      .map(p => ({ name: String(p.name ?? '').replace(/\.exe$/i, ''), pid: Number(p.pid), gb: Number(p.gb ?? 0), parentAlive: p.parentAlive !== false }))
+      .map(p => ({ name: String(p.name ?? '').replace(/\.exe$/i, ''), pid: Number(p.pid), gb: Number(p.gb ?? 0), parentAlive: p.parentAlive !== false, ...(typeof p.cmd === 'string' && p.cmd ? { cmd: p.cmd.slice(0, 500) } : {}) }))
       .filter(p => p.name && Number.isFinite(p.pid))
     return { freeGb: free, diskGb: Number.isFinite(disk) && disk >= 0 ? disk : null, procs }
   } catch {
@@ -548,7 +563,7 @@ export const ramProbe = (drive: string): string[] => [
     '$disk = if ($d) { [math]::Round($d.Free / 1GB, 1) } else { -1 }',
     '$alive = @{}; Get-Process | ForEach-Object { $alive[[int]$_.Id] = 1 }',
     "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe','dotnet.exe','UnrealBuildTool.exe','cl.exe','link.exe','MSBuild.exe','UnrealGame.exe','S2.exe')",
-    "$procs = @(Get-CimInstance Win32_Process | Where-Object { ($names -contains $_.Name) -or ($_.Name -like 'UnrealEditor*.exe') } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId) } })",
+    "$procs = @(Get-CimInstance Win32_Process | Where-Object { ($names -contains $_.Name) -or ($_.Name -like 'UnrealEditor*.exe') } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId); cmd = $(if ($_.Name -eq 'git.exe') { [string]$_.CommandLine } else { '' }) } })",
     '[pscustomobject]@{ freeGb = $free; diskGb = $disk; procs = $procs } | ConvertTo-Json -Compress -Depth 3',
   ].join('; '),
 ]
@@ -1047,8 +1062,8 @@ export const NOTICES = {
   /** A96: the worker gave up (its abort, no merge commit, or it could not start): the sync is back in the holder's hands,
    * still frozen. */
   syncManual: (s: SyncFile, busy = NO_GIT_BUSY): string => {
-    const git = gitBusyLabel(busy) // A108: git still running, or index.lock, when the worker handed the sync back
-    return noticeText('Sync main', `the sync at ${hhmm(s.at)} is back in your hands (${s.note}); every other session stays frozen and the sync's Editor lock stays this session's until done, abort or ${hhmm(s.hardEnd)}${git}`, `keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); ${git ? 'wait for that git to exit before you touch the index (the worker\'s own commands may still run: no git add, checkout, merge or commit until then); then ' : ''}either finish it by hand: close the Editor process first (an open Editor holds files git must replace: "unable to unlink"), check git status and .git/MERGE_HEAD, merge with git non-interactive (git -C <checkout> merge --no-edit origin/main), resolve (rule 11 and your conflict rules)${s.build ? ', build' : ''}, run the post-merge headless tests (${POST_MERGE_TESTS}) and call the sync tool done with their result line; or call the sync tool abort with why, which lifts the freeze and frees the Editor at once`)
+    const git = gitBusyNote(busy) // A108: the checkout's git and its index.lock when the worker handed the sync back
+    return noticeText('Sync main', `the sync at ${hhmm(s.at)} is back in your hands (${s.note}); every other session stays frozen and the sync's Editor lock stays this session's until done, abort or ${hhmm(s.hardEnd)}${git.fact}`, `keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); ${git.step ? `${git.step}; then ` : ''}either finish it by hand: close the Editor process first (an open Editor holds files git must replace: "unable to unlink"), check git status and .git/MERGE_HEAD, merge with git non-interactive (git -C <checkout> merge --no-edit origin/main), resolve (rule 11 and your conflict rules)${s.build ? ', build' : ''}, run the post-merge headless tests (${POST_MERGE_TESTS}) and call the sync tool done with their result line; or call the sync tool abort with why, which lifts the freeze and frees the Editor at once`)
   },
   /** A93: the merge is in and its build runs: the freeze holds; the holder hears when the build's Result line comes. */
   syncBuilding: (s: SyncFile): string => noticeText('Sync main', `the merge ${mergeLabel(s.mergeSha)} is in and the build runs${s.buildLog ? ` (log ${s.buildLog})` : ''}; every other session stays frozen`, 'leave git and the Editor in the shared checkout alone; A5R wakes you at the build\'s own Result: line'),
@@ -1085,10 +1100,10 @@ export const NOTICES = {
       foreign.length ? `foreign change on main in ${foreign.map(c => c.path).join(', ')}` : '',
       self.length ? `self-conflict in ${self.map(c => `${c.path} (main holds our ${c.match})`).join(', ')}` : '',
     ].filter(Boolean)
-    return noticeText('Sync main', `${parts.join('; ')} for the sync at ${hhmm(s.at)}${isListAtT(s) ? ', found by the dry-run at T' : ''}; this session edited ${mine.length === 1 ? 'that path' : 'those paths'}`, `${foreign.length ? `${isFrozen ? 'the sync is frozen, so make no git write' : `before ${hhmm(s.at)}: commit your own version (exact paths)`} and tell ${s.holder.lane} how the two sides combine; a logic or .uasset/.umap conflict means the merge is aborted and you resolve it after the sync (the owner decides, never discard either side)` : ''}${foreign.length && self.length ? '; ' : ''}${self.length ? 'a self-conflict needs nothing from you: the holder resolves it to ours (rule 11)' : ''}`)
+    return noticeText('Sync main', `${parts.join('; ')} for the sync at ${hhmm(s.at)}${isListAtT(s) ? ', found by the dry-run at T' : ''}; this session edited ${mine.length === 1 ? 'that path' : 'those paths'}`, `${foreign.length ? (isFrozen ? `the sync is frozen, so make no git write; the worker reads no messages and aborts on a conflict that is not mechanical and no rule settles, then ${s.holder.lane} finishes the merge by hand: tell ${s.holder.lane} how the two sides combine (never discard either side)` : `before ${hhmm(s.at)}: commit your own version (exact paths) and tell ${s.holder.lane} how the two sides combine; a logic or .uasset/.umap conflict means the merge is aborted and you resolve it after the sync (the owner decides, never discard either side)`) : ''}${foreign.length && self.length ? '; ' : ''}${self.length ? 'a self-conflict needs nothing from you: the holder resolves it to ours (rule 11)' : ''}`)
   },
   ownerUntracked: (s: SyncFile, paths: readonly string[], isFrozen = false): string =>
-    noticeText('Sync main', `origin/main adds ${paths.join(', ')}, which already ${paths.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout and ${paths.length === 1 ? 'was' : 'were'} written by this session; the merge at ${hhmm(s.at)} would refuse to overwrite ${paths.length === 1 ? 'it' : 'them'} (merge-tree does not see this)${isListAtT(s) ? '; found by the dry-run at T' : ''}`, isFrozen ? `the sync is frozen, so make no git write: tell ${s.holder.lane} whether ${paths.length === 1 ? 'it' : 'they'} may be moved out of the tree; never delete a file that may be someone else's` : `before ${hhmm(s.at)}: commit ${paths.length === 1 ? 'it' : 'them'} with exact paths (then it is an ordinary conflict, yours to settle) or move ${paths.length === 1 ? 'it' : 'them'} out of the tree; never delete a file that may be someone else's`),
+    noticeText('Sync main', `origin/main adds ${paths.join(', ')}, which already ${paths.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout and ${paths.length === 1 ? 'was' : 'were'} written by this session; the merge at ${hhmm(s.at)} would refuse to overwrite ${paths.length === 1 ? 'it' : 'them'} (merge-tree does not see this)${isListAtT(s) ? '; found by the dry-run at T' : ''}`, isFrozen ? `the sync is frozen, so make no git write; the worker aborts on such a file and ${s.holder.lane} finishes the merge by hand: tell ${s.holder.lane} whether ${paths.length === 1 ? 'it' : 'they'} may be moved out of the tree; never delete a file that may be someone else's` : `before ${hhmm(s.at)}: commit ${paths.length === 1 ? 'it' : 'them'} with exact paths (then it is an ordinary conflict, yours to settle) or move ${paths.length === 1 ? 'it' : 'them'} out of the tree; never delete a file that may be someone else's`),
   holderUntracked: (s: SyncFile, rows: { path: string; owners: string[] }[], isFrozen = false): string =>
     noticeText('Sync main', `${isListAtT(s) ? 'the dry-run at T found that ' : ''}origin/main adds ${plural(rows.length, 'file')} that already ${rows.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout ("untracked would be overwritten"): ${rows.map(r => `${r.path} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')}`, `${isFrozen ? 'the worker aborts on such a file (its rule 4) and hands the sync back to you' : `the owners are told to commit or move theirs before ${hhmm(s.at)}`}; owner unknown → name it in the sync's note and leave it; never delete or overwrite one to get the merge through`),
   holderWithoutMod: (s: SyncFile, rows: { n: NoMod; isDelivered: boolean }[]): string =>

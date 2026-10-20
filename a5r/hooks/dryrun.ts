@@ -1,25 +1,34 @@
 // A107 (rev 35): the conflict dry-run reads the main that will be merged. The holder's A5R fetches origin main before the
 // cutoff's dry-run, and fetches and dry-runs again at T, just before it starts the worker. The fetch never prompts
-// (GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=never), is killed after 5 min, and brings no LFS objects (a plain fetch never
-// downloads them; `$.process.run` runs git with repo hooks off; GIT_LFS_SKIP_SMUDGE is not set because nothing is checked
-// out). The fetch and the dry-run run off the tick chain (a hook may wait on a tick), one at a time, and the worker starts
-// only when none runs, so A5R never runs two fetches at once nor one beside the worker's own. Pure: no `$`; register.ts
-// runs git and writes sync.json.
+// (GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=never), is killed after 5 min (2 min at T), is tried once more a few seconds after
+// a quick failure (another process's fetch holding the ref lock), and brings no LFS objects (a plain fetch never downloads
+// them; `$.process.run` runs git with repo hooks off; GIT_LFS_SKIP_SMUDGE is not set because nothing is checked out). The
+// fetch and the dry-run run off the tick chain (a hook may wait on a tick), one at a time, and the worker starts only when
+// none runs, so within one load of the mod A5R never runs two fetches at once nor one beside the worker's own. A reload in
+// the middle of a round forgets it and may start the round again beside a fetch the old load left running: the second
+// fetch then fails on the ref lock, is tried once more, and at worst reads as a failed fetch (told, the list stale).
+// Pure: no `$`; register.ts runs git and writes sync.json.
 import { isListAtT, type Conflict, type Phase, type SyncFile } from './coord.ts'
 
-/** The fetch is killed after this long (a credential, network or server stall reads as a failed fetch). */
-export const FETCH_MS = 5 * 60_000
+/** The fetch is killed after this long (a credential, network or server stall reads as a failed fetch). At T it is
+ * shorter: the worker fetches again itself (its rule 4), so A5R's fetch there only freshens the list, and a slow one must
+ * not eat the merge's window (rather than moving the hard end, which would lengthen every session's freeze). */
+export const FETCH_MS: Record<DryRound, number> = { cutoff: 5 * 60_000, start: 2 * 60_000 }
+/** A fetch that failed (another fetch holding the ref lock, a network blip; not one killed at its limit) is tried once
+ * more after this pause. */
+export const FETCH_RETRY_MS = 5_000
 /** Rule 11 for the conflicted paths stops after this long; the paths left count as foreign (the conservative side). */
 export const CLASSIFY_BUDGET_MS = 3 * 60_000
 /** The dry-run at T starts within this long after T or not at all, and the worker never waits longer for one to start. */
 export const START_WAIT_MS = 10 * 60_000
 export const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' } as const
-/** Only origin's main, no tags, and no `git maintenance` left running behind it (A108: no git outlives A5R's own call). */
+/** Only origin's main, no tags, and no `git maintenance` started behind it (the checkout's own fsmonitor daemon is git's
+ * and runs on whatever A5R does). */
 export const fetchArgv = (root: string): string[] => ['git', '-C', root, 'fetch', '--no-tags', '--no-auto-maintenance', 'origin', 'main']
 
-/** Why the fetch failed, '' when it succeeded (`null`: it could not start, or was killed at FETCH_MS). */
-export const fetchWhy = (r: { exitCode: number; stderr: string } | null): string => {
-  if (r === null) return `it did not run or did not finish within ${FETCH_MS / 60_000} min`
+/** Why the fetch failed, '' when it succeeded (`null`: it could not start, or was killed at its limit). */
+export const fetchWhy = (r: { exitCode: number; stderr: string } | null, limitMs: number): string => {
+  if (r === null) return `it did not run or did not finish within ${limitMs / 60_000} min`
   if (r.exitCode === 0) return ''
   const last = r.stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean).pop() ?? ''
   return `exit ${r.exitCode}${last ? `: ${last.slice(0, 160)}` : ''}`

@@ -9,14 +9,14 @@ import {
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
   DEFAULT_GATES, isYieldMoment, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, gitPids, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
-import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
+import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
 import { POST_MERGE_TESTS, afterWorker, buildResultOf, enterStage, isMergedStage, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type MergeRead, type SyncStage } from './syncstage.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
@@ -1128,9 +1128,11 @@ async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: { stage: S
   push({ id: `sync:${s.id}:${s.at}:${to.stage}`, text: busy ? NOTICES.syncManual(next, busy) : SYNC_TELL[to.stage](next), isActionable: to.stage !== 'building' })
 }
 
-/** A108: the git processes running now (a fresh probe) and the shared checkout's .git/index.lock. */
+/** A108: the checkout's git processes now (a fresh probe) and the age of its .git/index.lock. */
 async function gitBusy($: Engine, opts: Opts): Promise<GitBusy> {
-  return { gitPids: gitPids(await freshProbe($, opts)), isIndexLocked: await $.fs.exists(`${s2Root(opts)}/.git/index.lock`).catch(() => false) }
+  const root = s2Root(opts)
+  const lock = await $.fs.stat(`${root}/.git/index.lock`).catch(() => null)
+  return { gitPids: checkoutGitPids(await freshProbe($, opts), root), lockAgeMs: lock ? Math.max(0, (await $.clock.now()) - lock.mtimeMs) : null }
 }
 
 /** A93: the holder's a5r through the stages after the merge: the hard end put back once while the build runs near it;
@@ -1841,26 +1843,34 @@ function startDryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): void 
  * rule 11 (3 min in all) and the files main adds that exist on disk. The result goes onto sync.json as it is by then. */
 async function dryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): Promise<void> {
   const root = s2Root(opts)
-  const failed = fetchWhy(await $.process.run(fetchArgv(root), { env: FETCH_ENV, timeoutMs: FETCH_MS }).catch(() => null))
+  const limitMs = FETCH_MS[round]
+  const fetch = () => $.process.run(fetchArgv(root), { env: FETCH_ENV, timeoutMs: limitMs }).catch(() => null)
+  let fetched = await fetch()
+  if (fetched && fetched.exitCode !== 0) fetched = await $.clock.sleep(FETCH_RETRY_MS).then(fetch) // once: a ref lock, a blip
+  const failed = fetchWhy(fetched, limitMs)
   const now = await $.clock.now()
   if (failed) push({ id: `sync:${s.id}:${s.at}:fetch-failed:${round}`, text: NOTICES.fetchFailed(s, round, failed), isActionable: true })
   const main = shaOf((await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'origin/main'], { timeoutMs: 30_000 }).catch(() => null))?.stdout)
   const r = await $.process.run(['git', '-C', root, 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
   if (!r || (r.exitCode !== 0 && r.exitCode !== 1)) {
     push({ id: `sync:${s.id}:${s.at}:dry-run-failed:${round}`, text: noticeText('Sync main', `the conflict dry-run (git merge-tree) did not finish${r ? ` (exit ${r.exitCode})` : ' within 60 s'}`, `run git -C ${root} merge-tree --write-tree --name-only HEAD origin/main yourself and pass the conflicted paths with the sync tool (action conflicts)`), isActionable: true })
-    await onSyncFile($, opts, s, cur => withDryRunFailed(cur, now))
+    await updateSync($, opts, s, me8, cur => withDryRunFailed(cur, now))
     return
   }
   const conflicts = r.exitCode === 0 ? [] : await classifyAll($, opts, parseMergeTree(r.stdout).paths, now + CLASSIFY_BUDGET_MS)
   const untracked = await addedOnDisk($, opts, s)
-  await onSyncFile($, opts, s, cur => withDryRun(cur, { conflicts, untracked, main, stale: staleOf(failed) }, now))
+  await updateSync($, opts, s, me8, cur => withDryRun(cur, { conflicts, untracked, main, stale: staleOf(failed) }, now))
 }
 
-/** A change written onto sync.json as it is now (the tick may have written it while a dry-run ran), only while it is
- * still the same planned sync and this session holds it. */
-async function onSyncFile($: Engine, opts: Opts, s: SyncFile, change: (cur: SyncFile) => SyncFile): Promise<void> {
+/** A holder-side change applied to sync.json as it is now, not to the copy `s` read before an await (a dry-run's list may
+ * have landed meanwhile, or a tick's write): only while it is still the same planned sync and its holder is `holder8` (a
+ * take-over meanwhile wins; this session's own writes pass me8, read at the write, so a /clear meanwhile is still it).
+ * The written sync, or null. (writeSync's own compare is moot here: `cur` was just read.) */
+async function updateSync($: Engine, opts: Opts, s: SyncFile, holder8: string, change: (cur: SyncFile) => SyncFile): Promise<SyncFile | null> {
   const cur = parseSyncFile(await readJson($, syncPath(opts)))
-  if (cur && cur.id === s.id && cur.at === s.at && cur.state === 'planned' && cur.holder.id8 === me8) await writeSync($, opts, change(cur), cur)
+  if (!cur || cur.id !== s.id || cur.at !== s.at || cur.state !== 'planned' || cur.holder.id8 !== holder8) return null
+  const next = change(cur)
+  return (await writeSync($, opts, next, cur)) ? next : null
 }
 
 /** A11: the files origin/main adds that already exist on disk in the shared checkout ("untracked would be
@@ -2043,11 +2053,14 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     return (await writeSync($, opts, taken, s)) ? `taken over: ${planned(taken)}` : blocked(gate, 'sync.json changed while taking it over', 'read it with status')
   }
   if (!isMine && !isGone) return notHolder(s)
-  const mine = isMine ? s : { ...s, holder: { session: me.session, id8: me8, lane: me.lane } }
+  const holder = { session: me.session, id8: me8, lane: me.lane }
+  const asMine = (x: SyncFile): SyncFile => (isMine ? x : { ...x, holder })
+  const mine = asMine(s)
   if (action === 'conflicts') {
     const paths = (a.paths ?? []).map(p => p.replace(/\\/g, '/').trim()).filter(Boolean)
-    const next = withConflicts(mine, await classifyAll($, opts, paths), now)
-    if (!(await writeSync($, opts, next, s))) return blocked(gate, 'sync.json changed', 'read it with status and try again')
+    const classified = await classifyAll($, opts, paths)
+    const next = await updateSync($, opts, s, s.holder.id8, cur => withConflicts(asMine(cur), classified, now))
+    if (!next) return blocked(gate, 'sync.json changed', 'read it with status and try again')
     return `recorded ${paths.length} conflicted path${paths.length === 1 ? '' : 's'}: ${(next.conflicts ?? []).map(c => conflictLabel(c, next.rules)).join(', ') || 'none'}; the sessions that edited them are told at their next tick`
   }
   if (action === 'rules') {
@@ -2055,14 +2068,14 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     if (s.workerAt !== null) return blocked(gate, `the sync worker started at ${clockOf(s.workerAt)} with the rules it had (${rulesLabel(s.rules)})`, 'resolve the remaining conflicts by hand when the sync comes back to you, or abort it')
     if (badRules) return badRules
     if (rules === null) return blocked(gate, 'rules names no rules', `give rules: ${RULE_FORM}; an empty list clears them`)
-    const next = { ...mine, rules, updatedAt: now }
-    return (await writeSync($, opts, next, s)) ? `conflict rules for ${when(next)}: ${rulesLabel(rules)}` : blocked(gate, 'sync.json changed', 'read it with status and try again')
+    const next = await updateSync($, opts, s, s.holder.id8, cur => ({ ...asMine(cur), rules, updatedAt: now }))
+    return next ? `conflict rules for ${when(next)}: ${rulesLabel(rules)}` : blocked(gate, 'sync.json changed', 'read it with status and try again')
   }
   if (action === 'build') {
     if (phase === 'frozen') return blocked(gate, `${when(s)} is frozen already`, 'its hard end stays as it is')
     const build = a.build ?? !s.build
-    const next = withBuild(mine, build, freezeMinutes(opts, build), now)
-    return (await writeSync($, opts, next, s)) ? `${build ? 'with' : 'without'} a build: ${planned(next)}` : blocked(gate, 'sync.json changed', 'read it with status')
+    const next = await updateSync($, opts, s, s.holder.id8, cur => withBuild(asMine(cur), build, freezeMinutes(opts, build), now))
+    return next ? `${build ? 'with' : 'without'} a build: ${planned(next)}` : blocked(gate, 'sync.json changed', 'read it with status')
   }
   if (action === 'cancel') {
     if (phase === 'frozen') return blocked(gate, `${when(s)} is frozen already`, 'end it with done or abort')
@@ -2116,7 +2129,7 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
     const sent = await $.session.send({ to: { sessionId: n.sessionId }, text: noModMessage(s, s2Root(opts)) }).catch(err => ({ isDelivered: false as const, reason: String(err) }))
     rows.push({ n, isDelivered: sent.isDelivered })
   }
-  await writeSync($, opts, { ...s, messaged: [...s.messaged, ...targets.map(t => t.sessionId)], updatedAt: now }, s)
+  await updateSync($, opts, s, me8, cur => ({ ...cur, messaged: [...new Set([...cur.messaged, ...targets.map(t => t.sessionId)])], updatedAt: now }))
   push({ id: noticeIds.withoutMod(s, targets.map(t => t.id8)), text: NOTICES.holderWithoutMod(s, rows), isActionable: false })
 }
 

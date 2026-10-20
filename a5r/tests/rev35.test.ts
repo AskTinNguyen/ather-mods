@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { blankSession, gitBusyLabel, isListAtT, newSync, NO_GIT_BUSY, NOTICES, parseSyncFile, SYNC_WORKER_PROMPT, syncWorkerTask, type SessionFile, type SyncFile } from '../hooks/coord.ts'
+import { blankSession, checkoutGitPids, gitBusyNote, isListAtT, newSync, NO_GIT_BUSY, NOTICES, parseProbe, parseSyncFile, SYNC_WORKER_PROMPT, syncWorkerTask, type SessionFile, type SyncFile } from '../hooks/coord.ts'
 import { dryKey, dryStep, FETCH_MS, fetchArgv, fetchWhy, shaOf, staleOf, START_WAIT_MS, withDryRun, withDryRunFailed } from '../hooks/dryrun.ts'
-import { LOCK, ME, NOW, PROJ, opts, world, type Rec } from './world.ts'
+import { LOCK, ME, NOW, PROJ, opts, refused, world, type Proc, type Rec } from './world.ts'
 
 // Rev 35 (L-39, the sync conductor's report on the first 0.20 sync, 2026-10-20 13:45). A107: the 13:15 cutoff dry-run read
 // the last fetched origin/main (no fetch) and missed 15 avian conflicts from e81deaf1, which landed after it; the dry-run
@@ -77,8 +77,8 @@ test('A107: unit: the dry-run owed at the cutoff and at T, one at a time, each o
   expect(dryStep({ ...listed, workerAt: T(14, 45) }, 'frozen', null, T(14, 50))).toEqual({ start: null, mayStartWorker: false })
   // The fetch: origin's main only, no prompt, no tags, no maintenance left behind; LFS skip not set.
   expect(fetchArgv(S2)).toEqual(['git', '-C', S2, 'fetch', '--no-tags', '--no-auto-maintenance', 'origin', 'main'])
-  expect(FETCH_MS).toBe(5 * MIN)
-  expect([fetchWhy({ exitCode: 0, stderr: 'From github' }), fetchWhy({ exitCode: 128, stderr: 'remote: x\nfatal: unable to access\n' }), fetchWhy(null)]).toEqual(['', 'exit 128: fatal: unable to access', 'it did not run or did not finish within 5 min'])
+  expect([FETCH_MS.cutoff, FETCH_MS.start]).toEqual([5 * MIN, 2 * MIN]) // review 5: at T the fetch must not eat the merge's window
+  expect([fetchWhy({ exitCode: 0, stderr: 'From github' }, 5 * MIN), fetchWhy({ exitCode: 128, stderr: 'remote: x\nfatal: unable to access\n' }, 5 * MIN), fetchWhy(null, 2 * MIN)]).toEqual(['', 'exit 128: fatal: unable to access', 'it did not run or did not finish within 2 min'])
   expect([shaOf(`${MAIN2}\n`), shaOf('HaiHuynh/20261005'), shaOf(undefined)]).toEqual([MAIN2, '', ''])
   // The lists with what the dry-run read; a failed one marks a list on file stale; the holder's own list reads nothing.
   const cut = withDryRun(s, { conflicts: [{ path: 'Source/S2/Foo.cpp', kind: 'foreign' }], untracked: ['Content/Old.uasset'], main: MAIN1, stale: '' }, T(14, 20))
@@ -138,7 +138,7 @@ test('A107: a conflict new at T reaches the session that edited it once, as foun
   w.put(SYNC, JSON.stringify(withDryRun(cut, { conflicts: [{ path: 'Source/S2/Foo.cpp', kind: 'foreign' }, { path: 'Source/S2/Avian.cpp', kind: 'foreign' }], untracked: [], main: MAIN2, stale: '' }, T(14, 45))))
   await minutes($, w, 2, 'bbbbbbbb')
   const all = told(w)
-  expect(all).toContain('A5R · Sync main — foreign change on main in Source/S2/Avian.cpp for the sync at 14:45, found by the dry-run at T; this session edited that path → the sync is frozen, so make no git write and tell sync-lane how the two sides combine')
+  expect(all).toContain('A5R · Sync main — foreign change on main in Source/S2/Avian.cpp for the sync at 14:45, found by the dry-run at T; this session edited that path → the sync is frozen, so make no git write; the worker reads no messages and aborts on a conflict that is not mechanical and no rule settles, then sync-lane finishes the merge by hand: tell sync-lane how the two sides combine (never discard either side)')
   expect(count(all, 'foreign change on main in Source/S2/Foo.cpp')).toBe(1)
   expect(count(all, 'foreign change on main in Source/S2/Avian.cpp')).toBe(1)
   expect(all).not.toContain('Source/S2/Foo.cpp, Source/S2/Avian.cpp') // never the two again in one notice
@@ -151,11 +151,65 @@ test('A107: a failed fetch is told to the holder (at the cutoff and at T) and th
   expect(told(w)).toContain('A5R · Sync main — git fetch origin main failed at the cutoff (it did not run or did not finish within 5 min), so the conflict dry-run reads origin/main as last fetched → fetch it yourself')
   expect([syncOf(w)?.conflictsAt, syncOf(w)?.dry?.stale]).toEqual([T(14, 41), 'git fetch origin main failed (it did not run or did not finish within 5 min); origin/main as last fetched'])
   git[' fetch '] = { stdout: '', exitCode: 128 }
-  await minutes($, w, 4) // 14:45
+  await minutes($, w, 5) // 14:45: it fails, is tried again 5 s later, fails again
+  expect(fetches(w).length).toBe(3) // the cutoff's (killed: not tried again), T's twice
   expect(told(w)).toContain("A5R · Sync main — git fetch origin main failed at T (14:45) (exit 128), so the conflict dry-run reads origin/main as last fetched → nothing to do: the worker's task marks its list stale")
   const task = String(spawns(w)[0]?.prompt)
-  expect(task).toContain(`That list: made at 14:45 against origin/main ${MAIN1.slice(0, 12)}, STALE: git fetch origin main failed (exit 128); origin/main as last fetched.`)
+  expect(task).toContain(`against origin/main ${MAIN1.slice(0, 12)}, STALE: git fetch origin main failed (exit 128); origin/main as last fetched.`)
   expect(count(told(w), 'Source/S2/Foo.cpp → owner unknown')).toBe(1) // the same conflict as at the cutoff: not told again
+})
+
+test('A107 (review 4): a fetch that fails at once (another fetch holds the ref lock) is tried once more; the list is then fresh', opts(), async ($, on) => {
+  const git: Git = { 'merge-tree': mergeTree('Source/S2/Foo.cpp'), 'rev-parse --verify --quiet origin/main': { stdout: `${MAIN1}\n` } }
+  const lockFail = { stdout: '', exitCode: 1 }
+  const ok = { stdout: '' }
+  // The first fetch meets another process's ref lock; the second succeeds.
+  Object.defineProperty(git, ' fetch ', { enumerable: true, get: () => (fetchCount() === 1 ? lockFail : ok) })
+  const w = await holder($, on, git)
+  const fetchCount = () => w.runs.filter(r => r.includes(' fetch ')).length
+  await minutes($, w, 2) // 14:42
+  expect(fetches(w).length).toBe(2)
+  expect([syncOf(w)?.conflicts?.length, syncOf(w)?.dry]).toEqual([1, { main: MAIN1, stale: '' }])
+  expect(told(w)).not.toContain('git fetch origin main failed')
+})
+
+test('A107 (review 3): a holder\'s own write lands on sync.json as it is then: a list and other writes that came during its conflicts action stay', opts(), async ($, on) => {
+  let release = () => {}
+  const hold = new Promise<void>(r => {
+    release = r
+  })
+  const git: Git = { 'merge-tree': mergeTree('Source/S2/Foo.cpp'), 'rev-parse --verify --quiet origin/main': { stdout: `${MAIN1}\n` }, 'origin/main:Source/S2/Hand.cpp': { stdout: '', hold } }
+  const w = await holder($, on, git)
+  await minutes($, w, 1) // 14:41: the cutoff's list
+  const action = $.tool.call({ tool: 'mcp__a5r__sync', action: 'conflicts', paths: ['Source/S2/Hand.cpp'] } as never)
+  for (let n = 0; n < 100 && !w.runs.some(r => r.includes('origin/main:Source/S2/Hand.cpp')); n += 1) await sleep(10)
+  // While the action classifies its path, other writes land: a list's untracked files, a message record, a rule.
+  const now = syncOf(w) as SyncFile
+  w.put(SYNC, JSON.stringify({ ...now, untracked: ['Content/New.uasset'], messaged: ['cccccccc-1'], rules: [{ side: 'theirs', pattern: 'Content/' }], updatedAt: now.updatedAt + 1 }))
+  release()
+  expect(out(await action)).toContain('recorded 1 conflicted path')
+  const s = syncOf(w)
+  expect([s?.conflicts, s?.conflictsSource, s?.untracked, s?.messaged, s?.rules]).toEqual([[{ path: 'Source/S2/Hand.cpp', kind: 'foreign' }], 'holder', ['Content/New.uasset'], ['cccccccc-1'], [{ side: 'theirs', pattern: 'Content/' }]])
+})
+
+test('A107 (review of the fixes, C1): a holder\'s action held while another session takes the sync over is refused, never undoing the take-over', opts(), async ($, on) => {
+  let release = () => {}
+  const hold = new Promise<void>(r => {
+    release = r
+  })
+  const w = world(on, { ram: '40', git: { 'origin/main:Source/S2/Hand.cpp': { stdout: '', hold } } })
+  on('turn.complete', async () => ({ text: '' }))
+  w.put(`${S2}/.git/HEAD`, 'ref: refs/heads/HaiHuynh/20261005')
+  const gone = { session: SID('dddddddd'), id8: 'dddddddd', lane: 'gone-lane' }
+  w.put(SYNC, JSON.stringify(newSync(T(15, 30), gone, 'gone-lane', NOW)))
+  w.put(`${HF}/editor/dddddddd.json`, peer('dddddddd', { heartbeatAt: NOW - 10 * MIN }), NOW - 10 * MIN) // its file stopped 10 min ago
+  await $.session.start(START)
+  const action = $.tool.call({ tool: 'mcp__a5r__sync', action: 'conflicts', paths: ['Source/S2/Hand.cpp'] } as never)
+  for (let n = 0; n < 100 && !w.runs.some(r => r.includes('origin/main:Source/S2/Hand.cpp')); n += 1) await sleep(10)
+  w.put(SYNC, JSON.stringify({ ...(syncOf(w) as SyncFile), holder: B, updatedAt: NOW + 1 })) // B takes it over meanwhile
+  release()
+  expect(out(await action)).toContain('sync.json changed')
+  expect([syncOf(w)?.holder.id8, syncOf(w)?.conflicts]).toEqual(['bbbbbbbb', null])
 })
 
 test('A107: a dry-run at T that does not finish is told; the worker starts with the cutoff\'s list marked stale', opts(), async ($, on) => {
@@ -186,7 +240,7 @@ test('A107 (review C1): a list that lands only in the freeze is still told, once
   const early = withDryRun(plan, { conflicts: [{ path: 'Source/S2/Foo.cpp', kind: 'foreign' }], untracked: [], main: MAIN1, stale: '' }, T(14, 44) + 30_000)
   w.put(SYNC, JSON.stringify(early))
   await minutes($, w, 1, 'bbbbbbbb')
-  expect(told(w)).toContain('foreign change on main in Source/S2/Foo.cpp for the sync at 14:45; this session edited that path → the sync is frozen, so make no git write and tell sync-lane how the two sides combine')
+  expect(told(w)).toContain('foreign change on main in Source/S2/Foo.cpp for the sync at 14:45; this session edited that path → the sync is frozen, so make no git write; the worker reads no messages and aborts on a conflict that is not mechanical and no rule settles, then sync-lane finishes the merge by hand: tell sync-lane how the two sides combine (never discard either side)')
   // The holder's late dry-run (it ran past T) lands at 14:47 with one more path.
   w.put(SYNC, JSON.stringify(withDryRun(early, { conflicts: [{ path: 'Source/S2/Foo.cpp', kind: 'foreign' }, { path: 'Source/S2/Late.cpp', kind: 'foreign' }], untracked: [], main: MAIN2, stale: '' }, T(14, 47))))
   await minutes($, w, 3, 'bbbbbbbb')
@@ -233,16 +287,28 @@ test('A107: the fetch runs off the tick chain: a tool that waits on a tick answe
 })
 
 // ---------- A108 ----------
-test('A108: unit: the worker prompt keeps every command in the foreground and never ends while one runs; the hand-back names running git and index.lock', () => {
+test('A108: unit: the worker prompt keeps every command in the foreground and never ends while one runs; the hand-back waits only on index.lock and names the checkout\'s own git', () => {
   expect(SYNC_WORKER_PROMPT).toContain('Run every git command in the foreground, to its end, in one tool call: never with `&`, never as a background tool run, never by Start-Process without -Wait, never from a script you leave running; the build of rule 6 is the only command you start to outlive your turn.')
   expect(SYNC_WORKER_PROMPT).toContain('7. End: never end your turn while a command you started (other than the build of rule 6) still runs, and never end with "waiting" or "until … finishes": wait for each such command in the foreground first.')
   expect(SYNC_WORKER_PROMPT).toContain("The dry-run list in your task may be older than your merge (main can move after it): the merge's own unmerged paths (`git diff --name-only --diff-filter=U`) decide, listed or not.")
+  // Review 1: only git whose command line names the checkout; never the fsmonitor daemon (core.fsmonitor=true on S2).
+  const git = (pid: number, cmd?: string): Proc => ({ name: 'git', pid, gb: 0.1, parentAlive: true, ...(cmd === undefined ? {} : { cmd }) })
+  const probe = { freeGb: 30, diskGb: 100, procs: [git(1, 'git -C E:/Projects/s2 checkout --ours -- a.cpp'), git(2, '"C:\\Program Files\\Git\\cmd\\git.exe" -C "E:\\Projects\\S2" add -- a.cpp'), git(3, 'git fsmonitor--daemon run --detach --ipc-threads=8'), git(4, 'git -C E:/Projects/s2-old status'), git(5, 'git -C D:/Projects/ather-mods status'), git(6), git(7, 'git -C E:/Projects/s2 fsmonitor--daemon run --detach'), git(8, 'git -C D:/other diff --no-index E:/Projects/s2/x'), git(9, 'git -C E:/Projects/s2/Source status')] }
+  expect(checkoutGitPids(probe, 'E:/Projects/s2')).toEqual([1, 2, 9]) // by -C, never a path named elsewhere
+  expect(checkoutGitPids(null, 'E:/Projects/s2')).toBe(null)
+  expect(parseProbe(JSON.stringify({ freeGb: 30, diskGb: 1, procs: [{ name: 'git', pid: 7, gb: 0, parentAlive: true, cmd: 'git -C E:/s2 status' }, { name: 'S2', pid: 8, gb: 1, parentAlive: true, cmd: '' }] }))?.procs.map(p => p.cmd)).toEqual(['git -C E:/s2 status', undefined])
+  // Review 2: index.lock is the only wait; stale at 10 min with no checkout git running (or none known).
+  expect(gitBusyNote(NO_GIT_BUSY)).toEqual({ fact: '', step: '' })
+  expect(gitBusyNote({ gitPids: [1, 2, 3, 4, 5, 6], lockAgeMs: null })).toEqual({ fact: '; 6 git processes of the checkout still run (PID 1, 2, 3, 4, 5, …)', step: '' })
+  expect(gitBusyNote({ gitPids: [4242], lockAgeMs: 30_000 }).fact).toBe('; 1 git process of the checkout still runs (PID 4242) and .git/index.lock exists (0 min old)')
+  expect(gitBusyNote({ gitPids: [], lockAgeMs: 3 * MIN }).step).toContain('wait until .git/index.lock is gone before you touch the index')
+  expect(gitBusyNote({ gitPids: null, lockAgeMs: 3 * MIN })).toMatchObject({ fact: '; the process list could not be read and .git/index.lock exists (3 min old)' })
+  expect(gitBusyNote({ gitPids: [4242], lockAgeMs: 12 * MIN }).step).toContain('wait until .git/index.lock is gone') // git still works there
+  expect(gitBusyNote({ gitPids: [], lockAgeMs: 12 * MIN })).toEqual({ fact: '; .git/index.lock exists (12 min old) and no git of the checkout runs: git left it behind', step: 'remove that stale lock first (rm <checkout>/.git/index.lock)' })
+  expect(gitBusyNote({ gitPids: null, lockAgeMs: 12 * MIN })).toEqual({ fact: '; .git/index.lock exists (12 min old) and the process list could not be read: git left it behind', step: 'remove that stale lock first (rm <checkout>/.git/index.lock)' }) // none known
   const s: SyncFile = { ...newSync(T(14, 45), B, 'x', NOW), stage: 'manual', note: 'the sync worker ended without a SYNC line' }
-  expect(gitBusyLabel(NO_GIT_BUSY)).toBe('')
-  expect(gitBusyLabel({ gitPids: [1, 2, 3, 4, 5, 6], isIndexLocked: true })).toBe('; 6 git processes still run (PID 1, 2, 3, 4, 5, …; A5R cannot tell their checkout) and .git/index.lock exists in the checkout')
-  expect(gitBusyLabel({ gitPids: null, isIndexLocked: false })).toBe('; the process list could not be read (look for git.exe yourself)')
-  expect(NOTICES.syncManual(s, { gitPids: [4242], isIndexLocked: false })).toContain("until done, abort or 15:30; 1 git process still runs (PID 4242; A5R cannot tell their checkout) → keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); wait for that git to exit before you touch the index")
-  expect(NOTICES.syncManual(s, { gitPids: [], isIndexLocked: false })).toBe(NOTICES.syncManual(s))
+  expect(NOTICES.syncManual(s, { gitPids: [4242], lockAgeMs: 0 })).toContain("until done, abort or 15:30; 1 git process of the checkout still runs (PID 4242) and .git/index.lock exists (0 min old) → keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); wait until .git/index.lock is gone before you touch the index")
+  expect(NOTICES.syncManual(s, NO_GIT_BUSY)).toBe(NOTICES.syncManual(s))
   expect(syncWorkerTask(s, S2, 'FREE')).toContain('That list: none made. It may be older than your merge')
 })
 
@@ -253,28 +319,38 @@ const atT = async ($: any, on: any) => {
   expect(spawns(w).length).toBe(1)
   return w
 }
+const FSMONITOR: Proc[] = [3, 4, 5].map(pid => ({ name: 'git', pid: 9000 + pid, gb: 0.05, parentAlive: true, cmd: 'git fsmonitor--daemon run --detach --ipc-threads=8' }))
+const handBack = (w: W): string[] => prompts(w).filter(p => p.includes('is back in your hands'))
 
-test('A108: the worker ends while git still runs: the hand-back says so and tells the holder to wait for it before touching the index', opts(), async ($, on) => {
+test('A108: the worker ends while its git still runs: the hand-back names the checkout\'s git and has the holder wait for index.lock', opts(), async ($, on) => {
   const w = await atT($, on)
-  w.machine.procs = [{ name: 'git', pid: 4242, gb: 0.1, parentAlive: false }]
+  w.machine.procs = [...FSMONITOR, { name: 'git', pid: 4242, gb: 0.1, parentAlive: false, cmd: 'git -C E:/s2 checkout --ours -- Source/S2/A.cpp' }, { name: 'git', pid: 88, gb: 0.1, parentAlive: true, cmd: 'git -C D:/Projects/ather-mods status' }]
+  w.put(`${S2}/.git/index.lock`, '', w.clock.now())
   await workerEnds($, 'Resolved 13 self conflicts. Waiting for the resolution script to finish.')
   expect(syncOf(w)?.stage).toBe('manual')
-  const back = prompts(w).filter(p => p.includes('is back in your hands'))
+  const back = handBack(w)
   expect(back.length).toBe(1)
-  expect(back[0]).toContain('1 git process still runs (PID 4242; A5R cannot tell their checkout) →')
-  expect(back[0]).toContain('wait for that git to exit before you touch the index')
-  expect(back[0]).not.toContain('index.lock')
+  expect(back[0]).toContain('; 1 git process of the checkout still runs (PID 4242) and .git/index.lock exists (0 min old) →')
+  expect(back[0]).toContain('wait until .git/index.lock is gone before you touch the index')
+  expect(back[0]).not.toMatch(/9003|9004|9005|PID 88/)
 })
 
-test('A108: the worker ends with .git/index.lock left: the hand-back names it; with neither, the notice is as before', opts(), async ($, on) => {
+test('A108 (review 1): with only git\'s fsmonitor daemons running and no index.lock, the hand-back asks no wait', opts(), async ($, on) => {
   const w = await atT($, on)
-  w.put(`${S2}/.git/index.lock`, '')
+  w.machine.procs = [...FSMONITOR]
   await workerEnds($, 'SYNC ABORT conflicts state=merge in progress')
-  const back = prompts(w).filter(p => p.includes('is back in your hands'))
+  const back = handBack(w)
   expect(back.length).toBe(1)
-  expect(back[0]).toContain('; .git/index.lock exists in the checkout →')
-  expect(back[0]).toContain('wait for that git to exit before you touch the index')
-  expect(back[0]).not.toContain('git process')
-  const plain: SyncFile = { ...newSync(T(14, 45), { session: ME, id8: ME8, lane: 'x' }, 'x', NOW), stage: 'manual' }
-  expect(NOTICES.syncManual(plain, { gitPids: [], isIndexLocked: false })).not.toContain('wait for that git')
+  expect(back[0]).not.toMatch(/git process|index\.lock|wait until/)
+})
+
+test('A108 (review 2): an index.lock 12 min old with no git of the checkout running is stale: the holder may remove it (A5R lets the rm run)', opts(), async ($, on) => {
+  const w = await atT($, on)
+  w.machine.procs = [...FSMONITOR]
+  w.put(`${S2}/.git/index.lock`, '', w.clock.now() - 12 * MIN)
+  await workerEnds($, 'SYNC ABORT conflicts state=merge in progress')
+  const back = handBack(w)
+  expect(back[0]).toContain('; .git/index.lock exists (12 min old) and no git of the checkout runs: git left it behind →')
+  expect(back[0]).toContain('remove that stale lock first (rm <checkout>/.git/index.lock); then either finish it by hand')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: `rm ${S2}/.git/index.lock` }))).toBe(undefined)
 })
