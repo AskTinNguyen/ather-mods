@@ -278,3 +278,11 @@ Sent to this session by the S2 sync main session (the sync conductor), verbatim:
 > - done released everything at once.
 > Two gaps: (1) the dry-run missed 15 real conflicts. They came from commit e81deaf1, which landed after the dry-run ran at the 13:15 cutoff, so re-run the dry-run at sync time. (2) The worker exited while its own git checkout --ours was still running (git.exe PIDs still alive afterwards); it should wait for its children before ending.
 > Separately: the build found main itself does not link, because SipherAvian calls MinimalAPI S2 methods. That is fixed in PR #34186.
+
+## L-40 (2026-10-20) | class: intent | -> rev 36
+
+Sent to this session by the S2 sync main session (the sync conductor), verbatim:
+
+> A5R sync report, 20/10 16:50: the worker merged cleanly with rules (bd1b9c40, montage resolved by `theirs`), and A5R then said "the build runs, log Saved/A5R/sync-20261020-1650-f41dc683-build.log". But no build process ever started and that log file never existed; the next notice admitted it. So the worker ended without launching Build.bat (or launched it detached and it died at once). I built by hand: Succeeded, tests 291/0, done called. Please check how the worker starts the build.
+
+Read in the worker's transcript (agent aa0ae3d3aa8c5772c): it ran `Start-Process cmd.exe -ArgumentList '/c "D:\GameEditors\5.8-ninetails-ed5c054\Engine\Build\BatchFiles\Build.bat" S2Editor Win64 Development -Project="E:\Projects\s2\S2.uproject" -WaitMutex > "E:\Projects\s2\Saved\A5R\sync-20261020-1650-f41dc683-build.log" 2>&1' -WindowStyle Hidden -PassThru` (pid 49328) and ended; the log was never created.
