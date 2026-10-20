@@ -5,7 +5,7 @@
 // hand, or abort). Every other session stays frozen through every stage; the lift goes out only at done, abort or
 // expiry. Pure: no `$`; register.ts gathers the facts (the worker's last line, git's HEAD, the build log, the build
 // processes) and applies the moves decided here.
-import { SCRIPT_END } from './buildscript.ts'
+import { LOCK_WAIT, SCRIPT_END } from './buildscript.ts'
 import type { SyncEnd, SyncFile } from './coord.ts'
 
 export type SyncStage = 'building' | 'testing' | 'manual'
@@ -53,18 +53,29 @@ export const buildResultOf = (log: string): 'Succeeded' | 'Failed' | null => {
   return last
 }
 
-/** A109: the sync's build log as A5R reads it (null: no file of this run): absent; running (written, no end yet); ended
- * (the build script's own exit or refusal line with no Result: line); or the build's own Result. */
-export type BuildLogRead = 'absent' | 'running' | 'ended' | 'Succeeded' | 'Failed'
-export const readBuildLog = (text: string | null): BuildLogRead => (text === null ? 'absent' : buildResultOf(text) ?? (SCRIPT_END.test(text) ? 'ended' : 'running'))
+/** A109: the sync's build log as A5R reads it (null: no file of this run): absent; running (written, no end yet); queued
+ * (its last line is Build.bat's wait for another Build.bat on the same engine: started, behind the lock); ended (the build
+ * script's own exit or refusal line with no Result: line); or the build's own Result. */
+export type BuildLogRead = 'absent' | 'running' | 'queued' | 'ended' | 'Succeeded' | 'Failed'
+/** `mtime`: the log's write time (0: none); `isFinal`: the script's own exit or refusal line is in (the log no longer
+ * changes); `tail`: its last three lines as a notice quotes them. */
+export type BuildLog = { log: BuildLogRead; mtime: number; isFinal: boolean; tail: string }
+const lastLines = (text: string, n: number): string[] => text.split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(-n)
+/** The log of this run (`text` null: none). */
+export const readBuildLog = (text: string | null, mtime: number): BuildLog => {
+  if (text === null) return { log: 'absent', mtime: 0, isFinal: false, tail: '' }
+  const last = lastLines(text, 3)
+  const isFinal = SCRIPT_END.test(text)
+  const log = buildResultOf(text) ?? (isFinal ? 'ended' : LOCK_WAIT.test(last[last.length - 1] ?? '') ? 'queued' : 'running')
+  return { log, mtime, isFinal, tail: last.map(l => `"${l.slice(0, 160)}"`).join(' | ') }
+}
 
-/** A109: what the holder hears of a build from its log (a Result: line moves the stage on, stageNext: null here):
- * `building` (the build runs) once its log of this run is seen (the script writes it before Build.bat starts);
- * `build-unknown` (start the script yourself) when the script ended with no Result:, or with no log when the build is not
- * started (`isNotStarted`: the worker's `build-log=none`, or no log and no build process past the grace); else null. A log
- * seen running is never told to start again. */
-export const buildTell = (log: BuildLogRead, isNotStarted: boolean): 'building' | 'build-unknown' | null =>
-  log === 'running' ? 'building' : log === 'ended' || (log === 'absent' && isNotStarted) ? 'build-unknown' : null
+/** A109: what a build log with no Result: line says by itself: `building` (written: the script writes it before Build.bat
+ * starts) and `build-queued` (Build.bat's lock line last), both quiet; `build-ended` (the script ended with no Result:, read
+ * why). With no log, or a Result:, nothing here: the entry and the watch decide (entryTell, stageNext). Another lane's
+ * dotnet, cl or Live Coding never stands for this sync's build (review of rev 36). */
+export type BuildTell = 'building' | 'build-queued' | 'build-unknown' | 'build-ended' | 'build-stopped'
+export const logTell = (log: BuildLogRead): BuildTell | null => (log === 'ended' ? 'build-ended' : log === 'queued' ? 'build-queued' : log === 'running' ? 'building' : null)
 
 /** A93: the sync's own build log, a fresh file per sync (Build.bat's output written with `>`, never appended to; A109: the
  * build script appends only its own exit line after it). */
@@ -122,27 +133,40 @@ export const mergeLabel = (mergeSha: string): string => mergeSha || '(its sha no
  * a build, test or Editor process runs within `warnMs` of it, or the processes cannot be read (`isBusy`); then, by stage,
  * the next stage and what the holder is told (each said once, by its key). `stageAt`: when the stage began (the
  * build-unknown grace). The manual stage moves on only by the holder's own done or abort (A96: told once, at the hand-back). */
-export type StageTell = 'testing' | 'build-failed' | 'build-unknown' | 'building'
-/** A109: what the holder is told as the sync enters a stage: the stage's own notice; for a building stage what is seen of
- * its build (buildTell: the worker's `build-log=none` tells the holder at once to start the script, whatever other
- * process runs); with no log yet, the build runs when a build process is seen, else the worker's report, quietly, until
- * the log appears; a log that already holds the Result: is left to the watch's next step, which moves the stage on (null:
- * nothing told now). */
-export type EntryTell = SyncStage | 'build-unknown' | 'build-reported'
-export const entryTell = (to: StageEntry, log: BuildLogRead, isBuilding: boolean): EntryTell | null => {
-  if (to.stage !== 'building') return to.stage
-  return buildTell(log, to.isBuildNone) ?? (log !== 'absent' ? null : isBuilding ? 'building' : 'build-reported')
-}
-/** A109: the tells that wake nobody (the build runs, or the worker reports it started it). */
-export const isQuietTell = (t: StageTell | EntryTell): boolean => t === 'building' || t === 'build-reported'
+export type StageTell = 'testing' | 'build-failed' | BuildTell
+/** A109: what the holder is told as the sync enters a stage: the stage's own notice; for a building stage what its log
+ * says (logTell), and with no log yet: the worker's `build-log=none` → start the script now (`build-unknown`), else the
+ * worker's report, quietly, until the log appears; a log that already holds the Result: is left to the watch's next step,
+ * which moves the stage on (null: nothing told now). */
+export type EntryTell = SyncStage | BuildTell | 'build-reported'
+export const entryTell = (to: StageEntry, log: BuildLogRead): EntryTell | null =>
+  to.stage !== 'building' ? to.stage : log === 'absent' ? (to.isBuildNone ? 'build-unknown' : 'build-reported') : logTell(log)
+/** A109: the tells that wake nobody (the build runs or waits behind Build.bat's lock, or the worker reports it started it). */
+export const isQuietTell = (t: StageTell | EntryTell): boolean => t === 'building' || t === 'build-queued' || t === 'build-reported'
+/** A109 (review D4): a notice's key: a wake about the build's log is keyed by that log's write time too (told only once
+ * the log no longer changes: build-failed waits for the script's exit line, stageNext), so a run the holder starts again
+ * that fails again is told again; every other tell once per sync. */
+export const tellKey = (t: StageTell | EntryTell, mtime: number): string => (mtime && (t === 'build-failed' || t === 'build-ended' || t === 'build-stopped') ? `${t}:${mtime}` : t)
 export type StageMove = { extendTo: number | null; next: SyncStage | null; tell: StageTell | null }
-export const stageNext = (s: { stage: SyncStage | null; extended: boolean; hardEnd: number; stageAt: number }, f: { log: BuildLogRead; isBuilding: boolean; isBusy: boolean; now: number }, warnMs: number): StageMove => {
+/** A93 / A109: the watch over a build: its Result: (Succeeded → testing; Failed → revert, told once the script's exit line
+ * is in, or its cmd.exe is seen gone, so the log no longer changes; an unread process list waits for the exit line, which
+ * the script always appends, as C2 of the fixes' review reads null: never gone); no log past the grace → start the script; a log
+ * that stopped with no Result: and no exit line while the script's cmd.exe is seen gone past the grace → `build-stopped`
+ * (an unread process list, `isScript` null, never says gone); else what the log says. */
+const buildWatch = (b: BuildLog, isScript: boolean | null, isGraceOver: boolean): StageTell | null => {
+  if (b.log === 'Succeeded') return 'testing'
+  if (b.log === 'Failed') return b.isFinal || isScript === false ? 'build-failed' : null
+  if (b.log === 'absent') return isGraceOver ? 'build-unknown' : null
+  if ((b.log === 'running' || b.log === 'queued') && isGraceOver && isScript === false) return 'build-stopped'
+  return logTell(b.log)
+}
+export const stageNext = (s: { stage: SyncStage | null; extended: boolean; hardEnd: number; stageAt: number }, f: { log: BuildLog; isScript: boolean | null; isBusy: boolean; now: number }, warnMs: number): StageMove => {
   const extendTo = s.stage !== null && f.isBusy && !s.extended && f.now >= s.hardEnd - warnMs ? s.hardEnd + BUILD_EXTEND_MS : null
   switch (s.stage) {
-    case 'building':
-      if (f.log === 'Succeeded') return { extendTo, next: 'testing', tell: 'testing' }
-      if (f.log === 'Failed') return { extendTo, next: null, tell: 'build-failed' }
-      return { extendTo, next: null, tell: buildTell(f.log, !f.isBuilding && f.now - s.stageAt >= STAGE_GRACE_MS) }
+    case 'building': {
+      const tell = buildWatch(f.log, f.isScript, f.now - s.stageAt >= STAGE_GRACE_MS)
+      return { extendTo, next: tell === 'testing' ? 'testing' : null, tell }
+    }
     case 'testing':
       return { extendTo, next: null, tell: 'testing' }
     default:

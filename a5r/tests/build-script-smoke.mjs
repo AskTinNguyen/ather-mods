@@ -50,15 +50,15 @@ try {
   const args = `stand-in Build.bat args: S2Editor Win64 Development -Project="${checkout}\\S2.uproject" -WaitMutex`
   const byArg = await run('s-arg', '', engine) // the option unset: the root as the first argument
   expect(`argument form, Build.bat's args: ${byArg}`, byArg.includes(args))
-  expect(`argument form, Result line: ${byArg}`, byArg.includes('Result: Succeeded') && readBuildLog(byArg) === 'Succeeded')
+  expect(`argument form, Result line: ${byArg}`, byArg.includes('Result: Succeeded') && readBuildLog(byArg, 1).log === 'Succeeded')
   expect(`argument form, exit line: ${byArg}`, byArg.includes(`A5R build exit 0 (engine "${engine}")`))
   const byOption = await run('s-opt', engine, null) // the option set: written into the script, no argument
   expect(`option form: ${byOption}`, byOption.includes(args) && byOption.includes(`A5R build exit 0 (engine "${engine}")`))
   const none = await run('s-none', '', null)
-  expect(`no root: ${none}`, none.includes('A5R build refused: no engine root') && readBuildLog(none) === 'ended')
+  expect(`no root: ${none}`, none.includes('A5R build refused: no engine root') && readBuildLog(none, 1).log === 'ended')
   const wrong = path.join(tmp, 'UE_5.8')
   const noBat = await run('s-wrong', '', wrong)
-  expect(`a root without Build.bat: ${noBat}`, noBat.includes(`A5R build refused: "${wrong}\\Engine\\Build\\BatchFiles\\Build.bat" does not exist`) && readBuildLog(noBat) === 'ended')
+  expect(`a root without Build.bat: ${noBat}`, noBat.includes(`A5R build refused: "${wrong}\\Engine\\Build\\BatchFiles\\Build.bat" does not exist`) && readBuildLog(noBat, 1).log === 'ended')
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true })
 }

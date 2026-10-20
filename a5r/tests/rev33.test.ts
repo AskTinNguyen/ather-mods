@@ -60,7 +60,7 @@ test('A96: unit: the manual stage keeps the freeze, expires with a gone holder (
   expect([syncPhase(manual, T(15, 0), false), syncPhase(manual, T(15, 0), true)]).toEqual(['frozen', 'expired'])
   expect(syncPhase({ ...manual, stage: 'building' }, T(15, 0), true)).toBe('frozen') // after a merge: handed over (A93)
   expect(parseSyncFile(JSON.stringify(manual))?.stage).toBe('manual')
-  const step = (now: number, isBusy: boolean) => stageNext(manual, { log: 'Succeeded', isBuilding: false, isBusy, now }, 10 * MIN)
+  const step = (now: number, isBusy: boolean) => stageNext(manual, { log: { log: 'Succeeded', mtime: 1, isFinal: true, tail: '' }, isScript: false, isBusy, now }, 10 * MIN)
   expect(step(T(15, 0), true)).toEqual({ extendTo: null, next: null, tell: null })
   expect(step(T(16, 6), true).extendTo).toBe(T(16, 45)) // the A93 extension while busy still applies
 })

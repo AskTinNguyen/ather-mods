@@ -10,10 +10,18 @@ export const ENGINE_ROOT_SLOT = '<engine root>'
 /** The script's own last line in the log: its exit code after Build.bat, or why it refused to run Build.bat. Build.bat
  * exits 0 on failure, so only the build's own `Result:` line says how it went; this line only says that the script ended. */
 export const SCRIPT_END = /^A5R build (exit|refused)\b/m
+/** Build.bat's own line while another Build.bat on the same engine holds its lock (MEASURED, Fable review of rev 36: the
+ * second script runs only cmd and ping, no dotnet or UnrealBuildTool, until the first ends): started, and queued. */
+export const LOCK_WAIT = /waiting for existing script to terminate/i
 
 /** The sync's build script, beside its log (syncstage.ts `syncBuildLog`): one file per sync, written fresh before each
- * worker start. */
-export const syncBuildScript = (checkout: string, syncId: string): string => `${checkout}/Saved/A5R/${syncId}-build.cmd`
+ * worker start; the probe lists a cmd.exe whose command line holds this suffix (coord.ts `ramProbe`). */
+export const SCRIPT_SUFFIX = '-build.cmd'
+export const syncBuildScript = (checkout: string, syncId: string): string => `${checkout}/Saved/A5R/${syncId}${SCRIPT_SUFFIX}`
+/** The script's own cmd.exe runs (null: no process list was read, never taken for gone). Another lane's dotnet, cl or Live
+ * Coding never counts as this sync's build. */
+export const isScriptAlive = (procs: readonly { name: string; cmd?: string }[] | null, syncId: string): boolean | null =>
+  procs === null ? null : procs.some(p => /^cmd$/i.test(p.name) && (p.cmd ?? '').toLowerCase().includes(`${syncId}${SCRIPT_SUFFIX}`.toLowerCase()))
 
 const win = (p: string): string => p.trim().replace(/\//g, '\\').replace(/\\+$/, '')
 /** A literal for `set "NAME=…"`: inside the quotes `&`, `(`, `)` and spaces are plain text; only `%` needs doubling. */

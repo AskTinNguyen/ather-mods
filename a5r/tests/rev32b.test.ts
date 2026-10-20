@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { NOTICES, blankSession, newSync, parseLockLine, parseSyncEnd, parseSyncFile, type SessionFile, type SyncFile } from '../hooks/coord.ts'
-import { afterWorker, buildResultOf, readMerge, stageNext, syncBuildLog, testsOf, type BuildLogRead } from '../hooks/syncstage.ts'
+import { afterWorker, buildResultOf, readBuildLog, readMerge, stageNext, syncBuildLog, testsOf, type BuildLogRead } from '../hooks/syncstage.ts'
 import { LOCK, ME, NOW, PROJ, opts, world, type Proc, type Rec } from './world.ts'
 
 // Rev 32 (L-36), A93-A95. MEASURED 2026-10-19: sync-20261019-1145-f41dc683 (T 11:10, hard end 12:40) merged 7b68b894;
@@ -58,12 +58,12 @@ test('A93: unit: the MERGED line, the build\'s own Result line, a merge commit o
   expect(readMerge(`7b68b894aaaa ${PRE} 1c153b41bbbb\n`, PRE)).toEqual({ state: 'merged', sha: '7b68b894aaaa' })
   expect([readMerge(`${PRE} 111111\n`, PRE), readMerge(null, PRE), readMerge(`7b68b894aaaa 111111 1c153b41bbbb`, PRE), readMerge('cafe1234 111111', PRE)]).toEqual([{ state: 'none' }, { state: 'unknown' }, { state: 'unknown' }, { state: 'unknown' }])
   const s = { stage: 'building' as const, extended: false, hardEnd: T(16, 15), stageAt: T(14, 50) }
-  const step = (o: Partial<typeof s>, f: { log?: BuildLogRead; isBuilding?: boolean; isBusy?: boolean; now: number }) => stageNext({ ...s, ...o }, { log: 'absent', isBuilding: f.isBuilding ?? true, isBusy: f.isBusy ?? f.isBuilding ?? true, ...f }, 10 * MIN)
-  expect([step({}, { now: T(16, 6) }).extendTo, step({}, { now: T(16, 4) }).extendTo, step({}, { now: T(16, 6), isBuilding: false }).extendTo, step({ extended: true }, { now: T(16, 6) }).extendTo]).toEqual([T(16, 45), null, null, null])
-  expect(stageNext({ ...s, stage: 'testing' }, { log: 'absent', isBuilding: false, isBusy: true, now: T(16, 6) }, 10 * MIN).extendTo).toBe(T(16, 45)) // a test or Editor run, or no reading
+  const step = (o: Partial<typeof s>, f: { log?: BuildLogRead; isScript?: boolean; isBusy?: boolean; now: number }) => stageNext({ ...s, ...o }, { isScript: f.isScript ?? true, isBusy: f.isBusy ?? f.isScript ?? true, now: f.now, log: { log: f.log ?? 'absent', mtime: 1, isFinal: true, tail: '' } }, 10 * MIN)
+  expect([step({}, { now: T(16, 6) }).extendTo, step({}, { now: T(16, 4) }).extendTo, step({}, { now: T(16, 6), isScript: false }).extendTo, step({ extended: true }, { now: T(16, 6) }).extendTo]).toEqual([T(16, 45), null, null, null])
+  expect(stageNext({ ...s, stage: 'testing' }, { log: readBuildLog(null, 0), isScript: false, isBusy: true, now: T(16, 6) }, 10 * MIN).extendTo).toBe(T(16, 45)) // a test or Editor run, or no reading
   expect(step({}, { now: T(15, 0), log: 'Succeeded' })).toEqual({ extendTo: null, next: 'testing', tell: 'testing' })
   expect(step({}, { now: T(15, 0), log: 'Failed' }).tell).toBe('build-failed')
-  expect([step({}, { now: T(14, 51), isBuilding: false }).tell, step({}, { now: T(14, 53), isBuilding: false }).tell]).toEqual([null, 'build-unknown'])
+  expect([step({}, { now: T(14, 51), isScript: false }).tell, step({}, { now: T(14, 53), isScript: false }).tell]).toEqual([null, 'build-unknown'])
   // Git, not the worker, says whether the merge happened.
   const merged = { state: 'merged' as const, sha: '7b68b894' }
   expect(afterWorker(parseSyncEnd(MERGED), merged, true)).toEqual({ kind: 'stage', stage: 'building', mergeSha: '7b68b894', note: `merged 7b68b894; build log ${LOG}`, isBuildNone: false })
@@ -78,14 +78,15 @@ test('A93: unit: the MERGED line, the build\'s own Result line, a merge commit o
 
 test('A93 / A95: the worker ends with SYNC MERGED: still frozen through the build; Result: Succeeded wakes the holder to test; done needs the test line, then lifts', opts(), async ($, on) => {
   const w = await atT($, on)
-  w.machine.procs = [UBT]
-  w.put(LOG, 'Building 4127 actions...\n')
+  // A109 (review of rev 36, by design): the build runs as the sync's own script (its cmd.exe) writing the log of this run.
+  w.machine.procs = [UBT, { name: 'cmd', pid: 950, gb: 0, parentAlive: false, cmd: 'cmd.exe /c ""E:\\s2\\Saved\\A5R\\sync-20261006-1445-ab12cd34-build.cmd" "D:\\x""' }]
+  w.put(LOG, 'Building 4127 actions...\n', w.clock.now())
   await workerEnds($, MERGED)
   expect([syncOf(w)?.state, syncOf(w)?.stage, syncOf(w)?.mergeSha, syncOf(w)?.buildLog]).toEqual(['planned', 'building', '7b68b894', LOG])
   expect(w.read(LOCK)).toContain('note=Sync main 14:45') // the sync keeps the Editor down through its build
   await minutes(w, 10) // 14:55: still building
   expect(syncOf(w)?.stage).toBe('building')
-  expect(prompts(w).some(p => /has no Result: line|aborted|Sync main — done/.test(p))).toBe(false)
+  expect(prompts(w).some(p => /no Result: line|did not start|aborted|Sync main — done/.test(p))).toBe(false)
   w.put(LOG, 'Building 4127 actions...\nResult: Succeeded\nTotal execution time: 2160 seconds\n', w.clock.now())
   w.machine.procs = []
   await minutes(w, 1)
@@ -116,14 +117,16 @@ test('A93: Result: Failed wakes the holder to revert the merge and abort; aborte
 
 test('A93: a worker ending with no SYNC line while a merge commit sits on top of the pre-merge HEAD is merged: frozen; no build process and no Result line → the holder is told to read the result', opts(), async ($, on) => {
   const w = await atT($, on, { 'log -1 --format=%H %P HEAD': { stdout: `7b68b894aaaa ${PRE} 1c153b41bbbb\n` } })
-  w.machine.procs = [UBT]
+  // A109 (review of rev 36, by design): the build is the sync's own script (its cmd.exe) writing its log, not any UnrealBuildTool.
+  w.machine.procs = [UBT, { name: 'cmd', pid: 950, gb: 0, parentAlive: false, cmd: 'cmd.exe /c ""E:\\s2\\Saved\\A5R\\sync-20261006-1445-ab12cd34-build.cmd" "D:\\x""' }]
+  w.put(LOG, 'Building 4127 actions...\n', w.clock.now())
   await workerEnds($, 'I\'m waiting for the build to print its own "Result:" line.')
   expect([syncOf(w)?.state, syncOf(w)?.stage, syncOf(w)?.mergeSha, syncOf(w)?.buildLog]).toEqual(['planned', 'building', '7b68b894aaaa', LOG])
   await minutes(w, 5)
-  expect(prompts(w).some(p => p.includes('has no Result: line'))).toBe(false) // the build process still runs
+  expect(prompts(w).some(p => p.includes('no Result: line'))).toBe(false) // the build's script still runs
   w.machine.procs = []
   await minutes(w, 3)
-  expect(prompts(w).filter(p => p.includes(`A5R · Sync main — the merge 7b68b894aaaa is in but its build log (${LOG}) has no Result: line of this run: the build did not start (no log of this run)`)).length).toBe(1)
+  expect(prompts(w).filter(p => p.includes(`A5R · Sync main — the build log of the merge 7b68b894aaaa (${LOG}) stopped with no Result: line and no exit line, and its script no longer runs`)).length).toBe(1)
   expect(syncOf(w)?.state).toBe('planned')
 })
 

@@ -9,7 +9,7 @@ import {
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
   DEFAULT_GATES, isYieldMoment, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
@@ -17,8 +17,8 @@ import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHol
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
-import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type BuildLogRead, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
-import { buildScriptText, buildStartCommand, syncBuildScript } from './buildscript.ts'
+import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, tellKey, testsOf, type BuildLog, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
+import { buildScriptText, buildStartCommand, isScriptAlive, syncBuildScript } from './buildscript.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -949,7 +949,7 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
   // A79: the worker calls no a5r tool (a plugin's hooks never see the calls of an agent it spawned), so the holder's a5r
   // takes the Editor lock for the sync here, as the editor tool's request does, and releases it when the worker ends.
   await takeSyncLock($, opts, claimed, now).catch(err => $.ui.log(`a5r: sync lock: ${String(err)}`, { to: 'debug' }))
-  const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(opts), (lockRaw ?? '').trim()) }).catch(err => ({ deny: String(err) }))
+  const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(opts), (lockRaw ?? '').trim(), String(opts.engineRoot ?? '')) }).catch(err => ({ deny: String(err) }))
   // A96: a worker that could not start hands the sync back like one that gave up (the manual stage).
   if (ran.deny !== undefined) return enterSyncStage($, opts, claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}`, isBuildNone: false }, now)
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
@@ -1134,22 +1134,23 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
  * follows its hard end, the holder told. The build log is the sync's own (A5R named it in the worker's task), whatever
  * path the worker's line gives. A108: a hand-back names the git processes still running (a fresh probe; the worker's own
  * commands may be among them) and the checkout's .git/index.lock. A109: what a building stage says of its build is
- * syncstage.ts `entryTell`'s (the build runs only once its log or a build process is seen). */
+ * syncstage.ts `entryTell`'s (the build runs only once its log of this run is seen). */
 async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: StageEntry, now: number): Promise<void> {
   const next = enterStage(s, to, s.build ? syncBuildLog(s2Root(opts), s.id) : '', now)
   if (!(await writeSync($, opts, next, s))) return
   await syncLockUntil($, opts, next, now)
-  const tell = entryTell(to, await readSyncLog($, next), buildProcs(probe).length > 0)
-  const busy = to.stage === 'manual' ? await gitBusy($, opts) : null
-  if (tell) push({ id: `sync:${s.id}:${s.at}:${tell}`, text: busy ? NOTICES.syncManual(next, busy) : SYNC_TELL[tell](next), isActionable: !isQuietTell(tell) })
+  const read = await readSyncLog($, next)
+  const tell = entryTell(to, read.log)
+  const busy = to.stage === 'manual' ? await gitBusy($, opts) : NO_GIT_BUSY
+  if (tell) push({ id: `sync:${s.id}:${s.at}:${tellKey(tell, read.mtime)}`, text: SYNC_TELL[tell](next, { tail: read.tail, busy }), isActionable: !isQuietTell(tell) })
 }
 
 /** A93 / A109: the build log of this run of a sync in its building stage (written since the worker started: a quick build
  * can end before the worker does, and an earlier run's log is older; the worker's end is the only way into that stage, so
  * workerAt is set there, and stageAt only stands in for a file written by hand). */
-async function readSyncLog($: Engine, s: SyncFile): Promise<BuildLogRead> {
+async function readSyncLog($: Engine, s: SyncFile): Promise<BuildLog> {
   const stat = s.stage === 'building' && s.buildLog ? await $.fs.stat(s.buildLog).catch(() => null) : null
-  return readBuildLog(stat && stat.mtimeMs >= (s.workerAt ?? s.stageAt) ? ((await $.fs.read(s.buildLog).catch(() => '')) ?? '') : null)
+  return stat && stat.mtimeMs >= (s.workerAt ?? s.stageAt) ? readBuildLog((await $.fs.read(s.buildLog).catch(() => '')) ?? '', stat.mtimeMs) : readBuildLog(null, 0)
 }
 
 /** A108: the checkout's git processes now (a fresh probe) and the age of its .git/index.lock. */
@@ -1161,9 +1162,10 @@ async function gitBusy($: Engine, opts: Opts): Promise<GitBusy> {
 
 /** A93: the holder's a5r through the stages after the merge: the hard end put back once while the build runs near it;
  * the build's own Result: line read from its log (Succeeded → the testing stage and the holder woken to run the
- * post-merge tests; Failed → the holder woken to revert and abort); no log and no build process past the grace, or the
- * build script's own end with no Result: line → the holder woken to start the script itself (A109; a log or process seen
- * first → told quietly that the build runs); in the testing stage the holder is woken once to run the tests and call done. */
+ * post-merge tests; Failed → the holder woken to revert and abort); A109: what is told of a build with no Result: line yet
+ * is syncstage.ts `stageNext`'s (its `buildWatch` and `logTell`: the log of this run and the script's own cmd.exe; quiet while it runs or waits behind
+ * Build.bat's lock, a wake when it did not start, ended without Result: or stopped); in the testing stage the holder is
+ * woken once to run the tests and call done. */
 async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   // After the merge, git did not answer at the worker's end: ask again (a manual stage is the holder's to finish, A96).
   const git = isMergedStage(s.stage) && !s.mergeSha ? await mergeCommit($, opts, s) : null
@@ -1171,12 +1173,12 @@ async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promi
   // Near the hard end the processes are read fresh: a build, test or Editor run (or no reading at all) puts it back once.
   const nearEnd = !s.extended && now >= s.hardEnd - HARD_END_WARN_MS
   const reading = nearEnd && !probe ? await freshProbe($, opts) : probe // the shared reading is at most 50 s old
-  const isBuilding = buildProcs(reading).length > 0
-  const move = stageNext(s, { log, isBuilding, isBusy: reading === null || isBuilding || unrealPids(reading).length > 0, now }, HARD_END_WARN_MS)
+  const isScript = isScriptAlive(reading?.procs ?? null, s.id)
+  const move = stageNext(s, { log, isScript, isBusy: reading === null || isScript === true || buildProcs(reading).length > 0 || unrealPids(reading).length > 0, now }, HARD_END_WARN_MS)
   const changes: Partial<SyncFile> = {
     ...(git?.state === 'merged' ? { mergeSha: git.sha } : {}),
     ...(move.extendTo === null ? {} : { hardEnd: move.extendTo, extended: true }),
-    ...(move.next ? { stage: move.next, stageAt: now, note: `${s.note}; build ${log}`.slice(0, 300) } : {}),
+    ...(move.next ? { stage: move.next, stageAt: now, note: `${s.note}; build ${log.log}`.slice(0, 300) } : {}),
   }
   const moved: SyncFile = { ...s, ...changes, updatedAt: now }
   const isMoved = Object.keys(changes).length > 0 && (await writeSync($, opts, moved, s))
@@ -1185,7 +1187,7 @@ async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promi
     await syncLockUntil($, opts, cur, now)
     push({ id: `sync:${s.id}:${s.at}:extended`, text: NOTICES.syncExtended(cur), isActionable: false })
   }
-  if (move.tell) push({ id: `sync:${s.id}:${s.at}:${move.tell}`, text: SYNC_TELL[move.tell](cur), isActionable: !isQuietTell(move.tell) })
+  if (move.tell) push({ id: `sync:${s.id}:${s.at}:${tellKey(move.tell, log.mtime)}`, text: SYNC_TELL[move.tell](cur, { tail: log.tail, busy: NO_GIT_BUSY }), isActionable: !isQuietTell(move.tell) })
 }
 
 /** The live session that takes over what a gone holder left (a merge left behind, a sync after its merge): the first
