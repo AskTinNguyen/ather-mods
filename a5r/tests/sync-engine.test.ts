@@ -117,9 +117,11 @@ test('the holder dry-runs the merge at the cutoff; each conflict reaches the ses
   await idle($)
   await advance(w, 20, 'cccccccc') // 15:00, the cutoff
   expect(syncOf(w)?.conflicts).toEqual([{ path: 'Source/S2/Foo.cpp', kind: 'self', match: '091845264d60' }, { path: 'Content/S2/Maps/L_TALab.umap', kind: 'foreign' }])
-  expect(prompts(w).length).toBe(1)
-  const told = prompts(w)[0] ?? ''
-  expect(told).toContain('A5R · Sync main — cutoff: you hold the sync at 15:30')
+  expect(prompts(w)[0]).toContain('A5R · Sync main — cutoff: you hold the sync at 15:30')
+  // A107 (rev 35, by design): the fetch and the dry-run run off the tick, so their notices may come in the next prompt.
+  await idle($)
+  const told = prompts(w).join('\n')
+  expect(told.split('self-conflict in Source/S2/Foo.cpp').length).toBe(2) // told once
   expect(told).toContain('A5R · Sync main — self-conflict in Source/S2/Foo.cpp (main holds our 091845264d60) for the sync at 15:30; this session edited that path → a self-conflict needs nothing from you: the holder resolves it to ours (rule 11)')
   expect(told).toContain('dry-run for 15:30: 2 conflicts (1 self, 1 foreign): Content/S2/Maps/L_TALab.umap (binary) → level-lane')
   expect(told).toContain('a logic or .uasset/.umap conflict → git merge --abort and the path goes to its owner')
@@ -270,7 +272,9 @@ test('A11: at the cutoff the holder lists the files main adds that already exist
   expect(syncOf(w)?.untracked).toEqual(['Source/S2/NewFile.cpp', 'Content/S2/New/A.uasset', 'Config/Stray.ini'])
   expect(w.runs.filter(r => r.includes('--diff-filter=A')).length).toBe(1)
   expect(w.runs.some(r => /ls-files|\bstatus\b|--others/.test(r))).toBe(false) // never a whole-tree untracked scan
-  const told = prompts(w)[0] ?? ''
+  await idle($) // A107 (rev 35, by design): the dry-run's notices may come in the prompt after the cutoff's
+  const told = prompts(w).join('\n')
+  expect(told.split('origin/main adds Source/S2/NewFile.cpp, which').length).toBe(2) // told once
   expect(told).toContain('A5R · Sync main — origin/main adds Source/S2/NewFile.cpp, which already exists untracked in the shared checkout and was written by this session')
   expect(told).toContain('before 15:30: commit it with exact paths (then it is an ordinary conflict, yours to settle) or move it out of the tree')
   expect(told).toContain('origin/main adds 3 files that already exist untracked in the shared checkout ("untracked would be overwritten"): Source/S2/NewFile.cpp → 3️⃣-Loco-fix; Content/S2/New/A.uasset → level-lane; Config/Stray.ini → owner unknown')

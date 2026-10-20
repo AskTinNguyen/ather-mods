@@ -7,6 +7,7 @@
 import { commandVerb, nestedCommand, segments, stripHeredocs, tokenize } from './a5r.ts'
 import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from './syncrules.ts'
 import type { LeaseNotes } from './lease.ts'
+import type { DryRound } from './dryrun.ts'
 import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type StageTell, type SyncStage } from './syncstage.ts'
 
 export const DIR = 'Saved/A5R'
@@ -365,6 +366,21 @@ export const unrealPids = (probe: Probe | null): number[] => (probe?.procs ?? []
 export const BUILD_NAMES = ['dotnet', 'UnrealBuildTool', 'cl', 'link', 'MSBuild', 'UnrealGame', 'S2'] as const
 export const buildProcs = (probe: Probe | null): Proc[] => (probe?.procs ?? []).filter(p => BUILD_NAMES.some(n => isName(p, n)))
 
+/** A108: the git processes a fresh probe saw (null: no reading; the probe cannot tell their checkout) and whether the shared
+ * checkout's .git/index.lock exists, when the worker hands the sync back. */
+export type GitBusy = { gitPids: number[] | null; isIndexLocked: boolean }
+export const gitPids = (probe: Probe | null): number[] | null => (probe ? probe.procs.filter(p => isName(p, 'git')).map(p => p.pid) : null)
+/** A108: what the manual-stage notice says of git still running ('' when nothing is seen). */
+export const NO_GIT_BUSY: GitBusy = { gitPids: [], isIndexLocked: false }
+export const gitBusyLabel = (b: GitBusy): string => {
+  const n = b.gitPids?.length ?? 0
+  const parts = [
+    b.gitPids === null ? 'the process list could not be read (look for git.exe yourself)' : n ? `${n} git process${n === 1 ? ' still runs' : 'es still run'} (PID ${b.gitPids.slice(0, 5).join(', ')}${n > 5 ? ', …' : ''}; A5R cannot tell their checkout)` : '',
+    b.isIndexLocked ? '.git/index.lock exists in the checkout' : '',
+  ].filter(Boolean)
+  return parts.length ? `; ${parts.join(' and ')}` : ''
+}
+
 /** A58: whether the lease is a build: the holder asked with build, or its lock line's note says so. */
 export const isBuildLease = (lock: LockLine, holder: SessionFile | undefined): boolean => Boolean(holder?.want?.build) || /\(build\)/i.test(lock.note)
 
@@ -703,6 +719,8 @@ export type SyncFile = {
   /** Paths origin/main adds that already exist on disk in the shared checkout (A11): the merge would refuse or
    * overwrite them, and merge-tree does not see them. Null until the holder's dry-run lists them. */
   untracked: string[] | null
+  /** A107: what the dry-run behind the lists read (null: no dry-run list on file). */
+  dry: DryRead | null
   /** D8: the sync includes a build; its freeze may last longer. */
   build: boolean
   /** D8: the freeze's hard end (T + 45 min, T + 90 min with a build): past it the sync expires. */
@@ -729,6 +747,8 @@ export type SyncFile = {
   /** A99: the holder's conflict rules for the worker, first match wins ([] none). */
   rules: SyncRule[]
 }
+/** A107: the origin/main a dry-run read ('' unread) and why its list is stale ('' when the fetch just before it succeeded). */
+export type DryRead = { main: string; stale: string }
 export type Phase = 'none' | 'planned' | 'cutoff' | 'frozen' | 'done' | 'aborted' | 'cancelled' | 'expired'
 
 export const parseSyncFile = (text: string | null): SyncFile | null => {
@@ -747,6 +767,7 @@ export const parseSyncFile = (text: string | null): SyncFile | null => {
       conflictsAt: v.conflictsAt ?? null,
       conflictsSource: v.conflictsSource ?? null,
       untracked: Array.isArray(v.untracked) ? v.untracked.map(String) : null,
+      dry: v.dry && typeof v.dry === 'object' ? { main: String(v.dry.main ?? ''), stale: String(v.dry.stale ?? '') } : null,
       build,
       hardEnd: typeof v.hardEnd === 'number' ? v.hardEnd : v.at + (build ? SYNC_BUILD_MIN : SYNC_MERGE_MIN) * 60_000, // a 0.4 file: the default end
       workerId: typeof v.workerId === 'string' ? v.workerId : null,
@@ -780,6 +801,8 @@ export const syncPhase = (s: SyncFile | null, now: number, isHolderGone = false)
   // it, and in the manual stage (A96: the sync is the holder's own to finish), a gone holder expires it.
   return now >= s.hardEnd || (isHolderGone && !isMergedStage(s.stage)) ? 'expired' : 'frozen'
 }
+/** A107: the conflict list on file was made by a dry-run at T or later (not by the holder's hand). */
+export const isListAtT = (s: SyncFile): boolean => s.conflictsSource === 'merge-tree' && s.conflictsAt !== null && s.conflictsAt >= s.at
 export const isOpenPhase = (p: Phase): boolean => p === 'planned' || p === 'cutoff' || p === 'frozen'
 /** A94: this session holds the sync and it is in its cutoff or freeze: its own Editor slot goes first, uncapped, and ends
  * with the sync. */
@@ -798,6 +821,7 @@ export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: 
   conflictsAt: null,
   conflictsSource: null,
   untracked: null,
+  dry: null,
   build,
   hardEnd: at + freezeMin * 60_000,
   workerId: null,
@@ -816,15 +840,15 @@ export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: 
 })
 /** A move keeps the sync's id and the length of its freeze; its notices are keyed by its time too, so a moved
  * sync gets them again. */
-export const movedSync = (s: SyncFile, at: number, now: number): SyncFile => ({ ...s, at, hardEnd: at + (s.hardEnd - s.at), conflicts: null, conflictsAt: null, conflictsSource: null, untracked: null, messaged: [], updatedAt: now })
+export const movedSync = (s: SyncFile, at: number, now: number): SyncFile => ({ ...s, at, hardEnd: at + (s.hardEnd - s.at), conflicts: null, conflictsAt: null, conflictsSource: null, untracked: null, dry: null, messaged: [], updatedAt: now })
 /** The build flag of a planned sync, with its freeze length to match (D8). */
 export const withBuild = (s: SyncFile, build: boolean, freezeMin: number, now: number): SyncFile => ({ ...s, build, hardEnd: s.at + freezeMin * 60_000, updatedAt: now })
-export const withUntracked = (s: SyncFile, paths: readonly string[], now: number): SyncFile => ({ ...s, untracked: [...paths], updatedAt: now })
 
 /** `git diff --name-only -z --diff-filter=A HEAD origin/main`: the paths main adds, NUL-separated (no quoting). */
 export const parseAdded = (stdout: string): string[] => [...new Set(stdout.split('\0').map(p => p.replace(/[\r\n]+/g, '').trim()).filter(Boolean))]
 export const endedSync = (s: SyncFile, state: 'done' | 'aborted' | 'cancelled' | 'expired', note: string, now: number): SyncFile => ({ ...s, state, note: note.slice(0, 200), endedAt: now, updatedAt: now })
-export const withConflicts = (s: SyncFile, conflicts: Conflict[], source: 'merge-tree' | 'holder', now: number): SyncFile => ({ ...s, conflicts, conflictsAt: now, conflictsSource: source, updatedAt: now })
+/** The holder's own conflict list (the sync tool's conflicts action; the dry-run's goes through withDryRun). */
+export const withConflicts = (s: SyncFile, conflicts: Conflict[], now: number): SyncFile => ({ ...s, conflicts, conflictsAt: now, conflictsSource: 'holder', dry: null, updatedAt: now })
 
 /** `git merge-tree --write-tree --name-only HEAD origin/main`: the tree, then the conflicted paths up to the
  * first blank line (informational messages follow it). Exit 1 means conflicts, 0 a clean merge. */
@@ -1022,7 +1046,10 @@ export const NOTICES = {
   workerDone: (s: SyncFile): string => noticeText('Sync main', `the sync worker finished the sync at ${hhmm(s.at)}: done (${s.note}); the Editor lock is released`, 'git and the Editor are open again for every session; check the merge commit before trusting old measurements'),
   /** A96: the worker gave up (its abort, no merge commit, or it could not start): the sync is back in the holder's hands,
    * still frozen. */
-  syncManual: (s: SyncFile): string => noticeText('Sync main', `the sync at ${hhmm(s.at)} is back in your hands (${s.note}); every other session stays frozen and the sync's Editor lock stays this session's until done, abort or ${hhmm(s.hardEnd)}`, `keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); either finish it by hand: close the Editor process first (an open Editor holds files git must replace: "unable to unlink"), check git status and .git/MERGE_HEAD, merge with git non-interactive (git -C <checkout> merge --no-edit origin/main), resolve (rule 11 and your conflict rules)${s.build ? ', build' : ''}, run the post-merge headless tests (${POST_MERGE_TESTS}) and call the sync tool done with their result line; or call the sync tool abort with why, which lifts the freeze and frees the Editor at once`),
+  syncManual: (s: SyncFile, busy = NO_GIT_BUSY): string => {
+    const git = gitBusyLabel(busy) // A108: git still running, or index.lock, when the worker handed the sync back
+    return noticeText('Sync main', `the sync at ${hhmm(s.at)} is back in your hands (${s.note}); every other session stays frozen and the sync's Editor lock stays this session's until done, abort or ${hhmm(s.hardEnd)}${git}`, `keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); ${git ? 'wait for that git to exit before you touch the index (the worker\'s own commands may still run: no git add, checkout, merge or commit until then); then ' : ''}either finish it by hand: close the Editor process first (an open Editor holds files git must replace: "unable to unlink"), check git status and .git/MERGE_HEAD, merge with git non-interactive (git -C <checkout> merge --no-edit origin/main), resolve (rule 11 and your conflict rules)${s.build ? ', build' : ''}, run the post-merge headless tests (${POST_MERGE_TESTS}) and call the sync tool done with their result line; or call the sync tool abort with why, which lifts the freeze and frees the Editor at once`)
+  },
   /** A93: the merge is in and its build runs: the freeze holds; the holder hears when the build's Result line comes. */
   syncBuilding: (s: SyncFile): string => noticeText('Sync main', `the merge ${mergeLabel(s.mergeSha)} is in and the build runs${s.buildLog ? ` (log ${s.buildLog})` : ''}; every other session stays frozen`, 'leave git and the Editor in the shared checkout alone; A5R wakes you at the build\'s own Result: line'),
   /** A93 / A95: the build succeeded (or the sync does not build): the holder runs the post-merge tests, then done. */
@@ -1039,27 +1066,31 @@ export const NOTICES = {
     s.state === 'done'
       ? noticeText('Sync main', `done at ${hhmm(s.endedAt ?? s.updatedAt)}${testsLabel(s.note) ? ` · ${testsLabel(s.note)}` : ''}${s.note ? ` (${s.note})` : ''}`, 'git and the Editor are open again: resume from your resume note and re-check the files main changed before trusting old measurements')
       : noticeText('Sync main', `${s.state} at ${hhmm(s.endedAt ?? s.updatedAt)}${s.note ? ` (${s.note})` : ''}`, 'git and the Editor are open again; your work stays as it is; the next sync is planned on the A5R panel'),
-  holderConflicts: (s: SyncFile, rows: { c: Conflict; owners: string[] }[]): string => {
+  // A107: the dry-run's notices name each path once per session; `isFrozen`: told in the freeze (no git write left to ask
+  // for), "found by the dry-run at T" when the list on file was made at T or later.
+  fetchFailed: (s: SyncFile, round: DryRound, why: string): string =>
+    noticeText('Sync main', `git fetch origin main failed ${round === 'start' ? `at T (${hhmm(s.at)})` : 'at the cutoff'} (${why}), so the conflict dry-run reads origin/main as last fetched`, round === 'start' ? 'nothing to do: the worker\'s task marks its list stale, the worker fetches itself and its merge\'s own unmerged paths decide' : `fetch it yourself (GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main) if the network or credential needs you; A5R fetches and dry-runs again at ${hhmm(s.at)}`),
+  holderConflicts: (s: SyncFile, rows: { c: Conflict; owners: string[] }[], isFrozen = false): string => {
     const self = rows.filter(r => r.c.kind === 'self')
     const foreign = rows.filter(r => r.c.kind === 'foreign')
     // A99: a path one of the holder's rules matches goes to the worker's rule 5, not to an owner.
     const whose = (r: { c: Conflict; owners: string[] }) => ruleNote(r.c.path, s.rules) ?? (r.owners.length ? r.owners.join(', ') : 'owner unknown')
     const list = foreign.map(r => `${r.c.path}${isBinaryAsset(r.c.path) ? ' (binary)' : ''} → ${whose(r)}`).join('; ')
-    return noticeText('Sync main', `dry-run for ${hhmm(s.at)}: ${plural(rows.length, 'conflict')} (${self.length} self, ${foreign.length} foreign)${list ? `: ${list}` : ''}`, `${self.length ? 'self-conflicts resolve to ours at the merge (rule 11, log each with its commit); ' : ''}${foreign.length ? 'a mechanical text conflict (both sides additive) you resolve and check with git diff --check; a logic or .uasset/.umap conflict → git merge --abort and the path goes to its owner; owner unknown → abort the merge and name the path in the abort note' : 'nothing else to do'}`)
+    return noticeText('Sync main', `${isListAtT(s) ? 'the dry-run at T' : `dry-run for ${hhmm(s.at)}`}: ${plural(rows.length, 'conflict')} (${self.length} self, ${foreign.length} foreign)${list ? `: ${list}` : ''}`, `${self.length ? 'self-conflicts resolve to ours at the merge (rule 11, log each with its commit); ' : ''}${foreign.length ? 'a mechanical text conflict (both sides additive) you resolve and check with git diff --check; a logic or .uasset/.umap conflict → git merge --abort and the path goes to its owner; owner unknown → abort the merge and name the path in the abort note' : 'nothing else to do'}`)
   },
-  ownerConflicts: (s: SyncFile, mine: Conflict[]): string => {
+  ownerConflicts: (s: SyncFile, mine: Conflict[], isFrozen = false): string => {
     const self = mine.filter(c => c.kind === 'self')
     const foreign = mine.filter(c => c.kind === 'foreign')
     const parts = [
       foreign.length ? `foreign change on main in ${foreign.map(c => c.path).join(', ')}` : '',
       self.length ? `self-conflict in ${self.map(c => `${c.path} (main holds our ${c.match})`).join(', ')}` : '',
     ].filter(Boolean)
-    return noticeText('Sync main', `${parts.join('; ')} for the sync at ${hhmm(s.at)}; this session edited ${mine.length === 1 ? 'that path' : 'those paths'}`, `${foreign.length ? `before ${hhmm(s.at)}: commit your own version (exact paths) and tell ${s.holder.lane} how the two sides combine; a logic or .uasset/.umap conflict means the merge is aborted and you resolve it after the sync (the owner decides, never discard either side)` : ''}${foreign.length && self.length ? '; ' : ''}${self.length ? 'a self-conflict needs nothing from you: the holder resolves it to ours (rule 11)' : ''}`)
+    return noticeText('Sync main', `${parts.join('; ')} for the sync at ${hhmm(s.at)}${isListAtT(s) ? ', found by the dry-run at T' : ''}; this session edited ${mine.length === 1 ? 'that path' : 'those paths'}`, `${foreign.length ? `${isFrozen ? 'the sync is frozen, so make no git write' : `before ${hhmm(s.at)}: commit your own version (exact paths)`} and tell ${s.holder.lane} how the two sides combine; a logic or .uasset/.umap conflict means the merge is aborted and you resolve it after the sync (the owner decides, never discard either side)` : ''}${foreign.length && self.length ? '; ' : ''}${self.length ? 'a self-conflict needs nothing from you: the holder resolves it to ours (rule 11)' : ''}`)
   },
-  ownerUntracked: (s: SyncFile, paths: readonly string[]): string =>
-    noticeText('Sync main', `origin/main adds ${paths.join(', ')}, which already ${paths.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout and ${paths.length === 1 ? 'was' : 'were'} written by this session; the merge at ${hhmm(s.at)} would refuse to overwrite ${paths.length === 1 ? 'it' : 'them'} (merge-tree does not see this)`, `before ${hhmm(s.at)}: commit ${paths.length === 1 ? 'it' : 'them'} with exact paths (then it is an ordinary conflict, yours to settle) or move ${paths.length === 1 ? 'it' : 'them'} out of the tree; never delete a file that may be someone else's`),
-  holderUntracked: (s: SyncFile, rows: { path: string; owners: string[] }[]): string =>
-    noticeText('Sync main', `origin/main adds ${plural(rows.length, 'file')} that already ${rows.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout ("untracked would be overwritten"): ${rows.map(r => `${r.path} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')}`, `the owners are told to commit or move theirs before ${hhmm(s.at)}; owner unknown → name it in the sync's note and leave it; never delete or overwrite one to get the merge through`),
+  ownerUntracked: (s: SyncFile, paths: readonly string[], isFrozen = false): string =>
+    noticeText('Sync main', `origin/main adds ${paths.join(', ')}, which already ${paths.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout and ${paths.length === 1 ? 'was' : 'were'} written by this session; the merge at ${hhmm(s.at)} would refuse to overwrite ${paths.length === 1 ? 'it' : 'them'} (merge-tree does not see this)${isListAtT(s) ? '; found by the dry-run at T' : ''}`, isFrozen ? `the sync is frozen, so make no git write: tell ${s.holder.lane} whether ${paths.length === 1 ? 'it' : 'they'} may be moved out of the tree; never delete a file that may be someone else's` : `before ${hhmm(s.at)}: commit ${paths.length === 1 ? 'it' : 'them'} with exact paths (then it is an ordinary conflict, yours to settle) or move ${paths.length === 1 ? 'it' : 'them'} out of the tree; never delete a file that may be someone else's`),
+  holderUntracked: (s: SyncFile, rows: { path: string; owners: string[] }[], isFrozen = false): string =>
+    noticeText('Sync main', `${isListAtT(s) ? 'the dry-run at T found that ' : ''}origin/main adds ${plural(rows.length, 'file')} that already ${rows.length === 1 ? 'exists' : 'exist'} untracked in the shared checkout ("untracked would be overwritten"): ${rows.map(r => `${r.path} → ${r.owners.length ? r.owners.join(', ') : 'owner unknown'}`).join('; ')}`, `${isFrozen ? 'the worker aborts on such a file (its rule 4) and hands the sync back to you' : `the owners are told to commit or move theirs before ${hhmm(s.at)}`}; owner unknown → name it in the sync's note and leave it; never delete or overwrite one to get the merge through`),
   holderWithoutMod: (s: SyncFile, rows: { n: NoMod; isDelivered: boolean }[]): string =>
     noticeText('Sync main', `${plural(rows.length, 'live S2 session')} without a5r 0.4 cannot be frozen for the sync at ${hhmm(s.at)}: ${rows.map(r => `${r.n.intent} (session ${r.n.id8}${r.n.branch ? `, ${r.n.branch}` : ''})${r.isDelivered ? '' : ' — the message did not reach it'}`).join('; ')}`, `each got the standard message once; before the merge check that their paths are committed and that they are off git and the Editor; one that is not → move the sync (/a5r sync move HH:MM) or cancel it before ${hhmm(s.at)}`),
   hardEndSoon: (s: SyncFile): string =>
@@ -1189,13 +1220,13 @@ export const noModMessage = (s: SyncFile, checkout: string): string =>
 export const SYNC_WORKER_PROMPT = [
   'You are the a5r sync worker for the shared S2 checkout. The sync holder\'s a5r started you at the planned sync time T, in the holder\'s session. Every other session is frozen (no git writes, no Editor) until you end, or until the hard end, when the sync expires and every session is told. You call no a5r tool: the holder\'s a5r took the Editor lock for this sync before it started you, releases it when you end, and reads your final answer to record the sync as done or aborted.',
   'Rules (the checkout\'s AGENTS.md and the user\'s machine profile win over this list):',
-  '1. Git never prompts. Run every git command with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never in its environment (Bash: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> …`; PowerShell: set $env:GIT_TERMINAL_PROMPT=\'0\' and $env:GCM_INTERACTIVE=\'never\' first) and a timeout on the tool call: fetch and merge 10 min at most, everything else 2 min. A credential, network or LFS failure is an abort, never a retry loop. Never set GIT_LFS_SKIP_SMUDGE.',
+  '1. Git never prompts. Run every git command with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never in its environment (Bash: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> …`; PowerShell: set $env:GIT_TERMINAL_PROMPT=\'0\' and $env:GCM_INTERACTIVE=\'never\' first) and a timeout on the tool call: fetch and merge 10 min at most, everything else 2 min. A credential, network or LFS failure is an abort, never a retry loop. Never set GIT_LFS_SKIP_SMUDGE. Run every git command in the foreground, to its end, in one tool call: never with `&`, never as a background tool run, never by Start-Process without -Wait, never from a script you leave running; the build of rule 6 is the only command you start to outlive your turn.',
   '2. Always `git -C <checkout>`. Never rebase, reset --hard, stash, clean, push or switch branches. Your git writes are exactly: `git update-index -q --refresh`, `git merge --no-edit origin/main`, `git merge --abort`, `git checkout --ours|--theirs -- <paths>`, `git add -- <paths>`, `git commit --no-edit`, `git revert -m 1 <merge sha> --no-edit`. If any command is refused, abort the sync with the refusal as the reason.',
   '3. The Editor. Never write Saved/EDITOR_OWNER.txt. Read it before any merge: it must name the holder session given in your task (the sync\'s lock). If it names another lane: never close, kill or drive that Editor; never sleep or poll in a loop (a foreground sleep is refused here); read it once more after the fetch of rule 4 (the sync is first in the queue and is granted the moment it comes free), and if it still names another lane, end with SYNC ABORT naming that lane. If an Editor is open while the lock is the sync\'s (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone.',
   '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. Before you judge any path dirty or untracked in the way, run `git -C <checkout> update-index -q --refresh` and read `git status` again: a path git no longer lists after it is clean (a stat-only change), never a reason to abort. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
-  '5. Merge: `git merge --no-edit origin/main` (never rebase). For each conflicted path (`git diff --name-only --diff-filter=U`): first the holder\'s conflict rules in your task (the first rule whose pattern matches the path wins): a path a rule matches is resolved with that rule\'s side whatever its kind, .uasset and .umap included: `git checkout --<side> -- <path>` then `git add -- <path>`, and your report names each such path with its rule. A path no rule matches: rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
+  '5. Merge: `git merge --no-edit origin/main` (never rebase). The dry-run list in your task may be older than your merge (main can move after it): the merge\'s own unmerged paths (`git diff --name-only --diff-filter=U`) decide, listed or not. For each conflicted path: first the holder\'s conflict rules in your task (the first rule whose pattern matches the path wins): a path a rule matches is resolved with that rule\'s side whatever its kind, .uasset and .umap included: `git checkout --<side> -- <path>` then `git add -- <path>`, and your report names each such path with its rule. A path no rule matches: rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
   '6. Build, only when the sync builds: the engine root comes from the machine profile. Start the build in the background with its output written to the build log your task names (a fresh file for this sync), with `>` and never `>>` (for example Build.bat … > <build log> 2>&1, started so that it outlives your turn), then end at once with the SYNC MERGED line naming that log: never wait for the build (a build outlives your tool calls). The holder\'s a5r watches that log for the build\'s own `Result:` line (Build.bat exits 0 on failure), keeps every other session frozen meanwhile, and has the holder run the post-merge tests or revert.',
-  '7. End: your final answer is a short report whose last line is exactly one of these lines (nothing after it, no other line starting with SYNC):',
+  '7. End: never end your turn while a command you started (other than the build of rule 6) still runs, and never end with "waiting" or "until … finishes": wait for each such command in the foreground first. Your final answer is a short report whose last line is exactly one of these lines (nothing after it, no other line starting with SYNC):',
   '   SYNC MERGED <merge sha> build-log=<path of the build log, or none when the sync does not build>',
   '   SYNC ABORT <why, one line> state=<the state the checkout is in: clean at <sha>, merge aborted, reverted <sha>, …>',
   '   The holder\'s a5r takes the first as merged (the freeze holds through the build and the post-merge tests, until the holder calls done); the second hands the sync back to the holder, still frozen, to finish by hand or abort. An ending with no SYNC line while a merge commit sits on top of the pre-merge HEAD is taken as merged too; with no merge commit it is handed back like an abort.',
@@ -1238,13 +1269,21 @@ export const parseSyncEnd = (answer: string): SyncEnd | null => {
   return { kind: 'abort', why, note: (line.rest || why).slice(0, 300) }
 }
 
+/** A107: when and against which main the conflict list was made, whether it is stale, and that it may be older than the
+ * merge, whose own unmerged paths decide. */
+const listLabel = (s: SyncFile): string => {
+  const made = s.conflictsAt === null ? 'none made' : `made at ${hhmm(s.conflictsAt)}${s.conflictsSource === 'holder' ? ' by the holder' : ` against origin/main ${s.dry?.main.slice(0, 12) || '(sha unread)'}`}`
+  return `That list: ${made}${s.dry?.stale ? `, STALE: ${s.dry.stale}` : ''}. It may be older than your merge: the merge's own unmerged paths (git diff --name-only --diff-filter=U) decide.`
+}
+
 /** The task the holder's a5r hands the sync worker: this sync's facts. */
 export const syncWorkerTask = (s: SyncFile, checkout: string, lock: string): string =>
   [
     `Run the sync of origin/main planned for ${hhmm(s.at)} in ${checkout} (holder ${s.holder.lane}, session ${s.holder.id8}). Hard end ${hhmm(s.hardEnd)}: end before it with the SYNC MERGED or SYNC ABORT line. Build: ${s.build ? `yes; build log: ${syncBuildLog(checkout, s.id)} (write it with >, never >>)` : 'no'}.`,
     `Holder's conflict rules (rule 5, the first match wins): ${rulesLabel(s.rules)}.`,
-    `Dry-run at the cutoff: ${s.conflicts === null ? 'not run' : s.conflicts.length === 0 ? 'no conflicts' : s.conflicts.map(c => conflictLabel(c, s.rules)).join('; ')}.`,
+    `Dry-run at ${isListAtT(s) ? 'T' : 'the cutoff'}: ${s.conflicts === null ? 'not run' : s.conflicts.length === 0 ? 'no conflicts' : s.conflicts.map(c => conflictLabel(c, s.rules)).join('; ')}.`,
     `Untracked files origin/main adds: ${s.untracked === null ? 'not listed' : s.untracked.length === 0 ? 'none' : s.untracked.join('; ')}.`,
+    listLabel(s),
     `Editor lock now: ${lock || 'missing'} (the sync's lock names session ${s.holder.id8}).`,
   ].join('\n')
 

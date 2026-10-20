@@ -9,14 +9,15 @@ import {
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
   DEFAULT_GATES, isYieldMoment, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, gitPids, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
-import { POST_MERGE_TESTS, afterWorker, buildResultOf, enterStage, isMergedStage, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type MergeRead } from './syncstage.ts'
+import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
+import { POST_MERGE_TESTS, afterWorker, buildResultOf, enterStage, isMergedStage, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type MergeRead, type SyncStage } from './syncstage.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -146,7 +147,7 @@ let pieLowSince = 0
 let cleanupNote = ''
 let cleanupAt = 0
 let decision: GrantDecision | null = null
-const dryRuns = new Set<string>() // syncs (id + time) whose conflict dry-run this holder has started
+let dryJob: DryJob = null // A107: this holder's last fetch and dry-run (one at a time, off the tick chain)
 let nowMs = 0 // the time of the last tick
 let clearFrom: string | null = null // the session id a /clear left, until its files have moved to the new id (A10)
 // A18/A19: the last acceptance score; A52: after the fact, one score per PR (`prs`) and `scores` the worst of them.
@@ -947,14 +948,8 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
   // takes the Editor lock for the sync here, as the editor tool's request does, and releases it when the worker ends.
   await takeSyncLock($, opts, claimed, now).catch(err => $.ui.log(`a5r: sync lock: ${String(err)}`, { to: 'debug' }))
   const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(opts), (lockRaw ?? '').trim()) }).catch(err => ({ deny: String(err) }))
-  if (ran.deny !== undefined) {
-    // A96: a worker that could not start hands the sync back like one that gave up (the manual stage).
-    const back = enterStage(claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}` }, '', now)
-    if (!(await writeSync($, opts, back, claimed))) return
-    await syncLockUntil($, opts, back, now)
-    push({ id: `sync:${s.id}:${s.at}:manual`, text: SYNC_TELL.manual(back), isActionable: true })
-    return
-  }
+  // A96: a worker that could not start hands the sync back like one that gave up (the manual stage).
+  if (ran.deny !== undefined) return enterSyncStage($, opts, claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}` }, now)
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
   const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'a5r').pop()?.id
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
@@ -1118,11 +1113,24 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
     if (await endSync($, opts, s, 'done', after.note, now)) push({ id: `sync:${s.id}:${s.at}:worker-done`, text: NOTICES.workerDone(syncFile ?? s), isActionable: true })
     return
   }
-  // The build log is the sync's own (A5R named it in the worker's task), whatever path the worker's line gives.
-  const next = enterStage(s, after, s.build ? syncBuildLog(s2Root(opts), s.id) : '', now)
+  await enterSyncStage($, opts, s, after, now)
+}
+
+/** A93 / A96: the sync enters a stage (the worker's end, or a worker that could not start): written, the sync's lock
+ * follows its hard end, the holder told. The build log is the sync's own (A5R named it in the worker's task), whatever
+ * path the worker's line gives. A108: a hand-back names the git processes still running (a fresh probe; the worker's own
+ * commands may be among them) and the checkout's .git/index.lock. */
+async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: { stage: SyncStage; mergeSha: string; note: string }, now: number): Promise<void> {
+  const next = enterStage(s, to, s.build ? syncBuildLog(s2Root(opts), s.id) : '', now)
   if (!(await writeSync($, opts, next, s))) return
   await syncLockUntil($, opts, next, now)
-  push({ id: `sync:${s.id}:${s.at}:${after.stage}`, text: SYNC_TELL[after.stage](next), isActionable: after.stage !== 'building' })
+  const busy = to.stage === 'manual' ? await gitBusy($, opts) : null
+  push({ id: `sync:${s.id}:${s.at}:${to.stage}`, text: busy ? NOTICES.syncManual(next, busy) : SYNC_TELL[to.stage](next), isActionable: to.stage !== 'building' })
+}
+
+/** A108: the git processes running now (a fresh probe) and the shared checkout's .git/index.lock. */
+async function gitBusy($: Engine, opts: Opts): Promise<GitBusy> {
+  return { gitPids: gitPids(await freshProbe($, opts)), isIndexLocked: await $.fs.exists(`${s2Root(opts)}/.git/index.lock`).catch(() => false) }
 }
 
 /** A93: the holder's a5r through the stages after the merge: the hard end put back once while the build runs near it;
@@ -1199,8 +1207,8 @@ function runTick($: Engine, opts: Opts): Promise<void> {
 
 /** A88 (b): the Editor's own pass (the world read, a lapsed lease released, the grant decided) is serialized on a chain
  * of its own, shared by the minute tick and the editor tool's request, so a request never waits behind the tick's slow
- * work: the acceptance score (gh and git), the judge's spawn, the holder's sync dry-run at the cutoff (merge-tree up to
- * 60 s, then two git calls per conflicted path, 1.3-4 s each on S2, MEASURED 2026-10-16). */
+ * work: the acceptance score (gh and git), the judge's spawn. (The holder's fetch and sync dry-run left the tick in rev 35,
+ * A107: merge-tree up to 60 s, then two git calls per conflicted path, 1.3-4 s each on S2, MEASURED 2026-10-16.) */
 let editorChain: Promise<unknown> = Promise.resolve()
 function editorSerial<T>(f: () => Promise<T>): Promise<T> {
   const run = editorChain.then(f, f)
@@ -1798,8 +1806,9 @@ function holderFor(spec: string, now: number): SyncHolder | null {
   return f ? { session: f.session, id8: f.id8, lane: f.lane } : null
 }
 
-/** Rule 11 for each conflicted path: main's blob against every blob this branch had (one rev-parse and one log). */
-async function classifyAll($: Engine, opts: Opts, paths: readonly string[]): Promise<Conflict[]> {
+/** Rule 11 for each conflicted path: main's blob against every blob this branch had (one rev-parse and one log); past
+ * `until` (A107: the dry-run at T must not hold the worker back) the paths left count as foreign. */
+async function classifyAll($: Engine, opts: Opts, paths: readonly string[], until = Infinity): Promise<Conflict[]> {
   const repo = s2Root(opts)
   const git = async (args: string[]): Promise<string> => {
     const r = await $.process.run(['git', '-C', repo, ...args], { timeoutMs: 30_000 }).catch(() => null)
@@ -1807,23 +1816,51 @@ async function classifyAll($: Engine, opts: Opts, paths: readonly string[]): Pro
   }
   const out: Conflict[] = []
   for (const p of paths.slice(0, MAX_CLASSIFIED)) {
+    if ((await $.clock.now()) >= until) break
     const main = (await git(['rev-parse', `origin/main:${p}`])).trim()
     out.push(classify(p, main, historyBlobs(await git(['log', '--format=%H', '--raw', '--no-abbrev', '--max-count=200', 'HEAD', '--', p]))))
   }
-  return [...out, ...paths.slice(MAX_CLASSIFIED).map(p => ({ path: p, kind: 'foreign' as const }))]
+  return [...out, ...paths.slice(out.length).map(p => ({ path: p, kind: 'foreign' as const }))]
 }
 
-/** At the cutoff the holder's a5r dry-runs the merge against the last fetched origin/main (no fetch, 60 s). */
-async function dryRun($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
-  const r = await $.process.run(['git', '-C', s2Root(opts), 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
+/** A107: the holder's fetch and dry-run run off the tick chain (a hook may wait on a tick), one at a time; when one ends a
+ * tick runs at once, so the worker starts without waiting a minute. */
+function startDryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): void {
+  const key = dryKey(s, round)
+  dryJob = { key, isDone: false }
+  void dryRun($, opts, s, round)
+    .catch(err => $.ui.log(`a5r: dry-run: ${String(err)}`, { to: 'debug' }))
+    .finally(() => {
+      dryJob = { key, isDone: true }
+      void runTick($, opts)
+    })
+}
+
+/** The holder's dry-run of the merge (its conflicts, and A11's untracked files), at the cutoff and again at T (A107): origin/main fetched first; a failed
+ * fetch is told and the dry-run still reads origin/main as last fetched, its list marked stale; then merge-tree (60 s),
+ * rule 11 (3 min in all) and the files main adds that exist on disk. The result goes onto sync.json as it is by then. */
+async function dryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): Promise<void> {
+  const root = s2Root(opts)
+  const failed = fetchWhy(await $.process.run(fetchArgv(root), { env: FETCH_ENV, timeoutMs: FETCH_MS }).catch(() => null))
+  const now = await $.clock.now()
+  if (failed) push({ id: `sync:${s.id}:${s.at}:fetch-failed:${round}`, text: NOTICES.fetchFailed(s, round, failed), isActionable: true })
+  const main = shaOf((await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'origin/main'], { timeoutMs: 30_000 }).catch(() => null))?.stdout)
+  const r = await $.process.run(['git', '-C', root, 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
   if (!r || (r.exitCode !== 0 && r.exitCode !== 1)) {
-    push({ id: `sync:${s.id}:${s.at}:dry-run-failed`, text: noticeText('Sync main', `the conflict dry-run (git merge-tree) did not finish${r ? ` (exit ${r.exitCode})` : ' within 60 s'}`, `run git -C ${s2Root(opts)} merge-tree --write-tree --name-only HEAD origin/main yourself and pass the conflicted paths with the sync tool (action conflicts)`), isActionable: true })
+    push({ id: `sync:${s.id}:${s.at}:dry-run-failed:${round}`, text: noticeText('Sync main', `the conflict dry-run (git merge-tree) did not finish${r ? ` (exit ${r.exitCode})` : ' within 60 s'}`, `run git -C ${root} merge-tree --write-tree --name-only HEAD origin/main yourself and pass the conflicted paths with the sync tool (action conflicts)`), isActionable: true })
+    await onSyncFile($, opts, s, cur => withDryRunFailed(cur, now))
     return
   }
-  const conflicts = r.exitCode === 0 ? [] : await classifyAll($, opts, parseMergeTree(r.stdout).paths)
+  const conflicts = r.exitCode === 0 ? [] : await classifyAll($, opts, parseMergeTree(r.stdout).paths, now + CLASSIFY_BUDGET_MS)
   const untracked = await addedOnDisk($, opts, s)
-  const next = withConflicts(s, conflicts, 'merge-tree', now)
-  await writeSync($, opts, untracked === null ? next : withUntracked(next, untracked, now), s)
+  await onSyncFile($, opts, s, cur => withDryRun(cur, { conflicts, untracked, main, stale: staleOf(failed) }, now))
+}
+
+/** A change written onto sync.json as it is now (the tick may have written it while a dry-run ran), only while it is
+ * still the same planned sync and this session holds it. */
+async function onSyncFile($: Engine, opts: Opts, s: SyncFile, change: (cur: SyncFile) => SyncFile): Promise<void> {
+  const cur = parseSyncFile(await readJson($, syncPath(opts)))
+  if (cur && cur.id === s.id && cur.at === s.at && cur.state === 'planned' && cur.holder.id8 === me8) await writeSync($, opts, change(cur), cur)
 }
 
 /** A11: the files origin/main adds that already exist on disk in the shared checkout ("untracked would be
@@ -1872,7 +1909,10 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (phase === 'cutoff' && isConcerned) push({ id: noticeIds.cutoff(s), text: NOTICES.cutoff(s, isHolder, holdsLock()), isActionable: true })
   if (!isHolder && holdsLock() && ((phase === 'cutoff' && now >= s.at - RELEASE_BEFORE_MS) || phase === 'frozen')) push({ id: noticeIds.releaseBy(s), text: NOTICES.releaseBy(s), isActionable: true })
   if (phase === 'frozen') push({ id: noticeIds.frozen(s), text: isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s), isActionable: false })
-  if (isHolder && phase === 'frozen' && s.workerAt === null) {
+  // A107: the holder fetches and dry-runs at the cutoff and again at T (off the tick chain); the worker starts after T's.
+  const dry = isHolder ? dryStep(s, phase, dryJob, now) : null
+  if (dry?.start) startDryRun($, opts, s, dry.start)
+  if (dry?.mayStartWorker) {
     await spawnWorker($, opts, s, now)
     s = syncFile ?? s
   }
@@ -1898,30 +1938,33 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
     await messageNoMod($, opts, s, now)
     s = syncFile ?? s
   }
-  if (isHolder && phase !== 'planned' && s.conflicts === null && !dryRuns.has(`${s.id}:${s.at}`)) {
-    dryRuns.add(`${s.id}:${s.at}`)
-    await dryRun($, opts, s, now)
-  }
   const sync = syncFile?.id === s.id ? syncFile : s
   const lower = new Set([...touched].map(p => p.toLowerCase()))
   const all = [...touches, { session: me.session, id8: me8, lane: me.lane, paths: [...touched], updatedAt: now }]
-  const cs = sync.conflicts
-  if (cs && cs.length > 0) {
-    const minePaths = cs.filter(c => lower.has(c.path.toLowerCase()))
-    if (minePaths.length > 0) push({ id: noticeIds.conflicts(sync, minePaths.map(c => c.path)), text: NOTICES.ownerConflicts(sync, minePaths), isActionable: true })
-    if (isHolder) {
-      const rows = cs.map(c => ({ c, owners: ownersOf(c.path, all).map(t => t.lane) }))
-      push({ id: `${noticeIds.conflicts(sync, cs.map(c => c.path))}:holder`, text: NOTICES.holderConflicts(sync, rows), isActionable: true })
-    }
-  }
+  // A107: each path is named once to this session (the list at T adds to the cutoff's); in the freeze the words say so.
+  const isFrozen = phase === 'frozen'
+  const tag = `${sync.id}:${sync.at}`
+  const cs = sync.conflicts ?? []
+  pushNamed(`${tag}:conflicts`, cs.filter(c => lower.has(c.path.toLowerCase())), c => c.path, mine => ({ id: noticeIds.conflicts(sync, mine.map(c => c.path)), text: NOTICES.ownerConflicts(sync, mine, isFrozen), isActionable: true }))
+  if (isHolder) pushNamed(`${tag}:conflicts:holder`, cs, c => c.path, fresh => ({ id: `${noticeIds.conflicts(sync, fresh.map(c => c.path))}:holder`, text: NOTICES.holderConflicts(sync, fresh.map(c => ({ c, owners: ownersOf(c.path, all).map(t => t.lane) })), isFrozen), isActionable: true }))
   // A11: each untracked file main would overwrite goes to the session whose touch file names it; the holder
   // gets the whole list, with "owner unknown" where nobody's touch file names it.
-  const un = sync.untracked
-  if (un && un.length > 0) {
-    const mineUn = un.filter(p => lower.has(p.toLowerCase()))
-    if (mineUn.length > 0) push({ id: noticeIds.untracked(sync, mineUn), text: NOTICES.ownerUntracked(sync, mineUn), isActionable: true })
-    if (isHolder) push({ id: `${noticeIds.untracked(sync, un)}:holder`, text: NOTICES.holderUntracked(sync, un.map(path => ({ path, owners: ownersOf(path, all).map(t => t.lane) }))), isActionable: true })
-  }
+  const un = sync.untracked ?? []
+  pushNamed(`${tag}:untracked`, un.filter(p => lower.has(p.toLowerCase())), p => p, mine => ({ id: noticeIds.untracked(sync, mine), text: NOTICES.ownerUntracked(sync, mine, isFrozen), isActionable: true }))
+  if (isHolder) pushNamed(`${tag}:untracked:holder`, un, p => p, fresh => ({ id: `${noticeIds.untracked(sync, fresh)}:holder`, text: NOTICES.holderUntracked(sync, fresh.map(path => ({ path, owners: ownersOf(path, all).map(t => t.lane) })), isFrozen), isActionable: true }))
+}
+
+/** A107: the paths each dry-run notice of this session named, per sync and kind: a path is named once (a list made later
+ * adds only its new paths). In memory: after a reload a path may be named once more (the notice ids, kept in the
+ * session file, still stop the same notice twice). */
+const named = new Map<string, Set<string>>()
+function pushNamed<T>(key: string, items: readonly T[], pathOf: (item: T) => string, notice: (fresh: T[]) => Notice): void {
+  const seen = named.get(key) ?? new Set<string>()
+  const fresh = items.filter(i => !seen.has(pathOf(i).toLowerCase()))
+  if (fresh.length === 0) return
+  push(notice(fresh))
+  for (const i of fresh) seen.add(pathOf(i).toLowerCase())
+  named.set(key, seen)
 }
 
 /** Plan, move, cancel, take over, record conflicts, end: the one place sync.json changes (panel, /a5r sync, tool). */
@@ -2003,7 +2046,7 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   const mine = isMine ? s : { ...s, holder: { session: me.session, id8: me8, lane: me.lane } }
   if (action === 'conflicts') {
     const paths = (a.paths ?? []).map(p => p.replace(/\\/g, '/').trim()).filter(Boolean)
-    const next = withConflicts(mine, await classifyAll($, opts, paths), 'holder', now)
+    const next = withConflicts(mine, await classifyAll($, opts, paths), now)
     if (!(await writeSync($, opts, next, s))) return blocked(gate, 'sync.json changed', 'read it with status and try again')
     return `recorded ${paths.length} conflicted path${paths.length === 1 ? '' : 's'}: ${(next.conflicts ?? []).map(c => conflictLabel(c, next.rules)).join(', ') || 'none'}; the sessions that edited them are told at their next tick`
   }
