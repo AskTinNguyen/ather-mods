@@ -181,7 +181,7 @@ const DONE = '#3ccf7a'
 /**
  * How Needs you answers in place (0.2.0): what to draw (decide.mjs needsView) and what each press does.
  * The presses that act on an answer are handed the item's answers, so none needs to look them up.
- * `whereOf`: where an intent is worked on, by its key (0.6.3).
+ * `whereOf`: where an intent is worked on, by its key (0.6.4).
  * @typedef {{ view: NeedsView,
  *   onOpen: (id: string) => () => void, onAnswer: (one: Item, option: Option) => () => void, onExplain: (one: Item, answers: Answers) => () => void,
  *   onType: (one: Item, answers: Answers) => () => void, onTyped: (one: Item, answers: Answers) => (words: string) => void, onFindings: (one: Item) => () => void, onFold: () => void,
