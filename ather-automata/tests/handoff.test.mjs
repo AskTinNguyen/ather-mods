@@ -310,7 +310,7 @@ describe('which session a press about an intent is for (A1)', () => {
     expect(placeText(placeOf('asset-library', false, peers))).toBe('in "Asset library layout update"')
   })
 
-  test('a session that recorded no app title (outside the app, or before 0.6.2) is named by its branch, with no link to go to', () => {
+  test('a session that recorded no app title (outside the app, or before 0.6.3) is named by its branch, with no link to go to', () => {
     const place = placeOf('web-load-speed', false, peers.slice(0, 2))
     expect(place).toEqual({ kind: 'other', sessionId: 'aaaa1111', appId: '', link: '', name: 'a session on feat/speed', slug: 'web-load-speed' })
     // A lane with an app title but written before links were recorded: no link either.
