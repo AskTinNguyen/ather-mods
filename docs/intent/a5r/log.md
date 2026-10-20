@@ -266,3 +266,15 @@ Sent to this session by the S2 sync main session (the sync conductor), verbatim:
 > 2. Có
 
 (Answers to the plan after the adversary review: 1 = raise the PIE launch gate to 38 GB; 2 = build phase 1, the forced-release place and the queue view as rev 34.)
+
+## L-39 (2026-10-20) | class: intent | -> rev 35
+
+Sent to this session by the S2 sync main session (the sync conductor), verbatim:
+
+> A5R 0.20 first real sync report (20/10 13:45, sync-main):
+> - Rules worked: the worker resolved 13 self conflicts plus `theirs docs/generated/**`.
+> - The worker then ended mid-resolution ("Waiting for the resolution script to finish"), leaving MERGE_HEAD and 15 more unmerged avian files that the dry-run had NOT listed. The manual stage worked as designed: the freeze held, the lock stayed mine, and nobody jumped in.
+> - checkout --ours on unmerged paths passed D1.
+> - done released everything at once.
+> Two gaps: (1) the dry-run missed 15 real conflicts. They came from commit e81deaf1, which landed after the dry-run ran at the 13:15 cutoff, so re-run the dry-run at sync time. (2) The worker exited while its own git checkout --ours was still running (git.exe PIDs still alive afterwards); it should wait for its children before ending.
+> Separately: the build found main itself does not link, because SipherAvian calls MinimalAPI S2 methods. That is fixed in PR #34186.
