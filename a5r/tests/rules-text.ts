@@ -7,4 +7,9 @@ export const REQUIRED_RULES_TEXT: { file: string; row: string; text: string }[] 
     row: 'A90',
     text: 'If you (or your worker) cannot go on because the Editor is held or memory is short, request the Editor with the editor tool (minutes, pie, build, what) before you stop: never end your turn with "I will wait" alone. A5R wakes you when the slot is granted, and when the Editor comes free it may nudge you; then request it if your task was waiting for it.',
   },
+  {
+    file: 'rules/rules-a5r.md',
+    row: 'A102',
+    text: 'A fix that needs no C++ rebuild is retested in the same slot (extend for the retest); release when the test passes, when the slot ends, or when the fix needs a rebuild.',
+  },
 ]

@@ -183,8 +183,8 @@ test('notices: mid-turn they ride the main loop\'s next tool result, never a wor
   await $.session.start(START)
   // The model's calls carry a tool_use_id (a plugin's own `$.tool.call` does not): a turn runs, so the session is busy.
   await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'tail VFX', tool_use_id: 'tu1' } as never)
-  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'loco', want: want({ minutes: 10 }), heartbeatAt: NOW + MIN, yieldAsks: [{ holder: ME8, at: NOW + 30_000, via: 'file', minutes: 10, lane: 'loco' }] }))
-  await w.clock.advance(MIN)
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'loco', want: want({ minutes: 10 }), heartbeatAt: NOW + 5 * MIN, yieldAsks: [{ holder: ME8, at: NOW + 30_000, via: 'file', minutes: 10, lane: 'loco' }] }))
+  await w.clock.advance(5 * MIN) // A103 (by design): the ask reaches the holder once it made no Editor use for 5 min
   expect(prompts(w)).toEqual([]) // mid-turn: no prompt
   const worker = await $.tool.call({ tool: 'Bash', command: 'ls', agentId: 'w1', tool_use_id: 'tu2' } as never)
   expect((worker as { context?: string[] }).context ?? []).toEqual([])

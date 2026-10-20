@@ -4,6 +4,7 @@
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
+import { holderText, queueRowText, type QueueView } from './lease.ts'
 import { A5R_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
 
 // A31: this session's ★ takes the theme's gold (read at each draw, A40).
@@ -342,6 +343,38 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
       sectionLabel(el, 'hai-overview-head', v.header),
       ...v.rows.map(row),
       ...(v.more > 0 ? [Box({ key: 'hai-overview-more', children: [Text({ color: ATHER.quiet, children: `+${v.more} more` })] })] : []),
+    ],
+  })
+}
+
+/** A105: the Editor queue under the tools, in the sessions list's style: a section label with how many wait, the holder
+ * (▶, its lane, then a quiet line: granted at, Editor seen at, PIE since, extensions, time left), each queued session (its
+ * place, ★ for this session, its lane, then a quiet line: waited, minutes asked, PIE / build), and A100's 24-hour summary.
+ * Names shorten; every quiet line wraps inside the pane. */
+export const queueBox = (el: El, v: QueueView, summary: string, look?: { ink: string; quiet: string }): unknown => {
+  const quiet = look?.quiet ?? ATHER.quiet
+  const { Box, Text } = el
+  const entry = (key: string, mark: unknown, name: string, line: string, isMe: boolean) =>
+    Box({
+      key,
+      flexDirection: 'column',
+      width: '100%',
+      children: [
+        Box({ key: `${key}-name`, flexDirection: 'row', columnGap: 1, children: [Box({ key: `${key}-mark`, flexShrink: 0, children: [mark] }), Box({ key: `${key}-lane`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ bold: isMe, wrap: 'truncate-end', ...(look ? { color: look.ink } : {}), children: name })] })] }),
+        Box({ key: `${key}-line`, paddingLeft: 2, width: '100%', children: [Text({ color: quiet, wrap: 'wrap', children: line })] }),
+      ],
+    })
+  const h = v.holder
+  return Box({
+    key: 'hai-queue',
+    flexDirection: 'column',
+    width: '100%',
+    marginTop: 1,
+    children: [
+      sectionLabel(el, 'hai-queue-head', `Editor queue · ${v.rows.length} waiting`),
+      ...(h ? [entry('hai-queue-holder', Text({ color: A5R_LOOK.gold, children: '▶' }), `${h.lane}${h.isMe ? ' ★' : ''}`, holderText(h), h.isMe)] : []),
+      ...v.rows.map(r => entry(`hai-queue-${r.id8}`, Text({ color: r.isMe ? A5R_LOOK.gold : quiet, children: r.isMe ? '★' : String(r.place) }), r.isMe ? `${r.place} ${r.lane}` : r.lane, queueRowText(r), r.isMe)),
+      ...(summary ? [Box({ key: 'hai-queue-summary', width: '100%', children: [Text({ color: quiet, wrap: 'wrap', children: summary })] })] : []),
     ],
   })
 }

@@ -63,11 +63,11 @@ test('A25: /a5r gate shows, sets and resets the launch gate; a bad argument expl
   world(on)
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const run = async (args: string) => String((await $.command.run({ command: 'a5r', args } as never)).text)
-  expect(await run('gate')).toContain('≥ 31 GB with PIE, ≥ 28 GB without (plugin options)')
+  expect(await run('gate')).toContain('≥ 38 GB with PIE, ≥ 28 GB without (plugin options)')
   expect(await run('gate 33 30')).toContain('≥ 33 GB with PIE, ≥ 30 GB without')
   expect(await run('gate')).toContain('(set with /a5r gate)')
   expect(await run('gate many')).toContain('/a5r gate <with PIE GB> <without PIE GB>')
-  expect(await run('gate reset')).toContain('back to the plugin options: ≥ 31 GB with PIE, ≥ 28 GB without')
+  expect(await run('gate reset')).toContain('back to the plugin options: ≥ 38 GB with PIE, ≥ 28 GB without')
 })
 
 // A49 (Hai's dark-theme screenshots, 2026-10-07: a session row's "· 2m" read "· 2", cut at the pane's right edge):

@@ -39,7 +39,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       }
       // Memory: the value with its attention part in amber, the gates in the sub-line.
       const mem = text(find(tree, 'hai-tile-memory-main'))
-      expect(mem).toBe('4.2 GB free · below launch gategate 31 GB with PIE, 28 without · PIE needs 5 GB')
+      expect(mem).toBe('4.2 GB free · below launch gategate 38 GB with PIE, 28 without · PIE needs 5 GB')
       expect(all(find(tree, 'hai-tile-memory-main')).find(n => n.type === 'Text' && text(n) === ' · below launch gate')?.props?.color).toBe(V2.amber)
       // One label style: small, quiet, in capitals.
       expect(find(tree, 'hai-overview-head')?.children?.[0]).toMatchObject({ type: 'Text', props: { color: V2.label }, children: ['SESSIONS · 1 OPEN'] })
@@ -49,9 +49,9 @@ for (const surface of ['terminal', 'desktop'] as const)
 
 // A50 (Hai's screenshot, 2026-10-07: the whole Memory sub-line amber at 41.6 GB free because of "10 git processes"):
 // the Memory row colours only what is wrong. Amber goes on the parts that warn ("below launch gate", "N git
-// processes", a low disk); the gate details ("gate 31 GB with PIE, 28 without · PIE needs 5 GB") stay quiet.
+// processes", a low disk); the gate details ("gate 38 GB with PIE, 28 without · PIE needs 5 GB") stay quiet.
 const GIT10 = Array.from({ length: 10 }, (_, n) => ({ name: 'git', pid: 100 + n, gb: 0.3, parentAlive: true }))
-const GATES = 'gate 31 GB with PIE, 28 without · PIE needs 5 GB'
+const GATES = 'gate 38 GB with PIE, 28 without · PIE needs 5 GB'
 const CASES = [
   { name: 'above the gate, no warning', ram: '41.6', procs: [], disk: 40, value: '41.6 GB free', sub: GATES, amber: [] },
   { name: 'above the gate with 10 git processes', ram: '41.6', procs: GIT10, disk: 40, value: '41.6 GB free', sub: `${GATES} · 10 git processes`, amber: ['10 git processes'] },
@@ -72,5 +72,5 @@ for (const surface of ['terminal', 'desktop'] as const)
       expect(all(main).filter(n => n.type === 'Text' && n.props?.color === V2.amber).map(text)).toEqual(c.amber)
       const line = find(tree, 'hai-tile-memory-status')?.children?.[0] as Tree
       expect([line.type, line.props?.color === V2.amber]).toEqual(['Text', false])
-      for (const quiet of ['gate 31 GB with PIE, 28 without', 'PIE needs 5 GB']) expect(line.children).toContain(quiet)
+      for (const quiet of ['gate 38 GB with PIE, 28 without', 'PIE needs 5 GB']) expect(line.children).toContain(quiet)
     })

@@ -22,14 +22,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.ui.render(PANE_AT)
     await w.clock.advance(50) // the branch read runs off the render
     let tree = await $.ui.render(PANE_AT)
-    expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-overview', 'hai-a5r-rules']) // A29: the A5R pane, the rules last; A33: the band first
+    expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-queue', 'hai-overview', 'hai-a5r-rules']) // A29: the A5R pane, the rules last; A33: the band first; A105: the Editor queue (this session waits)
     // Editor holder: who, until when, this session's place.
     const editor = text(find(tree, 'hai-tile-editor'))
     for (const want of ['walker', 'until 15:10 · 30 min left', 'you: next']) expect(editor).toContain(want)
     // Memory: free RAM against the launch gate and the PIE gate; no buttons (A25).
     const memory = text(find(tree, 'hai-tile-memory'))
     // A35: "<n> GB free · <note>" with the gates in the sub-line.
-    for (const want of ['28.5 GB free · launch fits without PIE', 'gate 31 GB with PIE, 28 without · PIE needs 5 GB']) expect(memory).toContain(want)
+    for (const want of ['28.5 GB free · launch fits without PIE', 'gate 38 GB with PIE, 28 without · PIE needs 5 GB']) expect(memory).toContain(want)
     expect(find(tree, 'hai-tile-memory-action')).toBeUndefined()
     // Sync main: branch behind/ahead, no sync yet, one "Plan sync".
     const main = text(find(tree, 'hai-tile-main'))
@@ -43,7 +43,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(text(find(tree, 'hai-tile-memory'))).toContain('28.5 GB free · below launch gate')
     await $.command.run({ command: 'a5r', args: 'gate reset' } as never)
     tree = await $.ui.render(PANE_AT)
-    expect(text(find(tree, 'hai-tile-memory'))).toContain('gate 31 GB with PIE, 28 without')
+    expect(text(find(tree, 'hai-tile-memory'))).toContain('gate 38 GB with PIE, 28 without')
 
     // D4: Hai plans a sync at a preset in the one dialog; this session holds it; Sync ⋯ moves or cancels it.
     w.say('Plan 15:30')

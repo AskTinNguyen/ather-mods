@@ -6,6 +6,7 @@
 // Files are the truth; a notice is only a doorbell.
 import { commandVerb, nestedCommand, segments, stripHeredocs, tokenize } from './a5r.ts'
 import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from './syncrules.ts'
+import type { LeaseNotes } from './lease.ts'
 import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type StageTell, type SyncStage } from './syncstage.ts'
 
 export const DIR = 'Saved/A5R'
@@ -21,7 +22,9 @@ export const REAP_BELOW_GB = 14
 export const DISK_MIN_GB = 20
 export const PIE_START_GB = 5 // fixed, never raised (Hai, 25/09)
 export const PIE_ABORT_GB = 3
-export const DEFAULT_GATES = { pieGb: 31, nopieGb: 28 } as const // D5: Editor ≈ 25.7 GB idle, ≈ 31.4 GB at PIE peak (L_TALab, 28/09)
+// D5: Editor ≈ 25.7 GB idle, ≈ 31.4 GB at PIE peak (L_TALab, 28/09). A106 (Hai, 2026-10-20): a MainChar PIE on any map
+// needs ≥ 37–38 GB free before launch (machine profile, 2026-10-15), so the PIE launch gate defaults to 38.
+export const DEFAULT_GATES = { pieGb: 38, nopieGb: 28 } as const
 export const GATE_MIN_GB = 10
 export const GATE_MAX_GB = 60
 export const MARK = 'A5R ·'
@@ -77,8 +80,8 @@ export type Want = { minutes: number; pie: boolean; build: boolean; what: string
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }
-/** The lease a session holds, as it took it. */
-export type Holding = { since: number; end: number; extended: number }
+/** The lease a session holds, as it took it; A100: with what it notes for its record while it runs (lease.ts). */
+export type Holding = { since: number; end: number; extended: number; notes?: LeaseNotes }
 /** A request to a holder to yield (or a standard `UE request:` line sent to a holder without a5r). */
 export type YieldAsk = { holder: string; at: number; via: 'file' | 'send'; minutes: number; lane: string }
 export type SessionFile = {
@@ -111,11 +114,16 @@ export type SessionFile = {
   /** A82: when this session last ran a shell command that may write inside the shared checkout, since its last commit
    * there (absent: none); kept across a reload. */
   sharedShellAt?: number
+  /** A103: when this session last used the Editor (an Unreal MCP call, a build, an Editor driver), so an asker can tell
+   * whether its holder is in the middle of Editor work. */
+  editorUseAt?: number
+  /** A104: the place a forced release keeps (the requestedAt of the request it held) until `until`. */
+  return?: { requestedAt: number; until: number }
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
  * running, A58) or an unseen grant passed on (no turn since it, 10 min); A60: kept in Saved/A5R/released/<id8>.json. */
-export type Released = { kind: 'lapsed' | 'unseen'; at: number; by: string; since: number; end: number }
+export type Released = { kind: 'lapsed' | 'unseen'; at: number; by: string; since: number; end: number; requestedAt?: number }
 
 export const blankSession = (session: string, lane: string, title: string, now: number): SessionFile => ({
   v: 1,
@@ -134,7 +142,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}) }
   } catch {
     return null
   }
@@ -630,7 +638,7 @@ export const decide = (x: GrantInput): Decision => {
     const room = Math.floor((sync.at - CUTOFF_MS - now) / 60_000)
     return wait('sync', `a ${want.minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
   }
-  if (sync && (phase === 'cutoff' || phase === 'frozen') && sync.holder.id8 !== me8)
+  if (isSyncClaim(sync, me8, phase))
     return wait('sync', `the sync at ${hhmm(sync.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, 'Editor grants wait until it is done')
   // The launch gate guards a launch: a slot that never launches the Editor (the sync worker's) skips it.
   if (pid === null && want.launch !== false) {
@@ -646,14 +654,25 @@ export const decide = (x: GrantInput): Decision => {
 
 export const ordinal = (n: number): string => `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'}`
 
+/** A103: a holder is asked to yield only between Editor work: no Editor use for 5 min (from its grant at most) and at
+ * least 20 min of its lease left. */
+export const YIELD_QUIET_MS = 5 * 60_000
+export const YIELD_ROOM_MS = 20 * 60_000
+export const isYieldMoment = (x: { now: number; since: number; end: number; editorUseAt: number | undefined }): boolean =>
+  x.now - Math.max(x.editorUseAt ?? 0, x.since) >= YIELD_QUIET_MS && x.end - x.now >= YIELD_ROOM_MS
+
 /** Whether a request may ask the holder to yield now: ≤ 20 min without a build, at the head of the queue, the
- * holder alive and pausable, and nobody asked that holder in the last hour. */
+ * holder alive and pausable, nobody asked that holder in the last hour, and (A103) the holder between Editor work by its
+ * file's lease and the Editor use it publishes (a file from before 0.21.0 publishes none: its grant counts; a holder
+ * without a file is asked as before, and the holder's own A5R holds the notice until the moment comes). */
 export const mayAskYield = (x: GrantInput): { holder: string } | null => {
   const mine = x.files.find(f => f.id8 === x.me8)
   const want = mine?.want
   if (!want || want.build || want.minutes > YIELD_MAX_MIN) return null
   if (x.lock.kind !== 'held' || !x.lock.id8 || x.lock.id8 === x.me8 || !x.lock.pausable) return null
   if (livenessOf(x.lock.id8, x.files, x.lanes, x.now) !== 'alive') return null
+  const lease = x.files.find(f => f.id8 === x.lock.id8)
+  if (lease?.holding && !isYieldMoment({ now: x.now, since: lease.holding.since, end: lease.holding.end, editorUseAt: lease.editorUseAt })) return null
   if (queueOf(x.files, x.lanes, x.now, x.sync)[0]?.id8 !== x.me8) return null
   const asked = x.files.some(f => f.yieldAsks.some(a => a.holder === x.lock.id8 && x.now - a.at < YIELD_EVERY_MS))
   return asked ? null : { holder: x.lock.id8 }
@@ -765,6 +784,8 @@ export const isOpenPhase = (p: Phase): boolean => p === 'planned' || p === 'cuto
 /** A94: this session holds the sync and it is in its cutoff or freeze: its own Editor slot goes first, uncapped, and ends
  * with the sync. */
 export const isHolderInSync = (s: SyncFile | null, me8: string, phase: Phase): boolean => Boolean(s && s.holder.id8 === me8 && (phase === 'cutoff' || phase === 'frozen'))
+/** Another session's sync is in its cutoff or freeze: it needs the Editor (and the shared checkout) from this one. */
+export const isSyncClaim = (s: SyncFile | null, me8: string, phase: Phase): s is SyncFile => Boolean(s && s.holder.id8 !== me8 && (phase === 'cutoff' || phase === 'frozen'))
 
 export const newSync = (at: number, holder: SyncHolder, plannedBy: string, now: number, build = false, freezeMin = build ? SYNC_BUILD_MIN : SYNC_MERGE_MIN): SyncFile => ({
   v: 1,
