@@ -251,3 +251,18 @@ Sent to this session by the S2 sync main session (the sync conductor), verbatim:
 > (3) The D1 guard blocks `git checkout --theirs -- <conflicted paths>` during a merge as "discard uncommitted changes". Conflicted paths during a merge the holder runs should be allowed.
 > (4) "owner unknown → abort" fires on every foreign conflict, even where the holder recorded a rule (Saved/SYNC_QUEUE.md). A way to pass resolution rules to the worker would avoid manual merges.
 > The sync completed by hand: 42644138, build OK, 291/0.
+
+## L-38 (2026-10-20) | class: intent | -> rev 34
+
+> Nguyên lý chia editor của A5R là gì?
+> Tôi thấy hay có hiện tượng là session này làm làm sửa sửa, xong dùng editor, dùng xong thấy vấn đề chưa kịp sửa đã nhường editor cho session khác.
+> Rồi chứ chuyền chuyền như vậy liên tục. Không có task nào xong triệt để, nhiều task sắp xong đến nơi rồi nhưng vào check thì toàn là đang đợi đến lượt editor
+
+> Có rule nào an toàn hơn không?
+
+> Adversary Review rồi cho tôi giải pháp toàn diện hơn
+
+> 1. Nâng RAM
+> 2. Có
+
+(Answers to the plan after the adversary review: 1 = raise the PIE launch gate to 38 GB; 2 = build phase 1, the forced-release place and the queue view as rev 34.)
