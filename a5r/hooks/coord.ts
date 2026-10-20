@@ -76,7 +76,7 @@ export const presetTimes = (now: number): number[] => {
 // ---------- session files (Saved/A5R/editor/<id8>.json, one writer each) ----------
 export type Mode = 'interactive' | 'unattended'
 /** What a session asked the Editor for. */
-export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot }
+export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean }
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }
@@ -655,11 +655,11 @@ export const decide = (x: GrantInput): Decision => {
 export const ordinal = (n: number): string => `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'}`
 
 /** A103: a holder is asked to yield only between Editor work: no Editor use for 5 min (from its grant at most) and at
- * least 20 min of its lease left. */
+ * least 20 min of its lease left; past its end the room is waived (the lease no longer protects its last minutes). */
 export const YIELD_QUIET_MS = 5 * 60_000
 export const YIELD_ROOM_MS = 20 * 60_000
 export const isYieldMoment = (x: { now: number; since: number; end: number; editorUseAt: number | undefined }): boolean =>
-  x.now - Math.max(x.editorUseAt ?? 0, x.since) >= YIELD_QUIET_MS && x.end - x.now >= YIELD_ROOM_MS
+  x.now - Math.max(x.editorUseAt ?? 0, x.since) >= YIELD_QUIET_MS && (x.now >= x.end || x.end - x.now >= YIELD_ROOM_MS)
 
 /** Whether a request may ask the holder to yield now: ≤ 20 min without a build, at the head of the queue, the
  * holder alive and pausable, nobody asked that holder in the last hour, and (A103) the holder between Editor work by its

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { DEFAULT_GATES, blankSession, gatesOf, heldLine, mayAskYield, parseLockLine, type GrantInput, type SessionFile, type Want } from '../hooks/coord.ts'
-import { EDITOR_WORK, LEASES_MAX, appendCapped, isIdleHolder, isRetestExtension, leaseSummary, parseLeases, queueView, requestedAtOf, returnOf, summaryLine, type LeaseRecord } from '../hooks/lease.ts'
+import { DEFAULT_GATES, blankSession, decide, gatesOf, heldLine, isYieldMoment, mayAskYield, parseLockLine, type GrantInput, type SessionFile, type Want } from '../hooks/coord.ts'
+import { EDITOR_WORK, LEASES_MAX, appendCapped, endLease, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, parseLeases, placeOf, queueView, releaseReason, returnOf, summaryLine, yieldTold, type LeaseRecord } from '../hooks/lease.ts'
 import { A5RPANE, LOCK, ME, NOW, PROJ, find, opts, text, world, type Rec } from './world.ts'
 
 // Rev 34 (L-38: the Editor passes from hand to hand and no task finishes): A100 a record per lease and its 24-hour summary,
@@ -87,12 +87,15 @@ test('A100: a lapsed lease is recorded by the session that lapses it (reason lap
 test('A101: unit: Editor use counts the S2 drivers; busy (a turn, Editor use, an agent) is not idle', () => {
   for (const c of ['powershell -File E:/s2/docs/handoff/pie-perf-tools/launch_s2.ps1', 'python tools/TALab/lab.py --min-free-gb 8', 'python docs/handoff/pie-perf-tools/mcp.py ping', 'powershell -File close_editor.ps1', 'Build.bat S2Editor Win64', 'RunUAT.bat BuildCookRun']) expect([c, EDITOR_WORK.test(c)]).toEqual([c, true])
   for (const c of ['git status', 'python tools/collab.py', 'cat mcp.pyc.txt']) expect([c, EDITOR_WORK.test(c)]).toEqual([c, false])
-  const base = { now: T(15, 0), since: T(14, 0), editorUseAt: T(14, 10), lastTurnAt: T(14, 20), agents: 0, isPie: false, isUnattended: false }
+  const base = { now: T(15, 0), since: T(14, 0), end: T(16, 0), editorUseAt: T(14, 10), lastTurnAt: T(14, 20), agents: 0, isPie: false, isUnattended: false }
   expect(isIdleHolder(base)).toBe(true)
   expect(isIdleHolder({ ...base, lastTurnAt: T(14, 50) })).toBe(false) // a turn 10 min ago
   expect(isIdleHolder({ ...base, editorUseAt: T(14, 50) })).toBe(false)
   expect(isIdleHolder({ ...base, agents: 1 })).toBe(false)
   expect(isIdleHolder({ ...base, since: T(14, 50) })).toBe(false) // granted 10 min ago
+  // D2: past its end a holder's turns no longer keep the notice back (Editor use, PIE and agents still do).
+  expect(isIdleHolder({ ...base, end: T(14, 55), lastTurnAt: T(14, 58) })).toBe(true)
+  expect(isIdleHolder({ ...base, end: T(14, 55), lastTurnAt: T(14, 58), editorUseAt: T(14, 58) })).toBe(false)
 })
 
 for (const busy of [true, false])
@@ -217,37 +220,107 @@ for (const [args, pausable] of [[{ pie: true }, false], [{ pie: true, pausable: 
   })
 
 // ---------- A104 ----------
-test('A104: unit: a forced release keeps the place 60 min; a voluntary one keeps none; asking again keeps its own', () => {
+test('A104: unit: a forced release keeps the place 60 min (a yield right after its asker); a voluntary one none; a kept place is used once', () => {
   expect(returnOf('yielded', T(14, 10), T(14, 40))).toEqual({ requestedAt: T(14, 10), until: T(15, 40) })
+  expect(returnOf('yielded', T(14, 10), T(14, 40), T(14, 38))).toEqual({ requestedAt: T(14, 38) + 1, until: T(15, 40) }) // D1: after the asker
+  expect(returnOf('yielded', T(14, 39), T(14, 40), T(14, 38))?.requestedAt).toBe(T(14, 39)) // never earlier than its own
   for (const r of ['cutoff', 'lapsed', 'unseen'] as const) expect(returnOf(r, T(14, 10), T(14, 40))?.requestedAt).toBe(T(14, 10))
   for (const r of ['released', 'idle', 'overrun', 'sync'] as const) expect(returnOf(r, T(14, 10), T(14, 40))).toBeUndefined()
   const back = { requestedAt: T(14, 10), until: T(15, 40) }
-  expect(requestedAtOf({ want: null, return: back }, T(15, 0))).toBe(T(14, 10))
-  expect(requestedAtOf({ want: null, return: back }, T(15, 41))).toBe(T(15, 41))
-  expect(requestedAtOf({ want: want({ requestedAt: T(14, 30) }), return: back }, T(15, 0))).toBe(T(14, 30))
+  expect(placeOf({ want: null, return: back }, T(15, 0))).toEqual({ requestedAt: T(14, 10), isKept: true })
+  expect(placeOf({ want: null, return: back }, T(15, 41))).toEqual({ requestedAt: T(15, 41) })
+  expect(placeOf({ want: want({ requestedAt: T(14, 30) }), return: back }, T(15, 0))).toEqual({ requestedAt: T(14, 30) })
+  expect(placeOf({ want: want({ requestedAt: T(14, 10), isKept: true }), return: undefined }, T(15, 0))).toEqual({ requestedAt: T(14, 10), isKept: true })
+  // D1: a request whose time was a kept place keeps nothing again, for any reason; a lapse record names none for it.
+  const kept = JSON.parse(peer(ME8, { want: want({ requestedAt: T(14, 10), isKept: true }), holding: { since: T(14, 20), end: T(15, 20), extended: 0 } })) as SessionFile
+  for (const reason of ['yielded', 'cutoff', 'lapsed', 'unseen'] as const) expect([reason, endLease(kept, { at: T(14, 40), reason, isEditorOpen: false, after: T(14, 38) }).after.return]).toEqual([reason, undefined])
+  expect([keepableOf(kept.want), keepableOf(want({ requestedAt: T(14, 10) })), keepableOf(null)]).toEqual([undefined, T(14, 10), undefined])
+  expect(endLease({ ...kept, want: null }, { at: T(14, 40), reason: 'lapsed', isEditorOpen: false, requestedAt: T(13, 20) }).after.return).toEqual({ requestedAt: T(13, 20), until: T(15, 40) })
 })
 
-for (const forced of [true, false])
-  test(`A104: a holder that ${forced ? 'yields when asked' : 'releases on its own'} asks again while the borrower holds: it ranks ${forced ? 'before' : 'after'} a session that asked during its lease`, opts(), async ($, on) => {
-    const w = world(on, { ram: '40' })
-    on('turn.complete', async () => ({ text: '' }))
-    w.put(LOCK, held(ME8, T(14, 20), T(15, 20)))
-    meHolding(w, T(14, 20), T(15, 20), { want: want({ requestedAt: T(14, 10) }) })
-    w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'borrower', want: want({ minutes: 10, requestedAt: T(14, 38) }), yieldAsks: forced ? [{ holder: ME8, at: T(14, 38), via: 'file', minutes: 10, lane: 'borrower' }] : [] }))
-    w.put(`${HF}/editor/dddddddd.json`, peer('dddddddd', { lane: 'third', want: want({ minutes: 30, requestedAt: T(14, 39) }) }))
-    await $.session.start(START)
-    expect(prompts(w).some(p => p.includes('A5R · Editor yield — borrower asks'))).toBe(forced)
-    await idle($)
-    expect(out(await $.tool.call({ tool: EDITOR, action: 'release', note: forced ? 'yielded to borrower' : 'done' } as never))).toContain('released:')
-    expect(parseLeases(w.read(LEASES)).map(r => r.endReason)).toEqual([forced ? 'yielded' : 'released'])
-    // The borrower is granted (its own A5R), and holds the Editor.
-    w.put(LOCK, held('cccccccc', T(14, 41), T(14, 51)))
-    w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'borrower', want: want({ minutes: 10, requestedAt: T(14, 38) }), holding: { since: T(14, 41), end: T(14, 51), extended: 0 } }))
+test('A104 / D3: unit: a release is a yield only within the notice\'s 10-min safe-point window; a yield wins over the overrun inside it', () => {
+  const asker = JSON.parse(peer('cccccccc', { want: want({ requestedAt: T(14, 38) }) })) as SessionFile
+  const asks = [{ asker, ask: { holder: ME8, at: T(14, 38), via: 'file' as const, minutes: 10, lane: 'b' } }]
+  const told = new Map([[`editor:yield:cccccccc:${T(14, 38)}`, T(14, 40)]])
+  expect(yieldTold(asks, told, T(14, 50))?.asker.id8).toBe('cccccccc')
+  expect(yieldTold(asks, told, T(14, 51))).toBeUndefined()
+  expect(yieldTold(asks, new Map(), T(14, 41))).toBeUndefined() // never told (held back by A103)
+  expect(releaseReason({ isYieldTold: true, isSyncNeed: false, isOver: true, isIdleTold: false })).toBe('yielded')
+  expect(releaseReason({ isYieldTold: false, isSyncNeed: false, isOver: true, isIdleTold: false })).toBe('overrun')
+})
+
+/** The race (D1): this session holds since 14:20 (asked 14:10); `cccccccc` asked 14:38 and asked it to yield; `dddddddd`
+ * asked 14:39. The others' A5R are their files: what one would do is what `decide` answers for it. */
+const raceWorld = (on: any, o: { isKept?: boolean; isAsked?: boolean } = {}) => {
+  const w = world(on, { ram: '40' })
+  on('turn.complete', async () => ({ text: '' }))
+  w.put(LOCK, held(ME8, T(14, 20), T(15, 20)))
+  meHolding(w, T(14, 20), T(15, 20), { want: want({ requestedAt: T(14, 10), ...(o.isKept ? { isKept: true } : {}) }) })
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'borrower', want: want({ minutes: 10, requestedAt: T(14, 38) }), yieldAsks: o.isAsked === false ? [] : [{ holder: ME8, at: T(14, 38), via: 'file', minutes: 10, lane: 'borrower' }] }))
+  w.put(`${HF}/editor/dddddddd.json`, peer('dddddddd', { lane: 'third', want: want({ minutes: 30, requestedAt: T(14, 39) }) }))
+  return w
+}
+const filesOf = (w: ReturnType<typeof world>): SessionFile[] => ['editor/' + ME8, 'editor/cccccccc', 'editor/dddddddd'].map(f => JSON.parse(w.read(`${HF}/${f}.json`)) as SessionFile)
+const decideFor = (w: ReturnType<typeof world>, id8: string) => decide({ me8: id8, lock: parseLockLine(w.read(LOCK)), files: filesOf(w), lanes: [], now: w.clock.now(), sync: null, probe: { freeGb: 40, diskGb: 40, procs: [] }, gates: DEFAULT_GATES })
+
+test('A104 / D1: the real race: A yields and asks again at once; B, the session it yielded to, is granted first; A is next, before the session that asked during its lease', opts(), async ($, on) => {
+  const w = raceWorld(on)
+  await $.session.start(START)
+  expect(prompts(w).some(p => p.includes('A5R · Editor yield — borrower asks'))).toBe(true)
+  await idle($)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'release', note: 'yielded to borrower' } as never))).toContain('released:')
+  expect(parseLeases(w.read(LEASES)).map(r => r.endReason)).toEqual(['yielded'])
+  // A90: it asks again at once. The lock is FREE and B is the head: A is not granted.
+  const said = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'retest after the borrower' } as never))
+  expect(said).toContain('the Editor is free but borrower asked first')
+  expect(said).toContain('you are 2nd in the queue')
+  expect([parseLockLine(w.read(LOCK)).kind, mine(w).want?.requestedAt, mine(w).want?.isKept]).toEqual(['free', T(14, 38) + 1, true])
+  await w.clock.advance(MIN) // A's minute: still not granted
+  expect(parseLockLine(w.read(LOCK)).kind).toBe('free')
+  // B's own A5R takes it at its minute (decide answers grant for B alone), and later gives it back.
+  expect([decideFor(w, 'cccccccc').kind, decideFor(w, 'dddddddd').kind, decideFor(w, ME8).kind]).toEqual(['grant', 'wait', 'wait'])
+  w.put(LOCK, held('cccccccc', T(14, 41), T(14, 51)))
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'borrower', heartbeatAt: T(14, 41), want: want({ minutes: 10, requestedAt: T(14, 38) }), holding: { since: T(14, 41), end: T(14, 51), extended: 0 } }))
+  await w.clock.advance(MIN)
+  w.put(LOCK, 'FREE since=14:43 2026-10-06 by=borrower note=Editor closed background=none · free since 14:43\n')
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'borrower', heartbeatAt: T(14, 43) }))
+  w.put(`${HF}/editor/dddddddd.json`, peer('dddddddd', { lane: 'third', heartbeatAt: T(14, 43), want: want({ minutes: 30, requestedAt: T(14, 39) }) }))
+  await w.clock.advance(MIN) // 14:43: A is next, before dddddddd (14:39)
+  expect(parseLockLine(w.read(LOCK)).id8).toBe(ME8)
+  expect(mine(w).return).toBeUndefined() // the kept place is spent by the grant
+})
+
+test('A104: a holder that releases on its own asks again behind everyone who asked during its lease', opts(), async ($, on) => {
+  const w = raceWorld(on, { isAsked: false })
+  await $.session.start(START)
+  await idle($)
+  await $.tool.call({ tool: EDITOR, action: 'release', note: 'done' } as never)
+  expect(parseLeases(w.read(LEASES)).map(r => r.endReason)).toEqual(['released'])
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'again' } as never))).toContain('you are 3rd in the queue')
+  expect(mine(w).want?.requestedAt).toBe(NOW)
+})
+
+test('A104 / D1: a kept place is used once: a holder whose request was itself a kept place yields and goes to the back', opts(), async ($, on) => {
+  const w = raceWorld(on, { isKept: true })
+  await $.session.start(START)
+  await idle($)
+  await $.tool.call({ tool: EDITOR, action: 'release', note: 'yielded again' } as never)
+  expect([parseLeases(w.read(LEASES)).map(r => r.endReason), mine(w).return]).toEqual([['yielded'], undefined])
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'again' } as never))).toContain('you are 3rd in the queue')
+})
+
+test('A104 / D3: a release 11 min after the yield notice is no yield: recorded released, no kept place', opts(), async ($, on) => {
+  const w = raceWorld(on)
+  await $.session.start(START)
+  expect(prompts(w).some(p => p.includes('A5R · Editor yield — borrower asks'))).toBe(true)
+  await idle($)
+  for (let n = 1; n <= 11; n += 1) {
+    for (const id8 of ['cccccccc', 'dddddddd']) w.put(`${HF}/editor/${id8}.json`, JSON.stringify({ ...(JSON.parse(w.read(`${HF}/editor/${id8}.json`)) as SessionFile), heartbeatAt: NOW + n * MIN }))
     await w.clock.advance(MIN)
-    const said = out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'retest after the borrower' } as never))
-    expect(said).toContain(forced ? 'you are next' : 'you are 2nd in the queue')
-    expect(mine(w).want?.requestedAt).toBe(forced ? T(14, 10) : T(14, 41))
-  })
+  }
+  await $.tool.call({ tool: EDITOR, action: 'release', note: 'done' } as never)
+  expect([parseLeases(w.read(LEASES)).map(r => r.endReason), mine(w).return]).toEqual([['released'], undefined])
+})
 
 test('A104: a lapsed holder\'s next request keeps the request time its released file names (written by the lapsing session)', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
@@ -260,6 +333,24 @@ test('A104: a lapsed holder\'s next request keeps the request time its released 
   expect(mine(w).return).toEqual({ requestedAt: T(13, 20), until: T(15, 40) })
   w.put(LOCK, held('eeeeeeee', T(14, 40), T(15, 10)))
   expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'again' } as never))).toContain('you are next')
+  expect(mine(w).want?.isKept).toBe(true) // used once: a release of this request keeps nothing
+})
+
+// ---------- D2: past its end a busy holder no longer hoards the Editor ----------
+test('D2: unit: past the lease end the yield moment needs no 20-min room (5 min without Editor use still)', () => {
+  expect(isYieldMoment({ now: T(14, 40), since: T(14, 0), end: T(14, 55), editorUseAt: undefined })).toBe(false) // 15 min left
+  expect(isYieldMoment({ now: T(14, 40), since: T(14, 0), end: T(14, 35), editorUseAt: undefined })).toBe(true) // past its end
+  expect(isYieldMoment({ now: T(14, 40), since: T(14, 0), end: T(14, 35), editorUseAt: T(14, 38) })).toBe(false) // used 2 min ago
+})
+
+test('D2: past its end, a holder that keeps running turns is told it is idle, and a yield ask reaches it', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, held(ME8, T(13, 40), T(14, 35)))
+  meHolding(w, T(13, 40), T(14, 35), { lastTurnAt: NOW })
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc', { lane: 'loco', want: want({ minutes: 10 }), yieldAsks: [{ holder: ME8, at: NOW - 30_000, via: 'file', minutes: 10, lane: 'loco' }] }))
+  await $.session.start(START)
+  const all = prompts(w).join('\n')
+  expect([all.includes('has not used it for'), all.includes('A5R · Editor yield — loco asks')]).toEqual([true, true])
 })
 
 // ---------- A105 ----------

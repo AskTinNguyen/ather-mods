@@ -1,7 +1,7 @@
 // A5R rev 34 (L-38): the Editor lease's record and the rules that keep a slot with the session that needs it. Pure: no
 // `$`; register.ts reads and writes the files. A100 one record per lease (Saved/A5R/leases.jsonl) and its 24-hour summary;
 // A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it.
-import { IDLE_RELEASE_MS, YIELD_EVERY_MS, hhmm, lockTimes, queueOf, type Holding, type LaneBeat, type LockLine, type SessionFile, type SyncFile, type YieldAsk } from './coord.ts'
+import { IDLE_RELEASE_MS, YIELD_EVERY_MS, hhmm, lockTimes, noticeIds, queueOf, type Holding, type LaneBeat, type LockLine, type SessionFile, type SyncFile, type Want, type YieldAsk } from './coord.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
 export const LEASES_FILE = 'leases.jsonl'
@@ -63,9 +63,14 @@ export const noteLease = (h: Holding, f: { now: number; editorRuns: boolean; pie
   return Object.keys(notes).length ? { ...h, notes } : h
 }
 
-/** A100 / A104: how a lease ends: when, why, whether an Editor was left open, and the request time another session wrote
- * down for it (a lapse record), used when the holder's own request is already gone. */
-export type LeaseEnd = { at: number; reason: EndReason; isEditorOpen: boolean; requestedAt?: number }
+/** A100 / A104: how a lease ends: when, why, whether an Editor was left open, the request time another session wrote
+ * down for it (a lapse record), used when the holder's own request is already gone, and for a yield the request time of
+ * the session it yielded to (the kept place ranks right after it). */
+export type LeaseEnd = { at: number; reason: EndReason; isEditorOpen: boolean; requestedAt?: number; after?: number }
+
+/** A104: the request time a release may keep: the request's own, never one that was itself a kept place (a place is
+ * used once); undefined without a request. */
+export const keepableOf = (want: Want | null): number | undefined => (want && !want.isKept ? want.requestedAt : undefined)
 
 /** A100 / A104: a lease that ends: its record (none when the file holds no lease), and the holder's file after it: no
  * request and no lease; a forced end keeps the request's place for 60 min, any other end clears it. The record's
@@ -73,7 +78,7 @@ export type LeaseEnd = { at: number; reason: EndReason; isEditorOpen: boolean; r
  * which writes no record). */
 export const endLease = (f: SessionFile, end: LeaseEnd): { record: LeaseRecord | null; after: SessionFile } => {
   const { return: _was, ...rest } = f
-  const back = returnOf(end.reason, f.want?.requestedAt ?? end.requestedAt, end.at)
+  const back = returnOf(end.reason, f.want ? keepableOf(f.want) : end.requestedAt, end.at, end.after)
   const h = f.holding
   const n = h?.notes ?? {}
   const record: LeaseRecord | null = h
@@ -121,18 +126,31 @@ export const parseLeases = (text: string | null): LeaseRecord[] =>
     }
   })
 
-/** A100: the release's reason, from what the code knows: a yield ask it was told of, a sync's cutoff or freeze (not its
- * holder), past its end, told it was idle; else a plain release. Never a session's own word. */
+/** A100: the release's reason, from what the code knows: a yield ask it was told of within the notice's safe-point window
+ * (D3: a later release is no yield), a sync's cutoff or freeze (not its holder), past its end, told it was idle; else a
+ * plain release. Never a session's own word. */
 export const releaseReason = (x: { isYieldTold: boolean; isSyncNeed: boolean; isOver: boolean; isIdleTold: boolean }): EndReason =>
   x.isYieldTold ? 'yielded' : x.isSyncNeed ? 'cutoff' : x.isOver ? 'overrun' : x.isIdleTold ? 'idle' : 'released'
 
-/** A104: the place a release keeps: a forced one keeps the request's requestedAt for 60 min; any other keeps none. */
-export const returnOf = (reason: EndReason, requestedAt: number | undefined, at: number): { requestedAt: number; until: number } | undefined =>
-  FORCED.has(reason) && requestedAt !== undefined ? { requestedAt, until: at + RETURN_MS } : undefined
+/** A104: the place a release keeps: a forced one keeps the request's requestedAt for 60 min (a yield ranks right after
+ * the session it yielded to, `after`); any other keeps none. */
+export const returnOf = (reason: EndReason, requestedAt: number | undefined, at: number, after?: number): { requestedAt: number; until: number } | undefined =>
+  FORCED.has(reason) && requestedAt !== undefined ? { requestedAt: after === undefined ? requestedAt : Math.max(requestedAt, after + 1), until: at + RETURN_MS } : undefined
 
-/** A104: the requestedAt of a new request: asking again keeps the place; a forced release's place within its 60 min. */
-export const requestedAtOf = (me: Pick<SessionFile, 'want' | 'return'> | null, now: number): number =>
-  me?.want?.requestedAt ?? (me?.return && now < me.return.until ? me.return.requestedAt : now)
+/** A104: the place of a new request, as its Want carries it: asking again keeps the request's own (and its kept mark); a
+ * forced release's place within its 60 min, marked kept (used once: a release of that request keeps nothing). */
+export const placeOf = (me: Pick<SessionFile, 'want' | 'return'> | null, now: number): Pick<Want, 'requestedAt' | 'isKept'> =>
+  me?.want ? { requestedAt: me.want.requestedAt, ...(me.want.isKept ? { isKept: true } : {}) } : me?.return && now < me.return.until ? { requestedAt: me.return.requestedAt, isKept: true } : { requestedAt: now }
+
+/** D3: the window a yield notice gives the holder (its text: "at your next safe point (≤ 10 min)"). */
+export const YIELD_SAFE_MS = 10 * 60_000
+
+/** D3: the yield ask this holder was told of within the last 10 min (`toldAt`: when each notice reached it), if any. */
+export const yieldTold = (asks: readonly { asker: SessionFile; ask: YieldAsk }[], toldAt: ReadonlyMap<string, number>, now: number): { asker: SessionFile; ask: YieldAsk } | undefined =>
+  asks.find(y => {
+    const at = toldAt.get(noticeIds.yield(y.asker.id8, y.ask.at))
+    return at !== undefined && now - at <= YIELD_SAFE_MS
+  })
 
 /** A103: the yield asks this lease's holder has in other sessions' files: through its own a5r (`file`), made during the
  * lease (a minute before its grant counts) and less than an hour old; each with the session that asked, whose id keys
@@ -141,9 +159,10 @@ export const yieldAsksTo = (files: readonly SessionFile[], holder8: string, sinc
   files.flatMap(asker => asker.yieldAsks.filter(a => a.holder === holder8 && a.via === 'file' && a.at >= since - 60_000 && now - a.at < YIELD_EVERY_MS).map(ask => ({ asker, ask })))
 
 /** A101: the idle notice goes out only when the holder ran no turn, made no Editor use and ran no background agent for
- * 15 min (counted from the grant at most), with no PIE of its own and not unattended. */
-export const isIdleHolder = (x: { now: number; since: number; editorUseAt: number; lastTurnAt: number | undefined; agents: number; isPie: boolean; isUnattended: boolean }): boolean =>
-  !x.isPie && !x.isUnattended && x.agents === 0 && x.now - Math.max(x.editorUseAt, x.since) >= IDLE_RELEASE_MS && x.now - Math.max(x.lastTurnAt ?? 0, x.since) >= IDLE_RELEASE_MS
+ * 15 min (counted from the grant at most), with no PIE of its own and not unattended. D2: past the lease's end its turns
+ * no longer count (the end bounds a working holder's time): only Editor use, PIE or an agent keep the notice back. */
+export const isIdleHolder = (x: { now: number; since: number; end: number; editorUseAt: number; lastTurnAt: number | undefined; agents: number; isPie: boolean; isUnattended: boolean }): boolean =>
+  !x.isPie && !x.isUnattended && x.agents === 0 && x.now - Math.max(x.editorUseAt, x.since) >= IDLE_RELEASE_MS && (x.now >= x.end || x.now - Math.max(x.lastTurnAt ?? 0, x.since) >= IDLE_RELEASE_MS)
 
 /** A102: a second extension while others wait is the retest one: at most 15 min, no build lease, an Unreal Editor running,
  * the whole lease within 90 min, asked before its end. */

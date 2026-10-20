@@ -8,12 +8,12 @@ import {
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS,
-  isYieldMoment, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
+  DEFAULT_GATES, isYieldMoment, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, withUntracked, parseAdded, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
-import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, leaseSummary, noteLease, parseLeases, queueRowText, queueView, releaseReason, requestedAtOf, summaryLine, yieldAsksTo, type EndReason, type LeaseEnd, type LeaseRecord } from './lease.ts'
+import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { POST_MERGE_TESTS, afterWorker, buildResultOf, enterStage, isMergedStage, readMerge, stageNext, stageWord, syncBuildLog, testsOf, type MergeRead } from './syncstage.ts'
@@ -120,6 +120,11 @@ const touched = new Set<string>() // repo-relative paths this session and its wo
 let sharedShellAt: number | null = null // A82 (review 4): a shell command ran inside the shared checkout since this session's last commit there
 let pending: Notice[] = []
 const delivered = new Set<string>()
+// D3: the minute (the tick's time) each notice was handed to this session, for the yield's 10-min window. Kept in this
+// process only, by choice: after a reload a release reads as overrun or released, never as a yield (the place behind the
+// asker is lost; the A5R session file is not grown for a 10-min window). The last 50 kept.
+const toldAt = new Map<string, number>()
+const TOLD_KEEP = 50
 let isBusy = false // a main-loop turn runs: notices ride its next tool result instead of a prompt
 // A59: the last wake prompt this session queued, and the last sign that a turn ran (a prompt, a main-loop tool call,
 // a turn's end): a wake whose turn never starts frees the busy flag after WAKE_WAIT_MS.
@@ -833,7 +838,11 @@ function push(n: Notice): void {
 /** The queued notices' texts, now marked delivered. */
 function drain(): string[] {
   const out = pending.map(n => n.text)
-  for (const n of pending) delivered.add(n.id)
+  for (const n of pending) {
+    delivered.add(n.id)
+    toldAt.set(n.id, nowMs)
+  }
+  for (const id of [...toldAt.keys()].slice(0, Math.max(0, toldAt.size - TOLD_KEEP))) toldAt.delete(id)
   pending = []
   return out
 }
@@ -890,7 +899,7 @@ async function ensureTools($: Engine): Promise<void> {
         what: { type: 'string', description: 'request: what the slot is for, one line.' },
         lane: { type: 'string', description: 'request: the lane name written into the lock (default: this session\'s title).' },
         mode: { type: 'string', enum: ['interactive', 'unattended'] },
-        pausable: { type: 'boolean', description: 'request: whether you can yield at a safe point (default true).' },
+        pausable: { type: 'boolean', description: 'request: whether you can yield at a safe point (default true; false for a PIE request unless given).' },
         next_safe: { type: 'string', description: 'request: your next safe point, HH:MM or "after save".' },
         freeGb: { type: 'number', description: 'any action: free RAM in GB you read yourself, only when A5R said the RAM probe failed twice (used for 2 min, through the normal gates, logged).' },
         note: { type: 'string', description: 'release: one line for the lock note.' },
@@ -987,13 +996,13 @@ async function takeSyncLock($: Engine, opts: Opts, s: SyncFile, now: number): Pr
 /** The FREE line for this session's lease (the editor tool's release and the sync's own, A79): a fresh probe names an
  * Editor left open; the request and lease are dropped. A100: the lease's record is written with its reason; A104: a
  * forced reason keeps the request's place for 60 min, any other clears it. False when the lock changed meanwhile. */
-async function releaseLock($: Engine, opts: Opts, now: number, reason: EndReason, extra: string, dont: string[] = []): Promise<{ isWritten: boolean; line: string }> {
+async function releaseLock($: Engine, opts: Opts, now: number, why: Pick<LeaseEnd, 'reason' | 'after'>, extra: string, dont: string[] = []): Promise<{ isWritten: boolean; line: string }> {
   const fresh = await freshProbe($, opts)
   const pid = editorPid(fresh)
   const note = [pid ? `Editor open PID ${pid}, reusable` : 'Editor closed', dont.length ? `Don't-Save: ${dont.join(', ')}` : '', extra].filter(Boolean).join('; ')
   const line = freeLine({ since: now, by: me?.lane ?? me8, note, background: 'none' })
   if (!(await writeLock($, opts, line))) return { isWritten: false, line }
-  if (me) me = await recordEnd($, opts, { ...me, holding: me.holding && notedHolding(me.holding, now) }, { at: now, reason, isEditorOpen: pid !== null })
+  if (me) me = await recordEnd($, opts, { ...me, holding: me.holding && notedHolding(me.holding, now) }, { ...why, at: now, isEditorOpen: pid !== null })
   await saveMe($, opts, now)
   return { isWritten: true, line }
 }
@@ -1023,23 +1032,20 @@ async function readLeaseLog($: Engine, opts: Opts, now: number): Promise<void> {
   leaseLogAt = now
 }
 
-/** A100 / A104: why this session gives its lease up now, from what its own code knows: a yield ask it was told of (in a
- * peer's file), a sync's cutoff or freeze it does not hold, past its end, told it was idle. */
-function releaseReasonNow(h: Holding, now: number): EndReason {
-  const phase = phaseOf(syncFile, now)
-  return releaseReason({
-    isYieldTold: yieldAsksTo(peers, me8, h.since, now).some(y => delivered.has(noticeIds.yield(y.asker.id8, y.ask.at))),
-    isSyncNeed: isSyncClaim(syncFile, me8, phase),
-    isOver: now >= h.end,
-    isIdleTold: delivered.has(noticeIds.idle(h.since)),
-  })
+/** A100 / A104: why this session gives its lease up now, from what its own code knows: a yield ask (in a peer's file) it
+ * was told of in the last 10 min (D1: its kept place then ranks right after the asker), a sync's cutoff or freeze it does
+ * not hold, past its end, told it was idle. */
+function releaseWhy(h: Holding, now: number): Pick<LeaseEnd, 'reason' | 'after'> {
+  const told = yieldTold(yieldAsksTo(peers, me8, h.since, now), toldAt, now)
+  const reason = releaseReason({ isYieldTold: told !== undefined, isSyncNeed: isSyncClaim(syncFile, me8, phaseOf(syncFile, now)), isOver: now >= h.end, isIdleTold: delivered.has(noticeIds.idle(h.since)) })
+  return reason === 'yielded' && told?.asker.want ? { reason, after: told.asker.want.requestedAt } : { reason }
 }
 
 /** A79: the sync's Editor lock given back when the sync ends (or its queued request withdrawn). */
 async function releaseSyncSlot($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
   lock = lockOf(lockRaw)
-  if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, 'sync', `${SYNC_SLOT}${clockOf(s.at)} ended`)
+  if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${clockOf(s.at)} ended`)
   else if (me && isSyncSlot(me.want)) {
     me = { ...me, want: null }
     await saveMe($, opts, now)
@@ -1178,7 +1184,7 @@ async function syncSlotWhenOff($: Engine, opts: Opts): Promise<void> {
   const now = await $.clock.now()
   const s = parseSyncFile(await readJson($, syncPath(opts)))
   if (s && isOpenPhase(syncPhase(s, now, false))) return
-  if (holdsLock()) await releaseLock($, opts, now, 'sync', `${SYNC_SLOT}${s ? clockOf(s.at) : ''} ${s?.state ?? 'gone'}`)
+  if (holdsLock()) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${s ? clockOf(s.at) : ''} ${s?.state ?? 'gone'}`)
   else {
     me = { ...me, want: null }
     await saveMe($, opts, now)
@@ -1294,7 +1300,7 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
     if (now >= h.end - LEASE_WARN_MS && now < h.end) push({ id: noticeIds.leaseEnding(h.since, h.end), text: NOTICES.leaseEnding(h.end), isActionable: true })
     if (now >= h.end) push({ id: noticeIds.overrun(h.since, h.end), text: NOTICES.overrun(h.end), isActionable: true })
     // A101: busy is not idle: a turn, Editor use or a background agent in the last 15 min keeps the notice back.
-    if (isIdleHolder({ now, since: h.since, editorUseAt: lastEditorUseAt, lastTurnAt: me.lastTurnAt, agents: agentsNow ?? 0, isPie: isPieRunning, isUnattended: me.want?.mode === 'unattended' }))
+    if (isIdleHolder({ now, since: h.since, end: h.end, editorUseAt: lastEditorUseAt, lastTurnAt: me.lastTurnAt, agents: agentsNow ?? 0, isPie: isPieRunning, isUnattended: me.want?.mode === 'unattended' }))
       push({ id: noticeIds.idle(h.since), text: NOTICES.idle(Math.round((now - Math.max(lastEditorUseAt, h.since)) / 60_000)), isActionable: true })
     // A103: a yield ask is held until the holder is between Editor work (5 min without use, 20 min of the lease left).
     if (isYieldMoment({ now, since: h.since, end: h.end, editorUseAt: lastEditorUseAt }))
@@ -1443,7 +1449,8 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   // request it held (the holder's A5R keeps that place when it reads why).
   const holder = all.find(f => f.id8 === held.id8)
   const after = holder ? await recordEnd($, opts, holder, { at: now, reason: r.kind, isEditorOpen: false }) : null
-  const released: Released = { ...r, by: me.lane, ...(holder?.want ? { requestedAt: holder.want.requestedAt } : {}) }
+  const keep = holder ? keepableOf(holder.want) : undefined // A104: a kept place is never kept again
+  const released: Released = { ...r, by: me.lane, ...(keep === undefined ? {} : { requestedAt: keep }) }
   await appendInbox($, opts, releases, held.id8, released)
   if (held.id8 === me8 && after) me = after
 }
@@ -1871,7 +1878,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   }
   if (!isOpenPhase(phase)) {
     // A79: a sync that ended or expired while its worker still held the Editor for it gives the lock back.
-    if (isHolder && holdsSyncLock()) await releaseLock($, opts, now, 'sync', `${SYNC_SLOT}${clockOf(s.at)} ${s.state}`)
+    if (isHolder && holdsSyncLock()) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${clockOf(s.at)} ${s.state}`)
     // A83: an expired sync is one notice to its holder (no mark on a title), whether or not it heard the cutoff.
     if (isHolder && s.state === 'expired' && now - (s.endedAt ?? s.updatedAt) < 6 * 3_600_000) push({ id: noticeIds.lifted(s), text: NOTICES.expired(s), isActionable: true })
     // The lift reaches the sessions that were told of this sync, and only for a while after it ended.
@@ -2746,7 +2753,7 @@ function wantFrom(e: Input, now: number): Want {
     mode: e.mode === 'unattended' ? 'unattended' : 'interactive',
     pausable: e.pausable === undefined ? e.pie !== true : e.pausable !== false, // A103: a PIE request is not pausable unless it says so
     nextSafe: str(e.next_safe) || 'after save',
-    requestedAt: requestedAtOf(me, now), // asking again keeps the place in the queue; A104: so does a forced release, 60 min
+    ...placeOf(me, now), // asking again keeps the place in the queue; A104: so does a forced release, once, 60 min
     ...(e.launch === false ? { launch: false } : {}),
   }
 }
@@ -2849,7 +2856,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     if (refusal) return refusal
     if (isPieRunning && e.pie_stopped !== true) return blocked('Editor', 'this session started PIE and no stop was seen', 'stop PIE first (or call release with pie_stopped: true once it has ended)')
     const dont = Array.isArray(e.dont_save) ? e.dont_save.map(String).filter(Boolean) : []
-    const { isWritten, line } = await releaseLock($, opts, now, releaseReasonNow(heldNow(now), now), str(e.note), dont)
+    const { isWritten, line } = await releaseLock($, opts, now, releaseWhy(heldNow(now), now), str(e.note), dont)
     if (!isWritten) return blocked('Editor', 'the lock changed while releasing', 'read it with action status, then release again')
     isPieRunning = false
     return tail(`released: ${line}`)
@@ -2986,7 +2993,7 @@ async function gateCommand($: Engine, opts: Opts, args: string): Promise<string>
   if (words[0]?.toLowerCase() === 'reset') {
     await $.store.delete('gates')
     await runTick($, opts)
-    return `A5R · launch gate back to the plugin options: ≥ ${clampGate(Number(opts.launchGatePieGb ?? 31))} GB with PIE, ≥ ${clampGate(Number(opts.launchGateGb ?? 28))} GB without.`
+    return `A5R · launch gate back to the plugin options: ≥ ${clampGate(Number(opts.launchGatePieGb ?? DEFAULT_GATES.pieGb))} GB with PIE, ≥ ${clampGate(Number(opts.launchGateGb ?? DEFAULT_GATES.nopieGb))} GB without.`
   }
   const [pie, nopie] = words.map(Number)
   if (words.length === 0) return `A5R · launch gate: ≥ ${gates.pieGb} GB with PIE, ≥ ${gates.nopieGb} GB without (${gates.source === 'panel' ? 'set with /a5r gate' : 'plugin options'}). Change it: /a5r gate <with PIE> <without PIE>, or /a5r gate reset.`
