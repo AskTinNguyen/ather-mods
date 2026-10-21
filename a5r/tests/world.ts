@@ -152,8 +152,10 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return value({ isPlaced: true })
   })
   const toolHolds = new Map<string, Promise<void>>() // rev 38 (Fable review D2): a command's call held until the test settles it
+  const toolEffects = new Map<string, () => void>() // rev 39 (A115): what a command does to the files as it runs (git leaving a head file)
   on('tool.call', async (_$: unknown, e: Rec) => {
     await toolHolds.get(String(e.command ?? ''))
+    toolEffects.get(String(e.command ?? ''))?.()
     // The dialog (`$.ui.ask` → AskUserQuestion): Hai picks `ask` when the test gives one.
     // Rev 27 (review 7): every dialog is counted in calls.ask, answered or not.
     if (e.tool === 'AskUserQuestion') (calls.ask ??= []).push(e)
@@ -167,6 +169,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   })
   return {
     toolHolds,
+    toolEffects,
     failCwd: (n: number) => {
       cwdFails = n
     },

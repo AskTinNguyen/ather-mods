@@ -154,6 +154,20 @@ export const classifyGit = (args: string[]): GitAct => {
 const UNMERGED = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
 /** A97 (review F3): the files git leaves while a conflicted merge, revert or cherry-pick waits to be resolved. */
 export const CONFLICT_HEADS = ['MERGE_HEAD', 'REVERT_HEAD', 'CHERRY_PICK_HEAD'] as const
+export type ConflictHead = (typeof CONFLICT_HEADS)[number]
+/** A115: a head file present in a checkout, with its mtime (whole ms: what an owner record is tied to). */
+export type HeadFile = { head: ConflictHead; mtimeMs: number }
+/** A115: the operation each head file stands for (as refusals and notices name it; also its git subcommand) and how it
+ * is finished once resolved. */
+const OPS: Record<ConflictHead, { op: string; finish: string }> = {
+  MERGE_HEAD: { op: 'merge', finish: 'git commit --no-edit' },
+  REVERT_HEAD: { op: 'revert', finish: 'git revert --continue' },
+  CHERRY_PICK_HEAD: { op: 'cherry-pick', finish: 'git cherry-pick --continue' },
+}
+export const opOf = (head: ConflictHead): string => OPS[head].op
+export const endOf = (head: ConflictHead, checkout: string): string => `git -C ${checkout} ${OPS[head].op} --abort (or finish it: resolve, git add -- <paths>, ${OPS[head].finish})`
+/** A115: the git subcommands that leave a head file when they stop on a conflict. */
+export const STARTS_OP: ReadonlySet<string> = new Set(['pull', ...CONFLICT_HEADS.map(opOf)])
 
 /** The changed paths a discard would lose, from `git status --porcelain=v1 -z` (`XY path` entries, NUL-separated; a rename's
  * or copy's source path follows its entry as a field of its own, without XY, and is skipped: review F5). A97: while a

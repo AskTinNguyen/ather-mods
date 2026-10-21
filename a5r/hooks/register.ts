@@ -12,8 +12,9 @@ import {
   syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
+import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
+import { HEAD_OWNER_FILE, headOwner, isOwnerOf, ownerOf, parseHeadOwner, type HeadOwner, type Owner } from './opguard.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, idleMsOf, isIdle, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
@@ -138,7 +139,7 @@ let mainCalls = 0 // A114: main-loop tool calls running now (a long foreground c
 const myIdleMs = (now: number): number => idleMsOf({ now, lastTurnAt: me?.lastTurnAt, turnSignalAt, mainCalls, agents: agentsNow ?? 0 })
 let waitLogged: WaitLogged | null = null // A112: this session's last wait line (in memory: a reload logs once more)
 const WAKE_WAIT_MS = 30_000
-let mergeHead = false // A61: .git/MERGE_HEAD exists in the shared checkout (read every minute)
+let conflictHead: HeadFile | null = null // A61 / A115: a merge, revert or cherry-pick half done in the shared checkout (read every minute)
 let agentsNow: number | null = null // A62: this session's running background agents at the last minute
 let agentKindsNow: string[] = [] // A67: their kinds
 let tickChain: Promise<void> = Promise.resolve()
@@ -508,7 +509,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would discard is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
     // A97: resolving a conflict is not a discard: `checkout --ours|--theirs` passes the unmerged paths while a merge, revert
     // or cherry-pick waits to be resolved.
-    const isResolving = act.kind === 'check' && act.side !== undefined && (await Promise.all(CONFLICT_HEADS.map(h => $.fs.exists(`${root}/.git/${h}`).catch(() => false)))).some(Boolean)
+    const isResolving = act.kind === 'check' && act.side !== undefined && (await headIn($, root)) !== null
     const changed = discardedPaths(ran.stdout, isResolving)
     const now = await $.clock.now()
     const mine = new Set([...touched].map(p => p.toLowerCase()))
@@ -847,7 +848,7 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
   syncFile = parseSyncFile(syncText)
   touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
   probe = shared
-  mergeHead = await $.fs.exists(`${root}/.git/MERGE_HEAD`).catch(() => false) // A61
+  conflictHead = await headIn($, root) // A61 / A115
   verdicts = await readVerdicts($, opts) // A65
 }
 
@@ -1009,7 +1010,7 @@ async function ensureTools($: Engine): Promise<void> {
     description:
       'a5r A5R Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
       'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and every session is told. At the sync time the holder\'s a5r starts the sync worker, which runs the merge and ends with done or abort. ' +
-      '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; rules; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "rules" (rules: the conflict rules the worker applies, until it starts), "done" (note, with the post-merge test result line), "abort" (note: why), "takeover" (a sync, or a merge left in .git/MERGE_HEAD, whose holder is gone), "status". Only the holder changes a planned sync. A worker that aborts hands the sync back to its holder, still frozen: finish it by hand and call done, or abort.',
+      '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; rules; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "rules" (rules: the conflict rules the worker applies, until it starts), "done" (note, with the post-merge test result line), "abort" (note: why), "takeover" (a sync, or a merge, revert or cherry-pick left half done in the shared checkout, whose holder is gone), "status". Only the holder changes a planned sync. A worker that aborts hands the sync back to its holder, still frozen: finish it by hand and call done, or abort.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1433,7 +1434,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   $.ui.invalidate('ui.render')
 }
 
-const grantInput = (now: number): GrantInput => ({ me8, lock, files: me ? [me, ...peers] : peers, lanes, now, sync: syncFile, probe, gates, mergeHead })
+const grantInput = (now: number): GrantInput => ({ me8, lock, files: me ? [me, ...peers] : peers, lanes, now, sync: syncFile, probe, gates, conflictHead: conflictHead?.head })
 const holdsLock = (): boolean => lock.id8 === me8 && me8 !== '' && (lock.kind === 'held' || lock.kind === 'handed')
 
 /** The lock written by read-compare-write: only if it still reads as when this session decided, then read back
@@ -1937,12 +1938,6 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
 // ---------- Sync main holder: Saved/A5R/sync.json, written by the holder alone ----------
 const syncPath = (): string => `${hfDir()}/sync.json`
 const isLive = (id8: string, now: number): boolean => livenessOf(id8, me ? [me, ...peers] : peers, lanes, now) !== 'gone'
-/** A87: the merge guard's step an agent can take itself: the live holder ends it; with the holder gone (or no sync on
- * file) a live session takes the sync over and aborts the merge. Never "or Hai". */
-const mergeGuardAlt = (opts: Opts, s: SyncFile | null, now: number): string =>
-  s && s.holder.id8 && isLive(s.holder.id8, now)
-    ? `leave the merge state alone (no commit, reset, abort or stash of yours): its holder ${s.holder.lane} (session ${s.holder.id8}) finishes it or runs git merge --abort; work without git or in your own worktree meanwhile`
-    : `its holder is gone${s ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} merge --abort; until then no commit, reset or stash there`
 /** The sync's phase for every reader alike, the freeze lease included (D8: hard end, holder gone). */
 const phaseOf = (s: SyncFile | null, now: number): Phase => syncPhase(s, now, isSyncHolderGone(s, me ? [me, ...peers] : peers, lanes, now))
 /** D8: how long a freeze may last past T, from the plugin options. */
@@ -2228,26 +2223,31 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     if (!(await endSync($, opts, s, action === 'done' ? 'done' : 'aborted', a.note ?? '', now))) return blocked(gate, 'sync.json changed', 'read it with status')
     return `${action === 'done' ? 'done' : 'aborted'} (after its hard end ${clockOf(s.hardEnd)}): git and the Editor are open again for every session; each one is told at its next tick`
   }
-  // 0.17.1: a merge left in .git/MERGE_HEAD with no sync open is taken over by a live session when the last sync's holder
-  // is gone (or there is no sync file): it becomes the holder of that ended sync, which the merge guard lets end the merge.
-  if (action === 'takeover' && (!s || !open) && (await $.fs.exists(`${s2Root()}/.git/MERGE_HEAD`))) {
-    const root = s2Root()
-    const end = `git -C ${root} merge --abort (or finish it: resolve, git add -- <paths>, git commit --no-edit)`
-    if (s && isMine) return `this session already holds the last sync (${when(s)}): end the merge with ${end}`
-    if (s && !isGone) return notHolder(s)
-    const holder = { session: me.session, id8: me8, lane: me.lane }
-    const base = s ?? endedSync(newSync(now, holder, `${me.lane} (session ${me8})`, now), 'aborted', 'a merge left in .git/MERGE_HEAD with no sync', now)
-    const taken = { ...base, holder, note: `${base.note ? `${base.note}; ` : ''}merge left behind taken over by ${me.lane} at ${clockOf(now)}`, updatedAt: now }
-    if (!(await writeSync($, opts, taken, s))) return blocked(gate, 'sync.json changed while taking it over', 'read it with status, then try again')
-    return `taken over the merge left in the shared checkout (.git/MERGE_HEAD): run ${end}; every other session makes no git write there until it is gone; then plan a new sync`
+  if (action === 'takeover') {
+    // 0.17.1 (A115): a takeover takes what gone sessions left, each on its own: an open sync whose holder is gone, then a
+    // merge, revert or cherry-pick half done in the shared checkout whose owner (opguard.ts ownerOf, read after the sync
+    // step) is gone or unknown. Refused only when it took nothing, holds nothing and a live session holds what is left.
+    const syncTake = !s || !open ? 'none' : isMine ? 'mine' : isGone ? 'taken' : 'live'
+    const cur = s && syncTake === 'taken' ? { ...s, holder: { session: me.session, id8: me8, lane: me.lane }, updatedAt: now } : s
+    if (cur && syncTake === 'taken' && !(await writeSync($, opts, cur, s))) return blocked(gate, 'sync.json changed while taking it over', 'read it with status')
+    const left = await headState($, cur, now)
+    const took = left ? await takeLeft($, left, now) : null
+    const what = left ? leftText(left.h) : ''
+    const end = left ? endOf(left.h.head, s2Root()) : ''
+    if (syncTake !== 'taken' && syncTake !== 'mine' && took?.kind !== 'taken' && took?.kind !== 'mine') {
+      if (took?.kind === 'failed') return blocked(gate, `${HEAD_OWNER_FILE} could not be written`, 'try again at the next minute')
+      if (took?.kind === 'live') return blocked(gate, `${what} is ${took.owner.lane}'s (session ${took.owner.id8}), which is live; only it ends it`, `ask that session to end it; make no git write there until it is gone`)
+      return s && syncTake === 'live' ? notHolder(s) : blocked(gate, 'no sync is planned', 'plan one with /a5r sync HH:MM or the panel')
+    }
+    return [
+      cur && syncTake === 'taken' ? `taken over: ${planned(cur)}` : s && syncTake === 'mine' ? `this session already holds ${when(s)}` : '',
+      took?.kind === 'taken' ? `taken over ${what}: run ${end}; every other session makes no git write there until it is gone${open ? '' : '; then plan a new sync'}` : '',
+      took?.kind === 'mine' ? `this session already ends ${what}: run ${end}` : '',
+      took?.kind === 'live' ? `${what} stays with ${took.owner.lane} (session ${took.owner.id8}), which is live` : '',
+      took?.kind === 'failed' ? `${HEAD_OWNER_FILE} could not be written for ${what}: take it over again at the next minute` : '',
+    ].filter(Boolean).join('; and ')
   }
   if (!s || !open) return blocked(gate, 'no sync is planned', 'plan one with /a5r sync HH:MM or the panel')
-  if (action === 'takeover') {
-    if (isMine) return `this session already holds ${when(s)}`
-    if (!isGone) return notHolder(s)
-    const taken = { ...s, holder: { session: me.session, id8: me8, lane: me.lane }, updatedAt: now }
-    return (await writeSync($, opts, taken, s)) ? `taken over: ${planned(taken)}` : blocked(gate, 'sync.json changed while taking it over', 'read it with status')
-  }
   if (!isMine && !isGone) return notHolder(s)
   const holder = { session: me.session, id8: me8, lane: me.lane }
   const asMine = (x: SyncFile): SyncFile => (isMine ? x : { ...x, holder })
@@ -2881,10 +2881,46 @@ async function sharedGitWrite($: Engine, opts: Opts, a5r: A5R, writes: { verb: s
   return null
 }
 
+// ---------- A14 / A115, the merge guard: a merge, revert or cherry-pick half done in the shared checkout ----------
+/** The first of CONFLICT_HEADS present in a checkout. */
+async function headIn($: Engine, root: string): Promise<HeadFile | null> {
+  for (const head of CONFLICT_HEADS) {
+    const st = await $.fs.stat(`${root}/.git/${head}`).catch(() => null)
+    if (st) return { head, mtimeMs: Math.round(st.mtimeMs) }
+  }
+  return null
+}
+const headOwnerPath = (): string => `${hfDir()}/${HEAD_OWNER_FILE}`
+/** The head file in the shared checkout and its owner (opguard.ts ownerOf), read fresh. */
+async function headState($: Engine, s: SyncFile | null, now: number): Promise<{ h: HeadFile; owner: Owner | null } | null> {
+  const h = await headIn($, s2Root())
+  return h && { h, owner: ownerOf(h, s, phaseOf(s, now), parseHeadOwner(await readJson($, headOwnerPath()))) }
+}
+/** This session becomes the owner of the head file; whether the record now reads so. */
+async function writeHeadOwner($: Engine, h: HeadFile, how: HeadOwner['how'], now: number): Promise<boolean> {
+  if (!me) return false
+  const text = JSON.stringify(headOwner(h, me, now, how))
+  await $.fs.write(headOwnerPath(), text).catch(() => undefined)
+  return (await readJson($, headOwnerPath())) === text
+}
+/** 0.17.1 (A115): this session takes over a head file whose owner is gone or unknown ('mine': it owns it already). */
+async function takeLeft($: Engine, left: { h: HeadFile; owner: Owner | null }, now: number): Promise<{ kind: 'mine' | 'taken' | 'failed' } | { kind: 'live'; owner: Owner }> {
+  if (left.owner?.id8 === me8) return { kind: 'mine' }
+  if (left.owner && isLive(left.owner.id8, now)) return { kind: 'live', owner: left.owner }
+  return { kind: (await writeHeadOwner($, left.h, 'took over', now)) ? 'taken' : 'failed' }
+}
+const leftText = (h: HeadFile): string => `the ${opOf(h.head)} left in the shared checkout (.git/${h.head})`
+/** A87: the merge guard's step an agent can take itself: the live owner ends it; with the owner gone (or none known) a
+ * live session takes it over and aborts it. Never "or Hai". */
+const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
+  owner && isLive(owner.id8, now)
+    ? `leave the ${opOf(h.head)} state alone (no commit, reset, abort or stash of yours): its holder ${owner.lane} (session ${owner.id8}) finishes it or runs git ${opOf(h.head)} --abort; work without git or in your own worktree meanwhile`
+    : `its holder is gone${owner ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} ${opOf(h.head)} --abort; until then no commit, reset or stash there`
+
 /** A5R's freeze, a lease (D8): from the sync time until done, abort or expiry, a session that does not hold the sync
  * makes no git write in the shared checkout and does not use the Editor (sync.json read fresh for each such call).
- * A14, the merge guard: while .git/MERGE_HEAD exists in the shared checkout, git writes there are refused to every
- * session but the sync's holder, whatever sync.json says. */
+ * A14, the merge guard (A115: a revert or cherry-pick alike): while one of CONFLICT_HEADS exists in the shared checkout,
+ * git writes there are refused to every session but its owner (opguard.ts ownerOf), whatever sync.json says. */
 async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, input: Input): Promise<string | null> {
   const command = SHELL_TOOLS.has(tool) ? str(input.command) : ''
   const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command))
@@ -2892,11 +2928,13 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   if (!isEditorUse && writes.length === 0) return null
   const s = parseSyncFile(await readJson($, syncPath()))
   const now = await $.clock.now()
-  const isHolder = s?.holder.id8 === (await $.session.id()).slice(0, 8).toLowerCase()
+  const my8 = (await $.session.id()).slice(0, 8).toLowerCase()
+  const isHolder = s?.holder.id8 === my8
   const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5r, writes) : null
-  if (shared && !isHolder && (await $.fs.exists(`${s2Root()}/.git/MERGE_HEAD`))) {
-    const state = s ? `${s.holder.lane} holds the sync at ${clockOf(s.at)} (${phaseOf(s, now)})` : 'no sync is open (a merge left behind)'
-    return blocked('Merge guard', `a merge is in progress in the shared checkout (.git/MERGE_HEAD; ${state}): no git ${shared.verb} there until it is finished or aborted`, mergeGuardAlt(opts, s, now))
+  const left = shared ? await headState($, s, now) : null
+  if (shared && left && left.owner?.id8 !== my8) {
+    const op = opOf(left.h.head)
+    return blocked('Merge guard', `a ${op} is in progress in the shared checkout (.git/${left.h.head}; ${left.owner?.why ?? `no sync is open (a ${op} left behind)`}): no git ${shared.verb} there until it is finished or aborted`, mergeGuardAlt(left.h, left.owner, now))
   }
   if (!s || phaseOf(s, now) !== 'frozen' || isHolder) return null
   const why = `${s.holder.lane} merges origin/main since ${clockOf(s.at)}`
@@ -2905,20 +2943,31 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   return null
 }
 
-/** A14: a merge left in the shared checkout with no sync open (.git/MERGE_HEAD): one notice per MERGE_HEAD to every
- * session (A83: no mark on any title); the holder of the last sync is woken for it, the others hear it at their next
- * turn. */
+/** A14 (A115: a revert or cherry-pick alike): one of CONFLICT_HEADS left in the shared checkout with no sync open: one
+ * notice per head file to every session (A83: no mark on any title); its owner (opguard.ts ownerOf) is woken for it, the
+ * others hear it at their next turn. */
 async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const head = await $.fs.stat(`${s2Root()}/.git/MERGE_HEAD`).catch(() => null)
-  if (!head || isOpenPhase(phaseOf(syncFile, now))) return
+  const left = isOpenPhase(phaseOf(syncFile, now)) ? null : await headState($, syncFile, now)
+  if (!left) return
+  const { h, owner } = left
   const all = me ? [me, ...peers] : peers
-  // 0.17.1: the last sync's holder ends it while it lives; when it is gone (or there is none), the first live session in
-  // the queue (else the first live one by id) takes it over, so a left merge never waits on a gone session.
-  const holderAlive = syncFile !== null && livenessOf(syncFile.holder.id8, all, lanes, now) !== 'gone' && syncFile.holder.id8 !== ''
-  const takerId = holderAlive ? null : takerOf(now)
+  // 0.17.1: the owner ends it while it lives; when it is gone (or there is none), the first live session in the queue
+  // (else the first live one by id) takes it over, so a left operation never waits on a gone session.
+  const isOwnerAlive = owner !== null && isLive(owner.id8, now)
+  const takerId = isOwnerAlive ? null : takerOf(now)
   const taker = takerId === null ? null : { lane: all.find(f => f.id8 === takerId)?.lane ?? takerId, isMe: takerId === me8 }
-  const id = `merge-head:${Math.round(head.mtimeMs)}:${takerId ?? syncFile?.holder.id8 ?? ''}`
-  push({ id, text: NOTICES.mergeLeft(head.mtimeMs, syncFile, taker, s2Root()), isActionable: holderAlive ? syncFile?.holder.id8 === me8 : taker?.isMe === true })
+  const id = `${h.head.toLowerCase().replace(/_/g, '-')}:${h.mtimeMs}:${takerId ?? owner?.id8 ?? ''}` // merge-head:… as before 0.23.1 (no notice again on upgrade)
+  push({ id, text: NOTICES.mergeLeft(h, owner, syncFile, taker, s2Root()), isActionable: isOwnerAlive ? owner.id8 === me8 : taker?.isMe === true })
+}
+
+/** A115: a merge, pull, revert or cherry-pick this session ran in the shared checkout that left a head file there makes
+ * it that operation's owner: the record ties it to that very file (the guard let the command through). */
+async function noteHeadOwner($: Engine, opts: Opts, a5r: A5R, command: string): Promise<void> {
+  const starts = gitWrites(command).filter(w => STARTS_OP.has(w.verb))
+  if (starts.length === 0 || !(await sharedGitWrite($, opts, a5r, starts))) return
+  const h = await headIn($, s2Root())
+  const rec = h ? parseHeadOwner(await readJson($, headOwnerPath())) : null
+  if (h && !(isOwnerOf(rec, h) && rec.id8 === me8)) await writeHeadOwner($, h, 'started', await $.clock.now())
 }
 
 /** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */
@@ -3181,7 +3230,8 @@ async function refreshSync($: Engine, opts: Opts): Promise<void> {
     const now = await $.clock.now()
     const fetched = await $.fs.stat(`${repo}/.git/FETCH_HEAD`).catch(() => null)
     const flags: string[] = []
-    if (await $.fs.exists(`${repo}/.git/MERGE_HEAD`)) flags.push('a merge is in progress (MERGE_HEAD)')
+    const head = await headIn($, repo)
+    if (head) flags.push(`a ${opOf(head.head)} is in progress (${head.head})`)
     const lock = await $.fs.stat(`${repo}/.git/index.lock`).catch(() => null)
     if (lock) flags.push(`.git/index.lock for ${Math.round((now - lock.mtimeMs) / 60_000)} min`)
     sync = {
@@ -3205,7 +3255,7 @@ async function refreshSync($: Engine, opts: Opts): Promise<void> {
 const placeShort = (d: GrantDecision | null): string => {
   if (!d || d.kind === 'none' || d.kind === 'mine') return ''
   if (d.kind !== 'wait') return 'you: being granted'
-  const why = d.code === 'ram' ? ' · waiting on RAM' : d.code === 'sync' ? ' · after the sync' : d.code === 'gone-editor' ? ' · holder gone, Editor open' : d.code === 'missing' ? ' · lock missing' : d.code === 'merge' ? ' · merge in progress' : ''
+  const why = d.code === 'ram' ? ' · waiting on RAM' : d.code === 'sync' ? ' · after the sync' : d.code === 'gone-editor' ? ' · holder gone, Editor open' : d.code === 'missing' ? ' · lock missing' : d.code === 'merge' ? ` · ${opOf(conflictHead?.head ?? 'MERGE_HEAD')} in progress` : ''
   return `you: ${d.place > 1 ? `${ordinal(d.place)} in the queue` : 'next'}${why}`
 }
 
@@ -3779,6 +3829,7 @@ export const register: Register = (on, options) => {
       await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5r/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
+    if (isOn && isS2 && SHELL_TOOLS.has(tool)) await noteHeadOwner($, opts, a5r, what).catch(() => undefined) // A115
     // A19: a file changed (an edit, a git write): the card scores again at its next draw.
     if (ran.isError !== true && (EDIT_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && gitWrites(str(input.command)).length > 0))) acceptDirty = true
     if (ran.isError !== true && EDIT_TOOLS.has(tool) && parts.some(([path]) => /docs\/intent\/[^/]+\/(progress|prompt)\.md$/i.test(path.replace(/\\/g, '/')))) prDirty = true

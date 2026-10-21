@@ -9,6 +9,7 @@ import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from 
 import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
 import { buildStep, runLabel, SCRIPT_SUFFIX } from './buildscript.ts'
+import { endOf, opOf, type ConflictHead, type HeadFile } from './gitshared.ts'
 import { engineLabel, type EngineFind } from './machine.ts'
 import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type EntryTell, type StageTell, type SyncStage } from './syncstage.ts'
 
@@ -635,7 +636,7 @@ export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[
 
 /** Why a request waits; `ram`: its own launch gate is not met by free RAM (the head's, or, A112, a later request's behind a
  * head that waits for memory: its place says which). */
-export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe' | 'merge'
+export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe' | 'merge' // merge: A115, a revert or cherry-pick too
 /** A grant; A113: `pass` names the head of the queue this slot goes before (that head waits only for memory). */
 export type Grant = { kind: 'grant'; end: number; reuse: number | null; pass?: string }
 export type Decision =
@@ -654,8 +655,8 @@ export type GrantInput = {
   sync: SyncFile | null
   probe: Probe | null
   gates: Gates
-  /** A61: `.git/MERGE_HEAD` exists in the shared checkout (a merge in progress or left behind). */
-  mergeHead?: boolean
+  /** A61 / A115: the head file of a merge, revert or cherry-pick in progress (or left behind) in the shared checkout. */
+  conflictHead?: ConflictHead
   /** A88 (c): the RAM probe failed again on a fresh retry (no reading at all). */
   probeFailed?: boolean
 }
@@ -715,8 +716,8 @@ const slotOf = (x: GrantInput, f: SessionFile, place: number, capMin = Infinity)
   const want = f.want
   if (!want) return { kind: 'none' }
   const wait = (code: WaitCode, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place })
-  // A61: no grant over a merge in progress (or left behind), whatever the sync's state says.
-  if (x.mergeHead) return wait('merge', 'a merge is in progress in the shared checkout (.git/MERGE_HEAD)', 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
+  // A61 / A115: no grant over a merge, revert or cherry-pick in progress (or left behind), whatever the sync's state says.
+  if (x.conflictHead) return wait('merge', `a ${opOf(x.conflictHead)} is in progress in the shared checkout (.git/${x.conflictHead})`, 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
   const phase = syncPhase(sync, now, isSyncHolderGone(sync, x.files, x.lanes, now))
   const minutes = Math.min(want.minutes, capMin)
   const end = sync && isHolderInSync(sync, f.id8, phase) ? sync.hardEnd : now + minutes * 60_000 // A94: ends with the sync
@@ -1033,7 +1034,8 @@ export const gitWrites = (command: string): { verb: string; dir: string }[] => {
 
 /** A15: whether a command is only the sync's own git work, which the holder and its worker may run during their
  * frozen phase without A5R's asks: `git merge [--no-edit|--no-ff|--no-commit] origin/main`, `git merge --abort`,
- * `git checkout --ours|--theirs -- <paths>`, `git revert -m 1 <sha> [--no-edit]`, `git add -- <paths>`,
+ * `git checkout --ours|--theirs -- <paths>`, `git revert -m 1 <sha> [--no-edit]`, `git revert|cherry-pick --abort|--continue
+ * [--no-edit]` (A115), `git add -- <paths>`,
  * `git commit [-m <msg>|--no-edit|-F <file>|-q]`, `git update-index -q --refresh` (A98: stat-only changes are no dirt;
  * only `-q`, `--refresh`, `--really-refresh`, no paths), beside git reads; every segment must be git (env assignments such
  * as GIT_TERMINAL_PROMPT=0 allowed), no nested shell, no `.` or `-A` path, no `--amend` or `-a`. */
@@ -1062,9 +1064,10 @@ export const isSyncCommandOnly = (command: string): boolean => {
       return targets.length === 1 && targets[0] === 'origin/main' && opts.every(o => ['--no-edit', '--no-ff', '--no-commit'].includes(o))
     }
     if (sub === 'checkout') return (rest[0] === '--ours' || rest[0] === '--theirs') && pathsAfterDashes(rest.slice(1))
-    if (sub === 'revert') {
+    if (sub === 'revert' || sub === 'cherry-pick') {
       const r = rest.filter(x => x !== '--no-edit')
-      return r.length === 3 && r[0] === '-m' && r[1] === '1' && /^([0-9a-f]{7,40}|HEAD)$/i.test(r[2] ?? '')
+      if (r.length === 1 && (r[0] === '--abort' || r[0] === '--continue')) return true
+      return sub === 'revert' && r.length === 3 && r[0] === '-m' && r[1] === '1' && /^([0-9a-f]{7,40}|HEAD)$/i.test(r[2] ?? '')
     }
     if (sub === 'add') return pathsAfterDashes(rest)
     if (sub === 'update-index') return rest.some(r => r === '--refresh' || r === '--really-refresh') && rest.every(r => ['-q', '--refresh', '--really-refresh'].includes(r))
@@ -1211,17 +1214,18 @@ export const NOTICES = {
   hardEndSoon: (s: SyncFile): string =>
     noticeText('Sync main', `the freeze of the sync at ${hhmm(s.at)} ends at ${hhmm(s.hardEnd)} (its hard end) and the sync is not done`, 'finish it with done or abort before then; at the hard end it expires, git and the Editor open again for every session, and each session is told'),
   expired: (s: SyncFile): string =>
-    noticeText('Sync main', `the sync at ${hhmm(s.at)} expired at ${hhmm(s.endedAt ?? s.updatedAt)} without done or abort (${s.note || 'its lease ran out'})`, 'git and the Editor are open again (a merge left in .git/MERGE_HEAD still blocks git writes: the Merge guard notice names the session that ends it); your work stays as it is; the next sync is planned on the A5R panel'),
+    noticeText('Sync main', `the sync at ${hhmm(s.at)} expired at ${hhmm(s.endedAt ?? s.updatedAt)} without done or abort (${s.note || 'its lease ran out'})`, 'git and the Editor are open again (a merge, revert or cherry-pick left half done in the checkout still blocks git writes: the Merge guard notice names the session that ends it); your work stays as it is; the next sync is planned on the A5R panel'),
   // A83: what A5R raised as a decision mark before 0.17.0 is a plain notice now.
   prAfter: (n: number, slug: string, verdict: string, isMerged: boolean): string => noticeText('Acceptance', `PR #${n} (intent ${slug}) was ${isMerged ? 'merged' : 'opened'} without A5R acceptance and ${verdict}`, isMerged ? 'fix it in a follow-up PR (the A5R card lists what fails), or record in progress.md why it stays' : 'fix it on its branch before it merges (the A5R card lists what fails), or record in progress.md why it merges as it is'),
-  // 0.17.1: with the last sync's holder alive it ends the merge; else the first live session (queue order) takes it over.
-  mergeLeft: (since: number, last: SyncFile | null, taker: { lane: string; isMe: boolean } | null, checkout = 'the shared checkout'): string =>
-    noticeText('Merge guard', `a merge is in progress in the shared S2 checkout (.git/MERGE_HEAD since ${hhmm(since)}) and no sync is open${last ? ` (the last sync, ${hhmm(last.at)} by ${last.holder.lane}, is ${last.state})` : ''}`,
+  // 0.17.1: with its owner alive (A115: opguard.ts ownerOf; before, the last sync's holder) it ends the merge, revert or
+  // cherry-pick; else the first live session (queue order) takes it over.
+  mergeLeft: ({ head, mtimeMs }: HeadFile, owner: { lane: string } | null, last: SyncFile | null, taker: { lane: string; isMe: boolean } | null, checkout: string): string =>
+    noticeText('Merge guard', `a ${opOf(head)} is in progress in the shared S2 checkout (.git/${head} since ${hhmm(mtimeMs)}) and no sync is open${last ? ` (the last sync, ${hhmm(last.at)} by ${last.holder.lane}, is ${last.state})` : ''}`,
       taker === null
-        ? `${last ? last.holder.lane : 'the session that started it'} ends it (git merge --abort, or finish it); every other session makes no git write there until .git/MERGE_HEAD is gone`
+        ? `${owner ? owner.lane : 'the session that started it'} ends it (git ${opOf(head)} --abort, or finish it); every other session makes no git write there until .git/${head} is gone`
         : taker.isMe
-          ? `${last ? 'its holder is gone, so ' : ''}this session takes it over: /a5r sync takeover (or the sync tool, action takeover), then git -C ${checkout} merge --abort (or finish it: resolve, git add -- <paths>, git commit --no-edit); then plan a new sync`
-          : `${taker.lane} is asked to take it over and end it; make no git write there until .git/MERGE_HEAD is gone`),
+          ? `${owner ? 'its holder is gone, so ' : ''}this session takes it over: /a5r sync takeover (or the sync tool, action takeover), then ${endOf(head, checkout)}; then plan a new sync`
+          : `${taker.lane} is asked to take it over and end it; make no git write there until .git/${head} is gone`),
   syncHolderNamed: (s: SyncFile): string => noticeText('Sync main', `you were named holder of the sync at ${hhmm(s.at)} (planned by ${s.plannedBy})`, `at ${hhmm(s.at - CUTOFF_MS)} the cutoff notice reaches every session; at ${hhmm(s.at)} this session's a5r starts the sync worker, which ends the sync with done or abort (at the latest ${hhmm(s.hardEnd)}); keep this session open until then`),
 } as const
 
@@ -1354,7 +1358,7 @@ export const SYNC_WORKER_PROMPT = [
   '1. Git never prompts. Run every git command with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never in its environment (Bash: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> …`; PowerShell: set $env:GIT_TERMINAL_PROMPT=\'0\' and $env:GCM_INTERACTIVE=\'never\' first) and a timeout on the tool call: fetch and merge 10 min at most, everything else 2 min. A credential, network or LFS failure is an abort, never a retry loop. Never set GIT_LFS_SKIP_SMUDGE. Run every git command in the foreground, to its end, in one tool call: never with `&`, never as a background tool run, never by Start-Process without -Wait, never from a script you leave running; the build of rule 6 is the only command you start to outlive your turn.',
   '2. Always `git -C <checkout>`. Never rebase, reset --hard, stash, clean, push or switch branches. Your git writes are exactly: `git update-index -q --refresh`, `git merge --no-edit origin/main`, `git merge --abort`, `git checkout --ours|--theirs -- <paths>`, `git add -- <paths>`, `git commit --no-edit`, `git revert -m 1 <merge sha> --no-edit`. If any command is refused, abort the sync with the refusal as the reason.',
   '3. The Editor. Never write Saved/EDITOR_OWNER.txt. Read it before any merge: it must name the holder session given in your task (the sync\'s lock). If it names another lane: never close, kill or drive that Editor; never sleep or poll in a loop (a foreground sleep is refused here); read it once more after the fetch of rule 4 (the sync is first in the queue and is granted the moment it comes free), and if it still names another lane, end with SYNC ABORT naming that lane. If an Editor is open while the lock is the sync\'s (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone.',
-  '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. Before you judge any path dirty or untracked in the way, run `git -C <checkout> update-index -q --refresh` and read `git status` again: a path git no longer lists after it is clean (a stat-only change), never a reason to abort. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
+  '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REVERT_HEAD, .git/CHERRY_PICK_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. Before you judge any path dirty or untracked in the way, run `git -C <checkout> update-index -q --refresh` and read `git status` again: a path git no longer lists after it is clean (a stat-only change), never a reason to abort. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
   '5. Merge: `git merge --no-edit origin/main` (never rebase). The dry-run list in your task may be older than your merge (main can move after it): the merge\'s own unmerged paths (`git diff --name-only --diff-filter=U`) decide, listed or not. For each conflicted path: first the holder\'s conflict rules in your task (the first rule whose pattern matches the path wins): a path a rule matches is resolved with that rule\'s side whatever its kind, .uasset and .umap included: `git checkout --<side> -- <path>` then `git add -- <path>`, and your report names each such path with its rule. A path no rule matches: rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
   '6. Build, only when the sync builds: the holder\'s a5r wrote a build script (it runs Build.bat with the right arguments and writes the build log your task names, fresh, before anything else). Start the build only with the one PowerShell command your task gives, exactly as given (the script carries the engine root your task names: use no engine root of your own), in a tool call of its own with nothing after it (a tool call stopped while it still runs kills what it started); never your own cmd, Build.bat or redirection line (cmd /c strips the quotes of such a line and exits at once, with no log and no build). Then check in later tool calls, within 60 seconds: the build log\'s existence decides whether the build started. A log whose last line says `waiting for existing script to terminate` means it started and waits behind Build.bat\'s lock for another build on this engine: started too. The log exists → end at once with the SYNC MERGED line naming that log: never wait for the build (a build outlives your tool calls). No log after 60 seconds → start it no other way: end with `SYNC MERGED <merge sha> build-log=none` and say in your report that the build did not start, with what you saw (the processes). The holder\'s a5r watches that log for the build\'s own `Result:` line (Build.bat exits 0 on failure), keeps every other session frozen meanwhile, and has the holder run the post-merge tests or revert, or start the script itself.',
   '7. End: never end your turn while a command you started (other than the build of rule 6) still runs, and never end with "waiting" or "until … finishes": wait for each such command in the foreground first. Your final answer is a short report whose last line is exactly one of these lines (nothing after it, no other line starting with SYNC):',

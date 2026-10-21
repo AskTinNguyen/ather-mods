@@ -100,7 +100,7 @@ test('A113: unit: a sync block stays a block: in another holder\'s freeze nobody
   expect(asWait(decide(input(HEAD.id8, [HEAD, BUILD, holder], 27, { sync: planned })))?.code).toBe('ram')
   expect(grants([HEAD, BUILD, holder], 27, { sync: planned })).toEqual([])
   expect(asWait(decide(input(BUILD.id8, [HEAD, BUILD, holder], 27, { sync: planned })))?.code).toBe('sync')
-  expect(grants([HEAD, BUILD, holder], 27, { mergeHead: true })).toEqual([]) // A61: a merge in progress too
+  expect(grants([HEAD, BUILD, holder], 27, { conflictHead: 'MERGE_HEAD' })).toEqual([]) // A61: a merge in progress too
 })
 
 test('A113: unit: the pass slot stays within 30 min in all while its head is queued; the head never asks it to yield', () => {
