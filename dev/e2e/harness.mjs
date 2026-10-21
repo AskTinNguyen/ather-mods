@@ -1,6 +1,6 @@
 // What the end-to-end runs share (repos.mjs, board.mjs): a sandbox folder with git's own settings kept out, the
 // run's arguments, the checks and their report, what was drawn written as text, and the drawn tree's lookups.
-// run.mjs keeps its own: it runs only against an S2 checkout.
+// run.mjs keeps its own sandbox (it runs only against an S2 checkout) and shares only tempDir.
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -9,11 +9,32 @@ import { check } from './screen.mjs'
 // Folders with forward slashes, as the hooks name a checkout: on Windows path.join and the temporary folder give backslashes.
 export const join = (...parts) => path.join(...parts).split(path.sep).join('/')
 
+// A new folder under the temporary folder, removed when the run ends however it ends (a throw, a skipped clean-up,
+// Ctrl+C): an S2 sandbox holds a copy of docs/intent, over a GB, and kept ones filled the disk.
+/** @type {string[]} */
+const temps = []
+/** @param {string} prefix */
+export const tempDir = prefix => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  temps.push(dir)
+  return dir
+}
+process.on('exit', () => {
+  for (const dir of temps) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+    } catch (error) {
+      console.log(`left behind ${dir}: ${/** @type {NodeJS.ErrnoException} */ (error).code ?? error}`)
+    }
+  }
+})
+for (const signal of /** @type {const} */ (['SIGINT', 'SIGTERM', 'SIGHUP'])) process.on(signal, () => process.exit(128 + os.constants.signals[signal]))
+
 // A folder of the run's own, by its real path (git names a checkout by it; macOS's temporary folder is behind a link).
 // The person's own git settings (signing, hooks, default branch) stay out of its repositories and of the hooks' git calls.
 /** @param {string} prefix */
 export const sandbox = prefix => {
-  const base = join(fs.realpathSync(fs.mkdtempSync(join(os.tmpdir(), prefix))))
+  const base = join(fs.realpathSync(tempDir(prefix)))
   fs.writeFileSync(join(base, 'gitconfig'), '')
   process.env.GIT_CONFIG_GLOBAL = join(base, 'gitconfig')
   process.env.GIT_CONFIG_NOSYSTEM = '1'
