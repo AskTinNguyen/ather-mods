@@ -83,8 +83,9 @@ export type Want = { minutes: number; pie: boolean; build: boolean; what: string
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }
-/** The lease a session holds, as it took it; A100: with what it notes for its record while it runs (lease.ts). */
-export type Holding = { since: number; end: number; extended: number; notes?: LeaseNotes }
+/** The lease a session holds, as it took it; A100: with what it notes for its record while it runs (lease.ts); A113: the
+ * id8 of the head it went before (a pass slot). */
+export type Holding = { since: number; end: number; extended: number; notes?: LeaseNotes; pass?: string }
 /** A request to a holder to yield (or a standard `UE request:` line sent to a holder without a5r). */
 export type YieldAsk = { holder: string; at: number; via: 'file' | 'send'; minutes: number; lane: string }
 export type SessionFile = {
@@ -467,8 +468,9 @@ export const ORCHESTRATE_MAX_BYTES = 1_000_000
 export type OrchestrateEvent = {
   at: number
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
-   * running), holder-gone; or A65-judge (a verdict, advisory). A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge'
+   * running), holder-gone; or A65-judge (a verdict, advisory); A112: wait (a session's own wait decision, logged only).
+   * A64: no rule reads a session's title or a list file. */
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait'
   lane: string
   id8: string
   procs: readonly string[]
@@ -511,7 +513,9 @@ export const gatesOf = (stored: unknown, pieOpt: unknown, nopieOpt: unknown): Ga
 /** `cmd`: a git process's command line (A108: whose checkout it works in), or a cmd.exe's that runs a sync's build script
  * (A109, review: only those cmd.exe are listed). */
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean; cmd?: string }
-export type Probe = { freeGb: number; diskGb: number | null; procs: Proc[] }
+/** A112 / A114: what holds the machine's memory: every process grouped by name (claude and Chrome included), heaviest first. */
+export type Heavy = { name: string; n: number; gb: number }
+export type Probe = { freeGb: number; diskGb: number | null; procs: Proc[]; top?: Heavy[] }
 
 const isName = (p: Proc, name: string) => p.name.toLowerCase().replace(/\.exe$/, '') === name.toLowerCase()
 /** Rev 30 re-review: every `UnrealEditor*.exe` counts (UnrealEditor-Win64-DebugGame and the like), headless -Cmd included. */
@@ -523,7 +527,7 @@ export const editorPid = (probe: Probe | null): number | null => probe?.procs.fi
 /** The machine probe's JSON (`ramProbe`), or null when it did not answer. */
 export const parseProbe = (stdout: string): Probe | null => {
   try {
-    const v = JSON.parse(stdout.trim()) as { freeGb?: unknown; diskGb?: unknown; procs?: unknown }
+    const v = JSON.parse(stdout.trim()) as { freeGb?: unknown; diskGb?: unknown; procs?: unknown; top?: unknown }
     const free = Number(v.freeGb)
     if (!Number.isFinite(free) || free <= 0) return null
     const disk = Number(v.diskGb)
@@ -532,7 +536,11 @@ export const parseProbe = (stdout: string): Probe | null => {
       .map(p => p as Record<string, unknown>)
       .map(p => ({ name: String(p.name ?? '').replace(/\.exe$/i, ''), pid: Number(p.pid), gb: Number(p.gb ?? 0), parentAlive: p.parentAlive !== false, ...(typeof p.cmd === 'string' && p.cmd ? { cmd: p.cmd.slice(0, 500) } : {}) }))
       .filter(p => p.name && Number.isFinite(p.pid))
-    return { freeGb: free, diskGb: Number.isFinite(disk) && disk >= 0 ? disk : null, procs }
+    const top = (Array.isArray(v.top) ? v.top : v.top && typeof v.top === 'object' ? [v.top] : [])
+      .map(t => t as Record<string, unknown>)
+      .map(t => ({ name: String(t.name ?? ''), n: Number(t.n ?? 1), gb: Number(t.gb ?? 0) }))
+      .filter(t => t.name && Number.isFinite(t.gb))
+    return { freeGb: free, diskGb: Number.isFinite(disk) && disk >= 0 ? disk : null, procs, ...(top.length ? { top } : {}) }
   } catch {
     return null
   }
@@ -565,10 +573,12 @@ export const ramProbe = (drive: string): string[] => [
     // A111: the checkout's own drive, never a default one (no letter: no disk reading, -1)
     `$d = ${/^[A-Za-z]/.test(drive) ? `Get-PSDrive -Name '${drive.slice(0, 1)}' -ErrorAction SilentlyContinue` : '$null'}`,
     '$disk = if ($d) { [math]::Round($d.Free / 1GB, 1) } else { -1 }',
-    '$alive = @{}; Get-Process | ForEach-Object { $alive[[int]$_.Id] = 1 }',
+    '$all = @(Get-Process); $alive = @{}; $all | ForEach-Object { $alive[[int]$_.Id] = 1 }',
+    // A112 / A114: the heaviest names among all processes (claude, Chrome, …), which the named list below never shows
+    '$top = @($all | Group-Object ProcessName | ForEach-Object { [pscustomobject]@{ name = $_.Name; n = $_.Count; gb = [math]::Round((($_.Group | Measure-Object WorkingSet64 -Sum).Sum) / 1GB, 2) } } | Sort-Object gb -Descending | Select-Object -First 6)',
     "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe','dotnet.exe','UnrealBuildTool.exe','cl.exe','link.exe','MSBuild.exe','UnrealGame.exe','S2.exe')",
     `$procs = @(Get-CimInstance Win32_Process | Where-Object { ($names -contains $_.Name) -or ($_.Name -like 'UnrealEditor*.exe') -or ($_.Name -eq 'cmd.exe' -and ([string]$_.CommandLine) -like '*${SCRIPT_SUFFIX}*') } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId); cmd = $(if ($_.Name -eq 'git.exe' -or $_.Name -eq 'cmd.exe') { [string]$_.CommandLine } else { '' }) } })`,
-    '[pscustomobject]@{ freeGb = $free; diskGb = $disk; procs = $procs } | ConvertTo-Json -Compress -Depth 3',
+    '[pscustomobject]@{ freeGb = $free; diskGb = $disk; procs = $procs; top = $top } | ConvertTo-Json -Compress -Depth 3',
   ].join('; '),
 ]
 
@@ -590,8 +600,10 @@ export const cleanupPlan = (probe: Probe): { reap: boolean; stopLiveCoding: numb
 
 const round = (n: number): number => Math.round(n * 10) / 10
 
-/** What holds memory, heaviest first: the line the Memory tile and a waiting slot show. */
+/** What holds memory, heaviest first: the line the Memory tile and a waiting slot show; A112: every process by name when
+ * the probe read them (`top`), else the named processes it lists. */
 export const heavyList = (probe: Probe, max = 4): string => {
+  if (probe.top?.length) return probe.top.slice(0, max).map(t => `${t.name}${t.n > 1 ? ` ×${t.n}` : ''} ${round(t.gb)} GB`).join(', ')
   const by = new Map<string, { n: number; gb: number }>()
   for (const p of probe.procs) {
     const k = p.name
@@ -617,11 +629,15 @@ export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[
     .sort((a, b) => rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
 }
 
+/** Why a request waits; `ram`: its own launch gate is not met by free RAM (the head's, or, A112, a later request's behind a
+ * head that waits for memory: its place says which). */
 export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe' | 'merge'
+/** A grant; A113: `pass` names the head of the queue this slot goes before (that head waits only for memory). */
+export type Grant = { kind: 'grant'; end: number; reuse: number | null; pass?: string }
 export type Decision =
   | { kind: 'none' }
   | { kind: 'mine' }
-  | { kind: 'grant'; end: number; reuse: number | null }
+  | Grant
   | { kind: 'recover'; holder: string }
   | { kind: 'wait'; code: WaitCode; why: string; next: string; place: number }
 
@@ -641,8 +657,8 @@ export type GrantInput = {
 }
 
 /** Whether this session may take the Editor now, and if not why and what next. Only the head of the queue takes
- * a free lock; the slot must end by the next sync's cutoff (or wait out a cutoff and freeze, the sync holder
- * excepted); launching an Editor needs the launch gate (an Editor already open is reused, its memory counted). */
+ * a free lock (A113: or the one later request that passes a head held back only by memory); the slot's own checks are
+ * slotOf's. */
 export const decide = (x: GrantInput): Decision => {
   const { me8, lock, now, sync } = x
   const queue = queueOf(x.files, x.lanes, now, sync)
@@ -663,19 +679,51 @@ export const decide = (x: GrantInput): Decision => {
     if (live === 'gone' && pid !== null) return wait('gone-editor', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (its lease is freed once no UnrealEditor runs); an Editor left hung is a finding for Ather\'s Needs you')
     return wait('held', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}${isUnresolvedHand(lock) && lock.isReadable ? ' (a hand-written line naming no single live session)' : ''}`, `${place > 1 ? `you are ${ordinal(place)} in the queue` : 'you are next'}; do work that needs no Editor meanwhile${isUnresolvedHand(lock) && lock.isReadable ? '; a request turns it into a standard line for you once no other A5R session holds a lease and no Editor of another lane (the PID it names) runs, and it lapses 30 min past its end with nothing running' : ''}`)
   }
-  if (queue[0]?.id8 !== me8) return wait('queue', `the Editor is free but ${queue[0]?.lane ?? 'another session'} asked first`, `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile`)
+  if (queue[0]?.id8 !== me8) {
+    const head = queue[0]?.lane ?? 'another session'
+    const behind = `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile`
+    // A113: a head held back only by memory does not block a later request that fits now (one, the first in queue order).
+    const h = headStateOf(x, queue)
+    if (!h.isMemory) return wait('queue', `the Editor is free but ${head} asked first`, behind)
+    if (h.passer?.id8 === me8) return h.passer.grant
+    // A112: this request's own reason when its slot would not fit either (`ram`: its own launch gate is not met, as for
+    // the head; its place says it is not first); capped at 30 min only while a pass is possible.
+    const own = slotOf(x, mine, place, h.isAged ? Infinity : PASS_MAX_MIN)
+    if (own.kind === 'wait') return { ...own, next: `${head} (first in the queue) waits for memory too; ${own.next}` }
+    if (h.passer) return wait('queue', `the Editor is free; ${head} waits for memory and ${h.passer.lane} goes before it for ≤ ${PASS_MAX_MIN} min (its slot fits now)`, behind)
+    // Its slot fits and nobody passes: only because the head has waited 2 h (headStateOf tried this slot otherwise).
+    return wait('queue', `the Editor is free but ${head} asked first (it has waited ${PASS_AGING_MIN / 60} h or more for memory: nobody goes before it now)`, behind)
+  }
+  return slotOf(x, mine, place)
+}
+
+/** A113: a slot that goes before a head waiting for memory lasts at most this long; a head that has waited this long is
+ * never passed (it keeps its place and gets the next grant that fits). */
+export const PASS_MAX_MIN = 30
+export const PASS_AGING_MIN = 120
+
+/** The checks after the queue, for one session's request (its own, or a later one as if it were next, A113): no grant
+ * over a merge in progress; the slot ends by a planned sync's cutoff and waits out a cutoff and freeze (the sync holder
+ * excepted); launching needs the launch gate (an Editor already open is reused, its memory counted). `capMin`: the slot's
+ * minutes at most (A113's pass). */
+const slotOf = (x: GrantInput, f: SessionFile, place: number, capMin = Infinity): Decision => {
+  const { now, sync } = x
+  const want = f.want
+  if (!want) return { kind: 'none' }
+  const wait = (code: WaitCode, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place })
   // A61: no grant over a merge in progress (or left behind), whatever the sync's state says.
   if (x.mergeHead) return wait('merge', 'a merge is in progress in the shared checkout (.git/MERGE_HEAD)', 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
-  const want = mine.want
   const phase = syncPhase(sync, now, isSyncHolderGone(sync, x.files, x.lanes, now))
-  const end = sync && isHolderInSync(sync, me8, phase) ? sync.hardEnd : now + want.minutes * 60_000 // A94: ends with the sync
+  const minutes = Math.min(want.minutes, capMin)
+  const end = sync && isHolderInSync(sync, f.id8, phase) ? sync.hardEnd : now + minutes * 60_000 // A94: ends with the sync
   if (sync && phase === 'planned' && end > sync.at - CUTOFF_MS) {
     const room = Math.floor((sync.at - CUTOFF_MS - now) / 60_000)
-    return wait('sync', `a ${want.minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
+    return wait('sync', `a ${minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
   }
-  if (isSyncClaim(sync, me8, phase))
+  if (isSyncClaim(sync, f.id8, phase))
     return wait('sync', `the sync at ${hhmm(sync.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, 'Editor grants wait until it is done')
-  // The launch gate guards a launch: a slot that never launches the Editor (the sync worker's) skips it.
+  const pid = editorPid(x.probe)
+  // The launch gate guards a launch: a slot that never launches the Editor (the sync worker's, a build) skips it.
   if (pid === null && want.launch !== false) {
     // A88 (c, re-review): a failed probe is read once more at once; failing twice, the launch is not allowed blind: the
     // agent reads free RAM itself and asks again with that number (`freeGb`), which the normal gate then reads.
@@ -686,6 +734,33 @@ export const decide = (x: GrantInput): Decision => {
   }
   return { kind: 'grant', end, reuse: pid }
 }
+
+/** A113: the head of the queue as a later request sees it (the lock free: decide returned before otherwise): whether its
+ * only reason to wait is memory, whether it has waited 2 h or more, and the one later request granted before it: the
+ * first in queue order whose own slot, capped at 30 min, is granted now (a request that never launches the Editor, or a
+ * lower launch gate that free RAM meets; a sync's block, a merge in progress or a planned cutoff keep it waiting as they
+ * would the head). Every session computes it from the same files and the shared machine reading, so they agree on who
+ * passes; the lock's read-compare-write settles the rare split between two readings of free RAM. */
+type HeadState = { isMemory: false } | { isMemory: true; isAged: boolean; passer: { id8: string; lane: string; grant: Grant } | null }
+const headStateOf = (x: GrantInput, queue: readonly SessionFile[]): HeadState => {
+  const [head, ...later] = queue
+  const d = head ? slotOf(x, head, 1) : null
+  if (!head?.want || d?.kind !== 'wait' || d.code !== 'ram') return { isMemory: false }
+  const isAged = x.now - head.want.requestedAt >= PASS_AGING_MIN * 60_000
+  for (const [i, f] of (isAged ? [] : later).entries()) {
+    const g = slotOf(x, f, i + 2, PASS_MAX_MIN)
+    if (g.kind === 'grant') return { isMemory: true, isAged, passer: { id8: f.id8, lane: f.lane, grant: { ...g, pass: head.id8 } } }
+  }
+  return { isMemory: true, isAged, passer: null }
+}
+
+/** A113: the head this session's lease went before when it was asked with launch: false (such a slot launches no Editor), else
+ * null. */
+export const noLaunchPass = (f: SessionFile | null): string | null => (f?.holding?.pass && f.want?.launch === false ? f.holding.pass : null)
+
+/** A113: a pass slot's lease may not run past 30 min while the head it passed is still queued (an extension included). */
+export const passEndOk = (pass: string, since: number, end: number, queue: readonly SessionFile[]): boolean =>
+  !queue.some(f => f.id8 === pass) || end - since <= PASS_MAX_MIN * 60_000
 
 export const ordinal = (n: number): string => `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'}`
 
@@ -707,6 +782,7 @@ export const mayAskYield = (x: GrantInput): { holder: string } | null => {
   if (x.lock.kind !== 'held' || !x.lock.id8 || x.lock.id8 === x.me8 || !x.lock.pausable) return null
   if (livenessOf(x.lock.id8, x.files, x.lanes, x.now) !== 'alive') return null
   const lease = x.files.find(f => f.id8 === x.lock.id8)
+  if (lease?.holding?.pass === x.me8) return null // A113: a slot that passed this head (waiting for memory) is not asked to yield
   if (lease?.holding && !isYieldMoment({ now: x.now, since: lease.holding.since, end: lease.holding.end, editorUseAt: lease.editorUseAt })) return null
   if (queueOf(x.files, x.lanes, x.now, x.sync)[0]?.id8 !== x.me8) return null
   const asked = x.files.some(f => f.yieldAsks.some(a => a.holder === x.lock.id8 && x.now - a.at < YIELD_EVERY_MS))
@@ -1043,8 +1119,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 export const FREE_RAM_READ = 'powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB"'
 
 export const NOTICES = {
-  granted: (end: number, pie: boolean, reuse: number | null, cleanup: string): Notice['text'] =>
-    noticeText('Editor', `granted to this session until ${hhmm(end)}${reuse ? ` (UnrealEditor PID ${reuse} is open: reuse it)` : ''}${cleanup ? `; cleanup: ${cleanup}` : ''}`, `${reuse ? 'use that Editor' : 'launch the Editor'}${pie ? ' (PIE needs 5 GB free to start)' : ''}; release with the editor tool (action release) when done, and before ${hhmm(end)}`),
+  /** A113: `pass`: the slot goes before the head of the queue (`lane`), which waits for memory; `launch` false: no launch. */
+  granted: (end: number, pie: boolean, reuse: number | null, cleanup: string, pass?: { lane: string; launch: boolean }): Notice['text'] =>
+    noticeText('Editor', `granted to this session until ${hhmm(end)}${pass ? ` (a slot of at most ${PASS_MAX_MIN} min before ${pass.lane}, first in the queue, which waits for memory)` : ''}${reuse ? ` (UnrealEditor PID ${reuse} is open: reuse it)` : ''}${cleanup ? `; cleanup: ${cleanup}` : ''}`, `${pass && !pass.launch ? 'do the work that launches no Editor (asked with launch: false; an Editor launch is refused in this slot)' : reuse ? 'use that Editor' : 'launch the Editor'}${pie ? ' (PIE needs 5 GB free to start)' : ''}; release with the editor tool (action release) when done, and before ${hhmm(end)}`),
+  /** A113: an Unreal Editor runs in a pass slot that was asked with launch: false. */
+  passLaunched: (pid: number, head: string): string => noticeText('Editor', `an Unreal Editor (PID ${pid}) runs in this session's slot, which went before ${head} (waiting for memory) because it was asked with launch: false`, 'close it now if it is yours (it takes the memory that head waits for), then do the work that launches no Editor; to launch one, release and request again without launch: false'),
+  /** A114: a queued session idle an hour while the Editor is free and only memory holds its request back. */
+  memory: (why: string, heavy: string, idleMin: number): string => noticeText('Editor', `the Editor is free and you are queued, idle for ${idleMin} min, held back only by memory: ${why}; memory is held by ${heavy}`, 'nothing to do unless some of that memory is yours to free (an Editor, a game or a tool you left running): your request stays queued and the grant wakes you; if your task launches no Editor (a build), ask again with launch: false, which may go before a head waiting for memory'),
   /** A88 (c, re-review): the probe failed while this session's PIE runs, so the 3 GB abort cannot be checked: no silent pass. */
   pieProbeFailed: (): string => noticeText('RAM', 'the RAM probe did not answer while your PIE runs, so the 3 GB PIE abort cannot be checked', `read free RAM with ${FREE_RAM_READ} now and stop PIE if it is under 3 GB`),
   leaseEnding: (end: number): string => noticeText('Editor lease', `your lease ends at ${hhmm(end)}`, 'finish to a checkpoint (PIE stopped, your own assets saved), then release with the editor tool, or extend it if it still fits'),
@@ -1159,6 +1240,8 @@ export const SYNC_TELL: Record<StageTell | EntryTell, (s: SyncFile, f: TellFacts
   'build-stopped': (s, f) => NOTICES.syncBuildStopped(s, f.tail),
 }
 
+/** A114: the memory note's id prefix; its time follows, so a reload reads when it was last told from `delivered`. */
+export const MEMORY_NOTE_ID = 'editor:memory:'
 export const noticeIds = {
   granted: (since: number) => `editor:granted:${since}`,
   leaseEnding: (since: number, end: number) => `editor:ending:${since}:${end}`,
@@ -1168,6 +1251,8 @@ export const noticeIds = {
   recovered: (holder: string, at: number) => `editor:recovered:${holder}:${Math.floor(at / 60_000)}`,
   released: (r: Released) => `editor:released:${r.kind}:${r.since}`,
   nudge: (window: string) => `editor:nudge:${window}`,
+  passLaunched: (since: number) => `editor:pass-launch:${since}`,
+  memory: (at: number) => `${MEMORY_NOTE_ID}${at}`,
   goneEditor: (holder: string, pid: number) => `editor:gone:${holder}:${pid}`,
   pieAbort: (n: number) => `ram:pie-abort:${n}`,
   disk: (day: string) => `disk:${day}`,

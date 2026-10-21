@@ -36,15 +36,15 @@ export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as 
 
 export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean; cmd?: string }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
- * `disk` and `procs` are what the machine probe reads (a function of the run count to change it over time). */
-export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string; hold?: Promise<void> }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark', cwd = PROJ, now = NOW } = {}) {
+ * `disk`, `procs` and `top` are what the machine probe reads (a function of the run count to change it over time). */
+export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], top = [] as { name: string; n: number; gb: number }[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string; hold?: Promise<void> }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark', cwd = PROJ, now = NOW } = {}) {
   const files = new Map<string, string>([[k(`${PROJ}/.git/HEAD`), 'ref: refs/heads/main'], [k('E:/s2/S2.uproject'), '{}'], [k(`${PROJ}/S2.uproject`), '{}']])
   const mtimes = new Map<string, number>()
   const seen: Rec[] = []
   const runs: string[] = []
   const inits: { argv: string; env?: Record<string, string>; timeoutMs?: number }[] = [] // rev 35 (A107): what each run was given
   const sent: Rec[] = []
-  const machine = { ram, disk, procs }
+  const machine = { ram, disk, procs, top } // rev 38 (A112): `top`, every process by name
   const ids = { current: ME } // the session id: a /clear moves the process to another
   const value = (v: unknown) => ({ value: v })
   mock.env(on, ENV)
@@ -96,7 +96,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     if (hit?.hold) await hit.hold // rev 30 (A88 b): a slow git call, settled by the test
     if (hit?.deny) return { deny: hit.deny } // the run rejects, as a timeout does
     const stdout = hit ? hit.stdout
-      : argv.includes('ConvertTo-Json') ? JSON.stringify({ freeGb: Number(machine.ram), diskGb: machine.disk, procs: machine.procs })
+      : argv.includes('ConvertTo-Json') ? JSON.stringify({ freeGb: Number(machine.ram), diskGb: machine.disk, procs: machine.procs, ...(machine.top.length ? { top: machine.top } : {}) })
         : argv.includes('rev-parse') ? 'HaiHuynh/20261005'
           : argv.includes('rev-list') ? '3\t12'
             : argv.includes('--merges') ? 'def5678 · 3 days ago'

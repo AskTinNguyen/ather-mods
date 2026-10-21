@@ -360,11 +360,11 @@ test('A105: unit: the queue view: the holder from its file (granted, Editor seen
     JSON.parse(peer('cccccccc', { want: want({ minutes: 30, pie: true, requestedAt: T(14, 22) }) })) as SessionFile,
     JSON.parse(peer(ME8, { want: want({ minutes: 20, build: true, requestedAt: T(14, 36) }) })) as SessionFile,
   ]
-  const v = queueView({ me8: ME8, lock: parseLockLine(held('bbbbbbbb', T(14, 0), T(14, 52))), files, lanes: [], now: NOW, sync: null })
+  const v = queueView({ me8: ME8, lock: parseLockLine(held('bbbbbbbb', T(14, 0), T(14, 52))), files, lanes: [], now: NOW, sync: null, probe: null, gates: DEFAULT_GATES }) // rev 38 (A112): with the decide inputs
   expect(v.holder).toEqual({ lane: 'lane-bbbbbbbb', id8: 'bbbbbbbb', isMe: false, grantedAt: T(14, 0), editorAt: T(14, 4), pieAt: T(14, 20), extensions: 1, leftMin: 12 })
   expect(v.rows).toEqual([
-    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, pie: true, build: false },
-    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, pie: false, build: true },
+    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, pie: true, build: false, wait: 'held' },
+    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, pie: false, build: true, wait: 'held' },
   ])
 })
 
@@ -383,12 +383,12 @@ for (const surface of ['terminal', 'desktop'] as const)
     const tree = await $.ui.render(P)
     expect(text(find(tree, 'hai-queue-head'))).toBe('EDITOR QUEUE · 2 WAITING')
     expect(text(find(tree, 'hai-queue-holder'))).toBe('▶lane-bbbbbbbbgranted 14:00 · Editor 14:04 · PIE 14:20 · ext 1 · 12 min left')
-    expect(text(find(tree, 'hai-queue-cccccccc'))).toBe('1lane-ccccccccwaited 18 min · asks 30 min · PIE')
-    expect(text(find(tree, `hai-queue-${ME8}`))).toBe(`★2 ${mine(w).lane}waited 0 min · asks 20 min · build`)
+    expect(text(find(tree, 'hai-queue-cccccccc'))).toBe('1lane-ccccccccwaited 18 min · asks 30 min · PIE · wait held') // rev 38 (A112): the wait code
+    expect(text(find(tree, `hai-queue-${ME8}`))).toBe(`★2 ${mine(w).lane}waited 0 min · asks 20 min · build · wait held`)
     expect(text(find(tree, 'hai-queue-summary'))).toBe('24 h: 1 lease · median wait 12 min · launch 20% · 1 yield · 0 returns · 0 PIE aborts · sync 0 h')
     const status = JSON.parse(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never)).split('\n').filter(l => !l.startsWith('A5R ·')).join('\n')) as Record<string, unknown>
     expect(status.holder).toBe('lane-bbbbbbbb (session bbbbbbbb): granted 14:00 · Editor 14:04 · PIE 14:20 · ext 1 · 12 min left')
-    expect(status.queue).toEqual(['1. lane-cccccccc (session cccccccc): waited 18 min · asks 30 min · PIE: their slot', `2. ${mine(w).lane} (session ${ME8}): waited 0 min · asks 20 min · build: tail VFX`])
+    expect(status.queue).toEqual(['1. lane-cccccccc (session cccccccc): waited 18 min · asks 30 min · PIE · wait held: their slot', `2. ${mine(w).lane} (session ${ME8}): waited 0 min · asks 20 min · build · wait held: tail VFX`])
     expect(status.leases24h).toBe('24 h: 1 lease · median wait 12 min · launch 20% · 1 yield · 0 returns · 0 PIE aborts · sync 0 h')
   })
 

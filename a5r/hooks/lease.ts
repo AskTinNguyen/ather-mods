@@ -1,7 +1,7 @@
 // A5R rev 34 (L-38): the Editor lease's record and the rules that keep a slot with the session that needs it. Pure: no
 // `$`; register.ts reads and writes the files. A100 one record per lease (Saved/A5R/leases.jsonl) and its 24-hour summary;
 // A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it.
-import { IDLE_RELEASE_MS, YIELD_EVERY_MS, hhmm, lockTimes, noticeIds, queueOf, type Holding, type LaneBeat, type LockLine, type SessionFile, type SyncFile, type Want, type YieldAsk } from './coord.ts'
+import { IDLE_RELEASE_MS, PASS_MAX_MIN, YIELD_EVERY_MS, decide, hhmm, lockTimes, noticeIds, queueOf, type Decision, type GrantInput, type Holding, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
 export const LEASES_FILE = 'leases.jsonl'
@@ -216,12 +216,14 @@ export const summaryLine = (s: LeaseSummary): string =>
 
 // ---------- A105: the queue as Hai sees it ----------
 export type HolderRow = { lane: string; id8: string; isMe: boolean; grantedAt: number | null; editorAt: number | null; pieAt: number | null; extensions: number; leftMin: number | null }
-export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; pie: boolean; build: boolean }
+/** A112: `wait`: the row's current wait code by decide, read from the files every session reads ('grant': it takes the
+ * Editor at its next minute; 'pass': it goes before a head waiting for memory, A113). */
+export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; pie: boolean; build: boolean; wait: WaitCode | 'grant' | 'pass' | null }
 export type QueueView = { holder: HolderRow | null; rows: QueueRow[] }
 
 /** A105: the holder (its file's lease, else the lock line's times) and each queued session in the order every session
- * computes. */
-export const queueView = (x: { me8: string; lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; sync: SyncFile | null }): QueueView => {
+ * computes; A112: with each one's wait code. */
+export const queueView = (x: GrantInput): QueueView => {
   const isHeld = x.lock.kind === 'held' || x.lock.kind === 'handed'
   const f = isHeld ? x.files.find(s => s.id8 === x.lock.id8) : undefined
   const h = f?.holding
@@ -231,7 +233,7 @@ export const queueView = (x: { me8: string; lock: LockLine; files: readonly Sess
   const holder: HolderRow | null = isHeld
     ? { lane: f?.lane || x.lock.lane || x.lock.id8 || 'unknown', id8: x.lock.id8, isMe: x.lock.id8 !== '' && x.lock.id8 === x.me8, grantedAt, editorAt: h?.notes?.editorAt ?? null, pieAt: h?.notes?.pieAt ?? null, extensions: h?.extended ?? 0, leftMin: end === null ? null : Math.round((end - x.now) / 60_000) }
     : null
-  const rows = queueOf(x.files, x.lanes, x.now, x.sync).map((s, i): QueueRow => ({ place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: Math.max(0, Math.round((x.now - (s.want?.requestedAt ?? x.now)) / 60_000)), minutes: s.want?.minutes ?? 0, pie: s.want?.pie === true, build: s.want?.build === true }))
+  const rows = queueOf(x.files, x.lanes, x.now, x.sync).map((s, i): QueueRow => ({ place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: Math.max(0, Math.round((x.now - (s.want?.requestedAt ?? x.now)) / 60_000)), minutes: s.want?.minutes ?? 0, pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(decide({ ...x, me8: s.id8 })) }))
   return { holder, rows }
 }
 
@@ -245,5 +247,10 @@ export const holderText = (h: HolderRow): string =>
     h.leftMin === null ? 'no end' : h.leftMin < 0 ? `${-h.leftMin} min over` : `${h.leftMin} min left`,
   ].join(' · ')
 
-/** A105: a queued session's facts in one line: waited for, minutes asked, PIE / build. */
-export const queueRowText = (r: QueueRow): string => [`waited ${r.waitedMin} min`, `asks ${r.minutes} min`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : [])].join(' · ')
+const waitOf = (d: Decision): QueueRow['wait'] => (d.kind === 'wait' ? d.code : d.kind === 'grant' ? (d.pass ? 'pass' : 'grant') : null)
+const waitWords = (w: NonNullable<QueueRow['wait']>): string => (w === 'grant' ? 'granted next' : w === 'pass' ? `passes the head (≤ ${PASS_MAX_MIN} min)` : `wait ${w}`)
+
+/** A105: a queued session's facts in one line: waited for, minutes asked, PIE / build; A112: why it waits (or that it takes
+ * the Editor next, or goes before a head waiting for memory). */
+export const queueRowText = (r: QueueRow): string =>
+  [`waited ${r.waitedMin} min`, `asks ${r.minutes} min`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : []), ...(r.wait === null ? [] : [waitWords(r.wait)])].join(' · ')

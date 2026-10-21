@@ -55,6 +55,11 @@ export const mcpCallKind = (tool: string, input: Record<string, unknown>): Retur
 export const isEditorStartStop = (command: string): boolean =>
   /(Stop-Process|taskkill|kill)\b[^\n]*UnrealEditor(?!-Cmd)\b|Start-Process[^\n]*UnrealEditor(?!-Cmd)\b|UnrealEditor(\.exe)?["']?\s+[^\n]*\.uproject/i.test(command)
 
+/** A113: a shell command that launches an Unreal Editor and its memory: the Editor, a headless UnrealEditor-Cmd run of a
+ * project, or the S2 launcher script (stopping one is not a launch). */
+export const launchesEditor = (command: string): boolean =>
+  /Start-Process[^\n]*UnrealEditor|UnrealEditor(-Cmd)?(\.exe)?["']?\s+[^\n]*\.uproject|launch_s2\.ps1/i.test(command)
+
 /** Why this session may not drive the Editor now, or null when it holds the lock. */
 export const lockProblem = (lock: EditorLock, me8: string, take = `Take the lock first: write your slot, 'session ${me8}' and your end time into Saved/EDITOR_OWNER.txt (AGENTS.md), then retry.`, queue = ''): string | null => {
   if (lock.state === 'unknown') return `Saved/EDITOR_OWNER.txt is missing or empty: that means unknown, not free. ${take}`
