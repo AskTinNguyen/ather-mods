@@ -4,7 +4,7 @@
 // alive: each session writes only its own files (Saved/A5R/editor/<id8>.json, touch/<id8>.json), the
 // sync holder alone writes Saved/A5R/sync.json, and the head of the queue alone takes a free lock.
 // Files are the truth; a notice is only a doorbell.
-import { commandVerb, gitTarget, nestedCommand, psQuote, segments, stripHeredocs, tokenize, under } from './a5r.ts'
+import { commandVerb, gitTarget, programs, psQuote, segments, stripHeredocs, tokenize, under } from './a5r.ts'
 import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from './syncrules.ts'
 import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
@@ -123,6 +123,9 @@ export type SessionFile = {
   editorUseAt?: number
   /** A104: the place a forced release keeps (the requestedAt of the request it held) until `until`. */
   return?: { requestedAt: number; until: number }
+  /** A113 (Fable review D3): written by A5R 0.23.0 and later, which take a pass when they are its passer; a file without it
+   * (0.22.0) is never chosen as a passer (it would never take the lock and everyone behind it would wait). */
+  canPass?: true
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
@@ -140,13 +143,14 @@ export const blankSession = (session: string, lane: string, title: string, now: 
   holding: null,
   yieldAsks: [],
   delivered: [],
+  canPass: true,
 })
 
 export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}), ...(v.canPass === true ? { canPass: true as const } : {}) }
   } catch {
     return null
   }
@@ -748,6 +752,7 @@ const headStateOf = (x: GrantInput, queue: readonly SessionFile[]): HeadState =>
   if (!head?.want || d?.kind !== 'wait' || d.code !== 'ram') return { isMemory: false }
   const isAged = x.now - head.want.requestedAt >= PASS_AGING_MIN * 60_000
   for (const [i, f] of (isAged ? [] : later).entries()) {
+    if (f.canPass !== true) continue // D3: a 0.22.0 session never takes a pass
     const g = slotOf(x, f, i + 2, PASS_MAX_MIN)
     if (g.kind === 'grant') return { isMemory: true, isAged, passer: { id8: f.id8, lane: f.lane, grant: { ...g, pass: head.id8 } } }
   }
@@ -758,9 +763,10 @@ const headStateOf = (x: GrantInput, queue: readonly SessionFile[]): HeadState =>
  * null. */
 export const noLaunchPass = (f: SessionFile | null): string | null => (f?.holding?.pass && f.want?.launch === false ? f.holding.pass : null)
 
-/** A113: a pass slot's lease may not run past 30 min while the head it passed is still queued (an extension included). */
-export const passEndOk = (pass: string, since: number, end: number, queue: readonly SessionFile[]): boolean =>
-  !queue.some(f => f.id8 === pass) || end - since <= PASS_MAX_MIN * 60_000
+/** A113: a pass slot's lease may not run past 30 min while the head it passed still asks (its file carries a request,
+ * whatever its liveness reads: Fable review D5), an extension included. */
+export const passEndOk = (pass: string, since: number, end: number, files: readonly SessionFile[]): boolean =>
+  !files.some(f => f.id8 === pass && f.want) || end - since <= PASS_MAX_MIN * 60_000
 
 export const ordinal = (n: number): string => `${n}${n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th'}`
 
@@ -1000,18 +1006,12 @@ export const isBinaryAsset = (path: string): boolean => /\.(uasset|umap)$/i.test
 // ---------- freeze: git writes and Editor use in the shared checkout ----------
 // A98 (rev 33): update-index writes the index (the sync's own `update-index -q --refresh` is its exact form, A15).
 export const FREEZE_VERBS = new Set(['commit', 'add', 'rm', 'mv', 'checkout', 'switch', 'restore', 'reset', 'stash', 'merge', 'rebase', 'pull', 'push', 'cherry-pick', 'revert', 'clean', 'am', 'update-index'])
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
 
 /** The git writes a command makes (`git [-C dir] [-c k=v] <verb>`), each with the folder it runs in ('' = the
  * working directory). `git stash list|show` only reads. */
-export const gitWrites = (command: string, depth = 0): { verb: string; dir: string }[] => {
+export const gitWrites = (command: string): { verb: string; dir: string }[] => {
   const out: { verb: string; dir: string }[] = []
-  for (const seg of segments(stripHeredocs(command ?? ''))) {
-    const [verb, args] = commandVerb(tokenize(seg))
-    if (SHELLS.has(verb) && depth < 2) {
-      out.push(...gitWrites(nestedCommand(verb, args), depth + 1))
-      continue
-    }
+  for (const { verb, args } of programs(command)) {
     if (verb !== 'git') continue
     let dir = ''
     for (let i = 0; i < args.length; i += 1) {
@@ -1088,13 +1088,11 @@ const LOCK_WRITERS = new Set(['set-content', 'sc', 'add-content', 'ac', 'out-fil
 /** A shell command that writes the lock: a redirect into it, a writing verb that names it, an in-place sed,
  * or a .NET file write. Reading it is fine. */
 export const writesLock = (command: string): boolean =>
-  segments(stripHeredocs(command ?? '')).some(seg => {
-    if (!/EDITOR_OWNER\.txt/i.test(seg)) return false
-    if (/(>>?|\|\s*(tee|Out-File|Set-Content|Add-Content)\b)[^|]*EDITOR_OWNER\.txt/i.test(seg)) return true
-    if (/WriteAll(Text|Lines|Bytes)|AppendAll(Text|Lines)/i.test(seg)) return true
-    const [verb, args] = commandVerb(tokenize(seg))
+  programs(command).some(({ raw, verb, args }) => {
+    if (!/EDITOR_OWNER\.txt/i.test(raw)) return false
+    if (/(>>?|\|\s*(tee|Out-File|Set-Content|Add-Content)\b)[^|]*EDITOR_OWNER\.txt/i.test(raw)) return true
+    if (/WriteAll(Text|Lines|Bytes)|AppendAll(Text|Lines)/i.test(raw)) return true
     if (verb === 'sed' && args.some(a => /^-i/.test(a))) return true
-    if (SHELLS.has(verb)) return writesLock(nestedCommand(verb, args))
     return LOCK_WRITERS.has(verb)
   })
 
@@ -1124,6 +1122,8 @@ export const NOTICES = {
     noticeText('Editor', `granted to this session until ${hhmm(end)}${pass ? ` (a slot of at most ${PASS_MAX_MIN} min before ${pass.lane}, first in the queue, which waits for memory)` : ''}${reuse ? ` (UnrealEditor PID ${reuse} is open: reuse it)` : ''}${cleanup ? `; cleanup: ${cleanup}` : ''}`, `${pass && !pass.launch ? 'do the work that launches no Editor (asked with launch: false; an Editor launch is refused in this slot)' : reuse ? 'use that Editor' : 'launch the Editor'}${pie ? ' (PIE needs 5 GB free to start)' : ''}; release with the editor tool (action release) when done, and before ${hhmm(end)}`),
   /** A113: an Unreal Editor runs in a pass slot that was asked with launch: false. */
   passLaunched: (pid: number, head: string): string => noticeText('Editor', `an Unreal Editor (PID ${pid}) runs in this session's slot, which went before ${head} (waiting for memory) because it was asked with launch: false`, 'close it now if it is yours (it takes the memory that head waits for), then do the work that launches no Editor; to launch one, release and request again without launch: false'),
+  /** Fable review D4: two grants met in the same minute (or the line was rewritten): this session lost the lock it took. */
+  lockLost: (who: string): string => noticeText('Editor', `the lock names ${who}, not this session (two grants met in the same minute, or the line was rewritten)`, 'your request stays queued in its place; do work that needs no Editor meanwhile'),
   /** A114: a queued session idle an hour while the Editor is free and only memory holds its request back. */
   memory: (why: string, heavy: string, idleMin: number): string => noticeText('Editor', `the Editor is free and you are queued, idle for ${idleMin} min, held back only by memory: ${why}; memory is held by ${heavy}`, 'nothing to do unless some of that memory is yours to free (an Editor, a game or a tool you left running): your request stays queued and the grant wakes you; if your task launches no Editor (a build), ask again with launch: false, which may go before a head waiting for memory'),
   /** A88 (c, re-review): the probe failed while this session's PIE runs, so the 3 GB abort cannot be checked: no silent pass. */
@@ -1240,6 +1240,11 @@ export const SYNC_TELL: Record<StageTell | EntryTell, (s: SyncFile, f: TellFacts
   'build-stopped': (s, f) => NOTICES.syncBuildStopped(s, f.tail),
 }
 
+/** A113 (Fable review D1): an Editor running in a launch:false pass slot is told again, at most once per 10-min window. */
+export const PASS_TELL_MS = 10 * 60_000
+/** A113: why a launch:false pass slot may not launch or drive an Editor (a refusal's why), and what to do instead. */
+export const passNoLaunch = (head: string, what: string): string => `this slot went before ${head} (first in the queue, waiting for memory) because it was asked with launch: false, and ${what}`
+export const PASS_NO_LAUNCH_NEXT = 'do the work that needs no Editor (the build) in this slot; to use an Editor, release and request again without launch: false (the launch gate applies)'
 /** A114: the memory note's id prefix; its time follows, so a reload reads when it was last told from `delivered`. */
 export const MEMORY_NOTE_ID = 'editor:memory:'
 export const noticeIds = {
@@ -1251,7 +1256,8 @@ export const noticeIds = {
   recovered: (holder: string, at: number) => `editor:recovered:${holder}:${Math.floor(at / 60_000)}`,
   released: (r: Released) => `editor:released:${r.kind}:${r.since}`,
   nudge: (window: string) => `editor:nudge:${window}`,
-  passLaunched: (since: number) => `editor:pass-launch:${since}`,
+  passLaunched: (since: number, now: number) => `editor:pass-launch:${since}:${Math.floor(now / PASS_TELL_MS)}`,
+  lockLost: (since: number) => `editor:lock-lost:${since}`,
   memory: (at: number) => `${MEMORY_NOTE_ID}${at}`,
   goneEditor: (holder: string, pid: number) => `editor:gone:${holder}:${pid}`,
   pieAbort: (n: number) => `ram:pie-abort:${n}`,

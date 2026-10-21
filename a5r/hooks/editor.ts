@@ -1,6 +1,7 @@
 // The shared S2 Editor: who may drive it. Pure: no `$`.
 // Lock text is read the way Ather Automata's Unreal pack reads it (parseEditorLock), so both agree on
 // who holds the Editor; a session proves it is the holder by naming `session <first 8 of its id>`.
+import { program, programs, type Program } from './a5r.ts'
 
 export type EditorLock = { state: 'free' | 'held' | 'unknown'; holder: string; until: string; isStale: boolean; session: string }
 
@@ -34,7 +35,7 @@ export const mcpKind = (input: string): 'save-all' | 'pie' | 'write' | 'read' | 
  * method its input names (`name`, `tool`, …), never from the rest of its arguments: a read whose query or path mentions
  * `set_` or `run_` stays a read. A console command reaches PIE only through a console tool. */
 const MCP_METHOD_KEYS = ['name', 'tool', 'tool_name', 'toolName', 'method', 'function', 'action'] as const
-export const mcpCallKind = (tool: string, input: Record<string, unknown>): ReturnType<typeof mcpKind> => {
+export const mcpCallKind = (tool: string, input: Record<string, unknown>): ReturnType<typeof mcpKind> | 'stop' => {
   const method = [tool.split('__').pop() ?? '', ...MCP_METHOD_KEYS.map(k => (typeof input[k] === 'string' ? (input[k] as string) : ''))].filter(Boolean).join(' ')
   const kind = mcpKind(method)
   if (kind === 'save-all' || kind === 'pie' || kind === 'write') return kind
@@ -47,18 +48,40 @@ export const mcpCallKind = (tool: string, input: Record<string, unknown>): Retur
     if (command && mcpKind(command) === 'pie') return 'pie'
     return 'write' // a console command can quit, close or save: it needs the lock
   }
-  if (names.some(n => /^(quit|exit|shutdown)(_|$)/i.test(n) || /^(quit|exit|shutdown|close)_?editor$/i.test(n) || /^save_/i.test(n) || /^Save[A-Z]/.test(n))) return 'write'
+  // Rev 38 (thermo-nuclear review C2): quitting or closing the Editor is a stop (it needs the lock, and a launch:false pass
+  // slot may still do it).
+  if (names.some(n => /^(quit|exit|shutdown)(_|$)/i.test(n) || /^(quit|exit|shutdown|close)_?editor$/i.test(n))) return 'stop'
+  if (names.some(n => /^save_/i.test(n) || /^Save[A-Z]/.test(n))) return 'write'
   return kind
 }
 
-/** A shell command that opens or closes the shared Editor (headless UnrealEditor-Cmd is not it). */
-export const isEditorStartStop = (command: string): boolean =>
-  /(Stop-Process|taskkill|kill)\b[^\n]*UnrealEditor(?!-Cmd)\b|Start-Process[^\n]*UnrealEditor(?!-Cmd)\b|UnrealEditor(\.exe)?["']?\s+[^\n]*\.uproject/i.test(command)
+/** A shell command's act on an Unreal Editor, read by each segment's program (wrapper verbs stripped, a shell's own command
+ * read too): `launch` an Editor (an UnrealEditor* binary given a project, or Start-Process of one), a `headless`
+ * UnrealEditor-Cmd run of a project (memory, but not the shared Editor), or `stop` one (Stop-Process, taskkill, kill naming
+ * it). Rev 38 (Fable review D7, thermo-nuclear review C1): a read, a diff, an echo or a build (Build.bat, RunUAT) that names
+ * one is no act, and no launcher script of one project is named (another way to launch shows in the minute's probe). */
+export type EditorAct = 'launch' | 'headless' | 'stop'
+const EDITOR_BIN = /^unrealeditor(-[\w-]+)?$/
+// Rev 38 (thermo-nuclear review R1, R2): PowerShell's start/saps alias Start-Process; pkill/killall/spps stop by name; a name
+// inside `$(pgrep …)`, backticks, quotes or `(Get-Process UnrealEditor).Id` counts (the token is split on non-path characters).
+const START_VERBS = new Set(['start-process', 'start', 'saps'])
+const STOP_VERBS = new Set(['stop-process', 'spps', 'taskkill', 'kill', 'pkill', 'killall'])
+const editorArg = (a: string): boolean => a.split(/[^\w.:\\/-]+/).some(w => EDITOR_BIN.test(program(w)))
+const isHeadless = (name: string): boolean => /unrealeditor-cmd/i.test(name)
+const actOf = ({ verb, args }: Program): EditorAct | null => {
+  if (EDITOR_BIN.test(verb) && args.some(a => /\.uproject$/i.test(a))) return isHeadless(verb) ? 'headless' : 'launch'
+  const named = args.find(editorArg)
+  if (named && START_VERBS.has(verb)) return isHeadless(named) ? 'headless' : 'launch'
+  if (named && !isHeadless(named) && STOP_VERBS.has(verb)) return 'stop'
+  return null
+}
+export const editorShellAct = (command: string): EditorAct | null => programs(command).map(actOf).find(act => act !== null) ?? null
 
-/** A113: a shell command that launches an Unreal Editor and its memory: the Editor, a headless UnrealEditor-Cmd run of a
- * project, or the S2 launcher script (stopping one is not a launch). */
-export const launchesEditor = (command: string): boolean =>
-  /Start-Process[^\n]*UnrealEditor|UnrealEditor(-Cmd)?(\.exe)?["']?\s+[^\n]*\.uproject|launch_s2\.ps1/i.test(command)
+/** A shell command that opens or closes the shared Editor (headless UnrealEditor-Cmd is not it). */
+export const isEditorStartStop = (command: string): boolean => {
+  const act = editorShellAct(command)
+  return act === 'launch' || act === 'stop'
+}
 
 /** Why this session may not drive the Editor now, or null when it holds the lock. */
 export const lockProblem = (lock: EditorLock, me8: string, take = `Take the lock first: write your slot, 'session ${me8}' and your end time into Saved/EDITOR_OWNER.txt (AGENTS.md), then retry.`, queue = ''): string | null => {

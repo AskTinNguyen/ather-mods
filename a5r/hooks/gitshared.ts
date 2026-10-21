@@ -240,25 +240,6 @@ export const leasePushTargets = (args: string[]): string[] | null => {
   })
 }
 
-/** 0.16.1: a segment without its wrapper verbs (`timeout 120`, `nice -n 5`, `env A=1`, `time`, `command`, `nohup`,
- * `stdbuf -o0`, `ionice -c3`), so `timeout 120 git push …` reads as the git command it runs. */
-const WRAPPER_VERBS = new Set(['timeout', 'nice', 'env', 'time', 'command', 'nohup', 'stdbuf', 'ionice'])
-export const unwrap = (seg: Seg): Seg => {
-  let verb = seg.verb
-  let args = seg.args
-  for (let guard = 0; guard < 4 && WRAPPER_VERBS.has(verb); guard += 1) {
-    let i = 0
-    while (i < args.length) {
-      const a = args[i] ?? ''
-      if (/^-/.test(a)) i += /^-(n|c|s|k|o|e|i|u|-signal|-kill-after)$/.test(a) ? 2 : 1
-      else if (/^\w+=/.test(a) || (verb === 'timeout' && /^\d+(\.\d+)?[smhd]?$/.test(a))) i += 1
-      else break
-    }
-    verb = (args[i] ?? '').split(/[\\/]/).pop()?.toLowerCase().replace(/\.exe$/, '') ?? ''
-    args = args.slice(i + 1)
-  }
-  return verb === seg.verb ? seg : { ...seg, verb, args }
-}
 
 /** 0.16.1: verbs that only read files: a session that ran them inside the shared checkout changed nothing there. */
 const READ_VERBS = new Set(['ls', 'cat', 'rg', 'grep', 'egrep', 'find', 'head', 'tail', 'echo', 'printf', 'wc', 'pwd', 'stat', 'du', 'tree', 'which', 'where', 'type', 'less', 'more', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'dir', 'get-item', 'test-path', 'resolve-path'])
@@ -266,8 +247,7 @@ const GIT_READS = new Set(['log', 'status', 'diff', 'show', 'rev-parse', 'rev-li
 
 /** 0.16.1 (A82): whether a segment may change files inside `root`: a redirection or tee target there (from any folder), or
  * a command that is not a plain read run with its folder (after `cd`, or `git -C`) there. */
-export const writesInside = (raw: Seg, root: string): boolean => {
-  const seg = unwrap(raw)
+export const writesInside = (seg: Seg, root: string): boolean => {
   const inside = (p: string) => under(norm(p.replace(/\\/g, '/'), seg.dir), root)
   for (const m of seg.raw.matchAll(/(?:^|[^<>&\d])(?:\d*>>?|&>>?)\s*(?:"([^"]+)"|'([^']+)'|([^\s;|&<>]+))/g)) {
     const target = m[1] ?? m[2] ?? m[3] ?? ''

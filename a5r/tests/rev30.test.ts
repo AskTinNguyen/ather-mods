@@ -360,9 +360,10 @@ test('MCP kind: unit: the method decides; a read whose arguments mention set_ or
   // Re-review: a console command, and any method that can quit, close or save, needs the lock.
   expect(mcpCallKind(T, { name: 'McpPieToolset.ExecuteConsoleCommand', arguments: { command: 'stat fps' } })).toBe('write')
   expect(mcpCallKind(T, { name: 'McpPieToolset.ExecuteConsoleCommand', arguments: { command: 'QUIT_EDITOR' } })).toBe('write')
-  expect(mcpCallKind(T, { name: 'EditorTools.QuitEditor' })).toBe('write')
-  expect(mcpCallKind(T, { name: 'quit_editor' })).toBe('write')
-  expect(mcpCallKind(T, { name: 'close_editor' })).toBe('write')
+  // Rev 38 (thermo-nuclear review C2), changed by design: quitting or closing the Editor is a stop (it still needs the lock).
+  expect(mcpCallKind(T, { name: 'EditorTools.QuitEditor' })).toBe('stop')
+  expect(mcpCallKind(T, { name: 'quit_editor' })).toBe('stop')
+  expect(mcpCallKind(T, { name: 'close_editor' })).toBe('stop')
   expect(mcpCallKind(T, { name: 'AssetTools.save_asset' })).toBe('write')
   // Round-2 review: exact names and prefixes, never substrings.
   expect(mcpCallKind(T, { name: 'ActorTools.find_closest_actor' })).toBe('read')

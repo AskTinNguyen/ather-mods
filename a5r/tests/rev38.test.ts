@@ -1,9 +1,9 @@
 import { expect, test } from 'claude-code/testing'
-import { DEFAULT_GATES, PASS_MAX_MIN, blankSession, decide, heavyList, heldLine, mayAskYield, newSync, parseLockLine, parseProbe, passEndOk, queueOf, type Decision, type GrantInput, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
-import { launchesEditor } from '../hooks/editor.ts'
+import { DEFAULT_GATES, PASS_MAX_MIN, gitWrites, writesLock, blankSession, decide, heavyList, heldLine, mayAskYield, newSync, parseLockLine, parseProbe, passEndOk, queueOf, type Decision, type GrantInput, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
+import { editorShellAct } from '../hooks/editor.ts'
 import { queueRowText, queueView } from '../hooks/lease.ts'
 import { NUDGE_IDLE_MS, idleMsOf, isIdle } from '../hooks/nudge.ts'
-import { isMemoryNoteDue, isWaitLogDue, lastMemoryNote, waitNote } from '../hooks/waits.ts'
+import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote } from '../hooks/waits.ts'
 import { LOCK, ME, NOW, PROJ, opts, refused, world, type Rec } from './world.ts'
 
 // Rev 38 (L-42: the Editor sat free from 20:06 to 09:27 while session-daa8b2d4 (no PIE, gate 28 GB) and autovault-triage
@@ -83,6 +83,12 @@ test('A113: unit: every session computes the same single passer from the same fi
   for (const f of files) expect(queueView(input(f.id8, files, 25)).rows.map(r => r.wait)).toEqual(['ram', 'ram', 'pass', 'queue'])
 })
 
+test('A113: unit (Fable review D3): a 0.22.0 session file (no canPass) is never chosen as passer; the next one that fits is', () => {
+  const { canPass: _c, ...old } = BUILD
+  expect(grants([PIE_HEAD, old, NOPIE], 30)).toEqual([NOPIE.id8])
+  expect(grants([PIE_HEAD, old], 30)).toEqual([])
+})
+
 test('A113: unit: a sync block stays a block: in another holder\'s freeze nobody passes; a capped slot crossing a planned cutoff does not pass', () => {
   const frozen = newSync(NOW - 5 * MIN, { session: SID('5e5e5e5e'), id8: '5e5e5e5e', lane: 'sync-main' }, 'sync-main', NOW - 60 * MIN)
   const holder = file('5e5e5e5e', { lane: 'sync-main' })
@@ -100,7 +106,8 @@ test('A113: unit: a sync block stays a block: in another holder\'s freeze nobody
 test('A113: unit: the pass slot stays within 30 min in all while its head is queued; the head never asks it to yield', () => {
   expect(passEndOk(HEAD.id8, NOW, NOW + 30 * MIN, [HEAD])).toBe(true)
   expect(passEndOk(HEAD.id8, NOW, NOW + 31 * MIN, [HEAD])).toBe(false)
-  expect(passEndOk(HEAD.id8, NOW, NOW + 45 * MIN, [])).toBe(true) // the head withdrew or was granted: an ordinary lease
+  expect(passEndOk(HEAD.id8, NOW, NOW + 31 * MIN, [{ ...HEAD, heartbeatAt: NOW - 60 * MIN }])).toBe(false) // D5: a head that reads gone still asks: the cap holds
+  expect(passEndOk(HEAD.id8, NOW, NOW + 45 * MIN, [{ ...HEAD, want: null }])).toBe(true) // the head withdrew: an ordinary lease
   // The passer is between Editor work (10 min into its slot, 20 left): only the pass keeps the head's yield ask back.
   const slot = { since: NOW - 10 * MIN, end: NOW + 20 * MIN, extended: 0 }
   const head = file(HEAD.id8, { want: want({ minutes: 15 }) })
@@ -109,21 +116,73 @@ test('A113: unit: the pass slot stays within 30 min in all while its head is que
   expect(mayAskYield(input(HEAD.id8, [head, file(BUILD.id8, { holding: slot })], 27, { lock }))).toEqual({ holder: BUILD.id8 })
 })
 
-test('A113: unit: a command that launches an Unreal Editor (headless runs and the S2 launcher included); stopping or building is not one', () => {
-  for (const c of ['"D:/UE/Engine/Binaries/Win64/UnrealEditor.exe" "E:/s2/S2.uproject" -unattended', 'Start-Process -FilePath UnrealEditor.exe -ArgumentList "E:/s2/S2.uproject"', '& "D:/UE/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" "E:/s2/S2.uproject" -run=pythonscript', 'powershell -File docs/handoff/pie-perf-tools/launch_s2.ps1'])
-    expect([c, launchesEditor(c)]).toEqual([c, true])
-  for (const c of ['Stop-Process -Name UnrealEditor', '"D:/UE/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development -Project="E:/s2/S2.uproject"', 'git status'])
-    expect([c, launchesEditor(c)]).toEqual([c, false])
+test('A113: unit: one classifier reads a shell command\'s act on an Unreal Editor by each segment\'s program (wrappers and nested shells read too): launch, headless or stop; a build, a read, a diff or an echo is none', () => {
+  const cases: [string, ReturnType<typeof editorShellAct>][] = [
+    ['"D:/UE/Engine/Binaries/Win64/UnrealEditor.exe" "E:/s2/S2.uproject" -unattended', 'launch'],
+    ['Start-Process -FilePath UnrealEditor.exe -ArgumentList "E:/s2/S2.uproject"', 'launch'],
+    ['cd E:/s2 && D:\\UE\\Engine\\Binaries\\Win64\\UnrealEditor.exe S2.uproject', 'launch'],
+    // thermo-nuclear review C1: a shell's own command and wrapper verbs are read (the old regex caught the first two)
+    ["powershell -NoProfile -Command \"& 'D:\\UE\\UnrealEditor.exe' 'E:\\s2\\S2.uproject'\"", 'launch'],
+    ['cmd /c "D:\\UE\\UnrealEditor.exe E:\\s2\\S2.uproject"', 'launch'],
+    ['nohup D:/UE/UnrealEditor.exe E:/s2/S2.uproject &', 'launch'],
+    ['& "D:/UE/Engine/Binaries/Win64/UnrealEditor-Cmd.exe" "E:/s2/S2.uproject" -run=pythonscript', 'headless'],
+    ['timeout 600 D:/UE/UnrealEditor-Cmd.exe E:/s2/S2.uproject -run=pythonscript', 'headless'],
+    ['Stop-Process -Name UnrealEditor -Force', 'stop'],
+    ['taskkill /IM UnrealEditor.exe /F', 'stop'],
+    // thermo-nuclear review R1: forms the old regex caught
+    ['pkill -f UnrealEditor', 'stop'],
+    ['pkill UnrealEditor', 'stop'],
+    ['kill -9 $(pgrep UnrealEditor)', 'stop'],
+    ['kill -9 `pgrep UnrealEditor`', 'stop'], // R2
+    ['Stop-Process -Id (Get-Process UnrealEditor).Id -Force', 'stop'], // R2
+    ['start "" "D:/UE/UnrealEditor.exe" E:/s2/S2.uproject', 'launch'],
+    ['cmd /c start "" "D:/UE/UnrealEditor.exe" E:/s2/S2.uproject', 'launch'],
+    ['saps D:/UE/UnrealEditor.exe -ArgumentList E:/s2/S2.uproject', 'launch'],
+    // Fable review D7: a build naming the Editor target, reads, diffs and echoes; no project launcher by name
+    ['"D:/UE/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development -Project="E:/s2/S2.uproject"', null],
+    ['"D:/UE/Engine/Build/BatchFiles/Build.bat" -Target="UnrealEditor Win64 Development" -Project="E:/s2/S2.uproject"', null],
+    ['RunUAT.bat BuildCookRun -project=E:/s2/S2.uproject -editor=UnrealEditor.exe', null],
+    ['cat docs/handoff/pie-perf-tools/launch_s2.ps1', null],
+    ['git diff -- docs/handoff/pie-perf-tools/launch_s2.ps1', null],
+    ['rg UnrealEditor.exe Saved/Logs/S2.log', null],
+    ['echo UnrealEditor.exe S2.uproject', null],
+    ['Stop-Process -Name UnrealEditor-Cmd', null],
+  ]
+  for (const [c, act] of cases) expect([c, editorShellAct(c)]).toEqual([c, act])
+})
+
+test('rev 38 (thermo-nuclear review): one wrapper model and one program walker: the freeze\'s git and lock readers see through timeout, nice and env as the Editor classifier does', () => {
+  expect(gitWrites('timeout 600 git commit -m x')).toEqual([{ verb: 'commit', dir: '' }])
+  expect(gitWrites('nice -n 5 git -C E:/s2 merge origin/main')).toEqual([{ verb: 'merge', dir: 'E:/s2' }])
+  expect(gitWrites('env GIT_TERMINAL_PROMPT=0 git push origin feat')).toEqual([{ verb: 'push', dir: '' }])
+  expect(gitWrites('env -i git push origin feat')).toEqual([{ verb: 'push', dir: '' }]) // `env -i` takes no value
+  expect(gitWrites('env -u HOME git push origin feat')).toEqual([{ verb: 'push', dir: '' }])
+  expect(writesLock('env A=1 tee E:/s2/Saved/EDITOR_OWNER.txt')).toBe(true)
+  expect(writesLock('bash -c "echo x" > E:/s2/Saved/EDITOR_OWNER.txt')).toBe(true) // a redirect outside the shell's command
+  expect(writesLock('timeout 5 cat E:/s2/Saved/EDITOR_OWNER.txt')).toBe(false)
+  expect(editorShellAct('timeout 600 D:/UE/UnrealEditor.exe E:/s2/S2.uproject')).toBe('launch')
 })
 
 // ---------- A112: unit ----------
-test('A112: unit: a wait line is due on a change of code or place, else every 15 min; its note carries code, free RAM, gate, place and the heaviest processes', () => {
+test('A112: unit: a wait line is due on a place change, a new code held 2 min, else every 15 min; its note carries code, free RAM, gate, place and the heaviest processes', () => {
   const d = { kind: 'wait' as const, code: 'ram' as const, why: '', next: '', place: 1 }
-  expect(isWaitLogDue(null, d, NOW)).toBe(true)
-  expect(isWaitLogDue({ key: 'ram:1', at: NOW }, d, NOW + 14 * MIN)).toBe(false)
-  expect(isWaitLogDue({ key: 'ram:1', at: NOW }, d, NOW + 15 * MIN)).toBe(true)
-  expect(isWaitLogDue({ key: 'queue:1', at: NOW }, d, NOW + MIN)).toBe(true)
-  expect(isWaitLogDue({ key: 'ram:2', at: NOW }, d, NOW + MIN)).toBe(true)
+  const q = { ...d, code: 'queue' as const }
+  const last = { code: 'ram' as const, place: 1, at: NOW, next: null }
+  expect(waitLogOf(null, d, NOW).isDue).toBe(true)
+  expect(waitLogOf(last, d, NOW + 14 * MIN).isDue).toBe(false)
+  expect(waitLogOf(last, d, NOW + 15 * MIN).isDue).toBe(true)
+  expect(waitLogOf(last, { ...d, place: 2 }, NOW + MIN).isDue).toBe(true) // a place change at once
+  // Fable review D6: free RAM around a gate: ram, queue, ram, queue… never logged; a code that holds 2 min is.
+  let st = waitLogOf(last, q, NOW + MIN)
+  expect(st.isDue).toBe(false)
+  st = waitLogOf(st.state, d, NOW + 2 * MIN)
+  expect(st.isDue).toBe(false)
+  st = waitLogOf(st.state, q, NOW + 3 * MIN)
+  expect(st.isDue).toBe(false)
+  st = waitLogOf(st.state, q, NOW + 4 * MIN)
+  expect(st.isDue).toBe(false)
+  st = waitLogOf(st.state, q, NOW + 5 * MIN)
+  expect([st.isDue, st.state.code, st.state.at]).toEqual([true, 'queue', NOW + 5 * MIN])
   expect(waitNote(d, want(), probe(27.4, { top: TOP }), DEFAULT_GATES)).toBe('wait ram · freeGb 27.4 · gateGb 28 · place 1 · heavy claude ×32 8.5 GB, chrome ×20 2.7 GB, git ×12 1.2 GB')
   expect(waitNote({ ...d, code: 'queue', place: 2 }, want({ pie: true }), null, DEFAULT_GATES)).toBe('wait queue · freeGb unknown · gateGb 38 (PIE) · place 2 · heavy unknown')
   expect(waitNote(d, want({ launch: false }), probe(20), DEFAULT_GATES)).toContain('gateGb none (launch false)')
@@ -153,13 +212,14 @@ test('A114: unit: idle by the session\'s own facts; the memory note once an hour
   const ram: Decision = { kind: 'wait', code: 'ram', why: '', next: '', place: 1 }
   expect(isMemoryNoteDue({ d: ram, idleMs: 60 * MIN, lastAt: 0, now: NOW })).toBe(true)
   expect(isMemoryNoteDue({ d: ram, idleMs: 59 * MIN, lastAt: 0, now: NOW })).toBe(false)
-  expect(isMemoryNoteDue({ d: ram, idleMs: 90 * MIN, lastAt: NOW - 59 * MIN, now: NOW })).toBe(false)
+  expect(isMemoryNoteDue({ d: ram, idleMs: 300 * MIN, lastAt: NOW - 179 * MIN, now: NOW })).toBe(false) // D8: 3 h between notes
+  expect(isMemoryNoteDue({ d: ram, idleMs: 300 * MIN, lastAt: NOW - 180 * MIN, now: NOW })).toBe(true)
   expect(isMemoryNoteDue({ d: { ...ram, code: 'queue' }, idleMs: 90 * MIN, lastAt: 0, now: NOW })).toBe(false)
   expect(lastMemoryNote(['editor:granted:1', `editor:memory:${NOW - 70 * MIN}`, `editor:memory:${NOW - 5 * MIN}`])).toBe(NOW - 5 * MIN)
 })
 
 // ---------- A112: engine ----------
-test('A112: a queued session logs its wait (rule wait) once, again after 15 min, and at once when its code changes', opts(), async ($, on) => {
+test('A112: a queued session logs its wait (rule wait) once, again after 15 min, and when a new code has held 2 min', opts(), async ($, on) => {
   const w = world(on, { ram: '20.5', top: TOP })
   w.put(LOCK, FREE)
   await $.session.start(START)
@@ -175,6 +235,8 @@ test('A112: a queued session logs its wait (rule wait) once, again after 15 min,
   w.put(LOCK, held('bbbbbbbb', NOW, NOW + 60 * MIN))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { holding: { since: NOW, end: NOW + 60 * MIN, extended: 0 }, agents: 1 }))
   await w.clock.advance(MIN)
+  expect(waitLines(w)).toHaveLength(2) // a new code is logged once it has held 2 min (Fable review D6)
+  await w.clock.advance(2 * MIN)
   expect(waitLines(w)).toHaveLength(3)
   expect(waitLines(w)[2]).toContain('note=wait held;')
 })
@@ -206,8 +268,8 @@ test('A113: a launch:false build goes before a 28 GB head with 27 GB free: grant
   expect(ext).toContain('this slot went before session-daa8b2d4, which waits for memory, so it is at most 30 min in all; extended to 15:25 it would be 45 min')
   expect(parseLockLine(w.read(LOCK)).end).toBe('15:10')
   const launch = refused(await $.tool.call({ tool: 'Bash', command: '"D:/UE/Engine/Binaries/Win64/UnrealEditor.exe" "E:/s2/S2.uproject"' } as never))
-  expect(launch).toContain('A5R · Editor — this slot went before session-daa8b2d4 (first in the queue, waiting for memory) because it was asked with launch: false')
-  expect(launch).toContain('to launch one, release and request again without launch: false')
+  expect(launch).toContain('A5R · Editor lock — this slot went before session-daa8b2d4 (first in the queue, waiting for memory) because it was asked with launch: false')
+  expect(launch).toContain('to use an Editor, release and request again without launch: false')
   expect(refused(await $.tool.call({ tool: 'Bash', command: '"D:/UE/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development' } as never))).toBe(undefined) // the build runs
   // An Editor started another way (a driver, MCP) is seen at the minute: the holder is told to close it.
   await idle($)
@@ -290,7 +352,7 @@ test('A114: a session busy in a turn is not prompted at its grant; the grant rid
   expect(((next as { context?: string[] }).context ?? []).join('\n')).toContain('granted to this session')
 })
 
-test('A114: a queued session idle an hour while the Editor is free and only memory holds it back is told what holds the memory, at most once an hour', opts(), async ($, on) => {
+test('A114: a queued session idle an hour while the Editor is free and only memory holds it back is told what holds the memory, then at most every 3 h', opts(), async ($, on) => {
   const w = world(on, { ram: '20.5', top: TOP })
   on('turn.complete', async () => ({ text: '' }))
   w.put(LOCK, FREE)
@@ -303,9 +365,9 @@ test('A114: a queued session idle an hour while the Editor is free and only memo
   const told = prompts(w).filter(p => p.includes('held back only by memory'))
   expect(told).toHaveLength(1)
   expect(told[0]).toContain('A5R · Editor — the Editor is free and you are queued, idle for 60 min, held back only by memory: free RAM is 20.5 GB after cleanup, under the launch gate of 28 GB for a slot without PIE; memory is held by claude ×32 8.5 GB, chrome ×20 2.7 GB, git ×12 1.2 GB')
-  for (let n = 0; n < 50; n += 1) await w.clock.advance(MIN) // the wake started no turn: still idle, but told less than an hour ago
+  for (let n = 0; n < 179; n += 1) await w.clock.advance(MIN) // the wake started no turn: still idle; Fable review D8: again only after 3 h
   expect(prompts(w).filter(p => p.includes('held back only by memory'))).toHaveLength(1)
-  for (let n = 0; n < 10; n += 1) await w.clock.advance(MIN)
+  await w.clock.advance(MIN)
   expect(prompts(w).filter(p => p.includes('held back only by memory'))).toHaveLength(2)
 })
 
@@ -321,4 +383,73 @@ test('A114: a queued session that worked within the hour is not told about memor
   await idle($)
   for (let n = 0; n < 40; n += 1) await w.clock.advance(MIN)
   expect(prompts(w).filter(p => p.includes('held back only by memory'))).toEqual([])
+})
+
+// ---------- Fable review of 24da364 ----------
+test('A113 (Fable review D1): in a launch:false pass slot an Editor that came to run anyway is not driven (PIE, MCP writes), and the holder is told again every 10 min while it runs', opts(), async ($, on) => {
+  const w = world(on, { ram: '27' })
+  on('turn.complete', async () => ({ text: '' }))
+  w.put(LOCK, FREE)
+  w.put(`${HF}/editor/daa8b2d4.json`, peer('daa8b2d4', { lane: 'session-daa8b2d4', want: want({ minutes: 25 }) }))
+  await $.session.start(START)
+  await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, build: true, launch: false, what: 'build' } as never)
+  expect(lockId(w)).toBe(ME8)
+  const write = refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', method: 'set_actor_property', arguments: {} } as never))
+  expect(write).toContain('this slot went before session-daa8b2d4 (first in the queue, waiting for memory) because it was asked with launch: false, and this call drives an Unreal Editor → do the work that needs no Editor')
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'McpPieToolset.StartPIE' } as never))).toContain('release and request again without launch: false')
+  // Closing that Editor is what the holder is asked to do: a stop runs (MCP and shell).
+  expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'EditorTools.QuitEditor' } as never))).toBe(undefined)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'Stop-Process -Name UnrealEditor -Force' } as never))).toBe(undefined)
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'powershell -Command "& D:/UE/UnrealEditor-Cmd.exe E:/s2/S2.uproject -run=pythonscript"' } as never))).toContain('this command launches an Unreal Editor')
+  await idle($)
+  w.machine.procs = [{ name: 'UnrealEditor', pid: 4242, gb: 22, parentAlive: true }]
+  const told = () => prompts(w).filter(p => p.includes('an Unreal Editor (PID 4242) runs in this session')).length
+  await w.clock.advance(MIN)
+  expect(told()).toBe(1)
+  for (let n = 0; n < 11; n += 1) await w.clock.advance(MIN)
+  expect(told()).toBe(2) // the next 10-min window, while it still runs
+})
+
+test('A114 (Fable review D2): a long main-loop call that returns is a turn signal: no wake lands while the model works on after it', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, held('bbbbbbbb', NOW, NOW + 60 * MIN))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { holding: { since: NOW, end: NOW + 60 * MIN, extended: 0 }, agents: 1 }))
+  await $.session.start(START)
+  await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, what: 'PIE check' } as never)
+  let finish = () => {}
+  w.toolHolds.set('long build', new Promise<void>(r => { finish = r }))
+  const call = $.tool.call({ tool: 'Bash', command: 'long build' } as never)
+  for (let n = 0; n < 13; n += 1) await w.clock.advance(MIN) // the call runs: never idle
+  finish()
+  await call // returns at 14:53; the turn goes on
+  w.put(LOCK, FREE)
+  await w.clock.advance(MIN) // granted at 14:54: the session is busy, 1 min after its last signal
+  expect(lockId(w)).toBe(ME8)
+  expect(prompts(w)).toEqual([])
+})
+
+test('Fable review D4: a lock lost to another grant in the same minute keeps this session\'s request and place, and it is told', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, held('bbbbbbbb', NOW - MIN, NOW + 30 * MIN))
+  w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { holding: { since: NOW - MIN, end: NOW + 30 * MIN, extended: 0 }, agents: 1 }))
+  w.put(`${HF}/editor/${ME8}.json`, JSON.stringify({ ...blankSession(ME, 'tail-vfx', 'Tail', NOW), lastTurnAt: NOW, want: want({ requestedAt: NOW - 20 * MIN }), holding: { since: NOW - MIN, end: NOW + 29 * MIN, extended: 0 } }))
+  await $.session.start(START)
+  const mine = JSON.parse(w.read(`${HF}/editor/${ME8}.json`)) as SessionFile
+  expect([mine.holding, mine.want?.requestedAt]).toEqual([null, NOW - 20 * MIN])
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(((next as { context?: string[] }).context ?? []).join('\n')).toContain('A5R · Editor — the lock names lane-bbbbbbbb, not this session (two grants met in the same minute, or the line was rewritten) → your request stays queued in its place')
+})
+
+test('A113 (Fable review D3): the holder of a pass slot does not hear a yield ask from the head it passed (a 0.22.0 head may still ask)', opts(), async ($, on) => {
+  const w = world(on, { ram: '27' })
+  on('turn.complete', async () => ({ text: '' }))
+  w.put(LOCK, FREE)
+  w.put(`${HF}/editor/daa8b2d4.json`, peer('daa8b2d4', { lane: 'session-daa8b2d4', want: want({ minutes: 15 }) }))
+  await $.session.start(START)
+  await $.tool.call({ tool: EDITOR, action: 'request', minutes: 30, build: true, launch: false, what: 'build' } as never)
+  expect(lockId(w)).toBe(ME8)
+  await idle($)
+  w.put(`${HF}/editor/daa8b2d4.json`, peer('daa8b2d4', { lane: 'session-daa8b2d4', want: want({ minutes: 15 }), yieldAsks: [{ holder: ME8, at: NOW, via: 'file', minutes: 15, lane: 'session-daa8b2d4' }] }))
+  for (let n = 0; n < 12; n += 1) await w.clock.advance(MIN)
+  expect(prompts(w).filter(p => p.includes('Editor yield'))).toEqual([])
 })

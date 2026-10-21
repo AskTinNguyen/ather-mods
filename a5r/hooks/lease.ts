@@ -154,9 +154,9 @@ export const yieldTold = (asks: readonly { asker: SessionFile; ask: YieldAsk }[]
 
 /** A103: the yield asks this lease's holder has in other sessions' files: through its own a5r (`file`), made during the
  * lease (a minute before its grant counts) and less than an hour old; each with the session that asked, whose id keys
- * its notice. */
-export const yieldAsksTo = (files: readonly SessionFile[], holder8: string, since: number, now: number): { asker: SessionFile; ask: YieldAsk }[] =>
-  files.flatMap(asker => asker.yieldAsks.filter(a => a.holder === holder8 && a.via === 'file' && a.at >= since - 60_000 && now - a.at < YIELD_EVERY_MS).map(ask => ({ asker, ask })))
+ * its notice. A113: never from the head a pass slot went before (a 0.22.0 head may still ask). */
+export const yieldAsksTo = (files: readonly SessionFile[], holder8: string, lease: Pick<Holding, 'since' | 'pass'>, now: number): { asker: SessionFile; ask: YieldAsk }[] =>
+  files.filter(asker => asker.id8 !== lease.pass).flatMap(asker => asker.yieldAsks.filter(a => a.holder === holder8 && a.via === 'file' && a.at >= lease.since - 60_000 && now - a.at < YIELD_EVERY_MS).map(ask => ({ asker, ask })))
 
 /** A101: the idle notice goes out only when the holder ran no turn, made no Editor use and ran no background agent for
  * 15 min (counted from the grant at most), with no PIE of its own and not unattended. D2: past the lease's end its turns

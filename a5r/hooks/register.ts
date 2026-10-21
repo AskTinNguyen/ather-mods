@@ -1,21 +1,21 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5R, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
+import { A5R, SHELLS, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark } from './decision.ts'
-import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, isEditorStartStop, launchesEditor, lockProblem, mcpCallKind, parseEditorLock } from './editor.ts'
+import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, lockProblem, mcpCallKind, parseEditorLock } from './editor.ts'
 import {
   CUTOFF_MS, DIR, HARD_END_WARN_MS, isHolderInSync, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
-  PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, PASS_MAX_MIN, type Grant,
+  PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, passNoLaunch, PASS_NO_LAUNCH_NEXT, PASS_MAX_MIN, type Grant,
   DEFAULT_GATES, isYieldMoment, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
-import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, unwrap, walk, writesInside } from './gitshared.ts'
+import { CONFLICT_HEADS, classifyGit, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, idleMsOf, isIdle, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
-import { isMemoryNoteDue, isWaitLogDue, lastMemoryNote, waitKey, waitNote, type WaitLogged } from './waits.ts'
+import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
 import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, tellKey, testsOf, type BuildLog, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
@@ -375,9 +375,13 @@ const isUnrealMcp = (tool: string): boolean => tool.startsWith('mcp__') && /unre
 
 /** The Editor gate: null when the call may touch the Editor, else why not and what to do. */
 async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Promise<string | null> {
-  const kind = isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) && isEditorStartStop(str(e.command)) ? 'startstop' : null
+  const kind = isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) ? editorShellAct(str(e.command)) : null
   if (!kind || kind === 'read') return null
   if (kind === 'save-all') return 'save-all saves every dirty package, other lanes\' included → list the dirty packages and save each one by exact path'
+  // A113 (Fable review D1): a launch:false pass slot launches and drives no Editor, however one came to run; it may stop one.
+  const passed = holdsLock() ? noLaunchPass(me) : null
+  if (passed && kind !== 'stop') return `${passNoLaunch(laneOf(passed), kind === 'launch' || kind === 'headless' ? 'this command launches an Unreal Editor' : 'this call drives an Unreal Editor')} → ${PASS_NO_LAUNCH_NEXT}`
+  if (kind === 'headless') return null // a headless run uses no shared Editor (no lock), as before
   const raw = await $.fs.read(lockFile()).catch(() => null)
   if (raw === null && !(await isCheckoutHere($))) return null // no S2 checkout on this machine
   const nowMsHere = await $.clock.now() // the engine's clock, never the wall clock (a test's time is its own)
@@ -550,12 +554,11 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
   const LEASE = /--force-(with-lease|if-includes)/
   const unread = blocked(gate, 'this force push with a lease sits inside a nested shell, eval or script, so the branch it writes cannot be read', 'write it as one plain git command: git push --force-with-lease origin <your-branch>')
   let shared: string | null = null
-  for (const raw of walk(command, cwd, home)) {
-    if (!LEASE.test(raw.raw)) continue
-    const seg = unwrap(raw) // 0.16.1: `timeout 120 git push …` is the git command it runs
+  for (const seg of walk(command, cwd, home)) {
+    if (!LEASE.test(seg.raw)) continue
     // Review 1: `bash -c "…"`, `powershell -Command "…"`, `cmd /c "…"` are read inside (two levels at most); a shell fed a
     // script file or stdin (`bash -s`, `bash x.sh`) cannot be.
-    if (NESTED.has(seg.verb)) {
+    if (SHELLS.has(seg.verb)) {
       const inner = nestedCommand(seg.verb, seg.args)
       if (!inner || depth >= 2) return unread
       const problem = await leasePushProblem($, opts, inner, seg.dir, depth + 1)
@@ -583,7 +586,6 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
   }
   return null
 }
-const NESTED = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
 const EVALS = new Set(['eval', 'source', '.', 'iex', 'invoke-expression', 'xargs'])
 
 /** A74 (review 5): after this session commits in the shared checkout, its touch set keeps only the paths still changed
@@ -771,7 +773,7 @@ async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   if (!me) return
   const now = at ?? (await $.clock.now())
   const { sharedShellAt: _was, ...rest } = me
-  me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), heartbeatAt: now, canPass: true, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir()}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -948,6 +950,18 @@ async function deliverIdle($: Engine, opts: Opts): Promise<void> {
       $.ui.log('a5r: the notice prompt started no turn within 30 s; the next notice will wake the session again', { to: 'debug' })
     }
   })
+}
+
+/** A114: a main-loop tool call runs: counted while it runs (a long foreground call is not idle), and its return is a turn
+ * signal (Fable review D2: the model works on after it); the count is given back however the call ends. */
+async function asMainCall<T>($: Engine, run: () => Promise<T>): Promise<T> {
+  mainCalls += 1
+  try {
+    return await run()
+  } finally {
+    mainCalls -= 1
+    await signalTurn($)
+  }
 }
 
 /** A114: a busy flag no turn backs (a prompt whose turn never ran: another plugin's, which A59's timer does not watch) is
@@ -1160,7 +1174,7 @@ async function readLeaseLog($: Engine, opts: Opts, now: number): Promise<void> {
  * was told of in the last 10 min (D1: its kept place then ranks right after the asker), a sync's cutoff or freeze it does
  * not hold, past its end, told it was idle. */
 function releaseWhy(h: Holding, now: number): Pick<LeaseEnd, 'reason' | 'after'> {
-  const told = yieldTold(yieldAsksTo(peers, me8, h.since, now), toldAt, now)
+  const told = yieldTold(yieldAsksTo(peers, me8, h, now), toldAt, now)
   const reason = releaseReason({ isYieldTold: told !== undefined, isSyncNeed: isSyncClaim(syncFile, me8, phaseOf(syncFile, now)), isOver: now >= h.end, isIdleTold: delivered.has(noticeIds.idle(h.since)) })
   return reason === 'yielded' && told?.asker.want ? { reason, after: told.asker.want.requestedAt } : { reason }
 }
@@ -1462,17 +1476,22 @@ async function leaseStep($: Engine, opts: Opts, now: number): Promise<void> {
       push({ id: noticeIds.idle(h.since), text: NOTICES.idle(Math.round((now - Math.max(lastEditorUseAt, h.since)) / 60_000)), isActionable: true })
     // A103: a yield ask is held until the holder is between Editor work (5 min without use, 20 min of the lease left).
     if (isYieldMoment({ now, since: h.since, end: h.end, editorUseAt: lastEditorUseAt }))
-      for (const { asker, ask } of yieldAsksTo(peers, me8, h.since, now)) push({ id: noticeIds.yield(asker.id8, ask.at), text: NOTICES.yield(asker.lane, ask.minutes), isActionable: true })
+      for (const { asker, ask } of yieldAsksTo(peers, me8, h, now)) push({ id: noticeIds.yield(asker.id8, ask.at), text: NOTICES.yield(asker.lane, ask.minutes), isActionable: true })
     // A113: a pass slot asked with launch: false began with no Editor (a head waiting for memory means none ran): one that
     // runs now was launched in it.
     const passed = noLaunchPass(me)
     const launched = unrealPids(probe)[0]
-    if (passed && launched !== undefined) push({ id: noticeIds.passLaunched(h.since), text: NOTICES.passLaunched(launched, laneOf(passed)), isActionable: true })
+    if (passed && launched !== undefined) push({ id: noticeIds.passLaunched(h.since, now), text: NOTICES.passLaunched(launched, laneOf(passed)), isActionable: true })
     await notePid($, opts, false)
     decision = { kind: 'mine' }
     return
   }
-  if (me.holding) me = { ...me, holding: null, want: null } // the lock no longer names this session
+  // The lock no longer names this session though its file holds a lease (A54/A55 releases were read above): two grants met
+  // in the same minute, or the line was rewritten. Fable review D4: the request and its place stay; it is told.
+  if (me.holding) {
+    push({ id: noticeIds.lockLost(me.holding.since), text: NOTICES.lockLost(lock.lane || lock.id8 || 'another lane'), isActionable: false })
+    me = { ...me, holding: null }
+  }
   if (!me.want) {
     decision = null
     return
@@ -1529,8 +1548,9 @@ async function waitStep($: Engine, opts: Opts, now: number): Promise<void> {
     waitLogged = null
     return
   }
-  if (isWaitLogDue(waitLogged, d, now)) {
-    waitLogged = { key: waitKey(d), at: now }
+  const next = waitLogOf(waitLogged, d, now)
+  waitLogged = next.state
+  if (next.isDue) {
     await orchestrateLog($, opts, { at: now, rule: 'wait', lane: me.lane, id8: me8, procs: [], liveness: 'alive', lastTurnAt: me.lastTurnAt ?? null, agents: agentsNow, build: me.want.build, acted: false, note: waitNote(d, me.want, probe, gates) }).catch(() => undefined)
   }
   const idleMs = myIdleMs(now)
@@ -1837,9 +1857,11 @@ function orchestrateCard(el: { Box: (p: Record<string, unknown>) => unknown; Tex
   })
 }
 
-/** A55: when this session's main loop last ran (written with its file at the next save). */
-async function markTurn($: Engine): Promise<void> {
-  if (me) me = { ...me, lastTurnAt: await $.clock.now() }
+/** A55 / A59: the main loop ran (a prompt, a tool call or its return, a turn's end): its turn signal, and its last turn
+ * (written with its file at the next save). */
+async function signalTurn($: Engine): Promise<void> {
+  turnSignalAt = await $.clock.now()
+  if (me) me = { ...me, lastTurnAt: turnSignalAt }
 }
 
 /** A66: the holder writes the Editor that actually runs into its HELD line (read-compare-write; the holder only): at
@@ -2959,10 +2981,6 @@ async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): 
       return blocked('Notices', 'a5r notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5R ·" line out; the files under Saved/A5R are the record')
   }
   if (SHELL_TOOLS.has(tool) && writesLock(str(input.command))) return blocked('Editor lock', 'under A5R the lock is written by the editor tool, never by a command', viaTool)
-  // A113: a slot that went before a head waiting for memory because it launches no Editor does not launch one.
-  const passed = holdsLock() ? noLaunchPass(me) : null
-  if (SHELL_TOOLS.has(tool) && passed && launchesEditor(str(input.command)))
-    return blocked('Editor', `this slot went before ${laneOf(passed)} (first in the queue, waiting for memory) because it was asked with launch: false, and this command launches an Unreal Editor`, 'do the work that launches no Editor (the build) in this slot; to launch one, release and request again without launch: false (the launch gate applies)')
   if (SHELL_TOOLS.has(tool) && writesNoticeToIntent(str(input.command)))
     return blocked('Notices', 'a5r notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5R ·" line out; the files under Saved/A5R are the record')
   return null
@@ -3108,7 +3126,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     const add = Math.max(5, Math.min(120, Math.round(Number(e.minutes) || 15)))
     const end = Math.max(h.end, now) + add * 60_000
     // A113: a slot that went before a head waiting for memory stays within 30 min in all while that head is queued.
-    if (h.pass && !passEndOk(h.pass, h.since, end, queue)) return blocked('Editor', `this slot went before ${laneOf(h.pass)}, which waits for memory, so it is at most ${PASS_MAX_MIN} min in all; extended to ${clockOf(end)} it would be ${Math.round((end - h.since) / 60_000)} min`, `finish by ${clockOf(h.since + PASS_MAX_MIN * 60_000)}, release, and ask again for the rest`)
+    if (h.pass && !passEndOk(h.pass, h.since, end, [me, ...peers])) return blocked('Editor', `this slot went before ${laneOf(h.pass)}, which waits for memory, so it is at most ${PASS_MAX_MIN} min in all; extended to ${clockOf(end)} it would be ${Math.round((end - h.since) / 60_000)} min`, `finish by ${clockOf(h.since + PASS_MAX_MIN * 60_000)}, release, and ask again for the rest`)
     const phase = phaseOf(syncFile, now)
     if (syncFile && phase === 'planned' && end > syncFile.at - 30 * 60_000) return blocked('Editor', `the lease would end at ${clockOf(end)}, past the sync cutoff ${clockOf(syncFile.at - 30 * 60_000)}`, 'finish by the cutoff, or ask after the sync is done')
     if (isSyncClaim(syncFile, me8, phase)) return blocked('Editor', `the sync at ${clockOf(syncFile.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, `release by ${clockOf(syncFile.at - 10 * 60_000)}`)
@@ -3666,12 +3684,11 @@ export const register: Register = (on, options) => {
     const isMain = e.agentId === undefined && next.origin.plugin === 'engine'
     if (isMain) isBusy = true
     await ensureCheckout($, opts)
+    if (isMain) await signalTurn($) // A55 / A59: the main loop runs
     // Hotfix 0.18.2: A5R's own tools always answer: an error inside is the call's result (named, with a step), never a
     // throw that leaves the call unanswered ("no tool.call hook answered this call", MEASURED in b4f33d56 at 15:00:43).
     if (tool === EDITOR_TOOL || tool === SYNC_TOOL) {
       try {
-        if (isMain) await markTurn($) // A55: the main loop runs
-        if (isMain) turnSignalAt = await $.clock.now() // A59
         if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
         const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
         const rules = Array.isArray(input.rules) ? input.rules.map(String) : typeof input.rules === 'string' ? input.rules : undefined
@@ -3681,8 +3698,6 @@ export const register: Register = (on, options) => {
         return { result: toolErrorText($, tool, err) }
       }
     }
-    if (isMain) await markTurn($) // A55: the main loop runs
-    if (isMain) turnSignalAt = await $.clock.now() // A59
     const a5r = await load($)
     const isOn = await readA5R($)
 
@@ -3755,10 +3770,7 @@ export const register: Register = (on, options) => {
       }
     }
 
-    if (isMain) mainCalls += 1 // A114: a long foreground call is not idle
-    const ran = await next(e).finally(() => {
-      if (isMain) mainCalls -= 1
-    })
+    const ran = isMain ? await asMainCall($, () => next(e)) : await next(e)
     if (chain === null) {
       // Where this plugin sits: Ather beneath means its pane can be wrapped. Kept outside the plugin
       // folder (a write inside it would reload the mod), for /a5r status and for checking by hand.
@@ -3795,7 +3807,7 @@ export const register: Register = (on, options) => {
         const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
         const cwd = await $.session.cwd()
         // 0.16.1: reads (git log/status/diff, ls, cat, grep, …) change nothing; a redirect into the checkout counts from anywhere.
-        const segs = walk(what, cwd, home).map(unwrap)
+        const segs = walk(what, cwd, home)
         const root = s2Root()
         const commits = segs.some(seg => seg.verb === 'git' && under(gitPlace(seg).dir, root) && (gitPlace(seg).args[0] ?? '') === 'commit')
         const was = sharedShellAt
@@ -3838,8 +3850,7 @@ export const register: Register = (on, options) => {
     }
     if (e.agentId === undefined) {
       // The session is idle now: a notice that needs action and arrived after the last tool result is one prompt.
-      await markTurn($) // A55: the turn saw everything its tool results carried, a grant made in it included
-      turnSignalAt = await $.clock.now() // A59
+      await signalTurn($) // A55: the turn saw everything its tool results carried, a grant made in it included
       isBusy = false
       if (a5rOn) await deliverIdle($, opts)
     }
@@ -3851,9 +3862,8 @@ export const register: Register = (on, options) => {
     await ensureCheckout($, opts)
     // A59: a prompt Hai sends starts a turn; a plugin's queued prompt (this mod's wake included) only counts once its turn
     // runs a tool or ends, so a wake that never runs cannot pass for a turn.
-    if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') turnSignalAt = await $.clock.now()
     // A55: a turn starts (a prompt a plugin queued, this mod's notice prompt included, counts once the turn runs a tool or ends)
-    if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') await markTurn($)
+    if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') await signalTurn($)
     // A63 clean-up (kept by A83): Hai typed in a session whose title still carries an old decision mark (from before
     // 0.17.0): the title goes back without it, read now (never a value kept in memory, which a reload loses).
     const typed = (e.origin as { kind?: string } | undefined)?.kind

@@ -75,7 +75,6 @@ export const writesFiles = (raw: string, verb: string, all: readonly string[], i
   if (PKG.has(verb)) return PKG_WRITES.has(sub)
   return false
 }
-const NESTED_SHELLS = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
 /** 0.18.3: where a copy writes (cp, copy, Copy-Item, robocopy, xcopy), or null when the command is no copy or its
  * destination cannot be read. A move is no copy (it removes its source). */
 const copyDestinations = (verb: string, args: readonly string[]): string[] | null => {
@@ -185,14 +184,49 @@ export const blankQuotes = (seg: string): string => seg.replace(/"[^"]*"|'[^']*'
 export const tokenize = (seg: string): string[] =>
   (seg.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(t => (t.length > 1 && t[0] === t[t.length - 1] && (t[0] === '"' || t[0] === "'") ? t.slice(1, -1) : t))
 
-/** [verb, args]: env assignments and wrappers skipped; verb lowercased, path and .exe dropped. */
+/** 0.16.1 / rev 38: wrapper verbs that take arguments of their own (`timeout 120`, `nice -n 5`, `env A=1`, `stdbuf -o0`,
+ * `ionice -c3`), stepped over to the program they run; each with the flags of its own that take a separate value (`env -i`
+ * takes none, `env -u NAME` one). */
+const ARG_WRAPPERS: Readonly<Record<string, RegExp>> = { timeout: /^-(s|k|-signal|-kill-after)$/, nice: /^-(n|-adjustment)$/, env: /^-(u|C|-unset|-chdir)$/, stdbuf: /^-(i|o|e)$/, ionice: /^-(c|n|p|-class|-classdata|-pid)$/ }
+/** A token as a program name: its last path part, lowercased, `.exe` dropped. */
+export const program = (token: string): string => {
+  const verb = token.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+  return verb.endsWith('.exe') ? verb.slice(0, -4) : verb
+}
+
+/** [verb, args]: env assignments and wrappers skipped (bare ones: `&`, `sudo`, `time`, `nohup`, …; ones with arguments:
+ * `timeout 120`, `nice -n 5`, `env A=1`, …, so `timeout 120 git push` is the git command it runs); verb lowercased, path
+ * and .exe dropped. */
 export const commandVerb = (tokens: string[]): [string, string[]] => {
   let i = 0
-  while (i < tokens.length && (/^\w+=/.test(tokens[i] ?? '') || WRAPPERS.has((tokens[i] ?? '').toLowerCase()))) i += 1
+  for (let guard = 0; guard < 8; guard += 1) {
+    while (i < tokens.length && (/^\w+=/.test(tokens[i] ?? '') || WRAPPERS.has((tokens[i] ?? '').toLowerCase()))) i += 1
+    const verb = program(tokens[i] ?? '')
+    const valued = ARG_WRAPPERS[verb]
+    if (!valued) break
+    i += 1
+    while (i < tokens.length) {
+      const a = tokens[i] ?? ''
+      if (/^-/.test(a)) i += valued.test(a) ? 2 : 1
+      else if (/^\w+=/.test(a) || (verb === 'timeout' && /^\d+(\.\d+)?[smhd]?$/.test(a))) i += 1
+      else break
+    }
+  }
   if (i >= tokens.length) return ['', []]
-  const verb = (tokens[i] ?? '').split(/[\\/]/).pop()?.toLowerCase() ?? ''
-  return [verb.endsWith('.exe') ? verb.slice(0, -4) : verb, tokens.slice(i + 1)]
+  return [program(tokens[i] ?? ''), tokens.slice(i + 1)]
 }
+
+/** The shells whose `-c` / `-Command` / `/c` command is read as a command of its own (nestedCommand). */
+export const SHELLS: ReadonlySet<string> = new Set(['bash', 'sh', 'zsh', 'powershell', 'pwsh', 'cmd'])
+
+/** Rev 38 (thermo-nuclear review): every program a command runs, read once for every classifier: each segment (`raw`, its
+ * verb and args by commandVerb), and for a shell segment also the programs of its own command (two levels). */
+export type Program = { raw: string; verb: string; args: string[] }
+export const programs = (command: string, depth = 0): Program[] =>
+  segments(stripHeredocs(command ?? '')).flatMap(raw => {
+    const [verb, args] = commandVerb(tokenize(raw))
+    return [{ raw, verb, args }, ...(SHELLS.has(verb) && depth < 2 ? programs(nestedCommand(verb, args), depth + 1) : [])]
+  })
 
 /** The command handed to `bash -c`, `powershell -Command`, `cmd /c`. */
 export const nestedCommand = (verb: string, args: string[]): string => {
@@ -434,7 +468,7 @@ export class A5R {
       if (inKit && !outOnly && writesFiles(raw, verb, args, kitHere)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')
       const hit = this.writesProtected(raw, verb, args)
       if (hit) return decision('deny', 'D1', `This command touches the A5R kit (${hit}). Agents may not change the enforcement kit.`, 'kit')
-      if (NESTED_SHELLS.has(verb) && depth < 2) {
+      if (SHELLS.has(verb) && depth < 2) {
         const inner = this.preShell(nestedCommand(verb, args), workdir, env, depth + 1, isShared)
         if (inner?.kind === 'deny') return inner
         firstAsk ??= inner
