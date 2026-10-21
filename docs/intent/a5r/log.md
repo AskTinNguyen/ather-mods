@@ -292,3 +292,27 @@ Read in the worker's transcript (agent aa0ae3d3aa8c5772c): it ran `Start-Process
 > 1. Plugin phải dùng được cho nhiều máy khác nhau. Đặt hard path thì máy khác bị lỗi sao
 
 (Answer to the question whether to set `engineRoot = D:\GameEditors\5.8-ninetails-ed5c054`.)
+
+## L-42 (2026-10-21) | class: intent | -> rev 38
+
+Sent to this session by the "Sessions chờ Editor" session ("A5R insight from Hải"), verbatim:
+
+> A5R insight from Hải: the Editor sat FREE ~13 h 20 min last night (20:06 20/10 → 09:27 21/10) while 2 sessions were queued; neither got it until morning.
+>
+> MEASURED (Saved/A5R/leases.jsonl, editor/*.json, nudges/, orchestrate.log):
+> - Last lease 20/10: avian-enemy-family ended 20:06 (released). Next grant: session-daa8b2d4 at 09:27 21/10.
+> - Queued through the night: session-daa8b2d4 (requested 11:08 20/10, no PIE → gate 28 GB) and autovault-triage df9d2d62 (requested 12:03 20/10, PIE → gate 38 GB). Both waited ~22 h. No sync freeze then (sync.json phase done 17:23).
+> - Both queued sessions were idle overnight (daa8b2d4 lastTurn 14:32 20/10).
+> - nudges/ holds no nudge after 02:17 20/10. nudge.ts nudgeCandidates filters `!f.want`, so queued sessions are never nudged.
+> - Free RAM at 09:53 was 27–29.5 GB (many claude.exe), i.e. right around or under the 28/38 GB launch gates.
+>
+> INFERRED (not provable from current logs):
+> 1. decide() (coord.ts ~644) kept returning wait 'ram' for the queue head daa8b2d4 (needs ≥28 GB). The queue is strict FIFO (queueOf), so autovault (needs 38) was blocked behind it too. A5R does not log wait reasons or free RAM over time, so this cannot be confirmed.
+> 2. Even a grant would likely have gone unused: an idle session only sees the grant on its next tool call (machine-profile trap 09/10), and A91 never wakes queued sessions.
+>
+> Proposed fixes (for the a5r mod, in a worktree):
+> a) Log each wait decision with code + freeGb + gate to orchestrate.log, throttled (e.g. on change or every 15 min), so a night like this can be explained.
+> b) When the queue head is blocked by code 'ram' (or 'sync'), let a later request that fits (lower gate, or launch:false / build-only) take the free Editor instead of blocking everyone.
+> c) Extend A91 to wake the queue head when the Editor is free and it is idle (when granted, or when it is blocked only by RAM), instead of nudging only non-queued sessions.
+>
+> Also from A5R status: 24 h stats were 16 leases, median wait 42 min, launch 42%. Most leases logged a "no-editor" rule hit (lease held with no Editor/build running), which also wastes slots.
