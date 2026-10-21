@@ -6,7 +6,7 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import { AFK, createEngine } from './engine.mjs'
 import { check, draw, layouts } from './screen.mjs'
-import { repoId } from './out/hooks/state.mjs'
+import { repoId } from './out/hooks/workspace.mjs'
 
 const OUT = process.argv[2]
 // --layouts <dir>: write every pane and band laid out at 72 and 110 columns, to diff two runs.

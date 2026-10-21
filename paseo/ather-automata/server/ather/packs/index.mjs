@@ -45,7 +45,7 @@ import { makeWebPack } from './web.mjs'
  *   skillGroups: readonly { group: string, names: readonly string[] }[], createGroups: readonly { group: string, items: readonly CreateItem[] }[],
  *   createOrder: Record<string, readonly string[]>, createTitle: string, createMeta: (editor: EditorState) => string, createPrompt: (verb: string, name: string, editor: EditorState) => string,
  *   prompts: { brief: (role: string, slug: string) => string, prove: (role: string, slug: string) => string, ship: (role: string, slug: string) => string, shipHint: (role: string) => string, briefHint: string, tour: string, tourToast: string, ask: (question: string) => string },
- *   mandate: { flags: string, allowed: string, merge: string, away: string, pane: string },
+ *   mandate: { flags: string, allowed: string, merge: string, away: string, pane: string, panes: string },
  *   statusWhat: string, notHere: string, gates: readonly Gate[], production: Production | null, scripts?: Record<string, string>,
  *   teams?: Readonly<Record<string, string>>, names?: import('../worklist.mjs').NameRules,
  *   [key: string]: unknown

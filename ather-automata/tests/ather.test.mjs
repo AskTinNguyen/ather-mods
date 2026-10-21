@@ -1,7 +1,7 @@
 // @ts-check
 import { describe, expect, test } from 'claude-code/testing'
 
-import { awayReason, isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, windowDecisions } from '../hooks/away.mjs'
+import { awayMessage, awayReason, awaySessions, isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, pickedSessions, sideKind, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, SIMPLE_SHOWS, VIEW_LABELS, isShownIn, otherView, paneViewOf, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
@@ -9,13 +9,13 @@ import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStat
 import { NO_PLACE } from '../hooks/handoff.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
-import { checkoutNames, checkoutOf, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
+import { checkoutId, checkoutNames, checkoutOf, parseWorktrees, readWorkspace, repoId } from '../hooks/workspace.mjs'
 import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, propForTool, propSvg, trailWords, workerState } from '../hooks/squad.mjs'
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
 import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
-import { QUIET, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
-import { awayWindowRows, intentRows } from '../hooks/modes.mjs'
+import { QUIET, cells, fit, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
+import { awayPickText, awayWindowRows, intentRows } from '../hooks/modes.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
@@ -342,6 +342,150 @@ describe('away windows', () => {
     // The mandate says it in the same words.
     expect(mandateText(open, 420)).toContain('the user is away until the work is done (hard stop 12:00 local time). When the goal is done, call the mcp__ather-automata__away tool')
     expect(mandateText(timed, 420)).toContain('the user is away until 20:00 local time. Goal: continue the active work.')
+  })
+})
+
+describe('heading off for several sessions (away-many-sessions)', () => {
+  const MIN = 60000
+  const lane = (sessionId, fields = {}) => ({ sessionId, intent: null, branch: 'feat/x', updatedAt: NOON, lastActiveAt: NOON, ...fields })
+  const self = { sessionId: 'me', title: 'Walker topic S2 deep dive', branch: 'feat/walker', intent: 'walker' }
+
+  test('the sync conductor and scheduled tasks are told by their names, as composed characters, by whole words (A1)', () => {
+    const daily = '【Hằng ngày 08:30】Nhắc việc bàn giao Đuôi Cửu Vỹ + FluidNinja (hạn 20/10)'
+    // Hai's real titles, the daily reminder in composed and decomposed characters.
+    expect(['♾️S2 sync main', 'Duyệt PR được assign review (4 tiếng/lần)', daily, daily.normalize('NFD'), 'Walker topic S2 deep dive', 'L_Master_AoBing QA/Playtest mode'].map(sideKind)).toEqual(['sync', 'scheduled', 'scheduled', 'scheduled', '', ''])
+    expect(['Sync main conductor', 'sync-main', 'S2 Sync Main'].map(sideKind)).toEqual(['sync', 'sync', 'sync'])
+    expect(['daily standup notes', 'every 2 hours: triage', 'Every morning standup', 'Scheduled PR sweep', 'hourly check', 'Hằng ngày 08:30'.normalize('NFD')].map(sideKind)).toEqual(['scheduled', 'scheduled', 'scheduled', 'scheduled', 'scheduled', 'scheduled'])
+    // Fable's probe: never a word inside another or joined to one, never "every" alone or "nightly".
+    expect(['Hệ thống enemy chim mới', 'Every enemy validation', 'S2 sync với main', 'intent/daily-login-reward', 'feat/everything-open', 'Evening QA', 'Nightly build fix intent', 'hourly-rate calc', 'Synchronise the anim graph'].map(sideKind)).toEqual(['', '', '', '', '', '', '', '', ''])
+  })
+
+  test('the list: this session first and ticked; then the sessions tracking an intent, most recent first; then the rest; then those already away (A1)', () => {
+    const away = newWindow({ hours: 8, untilDone: false, goal: '' }, NOON, 'L.md', { person: 'tinnguyen', root: 'R' })
+    const peers = [
+      lane('form', { intent: 'enhance-form', app: { id: 'local_form', title: 'Enhance Form material reveal' }, lastActiveAt: NOON - 40 * MIN }),
+      lane('sync', { intent: 'sync', app: { id: 'local_sync', title: '♾️S2 sync main' }, lastActiveAt: NOON - 1 * MIN }),
+      lane('bird', { intent: 'bird', app: { id: 'local_bird', title: 'Hệ thống enemy chim mới' }, lastActiveAt: NOON - 3 * MIN }),
+      lane('review', { app: { id: 'local_review', title: 'Duyệt PR được assign review (2 tiếng/lần)' }, lastActiveAt: NOON - 5 * MIN }),
+      lane('qa', { intent: 'aobing-qa', app: { id: 'local_qa', title: 'L_Master_AoBing QA/Playtest' }, lastActiveAt: NOON - 12 * MIN }),
+      lane('loose', { branch: 'feat/loose', lastActiveAt: NOON - 20 }),
+      lane('night', { intent: 'night', app: { id: 'local_night', title: 'Night shift' }, window: away }),
+      lane('me', { intent: 'walker' }),
+    ]
+    const list = awaySessions(self, peers, NOON, 420)
+    expect(list.map(one => one.sessionId)).toEqual(['me', 'bird', 'qa', 'form', 'loose', 'sync', 'review', 'night'])
+    expect(list.filter(one => one.isDefault).map(one => one.sessionId)).toEqual(['me', 'bird', 'qa', 'form'])
+    expect(list.map(one => one.name)).toEqual(['this session · Walker topic S2 deep dive', 'Hệ thống enemy chim mới', 'L_Master_AoBing QA/Playtest', 'Enhance Form material reveal', 'a session on feat/loose', '♾️S2 sync main', 'Duyệt PR được assign review (2 tiếng/lần)', 'Night shift'])
+    expect(list.map(one => one.detail)).toEqual(['', 'active 3m ago', 'active 12m ago', 'active 40m ago', 'active now', 'active 1m ago', 'scheduled', 'away until 20:00'])
+    expect(list.at(-1)?.awayUntil).toBe('until 20:00')
+    expect(list[1]?.appId).toBe('local_bird')
+    // Outside the app, this session is named by its branch; with nothing else live, the list is this session alone.
+    expect(awaySessions({ ...self, title: '' }, [], NOON, 0)).toEqual([{ sessionId: 'me', appId: '', title: '', branch: 'feat/walker', intent: 'walker', name: 'this session · feat/walker', detail: '', isSelf: true, isDefault: true, awayUntil: '' }])
+  })
+
+  test('a row draws its box, its name in its column (in terminal cells) and what it says beside it', () => {
+    const [me, bird, night] = awaySessions(self, [lane('bird', { intent: 'bird', app: { title: 'Hệ thống enemy chim mới' }, lastActiveAt: NOON - 3 * MIN }), lane('night', { window: newWindow({ hours: 24, untilDone: true, goal: '' }, NOON, 'L.md', { person: 'p', root: 'R' }) })], NOON, 420)
+    expect(awayPickText(/** @type {any} */ (me), true, 30)).toBe('[x] this session · Walker topic S…')
+    expect(awayPickText(/** @type {any} */ (bird), false, 26)).toBe('[ ] Hệ thống enemy chim mới     active 3m ago')
+    expect(awayPickText(/** @type {any} */ (night), false, 20)).toBe('    a session on feat/x   away until done (24 hours at most)')
+    // 【 and 】 take two cells each: the name is cut and padded by cells, so the detail stays in its column.
+    const [, daily] = awaySessions(self, [lane('d', { intent: 'd', app: { title: '【Hằng ngày 08:30】Nhắc việc bàn giao' }, lastActiveAt: NOON - 3 * MIN })], NOON, 420)
+    const text = awayPickText(/** @type {any} */ (daily), true, 20)
+    expect(text).toBe('[x] 【Hằng ngày 08:30】…  scheduled')
+    expect(cells(text)).toBe(4 + 20 + 2 + 'scheduled'.length)
+  })
+
+  test('a text is measured and cut in terminal cells: wide characters take two, combining marks none', () => {
+    expect(cells('abc')).toBe(3)
+    expect(cells('【Hằng ngày】')).toBe(13)
+    expect(cells('Hằng ngày'.normalize('NFD'))).toBe(9)
+    expect(fit('【Hằng ngày 08:30】Nhắc việc', 12)).toBe('【Hằng ngày…')
+    expect(fit('Hằng ngày'.normalize('NFD'), 5)).toBe('Hằng…'.normalize('NFD'))
+    expect(fit('hello world', 5)).toBe('hell…')
+    expect(fit('abc', 3)).toBe('abc')
+  })
+
+  test('/away <length> names sessions only on purpose: all, in <names> or @names; plain words are this session\'s goal (A4)', () => {
+    const list = awaySessions(self, [
+      lane('bird', { intent: 'bird', app: { title: 'Hệ thống enemy chim mới' } }),
+      lane('qa', { intent: 'aobing-qa', app: { title: 'L_Master_AoBing QA/Playtest mode' }, branch: 'intent/aobing-qa-main-pass' }),
+      lane('sync', { app: { title: '♾️S2 sync main' }, branch: 'main' }),
+      lane('review', { app: { title: 'Duyệt PR được assign review (4 tiếng/lần)' } }),
+      lane('other', { intent: 'test-fix', app: { title: 'Fix the test pool' } }),
+      lane('night', { intent: 'night', window: newWindow({ hours: 8, untilDone: false, goal: '' }, NOON, 'L.md', { person: 'p', root: 'R' }) }),
+    ], NOON, 0)
+    const ids = (/** @type {ReturnType<typeof pickedSessions>} */ picked) => picked && { ids: picked.picked.map(one => one.sessionId), goal: picked.goal, unknown: picked.unknown }
+    // Fable's probe: every one of these is plain words, the goal of this session alone (null), never a pick.
+    for (const words of ['sync', 'main', 'review', 'test', 'fix the pool', 'pool', 'walker', 'enemy', 'S2', 'deep dive: finish', 'all, bird', 'bird, all', 'feat', 'all the tests green']) expect(pickedSessions(words, list)).toBe(null)
+    expect(ids(pickedSessions('all', list))).toEqual({ ids: ['me', 'bird', 'qa', 'other'], goal: '', unknown: [] })
+    expect(ids(pickedSessions(' ALL : finish the pass', list))).toEqual({ ids: ['me', 'bird', 'qa', 'other'], goal: 'finish the pass', unknown: [] })
+    // in <names>: this session with them, unless "only"; a goal after a colon.
+    expect(ids(pickedSessions('in enemy, playtest: finish the pass', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: 'finish the pass', unknown: [] })
+    expect(ids(pickedSessions('only in Enemy', list))).toEqual({ ids: ['bird'], goal: '', unknown: [] })
+    expect(ids(pickedSessions('in aobing-qa only: playtest notes', list))).toEqual({ ids: ['qa'], goal: 'playtest notes', unknown: [] })
+    expect(ids(pickedSessions('@enemy @playtest finish the pass', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: 'finish the pass', unknown: [] })
+    expect(ids(pickedSessions('@enemy only: tidy', list))).toEqual({ ids: ['bird'], goal: 'tidy', unknown: [] })
+    expect(ids(pickedSessions('@enemy onlyfix the bug', list))).toEqual({ ids: ['me', 'bird'], goal: 'onlyfix the bug', unknown: [] })
+    expect(ids(pickedSessions('@enemy@playtest go', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: 'go', unknown: [] })
+    // A session not ticked by default: by its whole title, branch or intent, never a part of one.
+    expect(ids(pickedSessions('in sync', list))).toEqual({ ids: ['me'], goal: '', unknown: ['sync'] })
+    expect(ids(pickedSessions('in main', list))).toEqual({ ids: ['me', 'qa', 'sync'], goal: '', unknown: [] })
+    expect(ids(pickedSessions('only in ♾️S2 sync main', list))).toEqual({ ids: ['sync'], goal: '', unknown: [] })
+    expect(ids(pickedSessions('only in review', list))).toEqual({ ids: [], goal: '', unknown: ['review'] })
+    // A session already away is never picked; a name too short to tell names nothing.
+    expect(ids(pickedSessions('only in night', list))).toEqual({ ids: [], goal: '', unknown: ['night'] })
+    expect(ids(pickedSessions('in qa', list))).toEqual({ ids: ['me'], goal: '', unknown: ['qa'] })
+  })
+
+  test('what another session is told: its window is open and the mandate whole, with no way around it (A2)', () => {
+    const away = newWindow({ hours: 8, untilDone: false, goal: 'finish the pass', group: 'g1' }, NOON, 'R/docs/intent/bird/decisions.md', { person: 'tinnguyen', root: 'R' })
+    const text = awayMessage({ from: '"Walker topic"', away, tz: 420 })
+    expect(text).toMatch(/^From the Ather pane of "Walker topic": the person is heading off and opened an away window in your session too\./)
+    expect(text).toContain('AUTONOMY WINDOW (Ather Automata): the user is away until 20:00 local time.')
+    expect(text).toContain('R/docs/intent/bird/decisions.md')
+    expect(text).toContain('Goal: finish the pass.')
+    expect(text).not.toContain('action "start"')
+  })
+
+  test("windows opened together carry one group id; each is the other session's own (its ledger, its holds), and the person's return in one ends the rest (A2, A3)", async () => {
+    const memory = memoryIo('me')
+    const { io, store, files } = memory
+    files.set('R/docs/intent/bird/prompt.md', '# Bird\n\n- Owner: Tin Nguyen\n')
+    memory.switchSession('bird')
+    await state.track(io, 'R', 'bird')
+    memory.switchSession('me')
+    const at = { root: 'R', tz: 0, now: NOON, me: 'Tin Nguyen' }
+    const choice = { hours: 8, untilDone: false, goal: 'finish', group: 'me-1' }
+    await state.startAway(io, choice, at)
+    const bird = state.asSession(io, 'bird', 'R')
+    const planned = await state.planAway(bird, choice, at)
+    // Planned only: nothing stored or written until it is opened; opened, it holds, and its ledger waits for startLedger.
+    expect(store.has('away:bird')).toBe(false)
+    expect(planned.ledgerPath).toBe('R/docs/intent/bird/decisions.md')
+    expect(files.has(planned.ledgerPath)).toBe(false)
+    expect((await state.openAway(bird, planned))?.group).toBe('me-1')
+    expect(files.has(planned.ledgerPath)).toBe(false)
+    await state.startLedger(bird, planned, at)
+    await state.startAway(state.asSession(io, 'qa', 'R'), choice, at)
+    await state.startAway(state.asSession(io, 'solo', 'R'), { ...choice, group: undefined }, at)
+    expect(/** @type {any} */ (store.get('away:bird')).group).toBe('me-1')
+    expect(files.get('R/docs/intent/bird/decisions.md') ?? '').toContain('## Autonomy window from')
+    expect(store.get('windows:tinnguyen')).toEqual(['me', 'bird', 'qa', 'solo'])
+    // The other session's own hooks see its window and hold its merges.
+    memory.switchSession('bird')
+    expect((await state.readAway(io)).phase).toBe('running')
+    expect((await state.park(io, 'merge', 'gh pr merge 7', NOON))?.parked.id).toBe('P-1')
+    expect(await state.openAway(io, planned)).toBe(null)
+    // Closing only that window: refused for another one.
+    expect(await state.closeAway(io, { ...planned, startedAt: 1 })).toBe(false)
+    memory.switchSession('me')
+    // "I'm back" here: this window ends, then the rest of its group; a window outside the group is untouched.
+    expect(await state.comeBack(io)).toEqual({ isEnded: true, others: 2 })
+    expect(['me', 'bird', 'qa', 'solo'].map(sid => /** @type {any} */ (store.get(`away:${sid}`)).phase)).toEqual(['review', 'review', 'review', 'running'])
+    expect(/** @type {any} */ (store.get('away:bird')).parked).toHaveLength(1)
+    // Again, from this session's review: nothing left to end; from a window outside any group, only itself.
+    expect(await state.comeBack(io)).toEqual({ isEnded: false, others: 0 })
+    expect(await state.comeBack(state.asSession(io, 'solo', 'R'))).toEqual({ isEnded: true, others: 0 })
   })
 })
 
@@ -1558,32 +1702,32 @@ describe('several repositories on one machine', () => {
   })
 
   test('a repository is named by its origin, whatever the protocol; without one, by its folder', () => {
-    expect(state.repoId('git@github.com:AskTinNguyen/han-viet.git', 'R')).toBe('asktinnguyen/han-viet')
-    expect(state.repoId('https://github.com/AskTinNguyen/han-viet', 'R')).toBe('asktinnguyen/han-viet')
-    expect(state.repoId('ssh://git@github.com:22/Sipher/S2.git/', 'R')).toBe('sipher/s2')
-    expect(state.repoId('D:\\Mirrors\\Sipher\\S2.git', 'R')).toBe('sipher/s2')
-    expect(state.repoId('', 'C:\\Work\\S2\\')).toBe('path:c:/work/s2')
+    expect(repoId('git@github.com:AskTinNguyen/han-viet.git', 'R')).toBe('asktinnguyen/han-viet')
+    expect(repoId('https://github.com/AskTinNguyen/han-viet', 'R')).toBe('asktinnguyen/han-viet')
+    expect(repoId('ssh://git@github.com:22/Sipher/S2.git/', 'R')).toBe('sipher/s2')
+    expect(repoId('D:\\Mirrors\\Sipher\\S2.git', 'R')).toBe('sipher/s2')
+    expect(repoId('', 'C:\\Work\\S2\\')).toBe('path:c:/work/s2')
   })
 
   test('a checkout is named by its repository and its folder; without an origin by its folder, without a repository not at all', () => {
-    expect(state.checkoutId('sipher/s2', 'C:\\Work\\S2\\')).toBe('sipher/s2@c:/work/s2')
-    expect(state.checkoutId('sipher/s2', '/Work/s2-b')).toBe('sipher/s2@/work/s2-b')
-    expect(state.checkoutId('path:c:/work/s2', 'C:\\Work\\S2')).toBe('path:c:/work/s2')
-    expect(state.checkoutId('', '/Work/s2')).toBe('')
+    expect(checkoutId('sipher/s2', 'C:\\Work\\S2\\')).toBe('sipher/s2@c:/work/s2')
+    expect(checkoutId('sipher/s2', '/Work/s2-b')).toBe('sipher/s2@/work/s2-b')
+    expect(checkoutId('path:c:/work/s2', 'C:\\Work\\S2')).toBe('path:c:/work/s2')
+    expect(checkoutId('', '/Work/s2')).toBe('')
   })
 
   test('a folder too long for a store key is kept as a digest and its end: one id per folder, and a key on it stays within 256 characters', () => {
     const deep = `C:\\Users\\someone\\AppData\\${'a-long-folder-name\\'.repeat(9)}look`
-    const id = state.checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods`)
+    const id = checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods`)
     expect(/^asktinnguyen\/ather-mods@~[0-9a-z]+~.*look\/ather-mods$/.test(id)).toBe(true)
     expect(id.length).toBe('asktinnguyen/ather-mods@'.length + 120)
     expect(`evidence:${'0'.repeat(36)}|${id}`.length <= 256).toBe(true)
-    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep}/Ather-Mods/`)).toBe(id)
-    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods-b`) === id).toBe(false)
-    expect(state.checkoutId('asktinnguyen/ather-mods', `${deep.replace('someone', 'another')}\\ather-mods`) === id).toBe(false)
-    expect(state.repoId('', `${deep}\\ather-mods`).startsWith('path:~')).toBe(true)
+    expect(checkoutId('asktinnguyen/ather-mods', `${deep}/Ather-Mods/`)).toBe(id)
+    expect(checkoutId('asktinnguyen/ather-mods', `${deep}\\ather-mods-b`) === id).toBe(false)
+    expect(checkoutId('asktinnguyen/ather-mods', `${deep.replace('someone', 'another')}\\ather-mods`) === id).toBe(false)
+    expect(repoId('', `${deep}\\ather-mods`).startsWith('path:~')).toBe(true)
     // A folder of 120 characters is kept as it is.
-    expect(state.checkoutId('sipher/s2', `C:\\${'x'.repeat(117)}`)).toBe(`sipher/s2@c:/${'x'.repeat(117)}`)
+    expect(checkoutId('sipher/s2', `C:\\${'x'.repeat(117)}`)).toBe(`sipher/s2@c:/${'x'.repeat(117)}`)
   })
 
   // Two clones of one origin, /work/s2 and /work/s2-b, over one store: `own` is a session in the first,
