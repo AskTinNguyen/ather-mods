@@ -92,6 +92,7 @@ export const core = {
     merge: 'never merge',
     away: 'The session may push branches and open PRs; nothing merges until you are back.',
     pane: 'The session keeps working; merges and pushes to main wait for your review.',
+    panes: 'The sessions keep working; merges and pushes to main wait for your review.',
   },
   statusWhat: 'this session',
   notHere: 'Ather Automata works in repositories with intents (a docs/intent folder); none here.',

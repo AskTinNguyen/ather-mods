@@ -199,9 +199,19 @@ const HERE = Object.freeze({ kind: 'here' })
 /** @type {Place} */
 export const NO_PLACE = Object.freeze({ kind: 'none' })
 
+// A session with no title in the app, as a row names it: by its branch, never its CLI id.
+/** @param {string} branch */
+export const untitledName = branch => (branch ? `a session on ${branch}` : 'another session')
+
 // A session's name as a row says it: its app title, cut and quoted; `fallback` without one.
 /** @param {string} title @param {string} fallback */
 const sessionName = (title, fallback) => (title ? `"${cutWords(title, 36)}"` : fallback)
+
+/**
+ * Another live session as its heartbeat says (state.readPeers): what it tracks, on which branch, when it was last
+ * active, and who it is in the desktop app.
+ * @typedef {{ sessionId: string, intent: string | null, branch?: string, updatedAt: number, lastActiveAt?: number, app?: Partial<AppSession> }} Peer
+ */
 
 // The session that works on an intent. This one when it tracks the intent; else the live session on the intent's
 // checkout that tracks it, the most recently active of several, named by its app title (never its CLI id), else
@@ -209,7 +219,7 @@ const sessionName = (title, fallback) => (title ? `"${cutWords(title, 36)}"` : f
 // into a session that does not track the intent has two sessions editing one intent folder.
 /**
  * @param {string} slug the intent's slug in its checkout @param {boolean} isTrackedHere
- * @param {readonly { sessionId: string, intent: string | null, branch?: string, updatedAt: number, lastActiveAt?: number, app?: Partial<AppSession> }[]} peers the other live sessions on that checkout (state.readPeers)
+ * @param {readonly Peer[]} peers the other live sessions on that checkout (state.readPeers)
  * @returns {Place}
  */
 export const placeOf = (slug, isTrackedHere, peers) => {
@@ -219,7 +229,7 @@ export const placeOf = (slug, isTrackedHere, peers) => {
     .sort((a, b) => Number(b.lastActiveAt ?? b.updatedAt) - Number(a.lastActiveAt ?? a.updatedAt))
   if (!lane) return NO_PLACE
   const { id = '', title = '', link = '' } = lane.app ?? {}
-  return { kind: 'other', sessionId: lane.sessionId, appId: id, link, name: sessionName(title, lane.branch ? `a session on ${lane.branch}` : 'another session'), slug }
+  return { kind: 'other', sessionId: lane.sessionId, appId: id, link, name: sessionName(title, untitledName(lane.branch ?? '')), slug }
 }
 
 // The guess (A3b) as a place: the session the app found, by its title and link.

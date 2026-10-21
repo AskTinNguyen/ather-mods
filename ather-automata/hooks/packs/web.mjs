@@ -605,6 +605,7 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
       merge: withProof ? 'merge only when every gate the profile requires has passed in this session' : 'never merge',
       away: withProof ? 'The session may push branches, open PRs and merge with every gate passed; production deploys, migrations and secrets wait for you.' : 'The session may push branches and open PRs; nothing merges until you are back.',
       pane: 'The session keeps working; production deploys, migrations and secret changes wait for your review.',
+      panes: 'The sessions keep working; production deploys, migrations and secret changes wait for your review.',
     },
     statusWhat: 'this web repository session',
     notHere: 'Ather Automata works in repositories with intents (a docs/intent folder); none here.',

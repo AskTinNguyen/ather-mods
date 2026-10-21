@@ -16,7 +16,8 @@ const ELEMENTS = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select',
 const MOBILE = Object.fromEntries(Object.entries(ELEMENTS).filter(([name]) => name !== 'Input' && name !== 'Select'))
 
 // `writable`: more folders the model's Write and Edit may change (a sibling checkout); with it, a relative path is taken from `root`.
-// `kept`: what the store already holds (an earlier session's on this machine).
+// `kept`: what the store already holds (an earlier session's on this machine). `store`: a store another engine uses too,
+// as the plugin's one store serves every session on the machine.
 // The next `times` runs whose command line starts with `argv` are rejected, as the app aborts a run. For every
 // engine of the run: an earlier session's timers still fire, and their runs must not answer for the one under test.
 export const aborts = { argv: '', times: 0 }
@@ -24,8 +25,7 @@ export const aborts = { argv: '', times: 0 }
 // A run of the system's own handler, which opens a file or link in its app: `cmd /c start` on Windows, `open` on macOS, `xdg-open` on Linux.
 const isHandler = argv => argv[0] === 'open' || argv[0] === 'xdg-open' || (argv[0] === 'cmd' && argv[1] === '/c' && argv[2] === 'start')
 
-export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable, kept }) => {
-  const store = new Map(kept)
+export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env, writable, kept, store = new Map(kept) }) => {
   // Background workers the session dispatched, as $.agent.list() reports them.
   const agents = []
   // The plugin's panes that are up, by id, as $.ui.panes() reports them: each one shown.
