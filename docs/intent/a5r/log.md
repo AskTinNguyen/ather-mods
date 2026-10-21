@@ -316,3 +316,11 @@ Sent to this session by the "Sessions chờ Editor" session ("A5R insight from H
 > c) Extend A91 to wake the queue head when the Editor is free and it is idle (when granted, or when it is blocked only by RAM), instead of nudging only non-queued sessions.
 >
 > Also from A5R status: 24 h stats were 16 leases, median wait 42 min, launch 42%. Most leases logged a "no-editor" rule hit (lease held with no Editor/build running), which also wastes slots.
+
+## L-43 (2026-10-21) | class: intent | -> rev 39
+
+> 1. Mockup ok
+> 2. ừ
+> 3. OK
+
+(Answers: 1 = the Away-for-many-sessions mockup is approved (Ather work, its own intent); 2 = F-9, guard a half-done revert or cherry-pick like a merge; 3 = Go to session in Ather 0.6.5 checked.)
