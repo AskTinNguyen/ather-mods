@@ -692,7 +692,7 @@ const LANE_STALE_MS = 10 * 60 * 1000
 /**
  * One session's heartbeat, a file under the pack's local folder: what it tracks, on which branch,
  * when it was written and when the session last took a prompt or ran a tool; `app`: its id and title in
- * the desktop app, when it runs there (absent elsewhere, and in heartbeats written before 0.6.4).
+ * the desktop app, when it runs there (absent elsewhere, and in heartbeats written before 0.6.5).
  * @typedef {{ sessionId: string, intent: string | null, branch: string, updatedAt: number, lastActiveAt?: number, away: string, hasEnded: boolean, app?: AppSession }} Lane
  * @typedef {import('./handoff.mjs').AppSession} AppSession
  */
