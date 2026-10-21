@@ -1219,15 +1219,22 @@ export const NOTICES = {
   prAfter: (n: number, slug: string, verdict: string, isMerged: boolean): string => noticeText('Acceptance', `PR #${n} (intent ${slug}) was ${isMerged ? 'merged' : 'opened'} without A5R acceptance and ${verdict}`, isMerged ? 'fix it in a follow-up PR (the A5R card lists what fails), or record in progress.md why it stays' : 'fix it on its branch before it merges (the A5R card lists what fails), or record in progress.md why it merges as it is'),
   // 0.17.1: with its owner alive (A115: opguard.ts ownerOf; before, the last sync's holder) it ends the merge, revert or
   // cherry-pick; else the first live session (queue order) takes it over.
-  mergeLeft: ({ head, mtimeMs }: HeadFile, owner: { lane: string } | null, last: SyncFile | null, taker: { lane: string; isMe: boolean } | null, checkout: string): string =>
-    noticeText('Merge guard', `a ${opOf(head)} is in progress in the shared S2 checkout (.git/${head} since ${hhmm(mtimeMs)}) and no sync is open${last ? ` (the last sync, ${hhmm(last.at)} by ${last.holder.lane}, is ${last.state})` : ''}`,
+  // Fable review D2 (rev 39): told during a planned sync or its cutoff too (Editor grants wait on it in every phase).
+  mergeLeft: ({ head, mtimeMs }: HeadFile, owner: { lane: string } | null, sync: SyncFile | null, phase: Phase, taker: { lane: string; isMe: boolean } | null, checkout: string): string =>
+    noticeText('Merge guard', `a ${opOf(head)} is in progress in the shared S2 checkout (.git/${head} since ${hhmm(mtimeMs)})${syncWhere(sync, phase)}`,
       taker === null
         ? `${owner ? owner.lane : 'the session that started it'} ends it (git ${opOf(head)} --abort, or finish it); every other session makes no git write there until .git/${head} is gone`
         : taker.isMe
-          ? `${owner ? 'its holder is gone, so ' : ''}this session takes it over: /a5r sync takeover (or the sync tool, action takeover), then ${endOf(head, checkout)}; then plan a new sync`
+          ? `${owner ? 'its holder is gone, so ' : ''}this session takes it over: /a5r sync takeover (or the sync tool, action takeover), then ${endOf(head, checkout)}${isOpenPhase(phase) ? '' : '; then plan a new sync'}`
           : `${taker.lane} is asked to take it over and end it; make no git write there until .git/${head} is gone`),
   syncHolderNamed: (s: SyncFile): string => noticeText('Sync main', `you were named holder of the sync at ${hhmm(s.at)} (planned by ${s.plannedBy})`, `at ${hhmm(s.at - CUTOFF_MS)} the cutoff notice reaches every session; at ${hhmm(s.at)} this session's a5r starts the sync worker, which ends the sync with done or abort (at the latest ${hhmm(s.hardEnd)}); keep this session open until then`),
 } as const
+
+/** The Merge guard notice's place in the sync's timeline: during an open sync, else after the last one (if any). */
+const syncWhere = (sync: SyncFile | null, phase: Phase): string => {
+  if (!sync) return ' and no sync is open'
+  return isOpenPhase(phase) ? ` during the sync at ${hhmm(sync.at)} by ${sync.holder.lane} (${phase})` : ` and no sync is open (the last sync, ${hhmm(sync.at)} by ${sync.holder.lane}, is ${sync.state})`
+}
 
 /** A93 / A96 / A109: what the holder is told as its sync enters a stage (the worker's end) or moves within one (the
  * watch), from the sync and the facts read with it: the build log's last lines, the checkout's git at a hand-back. */

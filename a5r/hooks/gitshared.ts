@@ -157,17 +157,18 @@ export const CONFLICT_HEADS = ['MERGE_HEAD', 'REVERT_HEAD', 'CHERRY_PICK_HEAD'] 
 export type ConflictHead = (typeof CONFLICT_HEADS)[number]
 /** A115: a head file present in a checkout, with its mtime (whole ms: what an owner record is tied to). */
 export type HeadFile = { head: ConflictHead; mtimeMs: number }
-/** A115: the operation each head file stands for (as refusals and notices name it; also its git subcommand) and how it
- * is finished once resolved. */
-const OPS: Record<ConflictHead, { op: string; finish: string }> = {
-  MERGE_HEAD: { op: 'merge', finish: 'git commit --no-edit' },
-  REVERT_HEAD: { op: 'revert', finish: 'git revert --continue' },
-  CHERRY_PICK_HEAD: { op: 'cherry-pick', finish: 'git cherry-pick --continue' },
+/** A115: the operation each head file stands for (as refusals and notices name it; also its git subcommand), how it is
+ * finished once resolved, and the git subcommands that leave it when they stop on a conflict. */
+const OPS: Record<ConflictHead, { op: string; finish: string; leftBy: readonly string[] }> = {
+  MERGE_HEAD: { op: 'merge', finish: 'git commit --no-edit', leftBy: ['merge', 'pull'] },
+  REVERT_HEAD: { op: 'revert', finish: 'git revert --continue', leftBy: ['revert'] },
+  CHERRY_PICK_HEAD: { op: 'cherry-pick', finish: 'git cherry-pick --continue', leftBy: ['cherry-pick'] },
 }
 export const opOf = (head: ConflictHead): string => OPS[head].op
 export const endOf = (head: ConflictHead, checkout: string): string => `git -C ${checkout} ${OPS[head].op} --abort (or finish it: resolve, git add -- <paths>, ${OPS[head].finish})`
-/** A115: the git subcommands that leave a head file when they stop on a conflict. */
-export const STARTS_OP: ReadonlySet<string> = new Set(['pull', ...CONFLICT_HEADS.map(opOf)])
+/** A115 (Fable review D1): whether one of these git subcommands can have left this head file. */
+export const isLeftBy = (head: ConflictHead, verbs: readonly string[]): boolean => verbs.some(v => OPS[head].leftBy.includes(v))
+export const STARTS_OP: ReadonlySet<string> = new Set(CONFLICT_HEADS.flatMap(h => OPS[h].leftBy))
 
 /** The changed paths a discard would lose, from `git status --porcelain=v1 -z` (`XY path` entries, NUL-separated; a rename's
  * or copy's source path follows its entry as a field of its own, without XY, and is skipped: review F5). A97: while a

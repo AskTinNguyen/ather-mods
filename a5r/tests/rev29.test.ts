@@ -37,9 +37,9 @@ test('A83: unit: what A5R raised as a decision mark before is a plain coordinati
     NOTICES.prAfter(813, 'tail-vfx', 'fails 1 of 5 (4 Keep it clean)', true),
     NOTICES.expired(s),
     NOTICES.hardEndSoon(s),
-    NOTICES.mergeLeft({ head: 'MERGE_HEAD', mtimeMs: T(14, 20) }, s.holder, s, null, 'E:/s2'), // rev 39 (A115): the head file and its owner given
-    NOTICES.mergeLeft({ head: 'MERGE_HEAD', mtimeMs: T(14, 20) }, s.holder, s, { lane: 'walker', isMe: true }, 'E:/s2'),
-    NOTICES.mergeLeft({ head: 'MERGE_HEAD', mtimeMs: T(14, 20) }, null, null, { lane: 'lane-cccccccc', isMe: false }, 'E:/s2'),
+    NOTICES.mergeLeft({ head: 'MERGE_HEAD', mtimeMs: T(14, 20) }, s.holder, s, 'expired', null, 'E:/s2'), // rev 39 (A115): the head file and its owner given
+    NOTICES.mergeLeft({ head: 'MERGE_HEAD', mtimeMs: T(14, 20) }, s.holder, s, 'expired', { lane: 'walker', isMe: true }, 'E:/s2'),
+    NOTICES.mergeLeft({ head: 'MERGE_HEAD', mtimeMs: T(14, 20) }, null, null, 'none', { lane: 'lane-cccccccc', isMe: false }, 'E:/s2'),
   ]
   for (const t of texts) {
     expect(t.startsWith('A5R · ')).toBe(true)

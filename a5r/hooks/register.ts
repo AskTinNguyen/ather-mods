@@ -14,7 +14,7 @@ import {
 } from './coord.ts'
 import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
-import { HEAD_OWNER_FILE, headOwner, isOwnerOf, ownerOf, parseHeadOwner, type HeadOwner, type Owner } from './opguard.ts'
+import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, idleMsOf, isIdle, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
@@ -140,6 +140,10 @@ const myIdleMs = (now: number): number => idleMsOf({ now, lastTurnAt: me?.lastTu
 let waitLogged: WaitLogged | null = null // A112: this session's last wait line (in memory: a reload logs once more)
 const WAKE_WAIT_MS = 30_000
 let conflictHead: HeadFile | null = null // A61 / A115: a merge, revert or cherry-pick half done in the shared checkout (read every minute)
+// A115 (Fable review D4): this session's backgrounded operation, claimed at the minute (claimStep); isSeen: a git of the
+// checkout was read running since it started.
+let opRunning: { op: OpStart; isSeen: boolean } | null = null
+const OP_CLAIM_MS = 2 * 60 * 60_000 // never seen running (a reading older than it, a git without -C), it is forgotten after this
 let agentsNow: number | null = null // A62: this session's running background agents at the last minute
 let agentKindsNow: string[] = [] // A67: their kinds
 let tickChain: Promise<void> = Promise.resolve()
@@ -722,7 +726,7 @@ async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
 
 /** A10: after /clear the process goes on under a new session id (no session.start fires). This session's file
  * (request, lease, yield asks, delivered notices), its touch file, its HELD/HANDED lock line (`session <new id8>`,
- * read-compare-write) and a sync it holds move to the new id, so it keeps driving the Editor it opened and nobody
+ * read-compare-write), a sync it holds and the operation it owns (A115) move to the new id, so it keeps driving the Editor it opened and nobody
  * sees a gone holder. The old file is left with no request, no lease and a zero heartbeat. */
 async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: string): Promise<SessionFile> {
   const old8 = oldSid.slice(0, 8).toLowerCase()
@@ -751,6 +755,9 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   const s = parseSyncFile(await readJson($, syncPath()))
   if (s && s.holder.id8 === old8 && isOpenPhase(syncPhase(s, now)))
     await writeSync($, opts, { ...s, holder: { ...s.holder, session: newSid, id8: new8 }, plannedBy: s.plannedBy.replace(old8, new8), updatedAt: now }, s)
+  // A115 (Fable review D3): the operation this session owns stays its own.
+  const rec = parseHeadOwner(await readJson($, headOwnerPath()))
+  if (rec?.id8 === old8) await writeHeadOwner($, rec, rec.how, rec.at)
   return me
 }
 
@@ -1420,6 +1427,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
   await nudgeStep($, opts, now, window).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
   await syncStep($, opts, now)
+  await claimStep($, now)
   await mergeGuardStep($, opts, now)
   currentVerdicts(now) // A89: note which verdicts' incidents are current, so an ended one stays 30 min
   ramStep(opts, now)
@@ -2943,11 +2951,12 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   return null
 }
 
-/** A14 (A115: a revert or cherry-pick alike): one of CONFLICT_HEADS left in the shared checkout with no sync open: one
- * notice per head file to every session (A83: no mark on any title); its owner (opguard.ts ownerOf) is woken for it, the
- * others hear it at their next turn. */
+/** A14 (A115: a revert or cherry-pick alike): one of CONFLICT_HEADS left in the shared checkout outside a freeze (Fable
+ * review D2: a planned sync or its cutoff too): one notice per head file to every session (A83: no mark on any title);
+ * its owner (opguard.ts ownerOf) is woken for it, the others hear it at their next turn. */
 async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const left = isOpenPhase(phaseOf(syncFile, now)) ? null : await headState($, syncFile, now)
+  const phase = phaseOf(syncFile, now)
+  const left = phase === 'frozen' ? null : await headState($, syncFile, now)
   if (!left) return
   const { h, owner } = left
   const all = me ? [me, ...peers] : peers
@@ -2957,17 +2966,30 @@ async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void>
   const takerId = isOwnerAlive ? null : takerOf(now)
   const taker = takerId === null ? null : { lane: all.find(f => f.id8 === takerId)?.lane ?? takerId, isMe: takerId === me8 }
   const id = `${h.head.toLowerCase().replace(/_/g, '-')}:${h.mtimeMs}:${takerId ?? owner?.id8 ?? ''}` // merge-head:… as before 0.23.1 (no notice again on upgrade)
-  push({ id, text: NOTICES.mergeLeft(h, owner, syncFile, taker, s2Root()), isActionable: isOwnerAlive ? owner.id8 === me8 : taker?.isMe === true })
+  push({ id, text: NOTICES.mergeLeft(h, owner, syncFile, phase, taker, s2Root()), isActionable: isOwnerAlive ? owner.id8 === me8 : taker?.isMe === true })
 }
 
-/** A115: a merge, pull, revert or cherry-pick this session ran in the shared checkout that left a head file there makes
- * it that operation's owner: the record ties it to that very file (the guard let the command through). */
-async function noteHeadOwner($: Engine, opts: Opts, a5r: A5R, command: string): Promise<void> {
+/** A115: a merge, pull, revert or cherry-pick this command runs in the shared checkout, with the time it starts. */
+async function opStartOf($: Engine, opts: Opts, a5r: A5R, command: string): Promise<OpStart | null> {
   const starts = gitWrites(command).filter(w => STARTS_OP.has(w.verb))
-  if (starts.length === 0 || !(await sharedGitWrite($, opts, a5r, starts))) return
+  return starts.length > 0 && (await sharedGitWrite($, opts, a5r, starts)) ? { verbs: starts.map(w => w.verb), at: await $.clock.now() } : null
+}
+
+/** A115: the head file becomes this session's when opguard.ts `mayClaim` says its operation left it. */
+async function claimHead($: Engine, op: OpStart): Promise<boolean> {
   const h = await headIn($, s2Root())
-  const rec = h ? parseHeadOwner(await readJson($, headOwnerPath())) : null
-  if (h && !(isOwnerOf(rec, h) && rec.id8 === me8)) await writeHeadOwner($, h, 'started', await $.clock.now())
+  return h !== null && mayClaim(h, op, parseHeadOwner(await readJson($, headOwnerPath())), isS2) && (await writeHeadOwner($, h, 'started', await $.clock.now()))
+}
+
+/** A115 (Fable review D4): this session's backgrounded operation is claimed at the minute while it may still run: it is
+ * forgotten once a git of the checkout was read running and then none is (seen, then gone: a reading older than the
+ * command, or a git the probe cannot see, never ends it), else after OP_CLAIM_MS. */
+async function claimStep($: Engine, now: number): Promise<void> {
+  if (!opRunning) return
+  const isClaimed = await claimHead($, opRunning.op).catch(() => false)
+  const running = checkoutGitPids(probe, s2Root())?.length ?? null
+  const isSeen = opRunning.isSeen || (running ?? 0) > 0
+  opRunning = isClaimed || (isSeen && running === 0) || now - opRunning.op.at > OP_CLAIM_MS ? null : { ...opRunning, isSeen }
 }
 
 /** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */
@@ -3820,6 +3842,7 @@ export const register: Register = (on, options) => {
       }
     }
 
+    const op = isOn && isS2 && SHELL_TOOLS.has(tool) ? await opStartOf($, opts, a5r, what) : null // A115: a coordinating session's
     const ran = isMain ? await asMainCall($, () => next(e)) : await next(e)
     if (chain === null) {
       // Where this plugin sits: Ather beneath means its pane can be wrapped. Kept outside the plugin
@@ -3829,7 +3852,8 @@ export const register: Register = (on, options) => {
       await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5r/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
-    if (isOn && isS2 && SHELL_TOOLS.has(tool)) await noteHeadOwner($, opts, a5r, what).catch(() => undefined) // A115
+    // A115: the head file its own operation left is this session's; a backgrounded one is claimed at the minute (D4).
+    if (op && !(await claimHead($, op).catch(() => false)) && input.run_in_background === true) opRunning = { op: withOp(opRunning?.op ?? null, op), isSeen: opRunning?.isSeen ?? false }
     // A19: a file changed (an edit, a git write): the card scores again at its next draw.
     if (ran.isError !== true && (EDIT_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && gitWrites(str(input.command)).length > 0))) acceptDirty = true
     if (ran.isError !== true && EDIT_TOOLS.has(tool) && parts.some(([path]) => /docs\/intent\/[^/]+\/(progress|prompt)\.md$/i.test(path.replace(/\\/g, '/')))) prDirty = true
