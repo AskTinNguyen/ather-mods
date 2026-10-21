@@ -3,7 +3,8 @@
 // place that changes a window is state.mjs.
 
 import { forBase, heldLabel } from './guards.mjs'
-import { clockText } from './model.mjs'
+import { untitledName } from './handoff.mjs'
+import { clockText, durationText } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
@@ -11,9 +12,10 @@ import { unreal } from './packs/unreal.mjs'
 /**
  * @typedef {{ id: string, kind: string, command: string, at: number }} Parked
  * A window holds actions and records questions from the moment it starts until the person has reviewed it:
- * 'running' while they are away, 'review' once it has ended and waits for them.
- * @typedef {{ phase: 'off' | 'running' | 'review', untilDone: boolean, goal: string, held: string[], startedAt: number, wakeAt: number, endedAt?: number, ledgerPath: string, parked: Parked[], person: string, root: string }} Away
- * @typedef {{ hours: number, untilDone: boolean, goal: string, held?: string[] }} WindowChoice
+ * 'running' while they are away, 'review' once it has ended and waits for them. `group`: the windows opened together
+ * from one Away dialog or /away share it, and the person's return in any of them ends them all.
+ * @typedef {{ phase: 'off' | 'running' | 'review', untilDone: boolean, goal: string, held: string[], startedAt: number, wakeAt: number, endedAt?: number, ledgerPath: string, parked: Parked[], person: string, root: string, group?: string }} Away
+ * @typedef {{ hours: number, untilDone: boolean, goal: string, held?: string[], group?: string }} WindowChoice
  */
 
 /** @returns {Away} */
@@ -88,6 +90,7 @@ export const newWindow = (choice, now, ledgerPath, owner) => ({
   parked: [],
   person: owner.person,
   root: owner.root,
+  ...(choice.group ? { group: choice.group } : {}),
 })
 
 // `base`: the branch the checkout's team merges into; a window there says so where it says main (guards.mjs forBase).
@@ -141,3 +144,80 @@ export const windowDecisions = markdown => {
   const parts = markdown.split(/^(?=## Autonomy window from )/m)
   return [...(parts[parts.length - 1] ?? '').matchAll(/^###\s+(D-\d+)\s*[·:\-–]?\s*(.*)$/gm)].map(match => ({ id: match[1] ?? '', question: (match[2] ?? '').trim() }))
 }
+
+// ---------------------------------------------------------------- heading off for several sessions
+
+// A session that runs on its own whoever is at the keyboard, so the Away dialog does not tick it by default (A1):
+// the sync conductor (a name starting with ♾, or naming "sync main") or a scheduled task (a name saying how often it
+// runs: "(2 tiếng/lần)", "Hằng ngày", "daily", "hourly", "nightly", "every …", "scheduled"). Read from its title in
+// the desktop app, else its branch.
+/** @param {string} name @returns {'sync' | 'scheduled' | ''} */
+export const sideKind = name => {
+  if (/^\s*♾/u.test(name) || /\bsync[\s_-]*main\b/i.test(name)) return 'sync'
+  if (/\(\s*\d+\s*(tiếng|giờ|phút|h|m)\s*\/\s*lần\s*\)|h[ằà]ng ngày|\b(daily|hourly|nightly|every|scheduled)\b/iu.test(name)) return 'scheduled'
+  return ''
+}
+
+/**
+ * One live session of the checkout as the Away dialog lists it (A1): its CLI id and app id (to send it the mandate),
+ * its title in the app ('' outside it), branch and tracked intent (what /away names match), the row's name and what it
+ * says beside it, and whether it is ticked when the dialog opens. `awayUntil`: the end of the window it is already in
+ * ('' for none); such a session is listed, never ticked.
+ * @typedef {{ sessionId: string, appId: string, title: string, branch: string, intent: string | null, name: string, detail: string, isSelf: boolean, isDefault: boolean, awayUntil: string }} AwaySession
+ * @typedef {import('./handoff.mjs').Peer & { window?: Away }} AwayPeer a live session of the checkout with its stored window
+ */
+
+/**
+ * The Away dialog's list: this session first; then the others, those ticked by default (each tracks an intent and is
+ * neither the sync conductor nor a scheduled task), then the rest, then those already away, each group the most
+ * recently active first. This session is always ticked.
+ * @param {{ sessionId: string, title: string, branch: string, intent: string | null }} self
+ * @param {readonly AwayPeer[]} peers @param {number} now @param {number} tz @returns {AwaySession[]}
+ */
+export const awaySessions = (self, peers, now, tz) => {
+  const others = peers
+    .filter(lane => typeof lane.sessionId === 'string' && lane.sessionId !== '' && lane.sessionId !== self.sessionId)
+    .map(lane => {
+      const title = lane.app?.title ?? ''
+      const branch = lane.branch ?? ''
+      const window = lane.window && isHolding(lane.window) ? lane.window : null
+      const side = sideKind(title || branch)
+      const ago = now - Number(lane.lastActiveAt ?? lane.updatedAt)
+      const detail = window ? `away ${windowEndText(window, tz)}` : side === 'scheduled' ? 'scheduled' : ago < 60000 ? 'active now' : `active ${durationText(ago)} ago`
+      /** @type {AwaySession} */
+      const row = { sessionId: lane.sessionId, appId: lane.app?.id ?? '', title, branch, intent: lane.intent, name: title || untitledName(branch), detail, isSelf: false, isDefault: !window && Boolean(lane.intent) && side === '', awayUntil: window ? windowEndText(window, tz) : '' }
+      return { row, rank: window ? 2 : row.isDefault ? 0 : 1, at: -ago }
+    })
+    .sort((a, b) => a.rank - b.rank || b.at - a.at)
+    .map(one => one.row)
+  const name = self.title || self.branch
+  return [{ sessionId: self.sessionId, appId: '', title: self.title, branch: self.branch, intent: self.intent, name: name ? `this session · ${name}` : 'this session', detail: '', isSelf: true, isDefault: true, awayUntil: '' }, ...others]
+}
+
+// "/away 8h all", "/away until done enemy, playtest: finish the pass": which sessions the words after the length name
+// (A4). `all`: the ones ticked by default. Else each comma-separated name (three letters at least) picks every session
+// whose title, branch or intent contains it, case-insensitive; a goal may follow a colon. Null when any name matches
+// no session: the words are the goal, for this session only, as before. A session already away is never picked.
+/** @param {string} words @param {readonly AwaySession[]} sessions @returns {{ picked: AwaySession[], goal: string } | null} */
+export const pickedSessions = (words, sessions) => {
+  const [list = '', ...rest] = words.split(':')
+  const names = list.split(',').map(one => one.trim().toLowerCase())
+  const open = sessions.filter(one => one.awayUntil === '')
+  const goal = rest.join(':').trim()
+  if (names.length === 1 && names[0] === 'all') return { picked: open.filter(one => one.isDefault), goal }
+  const matches = names.map(name => (name.length < 3 ? [] : open.filter(one => [one.title, one.branch, one.intent ?? ''].some(field => field.toLowerCase().includes(name)))))
+  if (matches.some(found => found.length === 0)) return null
+  return { picked: open.filter(one => matches.some(found => found.includes(one))), goal }
+}
+
+// What another session reads when the person heads off from this one (A2): that its window is open, and the mandate
+// whole (its ledger, what is held). The engine frames it as a message from this session (`from`, as its tab names it).
+// Should the window not show there, the session can open it itself with the same length and goal; a window opened that
+// way is its own, outside the group (the person's return elsewhere does not end it).
+/** @param {{ from: string, away: Away, tz: number, pack?: Pack, base?: string }} at */
+export const awayMessage = ({ from, away, tz, pack = unreal, base = 'main' }) =>
+  [
+    `From the Ather pane of ${from}: the person is heading off and opened an away window in your session too.`,
+    mandateText(away, tz, pack, base),
+    `If the mcp__ather-automata__status tool shows no away window for your session, open it with the mcp__ather-automata__away tool: action "start", ${away.untilDone ? 'untilDone true' : `hours ${Math.round(((away.wakeAt - away.startedAt) / 3600000) * 100) / 100}`}, goal ${JSON.stringify(away.goal)}.`,
+  ].join('\n\n')

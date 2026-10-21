@@ -1,6 +1,7 @@
 // Ather Automata: the checkouts a session works with. The checkout holding the
 // session folder, then the worktrees of its clone. A session opened in a folder
-// that is in no checkout works with none.
+// that is in no checkout works with none. Also the ids a repository and a checkout
+// are kept under in the store (repoId, checkoutId).
 // Pure apart from the files it is given.
 
 /**
@@ -11,6 +12,59 @@
  *   null when git could not say (the run was aborted, ran out of time, could not start).
  *   `real`: the folder a path really lands in, behind any symbolic link.
  */
+
+// A store key holds 256 characters at most (the engine's limit), and a folder is one part of it, beside a
+// session's id, a repository and an intent's name. A longer folder is kept as a digest of the whole and
+// its last characters: still one id per folder, and still told apart by eye.
+const FOLDER_MAX = 120
+// A 53-bit digest of a text (cyrb53), in base 36: the same on every machine and in every engine.
+/** @param {string} text */
+const digest = text => {
+  let high = 0xdeadbeef
+  let low = 0x41c6ce57
+  for (let at = 0; at < text.length; at += 1) {
+    const code = text.charCodeAt(at)
+    high = Math.imul(high ^ code, 2654435761)
+    low = Math.imul(low ^ code, 1597334677)
+  }
+  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909)
+  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909)
+  return (4294967296 * (2097151 & low) + (high >>> 0)).toString(36)
+}
+
+// A folder as an id holds it: normalised and lowercased, so it reads the same from every session.
+/** @param {string} root */
+const folderId = root => {
+  const folder = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  if (folder.length <= FOLDER_MAX) return folder
+  const mark = `~${digest(folder)}~`
+  return mark + folder.slice(mark.length - FOLDER_MAX)
+}
+
+// A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
+// clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
+//   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → asktinnguyen/han-viet
+//   D:\Mirrors\Sipher\S2.git (a local origin, as Windows writes it) → sipher/s2
+/** @param {string} url @param {string} root */
+export const repoId = (url, root) => {
+  const path = url
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\//i, '')
+    .replace(/^[^@/\s]+@[^:/\s]+:/, '')
+    .replace(/\.git\/?$/i, '')
+    .replace(/\/+$/, '')
+  const parts = path.split('/').filter(Boolean)
+  if (parts.length >= 2) return parts.slice(-2).join('/').toLowerCase()
+  return `path:${folderId(root)}`
+}
+
+// A checkout's id: its repository's and its folder, so two clones or worktrees of one repository keep their
+// own proof, changes and "Continue …". Without an origin the repository's id is the folder already; without
+// a repository (an Io without `repo`) there is none.
+//   sipher/s2 in D:\S2 → sipher/s2@d:/s2
+/** @param {string} repo from repoId @param {string} root the checkout's top folder */
+export const checkoutId = (repo, root) => (repo === '' || repo.startsWith('path:') ? repo : `${repo}@${folderId(root)}`)
 
 // How far up a folder is walked to find its checkout, and how many checkouts one session works with,
 // its clone's worktrees included.

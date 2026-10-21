@@ -12,7 +12,7 @@ import { addPersonAlias, emptyEvidence, intentOwner, isSamePerson, personId } fr
 import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { baseOf } from './team.mjs'
-import { checkoutOf, normalFolder, readWorkspace } from './workspace.mjs'
+import { checkoutId, checkoutOf, normalFolder, readWorkspace, repoId } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
 import { paneViewOf } from './home.mjs'
 
@@ -121,34 +121,6 @@ const rootLanes = new Map()
 /** @type {Map<string, Promise<string>>} */
 const realFolders = new Map()
 
-// A store key holds 256 characters at most (the engine's limit), and a folder is one part of it, beside a
-// session's id, a repository and an intent's name. A longer folder is kept as a digest of the whole and
-// its last characters: still one id per folder, and still told apart by eye.
-const FOLDER_MAX = 120
-// A 53-bit digest of a text (cyrb53), in base 36: the same on every machine and in every engine.
-/** @param {string} text */
-const digest = text => {
-  let high = 0xdeadbeef
-  let low = 0x41c6ce57
-  for (let at = 0; at < text.length; at += 1) {
-    const code = text.charCodeAt(at)
-    high = Math.imul(high ^ code, 2654435761)
-    low = Math.imul(low ^ code, 1597334677)
-  }
-  high = Math.imul(high ^ (high >>> 16), 2246822507) ^ Math.imul(low ^ (low >>> 13), 3266489909)
-  low = Math.imul(low ^ (low >>> 16), 2246822507) ^ Math.imul(high ^ (high >>> 13), 3266489909)
-  return (4294967296 * (2097151 & low) + (high >>> 0)).toString(36)
-}
-
-// A folder as an id holds it: normalised and lowercased, so it reads the same from every session.
-/** @param {string} root */
-const folderId = root => {
-  const folder = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-  if (folder.length <= FOLDER_MAX) return folder
-  const mark = `~${digest(folder)}~`
-  return mark + folder.slice(mark.length - FOLDER_MAX)
-}
-
 // The folder an id is made from: where the path really lands, so a checkout reached through a symbolic link
 // (macOS's /tmp, a linked projects folder) has the id it has by its real path. Only for ids: files are read
 // and git is run in the folder as given. An Io that cannot say, or a folder it could not resolve, keeps it as given.
@@ -169,31 +141,6 @@ const realFolder = (io, folder) => {
   realFolders.set(folder, reading)
   return reading
 }
-
-// A repository's id from its origin URL: owner/repo, lowercased, whatever the protocol, so every
-// clone and worktree of one repository shares what is kept for it. Without an origin, the checkout's folder.
-//   git@github.com:AskTinNguyen/han-viet.git, https://github.com/AskTinNguyen/han-viet → asktinnguyen/han-viet
-//   D:\Mirrors\Sipher\S2.git (a local origin, as Windows writes it) → sipher/s2
-/** @param {string} url @param {string} root */
-export const repoId = (url, root) => {
-  const path = url
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*\//i, '')
-    .replace(/^[^@/\s]+@[^:/\s]+:/, '')
-    .replace(/\.git\/?$/i, '')
-    .replace(/\/+$/, '')
-  const parts = path.split('/').filter(Boolean)
-  if (parts.length >= 2) return parts.slice(-2).join('/').toLowerCase()
-  return `path:${folderId(root)}`
-}
-
-// A checkout's id: its repository's and its folder, so two clones or worktrees of one repository keep their
-// own proof, changes and "Continue …". Without an origin the repository's id is the folder already; without
-// a repository (an Io without `repo`) there is none.
-//   sipher/s2 in D:\S2 → sipher/s2@d:/s2
-/** @param {string} repo from repoId @param {string} root the checkout's top folder */
-export const checkoutId = (repo, root) => (repo === '' || repo.startsWith('path:') ? repo : `${repo}@${folderId(root)}`)
 
 // Roots read without intents. One that has them at a later read got them in this session:
 // its profile is new, so its pack is chosen again and each half is told.
@@ -366,8 +313,11 @@ const setIndex = async (io, person, change) => {
 
 // ---------------------------------------------------------------- reading
 
+// A session's stored window, off when it has none.
+/** @param {Io} io @param {string} sid @returns {Promise<Away>} */
+const awayOf = async (io, sid) => /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
 /** @param {Io} io */
-export const readAway = async io => /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(await io.sessionId()))) ?? {}) })
+export const readAway = async io => awayOf(io, await io.sessionId())
 // Where evidence is kept: with the tracked intent, so yesterday's build and tests still count
 // today; with the session when nothing is tracked. Each record is good for a day (EVIDENCE_TTL_MS).
 /** @param {Io} io */
@@ -665,7 +615,7 @@ export const untrack = (io, me) =>
     const pin = await readPin(io)
     if (pin === null) return { result: /** @type {const} */ ('none'), slug: '' }
     const { slug } = pin
-    const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) })
+    const away = await awayOf(io, sid)
     if (away.phase === 'running') return { result: /** @type {const} */ ('away'), slug }
     await io.remove(KEY.pinned(sid))
     // The unscoped "Continue …" from before 0.2.5 goes too, or it would read through again.
@@ -692,8 +642,10 @@ const LANE_STALE_MS = 10 * 60 * 1000
 /**
  * One session's heartbeat, a file under the pack's local folder: what it tracks, on which branch,
  * when it was written and when the session last took a prompt or ran a tool; `app`: its id and title in
- * the desktop app, when it runs there (absent elsewhere, and in heartbeats written before 0.6.5).
- * @typedef {{ sessionId: string, intent: string | null, branch: string, updatedAt: number, lastActiveAt?: number, away: string, hasEnded: boolean, app?: AppSession }} Lane
+ * the desktop app, when it runs there (absent elsewhere, and in heartbeats written before 0.6.5); `root`: the
+ * session's own checkout ('' for a parent folder; absent before 0.6.6), which a heartbeat in another checkout
+ * (one whose intent it tracks) does not share.
+ * @typedef {{ sessionId: string, intent: string | null, branch: string, updatedAt: number, lastActiveAt?: number, away: string, hasEnded: boolean, app?: AppSession, root?: string }} Lane
  * @typedef {import('./handoff.mjs').AppSession} AppSession
  */
 
@@ -729,7 +681,7 @@ export const writeHeartbeat = (io, at) =>
     const sid = await io.sessionId()
     const away = await readAway(io)
     /** @type {Lane} */
-    const lane = { sessionId: sid, intent: await readPinned(io), branch: at.branch, updatedAt: Date.now(), lastActiveAt: activeAt, away: away.phase, hasEnded: at.hasEnded, ...(appSelf ? { app: appSelf } : {}) }
+    const lane = { sessionId: sid, intent: await readPinned(io), branch: at.branch, updatedAt: Date.now(), lastActiveAt: activeAt, away: away.phase, hasEnded: at.hasEnded, root: at.root, ...(appSelf ? { app: appSelf } : {}) }
     /** @type {typeof lastBeats} */
     const beats = at.root ? [{ path: `${at.root}/${at.localDir}/lanes/${sid}.json`, lane, isHome: true }] : []
     if (at.also) beats.push({ path: `${at.also.root}/${at.also.localDir}/lanes/${sid}.json`, lane: { ...lane, branch: at.also.branch } })
@@ -860,11 +812,11 @@ export const settleItem = (io, item) =>
 /** @param {Io} io @param {(away: Away) => Promise<{ away?: Away, result: T }>} change @template T @returns {Promise<T>} */
 const withAway = (io, change) =>
   serial(async () => {
-    const key = KEY.away(await io.sessionId())
-    const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(key)) ?? {}) })
+    const sid = await io.sessionId()
+    const key = KEY.away(sid)
+    const away = await awayOf(io, sid)
     const { away: next, result } = await change(away)
     if (next) {
-      const sid = key.slice('away:'.length)
       if (isHolding(next)) await io.set(key, next)
       else await io.remove(key)
       const person = next.person || away.person
@@ -875,24 +827,42 @@ const withAway = (io, change) =>
   })
 
 /**
- * Opens a window, unless one is running or waiting for review.
- * @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {{ root: string, tz: number, now: number, me: string, pack?: Pack, base?: string }} at
- *   `base`: the branch the checkout's team merges into, for what the ledger says is held
- * @returns {Promise<Away | null>}
+ * @typedef {{ root: string, tz: number, now: number, me: string, pack?: Pack, base?: string }} WindowAt where and when a window
+ *   opens; `base`: the branch the checkout's team merges into, for what the ledger says is held
  */
-export const startAway = (io, choice, at) =>
+
+// Another session's view through this one's Io: its own keys (its window, its tracked intent) and its checkout, so its
+// window is opened or ended from here. The store is the plugin's, one for every session on the machine, and each
+// session's hooks read their own window at every call.
+/** @param {Io} io @param {string} sid @param {string} root @returns {Io} */
+export const asSession = (io, sid, root) => ({ ...io, sessionId: async () => sid, root: async () => root })
+
+// The window the session would open now, nothing stored or written: its ledger is its tracked intent's decisions.md
+// when the intent is the person's own, else a file of its own under the checkout's local folder (named by the minute
+// and the session, so sessions heading off together never share one).
+/** @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {WindowAt} at @returns {Promise<Away>} */
+export const planAway = async (io, choice, at) => {
+  const pin = await readPin(io)
+  // The tracked intent's folder, in whichever checkout it lives.
+  const dir = pin ? `${pin.isOwn ? at.root : pin.root}/docs/intent/${pin.slug}` : ''
+  const owner = pin ? intentOwner((await io.read(`${dir}/prompt.md`)) ?? '') : ''
+  const stamp = new Date(at.now + at.tz * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-')
+  const ledgerPath = pin && isSamePerson(owner, at.me) ? `${dir}/decisions.md` : `${at.root}/${(at.pack ?? unreal).localDir}/away/${stamp}-${shortSession(await io.sessionId())}.md`
+  return newWindow({ ...choice, held: choice.held ?? [...(at.pack ?? unreal).held.defaults] }, at.now, ledgerPath, { person: personId(at.me), root: at.root })
+}
+
+// Opens a planned window, unless one is running or waiting for review: its ledger is started, and it holds from now.
+/** @param {Io} io @param {Away} planned @param {WindowAt} at @returns {Promise<Away | null>} */
+export const openAway = (io, planned, at) =>
   withAway(io, async away => {
     if (away.phase !== 'off') return { result: null }
-    const pin = await readPin(io)
-    // The tracked intent's folder, in whichever checkout it lives.
-    const dir = pin ? `${pin.isOwn ? at.root : pin.root}/docs/intent/${pin.slug}` : ''
-    const owner = pin ? intentOwner((await io.read(`${dir}/prompt.md`)) ?? '') : ''
-    const stamp = new Date(at.now + at.tz * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-')
-    const ledgerPath = pin && isSamePerson(owner, at.me) ? `${dir}/decisions.md` : `${at.root}/${(at.pack ?? unreal).localDir}/away/${stamp}.md`
-    const started = newWindow({ ...choice, held: choice.held ?? [...(at.pack ?? unreal).held.defaults] }, at.now, ledgerPath, { person: personId(at.me), root: at.root })
-    await io.write(ledgerPath, ledgerWithWindow((await io.read(ledgerPath)) ?? '', started, at.tz, at.pack ?? unreal, at.base))
-    return { away: started, result: started }
+    await io.write(planned.ledgerPath, ledgerWithWindow((await io.read(planned.ledgerPath)) ?? '', planned, at.tz, at.pack ?? unreal, at.base))
+    return { away: planned, result: planned }
   })
+
+// Opens a window now, unless one is running or waiting for review.
+/** @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {WindowAt} at @returns {Promise<Away | null>} */
+export const startAway = async (io, choice, at) => openAway(io, await planAway(io, choice, at), at)
 
 // Ends a running window; the review waits in "Needs you". Resolves whether it was running.
 /** @param {Io} io */
@@ -900,6 +870,21 @@ export const endAway = io => withAway(io, async away => (away.phase === 'running
 
 /** @param {Io} io */
 export const closeAway = io => withAway(io, async away => (away.phase === 'off' ? { result: false } : { away: { ...offAway(), person: away.person }, result: true }))
+
+// The person is back ("I'm back", /away stop, the review's press): this session's window ends if it runs, then every
+// other running window of its group (A3), each to its review in its own session. An ended window keeps its group.
+/** @param {Io} io @returns {Promise<{ isEnded: boolean, others: number }>} */
+export const comeBack = async io => {
+  const isEnded = await endAway(io)
+  const { group, person } = await readAway(io)
+  const own = await io.sessionId()
+  let others = 0
+  for (const sid of /** @type {string[]} */ (group ? ((await io.get(KEY.windows(person))) ?? []) : [])) {
+    const other = sid === own ? null : await awayOf(io, sid)
+    if (other && other.group === group && (await endAway(asSession(io, sid, other.root)))) others += 1
+  }
+  return { isEnded, others }
+}
 
 // Puts a window back, when the review that closed it could not be delivered.
 /** @param {Io} io @param {Away} saved */
@@ -934,12 +919,12 @@ export const deferQuestions = (io, questions, lastPersonAt) =>
 /** @param {Io} io @param {{ me: string, root: string, isAlive: (sid: string) => Promise<boolean> }} lane */
 export const adoptWindow = async (io, lane) => {
   const sid = await io.sessionId()
-  if (isHolding(/** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) }))) return null
+  if (isHolding(await awayOf(io, sid))) return null
   /** @type {{ from: string, away: Away } | null} */
   let found = null
   for (const from of /** @type {string[]} */ ((await io.get(KEY.windows(personId(lane.me)))) ?? [])) {
     if (from === sid) continue
-    const away = /** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(from))) ?? {}) })
+    const away = await awayOf(io, from)
     if (!isHolding(away) || away.root !== lane.root) continue
     if (await lane.isAlive(from)) continue
     if (!found || away.startedAt > found.away.startedAt) found = { from, away }
@@ -970,7 +955,7 @@ export const prune = async (io, isGone) => {
   for (const [sid, keys] of bySession) {
     if (!(await isGone(sid))) continue
     // A session that ended while its window still holds keeps its whole lane for adoption.
-    if (isHolding(/** @type {Away} */ ({ ...offAway(), .../** @type {object} */ ((await io.get(KEY.away(sid))) ?? {}) }))) continue
+    if (isHolding(await awayOf(io, sid))) continue
     await serial(async () => {
       for (const key of keys) await io.remove(key)
     })

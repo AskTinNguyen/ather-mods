@@ -203,18 +203,50 @@ export const skillsRows = (el, frame, { meta, groups, skills }, on) => {
   return rows
 }
 
+// A session's row in Heading off?: its tick box, its name in `nameCells` cells, and what it says beside it.
+/** @param {import('./away.mjs').AwaySession} one @param {boolean} isTicked @param {number} nameCells */
+export const awayPickText = (one, isTicked, nameCells) => {
+  const box = one.awayUntil ? '   ' : isTicked ? '[x]' : '[ ]'
+  return one.detail ? `${box} ${fit(one.name, nameCells).padEnd(nameCells)}  ${one.detail}` : `${box} ${fit(one.name, nameCells)}`
+}
+
 /**
- * Heading off?: the away presets, each a press, under what the window holds.
- * @param {any} el @param {Frame} frame @param {{ mandate: string }} view
- * @param {{ onPreset: (preset: (typeof AWAY_PRESETS)[number]) => Press, onBack: Press }} on
+ * Heading off?: which sessions (when more than this one is live: each a press that ticks it, and a: all, n: none),
+ * then the away presets, each a press, under what the window holds.
+ * @param {any} el @param {Frame} frame
+ * @param {{ mandate: string, sessions: readonly import('./away.mjs').AwaySession[], ticked: ReadonlySet<string> }} view `mandate`: for
+ *   one session or for several, as the list has
+ * @param {{ onPreset: (preset: (typeof AWAY_PRESETS)[number]) => Press, onTick: (sessionId: string) => Press, onAll: Press, onNone: Press, onBack: Press }} on
  */
-export const awayRows = (el, frame, { mandate }, on) => [
+export const awayRows = (el, frame, { mandate, sessions, ticked }, on) => [
   masthead(el, [label(el, 'brand', 'Away', frame.width), el.Text({ key: 'title', bold: true, children: 'Heading off?' }), el.Text({ key: 'meta', color: QUIET, wrap: 'wrap', children: mandate })], frame.surface),
+  ...(sessions.length > 1 ? [awayPicks(el, frame, sessions, ticked, on)] : []),
   section(el, 'away-choices', [
     ...AWAY_PRESETS.map((preset, index) => choiceRow(el, { key: `away-${preset.hotkey}`, title: preset.label, detail: preset.choice.untilDone ? 'Ends when the work is done, 24 hours at most.' : `Ends in ${preset.label}.`, hotkey: String(index + 1), autoFocus: index === 0, width: frame.width, onPress: on.onPreset(preset) }, frame.isClicked)),
   ]),
   backRow(el, frame, 'away-back', on.onBack),
 ]
+
+// A session's row: a button's margin, the box and its space, the gap before what it says.
+const PICK_MARGIN = 3
+const PICK_BOX = 4
+const PICK_GAP = 2
+
+// Which sessions: one row each, the names in one column (cut to leave room for the longest detail), then all and none.
+/** @param {any} el @param {Frame} frame @param {readonly import('./away.mjs').AwaySession[]} sessions @param {ReadonlySet<string>} ticked @param {{ onTick: (sessionId: string) => Press, onAll: Press, onNone: Press }} on */
+const awayPicks = (el, frame, sessions, ticked, on) => {
+  const detailCells = Math.max(0, ...sessions.map(one => one.detail.length))
+  const nameCells = Math.max(8, Math.min(Math.max(...sessions.map(one => one.name.length)), frame.width - PICK_MARGIN - PICK_BOX - PICK_GAP - detailCells))
+  return section(el, 'away-sessions', [
+    label(el, 'away-sessions-label', 'Which sessions?', frame.width),
+    // A session already away is listed with its end, and is no press.
+    ...sessions.map((one, index) => {
+      const text = fit(awayPickText(one, ticked.has(one.sessionId), nameCells), frame.width - PICK_MARGIN)
+      return one.awayUntil ? el.Text({ key: `away-session-${index}`, color: QUIET, children: text }) : el.Button({ key: `away-session-${index}`, label: text, plain: true, dimColor: ticked.has(one.sessionId) ? undefined : true, onPress: on.onTick(one.sessionId) })
+    }),
+    el.Box({ key: 'away-sessions-all', flexDirection: 'row', gap: 3, paddingLeft: PICK_BOX, children: [el.Button({ key: 'away-all', label: 'all', hotkey: keyOf(frame, 'a'), plain: true, onPress: on.onAll }), el.Button({ key: 'away-none', label: 'none', hotkey: keyOf(frame, 'n'), plain: true, onPress: on.onNone })] }),
+  ])
+}
 
 /**
  * While an away window runs: what the session is doing, what it did so far, and the press that ends the

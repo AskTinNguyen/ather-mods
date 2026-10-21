@@ -9,11 +9,11 @@
 // The host reads on(...) and $.noun.method(...) from source, so they are
 // spelled literally, and helpers that take $ are top-level functions.
 
-import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from './away.mjs'
+import { AWAY_PRESETS, awayMessage, awaySessions, isStopWord, parseAwayArgs, pickedSessions, windowEndText } from './away.mjs'
 import { VIEW_LABELS, isShownIn, otherView, viewText, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
-import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, searchIntents } from './model.mjs'
+import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, plural, searchIntents } from './model.mjs'
 import { unreal } from './packs/unreal.mjs'
 import * as state from './state.mjs'
 import { awayHours, warmBadge, warmPaneText } from './warm.mjs'
@@ -73,6 +73,11 @@ let places = new Map()
 const guesses = new Map()
 const GUESS_MS = 10 * 60 * 1000
 let paneMode = /** @type {Mode} */ ('home')
+// Heading off?: the live sessions of this checkout as last read when it opened (away.mjs awaySessions), and the ids ticked.
+/** @type {import('./away.mjs').AwaySession[]} */
+let awayList = []
+/** @type {Set<string>} */
+let awayTicked = new Set()
 // Create groups opened past their first three.
 /** @type {Set<string>} */
 const createOpen = new Set()
@@ -1045,9 +1050,7 @@ function handOff($, ids, text, onDelivered, onFailed) {
 async function sendTo($, target, ids, text, onDelivered, onFailed) {
   for (const id of ids) sent.add(id)
   stale()
-  const own = await state.sessionId(io($))
-  const from = state.appSession()?.title || (await sessionName(host($), (await laneOf($)).root, own).catch(() => '')) || `session ${state.shortSession(own)}`
-  const result = await deliverTo($, target, routedText({ from: `"${from}"`, slug: target.slug, text }))
+  const result = await deliverTo($, target, routedText({ from: await ownName($), slug: target.slug, text }))
   $.ui.log(`Ather hand-off: to session ${target.sessionId} for intent ${target.slug}: ${result.isDelivered ? 'queued there' : `not delivered (${result.reason})`}`, { to: 'debug' })
   // What follows may take its time (an answered row settles after it has shown): the press does not wait on it.
   if (result.isDelivered) void Promise.resolve().then(() => onDelivered?.()).catch(error => $.ui.log(`Ather hand-off: after the send to ${target.sessionId}: ${String(error)}`, { to: 'debug' }))
@@ -1060,9 +1063,16 @@ async function sendTo($, target, ids, text, onDelivered, onFailed) {
   return result.isDelivered ? `sent to ${target.name}, which tracks ${target.slug}. It reads it once its own turn ends.` : `could not reach ${target.name}: ${result.reason}. Nothing was sent; press it again to try once more.`
 }
 
+// This session as another reads it: its app title, else its tab's name, else its short id; quoted.
+/** @param {Engine} $ */
+async function ownName($) {
+  const own = await state.sessionId(io($))
+  return `"${state.appSession()?.title || (await sessionName(host($), (await laneOf($)).root, own).catch(() => '')) || `session ${state.shortSession(own)}`}"`
+}
+
 // Into the other session (A3): through the desktop app's session tool when both sessions run in the app (the other
 // recorded its app id, and this one could ask the app for its own), else the engine's send by its CLI id.
-/** @param {Engine} $ @param {Target} target @param {string} message @returns {Promise<{ isDelivered: boolean, reason?: string }>} */
+/** @param {Engine} $ @param {Pick<Target, 'sessionId' | 'appId'>} target @param {string} message @returns {Promise<{ isDelivered: boolean, reason?: string }>} */
 async function deliverTo($, target, message) {
   if (!target.appId || !state.appSession()) return $.session.send({ to: { sessionId: target.sessionId }, text: message }).catch(error => ({ isDelivered: false, reason: String(error) }))
   const sent = await appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__send_message', session_id: target.appId, message }))
@@ -1161,6 +1171,9 @@ async function explainItem($, one, answers, words) {
 async function act($, one) {
   if (one.kind === 'away-end') return comeBack($)
   if (one.kind === 'review') {
+    // The person is back: the rest of the window's group ends with this press (A3), and stays ended should the
+    // hand-off fail and this window be put back.
+    await state.comeBack(io($))
     // The review is the person walking through the window. The window closes when the session has the
     // review, not at the press: a press while a turn runs waits for that turn's end, and until then the
     // session has not read "I am back", so merges stay held and its questions still go to the ledger.
@@ -1186,9 +1199,10 @@ function isReviewQueued() {
   return outbox.queued().some(id => id.startsWith('review:'))
 }
 
-// "I'm back": ends the window and hands its review to the session in one step.
+// "I'm back": ends the window and hands its review to the session in one step (the review's press ends the group's).
 /** @param {Engine} $ */
 async function comeBack($) {
+  // Ended first, so the review exists to press; its press ends the rest of the group (state.comeBack).
   await state.endAway(io($))
   stale()
   const review = (await home($)).open.find(one => one.kind === 'review')
@@ -1427,6 +1441,55 @@ async function startAway($, choice) {
   return `Away ${windowEndText(away, tz)}${choice.goal ? ` (goal: ${choice.goal})` : ''}. ${pack.mandate.away}${handed === 'queued' ? ' The session is told when this turn ends.' : ''}${warm}`
 }
 
+// The live sessions of this checkout for Heading off? and /away (A1, A4): this one first, each other with its window.
+// A heartbeat here of a session whose own checkout is another (it tracks an intent here) is left out.
+/** @param {Engine} $ */
+async function readAwaySessions($) {
+  const files = io($)
+  const { root, pack: chosen } = await laneOf($)
+  const sid = await state.sessionId(files)
+  const peers = (await state.readPeers(files, root, chosen.localDir)).filter(lane => lane.root === undefined || lane.root === root)
+  const self = { sessionId: sid, title: state.appSession()?.title ?? '', branch: (await state.readLane(files, root, chosen.localDir, sid))?.branch ?? '', intent: await state.readPinned(files) }
+  const withWindows = await Promise.all(peers.map(async lane => ({ ...lane, window: await state.readAway(state.asSession(files, lane.sessionId, root)) })))
+  return awaySessions(self, withWindows, Date.now(), await state.readTz(files))
+}
+
+// Heading off for several sessions (A2): a window in each one ticked, of the same length and goal, under one group id.
+// This session's opens as before. Another's is planned, its mandate delivered as Needs you delivers (deliverTo), and
+// opened only once delivered: one the mandate cannot reach is named, and keeps no window. With only this session
+// ticked, as before.
+/** @param {Engine} $ @param {import('./away.mjs').WindowChoice} choice @param {readonly import('./away.mjs').AwaySession[]} ticked */
+async function startAwayIn($, choice, ticked) {
+  const others = ticked.filter(one => !one.isSelf)
+  const isHere = ticked.some(one => one.isSelf)
+  if (others.length === 0) return isHere ? startAway($, choice) : 'No session ticked: nothing started.'
+  const files = io($)
+  const session = await laneOf($)
+  const at = { root: session.root, me, tz: await state.readTz(files), now: Date.now(), pack, base: session.base }
+  const grouped = { ...choice, group: `${state.shortSession(await state.sessionId(files))}-${at.now}` }
+  const here = isHere ? await startAway($, grouped) : ''
+  const from = await ownName($)
+  // Each other session in turn: '' once its window is open, else why not.
+  const outcomes = await Promise.all(
+    others.map(async one => {
+      const view = state.asSession(files, one.sessionId, session.root)
+      const planned = await state.planAway(view, grouped, at)
+      const result = await deliverTo($, one, awayMessage({ from, away: planned, tz: at.tz, pack, base: session.base }))
+      $.ui.log(`Ather away: to session ${one.sessionId}: ${result.isDelivered ? 'delivered' : `not delivered (${result.reason})`}`, { to: 'debug' })
+      const missed = !result.isDelivered ? result.reason : (await state.openAway(view, planned, at)) ? '' : 'already in a window'
+      return { name: one.name, until: windowEndText(planned, at.tz), missed }
+    }),
+  )
+  stale()
+  const opened = outcomes.filter(one => one.missed === '')
+  const missed = outcomes.filter(one => one.missed !== '')
+  return [
+    here,
+    opened.length > 0 ? `Away ${opened[0]?.until} in ${plural(opened.length, 'other session')}: ${opened.map(one => one.name).join(', ')}; "I'm back" in any of them ends them all.` : '',
+    missed.length > 0 ? `Not reached, no window opened: ${missed.map(one => `${one.name} (${one.missed})`).join('; ')}.` : '',
+  ].filter(Boolean).join(' ')
+}
+
 // Text typed instead of picking: an intent, a question for the session, or nothing.
 /** @param {Engine} $ @param {string} text @param {boolean} [isInQuestion] typed under Other, so no further question */
 async function typed($, text, isInQuestion = true) {
@@ -1509,13 +1572,19 @@ async function atherCommand($, args) {
 async function awayCommand($, args) {
   const away = await state.readAway(io($))
   if (isStopWord(args)) {
-    if (await state.endAway(io($))) return 'Away window ended; held actions stay held until you review it. Type /ather.'
-    return away.phase === 'review' ? 'The away window has ended; type /ather to review it.' : 'No away window is running.'
+    // The rest of its group ends too (A3), whatever this session's window was doing.
+    const { isEnded, others } = await state.comeBack(io($))
+    const also = others > 0 ? ` Ended in ${plural(others, 'other session')} of its group too; each waits for its review there.` : ''
+    if (isEnded) return `Away window ended; held actions stay held until you review it. Type /ather.${also}`
+    return `${away.phase === 'review' ? 'The away window has ended; type /ather to review it.' : 'No away window is running.'}${also}`
   }
   if (away.phase === 'running') return `An away window is running ${windowEndText(away, await state.readTz(io($)))}. /away end ends it.`
   if (away.phase === 'review') return 'The last away window waits for your review: type /ather.'
   const parsed = parseAwayArgs(args, localMinutes(Date.now(), await state.readTz(io($))))
-  return parsed ? startAway($, parsed) : presetQuestion($, args)
+  if (!parsed) return presetQuestion($, args)
+  // "/away 8h all", "/away 8h enemy, playtest" (A4); words that name no session are the goal, as before.
+  const picked = parsed.goal ? pickedSessions(parsed.goal, await readAwaySessions($)) : null
+  return picked ? startAwayIn($, { ...parsed, goal: picked.goal }, picked.picked) : startAway($, parsed)
 }
 
 // ---------------------------------------------------------------- one question (desktop, and /away anywhere)
@@ -1694,6 +1763,8 @@ async function intentQuestion($, key) {
   })
 }
 
+// This session only: the question (the desktop's /away, Home's Heading off?) has no list to tick; the pane's ☾ and
+// `/away <length> all` hand over in several.
 /** @param {Engine} $ @param {string} goal */
 async function presetQuestion($, goal) {
   const tz = await state.readTz(io($))
@@ -1776,6 +1847,10 @@ async function searchQuestion($) {
 
 /** @param {Engine} $ @param {Mode} mode */
 async function openPane($, mode) {
+  if (mode === 'away') {
+    awayList = await readAwaySessions($).catch(async () => awaySessions({ sessionId: await state.sessionId(io($)), title: '', branch: '', intent: null }, [], 0, 0))
+    awayTicked = new Set(awayList.filter(one => one.isDefault).map(one => one.sessionId))
+  }
   paneMode = mode
   await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
   $.ui.invalidate('ui.render')
@@ -2114,7 +2189,18 @@ function paneView(el, $, model, columns, surface, crew = []) {
   }
 
   if (paneMode === 'away') {
-    return column([...awayRows(el, frame, { mandate: forBase(pack.mandate.pane, paneBase) }, { onPreset: preset => press($, () => startAway($, { ...preset.choice, goal: '' }), false), onBack: show($, 'home') }), ...foot])
+    const retick = (/** @type {Iterable<string>} */ ids) => () => ((awayTicked = new Set(ids)), $.ui.invalidate('ui.render'))
+    const toggled = (/** @type {string} */ sid) => (awayTicked.has(sid) ? [...awayTicked].filter(one => one !== sid) : [...awayTicked, sid])
+    return column([
+      ...awayRows(el, frame, { mandate: forBase(awayList.length > 1 ? pack.mandate.panes : pack.mandate.pane, paneBase), sessions: awayList, ticked: awayTicked }, {
+        onPreset: preset => press($, () => startAwayIn($, { ...preset.choice, goal: '' }, awayList.filter(one => awayTicked.has(one.sessionId))), false),
+        onTick: sid => retick(toggled(sid)),
+        onAll: retick(awayList.filter(one => one.awayUntil === '').map(one => one.sessionId)),
+        onNone: retick([]),
+        onBack: show($, 'home'),
+      }),
+      ...foot,
+    ])
   }
 
   const isUntracked = header.title === 'Ather'
