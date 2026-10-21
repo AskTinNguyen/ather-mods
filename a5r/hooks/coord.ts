@@ -562,7 +562,8 @@ export const ramProbe = (drive: string): string[] => [
   [
     '$os = Get-CimInstance Win32_OperatingSystem',
     '$free = [math]::Round($os.FreePhysicalMemory / 1MB, 1)',
-    `$d = Get-PSDrive -Name '${drive.replace(/[^A-Za-z]/g, '').slice(0, 1) || 'E'}' -ErrorAction SilentlyContinue`,
+    // A111: the checkout's own drive, never a default one (no letter: no disk reading, -1)
+    `$d = ${/^[A-Za-z]/.test(drive) ? `Get-PSDrive -Name '${drive.slice(0, 1)}' -ErrorAction SilentlyContinue` : '$null'}`,
     '$disk = if ($d) { [math]::Round($d.Free / 1GB, 1) } else { -1 }',
     '$alive = @{}; Get-Process | ForEach-Object { $alive[[int]$_.Id] = 1 }',
     "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe','dotnet.exe','UnrealBuildTool.exe','cl.exe','link.exe','MSBuild.exe','UnrealGame.exe','S2.exe')",

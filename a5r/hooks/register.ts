@@ -19,7 +19,7 @@ import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from 
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
 import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, tellKey, testsOf, type BuildLog, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
 import { buildScriptText, buildStartCommand, isScriptAlive, syncBuildScript } from './buildscript.ts'
-import { FIND_GIT_MS, LOGS_READ, NO_CHECKOUT, REG_MS, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, pickEngine, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
+import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG_MS, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, type Miss, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -175,10 +175,12 @@ const parentOf = (p: string): string => {
   const i = p.lastIndexOf('/')
   return i < 0 ? '' : p.slice(0, i)
 }
-// A111 (rev 37): the shared checkout, found once per load (at the session start; again at /a5r on while none is found),
-// never per call: each hook that reads it awaits the one cached find first (ensureCheckout). Null: none found, so the
+// A111 (rev 37): the shared checkout. One way to find it (`findAgain`: find, then take the result in one assignment): once
+// per load through the cached promise every hook awaits first (ensureCheckout), and again while none is found, at each
+// minute (beside the cache: no hook waits on it) and at /a5r on. Null: none found (`checkoutMiss` says why), so the
 // coordination is idle and the five rules still apply.
 let checkout: Checkout | null = null
+let checkoutMiss = ''
 let checkoutFound: Promise<void> | null = null
 let storeDir = '' // A5R's own folder while no checkout is found (<TEMP>/a5r): the rules' records and alerts land there, never at a drive root
 let isTicking = false
@@ -188,26 +190,57 @@ const isCheckoutHere = async ($: Engine): Promise<boolean> => checkout !== null 
 /** Whether a folder holds the checkout's .uproject at its root: the checkout itself or a worktree of it. */
 const holdsProject = async ($: Engine, dir: string): Promise<boolean> => Boolean(checkout?.uproject) && dir !== '' && (await $.fs.exists(`${dir}/${checkout?.uproject}`).catch(() => false))
 /** The editor and sync tools without a checkout on this machine. */
-const noCheckout = (gate: string): string => blocked(gate, checkout ? `no S2 checkout at ${checkout.root}` : NO_CHECKOUT.why, NO_CHECKOUT.next)
+const noCheckout = (gate: string): string => blocked(gate, checkout ? `no S2 checkout at ${checkout.root}` : checkoutMiss, NO_CHECKOUT_NEXT)
+type Found = { checkout: Checkout | null; miss: string; storeDir: string }
 /** A111: the editorLock option's checkout, else the main working tree of the session's own repository when it holds a
- * .uproject at its root (machine.ts `checkoutOf`). */
-async function findCheckout($: Engine, givenLock: string): Promise<void> {
-  storeDir = `${norm((await $.env.get('TEMP')) ?? (await $.env.get('TMPDIR')) ?? '/tmp')}/a5r`
-  const ran = givenLock ? null : await $.process.run(commonDirArgv(norm(await $.session.cwd())), { timeoutMs: FIND_GIT_MS }).catch(() => null)
-  const root = givenLock ? rootOfLock(givenLock) : ran?.exitCode === 0 ? mainTreeOf(ran.stdout) : ''
-  checkout = checkoutOf(givenLock, root, root ? await $.fs.list(root).catch(() => []) : [])
+ * .uproject at its root (machine.ts `checkoutOf`); with why none was found. It never throws (mainTreeHere answers a failure
+ * as a miss; the minute timer looks again). */
+async function findCheckout($: Engine, givenLock: string): Promise<Found> {
+  const temp = (await $.env.get('TEMP').catch(() => undefined)) || (await $.env.get('TMPDIR').catch(() => undefined)) || '/tmp'
+  const storeDir = `${norm(temp)}/a5r`
+  const found = givenLock ? { tree: rootOfLock(givenLock) } : await mainTreeHere($)
+  if (typeof found === 'string' || 'failed' in found) return { checkout: null, miss: noCheckoutWhy(found), storeDir }
+  const c = checkoutOf(givenLock, found.tree, await $.fs.list(found.tree).catch(() => []))
+  return { checkout: c, miss: c ? '' : noCheckoutWhy({ bare: found.tree }), storeDir }
 }
-const ensureCheckout = ($: Engine, opts: Opts): Promise<void> => (checkoutFound ??= findCheckout($, str(opts.editorLock).trim()))
-/** A111: this session coordinates when its root holds the checkout's .uproject (the checkout or one of its worktrees); the
+/** A111: the main working tree of the session's repository, read from the files: the first `.git` above the session's
+ * folder, a folder (that tree) or a linked worktree's file naming its main tree; git is asked only for a `.git` file that
+ * names anything else (a submodule's, a separate git dir). No PATH, no wait for the common cases; a failure is a miss. */
+async function mainTreeHere($: Engine): Promise<{ tree: string } | Exclude<Miss, { bare: string }>> {
+  try {
+    for (let d = norm(await $.session.cwd()); d; d = parentOf(d)) {
+      if (await $.fs.exists(`${d}/.git/HEAD`)) return { tree: d }
+      if (!(await $.fs.exists(`${d}/.git`))) continue
+      const tree = mainTreeOfGitFile(d, await $.fs.read(`${d}/.git`).catch(() => ''))
+      if (tree) return { tree }
+      const ran = await $.process.run(commonDirArgv(d), { timeoutMs: FIND_GIT_MS }).catch(() => null)
+      return ran?.exitCode === 0 ? { tree: mainTreeOf(ran.stdout) } : 'git-silent'
+    }
+    return 'no-repo'
+  } catch (err) {
+    return { failed: String(err).slice(0, 200) }
+  }
+}
+const findAgain = async ($: Engine, opts: Opts): Promise<void> => {
+  ;({ checkout, miss: checkoutMiss, storeDir } = await findCheckout($, str(opts.editorLock).trim()))
+}
+const ensureCheckout = ($: Engine, opts: Opts): Promise<void> => (checkoutFound ??= findAgain($, opts))
+/** A111: this session coordinates when its root holds the checkout's .uproject (the checkout or one of its worktrees). The
  * minute timer starts once per load. */
 async function startCoordination($: Engine, opts: Opts): Promise<void> {
   await ensureCheckout($, opts)
   isS2 = await holdsProject($, norm(await $.session.root()))
-  if (!isS2) return
-  // The minute timer reads files and probes; it wakes the model only for an event addressed to this session.
-  await runTick($, opts)
-  if (!isTicking) $.clock.every(EDITOR_PERIOD_MS, () => void runTick($, opts))
+  if (isS2) await runTick($, opts)
+  if (!isTicking) $.clock.every(EDITOR_PERIOD_MS, () => void minute($, opts))
   isTicking = true
+}
+/** The minute timer: the tick while this session coordinates (it reads files and probes; it wakes the model only for an
+ * event addressed to this session); while no checkout is found, the find again, and the coordination once one is. */
+async function minute($: Engine, opts: Opts): Promise<void> {
+  if (isS2) return runTick($, opts)
+  if (checkout !== null) return
+  await findAgain($, opts)
+  if (checkout !== null) await startCoordination($, opts)
 }
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const count = (rule: string) => {
@@ -744,7 +777,8 @@ async function readJson($: Engine, path: string): Promise<string | null> {
 
 /** A fresh machine reading (a grant, the cleanup, a release), published to the shared probe file for the others. */
 async function freshProbe($: Engine, opts: Opts): Promise<Probe | null> {
-  const ran = await $.process.run(ramProbe(s2Root().slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null)
+  if (!checkout) return null // A111: no checkout, no machine reading of its drive
+  const ran = await $.process.run(ramProbe(checkout.root.slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null)
   const p = ran ? parseProbe(ran.stdout) : null
   probeOk = p !== null // A88 (c, re-review): the last reading this session tried
   if (p) await $.fs.write(`${hfDir()}/probe.json`, JSON.stringify({ at: await $.clock.now(), by: me8, probe: p })).catch(() => undefined)
@@ -1003,17 +1037,27 @@ async function writeBuildScript($: Engine, c: Checkout, s: SyncFile, root: strin
   return isWritten ? buildStartCommand(script) : ''
 }
 
+/** A110 (Fable review D2): an Editor log's text; one over 4 MiB, which `$.fs.read` refuses, through findstr (its base
+ * directory lines only); null when findstr cannot read it. */
+async function logText($: Engine, path: string): Promise<string | null> {
+  if (((await $.fs.stat(path).catch(() => null))?.size ?? 0) <= FS_READ_MAX) return $.fs.read(path).catch(() => '')
+  return (await $.process.run(baseDirArgv(path), { timeoutMs: FIND_LOG_MS }).catch(() => null))?.stdout ?? null
+}
+
 /** A110: the engine root for the sync's build, read in order until a root's Build.bat exists (machine.ts `pickEngine`): the
  * engineRoot option, the engine the checkout's Editor last ran with (its newest logs), the .uproject's EngineAssociation in
  * Epic's registry entries. Read once per build sync, at T. */
 async function findEngine($: Engine, opts: Opts, c: Checkout): Promise<EngineFind> {
   const logs = `${c.root}/Saved/Logs`
   const fromLog = async (): Promise<Omit<EngineSource, 'hasBat'>> => {
+    const unread: string[] = []
     for (const name of editorLogs(await $.fs.list(logs).catch(() => []), c.uproject).slice(0, LOGS_READ)) {
-      const root = engineOfLog(await $.fs.read(`${logs}/${name}`).catch(() => ''))
+      const text = await logText($, `${logs}/${name}`)
+      if (text === null) unread.push(`${name} over 4 MiB, not read`)
+      const root = engineOfLog(text ?? '')
       if (root) return { from: `the Editor's last log (Saved/Logs/${name})`, root }
     }
-    return { from: "the Editor's last log (Saved/Logs)", root: null }
+    return { from: `the Editor's last log (Saved/Logs${unread.length ? `; ${unread.join('; ')}` : ''})`, root: null }
   }
   const fromRegistry = async (): Promise<Omit<EngineSource, 'hasBat'>> => {
     const assoc = engineAssociation(await $.fs.read(`${c.root}/${c.uproject}`).catch(() => ''))
@@ -3432,7 +3476,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
-  } else kids.push(el.Box({ key: 'hai-a5r-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: checkout ? `This session is not in the checkout ${checkout.root}: the Editor, Memory and Sync main tools and the sessions list live in a session there.` : `Coordination is idle here: ${NO_CHECKOUT.why}. To point it at a checkout, ${NO_CHECKOUT.next}. The five rules still apply.` })] }))
+  } else kids.push(el.Box({ key: 'hai-a5r-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: checkout ? `This session is not in the checkout ${checkout.root}: the Editor, Memory and Sync main tools and the sessions list live in a session there.` : `Coordination is idle here: ${checkoutMiss}. To point it at a checkout, ${NO_CHECKOUT_NEXT}. The five rules still apply.` })] }))
   // A19: the Nghiệm thu A5R card, once there is a score or the tracked intent is in Ship.
   if (lastAccept) {
     // A53: each rule's items capped at three lines (grouped by folder, "and N more"); A52: one section per PR.
@@ -3544,7 +3588,7 @@ export const register: Register = (on, options) => {
       if (arg === 'on' && !a5rOn) a5rFlipAt = await $.clock.now()
       a5rOn = arg === 'on'
       if (a5rOn) hits = noHits()
-      if (a5rOn && checkout === null) checkoutFound = null // A111: look again (git may have been slow); the find above has ended
+      if (a5rOn && checkout === null) await findAgain($, opts) // A111: look again (git may have been slow)
       if (a5rOn) await startCoordination($, opts)
       showStatus($)
       $.ui.invalidate('ui.render')

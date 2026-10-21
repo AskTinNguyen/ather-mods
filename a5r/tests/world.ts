@@ -79,7 +79,8 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
         : { deny: 'ENOENT' })
   on('session.id', async () => value(ids.current))
   on('session.end', async (_$: unknown, e: { sessionId: string }) => ({ sessionId: e.sessionId }))
-  on('session.cwd', async () => value(cwd))
+  let cwdFails = 0 // rev 37 (Fable review D1): `failCwd(n)` makes the next n reads of the session folder fail
+  on('session.cwd', async () => (cwdFails > 0 ? ((cwdFails -= 1), { deny: 'the session folder could not be read' }) : value(cwd)))
   on('session.root', async () => value(cwd))
   on('session.messages', async () => value([]))
   on('session.start', async () => ({ cwd }))
@@ -163,6 +164,9 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return { result: { stdout: t, stderr: '', interrupted: false }, text: t }
   })
   return {
+    failCwd: (n: number) => {
+      cwdFails = n
+    },
     failSubmit: (n: number) => {
       submitFails = n
     },

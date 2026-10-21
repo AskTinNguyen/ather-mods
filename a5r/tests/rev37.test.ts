@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { under } from '../hooks/a5r.ts'
 import { buildScriptText } from '../hooks/buildscript.ts'
-import { parseSyncFile, syncWorkerTask, newSync, type SyncFile } from '../hooks/coord.ts'
-import { NO_CHECKOUT, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineLabel, engineOfLog, lockIn, mainTreeOf, pickEngine, registryQueries, registryRoot, rootOfLock, uprojectIn } from '../hooks/machine.ts'
+import { parseSyncFile, ramProbe, syncWorkerTask, newSync, type SyncFile } from '../hooks/coord.ts'
+import { NO_CHECKOUT_NEXT, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineLabel, engineOfLog, lockIn, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, registryQueries, registryRoot, rootOfLock, uprojectIn } from '../hooks/machine.ts'
 import { machinePathHits } from './machine-paths.ts'
 import { A5RPANE, ME, NOW, find, text, world, type Rec } from './world.ts'
 
@@ -47,7 +47,17 @@ test('A111: unit: the main working tree from git\'s common dir (a worktree leads
   expect(checkoutOf('F:/elsewhere/Saved/EDITOR_OWNER.txt', 'F:/elsewhere', [])).toEqual({ root: 'F:/elsewhere', lock: 'F:/elsewhere/Saved/EDITOR_OWNER.txt', uproject: '' })
   // No checkout found: its folder is '', which holds nothing (a posix path starts with '/' and used to count as inside it).
   expect([under('/home/hai/app', ''), under('E:/s2/Source', ''), under('E:/s2/Source', 'E:/s2'), under('E:/s2', 'E:/s2/')]).toEqual([false, false, true, true])
-  expect(NO_CHECKOUT.next).toBe('set the a5r option editorLock to <checkout>/Saved/EDITOR_OWNER.txt')
+  expect(NO_CHECKOUT_NEXT).toBe('set the a5r option editorLock to <checkout>/Saved/EDITOR_OWNER.txt')
+  // Fable review D1: the main tree read from a linked worktree's .git file (absolute or relative); any other gitdir → git.
+  expect([mainTreeOfGitFile('E:/s2-wt/feat', 'gitdir: E:/s2/.git/worktrees/feat\n'), mainTreeOfGitFile('E:/s2-wt/feat', 'gitdir: ../../s2/.git/worktrees/feat'), mainTreeOfGitFile('D:/my games/wt', 'gitdir: D:\\my games\\s 2\\.git\\worktrees\\wt\r\n'), mainTreeOfGitFile('E:/s2/Plugins/Sub', 'gitdir: ../../.git/modules/Sub'), mainTreeOfGitFile('E:/x', 'not a git file')]).toEqual(['E:/s2', 'E:/s2', 'D:/my games/s 2', '', ''])
+  // Why none was found: no .uproject at the tree's root, git silent, or no repository at all.
+  expect(noCheckoutWhy({ bare: 'D:/tools/app' })).toBe('no Unreal checkout found for this session (its git repository\'s main working tree D:/tools/app holds no .uproject at its root)')
+  expect(noCheckoutWhy('git-silent')).toBe('no Unreal checkout found for this session (git did not answer for its repository (not on PATH, older than 2.31, or over 5 s))')
+  expect(noCheckoutWhy('no-repo')).toBe('no Unreal checkout found for this session (its folder is in no git repository)')
+  expect(noCheckoutWhy({ failed: 'x' })).toBe('no Unreal checkout found for this session (the search failed: x)')
+  // No checkout, no drive: the probe reads no disk (it used to fall back to drive E).
+  expect(ramProbe('').join(' ')).toContain('$d = $null')
+  expect(ramProbe('E').join(' ')).toContain("$d = Get-PSDrive -Name 'E'")
 })
 
 test('A110: unit: the log line (the last one, any platform folder, a timestamp before it), the Editor\'s own logs newest first, the association, the registry, the order', () => {
@@ -94,12 +104,15 @@ test('A110: unit: the log line (the last one, any platform folder, a timestamp b
 })
 
 test('A111: unit: the scan rule: a drive-letter path only in a comment labelled as an example (hooks), a labelled line (rules), never an option default', () => {
-  const code = ['const LOCK = \'E:/Projects/s2/Saved/EDITOR_OWNER.txt\'', '  alt: \'a worktree (D:\\\\Projects\\\\x)\',', '// the checkout E:/Projects/s2', ' * e.g. `E:/s2` → `E--s2`', '// for example C:/x', 'const u = \'https://github.com/a/b\'', 'const r = /^[a-zA-Z]:[\\\\/]/', 'foo(\'C:/x\') // e.g. a code line with a comment']
+  const code = ['const LOCK = \'E:/Projects/s2/Saved/EDITOR_OWNER.txt\'', '  alt: \'a worktree (D:\\\\Projects\\\\x)\',', '// the checkout E:/Projects/s2', '/** Records folder name,', ' * e.g. `E:/s2` → `E--s2`', ' */', '// for example C:/x', 'const u = \'https://github.com/a/b\'', 'const r = /^[a-zA-Z]:[\\\\/]/', 'foo(\'C:/x\') // e.g. a code line with a comment', 'const t = `', ' * e.g. C:/x inside a template literal`']
+  // Fable review: a comment line is a whole line after `//` or inside a /* */ block opened at a line's start; a template
+  // literal's line starting with `*` is not one.
   expect(machinePathHits('hooks/x.ts', code.join('\n'))).toEqual([
     'hooks/x.ts:1: const LOCK = \'E:/Projects/s2/Saved/EDITOR_OWNER.txt\'',
     'hooks/x.ts:2: alt: \'a worktree (D:\\\\Projects\\\\x)\',',
     'hooks/x.ts:3: // the checkout E:/Projects/s2',
-    'hooks/x.ts:8: foo(\'C:/x\') // e.g. a code line with a comment',
+    'hooks/x.ts:10: foo(\'C:/x\') // e.g. a code line with a comment',
+    'hooks/x.ts:12: * e.g. C:/x inside a template literal`',
   ])
   expect(machinePathHits('rules/rules-a5r.md', 'Work in E:/Projects/s2.\nA lock, e.g. E:/s2/Saved/EDITOR_OWNER.txt.')).toEqual(['rules/rules-a5r.md:1: Work in E:/Projects/s2.'])
   expect(machinePathHits('.claude-plugin/plugin.json', JSON.stringify({ userConfig: { editorLock: { type: 'string', default: 'E:/Projects/s2/Saved/EDITOR_OWNER.txt' }, motion: { default: 'on' }, engineRoot: { description: 'e.g. D:/x' } } }))).toEqual(['.claude-plugin/plugin.json: option editorLock default E:/Projects/s2/Saved/EDITOR_OWNER.txt'])
@@ -109,22 +122,23 @@ test('A111: unit: the scan rule: a drive-letter path only in a comment labelled 
 
 // ---------- engine: the checkout (A111) ----------
 test('A111: editorLock unset, a session in an Unreal checkout: that checkout coordinates (its lock, its Saved/A5R)', UNSET, async ($, on) => {
-  const w = world(on, { cwd: 'E:/s2', ram: '40', git: { [COMMON]: { stdout: 'E:/s2/.git\n' } } })
+  const w = world(on, { cwd: 'E:/s2/Source', ram: '40' })
   on('turn.complete', async () => ({ text: '' }))
+  w.put('E:/s2/.git/HEAD', 'ref: refs/heads/main')
   w.put(S2_LOCK, 'free since 14:20\n')
-  await $.session.start(start('E:/s2'))
-  expect(w.runs.filter(r => r.includes(COMMON))).toEqual(['git -C E:/s2 rev-parse --path-format=absolute --git-common-dir'])
+  await $.session.start(start('E:/s2/Source'))
+  expect(w.runs.filter(r => r.includes(COMMON))).toEqual([]) // read from the files (D1): no git, no PATH, no wait
   expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))).toContain('granted to this session until 15:00')
   expect(w.read(S2_LOCK)).toContain(ME.slice(0, 8))
   expect(w.read(`${HF}/editor/${ME.slice(0, 8)}.json`)).not.toBe('')
   expect(rootless(w)).toEqual([])
   await idle($)
   await $.ui.render(A5RPANE as never)
-  expect(w.runs.filter(r => r.includes(COMMON)).length).toBe(1) // found once, never per call
 })
 
 test('A111: in a linked worktree of the checkout: the main tree is the checkout, never the worktree', UNSET, async ($, on) => {
-  const w = world(on, { cwd: 'E:/s2-wt/feat', ram: '40', git: { [COMMON]: { stdout: 'E:/s2/.git\n' } } })
+  const w = world(on, { cwd: 'E:/s2-wt/feat', ram: '40' })
+  w.put('E:/s2/.git/HEAD', 'ref: refs/heads/main')
   w.put('E:/s2-wt/feat/S2.uproject', '{}')
   w.put('E:/s2-wt/feat/.git', 'gitdir: E:/s2/.git/worktrees/feat')
   w.put(S2_LOCK, 'free since 14:20\n')
@@ -132,17 +146,19 @@ test('A111: in a linked worktree of the checkout: the main tree is the checkout,
   expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))).toContain('granted to this session until 15:00')
   expect(w.read(S2_LOCK)).toContain(ME.slice(0, 8))
   expect([...w.files.keys()].some(p => p.startsWith('e:/s2-wt/feat/saved'))).toBe(false)
+  expect(w.runs.filter(r => r.includes(COMMON))).toEqual([]) // its .git file names the main tree
 })
 
 test('A111: outside any Unreal checkout: the Editor and Sync tools and the panel say how to point A5R at one; the five rules still apply; nothing is written at a drive root', UNSET, async ($, on) => {
-  const w = world(on, { cwd: 'D:/tools/app', git: { [COMMON]: { stdout: 'D:/tools/app/.git\n' } } })
+  const w = world(on, { cwd: 'D:/tools/app' })
   w.put('D:/tools/app/.git/HEAD', 'ref: refs/heads/main')
   w.put('D:/tools/app/README.md', 'x')
   await $.session.start(start('D:/tools/app'))
-  const hint = `${NO_CHECKOUT.why} → ${NO_CHECKOUT.next}`
+  const why = noCheckoutWhy({ bare: 'D:/tools/app' })
+  const hint = `${why} → ${NO_CHECKOUT_NEXT}`
   expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'x' } as never))).toBe(`A5R · Editor — ${hint}`)
   expect(out(await $.tool.call({ tool: SYNC_TOOL, action: 'status' } as never))).toContain(`A5R · Sync main — ${hint}`)
-  expect(text(find(await $.ui.render(A5RPANE as never), 'hai-a5r-nos2'))).toBe(`Coordination is idle here: ${NO_CHECKOUT.why}. To point it at a checkout, ${NO_CHECKOUT.next}. The five rules still apply.`)
+  expect(text(find(await $.ui.render(A5RPANE as never), 'hai-a5r-nos2'))).toBe(`Coordination is idle here: ${why}. To point it at a checkout, ${NO_CHECKOUT_NEXT}. The five rules still apply.`)
   expect(out(await $.tool.call({ tool: 'Bash', command: 'git commit --no-verify -m x' } as never))).toContain('--no-verify') // rule 1 stands
   expect(out(await $.tool.call({ tool: 'Bash', command: 'git push --force-with-lease origin HEAD:feature' } as never))).not.toContain('the shared checkout') // no shared branch to guard
   expect(rootless(w)).toEqual([])
@@ -156,7 +172,7 @@ test('A111: outside any checkout the rules\' own records still work: a PR scored
   const progress = (pr: string) => ['# tail-vfx: Progress', '', `- PR: ${pr}`, '', '## Acceptance', '| Item | Verdict | Evidence |', '| --- | --- | --- |', '| A1 | met | PIE: glow visible |'].join('\n')
   const view = { stdout: JSON.stringify({ headRefName: 'tail-glow', baseRefName: 'main', state: 'OPEN' }) }
   const DIRTY = { stdout: '+++ b/Source/S2/Tail/Glow.cpp\n+float Glow = 1.f; // A5TMP\n' }
-  const w = world(on, { cwd: 'D:/mods', out: { [STATUS_TOOL]: status }, git: { [COMMON]: { stdout: 'D:/mods/.git\n' }, 'pr view 812': view, 'diff --name-only': { stdout: 'Source/S2/Tail/Glow.cpp\n' }, 'diff -U0': DIRTY, 'worktree list': { stdout: '' } } })
+  const w = world(on, { cwd: 'D:/mods', out: { [STATUS_TOOL]: status }, git: { 'pr view 812': view, 'diff --name-only': { stdout: 'Source/S2/Tail/Glow.cpp\n' }, 'diff -U0': DIRTY, 'worktree list': { stdout: '' } } })
   on('turn.complete', async () => ({ text: '' }))
   w.put('D:/mods/.git/HEAD', 'ref: refs/heads/main')
   w.put(`${INTENT}/prompt.md`, ['# Tail VFX', '- Rev: 2', '- Status: active', 'Change `Source/S2/Tail/` only.', '## Acceptance', '- A1: the tail glows. Proof: PIE.'].join('\n'))
@@ -177,10 +193,11 @@ test('A111: outside any checkout the rules\' own records still work: a PR scored
 })
 
 test('A111: a repository whose .uproject sits in a subfolder is not taken for a checkout (idle, with the hint)', UNSET, async ($, on) => {
-  const w = world(on, { cwd: 'D:/game', git: { [COMMON]: { stdout: 'D:/game/.git\n' } } })
+  const w = world(on, { cwd: 'D:/game' })
+  w.put('D:/game/.git/HEAD', 'ref: refs/heads/main')
   w.put('D:/game/Unreal/Game.uproject', '{}')
   await $.session.start(start('D:/game'))
-  expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain(NO_CHECKOUT.why)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain(noCheckoutWhy({ bare: 'D:/game' }))
 })
 
 test('A111: the option set: the option\'s checkout, and no git call to find one', { timeoutMs: 30_000, options: { a5rWhenPresent: 'deny', editorLock: S2_LOCK } }, async ($, on) => {
@@ -194,29 +211,62 @@ test('A111: the option set: the option\'s checkout, and no git call to find one'
 })
 
 test('A111: a hook that runs before the session start (a reload in the middle of a turn) still waits for the one find', UNSET, async ($, on) => {
-  const w = world(on, { cwd: 'E:/s2', ram: '40', git: { [COMMON]: { stdout: 'E:/s2/.git\n' } } })
+  const w = world(on, { cwd: 'E:/s2', ram: '40' })
+  w.put('E:/s2/.git/HEAD', 'ref: refs/heads/main')
   w.put(S2_LOCK, 'free since 14:20\n')
   expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))).toContain('granted to this session until 15:00')
-  expect(w.runs.filter(r => r.includes(COMMON)).length).toBe(1)
 })
 
-test('A111: git missing or slow at the start: idle; /a5r on looks again and the checkout then coordinates', UNSET, async ($, on) => {
-  const git: Record<string, { stdout: string; deny?: string }> = { [COMMON]: { stdout: '', deny: 'spawn git ENOENT' } }
-  const w = world(on, { cwd: 'E:/s2', ram: '40', git })
+/** A worktree whose .git file names a gitdir A5R cannot read itself (here a separate git dir): only git can say its tree. */
+const oddWorktree = (on: any, git: Record<string, { stdout: string; deny?: string }>) => {
+  const w = world(on, { cwd: 'E:/s2-wt/odd', ram: '40', git })
+  w.put('E:/s2-wt/odd/S2.uproject', '{}')
+  w.put('E:/s2-wt/odd/.git', 'gitdir: F:/gitdirs/s2-odd')
   w.put(S2_LOCK, 'free since 14:20\n')
-  await $.session.start(start('E:/s2'))
-  expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain(NO_CHECKOUT.why)
+  return w
+}
+
+test('A111 (Fable review D1): git absent for a .git file only git can read: the hint says git did not answer; the minute timer looks again and coordinates once git answers', UNSET, async ($, on) => {
+  const git: Record<string, { stdout: string; deny?: string }> = { [COMMON]: { stdout: '', deny: 'spawn git ENOENT' } }
+  const w = oddWorktree(on, git)
+  await $.session.start(start('E:/s2-wt/odd'))
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain(noCheckoutWhy('git-silent'))
+  git[COMMON] = { stdout: 'E:/s2/.git\n' }
+  await w.clock.advance(MIN)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))).toContain('granted to this session until 15:01')
+  // Found once: neither the next hooks nor the next minutes ask git again.
+  await w.clock.advance(MIN)
+  await $.tool.call({ tool: EDITOR, action: 'status' } as never)
+  await $.ui.render(A5RPANE as never)
+  expect(w.runs.filter(r => r.includes(COMMON))).toEqual(['git -C E:/s2-wt/odd rev-parse --path-format=absolute --git-common-dir', 'git -C E:/s2-wt/odd rev-parse --path-format=absolute --git-common-dir'])
+})
+
+test('A111: /a5r on looks again at once while none was found', UNSET, async ($, on) => {
+  const git: Record<string, { stdout: string; deny?: string }> = { [COMMON]: { stdout: '', deny: 'spawn git ENOENT' } }
+  oddWorktree(on, git)
+  await $.session.start(start('E:/s2-wt/odd'))
   git[COMMON] = { stdout: 'E:/s2/.git\n' }
   await $.command.run({ command: 'a5r', args: 'on' } as never)
   expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))).toContain('granted to this session until 15:00')
-  expect(w.runs.filter(r => r.includes(COMMON)).length).toBe(2)
+})
+
+test('A111 (Fable review D1): a find that throws (the session folder unreadable) answers with why, never a hook that throws, and the minute timer looks again', UNSET, async ($, on) => {
+  const w = world(on, { cwd: 'E:/s2', ram: '40' })
+  w.put('E:/s2/.git/HEAD', 'ref: refs/heads/main')
+  w.put(S2_LOCK, 'free since 14:20\n')
+  w.failCwd(99)
+  await $.session.start(start('E:/s2'))
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain('no Unreal checkout found for this session (the search failed:')
+  w.failCwd(0)
+  await w.clock.advance(MIN)
+  expect(out(await $.tool.call({ tool: EDITOR, action: 'request', minutes: 20, what: 'tail VFX' } as never))).toContain('granted to this session until 15:01')
 })
 
 // ---------- engine: the engine root (A110) ----------
 /** This session's build sync at 14:45 in the checkout found from its cwd; `put` lays out the machine before the start. */
-const atT = async ($: any, on: any, put: (w: W) => void, git: Record<string, { stdout: string }> = {}) => {
+const atT = async ($: any, on: any, put: (w: W) => void, git: Record<string, { stdout: string; deny?: string }> = {}) => {
   const PRE = '9f8e7d6c0000'
-  const w = world(on, { cwd: 'E:/s2', ram: '40', git: { [COMMON]: { stdout: 'E:/s2/.git\n' }, 'rev-parse HEAD': { stdout: `${PRE}\n` }, 'log -1 --format=%H %P HEAD': { stdout: `7b68b894 ${PRE} 1c153b41\n` }, ...git } })
+  const w = world(on, { cwd: 'E:/s2', ram: '40', git: { 'rev-parse HEAD': { stdout: `${PRE}\n` }, 'log -1 --format=%H %P HEAD': { stdout: `7b68b894 ${PRE} 1c153b41\n` }, ...git } })
   on('turn.complete', async () => ({ text: '' }))
   w.put('E:/s2/.git/HEAD', 'ref: refs/heads/HaiHuynh/20261005')
   w.put(S2_LOCK, 'free since 14:20\n')
@@ -270,4 +320,19 @@ test('A110: no engine root anywhere: no script, the worker starts no build, and 
   const wake = prompts(w).find(p => p.includes('its build did not start')) ?? ''
   expect(wake).toContain('Build.bat <project>Editor Win64 Development -Project="<checkout>\\<project>.uproject" -WaitMutex')
   expect(wake).toContain('A5R wrote no build script (the worker\'s task says why): when it found no engine root, set the a5r option engineRoot to the engine root that builds this checkout')
+})
+
+test('A110 (Fable review D2): an Editor log over 4 MiB (which $.fs.read refuses) is read through findstr', UNSET, async ($, on) => {
+  const w = await atT($, on, w => {
+    w.put('E:/s2/Saved/Logs/S2.log', 'x'.repeat(4 * 1024 * 1024 + 1))
+    bat(w, 'D:/Eng/Big')
+  }, { findstr: { stdout: 'LogInit: Base Directory: D:/Eng/Big/Engine/Binaries/Win64/\r\n' } })
+  expect(baseDirArgv('E:/s2/Saved/Logs/S2.log')).toEqual(['findstr', '/C:LogInit: Base Directory:', 'E:\\s2\\Saved\\Logs\\S2.log'])
+  expect(w.runs).toContain('findstr /C:LogInit: Base Directory: E:\\s2\\Saved\\Logs\\s2.log')
+  expect(task(w)).toContain('the engine root D:/Eng/Big (from the Editor\'s last log (Saved/Logs/s2.log))')
+})
+
+test('A110 (Fable review D2): a log over 4 MiB that findstr cannot read is named in the task, never silently skipped', UNSET, async ($, on) => {
+  const w = await atT($, on, w => w.put('E:/s2/Saved/Logs/S2.log', 'x'.repeat(4 * 1024 * 1024 + 1)), { findstr: { stdout: '', deny: 'spawn findstr ENOENT' } })
+  expect(task(w)).toContain("the Editor's last log (Saved/Logs; s2.log over 4 MiB, not read): none")
 })
