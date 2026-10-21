@@ -94,12 +94,14 @@ export const ruleAnswers = (traps, owners) => {
 
 /**
  * Needs you's answering state: the decision pressed open ('' the first that waits, NONE_OPEN none), whose
- * typed answer is open, whether "▸ N decided" is unfolded, and this session's answers, newest first.
- * @typedef {{ opened: string, typing: string, isFoldOpen: boolean, decided: readonly Decided[] }} AnswerState
+ * typed answer is open, whether "▸ N decided" is unfolded, this session's answers, newest first, and the
+ * session each item's last press went to when that was another one (by item id).
+ * @typedef {{ opened: string, typing: string, isFoldOpen: boolean, decided: readonly Decided[], sentTo: Readonly<Record<string, SentTo>> }} AnswerState
+ * @typedef {{ sessionId: string, name: string }} SentTo the session a press went to: its CLI id, and its name as the row said it
  */
 
 /** @type {Readonly<AnswerState>} */
-export const FRESH_ANSWERS = Object.freeze({ opened: '', typing: '', isFoldOpen: false, decided: Object.freeze([]) })
+export const FRESH_ANSWERS = Object.freeze({ opened: '', typing: '', isFoldOpen: false, decided: Object.freeze([]), sentTo: Object.freeze({}) })
 
 // "✓ Decided: A", or the first words of a typed answer.
 /** @param {string} answer */
@@ -134,7 +136,7 @@ export const openedDecision = (visible, chosen, canAnswer) => {
 
 /**
  * @template T
- * @typedef {{ blocks: { slug: string, items: T[] }[], states: Record<string, RowState>, opens: Set<string>, shownId: string, fresh: Decided[], folded: Decided[], typingId: string, isFocusFree: boolean, isFoldOpen: boolean }} NeedsView
+ * @typedef {{ blocks: { slug: string, items: T[] }[], states: Record<string, RowState>, opens: Set<string>, shownId: string, fresh: Decided[], folded: Decided[], typingId: string, isFocusFree: boolean, isFoldOpen: boolean, sentTo: Readonly<Record<string, SentTo>> }} NeedsView
  */
 
 // What Needs you draws (D3, D4): the blocks (an intent's several decisions as one), each row's state,
@@ -158,5 +160,5 @@ export const needsView = (items, open, state, opened, now, hasInput) => {
   const states = Object.fromEntries(items.map(one => [one.id, freshIds.has(one.id) ? 'decided' : one === shown ? 'opened' : 'line']))
   // A press on a row that waits for an answer opens (or closes) it; any other row keeps its own press.
   const opens = new Set(items.filter(canAnswer).map(one => one.id))
-  return { blocks, states, opens, shownId: shown?.id ?? '', fresh, folded, typingId, isFocusFree: typingId === '', isFoldOpen: state.isFoldOpen }
+  return { blocks, states, opens, shownId: shown?.id ?? '', fresh, folded, typingId, isFocusFree: typingId === '', isFoldOpen: state.isFoldOpen, sentTo: state.sentTo }
 }

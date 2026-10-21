@@ -4,7 +4,7 @@ The [ather-automata](../../ather-automata/README.md) mod as a [Paseo](https://pa
 
 ## Install
 
-Paseo 0.11.1 or later (below 0.12), with plugins enabled (Settings → Plugins). Node, git and `gh` on the daemon's PATH.
+Paseo 0.11.1 or later, with plugins enabled (Settings → Plugins). Node, git and `gh` on the daemon's PATH.
 
 ```bash
 paseo plugin install github:AskTinNguyen/ather-mods:paseo/ather-automata
@@ -32,12 +32,12 @@ Paseo plugins have no hook before or after a tool call, so:
 - **Holds while away.** New Claude agents get *ask* rules for `git push`, `git merge`, `git pull`, `gh pr merge` and `gh api`. With the web pack they also cover deploys, migrations, publishes, secrets and infrastructure, including `npm run` scripts that run them. Ask rules fire even in bypass mode, and Ather answers each prompt itself: refused and parked (P-1, P-2…) when an away window holds it; allowed at once in a non-asking mode (bypass, auto); left to you in default mode. Unreal Editor launches and kills are left to s2-ue-orchestrator's lease; Ather only refuses them when a window holds them.
 - **Questions while away** reach Paseo as permission requests. Ather records them in the ledger (D-1, D-2…) and tells the agent to take the recommended option. This works for Codex agents too.
 - **Worker brief gate.** An `Agent`/`Task` ask rule lets Ather read each brief before the worker starts: *warn* adds a timeline note, *enforce* refuses it.
-- **Proof, traps, merge audit, intent changes and tracking** are read from each finished turn's timeline, not as each command runs. Only the agent's own writes to an intent's `prompt.md` or `log.md` track it (0.1.2). What Claude Code added to a tool's result for the model (a piped build that really failed, a merge that lost edits) is sent once as a follow-up message after the turn.
+- **Proof, traps, merge audit, intent changes and tracking** are read from each finished turn's timeline, not as each command runs. Only the agent's own writes to an intent's `prompt.md` or `log.md` track it (0.1.2). What Claude Code adds to a tool's result for the model is not sent to the agent here: Paseo cannot edit a tool's result, and the follow-up message that stood in for it is gone (0.6.4).
 - **Lane context.** Claude Code added the lane state (tracked intent, Editor lock, peers, the away mandate) to every prompt. Here the agent gets a short system note at creation and reads the live state with `mcp__ather-automata__status`; starting an away window tells it to.
 
 ## Settings
 
-Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, off), hold rules for Claude agents (on), and the follow-up message (on).
+Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, off), and hold rules for Claude agents (on).
 
 ## Limits
 

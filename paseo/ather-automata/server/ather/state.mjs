@@ -691,8 +691,10 @@ const LANE_STALE_MS = 10 * 60 * 1000
 
 /**
  * One session's heartbeat, a file under the pack's local folder: what it tracks, on which branch,
- * when it was written and when the session last took a prompt or ran a tool.
- * @typedef {{ sessionId: string, intent: string | null, branch: string, updatedAt: number, lastActiveAt?: number, away: string, hasEnded: boolean }} Lane
+ * when it was written and when the session last took a prompt or ran a tool; `app`: its id and title in
+ * the desktop app, when it runs there (absent elsewhere, and in heartbeats written before 0.6.5).
+ * @typedef {{ sessionId: string, intent: string | null, branch: string, updatedAt: number, lastActiveAt?: number, away: string, hasEnded: boolean, app?: AppSession }} Lane
+ * @typedef {import('./handoff.mjs').AppSession} AppSession
  */
 
 // When this session last took a prompt or ran a tool; a hot reload starts it again.
@@ -701,6 +703,16 @@ let activeAt = Date.now()
 export const markActive = (at = Date.now()) => {
   activeAt = at
 }
+
+// This session as the desktop app knows it (watch.mjs asks the app's session tool), written into every heartbeat
+// so other sessions can name it and send to it; null outside the app.
+/** @type {AppSession | null} */
+let appSelf = null
+/** @param {AppSession | null} app */
+export const setAppSession = app => {
+  appSelf = app
+}
+export const appSession = () => appSelf
 
 // The heartbeats last written. `isHome`: the session's own checkout's, which always names the tracked intent.
 /** @type {{ path: string, lane: Lane, isHome?: boolean }[]} */
@@ -717,7 +729,7 @@ export const writeHeartbeat = (io, at) =>
     const sid = await io.sessionId()
     const away = await readAway(io)
     /** @type {Lane} */
-    const lane = { sessionId: sid, intent: await readPinned(io), branch: at.branch, updatedAt: Date.now(), lastActiveAt: activeAt, away: away.phase, hasEnded: at.hasEnded }
+    const lane = { sessionId: sid, intent: await readPinned(io), branch: at.branch, updatedAt: Date.now(), lastActiveAt: activeAt, away: away.phase, hasEnded: at.hasEnded, ...(appSelf ? { app: appSelf } : {}) }
     /** @type {typeof lastBeats} */
     const beats = at.root ? [{ path: `${at.root}/${at.localDir}/lanes/${sid}.json`, lane, isHome: true }] : []
     if (at.also) beats.push({ path: `${at.also.root}/${at.also.localDir}/lanes/${sid}.json`, lane: { ...lane, branch: at.also.branch } })
