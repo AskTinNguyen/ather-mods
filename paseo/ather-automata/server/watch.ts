@@ -28,7 +28,7 @@ const seenTraps = new Map<string, Set<string>>();
 // The tracked intent's files as they were when the turn started, to tell what an edit changed.
 const before = new Map<string, Map<string, string>>();
 // Follow-ups already sent per agent, so the same warning does not loop.
-const told = new Map<string, Map<string, number>>();
+const told = new Map<string, Set<string>>();
 
 async function governedCtx(event: AgentEvent): Promise<Ctx | null> {
   noteAgent(event.agent);
@@ -230,13 +230,13 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
 
   await heartbeat(ctx, false).catch(() => undefined);
 
-  // What the original added to a tool's result for the model: sent once as a follow-up.
+  // What the original added to a tool's result for the model: sent as a follow-up once per agent, however long it runs.
   if (context_.length > 0 && settings().followUps && event.outcome.kind === "completed") {
-    const seen = told.get(agentId) ?? new Map<string, number>();
+    const seen = told.get(agentId) ?? new Set<string>();
     told.set(agentId, seen);
-    const fresh = [...new Set(context_)].filter((text) => Date.now() - (seen.get(text) ?? 0) > 30 * 60 * 1000);
+    const fresh = [...new Set(context_)].filter((text) => !seen.has(text));
     if (fresh.length > 0) {
-      for (const text of fresh) seen.set(text, Date.now());
+      for (const text of fresh) seen.add(text);
       await send(agentId, `Ather Automata, from this turn's tool output:\n${fresh.map((text) => `- ${text}`).join("\n")}`).catch((error) =>
         console.error(`[ather] ${agentId}: follow-up failed:`, error),
       );
