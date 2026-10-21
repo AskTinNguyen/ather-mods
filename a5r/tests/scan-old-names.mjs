@@ -2,13 +2,16 @@
 // list). The test runner has no file system, so this half runs with node; tests/old-names.test.ts checks the strings
 // a5r builds at run time. Run from the repository root:
 //   node --experimental-strip-types a5r/tests/scan-old-names.mjs
-// Exit 0: no old name outside the exceptions and every exception still matches; else each hit is printed, exit 1.
+// A111 (rev 37): also no drive-letter path in hooks/, rules/ or an option default (tests/machine-paths.ts).
+// Exit 0: no old name outside the exceptions and every exception still matches, and no such path; else each hit is
+// printed, exit 1.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXCEPTIONS, oldNamesIn, uncovered } from './old-names.ts'
 import { DECISION_EXCEPTIONS, decisionNamesIn } from './decision-names.ts'
 import { REQUIRED_RULES_TEXT } from './rules-text.ts'
+import { machinePathHits } from './machine-paths.ts'
 
 const mod = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const skip = new Set(['.claude-plugin/types', 'node_modules'])
@@ -56,4 +59,8 @@ for (const s of [...dHits, ...dStale]) console.log(s)
 const missing = REQUIRED_RULES_TEXT.filter(r => !fs.readFileSync(path.join(mod, r.file), 'utf8').includes(r.text)).map(r => `missing rules text (${r.row}): ${r.file}: ${r.text.slice(0, 80)}`)
 console.log(`checked ${REQUIRED_RULES_TEXT.length} required rules sentences: ${missing.length} missing`)
 for (const s of missing) console.log(s)
-process.exit(hits.length + stale.length + dHits.length + dStale.length + missing.length > 0 ? 1 : 0)
+// A111 (rev 37): no path of one machine in hooks/, rules/ or an option default (tests/machine-paths.ts: the rule).
+const mHits = files.flatMap(rel => machinePathHits(rel, fs.readFileSync(path.join(mod, rel), 'utf8')))
+console.log(`scanned hooks/, rules/ and the option defaults for drive-letter paths: ${mHits.length} outside a labelled example`)
+for (const s of mHits) console.log(s)
+process.exit(hits.length + stale.length + dHits.length + dStale.length + missing.length + mHits.length > 0 ? 1 : 0)

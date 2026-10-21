@@ -237,10 +237,10 @@ test('A99: unit: rule lines, matching (* within a folder, ** any depth, a traili
   expect(side('Config/DefaultEngine.ini.bak')).toBe(null) // a plain path matches itself only
   expect(ruleFor('Content/S2/Maps/L_X.uasset', rules)?.side).toBe('theirs') // the first match wins over **/*.uasset
   const s: SyncFile = { ...newSync(T(14, 45), B, 'x', NOW), rules, conflicts: [{ path: 'Content/S2/Maps/L_X.umap', kind: 'foreign' }, { path: 'Source/S2/Sub/Bar.cpp', kind: 'foreign' }] }
-  const task = syncWorkerTask(s, 'E:/s2', 'FREE')
+  const task = syncWorkerTask(s, 'E:/s2', 'FREE', null)
   expect(task).toContain("Holder's conflict rules (rule 5, the first match wins): theirs `Content/S2/Maps/`; ours `Source/S2/*.cpp`; theirs `**/*.uasset`; ours `Config/DefaultEngine.ini`.")
   expect(task).toContain('Dry-run at the cutoff: Content/S2/Maps/L_X.umap (foreign; rule: theirs `Content/S2/Maps/`); Source/S2/Sub/Bar.cpp (foreign).')
-  expect(syncWorkerTask({ ...s, rules: [] }, 'E:/s2', 'FREE')).toContain("Holder's conflict rules (rule 5, the first match wins): none.")
+  expect(syncWorkerTask({ ...s, rules: [] }, 'E:/s2', 'FREE', null)).toContain("Holder's conflict rules (rule 5, the first match wins): none.")
   expect(SYNC_WORKER_PROMPT).toContain('a path a rule matches is resolved with that rule\'s side whatever its kind, .uasset and .umap included: `git checkout --<side> -- <path>` then `git add -- <path>`, and your report names each such path with its rule. A path no rule matches: rule 11')
   expect(parseSyncFile(JSON.stringify({ ...s, rules: [{ side: 'theirs', pattern: 'a/' }, { side: 'main', pattern: 'b' }, { side: 'ours' }] }))?.rules).toEqual([{ side: 'theirs', pattern: 'a/' }])
   expect(parseSyncFile(JSON.stringify({ ...s, rules: undefined }))?.rules).toEqual([])

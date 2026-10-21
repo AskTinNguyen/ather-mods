@@ -240,7 +240,7 @@ export const deleteTargets = (args: string[]): string[] => {
 }
 
 // ---------- paths ----------
-/** Absolute path with forward slashes, `.` and `..` resolved; Git Bash /c/x becomes C:/x. A relative
+/** Absolute path with forward slashes, `.` and `..` resolved; a Git Bash path becomes a drive path, e.g. /c/x becomes C:/x. A relative
  * path without a base stays relative. */
 export const norm = (path: string, base = ''): string => {
   if (!path) return ''
@@ -259,14 +259,15 @@ export const norm = (path: string, base = ''): string => {
 
 export const isAbs = (p: string): boolean => /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('/') || p.startsWith('\\')
 const key = (p: string): string => norm(p).toLowerCase()
+/** Whether a path is a folder or inside it; an empty folder (rev 37, A111: no checkout found) holds nothing. */
 export const under = (path: string, root: string): boolean => {
   const a = key(path)
   const b = key(root).replace(/\/$/, '')
-  return a === b || a.startsWith(`${b}/`)
+  return b !== '' && (a === b || a.startsWith(`${b}/`))
 }
 export const basename = (p: string): string => p.replace(/\\/g, '/').split('/').pop() ?? ''
 
-/** Literal directory part of a glob: 'C:/kit/*' -> 'C:/kit'. */
+/** Literal directory part of a glob, e.g. 'C:/kit/*' -> 'C:/kit'. */
 export const globPrefix = (pattern: string): string => {
   const cut = pattern.search(/[*?[]/)
   return (cut < 0 ? pattern : pattern.slice(0, cut)).replace(/\/+$/, '')

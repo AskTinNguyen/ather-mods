@@ -40,6 +40,7 @@ export const EXCEPTIONS: Exception[] = [
   { file: 'tests/accept-engine.test.ts', name: 'old debug tag', line: 'Glow.cpp', why: 'test data: a debug leftover in a diff' },
   { file: 'tests/posthoc.test.ts', name: 'old debug tag', line: 'const DIRTY', why: 'test data: a debug leftover in a diff' },
   { file: 'tests/pr-tool.test.ts', name: 'old debug tag', line: 'const DIRTY', why: 'test data: a debug leftover in a diff' },
+  { file: 'tests/rev37.test.ts', name: 'old debug tag', line: 'const DIRTY', why: 'test data: a debug leftover in a diff' },
   { file: 'tests/pr-branch.test.ts', name: 'old debug tag', line: '// ', why: "test data (A42): a debug tag in the kit's own folder and in the PR's diff" },
 ]
 

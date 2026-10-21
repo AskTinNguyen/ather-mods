@@ -24,8 +24,8 @@ export const BUILD_EXTEND_MS = 30 * 60_000
 /** A93: how long after its stage began a build with no log and no process is reported as unknown (it may be starting). */
 export const STAGE_GRACE_MS = 2 * 60_000
 
-/** A95: the S2 standard's post-merge headless tests (E:/Projects/s2 docs/skills/s2-build-test.md, "Run all Sipher
- * tests"); `<ENGINE>` is the engine root from the machine profile. */
+/** A95: the S2 standard's post-merge headless tests (the checkout's docs/skills/s2-build-test.md, "Run all Sipher
+ * tests"); `<ENGINE>` is the engine root the sync's build used (its script's exit line names it, A110). */
 export const POST_MERGE_TESTS = '"<ENGINE>\\Engine\\Binaries\\Win64\\UnrealEditor-Cmd.exe" "<PROJECT>\\S2.uproject" -ExecCmds="Automation RunTests Sipher" -TestExit="Automation Test Queue Empty" -unattended -NullRHI -NoSound -NoSplash -log (docs/skills/s2-build-test.md)'
 
 /** A95: a test result line (the automation run's own exit line, or a count of passed or failed tests), or an explicit

@@ -19,6 +19,7 @@ import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from 
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
 import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, tellKey, testsOf, type BuildLog, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
 import { buildScriptText, buildStartCommand, isScriptAlive, syncBuildScript } from './buildscript.ts'
+import { FIND_GIT_MS, LOGS_READ, NO_CHECKOUT, REG_MS, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, pickEngine, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -174,7 +175,40 @@ const parentOf = (p: string): string => {
   const i = p.lastIndexOf('/')
   return i < 0 ? '' : p.slice(0, i)
 }
-const s2Root = (opts: Opts): string => parentOf(parentOf(norm(opts.editorLock)))
+// A111 (rev 37): the shared checkout, found once per load (at the session start; again at /a5r on while none is found),
+// never per call: each hook that reads it awaits the one cached find first (ensureCheckout). Null: none found, so the
+// coordination is idle and the five rules still apply.
+let checkout: Checkout | null = null
+let checkoutFound: Promise<void> | null = null
+let storeDir = '' // A5R's own folder while no checkout is found (<TEMP>/a5r): the rules' records and alerts land there, never at a drive root
+let isTicking = false
+const s2Root = (): string => checkout?.root ?? ''
+const lockFile = (): string => checkout?.lock ?? ''
+const isCheckoutHere = async ($: Engine): Promise<boolean> => checkout !== null && (await $.fs.exists(checkout.root))
+/** Whether a folder holds the checkout's .uproject at its root: the checkout itself or a worktree of it. */
+const holdsProject = async ($: Engine, dir: string): Promise<boolean> => Boolean(checkout?.uproject) && dir !== '' && (await $.fs.exists(`${dir}/${checkout?.uproject}`).catch(() => false))
+/** The editor and sync tools without a checkout on this machine. */
+const noCheckout = (gate: string): string => blocked(gate, checkout ? `no S2 checkout at ${checkout.root}` : NO_CHECKOUT.why, NO_CHECKOUT.next)
+/** A111: the editorLock option's checkout, else the main working tree of the session's own repository when it holds a
+ * .uproject at its root (machine.ts `checkoutOf`). */
+async function findCheckout($: Engine, givenLock: string): Promise<void> {
+  storeDir = `${norm((await $.env.get('TEMP')) ?? (await $.env.get('TMPDIR')) ?? '/tmp')}/a5r`
+  const ran = givenLock ? null : await $.process.run(commonDirArgv(norm(await $.session.cwd())), { timeoutMs: FIND_GIT_MS }).catch(() => null)
+  const root = givenLock ? rootOfLock(givenLock) : ran?.exitCode === 0 ? mainTreeOf(ran.stdout) : ''
+  checkout = checkoutOf(givenLock, root, root ? await $.fs.list(root).catch(() => []) : [])
+}
+const ensureCheckout = ($: Engine, opts: Opts): Promise<void> => (checkoutFound ??= findCheckout($, str(opts.editorLock).trim()))
+/** A111: this session coordinates when its root holds the checkout's .uproject (the checkout or one of its worktrees); the
+ * minute timer starts once per load. */
+async function startCoordination($: Engine, opts: Opts): Promise<void> {
+  await ensureCheckout($, opts)
+  isS2 = await holdsProject($, norm(await $.session.root()))
+  if (!isS2) return
+  // The minute timer reads files and probes; it wakes the model only for an event addressed to this session.
+  await runTick($, opts)
+  if (!isTicking) $.clock.every(EDITOR_PERIOD_MS, () => void runTick($, opts))
+  isTicking = true
+}
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const count = (rule: string) => {
   for (const id of rule.match(/D[1-5]/g) ?? []) freshHits.add(id) // A38: the chip stamps at the next draw
@@ -249,7 +283,7 @@ async function isSharedRoot($: Engine, root: string | null): Promise<boolean> {
  * checkout's own main working tree, never another repository (ather-mods, …) nor a worktree elsewhere. A folder whose
  * repository cannot be found counts as shared only inside the S2 checkout. */
 async function isS2Shared($: Engine, opts: Opts, root: string | null, dir: string | null): Promise<boolean> {
-  const s2 = s2Root(opts)
+  const s2 = s2Root()
   if (!root) return dir !== null && under(norm(dir), s2)
   return sameRoot(root, s2) && (await isSharedRoot($, root))
 }
@@ -268,7 +302,7 @@ async function sharedTest($: Engine, opts: Opts, a5r: A5R, command: string, cwd:
     const dir = gitPlace(seg).dir
     if (dir && (await isS2Shared($, opts, (await locate($, a5r, `${dir}/_`)).root, dir))) known.set(norm(cwd, cwd).toLowerCase(), true)
   }
-  return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? under(norm(dir || cwd, cwd), s2Root(opts))
+  return dir => known.get(norm(dir || cwd, cwd).toLowerCase()) ?? under(norm(dir || cwd, cwd), s2Root())
 }
 
 type AtherStatus = { role?: string; pack?: string; gates?: string[]; tracked?: { slug?: string; stage?: string; checklist?: string; directorCalls?: string[]; prs?: string[] } | null; evidence?: Proof['evidence'] }
@@ -307,8 +341,8 @@ async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Pro
   const kind = isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) && isEditorStartStop(str(e.command)) ? 'startstop' : null
   if (!kind || kind === 'read') return null
   if (kind === 'save-all') return 'save-all saves every dirty package, other lanes\' included → list the dirty packages and save each one by exact path'
-  const raw = await $.fs.read(opts.editorLock).catch(() => null)
-  if (raw === null && !(await $.fs.exists(s2Root(opts)))) return null // no S2 checkout on this machine
+  const raw = await $.fs.read(lockFile()).catch(() => null)
+  if (raw === null && !(await isCheckoutHere($))) return null // no S2 checkout on this machine
   const nowMsHere = await $.clock.now() // the engine's clock, never the wall clock (a test's time is its own)
   const now = new Date(nowMsHere)
   const id8 = (await $.session.id()).slice(0, 8).toLowerCase()
@@ -359,7 +393,7 @@ const ACTIONS: Record<string, Act> = {
   'no-verify': { act: 'refuse', alt: 'fix what the hook reports, then commit without --no-verify' },
   'lfs-skip-smudge': { act: 'refuse', alt: 'let LFS fetch the objects (git lfs pull), or work in a worktree of your own' },
   'sparse-checkout': { act: 'refuse', alt: 'make a worktree of your own and set its sparse layout there' },
-  kit: { act: 'refuse', alt: 'change the mod in a worktree of its repository (D:/Projects/ather-mods-wt/<name>), never in the live plugin folder' },
+  kit: { act: 'refuse', alt: 'change the mod in a worktree of its repository (git -C <repository> worktree add <folder of your own> <branch>), never in the live plugin folder' },
   secret: { act: 'refuse', alt: 'keep the secret in an environment variable or a config file outside the repository' },
   'force-push': { act: 'refuse', alt: 'use git push --force-with-lease to a branch of your own (it runs), or push to a new branch and open a PR; never rewrite shared history' },
   'push-main': { act: 'refuse', alt: 'push your branch and open a PR' },
@@ -399,7 +433,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
       const isRef = isFile ? (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${word}^{commit}`], { timeoutMs: 8_000 }).catch(() => null))?.exitCode === 0 : true
       act = isFile && !isRef ? { kind: 'check', sub: 'checkout', paths: [word], untracked: false } : { kind: 'refuse', why: 'git checkout <branch> moves the shared working tree under every session', alt: 'work in a worktree of your own (git worktree add <dir> <branch>)' }
     }
-    if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared S2 checkout ${s2Root(opts)})`, act.alt)
+    if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared S2 checkout ${s2Root()})`, act.alt)
     if (act.kind === 'stash-drop') {
       const list = await $.process.run(['git', '-C', root, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
       const n = list?.exitCode === 0 ? list.stdout.split(/\r?\n/).filter(Boolean).length : null
@@ -460,7 +494,7 @@ async function addsAllInShared($: Engine, opts: Opts, a5r: A5R, command: string,
     const { dir, args } = gitPlace(seg)
     if ((args[0] ?? '').toLowerCase() !== 'add' || !args.slice(1).some(a => a === '.' || a === '-A' || a === '--all')) continue
     const root = (await locate($, a5r, `${dir}/_`)).root
-    if (root && sameRoot(root, s2Root(opts)) && (await isSharedRoot($, root))) return true
+    if (root && sameRoot(root, s2Root()) && (await isSharedRoot($, root))) return true
   }
   // Inside a nested shell or a form walk cannot read: the rule's own match stands.
   return !walk(command, cwd, home).some(seg => isGit(seg) && (gitPlace(seg).args[0] ?? '').toLowerCase() === 'add')
@@ -505,7 +539,7 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
       const name = t === '' ? await branchOf(dir) : t
       if (!name || name === 'HEAD') return blocked(gate, `the branch git push --force-with-lease would write in ${dir} could not be read`, 'name it: git push --force-with-lease origin <your-branch>')
       if (PROTECTED_BRANCH.test(name)) return blocked(gate, `--force-with-lease would still rewrite ${name}, a protected branch`, 'push your branch and open a PR')
-      shared ??= await branchOf(s2Root(opts))
+      shared ??= checkout ? await branchOf(checkout.root) : '' // A111: no checkout, no shared branch
       if (shared && name.toLowerCase() === shared.toLowerCase())
         return blocked(gate, `--force-with-lease would rewrite ${name}, the branch the shared checkout has checked out (every session commits on it)`, 'push your commits to a branch of your own (git push origin HEAD:<your-branch>) and open a PR')
     }
@@ -520,7 +554,7 @@ const EVALS = new Set(['eval', 'source', '.', 'iex', 'invoke-expression', 'xargs
 async function pruneTouched($: Engine, opts: Opts): Promise<void> {
   if (!me || touched.size === 0) return
   const paths = [...touched].slice(-200)
-  const ran = await $.process.run(['git', '-C', s2Root(opts), 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths], { timeoutMs: 8_000 }).catch(() => null)
+  const ran = await $.process.run(['git', '-C', s2Root(), 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths], { timeoutMs: 8_000 }).catch(() => null)
   if (!ran || ran.exitCode !== 0) return
   const still = new Set(ran.stdout.split(/\0|\r?\n/).filter(e => /^.. \S/.test(e)).map(e => e.slice(3).trim().toLowerCase()))
   let changed = false
@@ -530,7 +564,7 @@ async function pruneTouched($: Engine, opts: Opts): Promise<void> {
   }
   if (!changed) return
   const t: Touch = { session: me.session, id8: me8, lane: me.lane, paths: [...touched].slice(-500), updatedAt: await $.clock.now() }
-  await $.fs.write(`${hfDir(opts)}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
+  await $.fs.write(`${hfDir()}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
 }
 
 /** A75: one action that ran and is recorded for nghiem thu: Saved/A5R/recorded/<id8>.json, this session's file. */
@@ -544,9 +578,9 @@ const recordTarget = (kind: string, command: string): string => {
   return args.filter(a => !a.startsWith('-')).slice(-1)[0] ?? command.slice(0, 120)
 }
 async function recordAction($: Engine, opts: Opts, r: Omit<Recorded, 'at' | 'id8' | 'lane'>): Promise<void> {
-  if (!(await $.fs.exists(s2Root(opts)))) return
+  if (!(await isCheckoutHere($))) return
   const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
-  const path = `${hfDir(opts)}/recorded/${id8}.json`
+  const path = `${hfDir()}/recorded/${id8}.json`
   let entries: Recorded[] = []
   try {
     const v = JSON.parse((await readJson($, path)) ?? '') as { entries?: Recorded[] }
@@ -559,7 +593,7 @@ async function recordAction($: Engine, opts: Opts, r: Omit<Recorded, 'at' | 'id8
 }
 /** A75: every session's recorded actions (for nghiem thu). */
 async function readRecorded($: Engine, opts: Opts): Promise<Recorded[]> {
-  const dir = `${hfDir(opts)}/recorded`
+  const dir = `${hfDir()}/recorded`
   const out: Recorded[] = []
   for (const f of await $.fs.list(dir).catch(() => [])) {
     if (f.kind !== 'file' || !f.name.endsWith('.json')) continue
@@ -615,7 +649,7 @@ function showStatus($: Engine): void {
 }
 
 // ---------- A5R coordination: files, the minute tick, notices ----------
-const hfDir = (opts: Opts): string => `${s2Root(opts)}/${DIR}`
+const hfDir = (): string => (checkout ? `${checkout.root}/${DIR}` : storeDir)
 const sameRoot = (a: string, b: string): boolean => norm(a).toLowerCase().replace(/\/$/, '') === norm(b).toLowerCase().replace(/\/$/, '')
 
 /** This session's own file, read back after a reload (its request, lease and delivered notices survive); after a
@@ -630,7 +664,7 @@ async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
     return moveAfterClear($, opts, from, id)
   }
   me8 = id8
-  const dir = hfDir(opts)
+  const dir = hfDir()
   const file = parseSessionFile(await $.fs.read(`${dir}/editor/${id8}.json`).catch(() => null))
   const title = file?.title || (await sessionTitle($).catch(() => ''))
   me = file ?? blankSession(id, safeWord(bareTitle(title) || `session-${id8}`), bareTitle(title), await $.clock.now())
@@ -653,7 +687,7 @@ async function restoreMe($: Engine, opts: Opts): Promise<SessionFile> {
 async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: string): Promise<SessionFile> {
   const old8 = oldSid.slice(0, 8).toLowerCase()
   const new8 = newSid.slice(0, 8).toLowerCase()
-  const dir = hfDir(opts)
+  const dir = hfDir()
   const now = await $.clock.now()
   const src = me && me.id8 === old8 ? me : parseSessionFile(await readJson($, `${dir}/editor/${old8}.json`))
   me8 = new8
@@ -668,13 +702,13 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   for (const p of t?.paths ?? []) touched.add(p)
   if (touched.size > 0) await $.fs.write(`${dir}/touch/${new8}.json`, JSON.stringify({ session: newSid, id8: new8, lane: me.lane, paths: [...touched].slice(-500), updatedAt: now })).catch(() => undefined)
   if (t) await $.fs.write(`${dir}/touch/${old8}.json`, JSON.stringify({ ...t, paths: [], updatedAt: now })).catch(() => undefined)
-  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
   if (lockRaw && lock.id8 === old8 && (lock.kind === 'held' || lock.kind === 'handed')) {
     const line = lockRaw.trim().replace(new RegExp(`\\bsession\\s+${old8}\\b`, 'gi'), `session ${new8}`)
     if (!(await writeLock($, opts, line))) $.ui.log('a5r: the lock changed while moving it to the cleared session id', { to: 'debug' })
   }
-  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  const s = parseSyncFile(await readJson($, syncPath()))
   if (s && s.holder.id8 === old8 && isOpenPhase(syncPhase(s, now)))
     await writeSync($, opts, { ...s, holder: { ...s.holder, session: newSid, id8: new8 }, plannedBy: s.plannedBy.replace(old8, new8), updatedAt: now }, s)
   return me
@@ -701,7 +735,7 @@ async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
   const now = at ?? (await $.clock.now())
   const { sharedShellAt: _was, ...rest } = me
   me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), heartbeatAt: now, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
-  await $.fs.write(`${hfDir(opts)}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
+  await $.fs.write(`${hfDir()}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
 async function readJson($: Engine, path: string): Promise<string | null> {
@@ -710,10 +744,10 @@ async function readJson($: Engine, path: string): Promise<string | null> {
 
 /** A fresh machine reading (a grant, the cleanup, a release), published to the shared probe file for the others. */
 async function freshProbe($: Engine, opts: Opts): Promise<Probe | null> {
-  const ran = await $.process.run(ramProbe(s2Root(opts).slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null)
+  const ran = await $.process.run(ramProbe(s2Root().slice(0, 1)), { timeoutMs: 20_000 }).catch(() => null)
   const p = ran ? parseProbe(ran.stdout) : null
   probeOk = p !== null // A88 (c, re-review): the last reading this session tried
-  if (p) await $.fs.write(`${hfDir(opts)}/probe.json`, JSON.stringify({ at: await $.clock.now(), by: me8, probe: p })).catch(() => undefined)
+  if (p) await $.fs.write(`${hfDir()}/probe.json`, JSON.stringify({ at: await $.clock.now(), by: me8, probe: p })).catch(() => undefined)
   return p
 }
 
@@ -721,7 +755,7 @@ async function freshProbe($: Engine, opts: Opts): Promise<Probe | null> {
  * than 50 s, and only after claiming it by read-compare-write and a re-read, so two sessions rarely both probe;
  * everyone else reads the file. */
 async function sharedProbe($: Engine, opts: Opts, now: number): Promise<Probe | null> {
-  const path = `${hfDir(opts)}/probe.json`
+  const path = `${hfDir()}/probe.json`
   const raw = await readJson($, path)
   const cur = parseSharedProbe(raw)
   if (cur?.probe && now - cur.at < PROBE_FRESH_MS) {
@@ -740,11 +774,11 @@ async function sharedProbe($: Engine, opts: Opts, now: number): Promise<Probe | 
 /** Everything the decisions read: the lock, every session file, Ather's lanes, the sync plan, the touch files
  * and the shared machine reading. */
 async function readWorld($: Engine, opts: Opts): Promise<void> {
-  const root = s2Root(opts)
-  const dir = hfDir(opts)
+  const root = s2Root()
+  const dir = hfDir()
   const now = await $.clock.now()
   const [raw, list, laneList, syncText, touchList, shared] = await Promise.all([
-    $.fs.read(opts.editorLock).catch(() => null),
+    $.fs.read(lockFile()).catch(() => null),
     $.fs.list(`${dir}/editor`).catch(() => []),
     $.fs.list(`${root}/Saved/AtherAutomata/lanes`).catch(() => []),
     readJson($, `${dir}/sync.json`),
@@ -790,7 +824,7 @@ async function recordsDir($: Engine, opts: Opts): Promise<string> {
   const home = slash(await $.env.get('USERPROFILE').catch(() => '')) || slash(await $.env.get('HOME').catch(() => ''))
   const config = slash(await $.env.get('CLAUDE_CONFIG_DIR').catch(() => '')) || (home ? `${home}/.claude` : '')
   if (!config) return ''
-  const want = projectFolder(s2Root(opts))
+  const want = projectFolder(s2Root())
   const all = (await $.fs.list(`${config}/projects`).catch(() => [])).filter(d => d.kind === 'dir')
   const hit = all.find(d => d.name === want) ?? all.find(d => d.name.toLowerCase() === want.toLowerCase())
   return hit ? `${config}/projects/${hit.name}` : ''
@@ -941,15 +975,16 @@ async function ensureTools($: Engine): Promise<void> {
  * so a reload or a second tick never starts another). */
 async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   // A93: the HEAD before the merge, so a worker that ends with no SYNC line can still be read as merged or not.
-  const head = await $.process.run(['git', '-C', s2Root(opts), 'rev-parse', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
+  const head = await $.process.run(['git', '-C', s2Root(), 'rev-parse', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
   const preHead = head?.exitCode === 0 ? head.stdout.trim() : ''
-  const buildRun = s.build ? await writeBuildScript($, opts, s) : ''
+  const engine = s.build && checkout ? await findEngine($, opts, checkout) : null
+  const buildRun = checkout && engine?.root ? await writeBuildScript($, checkout, s, engine.root) : ''
   if (!(await writeSync($, opts, { ...s, workerAt: now, preHead, buildRun, updatedAt: now }, s))) return
   const claimed = syncFile ?? s
   // A79: the worker calls no a5r tool (a plugin's hooks never see the calls of an agent it spawned), so the holder's a5r
   // takes the Editor lock for the sync here, as the editor tool's request does, and releases it when the worker ends.
   await takeSyncLock($, opts, claimed, now).catch(err => $.ui.log(`a5r: sync lock: ${String(err)}`, { to: 'debug' }))
-  const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(opts), (lockRaw ?? '').trim(), String(opts.engineRoot ?? '')) }).catch(err => ({ deny: String(err) }))
+  const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(), (lockRaw ?? '').trim(), engine) }).catch(err => ({ deny: String(err) }))
   // A96: a worker that could not start hands the sync back like one that gave up (the manual stage).
   if (ran.deny !== undefined) return enterSyncStage($, opts, claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}`, isBuildNone: false }, now)
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
@@ -957,16 +992,41 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
 }
 
-/** A109: the sync's build script written fresh (over any earlier one of this sync); the one command that starts it, or ''
- * when it could not be written (the worker's task then says to start no build). */
-async function writeBuildScript($: Engine, opts: Opts, s: SyncFile): Promise<string> {
-  const [checkout, root] = [s2Root(opts), String(opts.engineRoot ?? '')]
-  const script = syncBuildScript(checkout, s.id)
-  const isWritten = await $.fs.write(script, buildScriptText(checkout, syncBuildLog(checkout, s.id), root)).then(() => true, err => {
+/** A109: the sync's build script written fresh (over any earlier one of this sync) with the engine root found (A110); the
+ * one command that starts it, or '' when it could not be written (the worker's task then says to start no build). */
+async function writeBuildScript($: Engine, c: Checkout, s: SyncFile, root: string): Promise<string> {
+  const script = syncBuildScript(c.root, s.id)
+  const isWritten = await $.fs.write(script, buildScriptText(c.root, c.uproject, syncBuildLog(c.root, s.id), root)).then(() => true, err => {
     $.ui.log(`a5r: build script not written: ${String(err)}`, { to: 'debug' })
     return false
   })
-  return isWritten ? buildStartCommand(script, root) : ''
+  return isWritten ? buildStartCommand(script) : ''
+}
+
+/** A110: the engine root for the sync's build, read in order until a root's Build.bat exists (machine.ts `pickEngine`): the
+ * engineRoot option, the engine the checkout's Editor last ran with (its newest logs), the .uproject's EngineAssociation in
+ * Epic's registry entries. Read once per build sync, at T. */
+async function findEngine($: Engine, opts: Opts, c: Checkout): Promise<EngineFind> {
+  const logs = `${c.root}/Saved/Logs`
+  const fromLog = async (): Promise<Omit<EngineSource, 'hasBat'>> => {
+    for (const name of editorLogs(await $.fs.list(logs).catch(() => []), c.uproject).slice(0, LOGS_READ)) {
+      const root = engineOfLog(await $.fs.read(`${logs}/${name}`).catch(() => ''))
+      if (root) return { from: `the Editor's last log (Saved/Logs/${name})`, root }
+    }
+    return { from: "the Editor's last log (Saved/Logs)", root: null }
+  }
+  const fromRegistry = async (): Promise<Omit<EngineSource, 'hasBat'>> => {
+    const assoc = engineAssociation(await $.fs.read(`${c.root}/${c.uproject}`).catch(() => ''))
+    const out = await Promise.all(registryQueries(assoc).map(argv => $.process.run(argv, { timeoutMs: REG_MS }).then(r => (r.exitCode === 0 ? r.stdout : ''), () => '')))
+    return { from: `the registry (${c.uproject} EngineAssociation ${assoc || 'unset'})`, root: registryRoot(assoc, out.join('\n')) }
+  }
+  const read: EngineSource[] = []
+  for (const source of [async () => ({ from: 'the a5r option engineRoot', root: norm(str(opts.engineRoot).trim()) || null }), fromLog, fromRegistry]) {
+    const { from, root } = await source()
+    read.push({ from, root, hasBat: root !== null && (await $.fs.exists(buildBatOf(root))) })
+    if (read.at(-1)?.hasBat) break
+  }
+  return pickEngine(read)
 }
 
 /** A79: the Editor slot the sync takes for its worker (its `what` names it, so the grant, lease and idle notices that are
@@ -985,7 +1045,7 @@ const holdsSyncLock = (): boolean => holdsLock() && isSyncSlot(me?.want)
  * holds the Editor. Runs inside the tick (no runTick here). */
 async function takeSyncLock($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   if (!me) return
-  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
   const minutes = Math.ceil((s.hardEnd - now) / 60_000)
   const want: Want = { sync: { at: s.at, role: 'worker' }, ...wantFrom({ action: 'request', minutes, build: s.build, launch: false, mode: 'unattended', pausable: false, what: `${SYNC_SLOT}${clockOf(s.at)}`, next_safe: 'after the merge' } as unknown as Input, now), requestedAt: now }
@@ -1026,7 +1086,7 @@ const notedHolding = (h: Holding, now: number): Holding => noteLease(h, { now, e
 async function recordEnd($: Engine, opts: Opts, f: SessionFile, end: LeaseEnd): Promise<SessionFile> {
   const { record, after } = endLease(f, end)
   if (!record) return after
-  const path = `${hfDir(opts)}/${LEASES_FILE}`
+  const path = `${hfDir()}/${LEASES_FILE}`
   const text = appendCapped((await readJson($, path)) ?? '', JSON.stringify(record))
   await $.fs.write(path, text).catch(err => $.ui.log(`a5r: ${LEASES_FILE} not written: ${String(err)}`, { to: 'debug' }))
   leaseLog = parseLeases(text)
@@ -1037,7 +1097,7 @@ async function recordEnd($: Engine, opts: Opts, f: SessionFile, end: LeaseEnd): 
 /** A100: the lease log, read again at most every 5 min (this session's own writes refresh it at once). */
 async function readLeaseLog($: Engine, opts: Opts, now: number): Promise<void> {
   if (leaseLogAt !== 0 && now - leaseLogAt < LEASE_LOG_EVERY_MS) return
-  leaseLog = parseLeases(await readJson($, `${hfDir(opts)}/${LEASES_FILE}`))
+  leaseLog = parseLeases(await readJson($, `${hfDir()}/${LEASES_FILE}`))
   leaseLogAt = now
 }
 
@@ -1052,7 +1112,7 @@ function releaseWhy(h: Holding, now: number): Pick<LeaseEnd, 'reason' | 'after'>
 
 /** A79: the sync's Editor lock given back when the sync ends (or its queued request withdrawn). */
 async function releaseSyncSlot($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
-  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
   if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${clockOf(s.at)} ended`)
   else if (me && isSyncSlot(me.want)) {
@@ -1088,7 +1148,7 @@ async function rewriteLease($: Engine, opts: Opts, h: Holding, end: number, now:
 /** Review of rev 33 (F2): when the sync's hard end moves (the manual stage, the A93 extension), the sync's Editor lock this
  * session holds says the new end too. */
 async function syncLockUntil($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
-  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
   if (!holdsSyncLock()) return
   const h = heldNow(now)
@@ -1097,7 +1157,7 @@ async function syncLockUntil($: Engine, opts: Opts, s: SyncFile, now: number): P
 
 /** A93: the merge commit on top of the pre-merge HEAD the holder's a5r recorded, or null. */
 async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<MergeRead> {
-  const r = await $.process.run(['git', '-C', s2Root(opts), 'log', '-1', '--format=%H %P', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
+  const r = await $.process.run(['git', '-C', s2Root(), 'log', '-1', '--format=%H %P', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
   return readMerge(r?.exitCode === 0 ? r.stdout : null, s.preHead)
 }
 
@@ -1107,7 +1167,7 @@ async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<MergeRea
  * stage (A96: the holder finishes by hand or aborts). In every stage the freeze and the sync's Editor lock stay until the
  * holder calls done or abort (or the hard end). */
 async function workerEnded($: Engine, opts: Opts, agentId: string, answer: string): Promise<void> {
-  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  const s = parseSyncFile(await readJson($, syncPath()))
   if (!s || s.workerAt === null || s.holder.id8 !== me8) return
   if (s.workerId !== agentId) {
     // No id was recorded (or another agent ended): it is the worker only if the agent list says it ran as one.
@@ -1136,7 +1196,7 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
  * commands may be among them) and the checkout's .git/index.lock. A109: what a building stage says of its build is
  * syncstage.ts `entryTell`'s (the build runs only once its log of this run is seen). */
 async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: StageEntry, now: number): Promise<void> {
-  const next = enterStage(s, to, s.build ? syncBuildLog(s2Root(opts), s.id) : '', now)
+  const next = enterStage(s, to, s.build ? syncBuildLog(s2Root(), s.id) : '', now)
   if (!(await writeSync($, opts, next, s))) return
   await syncLockUntil($, opts, next, now)
   const read = await readSyncLog($, next)
@@ -1155,7 +1215,7 @@ async function readSyncLog($: Engine, s: SyncFile): Promise<BuildLog> {
 
 /** A108: the checkout's git processes now (a fresh probe) and the age of its .git/index.lock. */
 async function gitBusy($: Engine, opts: Opts): Promise<GitBusy> {
-  const root = s2Root(opts)
+  const root = s2Root()
   const lock = await $.fs.stat(`${root}/.git/index.lock`).catch(() => null)
   return { gitPids: checkoutGitPids(await freshProbe($, opts), root), lockAgeMs: lock ? Math.max(0, (await $.clock.now()) - lock.mtimeMs) : null }
 }
@@ -1212,13 +1272,13 @@ async function handOverSync($: Engine, opts: Opts, s: SyncFile, now: number): Pr
 /** Review 5: with A5R off the tick does nothing else, but a lock this session still holds for a sync that is no longer
  * open (done, aborted, cancelled, expired by its hard end) is given back, so a HELD line never outlives its sync. */
 async function syncSlotWhenOff($: Engine, opts: Opts): Promise<void> {
-  if (!(await $.fs.exists(s2Root(opts)))) return
+  if (!(await isCheckoutHere($))) return
   await restoreMe($, opts)
   if (!me || !isSyncSlot(me.want)) return
-  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
   const now = await $.clock.now()
-  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  const s = parseSyncFile(await readJson($, syncPath()))
   if (s && isOpenPhase(syncPhase(s, now, false))) return
   if (holdsLock()) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${s ? clockOf(s.at) : ''} ${s?.state ?? 'gone'}`)
   else {
@@ -1266,7 +1326,7 @@ async function missingLockStep($: Engine, opts: Opts, now: number): Promise<void
   await writeLock($, opts, freeLine({ since: now, by: me.lane, note: 'lock file was missing; written by A5R, no Unreal process running', background: 'none' }))
   // Re-review: the FREE line is written alone and the lock read again before any grant: a line another writer put there
   // meanwhile wins, and this session keeps its request and waits (the grant itself is read-compare-write too).
-  lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+  lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
 }
 
@@ -1278,7 +1338,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
     showStatus($)
     return
   }
-  if (!(await $.fs.exists(s2Root(opts)))) return // no S2 checkout on this machine
+  if (!(await isCheckoutHere($))) return // no S2 checkout on this machine
   await ensureTools($)
   await restoreMe($, opts)
   const now = await $.clock.now()
@@ -1309,14 +1369,14 @@ const holdsLock = (): boolean => lock.id8 === me8 && me8 !== '' && (lock.kind ==
 /** The lock written by read-compare-write: only if it still reads as when this session decided, then read back
  * (no compare-and-set exists; one more writer between the two reads loses, and the next tick decides again). */
 async function writeLock($: Engine, opts: Opts, line: string): Promise<boolean> {
-  const before = await $.fs.read(opts.editorLock).catch(() => null)
+  const before = await $.fs.read(lockFile()).catch(() => null)
   if (before !== lockRaw) {
     lockRaw = before
     lock = lockOf(before)
     return false
   }
-  await $.fs.write(opts.editorLock, `${line}\n`)
-  const after = await $.fs.read(opts.editorLock).catch(() => null)
+  await $.fs.write(lockFile(), `${line}\n`)
+  const after = await $.fs.read(lockFile()).catch(() => null)
   lockRaw = after
   lock = lockOf(after)
   return (after ?? '').trim() === line
@@ -1396,7 +1456,7 @@ async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
 type Inbox<T> = { folder: string; field: string; isItem: (x: T) => boolean }
 async function readInbox<T>($: Engine, opts: Opts, box: Inbox<T>, id8: string): Promise<T[]> {
   try {
-    const items = (JSON.parse((await readJson($, `${hfDir(opts)}/${box.folder}/${id8}.json`)) ?? '') as Record<string, unknown>)[box.field]
+    const items = (JSON.parse((await readJson($, `${hfDir()}/${box.folder}/${id8}.json`)) ?? '') as Record<string, unknown>)[box.field]
     return Array.isArray(items) ? (items as T[]).filter(x => x && box.isItem(x)) : []
   } catch {
     return []
@@ -1404,7 +1464,7 @@ async function readInbox<T>($: Engine, opts: Opts, box: Inbox<T>, id8: string): 
 }
 async function appendInbox<T>($: Engine, opts: Opts, box: Inbox<T>, id8: string, item: T): Promise<void> {
   const items = [...(await readInbox($, opts, box, id8)), item].slice(-10)
-  await $.fs.write(`${hfDir(opts)}/${box.folder}/${id8}.json`, JSON.stringify({ v: 1, [box.field]: items })).catch(err => $.ui.log(`a5r: ${box.folder}/${id8}.json not written: ${String(err)}`, { to: 'debug' }))
+  await $.fs.write(`${hfDir()}/${box.folder}/${id8}.json`, JSON.stringify({ v: 1, [box.field]: items })).catch(err => $.ui.log(`a5r: ${box.folder}/${id8}.json not written: ${String(err)}`, { to: 'debug' }))
 }
 /** A60: the releases other sessions made of this holder's lease (A54, A55). */
 const releases: Inbox<Released> = { folder: 'released', field: 'releases', isItem: r => typeof r.since === 'number' && (r.kind === 'lapsed' || r.kind === 'unseen') }
@@ -1414,7 +1474,7 @@ const nudges: Inbox<Nudge> = { folder: 'nudges', field: 'nudges', isItem: n => t
 
 /** A62: one line in Saved/A5R/orchestrate.log (rotated past about 1 MB into orchestrate.log.1). */
 async function orchestrateLog($: Engine, opts: Opts, e: OrchestrateEvent): Promise<void> {
-  const path = `${hfDir(opts)}/orchestrate.log`
+  const path = `${hfDir()}/orchestrate.log`
   const cur = (await $.fs.read(path).catch(() => '')) ?? ''
   const line = `${orchestrateLine(e)}\n`
   if (cur.length + line.length > ORCHESTRATE_MAX_BYTES) {
@@ -1468,7 +1528,7 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   const all = [me, ...peers]
   const waiting = queueOf(all, lanes, now, syncFile)
   // A84: a hand-written line with no end or no holder is held 2 h from when it was written (the lock file's time).
-  const writtenAt = lock.isStandard ? null : ((await $.fs.stat(opts.editorLock).catch(() => null))?.mtimeMs ?? null)
+  const writtenAt = lock.isStandard ? null : ((await $.fs.stat(lockFile()).catch(() => null))?.mtimeMs ?? null)
   const input = { lock, files: all, lanes, now, waiting, writtenAt, sync: syncFile }
   if (!lapseOf({ ...input, probe })) return
   const fresh = await freshProbe($, opts)
@@ -1552,10 +1612,10 @@ async function nudgeInbox($: Engine, opts: Opts, open: string | null): Promise<v
 let verdicts: VerdictRow[] = [] // Saved/A5R/verdicts.json, the latest first
 const judges = new Map<string, { facts: JudgeFacts; hint: { verdict: VerdictRow['verdict']; evidence: string[] } }>() // agentId → incident
 const JUDGE_IDLE_MS = 10 * 60_000
-const verdictsPath = (opts: Opts): string => `${hfDir(opts)}/verdicts.json`
+const verdictsPath = (): string => `${hfDir()}/verdicts.json`
 async function readVerdicts($: Engine, opts: Opts): Promise<VerdictRow[]> {
   try {
-    const v = JSON.parse((await readJson($, verdictsPath(opts))) ?? '') as { verdicts?: unknown }
+    const v = JSON.parse((await readJson($, verdictsPath())) ?? '') as { verdicts?: unknown }
     return Array.isArray(v.verdicts) ? (v.verdicts as VerdictRow[]).filter(r => r && typeof r.at === 'number' && typeof r.verdict === 'string') : []
   } catch {
     return []
@@ -1628,7 +1688,7 @@ async function recordVerdict($: Engine, opts: Opts, f: JudgeFacts, v: { verdict:
   const row: VerdictRow = { at: now, id8: f.id8, lane: f.lane, kind: f.kind, verdict: v.verdict, evidence: v.evidence[0] ?? '', recommendation: v.recommendation, by: me8, source, since: f.since, ...(f.kind === 'sync' && syncFile ? { syncId: syncFile.id } : {}) }
   await orchestrateLog($, opts, { at: now, rule: 'A65-judge', lane: f.lane, id8: f.id8, procs: f.procs, liveness: f.liveness, lastTurnAt: f.lastTurnAt, agents: f.agents, build: f.hasBuild, acted: false, note: `verdict ${v.verdict} (${source}): ${v.evidence.join('; ')}; recommend: ${v.recommendation}` }).catch(() => undefined)
   verdicts = [row, ...(await readVerdicts($, opts))].slice(0, 10)
-  await $.fs.write(verdictsPath(opts), JSON.stringify({ v: 1, verdicts })).catch(err => $.ui.log(`a5r: verdicts not written: ${String(err)}`, { to: 'debug' }))
+  await $.fs.write(verdictsPath(), JSON.stringify({ v: 1, verdicts })).catch(err => $.ui.log(`a5r: verdicts not written: ${String(err)}`, { to: 'debug' }))
   $.ui.toast(`Orchestrate · ${f.lane || f.id8}: ${v.verdict} — ${v.recommendation}`, { timeoutMs: 12_000 })
   $.ui.invalidate('ui.render')
 }
@@ -1756,7 +1816,7 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
     }
   }
   if (plan.reap) {
-    await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `${s2Root(opts)}/.agents/skills/git-poller-storm/scripts/reap-orphan-git.ps1`], { timeoutMs: 60_000 }).catch(() => null)
+    await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `${s2Root()}/.agents/skills/git-poller-storm/scripts/reap-orphan-git.ps1`], { timeoutMs: 60_000 }).catch(() => null)
     done.push('ran the orphan-git reaper')
   }
   probe = (await freshProbe($, opts)) ?? probe
@@ -1765,14 +1825,14 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
 }
 
 // ---------- Sync main holder: Saved/A5R/sync.json, written by the holder alone ----------
-const syncPath = (opts: Opts): string => `${hfDir(opts)}/sync.json`
+const syncPath = (): string => `${hfDir()}/sync.json`
 const isLive = (id8: string, now: number): boolean => livenessOf(id8, me ? [me, ...peers] : peers, lanes, now) !== 'gone'
 /** A87: the merge guard's step an agent can take itself: the live holder ends it; with the holder gone (or no sync on
  * file) a live session takes the sync over and aborts the merge. Never "or Hai". */
 const mergeGuardAlt = (opts: Opts, s: SyncFile | null, now: number): string =>
   s && s.holder.id8 && isLive(s.holder.id8, now)
     ? `leave the merge state alone (no commit, reset, abort or stash of yours): its holder ${s.holder.lane} (session ${s.holder.id8}) finishes it or runs git merge --abort; work without git or in your own worktree meanwhile`
-    : `its holder is gone${s ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root(opts)} merge --abort; until then no commit, reset or stash there`
+    : `its holder is gone${s ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} merge --abort; until then no commit, reset or stash there`
 /** The sync's phase for every reader alike, the freeze lease included (D8: hard end, holder gone). */
 const phaseOf = (s: SyncFile | null, now: number): Phase => syncPhase(s, now, isSyncHolderGone(s, me ? [me, ...peers] : peers, lanes, now))
 /** D8: how long a freeze may last past T, from the plugin options. */
@@ -1783,33 +1843,33 @@ const freezeMinutes = (opts: Opts, build: boolean): number => {
 
 /** One session claims an event every session sees (an alert file): the first to create it wins. */
 async function claimAlert($: Engine, opts: Opts, key: string, extra: Record<string, unknown> = {}): Promise<boolean> {
-  const path = alertPath(opts, key)
+  const path = alertPath(key)
   if (await $.fs.exists(path)) return false
   const mine = JSON.stringify({ by: me8, at: await $.clock.now(), ...extra })
   await $.fs.write(path, mine).catch(() => undefined)
   return (await readJson($, path)) === mine
 }
 
-const alertPath = (opts: Opts, key: string): string => `${hfDir(opts)}/alerts/${key.replace(/[^\w.-]+/g, '_')}.json`
+const alertPath = (key: string): string => `${hfDir()}/alerts/${key.replace(/[^\w.-]+/g, '_')}.json`
 
 /** D8: a freeze past its hard end, or whose holder is gone, is written down as expired (a terminal state any
  * session may write, read-compare-write; writing it twice is harmless). A83: the pane shows it and the holder and every
  * session told of the sync get one notice (syncStep); nobody's title is marked. */
 async function expireSync($: Engine, opts: Opts, s: SyncFile, now: number): Promise<SyncFile> {
   const why = now >= s.hardEnd ? `its hard end ${clockOf(s.hardEnd)} passed` : `its holder ${s.holder.lane} (session ${s.holder.id8}) is gone`
-  const cur = parseSyncFile(await readJson($, syncPath(opts)))
+  const cur = parseSyncFile(await readJson($, syncPath()))
   if (!cur || cur.id !== s.id || cur.state !== 'planned') return cur ?? s
   const ended = endedSync(cur, 'expired', why, now)
-  await $.fs.write(syncPath(opts), JSON.stringify(ended))
+  await $.fs.write(syncPath(), JSON.stringify(ended))
   syncFile = ended
   return ended
 }
 
 /** Writes the sync plan, unless another session has become its holder since this one read it (one writer). */
 async function writeSync($: Engine, opts: Opts, next: SyncFile, prior: SyncFile | null): Promise<boolean> {
-  const now = parseSyncFile(await readJson($, syncPath(opts)))
+  const now = parseSyncFile(await readJson($, syncPath()))
   if (now && prior && now.id === prior.id && now.updatedAt !== prior.updatedAt && now.holder.id8 !== me8) return false
-  await $.fs.write(syncPath(opts), JSON.stringify(next))
+  await $.fs.write(syncPath(), JSON.stringify(next))
   syncFile = next
   return true
 }
@@ -1837,7 +1897,7 @@ function holderFor(spec: string, now: number): SyncHolder | null {
 /** Rule 11 for each conflicted path: main's blob against every blob this branch had (one rev-parse and one log); past
  * `until` (A107: the dry-run at T must not hold the worker back) the paths left count as foreign. */
 async function classifyAll($: Engine, opts: Opts, paths: readonly string[], until = Infinity): Promise<Conflict[]> {
-  const repo = s2Root(opts)
+  const repo = s2Root()
   const git = async (args: string[]): Promise<string> => {
     const r = await $.process.run(['git', '-C', repo, ...args], { timeoutMs: 30_000 }).catch(() => null)
     return r && r.exitCode === 0 ? r.stdout : ''
@@ -1868,7 +1928,7 @@ function startDryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): void 
  * fetch is told and the dry-run still reads origin/main as last fetched, its list marked stale; then merge-tree (60 s),
  * rule 11 (3 min in all) and the files main adds that exist on disk. The result goes onto sync.json as it is by then. */
 async function dryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): Promise<void> {
-  const root = s2Root(opts)
+  const root = s2Root()
   const limitMs = FETCH_MS[round]
   const fetch = () => $.process.run(fetchArgv(root), { env: FETCH_ENV, timeoutMs: limitMs }).catch(() => null)
   let fetched = await fetch()
@@ -1893,7 +1953,7 @@ async function dryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): Prom
  * take-over meanwhile wins; this session's own writes pass me8, read at the write, so a /clear meanwhile is still it).
  * The written sync, or null. (writeSync's own compare is moot here: `cur` was just read.) */
 async function updateSync($: Engine, opts: Opts, s: SyncFile, holder8: string, change: (cur: SyncFile) => SyncFile): Promise<SyncFile | null> {
-  const cur = parseSyncFile(await readJson($, syncPath(opts)))
+  const cur = parseSyncFile(await readJson($, syncPath()))
   if (!cur || cur.id !== s.id || cur.at !== s.at || cur.state !== 'planned' || cur.holder.id8 !== holder8) return null
   const next = change(cur)
   return (await writeSync($, opts, next, cur)) ? next : null
@@ -1903,7 +1963,7 @@ async function updateSync($: Engine, opts: Opts, s: SyncFile, holder8: string, c
  * overwritten", which merge-tree does not see): each added path is checked on its own, never a whole-tree
  * untracked scan. Null when git could not list them (the holder is told). */
 async function addedOnDisk($: Engine, opts: Opts, s: SyncFile): Promise<string[] | null> {
-  const repo = s2Root(opts)
+  const repo = s2Root()
   const r = await $.process.run(['git', '-C', repo, 'diff', '--name-only', '-z', '--diff-filter=A', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
   if (!r || r.exitCode !== 0) {
     push({ id: `sync:${s.id}:${s.at}:added-failed`, text: noticeText('Sync main', 'the list of files origin/main adds (git diff --diff-filter=A) did not finish', `run git -C ${repo} diff --name-only --diff-filter=A HEAD origin/main yourself and check which of those paths already exist in the checkout before the merge`), isActionable: true })
@@ -2007,7 +2067,7 @@ function pushNamed<T>(key: string, items: readonly T[], pathOf: (item: T) => str
 async function syncAction($: Engine, opts: Opts, action: string, a: { at?: string; holder?: string; note?: string; paths?: string[]; build?: boolean; rules?: string | string[] }): Promise<string> {
   const gate = 'Sync main'
   if (!(await readA5R($))) return blocked(gate, 'A5R is off', 'turn A5R on (/a5r on) to plan a sync')
-  if (!(await $.fs.exists(s2Root(opts)))) return blocked(gate, `no S2 checkout at ${s2Root(opts)}`, 'set the editorLock option to the checkout\'s Saved/EDITOR_OWNER.txt')
+  if (!(await isCheckoutHere($))) return noCheckout(gate)
   await restoreMe($, opts)
   if (!me) return 'no session file'
   const now = await $.clock.now()
@@ -2060,8 +2120,8 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
   }
   // 0.17.1: a merge left in .git/MERGE_HEAD with no sync open is taken over by a live session when the last sync's holder
   // is gone (or there is no sync file): it becomes the holder of that ended sync, which the merge guard lets end the merge.
-  if (action === 'takeover' && (!s || !open) && (await $.fs.exists(`${s2Root(opts)}/.git/MERGE_HEAD`))) {
-    const root = s2Root(opts)
+  if (action === 'takeover' && (!s || !open) && (await $.fs.exists(`${s2Root()}/.git/MERGE_HEAD`))) {
+    const root = s2Root()
     const end = `git -C ${root} merge --abort (or finish it: resolve, git add -- <paths>, git commit --no-edit)`
     if (s && isMine) return `this session already holds the last sync (${when(s)}): end the merge with ${end}`
     if (s && !isGone) return notHolder(s)
@@ -2141,7 +2201,7 @@ async function refreshClients($: Engine, opts: Opts, now: number): Promise<void>
   clients = text ? parseClients(text) : null
   for (const r of clients ?? []) {
     const key = r.cwd.toLowerCase()
-    if (!s2Cwds.has(key)) s2Cwds.set(key, under(r.cwd, s2Root(opts)) || (r.cwd !== '' && (await $.fs.exists(`${r.cwd}/S2.uproject`).catch(() => false))))
+    if (!s2Cwds.has(key)) s2Cwds.set(key, under(r.cwd, s2Root()) || (await holdsProject($, r.cwd)))
   }
 }
 
@@ -2152,7 +2212,7 @@ async function messageNoMod($: Engine, opts: Opts, s: SyncFile, now: number): Pr
   if (targets.length === 0) return
   const rows: { n: NoMod; isDelivered: boolean }[] = []
   for (const n of targets) {
-    const sent = await $.session.send({ to: { sessionId: n.sessionId }, text: noModMessage(s, s2Root(opts)) }).catch(err => ({ isDelivered: false as const, reason: String(err) }))
+    const sent = await $.session.send({ to: { sessionId: n.sessionId }, text: noModMessage(s, s2Root()) }).catch(err => ({ isDelivered: false as const, reason: String(err) }))
     rows.push({ n, isDelivered: sent.isDelivered })
   }
   await updateSync($, opts, s, me8, cur => ({ ...cur, messaged: [...new Set([...cur.messaged, ...targets.map(t => t.sessionId)])], updatedAt: now }))
@@ -2399,11 +2459,11 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
     if (/^-\s*Status:\s*active\b/im.test(p)) otherIntents.push({ slug: d.name, names: namedPaths(p, d.name).filter(n => n !== `docs/intent/${d.name}/`) })
   }
   const now = await $.clock.now()
-  const isS2Repo = isS2 && (sameRoot(root, s2Root(opts)) || (await $.fs.exists(`${root}/S2.uproject`)))
+  const isS2Repo = isS2 && (sameRoot(root, s2Root()) || (await holdsProject($, root)))
   const othersTouch = isS2Repo ? touches.filter(t => isLive(t.id8, now)).map(t => ({ lane: t.lane, paths: t.paths })) : []
   const mine = [...touched].slice(0, 100)
   const untrackedLeft = isS2Repo && mine.length
-    ? ((await $.process.run(['git', '-C', s2Root(opts), 'status', '--porcelain', '--untracked-files=all', '--', ...mine], { timeoutMs: 30_000 }).catch(() => null))?.stdout ?? '').split(/\r?\n/).filter(l => l.startsWith('?? ')).map(l => l.slice(3).trim())
+    ? ((await $.process.run(['git', '-C', s2Root(), 'status', '--porcelain', '--untracked-files=all', '--', ...mine], { timeoutMs: 30_000 }).catch(() => null))?.stdout ?? '').split(/\r?\n/).filter(l => l.startsWith('?? ')).map(l => l.slice(3).trim())
     : []
   const strayWorktrees: string[] = []
   let wt = ''
@@ -2584,7 +2644,7 @@ async function scorePr($: Engine, opts: Opts, a5r: A5R, root: string, slug: stri
 
 /** A52: an alert of the old scorer (no `scorer` in it, not withdrawn) for PR `n`: it scored the checkout, not the PR. */
 async function oldAlert($: Engine, opts: Opts, n: number): Promise<boolean> {
-  const text = await readJson($, alertPath(opts, `pr-${n}`))
+  const text = await readJson($, alertPath(`pr-${n}`))
   if (text === null) return false
   try {
     const v = JSON.parse(text) as { scorer?: unknown; withdrawn?: unknown }
@@ -2597,7 +2657,7 @@ async function oldAlert($: Engine, opts: Opts, n: number): Promise<boolean> {
 /** A52: withdraws an old scorer's alert for PR `n`: its alert file says so (so no session withdraws it twice). */
 async function withdrawOldAlert($: Engine, opts: Opts, n: number): Promise<void> {
   const now = await $.clock.now()
-  await $.fs.write(alertPath(opts, `pr-${n}`), JSON.stringify({ by: me8, at: now, scorer: POSTHOC_SCORER, withdrawn: true, why: 'scored the session checkout, not the PR (before a5r 0.12.3)' })).catch(() => undefined)
+  await $.fs.write(alertPath(`pr-${n}`), JSON.stringify({ by: me8, at: now, scorer: POSTHOC_SCORER, withdrawn: true, why: 'scored the session checkout, not the PR (before a5r 0.12.3)' })).catch(() => undefined)
 }
 
 /** A23: a PR number on the tracked intent's `- PR:` line (or in Ather's `tracked.prs`) that this session never scored
@@ -2695,7 +2755,7 @@ const A5R_HELP = [
 
 /** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */
 async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
-  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  const s = parseSyncFile(await readJson($, syncPath()))
   if (!s || s.holder.id8 !== (await $.session.id()).slice(0, 8).toLowerCase()) return false
   return phaseOf(s, await $.clock.now()) === 'frozen'
 }
@@ -2706,7 +2766,7 @@ async function sharedGitWrite($: Engine, opts: Opts, a5r: A5R, writes: { verb: s
   for (const w of writes) {
     const dir = norm(w.dir || cwd, cwd)
     const root = (await locate($, a5r, `${dir}/_`)).root
-    if (root && sameRoot(root, s2Root(opts)) && (await isSharedRoot($, root))) return w
+    if (root && sameRoot(root, s2Root()) && (await isSharedRoot($, root))) return w
   }
   return null
 }
@@ -2720,11 +2780,11 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command))
   const writes = command ? gitWrites(command) : []
   if (!isEditorUse && writes.length === 0) return null
-  const s = parseSyncFile(await readJson($, syncPath(opts)))
+  const s = parseSyncFile(await readJson($, syncPath()))
   const now = await $.clock.now()
   const isHolder = s?.holder.id8 === (await $.session.id()).slice(0, 8).toLowerCase()
   const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5r, writes) : null
-  if (shared && !isHolder && (await $.fs.exists(`${s2Root(opts)}/.git/MERGE_HEAD`))) {
+  if (shared && !isHolder && (await $.fs.exists(`${s2Root()}/.git/MERGE_HEAD`))) {
     const state = s ? `${s.holder.lane} holds the sync at ${clockOf(s.at)} (${phaseOf(s, now)})` : 'no sync is open (a merge left behind)'
     return blocked('Merge guard', `a merge is in progress in the shared checkout (.git/MERGE_HEAD; ${state}): no git ${shared.verb} there until it is finished or aborted`, mergeGuardAlt(opts, s, now))
   }
@@ -2739,7 +2799,7 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
  * session (A83: no mark on any title); the holder of the last sync is woken for it, the others hear it at their next
  * turn. */
 async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const head = await $.fs.stat(`${s2Root(opts)}/.git/MERGE_HEAD`).catch(() => null)
+  const head = await $.fs.stat(`${s2Root()}/.git/MERGE_HEAD`).catch(() => null)
   if (!head || isOpenPhase(phaseOf(syncFile, now))) return
   const all = me ? [me, ...peers] : peers
   // 0.17.1: the last sync's holder ends it while it lives; when it is gone (or there is none), the first live session in
@@ -2748,7 +2808,7 @@ async function mergeGuardStep($: Engine, opts: Opts, now: number): Promise<void>
   const takerId = holderAlive ? null : takerOf(now)
   const taker = takerId === null ? null : { lane: all.find(f => f.id8 === takerId)?.lane ?? takerId, isMe: takerId === me8 }
   const id = `merge-head:${Math.round(head.mtimeMs)}:${takerId ?? syncFile?.holder.id8 ?? ''}`
-  push({ id, text: NOTICES.mergeLeft(head.mtimeMs, syncFile, taker, s2Root(opts)), isActionable: holderAlive ? syncFile?.holder.id8 === me8 : taker?.isMe === true })
+  push({ id, text: NOTICES.mergeLeft(head.mtimeMs, syncFile, taker, s2Root()), isActionable: holderAlive ? syncFile?.holder.id8 === me8 : taker?.isMe === true })
 }
 
 /** RAM while this session's PIE runs (abort under 3 GB) and the checkout drive under 20 GB. */
@@ -2762,7 +2822,7 @@ function ramStep(opts: Opts, now: number): void {
     isPieLow = true
     push({ id: noticeIds.pieAbort(pieLowSince), text: NOTICES.pieAbort(probe.freeGb), isActionable: true })
   } else if (probe.freeGb >= PIE_ABORT_GB) isPieLow = false
-  if (probe.diskGb !== null && probe.diskGb < DISK_MIN_GB) push({ id: noticeIds.disk(ymd(now)), text: NOTICES.disk(`${s2Root(opts).slice(0, 2)}`, probe.diskGb), isActionable: false })
+  if (probe.diskGb !== null && probe.diskGb < DISK_MIN_GB) push({ id: noticeIds.disk(ymd(now)), text: NOTICES.disk(`${s2Root().slice(0, 2)}`, probe.diskGb), isActionable: false })
 }
 
 /** What the tiles and the status line show, from what the tick read; a toast when the Editor comes free or RAM
@@ -2786,7 +2846,7 @@ function showMachine($: Engine, now: number): void {
 
 /** Records a repo-relative path this session (or one of its workers) edited in the shared checkout. */
 async function recordTouch($: Engine, opts: Opts, locs: Located[]): Promise<void> {
-  const root = s2Root(opts)
+  const root = s2Root()
   let isNew = false
   for (const l of locs) {
     if (!l.root || !l.rel || !sameRoot(l.root, root) || !(await isSharedRoot($, l.root))) continue
@@ -2797,7 +2857,7 @@ async function recordTouch($: Engine, opts: Opts, locs: Located[]): Promise<void
   }
   if (!isNew || !me) return
   const t: Touch = { session: me.session, id8: me8, lane: me.lane, paths: [...touched].slice(-500), updatedAt: await $.clock.now() }
-  await $.fs.write(`${hfDir(opts)}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
+  await $.fs.write(`${hfDir()}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
 }
 
 /** A5R's coordination refusals before a tool runs: the lock is the editor tool's to write; notices are not
@@ -2891,7 +2951,7 @@ function toolErrorText($: Engine, tool: string, err: unknown): string {
 /** The `editor` tool: request, release, extend, status (the only writer of the lock under A5R). */
 async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   if (!(await readA5R($))) return blocked('Editor', 'A5R is off, so the Editor holder is not running', 'follow AGENTS.md: take Saved/EDITOR_OWNER.txt by hand')
-  if (!(await $.fs.exists(s2Root(opts)))) return blocked('Editor', `no S2 checkout at ${s2Root(opts)}`, 'set the editorLock option to the checkout\'s Saved/EDITOR_OWNER.txt')
+  if (!(await isCheckoutHere($))) return noCheckout('Editor')
   await restoreMe($, opts)
   const action = str(e.action)
   const now = await $.clock.now()
@@ -2927,7 +2987,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     return tail(`${placeText(decision)}${convertNote ? ` · ${convertNote}` : ''}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5r)' : ''}` : ''}`)
   }
   if (action === 'release') {
-    lockRaw = await $.fs.read(opts.editorLock).catch(() => null)
+    lockRaw = await $.fs.read(lockFile()).catch(() => null)
     lock = lockOf(lockRaw)
     if (!holdsLock()) {
       if (me) me = { ...me, want: null, holding: null }
@@ -2996,7 +3056,7 @@ async function refreshSync($: Engine, opts: Opts): Promise<void> {
   if (isReadingGit) return
   isReadingGit = true
   try {
-    const repo = s2Root(opts)
+    const repo = s2Root()
     const git = async (args: string[]): Promise<string> => {
       const r = await $.process.run(['git', '-C', repo, ...args], { timeoutMs: 30_000 }).catch(() => null)
       return r && r.exitCode === 0 ? r.stdout.trim() : ''
@@ -3336,7 +3396,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     const plan = syncData(now)
     const tiles = [
       editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
-      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root(opts).slice(0, 2) }, { fill: A5R_LOOK.meter, track: A5R_LOOK.meterTrack }),
+      memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root().slice(0, 2) }, { fill: A5R_LOOK.meter, track: A5R_LOOK.meterTrack }),
       mainTile(sync, plan, syncActionButton($, opts, el, isDesktop, now)),
     ]
     tiles[0] = { ...tiles[0], action: editorAction($, opts, el, isDesktop) } as (typeof tiles)[number]
@@ -3344,7 +3404,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     // details are the sub-line; no meter. Sync main's sub-line: when main was fetched, the planned or last sync.
     // A50: only the parts that warn (a low disk, N git processes) are amber; the gate details stay quiet.
     const free = vitals?.freeGb
-    const extra = [...(probe?.diskGb !== null && probe?.diskGb !== undefined && probe.diskGb < DISK_MIN_GB ? [`${s2Root(opts).slice(0, 2)} ${probe.diskGb} GB free`] : []), ...(vitals && vitals.git >= 10 ? [`${vitals.git} git processes`] : [])].map(text => ({ text, warn: true }))
+    const extra = [...(probe?.diskGb !== null && probe?.diskGb !== undefined && probe.diskGb < DISK_MIN_GB ? [`${s2Root().slice(0, 2)} ${probe.diskGb} GB free`] : []), ...(vitals && vitals.git >= 10 ? [`${vitals.git} git processes`] : [])].map(text => ({ text, warn: true }))
     tiles[1] = {
       ...tiles[1],
       value: free === undefined ? 'probe failed' : `${free} GB free`,
@@ -3372,7 +3432,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
-  } else kids.push(el.Box({ key: 'hai-a5r-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: 'This session is not in the S2 checkout: the Editor, Memory and Sync main tools and the sessions list live in an S2 session.' })] }))
+  } else kids.push(el.Box({ key: 'hai-a5r-nos2', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: checkout ? `This session is not in the checkout ${checkout.root}: the Editor, Memory and Sync main tools and the sessions list live in a session there.` : `Coordination is idle here: ${NO_CHECKOUT.why}. To point it at a checkout, ${NO_CHECKOUT.next}. The five rules still apply.` })] }))
   // A19: the Nghiệm thu A5R card, once there is a score or the tracked intent is in Ship.
   if (lastAccept) {
     // A53: each rule's items capped at three lines (grouped by folder, "and N more"); A52: one section per PR.
@@ -3449,12 +3509,8 @@ export const register: Register = (on, options) => {
     })
     await readA5R($)
     a5rFlipAt = 0 // a session that starts with A5R already on does not stamp the seal
-    isS2 = await $.fs.exists(`${(await $.session.root()).replace(/\\/g, '/')}/S2.uproject`)
-    if (isS2) {
-      // The minute timer reads files and probes; it wakes the model only for an event addressed to this session.
-      await runTick($, opts)
-      $.clock.every(EDITOR_PERIOD_MS, () => void runTick($, opts))
-    } else showStatus($)
+    await startCoordination($, opts)
+    if (!isS2) showStatus($)
     return res
   })
 
@@ -3465,6 +3521,7 @@ export const register: Register = (on, options) => {
   // A /clear goes on under a new session id: this session's lease, request and sync follow it (A10).
   on('session.end', async ($, e, next) => {
     const res = await next(e)
+    await ensureCheckout($, opts)
     if (e.reason === 'clear' && isS2) {
       clearFrom = e.sessionId
       followClear($, opts, e.sessionId, 25)
@@ -3473,6 +3530,7 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'a5r' }, async ($, e) => {
+    await ensureCheckout($, opts)
     if (/^sync\b/i.test(e.args.trim())) return { text: await syncCommand($, opts, e.args.trim().slice(4)) }
     if (/^accept\b/i.test(e.args.trim())) return { text: await acceptCommand($, opts) }
     if (/^gate\b/i.test(e.args.trim())) return { text: await gateCommand($, opts, e.args.trim().slice(4)) }
@@ -3486,7 +3544,8 @@ export const register: Register = (on, options) => {
       if (arg === 'on' && !a5rOn) a5rFlipAt = await $.clock.now()
       a5rOn = arg === 'on'
       if (a5rOn) hits = noHits()
-      if (a5rOn && isS2) await runTick($, opts)
+      if (a5rOn && checkout === null) checkoutFound = null // A111: look again (git may have been slow); the find above has ended
+      if (a5rOn) await startCoordination($, opts)
       showStatus($)
       $.ui.invalidate('ui.render')
       return {
@@ -3511,6 +3570,7 @@ export const register: Register = (on, options) => {
     // plugin, not the engine): it marks the session busy, and its result may carry queued notices to the model.
     const isMain = e.agentId === undefined && next.origin.plugin === 'engine'
     if (isMain) isBusy = true
+    await ensureCheckout($, opts)
     // Hotfix 0.18.2: A5R's own tools always answer: an error inside is the call's result (named, with a step), never a
     // throw that leaves the call unanswered ("no tool.call hook answered this call", MEASURED in b4f33d56 at 15:00:43).
     if (tool === EDITOR_TOOL || tool === SYNC_TOOL) {
@@ -3638,7 +3698,7 @@ export const register: Register = (on, options) => {
         const cwd = await $.session.cwd()
         // 0.16.1: reads (git log/status/diff, ls, cat, grep, …) change nothing; a redirect into the checkout counts from anywhere.
         const segs = walk(what, cwd, home).map(unwrap)
-        const root = s2Root(opts)
+        const root = s2Root()
         const commits = segs.some(seg => seg.verb === 'git' && under(gitPlace(seg).dir, root) && (gitPlace(seg).args[0] ?? '') === 'commit')
         const was = sharedShellAt
         if (commits) sharedShellAt = null
@@ -3665,6 +3725,7 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const res = await next(e)
+    await ensureCheckout($, opts)
     // A12: the sync worker's run ended; without done or abort the sync is aborted for it.
     // Review 5: the sync worker's end is recorded and its lock released even when A5R was turned off meanwhile.
     if (e.agentId !== undefined && isS2 && !(await readA5R($))) {
@@ -3689,6 +3750,7 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     isBusy = true
+    await ensureCheckout($, opts)
     // A59: a prompt Hai sends starts a turn; a plugin's queued prompt (this mod's wake included) only counts once its turn
     // runs a tool or ends, so a wake that never runs cannot pass for a turn.
     if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') turnSignalAt = await $.clock.now()
@@ -3728,7 +3790,10 @@ export const register: Register = (on, options) => {
   })
 
   // Ather's pane: drawn by Ather beneath; this wraps what it drew.
-  on('ui.render', { component: 'Pane', requestId: ATHER_PANE }, async ($, e, next) => drawPane($, opts, e, await next(e)))
+  on('ui.render', { component: 'Pane', requestId: ATHER_PANE }, async ($, e, next) => {
+    await ensureCheckout($, opts)
+    return drawPane($, opts, e, await next(e))
+  })
   // A40: the theme changed in /config: every colour follows at once.
   on('config.set', { key: 'theme' }, async ($, e, next) => {
     const res = await next(e)
@@ -3739,5 +3804,8 @@ export const register: Register = (on, options) => {
     return res
   })
   // A29: the A5R pane is this plugin's own: drawn here, never by anything beneath.
-  on('ui.render', { component: 'Pane', requestId: A5R_PANE }, async ($, e) => drawA5Pane($, opts, e))
+  on('ui.render', { component: 'Pane', requestId: A5R_PANE }, async ($, e) => {
+    await ensureCheckout($, opts)
+    return drawA5Pane($, opts, e)
+  })
 }

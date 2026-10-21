@@ -309,7 +309,7 @@ test('A108: unit: the worker prompt keeps every command in the foreground and ne
   const s: SyncFile = { ...newSync(T(14, 45), B, 'x', NOW), stage: 'manual', note: 'the sync worker ended without a SYNC line' }
   expect(NOTICES.syncManual(s, { gitPids: [4242], lockAgeMs: 0 })).toContain("until done, abort or 15:30; 1 git process of the checkout still runs (PID 4242) and .git/index.lock exists (0 min old) → keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); wait until .git/index.lock is gone before you touch the index")
   expect(NOTICES.syncManual(s, NO_GIT_BUSY)).toBe(NOTICES.syncManual(s))
-  expect(syncWorkerTask(s, S2, 'FREE')).toContain('That list: none made. It may be older than your merge')
+  expect(syncWorkerTask(s, S2, 'FREE', null)).toContain('That list: none made. It may be older than your merge')
 })
 
 /** The holder's sync at 14:45; the worker starts at T; git's HEAD stays the pre-merge HEAD (no merge commit). */

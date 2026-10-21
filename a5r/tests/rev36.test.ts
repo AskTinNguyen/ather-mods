@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { newSync, parseSyncEnd, parseSyncFile, SYNC_WORKER_PROMPT, syncWorkerTask, type SyncFile } from '../hooks/coord.ts'
-import { buildScriptText, buildStartCommand, ENGINE_ROOT_SLOT, isScriptAlive, runLabel, syncBuildScript } from '../hooks/buildscript.ts'
+import { buildScriptText, buildStartCommand, isScriptAlive, runLabel, syncBuildScript } from '../hooks/buildscript.ts'
 // The real cmd half (the script started through PowerShell with a stand-in Build.bat) runs with node, as the test runner
 // has no file system or processes: node --experimental-strip-types a5r/tests/build-script-smoke.mjs
 import { afterWorker, entryTell, isQuietTell, logTell, readBuildLog, stageNext, syncBuildLog, tellKey } from '../hooks/syncstage.ts'
@@ -20,8 +20,10 @@ const PRE = '9f8e7d6c0000'
 const ID = 'sync-20261006-1445-ab12cd34'
 const LOG = `${HF}/${ID}-build.log`
 const SCRIPT = `${HF}/${ID}-build.cmd`
-const RUN = `Start-Process -FilePath 'E:\\s2\\Saved\\A5R\\${ID}-build.cmd' -ArgumentList '"<engine root>"' -WindowStyle Hidden`
+// Rev 37 (A110): the engine root is written into the script (found by A5R), so the command has no argument.
+const RUN = `Start-Process -FilePath 'E:\\s2\\Saved\\A5R\\${ID}-build.cmd' -WindowStyle Hidden`
 const ENGINE = 'D:\\GameEditors\\5.8-ninetails-ed5c054'
+const ENGINE_FWD = 'D:/GameEditors/5.8-ninetails-ed5c054'
 const UBT: Proc = { name: 'UnrealBuildTool', pid: 900, gb: 2, parentAlive: true }
 /** The sync's own build script's cmd.exe, as the probe lists it (its command line kept). */
 const SCRIPT_CMD: Proc = { name: 'cmd', pid: 950, gb: 0, parentAlive: false, cmd: `C:\\WINDOWS\\system32\\cmd.exe /c ""E:\\s2\\Saved\\A5R\\${ID}-build.cmd" "D:\\GameEditors\\5.8-ninetails-ed5c054""` }
@@ -44,6 +46,9 @@ const atT = async ($: any, on: any, build = true, git: Record<string, { stdout: 
   on('turn.complete', async () => ({ text: '' }))
   w.put('E:/s2/.git/HEAD', 'ref: refs/heads/HaiHuynh/20261005')
   w.put(LOCK, 'free since 14:20\n')
+  // Rev 37 (A110): the engine the checkout's Editor last ran with, from its log, with its Build.bat.
+  w.put('E:/s2/Saved/Logs/S2.log', `LogInit: Base Directory: ${ENGINE_FWD}/Engine/Binaries/Win64/\n`)
+  w.put(`${ENGINE_FWD}/Engine/Build/BatchFiles/Build.bat`, '@echo off')
   await $.session.start(START)
   expect(String((await $.command.run({ command: 'a5r', args: `sync 14:45${build ? ' build' : ''}` } as never)).text)).toContain('planned')
   await idle($)
@@ -53,47 +58,42 @@ const atT = async ($: any, on: any, build = true, git: Record<string, { stdout: 
 }
 
 // ---------- unit ----------
-test('A109: unit: the build script: @echo off, the engine root from the option or its first argument, Build.bat with -WaitMutex written fresh with > to the log, the exit line, CRLF', () => {
+test('A109: unit: the build script: @echo off, the engine root written in (rev 37, A110: found by A5R; no argument form), Build.bat with -WaitMutex written fresh with > to the log, the exit line, CRLF', () => {
   const s2 = 'E:/Projects/s2'
   const log = syncBuildLog(s2, 'sync-20261020-1650-f41dc683')
-  const text = buildScriptText(s2, log)
+  const text = buildScriptText(s2, 'S2.uproject', log, `${ENGINE_FWD}/`)
   expect(text.split('\r\n')[0]).toBe('@echo off')
   expect(text.endsWith('\r\n')).toBe(true)
   expect(text.replace(/\r\n/g, '').includes('\n')).toBe(false) // every line ends in CRLF
   const lines = text.split('\r\n')
   expect(lines).toContain('set "LOG=E:\\Projects\\s2\\Saved\\A5R\\sync-20261020-1650-f41dc683-build.log"')
   expect(lines).toContain('set "PROJECT=E:\\Projects\\s2\\S2.uproject"')
-  expect(lines).toContain('set "ROOT=%~1"')
-  expect(lines).toContain('if not defined ROOT goto noroot')
+  // The root found, forward slashes and a trailing slash made Windows; no argument read, no "no engine root" branch.
+  expect(lines).toContain(`set "ROOT=${ENGINE}"`)
+  expect(text).not.toContain('%~1')
+  expect(text).not.toContain('noroot')
   expect(lines).toContain('set "BAT=%ROOT%\\Engine\\Build\\BatchFiles\\Build.bat"')
   expect(lines).toContain('if not exist "%BAT%" goto nobat')
   // Build.bat's own output and errors go to a fresh log (`>`), never appended to; only the script's exit line follows.
   expect(lines).toContain('call "%BAT%" S2Editor Win64 Development -Project="%PROJECT%" -WaitMutex > "%LOG%" 2>&1')
   expect(lines.filter(l => l.includes('>>'))).toEqual(['>> "%LOG%" echo A5R build exit %ERRORLEVEL% (engine "%ROOT%")'])
   expect(lines.indexOf('>> "%LOG%" echo A5R build exit %ERRORLEVEL% (engine "%ROOT%")')).toBe(lines.findIndex(l => l.startsWith('call ')) + 1)
-  expect(lines).toContain('> "%LOG%" echo A5R build refused: no engine root (set the a5r option engineRoot, or pass the engine root as the first argument)')
   expect(lines).toContain('> "%LOG%" echo A5R build refused: "%BAT%" does not exist (not an engine root)')
   expect(lines).not.toContain('goto badpath')
-  // The option: written into the script (forward slashes and a trailing slash made Windows), no argument read.
-  const set = buildScriptText(s2, log, 'D:/GameEditors/5.8-ninetails-ed5c054/')
-  expect(set.split('\r\n')).toContain(`set "ROOT=${ENGINE}"`)
-  expect(set).not.toContain('%~1')
   // `%` is doubled in a literal; a checkout or root with `%` or `^` (which call would change) is refused in the log.
-  const odd = buildScriptText('E:/a%b', 'E:/a%b/Saved/A5R/x-build.log')
+  const odd = buildScriptText('E:/a%b', 'S2.uproject', 'E:/a%b/Saved/A5R/x-build.log', ENGINE_FWD)
   expect(odd.split('\r\n')).toContain('set "LOG=E:\\a%%b\\Saved\\A5R\\x-build.log"')
   expect(odd.split('\r\n')).toContain('goto badpath')
-  expect(buildScriptText('E:/s2', 'E:/s2/x.log', 'D:/a^b').split('\r\n')).toContain('goto badpath')
-  expect(buildScriptText('E:/my s2 & co', 'E:/my s2 & co/x.log', 'D:/eng a&b').split('\r\n')).not.toContain('goto badpath') // spaces and & are plain inside quotes
+  expect(buildScriptText('E:/s2', 'S2.uproject', 'E:/s2/x.log', 'D:/a^b').split('\r\n')).toContain('goto badpath')
+  expect(buildScriptText('E:/my s2 & co', 'S2.uproject', 'E:/my s2 & co/x.log', 'D:/eng a&b').split('\r\n')).not.toContain('goto badpath') // spaces and & are plain inside quotes
 })
 
 test('A109: unit: the one start command, the log as A5R reads it, what the holder hears, the worker prompt and the task', () => {
   const script = syncBuildScript('E:/s2', ID)
   expect(script).toBe(SCRIPT)
   expect(buildStartCommand(script)).toBe(RUN)
-  expect(buildStartCommand(script, ENGINE)).toBe(`Start-Process -FilePath 'E:\\s2\\Saved\\A5R\\${ID}-build.cmd' -WindowStyle Hidden`)
-  expect(buildStartCommand("E:/Hai's s2/Saved/A5R/x-build.cmd", ENGINE)).toBe("Start-Process -FilePath 'E:\\Hai''s s2\\Saved\\A5R\\x-build.cmd' -WindowStyle Hidden")
-  expect(runLabel(RUN)).toBe(`this one PowerShell command (put the engine root from the machine profile in place of ${ENGINE_ROOT_SLOT}): ${RUN}`)
-  expect(runLabel('Start-Process -FilePath x')).toBe('this one PowerShell command: Start-Process -FilePath x')
+  expect(buildStartCommand("E:/Hai's s2/Saved/A5R/x-build.cmd")).toBe("Start-Process -FilePath 'E:\\Hai''s s2\\Saved\\A5R\\x-build.cmd' -WindowStyle Hidden")
+  expect(runLabel(RUN)).toBe(`this one PowerShell command: ${RUN}`)
   const logOf = (text: string | null) => readBuildLog(text, 1).log
   expect([logOf(null), logOf(''), logOf('Building 4127 actions...'), logOf('Building...\nA5R build exit 0 (engine "D:\\x")'), logOf('A5R build refused: no engine root'), logOf('Result: Succeeded\nA5R build exit 0'), logOf('Result: Failed (x)\nA5R build exit 0'), logOf('Using bundled DotNet SDK\nBuild.bat is already running, waiting for existing script to terminate...\n'), logOf('Build.bat is already running, waiting for existing script to terminate...\nBuilding S2Editor...')]).toEqual(['absent', 'running', 'running', 'ended', 'ended', 'Succeeded', 'Failed', 'queued', 'running'])
   expect(readBuildLog('a\n\nb\nc\nd\n', 7)).toEqual({ log: 'running', mtime: 7, isFinal: false, tail: '"b" | "c" | "d"' })
@@ -110,31 +110,31 @@ test('A109: unit: the one start command, the log as A5R reads it, what the holde
   expect([tellKey('build-ended', 5), tellKey('build-stopped', 5), tellKey('build-failed', 5), tellKey('build-unknown', 0), tellKey('building', 5), tellKey('testing', 5)]).toEqual(['build-ended:5', 'build-stopped:5', 'build-failed:5', 'build-unknown', 'building', 'testing'])
   expect([isScriptAlive([{ name: 'cmd', cmd: `C:\\WINDOWS\\system32\\cmd.exe /c ""E:\\s2\\Saved\\A5R\\${ID}-build.cmd" "D:\\x""` }], ID), isScriptAlive([{ name: 'cmd', cmd: 'cmd /c "E:\\s2\\Saved\\A5R\\sync-20261006-0900-ab12cd34-build.cmd"' }], ID), isScriptAlive([{ name: 'dotnet' }, { name: 'UnrealBuildTool' }], ID), isScriptAlive(null, ID)]).toEqual([true, false, false, null])
   expect([afterWorker(parseSyncEnd('SYNC MERGED 7b68b894 build-log=none'), { state: 'merged', sha: '7b68b894' }, true), afterWorker(parseSyncEnd('SYNC MERGED 7b68b894 build-log=none'), { state: 'merged', sha: '7b68b894' }, false), afterWorker(parseSyncEnd(`SYNC MERGED 7b68b894 build-log=${LOG}`), { state: 'merged', sha: '7b68b894' }, true)]).toMatchObject([{ stage: 'building', isBuildNone: true }, { stage: 'testing', isBuildNone: false }, { stage: 'building', isBuildNone: false }])
-  for (const must of ['Start the build only with the one PowerShell command your task gives, exactly as given', 'in a tool call of its own with nothing after it (a tool call stopped while it still runs kills what it started)', 'never your own cmd, Build.bat or redirection line', 'the build log\'s existence decides whether the build started', '`waiting for existing script to terminate` means it started and waits behind Build.bat\'s lock', 'No log after 60 seconds → start it no other way: end with `SYNC MERGED <merge sha> build-log=none`', 'when your task names the engine root itself, use none of your own'])
+  for (const must of ['Start the build only with the one PowerShell command your task gives, exactly as given', 'in a tool call of its own with nothing after it (a tool call stopped while it still runs kills what it started)', 'never your own cmd, Build.bat or redirection line', 'the build log\'s existence decides whether the build started', '`waiting for existing script to terminate` means it started and waits behind Build.bat\'s lock', 'No log after 60 seconds → start it no other way: end with `SYNC MERGED <merge sha> build-log=none`', 'the script carries the engine root your task names: use no engine root of your own'])
     expect(SYNC_WORKER_PROMPT).toContain(must)
   const s: SyncFile = { ...newSync(T(14, 45), { session: ME, id8: ME.slice(0, 8), lane: 'x' }, 'x', NOW, true), buildRun: RUN }
-  expect(syncWorkerTask(s, 'E:/s2', '')).toContain(`Build: yes; build log: ${LOG}; start the build (after the merge commit) only with ${runLabel(RUN)}.`)
-  expect(syncWorkerTask({ ...s, buildRun: '' }, 'E:/s2', '')).toContain('Build: yes, but A5R could not write its build script: start no build, and end with SYNC MERGED <merge sha> build-log=none.')
-  expect(syncWorkerTask({ ...s, build: false }, 'E:/s2', '')).toContain('Build: no.')
-  // With the option engineRoot the task names that root and offers no slot for another.
-  const set = syncWorkerTask({ ...s, buildRun: buildStartCommand(SCRIPT, ENGINE) }, 'E:/s2', '', ENGINE)
-  expect(set).toContain(`(the script builds with the engine root ${ENGINE}, the a5r option engineRoot: pass no engine root of your own)`)
-  expect(set).not.toContain(ENGINE_ROOT_SLOT)
+  expect(syncWorkerTask(s, 'E:/s2', '', null)).toContain(`Build: yes; build log: ${LOG}; start the build (after the merge commit) only with ${runLabel(RUN)}.`)
+  expect(syncWorkerTask({ ...s, buildRun: '' }, 'E:/s2', '', null)).toContain('Build: yes, but A5R wrote no build script (the write failed): start no build, and end with SYNC MERGED <merge sha> build-log=none.')
+  expect(syncWorkerTask({ ...s, build: false }, 'E:/s2', '', null)).toContain('Build: no.')
+  // Rev 37 (A110): the task names the engine root the script carries and where A5R found it, or that it found none.
+  const set = syncWorkerTask({ ...s, buildRun: buildStartCommand(SCRIPT) }, 'E:/s2', '', { root: ENGINE_FWD, from: 'the a5r option engineRoot', tried: [] })
+  expect(set).toContain(`(the script builds with the engine root ${ENGINE_FWD} (from the a5r option engineRoot): pass no engine root of your own)`)
+  expect(set).not.toContain('<engine root>')
 })
 
 // ---------- engine ----------
-test('A109: at T the holder\'s A5R writes the build script before the worker starts; the task gives the one command (the engine root slot while the option is unset)', opts(), async ($, on) => {
+test('A109: at T the holder\'s A5R writes the build script before the worker starts; the task gives the one command (rev 37, A110: with the engine root found in the Editor\'s last log written in)', opts(), async ($, on) => {
   const w = await atT($, on)
-  expect(w.read(SCRIPT)).toBe(buildScriptText('E:/s2', LOG, ''))
+  expect(w.read(SCRIPT)).toBe(buildScriptText('E:/s2', 's2.uproject', LOG, ENGINE_FWD))
   expect(syncOf(w)?.buildRun).toBe(RUN)
-  expect(task(w)).toContain(`Build: yes; build log: ${LOG}; start the build (after the merge commit) only with this one PowerShell command (put the engine root from the machine profile in place of <engine root>): ${RUN}.`)
+  expect(task(w)).toContain(`Build: yes; build log: ${LOG}; start the build (after the merge commit) only with this one PowerShell command: ${RUN} (the script builds with the engine root ${ENGINE_FWD} (from the Editor's last log (Saved/Logs/s2.log)): pass no engine root of your own).`)
 })
 
-test('A109: with the option engineRoot the script carries the root and the command has no argument', { ...opts(), options: { ...opts().options, engineRoot: ENGINE } }, async ($, on) => {
+test('A109: with the option engineRoot (its Build.bat there) the script carries that root and the command has no argument', { ...opts(), options: { ...opts().options, engineRoot: ENGINE } }, async ($, on) => {
   const w = await atT($, on)
   expect(w.read(SCRIPT).split('\r\n')).toContain(`set "ROOT=${ENGINE}"`)
-  expect(syncOf(w)?.buildRun).toBe(`Start-Process -FilePath 'E:\\s2\\Saved\\A5R\\${ID}-build.cmd' -WindowStyle Hidden`)
-  expect(task(w)).toContain(`only with this one PowerShell command: Start-Process -FilePath 'E:\\s2\\Saved\\A5R\\${ID}-build.cmd' -WindowStyle Hidden (the script builds with the engine root ${ENGINE}, the a5r option engineRoot: pass no engine root of your own).`)
+  expect(syncOf(w)?.buildRun).toBe(RUN)
+  expect(task(w)).toContain(`only with this one PowerShell command: ${RUN} (the script builds with the engine root ${ENGINE_FWD} (from the a5r option engineRoot): pass no engine root of your own).`)
   expect(task(w)).not.toContain('<engine root>')
 })
 
@@ -248,7 +248,7 @@ test('A109: the worker ends with build-log=none on a build sync: the holder is w
   expect(syncOf(w)?.stage).toBe('building') // still frozen: the merge is in
   const wake = prompts(w).filter(p => p.includes(`the merge 7b68b894 is in but its build did not start: no log of this run (${LOG})`))
   expect(wake.length).toBe(1)
-  expect(wake[0]).toContain(`start the build yourself now with its script, this one PowerShell command (put the engine root from the machine profile in place of <engine root>): ${RUN} (A5R watches the log and wakes you at its Result: line)`)
+  expect(wake[0]).toContain(`start the build yourself now with its script, this one PowerShell command: ${RUN} (A5R watches the log and wakes you at its Result: line)`)
   await minutes(w, 3) // past the grace: told once only
   expect(prompts(w).filter(p => p.includes('its build did not start')).length).toBe(1)
   await typed($)

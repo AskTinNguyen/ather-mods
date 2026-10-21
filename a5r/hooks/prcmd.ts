@@ -88,7 +88,7 @@ export const words = (cmd: string): string[] => {
 }
 
 /** The command's verb and its arguments: env assignments and lead words skipped; the verb lowercased, its path and
- * `.exe` dropped (`& "C:\…\gh.exe" pr create` is gh). */
+ * `.exe` dropped (e.g. `& "C:\…\gh.exe" pr create` is gh). */
 export const verbOf = (ws: string[]): [string, string[]] => {
   let i = 0
   while (i < ws.length && (/^[A-Za-z_][\w]*=/.test(ws[i] ?? '') || LEADS.has((ws[i] ?? '').toLowerCase()) || (i > 0 && (ws[i - 1] ?? '').toLowerCase() === 'env' && /^-/.test(ws[i] ?? '')))) i += 1
