@@ -11,7 +11,7 @@ import { briefIssues, explainGuard, heldShell, isMergeCommand, isSearchCommand, 
 import { andList } from "./ather/model.mjs";
 import { intentChanges, intentFileOf, orchestrationFileOf } from "./ather/changes.mjs";
 import * as state from "./ather/state.mjs";
-import { currentMode, forgetAgent, isNonAsking, knownAgents, lastPersonAt, markAgentActive, note, noteAgent, onTurnStarted as markTurn, paseo, remember, send } from "./agents";
+import { currentMode, forgetAgent, isNonAsking, knownAgents, lastPersonAt, markAgentActive, note, noteAgent, onTurnStarted as markTurn, paseo, remember } from "./agents";
 import { governedRoot } from "./agentConfig";
 import { readText, run } from "./io";
 import { branchesFor, ctxOf, heartbeat, isLaneAlive, isLaneGone, laneOf, type Ctx, type Pack } from "./lane";
@@ -27,8 +27,6 @@ type AgentEvent = { agent: PermissionEvent["agent"] };
 const seenTraps = new Map<string, Set<string>>();
 // The tracked intent's files as they were when the turn started, to tell what an edit changed.
 const before = new Map<string, Map<string, string>>();
-// Follow-ups already sent per agent, so the same warning does not loop.
-const told = new Map<string, Set<string>>();
 
 async function governedCtx(event: AgentEvent): Promise<Ctx | null> {
   noteAgent(event.agent);
@@ -179,7 +177,6 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   const io = ctx.io as never;
   const { root, pack } = await laneOf(ctx);
   const scope = await state.evidenceScope(io);
-  const context_: string[] = [];
   const touched = new Set<string>();
 
   for (const item of thisTurn(event.timeline)) {
@@ -192,7 +189,7 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
       if (detail.type === "shell") {
         const text = String(detail.output ?? "") || errorText;
         const isError = item.status === "failed" || (typeof detail.exitCode === "number" && detail.exitCode !== 0);
-        context_.push(...(await afterShell(ctx, pack, detail.command, text, isError)));
+        await afterShell(ctx, pack, detail.command, text, isError);
       } else if (detail.type === "write" || detail.type === "edit") {
         // The agent's own orchestration writing an intent's prompt.md or log.md tracks it (never its
         // workers': their writes are in their own transcripts, not this timeline). Writing a new
@@ -229,32 +226,17 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   before.delete(agentId);
 
   await heartbeat(ctx, false).catch(() => undefined);
-
-  // What the original added to a tool's result for the model: sent as a follow-up once per agent, however long it runs.
-  if (context_.length > 0 && settings().followUps && event.outcome.kind === "completed") {
-    const seen = told.get(agentId) ?? new Set<string>();
-    told.set(agentId, seen);
-    const fresh = [...new Set(context_)].filter((text) => !seen.has(text));
-    if (fresh.length > 0) {
-      for (const text of fresh) seen.add(text);
-      await send(agentId, `Ather Automata, from this turn's tool output:\n${fresh.map((text) => `- ${text}`).join("\n")}`).catch((error) =>
-        console.error(`[ather] ${agentId}: follow-up failed:`, error),
-      );
-    }
-  }
 }
 
 async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, isError: boolean) {
   const io = ctx.io as never;
   const agentId = ctx.agent.id;
-  const context: string[] = [];
   if (!isSearchCommand(command)) await noteTraps(ctx, pack, text);
   const guard = explainGuard(command);
   if (guard !== null && isError) void note(agentId, "warn", `Guard: ${guard}`);
   const reading = pack.readShell(command, text, { isError });
   const scope = await state.evidenceScope(io);
   for (const one of reading.rungs) await state.setRung(io, scope, one.rung, one.value, one.gates);
-  context.push(...reading.context);
   for (const toast of reading.toasts) void note(agentId, "warn", String(toast.text).replace(/^Ather:\s*/, ""));
   for (const key of reading.bumps) void state.bump(io, key).catch(() => undefined);
   if (isMergeCommand(command) && !isError) {
@@ -263,12 +245,8 @@ async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, i
       await state.flagLost(io, lost);
       void state.bump(io, "lostWorkFlags").catch(() => undefined);
       void note(agentId, "bad", `The merge kept the other side of ${lost.length} binary asset(s); this branch's edits to them are gone: ${lost.join(", ")}`);
-      context.push(
-        `Ather Automata merge audit: these binary assets are byte-identical to the merged-in side, so every edit this branch made to them is gone: ${lost.join(", ")}. Tell the user now, itemised, and mark each as a lost optimisation or a broken feature.`,
-      );
     }
   }
-  return context;
 }
 
 async function noteTraps(ctx: Ctx, pack: Pack, text: string) {
@@ -347,7 +325,6 @@ export async function onGone(event: AgentEvent) {
   if (ctx) await heartbeat(ctx, true).catch(() => undefined);
   seenTraps.delete(event.agent.id);
   before.delete(event.agent.id);
-  told.delete(event.agent.id);
   forgetAgent(event.agent.id);
 }
 

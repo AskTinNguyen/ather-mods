@@ -33,13 +33,6 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
             onValueChange={(holdRules) => save({ holdRules })}
             disabled={settings.saving}
           />
-          <SettingsSwitch
-            label="Tell the agent at once"
-            hint="When a turn's output shows a false build pass or a merge that lost edits, send the agent a follow-up."
-            value={values.followUps}
-            onValueChange={(followUps) => save({ followUps })}
-            disabled={settings.saving}
-          />
         </SettingsCard>
       </SettingsSection>
       {settings.saveError ? <Text style={{ color: theme.colors.statusDanger }}>{settings.saveError}</Text> : null}
