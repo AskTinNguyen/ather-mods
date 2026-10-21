@@ -24,10 +24,33 @@ export const GROUP_COLOURS = { mine: INK, issues: AMBER, others: '#3ccf7a' }
 // Home's work rows take letters; they skip f (sync) and i (Everything open).
 const PICK_KEYS = 'abcdeghjkl'
 
+// The cells a character takes in a terminal: two for an East Asian wide or fullwidth one (CJK, 【】, Hangul, fullwidth
+// forms, emoji pictographs), none for a combining mark, a variation selector or a zero-width joiner, else one.
+const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1F300}-\u{1FAFF}\u{20000}-\u{3FFFD}]/u
+const NONE = /[\p{M}​-‍︀-️]/u
+/** @param {string} char */
+const charCells = char => (char < '̀' ? 1 : NONE.test(char) ? 0 : WIDE.test(char) ? 2 : 1)
+// The cells a text takes; plain ASCII is its length.
+/** @param {string} text */
+export const cells = text => (/^[\x20-\x7e]*$/.test(text) ? text.length : [...text].reduce((sum, char) => sum + charCells(char), 0))
+
+// A text padded with spaces to `width` cells.
+/** @param {string} text @param {number} width */
+export const padCells = (text, width) => `${text}${' '.repeat(Math.max(0, width - cells(text)))}`
+
+// A text cut to `width` cells, with … where it was cut.
 /** @param {string} text @param {number} width */
 export const fit = (text, width) => {
   const clean = text.replace(/[\r\n\t]+/g, ' ')
-  return clean.length <= width ? clean : `${clean.slice(0, Math.max(1, width - 1))}…`
+  if (cells(clean) <= width) return clean
+  let cut = ''
+  let used = 0
+  for (const char of clean) {
+    used += charCells(char)
+    if (used > Math.max(1, width - 1) && cut !== '') break
+    cut += char
+  }
+  return `${cut}…`
 }
 
 // A checkout's name after a row's title: a worktree's folder can be longer than the title it sits beside, so it is cut.

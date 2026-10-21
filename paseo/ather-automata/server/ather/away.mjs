@@ -147,15 +147,23 @@ export const windowDecisions = markdown => {
 
 // ---------------------------------------------------------------- heading off for several sessions
 
+// A word standing alone in a name: not inside another word, and not joined to one by - _ or / (an intent named
+// daily-login-reward is no schedule).
+/** @param {string} words */
+const alone = words => new RegExp(`(?:^|[\\s(\\[【「])(?:${words})(?=$|[\\s)\\]】」.,:;!])`, 'iu')
+const SYNC = alone('sync[\\s_-]*main')
+const SCHEDULED = [/\(\s*\d+\s*(?:tiếng|giờ|phút|h|m)\s*\/\s*lần\s*\)/iu, alone('h[ằà]ng ngày|daily|hourly|scheduled|every (?:\\d+\\s*\\w*|day|hour|morning|night|evening|week)')]
+
 // A session that runs on its own whoever is at the keyboard, so the Away dialog does not tick it by default (A1):
 // the sync conductor (a name starting with ♾, or naming "sync main") or a scheduled task (a name saying how often it
-// runs: "(2 tiếng/lần)", "Hằng ngày", "daily", "hourly", "nightly", "every …", "scheduled"). Read from its title in
-// the desktop app, else its branch.
+// runs: "(4 tiếng/lần)", "Hằng ngày", "daily", "hourly", "scheduled", "every 2 hours", "every morning"; never a word
+// inside another, "every" alone or "nightly"). Read from its title in the desktop app, else its branch, as composed
+// characters (a title typed as decomposed ones reads the same).
 /** @param {string} name @returns {'sync' | 'scheduled' | ''} */
 export const sideKind = name => {
-  if (/^\s*♾/u.test(name) || /\bsync[\s_-]*main\b/i.test(name)) return 'sync'
-  if (/\(\s*\d+\s*(tiếng|giờ|phút|h|m)\s*\/\s*lần\s*\)|h[ằà]ng ngày|\b(daily|hourly|nightly|every|scheduled)\b/iu.test(name)) return 'scheduled'
-  return ''
+  const text = name.normalize('NFC')
+  if (/^\s*♾/u.test(text) || SYNC.test(text)) return 'sync'
+  return SCHEDULED.some(rule => rule.test(text)) ? 'scheduled' : ''
 }
 
 /**
@@ -194,30 +202,48 @@ export const awaySessions = (self, peers, now, tz) => {
   return [{ sessionId: self.sessionId, appId: '', title: self.title, branch: self.branch, intent: self.intent, name: name ? `this session · ${name}` : 'this session', detail: '', isSelf: true, isDefault: true, awayUntil: '' }, ...others]
 }
 
-// "/away 8h all", "/away until done enemy, playtest: finish the pass": which sessions the words after the length name
-// (A4). `all`: the ones ticked by default. Else each comma-separated name (three letters at least) picks every session
-// whose title, branch or intent contains it, case-insensitive; a goal may follow a colon. Null when any name matches
-// no session: the words are the goal, for this session only, as before. A session already away is never picked.
-/** @param {string} words @param {readonly AwaySession[]} sessions @returns {{ picked: AwaySession[], goal: string } | null} */
-export const pickedSessions = (words, sessions) => {
-  const [list = '', ...rest] = words.split(':')
-  const names = list.split(',').map(one => one.trim().toLowerCase())
-  const open = sessions.filter(one => one.awayUntil === '')
-  const goal = rest.join(':').trim()
-  if (names.length === 1 && names[0] === 'all') return { picked: open.filter(one => one.isDefault), goal }
-  const matches = names.map(name => (name.length < 3 ? [] : open.filter(one => [one.title, one.branch, one.intent ?? ''].some(field => field.toLowerCase().includes(name)))))
-  if (matches.some(found => found.length === 0)) return null
-  return { picked: open.filter(one => matches.some(found => found.includes(one))), goal }
+// Whether `name` (lowercase) names a session: a session ticked by default when its title, branch or intent contains it
+// (three letters at least); any other (the sync conductor, a scheduled task, one tracking nothing) only by its whole
+// title, branch or intent, so a word of a goal never reaches it.
+/** @param {AwaySession} one @param {string} name */
+const isNamed = (one, name) => {
+  const fields = [one.title, one.branch, one.intent ?? ''].filter(Boolean).map(field => field.normalize('NFC').toLowerCase())
+  return one.isDefault ? name.length >= 3 && fields.some(field => field.includes(name)) : fields.includes(name)
 }
 
-// What another session reads when the person heads off from this one (A2): that its window is open, and the mandate
-// whole (its ledger, what is held). The engine frames it as a message from this session (`from`, as its tab names it).
-// Should the window not show there, the session can open it itself with the same length and goal; a window opened that
-// way is its own, outside the group (the person's return elsewhere does not end it).
+// The names a `[only] in <names>[ only][: goal]` or a `@name @name [only][:] goal` says, whether `only` was said, and
+// the goal; null for any other words.
+/** @param {string} text @returns {{ names: string[], isOnly: boolean, goal: string } | null} */
+const namesOf = text => {
+  const listed = /^(only\s+)?in\s+([^:]+?)(\s+only)?\s*(?::\s*([\s\S]*))?$/i.exec(text)
+  if (listed) return { names: (listed[2] ?? '').split(','), isOnly: Boolean(listed[1] || listed[3]), goal: listed[4] ?? '' }
+  const tagged = /^((?:@[^\s,:@]+[\s,]*)+)(only\b)?\s*(?::\s*)?([\s\S]*)$/iu.exec(text)
+  if (tagged) return { names: (tagged[1] ?? '').split(/[\s,@]+/), isOnly: Boolean(tagged[2]), goal: tagged[3] ?? '' }
+  return null
+}
+
+// "/away 8h all", "/away 8h in enemy, playtest: finish the pass", "/away 8h @enemy finish the pass": the sessions the
+// words after the length name (A4), only when they name them on purpose, so a goal is never read as names. `all` (alone,
+// or before a colon and the goal): the sessions ticked by default. `in <name>, <name>` (a goal after a colon) or
+// leading `@name`s: those sessions, and this one with them unless `only` is said ("only in …", "in … only", "@a only").
+// A session already away is never picked. Null for plain words: the goal of this session alone, as before. `unknown`:
+// the names that named no session (nothing is started then).
+/** @param {string} words @param {readonly AwaySession[]} sessions @returns {{ picked: AwaySession[], goal: string, unknown: string[] } | null} */
+export const pickedSessions = (words, sessions) => {
+  const text = words.normalize('NFC').trim()
+  const open = sessions.filter(one => one.awayUntil === '')
+  const all = /^all\s*(?::\s*([\s\S]*))?$/i.exec(text)
+  if (all) return { picked: open.filter(one => one.isDefault), goal: (all[1] ?? '').trim(), unknown: [] }
+  const named = namesOf(text)
+  if (!named) return null
+  const names = named.names.map(one => one.trim().toLowerCase()).filter(Boolean)
+  const matches = names.map(name => open.filter(one => isNamed(one, name)))
+  return { picked: open.filter(one => (one.isSelf && !named.isOnly) || matches.some(found => found.includes(one))), goal: named.goal.trim(), unknown: names.filter((_, index) => (matches[index] ?? []).length === 0) }
+}
+
+// What another session reads when the person heads off from this one (A2): that its window is open (it is, before this
+// is sent), and the mandate whole (its ledger, what is held). The engine frames it as a message from this session
+// (`from`, as its tab names it); while the window holds, that session's lane state carries the mandate too.
 /** @param {{ from: string, away: Away, tz: number, pack?: Pack, base?: string }} at */
 export const awayMessage = ({ from, away, tz, pack = unreal, base = 'main' }) =>
-  [
-    `From the Ather pane of ${from}: the person is heading off and opened an away window in your session too.`,
-    mandateText(away, tz, pack, base),
-    `If the mcp__ather-automata__status tool shows no away window for your session, open it with the mcp__ather-automata__away tool: action "start", ${away.untilDone ? 'untilDone true' : `hours ${Math.round(((away.wakeAt - away.startedAt) / 3600000) * 100) / 100}`}, goal ${JSON.stringify(away.goal)}.`,
-  ].join('\n\n')
+  `From the Ather pane of ${from}: the person is heading off and opened an away window in your session too.\n\n${mandateText(away, tz, pack, base)}`

@@ -31,7 +31,7 @@ import { forBase } from './guards.mjs'
 import { withFolders } from './shell.mjs'
 import { nextGroup, nextSort } from './worklist.mjs'
 import { LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, mergeRow, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
-import { awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
+import { awayPaneRows, awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
 import { NO_PLACE, appSessionOf, appTool, createOutbox, guessPlace, guessedSession, isSentReply, placeOf, routedText, toldText } from './handoff.mjs'
 
@@ -43,6 +43,8 @@ import { NO_PLACE, appSessionOf, appTool, createOutbox, guessPlace, guessedSessi
 /** @typedef {import('./home.mjs').Work} Work */
 
 const PANE_ID = 'ather'
+// The pane's rows when it opens (Heading off? asks for more with a long list: modes.mjs awayPaneRows).
+const PANE_ROWS = 22
 // The band's words when it has nothing else to say.
 const NAME = '◆ Ather Automata'
 // Queued work goes out after the command hook returns: a hook holds the turn,
@@ -562,7 +564,7 @@ async function openConsole($, folder) {
   cwd = folder
   for (const command of [
     { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
-    { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [goal] | stop' },
+    { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [all | in <session>, <session> [only]:] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
     await $.command.register(command).catch(error => $.ui.log(`Ather console: /${command.name} not registered: ${String(error)}`, { to: 'debug' }))
@@ -1455,9 +1457,10 @@ async function readAwaySessions($) {
 }
 
 // Heading off for several sessions (A2): a window in each one ticked, of the same length and goal, under one group id.
-// This session's opens as before. Another's is planned, its mandate delivered as Needs you delivers (deliverTo), and
-// opened only once delivered: one the mandate cannot reach is named, and keeps no window. With only this session
-// ticked, as before.
+// This session's opens as before. Another's opens first (so its own status reads it as soon as the mandate lands),
+// then its mandate is delivered as Needs you delivers (deliverTo), then its ledger is started; a session already in a
+// window is named and sent nothing, and one the mandate cannot reach is named and its window closed again, before any
+// ledger was written. With only this session ticked, as before.
 /** @param {Engine} $ @param {import('./away.mjs').WindowChoice} choice @param {readonly import('./away.mjs').AwaySession[]} ticked */
 async function startAwayIn($, choice, ticked) {
   const others = ticked.filter(one => !one.isSelf)
@@ -1469,24 +1472,29 @@ async function startAwayIn($, choice, ticked) {
   const grouped = { ...choice, group: `${state.shortSession(await state.sessionId(files))}-${at.now}` }
   const here = isHere ? await startAway($, grouped) : ''
   const from = await ownName($)
-  // Each other session in turn: '' once its window is open, else why not.
+  // Each other session in turn: opened (its window's end), skipped (already away until …) or missed (why not).
+  /** @type {{ name: string, kind: 'opened' | 'skipped' | 'missed', words: string }[]} */
   const outcomes = await Promise.all(
     others.map(async one => {
       const view = state.asSession(files, one.sessionId, session.root)
-      const planned = await state.planAway(view, grouped, at)
-      const result = await deliverTo($, one, awayMessage({ from, away: planned, tz: at.tz, pack, base: session.base }))
-      $.ui.log(`Ather away: to session ${one.sessionId}: ${result.isDelivered ? 'delivered' : `not delivered (${result.reason})`}`, { to: 'debug' })
-      const missed = !result.isDelivered ? result.reason : (await state.openAway(view, planned, at)) ? '' : 'already in a window'
-      return { name: one.name, until: windowEndText(planned, at.tz), missed }
+      const opened = await state.openAway(view, await state.planAway(view, grouped, at))
+      if (!opened) return { name: one.name, kind: /** @type {const} */ ('skipped'), words: `already away ${windowEndText(await state.readAway(view), at.tz)}` }
+      const result = await deliverTo($, one, awayMessage({ from, away: opened, tz: at.tz, pack, base: session.base }))
+      $.ui.log(`Ather away: to session ${one.sessionId}: ${result.isDelivered ? 'delivered' : `not delivered (${result.reason}), its window closed`}`, { to: 'debug' })
+      if (!result.isDelivered) await state.closeAway(view, opened)
+      else await state.startLedger(view, opened, at)
+      return result.isDelivered ? { name: one.name, kind: /** @type {const} */ ('opened'), words: windowEndText(opened, at.tz) } : { name: one.name, kind: /** @type {const} */ ('missed'), words: result.reason ?? 'not delivered' }
     }),
   )
   stale()
-  const opened = outcomes.filter(one => one.missed === '')
-  const missed = outcomes.filter(one => one.missed !== '')
+  const of = (/** @type {string} */ kind) => outcomes.filter(one => one.kind === kind)
+  const [opened, skipped, missed] = [of('opened'), of('skipped'), of('missed')]
+  const said = (/** @type {typeof outcomes} */ list) => list.map(one => `${one.name} (${one.words})`).join('; ')
   return [
     here,
-    opened.length > 0 ? `Away ${opened[0]?.until} in ${plural(opened.length, 'other session')}: ${opened.map(one => one.name).join(', ')}; "I'm back" in any of them ends them all.` : '',
-    missed.length > 0 ? `Not reached, no window opened: ${missed.map(one => `${one.name} (${one.missed})`).join('; ')}.` : '',
+    opened.length > 0 ? `Away ${opened[0]?.words} in ${plural(opened.length, 'other session')}: ${opened.map(one => one.name).join(', ')}; "I'm back" in any of them ends them all.` : '',
+    skipped.length > 0 ? `Left as they are, nothing sent: ${said(skipped)}.` : '',
+    missed.length > 0 ? `Not reached, no window opened: ${said(missed)}.` : '',
   ].filter(Boolean).join(' ')
 }
 
@@ -1582,8 +1590,9 @@ async function awayCommand($, args) {
   if (away.phase === 'review') return 'The last away window waits for your review: type /ather.'
   const parsed = parseAwayArgs(args, localMinutes(Date.now(), await state.readTz(io($))))
   if (!parsed) return presetQuestion($, args)
-  // "/away 8h all", "/away 8h enemy, playtest" (A4); words that name no session are the goal, as before.
+  // "/away 8h all", "/away 8h in enemy, playtest: goal", "/away 8h @enemy goal" (A4); plain words are this session's goal.
   const picked = parsed.goal ? pickedSessions(parsed.goal, await readAwaySessions($)) : null
+  if (picked && picked.unknown.length > 0) return `No live session here to hand over is named ${picked.unknown.map(name => `"${name}"`).join(', ')}: nothing started. Words after the length that start with "in " or "@" name sessions (☾ lists them; one not ticked by default by its whole title, branch or intent); say a goal that starts so another way.`
   return picked ? startAwayIn($, { ...parsed, goal: picked.goal }, picked.picked) : startAway($, parsed)
 }
 
@@ -1852,7 +1861,9 @@ async function openPane($, mode) {
     awayTicked = new Set(awayList.filter(one => one.isDefault).map(one => one.sessionId))
   }
   paneMode = mode
-  await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: 22 })
+  // Heading off? asks to be as tall as its list (the host gives what the layout spares, and the body scrolls past it),
+  // so every session's row is there to tick without a press that unfolds more.
+  await $.ui.open({ id: PANE_ID, title: 'ATHER AUTOMATA', focus: true, closeOnEscape: true, rows: mode === 'away' ? Math.max(PANE_ROWS, awayPaneRows(awayList)) : PANE_ROWS })
   $.ui.invalidate('ui.render')
   return mode === 'pick' ? 'Everything open: ↑↓ move · Enter choose · Esc close.' : 'Ather: ↑↓ move · Enter choose · Esc close.'
 }

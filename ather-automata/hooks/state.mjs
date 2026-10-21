@@ -852,25 +852,30 @@ export const planAway = async (io, choice, at) => {
   return newWindow({ ...choice, held: choice.held ?? [...(at.pack ?? unreal).held.defaults] }, at.now, ledgerPath, { person: personId(at.me), root: at.root })
 }
 
-// Opens a planned window, unless one is running or waiting for review: its ledger is started, and it holds from now.
-/** @param {Io} io @param {Away} planned @param {WindowAt} at @returns {Promise<Away | null>} */
-export const openAway = (io, planned, at) =>
-  withAway(io, async away => {
-    if (away.phase !== 'off') return { result: null }
-    await io.write(planned.ledgerPath, ledgerWithWindow((await io.read(planned.ledgerPath)) ?? '', planned, at.tz, at.pack ?? unreal, at.base))
-    return { away: planned, result: planned }
-  })
+// Opens a planned window, unless one is running or waiting for review: it holds from now. Its ledger is started apart
+// (startLedger), so a window closed again at once (another session the mandate never reached) leaves no file behind.
+/** @param {Io} io @param {Away} planned @returns {Promise<Away | null>} */
+export const openAway = (io, planned) => withAway(io, async away => (away.phase === 'off' ? { away: planned, result: planned } : { result: null }))
 
-// Opens a window now, unless one is running or waiting for review.
+// An open window's ledger: its section appended to the file, or the file begun.
+/** @param {Io} io @param {Away} away @param {WindowAt} at */
+export const startLedger = (io, away, at) => serial(async () => io.write(away.ledgerPath, ledgerWithWindow((await io.read(away.ledgerPath)) ?? '', away, at.tz, at.pack ?? unreal, at.base)))
+
+// Opens a window now, with its ledger, unless one is running or waiting for review.
 /** @param {Io} io @param {import('./away.mjs').WindowChoice} choice @param {WindowAt} at @returns {Promise<Away | null>} */
-export const startAway = async (io, choice, at) => openAway(io, await planAway(io, choice, at), at)
+export const startAway = async (io, choice, at) => {
+  const opened = await openAway(io, await planAway(io, choice, at))
+  if (opened) await startLedger(io, opened, at)
+  return opened
+}
 
 // Ends a running window; the review waits in "Needs you". Resolves whether it was running.
 /** @param {Io} io */
 export const endAway = io => withAway(io, async away => (away.phase === 'running' ? { away: { ...away, phase: /** @type {const} */ ('review'), endedAt: Date.now() }, result: true } : { result: false }))
 
-/** @param {Io} io */
-export const closeAway = io => withAway(io, async away => (away.phase === 'off' ? { result: false } : { away: { ...offAway(), person: away.person }, result: true }))
+// Closes the window; with `which`, only while it is still that window (opened at the same moment).
+/** @param {Io} io @param {Away} [which] */
+export const closeAway = (io, which) => withAway(io, async away => (away.phase === 'off' || (which && away.startedAt !== which.startedAt) ? { result: false } : { away: { ...offAway(), person: away.person }, result: true }))
 
 // The person is back ("I'm back", /away stop, the review's press): this session's window ends if it runs, then every
 // other running window of its group (A3), each to its review in its own session. An ended window keeps its group.

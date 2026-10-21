@@ -14,7 +14,7 @@ import { FRAME_SCHEME, KINDS, avatarSvg, classifyWorker, crewWords, isLive, prop
 import { adoptWorker, recordEnd, recordHeard, recordSpawn, recordTool, resetWorkers, workerElapsed, workerOf } from '../hooks/workers.mjs'
 import { askingIn, callWhat, callsIn, during, endCall, endLoop, isInFlight, isSilent, linkChild, longShell, markAsking, resetCalls, startCall, waitWords } from '../hooks/inflight.mjs'
 import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
-import { QUIET, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
+import { QUIET, cells, fit, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
 import { awayPickText, awayWindowRows, intentRows } from '../hooks/modes.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
@@ -350,14 +350,14 @@ describe('heading off for several sessions (away-many-sessions)', () => {
   const lane = (sessionId, fields = {}) => ({ sessionId, intent: null, branch: 'feat/x', updatedAt: NOON, lastActiveAt: NOON, ...fields })
   const self = { sessionId: 'me', title: 'Walker topic S2 deep dive', branch: 'feat/walker', intent: 'walker' }
 
-  test('the sync conductor and scheduled tasks are told by their names (A1)', () => {
-    expect(sideKind('♾️S2 sync main')).toBe('sync')
-    expect(sideKind('S2 Sync Main conductor')).toBe('sync')
-    expect(sideKind('sync-main')).toBe('sync')
-    expect(sideKind('Duyệt PR được assign review (2 tiếng/lần)')).toBe('scheduled')
-    expect(sideKind('Hằng ngày: tổng hợp bug')).toBe('scheduled')
-    expect(['daily standup notes', 'every morning: triage', 'Scheduled PR sweep', 'hourly check'].map(sideKind)).toEqual(['scheduled', 'scheduled', 'scheduled', 'scheduled'])
-    expect(['Hệ thống enemy chim mới', 'L_Master_AoBing QA/Playtest', 'Synchronise the anim graph', 'feat/everyday-ui'].map(sideKind)).toEqual(['', '', '', ''])
+  test('the sync conductor and scheduled tasks are told by their names, as composed characters, by whole words (A1)', () => {
+    const daily = '【Hằng ngày 08:30】Nhắc việc bàn giao Đuôi Cửu Vỹ + FluidNinja (hạn 20/10)'
+    // Hai's real titles, the daily reminder in composed and decomposed characters.
+    expect(['♾️S2 sync main', 'Duyệt PR được assign review (4 tiếng/lần)', daily, daily.normalize('NFD'), 'Walker topic S2 deep dive', 'L_Master_AoBing QA/Playtest mode'].map(sideKind)).toEqual(['sync', 'scheduled', 'scheduled', 'scheduled', '', ''])
+    expect(['Sync main conductor', 'sync-main', 'S2 Sync Main'].map(sideKind)).toEqual(['sync', 'sync', 'sync'])
+    expect(['daily standup notes', 'every 2 hours: triage', 'Every morning standup', 'Scheduled PR sweep', 'hourly check', 'Hằng ngày 08:30'.normalize('NFD')].map(sideKind)).toEqual(['scheduled', 'scheduled', 'scheduled', 'scheduled', 'scheduled', 'scheduled'])
+    // Fable's probe: never a word inside another or joined to one, never "every" alone or "nightly".
+    expect(['Hệ thống enemy chim mới', 'Every enemy validation', 'S2 sync với main', 'intent/daily-login-reward', 'feat/everything-open', 'Evening QA', 'Nightly build fix intent', 'hourly-rate calc', 'Synchronise the anim graph'].map(sideKind)).toEqual(['', '', '', '', '', '', '', '', ''])
   })
 
   test('the list: this session first and ticked; then the sessions tracking an intent, most recent first; then the rest; then those already away (A1)', () => {
@@ -383,43 +383,68 @@ describe('heading off for several sessions (away-many-sessions)', () => {
     expect(awaySessions({ ...self, title: '' }, [], NOON, 0)).toEqual([{ sessionId: 'me', appId: '', title: '', branch: 'feat/walker', intent: 'walker', name: 'this session · feat/walker', detail: '', isSelf: true, isDefault: true, awayUntil: '' }])
   })
 
-  test('a row draws its box, its name in its column and what it says beside it', () => {
+  test('a row draws its box, its name in its column (in terminal cells) and what it says beside it', () => {
     const [me, bird, night] = awaySessions(self, [lane('bird', { intent: 'bird', app: { title: 'Hệ thống enemy chim mới' }, lastActiveAt: NOON - 3 * MIN }), lane('night', { window: newWindow({ hours: 24, untilDone: true, goal: '' }, NOON, 'L.md', { person: 'p', root: 'R' }) })], NOON, 420)
     expect(awayPickText(/** @type {any} */ (me), true, 30)).toBe('[x] this session · Walker topic S…')
     expect(awayPickText(/** @type {any} */ (bird), false, 26)).toBe('[ ] Hệ thống enemy chim mới     active 3m ago')
     expect(awayPickText(/** @type {any} */ (night), false, 20)).toBe('    a session on feat/x   away until done (24 hours at most)')
+    // 【 and 】 take two cells each: the name is cut and padded by cells, so the detail stays in its column.
+    const [, daily] = awaySessions(self, [lane('d', { intent: 'd', app: { title: '【Hằng ngày 08:30】Nhắc việc bàn giao' }, lastActiveAt: NOON - 3 * MIN })], NOON, 420)
+    const text = awayPickText(/** @type {any} */ (daily), true, 20)
+    expect(text).toBe('[x] 【Hằng ngày 08:30】…  scheduled')
+    expect(cells(text)).toBe(4 + 20 + 2 + 'scheduled'.length)
   })
 
-  test('/away <length> all, or names: the sessions they pick, and the goal after a colon (A4)', () => {
+  test('a text is measured and cut in terminal cells: wide characters take two, combining marks none', () => {
+    expect(cells('abc')).toBe(3)
+    expect(cells('【Hằng ngày】')).toBe(13)
+    expect(cells('Hằng ngày'.normalize('NFD'))).toBe(9)
+    expect(fit('【Hằng ngày 08:30】Nhắc việc', 12)).toBe('【Hằng ngày…')
+    expect(fit('Hằng ngày'.normalize('NFD'), 5)).toBe('Hằng…'.normalize('NFD'))
+    expect(fit('hello world', 5)).toBe('hell…')
+    expect(fit('abc', 3)).toBe('abc')
+  })
+
+  test('/away <length> names sessions only on purpose: all, in <names> or @names; plain words are this session\'s goal (A4)', () => {
     const list = awaySessions(self, [
       lane('bird', { intent: 'bird', app: { title: 'Hệ thống enemy chim mới' } }),
-      lane('qa', { intent: 'aobing-qa', app: { title: 'L_Master_AoBing QA/Playtest' } }),
-      lane('sync', { intent: 'sync', app: { title: '♾️S2 sync main' } }),
+      lane('qa', { intent: 'aobing-qa', app: { title: 'L_Master_AoBing QA/Playtest mode' }, branch: 'intent/aobing-qa-main-pass' }),
+      lane('sync', { app: { title: '♾️S2 sync main' }, branch: 'main' }),
+      lane('review', { app: { title: 'Duyệt PR được assign review (4 tiếng/lần)' } }),
+      lane('other', { intent: 'test-fix', app: { title: 'Fix the test pool' } }),
       lane('night', { intent: 'night', window: newWindow({ hours: 8, untilDone: false, goal: '' }, NOON, 'L.md', { person: 'p', root: 'R' }) }),
     ], NOON, 0)
-    const ids = (/** @type {ReturnType<typeof pickedSessions>} */ picked) => picked && { ids: picked.picked.map(one => one.sessionId), goal: picked.goal }
-    expect(ids(pickedSessions('all', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: '' })
-    expect(ids(pickedSessions(' ALL : finish the pass', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: 'finish the pass' })
-    expect(ids(pickedSessions('Enemy, playtest', list))).toEqual({ ids: ['bird', 'qa'], goal: '' })
-    // Matched on the branch or the intent too, case-insensitive; a session not ticked by default can be named.
-    expect(ids(pickedSessions('SYNC MAIN', list))).toEqual({ ids: ['sync'], goal: '' })
-    expect(ids(pickedSessions('aobing-qa: playtest notes', list))).toEqual({ ids: ['qa'], goal: 'playtest notes' })
-    // Words that name no session (or a name too short to tell) are the goal, as before; one away is never picked.
-    expect(pickedSessions('fix the pool', list)).toBe(null)
-    expect(pickedSessions('enemy, fix the pool', list)).toBe(null)
-    expect(pickedSessions('qa', list)).toBe(null)
-    expect(pickedSessions('night', list)).toBe(null)
+    const ids = (/** @type {ReturnType<typeof pickedSessions>} */ picked) => picked && { ids: picked.picked.map(one => one.sessionId), goal: picked.goal, unknown: picked.unknown }
+    // Fable's probe: every one of these is plain words, the goal of this session alone (null), never a pick.
+    for (const words of ['sync', 'main', 'review', 'test', 'fix the pool', 'pool', 'walker', 'enemy', 'S2', 'deep dive: finish', 'all, bird', 'bird, all', 'feat', 'all the tests green']) expect(pickedSessions(words, list)).toBe(null)
+    expect(ids(pickedSessions('all', list))).toEqual({ ids: ['me', 'bird', 'qa', 'other'], goal: '', unknown: [] })
+    expect(ids(pickedSessions(' ALL : finish the pass', list))).toEqual({ ids: ['me', 'bird', 'qa', 'other'], goal: 'finish the pass', unknown: [] })
+    // in <names>: this session with them, unless "only"; a goal after a colon.
+    expect(ids(pickedSessions('in enemy, playtest: finish the pass', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: 'finish the pass', unknown: [] })
+    expect(ids(pickedSessions('only in Enemy', list))).toEqual({ ids: ['bird'], goal: '', unknown: [] })
+    expect(ids(pickedSessions('in aobing-qa only: playtest notes', list))).toEqual({ ids: ['qa'], goal: 'playtest notes', unknown: [] })
+    expect(ids(pickedSessions('@enemy @playtest finish the pass', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: 'finish the pass', unknown: [] })
+    expect(ids(pickedSessions('@enemy only: tidy', list))).toEqual({ ids: ['bird'], goal: 'tidy', unknown: [] })
+    expect(ids(pickedSessions('@enemy onlyfix the bug', list))).toEqual({ ids: ['me', 'bird'], goal: 'onlyfix the bug', unknown: [] })
+    expect(ids(pickedSessions('@enemy@playtest go', list))).toEqual({ ids: ['me', 'bird', 'qa'], goal: 'go', unknown: [] })
+    // A session not ticked by default: by its whole title, branch or intent, never a part of one.
+    expect(ids(pickedSessions('in sync', list))).toEqual({ ids: ['me'], goal: '', unknown: ['sync'] })
+    expect(ids(pickedSessions('in main', list))).toEqual({ ids: ['me', 'qa', 'sync'], goal: '', unknown: [] })
+    expect(ids(pickedSessions('only in ♾️S2 sync main', list))).toEqual({ ids: ['sync'], goal: '', unknown: [] })
+    expect(ids(pickedSessions('only in review', list))).toEqual({ ids: [], goal: '', unknown: ['review'] })
+    // A session already away is never picked; a name too short to tell names nothing.
+    expect(ids(pickedSessions('only in night', list))).toEqual({ ids: [], goal: '', unknown: ['night'] })
+    expect(ids(pickedSessions('in qa', list))).toEqual({ ids: ['me'], goal: '', unknown: ['qa'] })
   })
 
-  test('what another session is told: its window is open, the mandate whole, and how to open it should it not show (A2)', () => {
+  test('what another session is told: its window is open and the mandate whole, with no way around it (A2)', () => {
     const away = newWindow({ hours: 8, untilDone: false, goal: 'finish the pass', group: 'g1' }, NOON, 'R/docs/intent/bird/decisions.md', { person: 'tinnguyen', root: 'R' })
     const text = awayMessage({ from: '"Walker topic"', away, tz: 420 })
     expect(text).toMatch(/^From the Ather pane of "Walker topic": the person is heading off and opened an away window in your session too\./)
     expect(text).toContain('AUTONOMY WINDOW (Ather Automata): the user is away until 20:00 local time.')
     expect(text).toContain('R/docs/intent/bird/decisions.md')
     expect(text).toContain('Goal: finish the pass.')
-    expect(text).toContain('open it with the mcp__ather-automata__away tool: action "start", hours 8, goal "finish the pass".')
-    expect(awayMessage({ from: '"x"', away: newWindow({ hours: 24, untilDone: true, goal: '' }, NOON, 'L.md', { person: 'p', root: 'R' }), tz: 0 })).toContain('action "start", untilDone true, goal "".')
+    expect(text).not.toContain('action "start"')
   })
 
   test("windows opened together carry one group id; each is the other session's own (its ledger, its holds), and the person's return in one ends the rest (A2, A3)", async () => {
@@ -434,11 +459,13 @@ describe('heading off for several sessions (away-many-sessions)', () => {
     await state.startAway(io, choice, at)
     const bird = state.asSession(io, 'bird', 'R')
     const planned = await state.planAway(bird, choice, at)
-    // Planned only: nothing stored or written until it is opened.
+    // Planned only: nothing stored or written until it is opened; opened, it holds, and its ledger waits for startLedger.
     expect(store.has('away:bird')).toBe(false)
     expect(planned.ledgerPath).toBe('R/docs/intent/bird/decisions.md')
     expect(files.has(planned.ledgerPath)).toBe(false)
-    expect((await state.openAway(bird, planned, at))?.group).toBe('me-1')
+    expect((await state.openAway(bird, planned))?.group).toBe('me-1')
+    expect(files.has(planned.ledgerPath)).toBe(false)
+    await state.startLedger(bird, planned, at)
     await state.startAway(state.asSession(io, 'qa', 'R'), choice, at)
     await state.startAway(state.asSession(io, 'solo', 'R'), { ...choice, group: undefined }, at)
     expect(/** @type {any} */ (store.get('away:bird')).group).toBe('me-1')
@@ -448,7 +475,9 @@ describe('heading off for several sessions (away-many-sessions)', () => {
     memory.switchSession('bird')
     expect((await state.readAway(io)).phase).toBe('running')
     expect((await state.park(io, 'merge', 'gh pr merge 7', NOON))?.parked.id).toBe('P-1')
-    expect(await state.openAway(io, planned, at)).toBe(null)
+    expect(await state.openAway(io, planned)).toBe(null)
+    // Closing only that window: refused for another one.
+    expect(await state.closeAway(io, { ...planned, startedAt: 1 })).toBe(false)
     memory.switchSession('me')
     // "I'm back" here: this window ends, then the rest of its group; a window outside the group is untouched.
     expect(await state.comeBack(io)).toEqual({ isEnded: true, others: 2 })

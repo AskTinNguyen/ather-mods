@@ -7,7 +7,7 @@
 import { AWAY_PRESETS } from './away.mjs'
 import { changeGlyph } from './changes.mjs'
 import { CREATE_SHOWN } from './home.mjs'
-import { AMBER, LIME, QUIET, choiceRow, fit, label, masthead, section, workGroups } from './rows.mjs'
+import { AMBER, LIME, QUIET, cells, choiceRow, fit, label, masthead, padCells, section, workGroups } from './rows.mjs'
 import { GROUP_LABELS, SORT_LABELS } from './worklist.mjs'
 
 /**
@@ -207,7 +207,7 @@ export const skillsRows = (el, frame, { meta, groups, skills }, on) => {
 /** @param {import('./away.mjs').AwaySession} one @param {boolean} isTicked @param {number} nameCells */
 export const awayPickText = (one, isTicked, nameCells) => {
   const box = one.awayUntil ? '   ' : isTicked ? '[x]' : '[ ]'
-  return one.detail ? `${box} ${fit(one.name, nameCells).padEnd(nameCells)}  ${one.detail}` : `${box} ${fit(one.name, nameCells)}`
+  return one.detail ? `${box} ${padCells(fit(one.name, nameCells), nameCells)}  ${one.detail}` : `${box} ${fit(one.name, nameCells)}`
 }
 
 /**
@@ -227,6 +227,12 @@ export const awayRows = (el, frame, { mandate, sessions, ticked }, on) => [
   backRow(el, frame, 'away-back', on.onBack),
 ]
 
+// The rows Heading off? draws at 72 columns beside its list (its masthead and mandate, Which sessions? and a: all, the
+// three presets with their lines, Back and the foot), and one per session: what it asks the pane for (the e2e checks it).
+const AWAY_FIXED_ROWS = 20
+/** @param {readonly unknown[]} sessions */
+export const awayPaneRows = sessions => AWAY_FIXED_ROWS + sessions.length
+
 // A session's row: a button's margin, the box and its space, the gap before what it says.
 const PICK_MARGIN = 3
 const PICK_BOX = 4
@@ -236,7 +242,7 @@ const PICK_GAP = 2
 /** @param {any} el @param {Frame} frame @param {readonly import('./away.mjs').AwaySession[]} sessions @param {ReadonlySet<string>} ticked @param {{ onTick: (sessionId: string) => Press, onAll: Press, onNone: Press }} on */
 const awayPicks = (el, frame, sessions, ticked, on) => {
   const detailCells = Math.max(0, ...sessions.map(one => one.detail.length))
-  const nameCells = Math.max(8, Math.min(Math.max(...sessions.map(one => one.name.length)), frame.width - PICK_MARGIN - PICK_BOX - PICK_GAP - detailCells))
+  const nameCells = Math.max(8, Math.min(Math.max(...sessions.map(one => cells(one.name))), frame.width - PICK_MARGIN - PICK_BOX - PICK_GAP - detailCells))
   return section(el, 'away-sessions', [
     label(el, 'away-sessions-label', 'Which sessions?', frame.width),
     // A session already away is listed with its end, and is no press.

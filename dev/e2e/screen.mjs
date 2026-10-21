@@ -1,6 +1,8 @@
 // Draws a hooks tree as terminal text, roughly as the terminal surface lays it
 // out, and checks it: one autofocus at most, unique hotkeys, every Button acts,
-// nothing wider than the pane.
+// nothing wider than the pane (in terminal cells: a wide character takes two).
+
+import { cells } from './out/hooks/rows.mjs'
 
 const textOf = node => {
   if (node === null || node === undefined || node === false) return ''
@@ -107,7 +109,7 @@ export const check = (node, width) => {
   if (focus > 1) problems.push(`${focus} elements autofocus (first wins; the rest are noise)`)
   const lines = draw(node, width)
   lines.forEach((line, index) => {
-    if (line.length > width) problems.push(`line ${index + 1} is ${line.length} wide (> ${width}): ${line.slice(0, 50)}…`)
+    if (cells(line) > width) problems.push(`line ${index + 1} is ${cells(line)} wide (> ${width}): ${line.slice(0, 50)}…`)
   })
   layouts.push({ width, lines })
   return { lines, problems }

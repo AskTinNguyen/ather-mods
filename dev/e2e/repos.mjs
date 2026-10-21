@@ -1607,7 +1607,8 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
     store: shared,
     tools: {
       [GET]: () => ({ text: JSON.stringify({ sessionId: 'local_me', title: 'Walker topic S2 deep dive' }) }),
-      [SEND]: input => (sent.push(input), { text: input.session_id === 'local_form' ? 'It cannot deliver into a session an orchestrator dispatched. (delivery: refused; message_id: m9)' : `Queued behind its current work. (delivery: queued; message_id: m${sent.length})` }),
+      // Each send records the target's window as it stood when the mandate went: open first, then sent (D3).
+      [SEND]: input => (sent.push({ ...input, phase: shared.get(`away:${sessions.find(one => one.app === input.session_id)?.sid}`)?.phase }), { text: input.session_id === 'local_form' ? 'It cannot deliver into a session an orchestrator dispatched. (delivery: refused; message_id: m9)' : `Queued behind its current work. (delivery: queued; message_id: m${sent.length})` }),
     },
   })
   engine.setSurfaces(['terminal'])
@@ -1623,6 +1624,8 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
     if (OUT) writeDrawn(OUT, 'away-many', await pane(width), width)
   }
   const at110 = drawn[110].lines.join('\n')
+  const asked = engine.record.opens.at(-1)?.rows ?? 0
+  expect('A1: the pane asks to be as tall as the dialog it draws, every session\'s row included, at 72 and 110 columns', asked >= drawn[72].lines.length && asked >= drawn[110].lines.length, [asked, drawn[72].lines.length, drawn[110].lines.length])
   expect('A1: Heading off? lists the sessions under "Which sessions?", in the sessions\' words, and fits 72 and 110 columns', /W H I C H   S E S S I O N S \?/.test(at110) && /The sessions keep working/.test(at110) && drawn[72].problems.length === 0 && drawn[110].problems.length === 0, [drawn[72].problems, drawn[110].problems, drawn[72].lines])
   const names = ['this session · Walker topic S2 deep dive', 'Hệ thống enemy chim mới', 'L_Master_AoBing QA/Playtest', 'Enhance Form material reveal', '♾️S2 sync main', 'Night shift']
   const rows = drawn[110].lines.filter(line => names.some(name => line.includes(name)))
@@ -1640,6 +1643,10 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   const toggled = check(await pane(110), 110).lines.filter(line => /^\s*\[[x ]\]/.test(line))
   expect('A1: n ticks none, a ticks every session not already away, a press on a row toggles it', none.every(line => line.trimStart().startsWith('[ ]')) && all.length === 5 && all.every(line => line.trimStart().startsWith('[x]')) && toggled[4]?.trimStart().startsWith('[ ]') && toggled.slice(0, 4).every(line => line.trimStart().startsWith('[x]')), [none, all, toggled])
 
+  // The conductor ticked again, and in a window of its own before the press: left as it is, nothing sent (D2).
+  byKey(await pane(110), 'away-session-4')?.props.onPress()
+  await engines['harness-session-0063'].modelTool({ tool: 'mcp__ather-automata__away', action: 'start', hours: 1, goal: 'sync' })
+  const syncOwn = shared.get('away:harness-session-0063')
   // 8 hours: a window in this session and in each other ticked one the mandate reaches.
   byKey(await pane(110), 'away-o')?.props.onPress()
   await until(() => engine.record.toasts.some(text => /Not reached/.test(text)), 10000)
@@ -1652,9 +1659,11 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   expect('A2: each reached session has its own window: the same length and group, its own ledger (its intent\'s decisions.md)', [bird, qa].every(one => one?.phase === 'running' && one.group === mine.group && one.wakeAt - one.startedAt === mine.wakeAt - mine.startedAt) && bird.ledgerPath === join(s2, 'docs/intent/bird/decisions.md') && qa.ledgerPath === join(s2, 'docs/intent/aobing-qa/decisions.md') && fs.existsSync(bird.ledgerPath), [bird, qa])
   const toBird = sent.find(one => one.session_id === 'local_bird')
   expect('A2: the mandate it read names its own ledger', toBird?.message.includes(bird.ledgerPath), toBird?.message)
-  expect('A2: the session the app refused keeps no window, the unticked conductor none, the one away its own', window('harness-session-0062') === undefined && window('harness-session-0063') === undefined && window('harness-session-0064')?.phase === 'running' && window('harness-session-0064').group === undefined, [window('harness-session-0062'), window('harness-session-0064')])
+  expect('A2: each window was open before its mandate went, and the mandate offers no way to open one itself (D3)', sent.every(one => one.phase === 'running' && !/action "start"/.test(one.message)), sent.map(one => [one.session_id, one.phase]))
+  expect('A2: the session the app refused has its window closed again, and no ledger was written for it; the one away keeps its own', window('harness-session-0062') === undefined && !fs.existsSync(join(s2, 'docs/intent/form/decisions.md')) && window('harness-session-0064')?.phase === 'running' && window('harness-session-0064').group === undefined, [window('harness-session-0062'), window('harness-session-0064')])
+  expect('A2: a ticked session already in a window by the press is sent nothing and keeps its window (D2)', sent.every(one => one.session_id !== 'local_sync') && JSON.stringify(window('harness-session-0063')) === JSON.stringify(syncOwn), [sent.map(one => one.session_id), window('harness-session-0063')])
   const said = engine.record.toasts.find(text => /Not reached/.test(text)) ?? ''
-  expect('A2: the result line names where it opened and the session it could not reach, with the app\'s words', /in 2 other sessions: /.test(said) && said.includes('Hệ thống enemy chim mới') && said.includes('L_Master_AoBing QA/Playtest') && /Not reached, no window opened: Enhance Form material reveal \(It cannot deliver into a session an orchestrator dispatched\./.test(said), said)
+  expect('A2: the result line names where it opened and the session it could not reach, with the app\'s words', /in 2 other sessions: /.test(said) && said.includes('Hệ thống enemy chim mới') && said.includes('L_Master_AoBing QA/Playtest') && /Left as they are, nothing sent: ♾️S2 sync main \(already away until \d\d:\d\d\)\./.test(said) && /Not reached, no window opened: Enhance Form material reveal \(It cannot deliver into a session an orchestrator dispatched\./.test(said), said)
   // The reached session's own hooks hold its merge; the unreached one's do not.
   const held = await bash(engines['harness-session-0060'], 'gh pr merge 12 --squash')
   expect('A2: a merge in a reached session is held by its own window and parked there', held.deny !== undefined && window('harness-session-0060').parked.at(-1)?.command === 'gh pr merge 12 --squash', [held.deny, window('harness-session-0060').parked])
@@ -1663,15 +1672,16 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
 
   // /away stop in another session of the group: every window of the group ends, each to its review; the other stays.
   const stopped = String((await engines['harness-session-0061'].command('away', 'stop'))?.text ?? '')
-  expect('A3: /away stop in another session of the group ends every window of the group, each to its review', /Ended in 2 other sessions of its group too/.test(stopped) && [sid, 'harness-session-0060', 'harness-session-0061'].every(id => window(id)?.phase === 'review') && window('harness-session-0064')?.phase === 'running', [stopped, [sid, 'harness-session-0060', 'harness-session-0061', 'harness-session-0064'].map(id => window(id)?.phase)])
+  expect('A3: /away stop in another session of the group ends every window of the group, each to its review', /Ended in 2 other sessions of its group too/.test(stopped) && [sid, 'harness-session-0060', 'harness-session-0061'].every(id => window(id)?.phase === 'review') && ['harness-session-0063', 'harness-session-0064'].every(id => window(id)?.phase === 'running'), [stopped, [sid, 'harness-session-0060', 'harness-session-0061', 'harness-session-0063', 'harness-session-0064'].map(id => window(id)?.phase)])
   expect('A3: the held merge waits in that session\'s review', window('harness-session-0060').parked.length === 1, window('harness-session-0060').parked)
   expect('no hook threw', [engine, ...Object.values(engines)].every(one => one.record.hookErrors.length === 0), [engine, ...Object.values(engines)].map(one => one.record.hookErrors))
   for (const one of [engine, ...Object.values(engines)]) await one.end('other')
 }
 
 {
-  // The terminal: /away <length> <name> opens windows in the sessions named, /away <length> all in every session ticked
-  // by default, through the engine's send by CLI id; "I'm back" in this session ends the group (away-many-sessions A3, A4).
+  // The terminal: /away <length> in <name> only opens windows in the sessions named, /away <length> all in every session
+  // ticked by default, through the engine's send by CLI id; plain words are this session's goal, whatever they match;
+  // "I'm back" in this session ends the group (away-many-sessions A3, A4).
   const { s2 } = makeWorkspace()
   for (const slug of ['bird', 'night-qa']) writeIntent(s2, slug)
   const shared = new Map()
@@ -1685,14 +1695,16 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   engine.setSurfaces(['terminal'])
   await engine.timers()
   const window = id => shared.get(`away:${id}`)
-  const named = String((await engine.command('away', '4h night: finish the pass'))?.text ?? '')
-  expect('A4: /away 4h night: … opens a window only in the session named (by its intent), with the goal after the colon', window('harness-session-0071')?.phase === 'running' && window('harness-session-0071').goal === 'finish the pass' && window('harness-session-0070') === undefined && window(sid) === undefined && engine.record.sends.length === 1 && JSON.stringify(engine.record.sends[0].to) === JSON.stringify({ sessionId: 'harness-session-0071' }) && /in 1 other session: a session on feat\/x/.test(named), [named, engine.record.sends.map(one => one.to)])
-  const goal = String((await engine.command('away', '2h fix the pool'))?.text ?? '')
-  expect('A4: words that name no session are the goal of this session alone, as before', window(sid)?.phase === 'running' && window(sid).goal === 'fix the pool' && window(sid).group === undefined && engine.record.sends.length === 1, [goal, window(sid)])
+  const named = String((await engine.command('away', '4h in night only: finish the pass'))?.text ?? '')
+  expect('A4: /away 4h in night only: … opens a window only in the session named (by its intent), with the goal after the colon', window('harness-session-0071')?.phase === 'running' && window('harness-session-0071').goal === 'finish the pass' && window('harness-session-0070') === undefined && window(sid) === undefined && engine.record.sends.length === 1 && JSON.stringify(engine.record.sends[0].to) === JSON.stringify({ sessionId: 'harness-session-0071' }) && /in 1 other session: a session on feat\/x/.test(named), [named, engine.record.sends.map(one => one.to)])
+  const goal = String((await engine.command('away', '2h bird'))?.text ?? '')
+  expect('A4: plain words are the goal of this session alone, even one that is another session\'s intent', window(sid)?.phase === 'running' && window(sid).goal === 'bird' && window(sid).group === undefined && window('harness-session-0070') === undefined && engine.record.sends.length === 1, [goal, window(sid)])
   await engine.command('away', 'stop')
   await engine.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
   await night.modelTool({ tool: 'mcp__ather-automata__away', action: 'end' })
   await night.modelTool({ tool: 'mcp__ather-automata__away', action: 'close' })
+  const nobody = String((await engine.command('away', '4h in nobody: tidy'))?.text ?? '')
+  expect('A4: a name that names no live session starts nothing and says so', /No live session here to hand over is named "nobody": nothing started/.test(nobody) && window(sid) === undefined && engine.record.sends.length === 1, [nobody, window(sid)])
   const all = String((await engine.command('away', '4h all'))?.text ?? '')
   const group = window(sid)?.group
   expect('A4: /away 4h all opens a window in this session and every session ticked by default, sent by CLI id, under one group', Boolean(group) && ['harness-session-0070', 'harness-session-0071'].every(id => window(id)?.phase === 'running' && window(id).group === group) && engine.record.sends.slice(1).map(one => one.to.sessionId).sort().join(',') === 'harness-session-0070,harness-session-0071' && /in 2 other sessions/.test(all), [all, engine.record.sends.slice(1).map(one => one.to)])
