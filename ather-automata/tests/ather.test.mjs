@@ -6,6 +6,7 @@ import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, 
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, SIMPLE_SHOWS, VIEW_LABELS, isShownIn, otherView, paneViewOf, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle, waitingCalls } from '../hooks/model.mjs'
+import { NO_PLACE } from '../hooks/handoff.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
 import { checkoutNames, checkoutOf, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
@@ -18,7 +19,7 @@ import { awayWindowRows, intentRows } from '../hooks/modes.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
-import { editorLockLine, unreal } from '../hooks/packs/unreal.mjs'
+import { editorLockLine, readShell, unreal } from '../hooks/packs/unreal.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncError, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
@@ -219,6 +220,15 @@ describe('guards and evidence', () => {
     expect(isEditorBuild('Build.bat ShaderCompileWorker Win64 Development')).toBe(false)
     expect(isEditorBuild('Build.bat S2Editor Win64 Development')).toBe(true)
     expect(isBuildCommand("node - <<'EOF'\nconsole.log('Build.bat S2Editor | tail')\nEOF")).toBe(false)
+  })
+
+  test('a piped build warns that its exit is the filters, but not under pipefail or after an error', () => {
+    const build = 'Build.bat S2Editor Win64 Development'
+    const warns = (command, ran = {}) => readShell(command, 'compiling...', ran).context.length
+    expect(warns(`${build} | tail -5`)).toBe(1)
+    expect(warns(`set -o pipefail; ${build} | tail -5`)).toBe(0)
+    expect(warns(`${build} | tail -5`, { isError: true })).toBe(0)
+    expect(warns(build)).toBe(0)
   })
 
   test('tests pass only when tests ran and passed; no tests or a non-zero exit is a fail', () => {
@@ -2216,7 +2226,7 @@ describe('one pane over the workspace', () => {
     expect(pruneDecided([...decided, { id: 'call:login:F-1', answer: 'B', at: now }], id => waiting.has(id), now + 60000).map(one => one.id)).toEqual(['call:login:F-1'])
     // Drawn: both heads and every row, no element key twice.
     const press = () => () => undefined
-    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined }
+    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined, whereOf: () => NO_PLACE }
     const keys = keysOf(needsRows(el, false, { items: model.items, open: model.open, opened: new Set(['web/login', 'login']), width: 100, key: () => undefined, onAct: press, onToggle: press, answer: /** @type {any} */ (answer) }))
     expect(repeated(keys)).toEqual([])
     expect(['calls-login', 'calls-web/login', 'item-call:login:F-1', 'item-call:web/login:F-1'].every(key => keys.includes(key))).toBe(true)

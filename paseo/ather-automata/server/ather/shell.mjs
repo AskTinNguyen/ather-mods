@@ -6,8 +6,9 @@
 /** @param {string} command */
 export const withoutHeredocs = command => command.replace(/<<-?\s*['"]?(\w+)['"]?[\s\S]*?\n\1\b/g, '')
 
+// A filter after a pipe makes the exit the filter's, unless `pipefail` hands the build's back.
 /** @param {string} command */
-export const isPiped = command => /\|\s*(tail|head|grep|Select-String|Select-Object|findstr|tee|sls)\b/i.test(command)
+export const isPiped = command => /\|\s*(tail|head|grep|Select-String|Select-Object|findstr|tee|sls)\b/i.test(command) && !/\bpipefail\b/.test(command)
 
 // The commands of a chain: split only outside quotes, heredoc bodies dropped, quotes removed.
 // `git commit -m "fix; git push origin main"` is one commit command, not a push.

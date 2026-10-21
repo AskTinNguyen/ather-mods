@@ -12,15 +12,12 @@ export const atherSettings = defineSettings({
     // Add Claude ask rules for held commands, so holds work even in bypass mode. The plugin answers
     // those prompts itself: allowed unless an away window holds them.
     holdRules: z.boolean().default(true),
-    // When a turn's tool output shows a false build pass or a merge that lost edits, tell the session at once.
-    followUps: z.boolean().default(true),
   }),
 });
 
 export type AtherSettings = {
   briefGate: "warn" | "enforce" | "off";
   holdRules: boolean;
-  followUps: boolean;
 };
 
-export const DEFAULT_SETTINGS: AtherSettings = { briefGate: "warn", holdRules: true, followUps: true };
+export const DEFAULT_SETTINGS: AtherSettings = { briefGate: "warn", holdRules: true };

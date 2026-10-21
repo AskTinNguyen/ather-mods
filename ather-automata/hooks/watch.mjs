@@ -17,6 +17,7 @@ import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCal
 import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
 import { trackedByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
+import { appSessionOf, appTool } from './handoff.mjs'
 import { withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
 import { IDLE_ENV, PING_PROMPT, initialWarm, stepWarm } from './warm.mjs'
@@ -25,6 +26,8 @@ import * as warmStore from './warm-store.mjs'
 /** @typedef {import('claude-code').EngineInterface} Engine */
 
 const IDLE_MS = 10 * 60 * 1000
+// How often this session asks the desktop app for its own id and title (a title may change at any time).
+const APP_EVERY_MS = 5 * 60 * 1000
 
 let cwd = ''
 let briefGate = 'warn'
@@ -103,6 +106,9 @@ export function register(on, options) {
     lastPersonAt = 0
     sessionStartedAt = Date.now()
     state.markActive()
+    // The app is asked again at the next heartbeat: this session may run in another client than the last.
+    appAskedAt = 0
+    state.setAppSession(null)
     cwd = e.cwd
     try {
       const { me, root, isS2, pack } = await laneOf($)
@@ -222,6 +228,8 @@ export function register(on, options) {
   })
 
   on('tool.call', async ($, e, next) => {
+    // Ather's own calls of the desktop app's tools are neither the session's activity nor its work.
+    if (next.origin.plugin === $.plugin.name && String(e.tool).startsWith('mcp__ccd_')) return next(e)
     const tool = String(e.tool)
     state.markActive()
     // A worker's tool call: what it is doing now, for its avatar and trail.
@@ -332,12 +340,24 @@ async function branchesFor($, command) {
 // checkouts it wrote to before.
 /** @param {Engine} $ @param {boolean} hasEnded */
 async function heartbeat($, hasEnded) {
+  await askApp($)
   const { root, isS2, pack } = await laneOf($)
   const tracked = await state.trackedLane(io($), cwd)
   const other = tracked && !tracked.isOwn ? tracked.lane : null
   if (!isS2 && !other && !state.hasHeartbeats()) return
   const also = other ? { root: other.root, localDir: other.pack.localDir, branch: await readBranch($, other.root).catch(() => '') } : null
   await state.writeHeartbeat(io($), { root: isS2 ? root : '', localDir: pack.localDir, branch: isS2 ? await readBranch($) : '', hasEnded, also })
+}
+
+// This session's id and title in the desktop app, from the app's session tool, for the heartbeats (A1): other
+// sessions name it by its title and send to it by that id. Outside the app the tool is absent and there is none.
+let appAskedAt = 0
+/** @param {Engine} $ */
+async function askApp($) {
+  if (Date.now() - appAskedAt < APP_EVERY_MS) return
+  appAskedAt = Date.now()
+  const asked = await appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__get_session', session_id: 'self' }))
+  state.setAppSession(asked.isDone ? appSessionOf(asked.text) : null)
 }
 
 // A session this checkout can vouch has gone: its heartbeat is here and says ended, or is stale.

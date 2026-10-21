@@ -159,6 +159,7 @@ const said = String((await engine.command('board', 'open'))?.text ?? '')
 const pagePath = /Page written(?: and opened)?: (\S+?)(?: \(|$)/.exec(said)?.[1] ?? ''
 const page = pagePath && fs.existsSync(pagePath) ? fs.readFileSync(pagePath, 'utf8') : ''
 const data = page ? JSON.parse(/<script type="application\/json" id="board-data">([\s\S]*?)<\/script>/.exec(page)?.[1]?.replace(/<\\\//g, '</') ?? '{}') : {}
+expect('A7: /board open asks the system’s handler to open that page, once (the stand-in engine runs no handler)', /^Page written and opened: /.test(said) && engine.record.handlerRuns.length === 1 && engine.record.handlerRuns[0].at(-1).replace(/\\/g, '/') === pagePath, [said, engine.record.handlerRuns])
 expect('A7: /board open writes the page with every collision in its data', (data.records ?? []).filter(one => one.collisions.length > 0).map(one => one.slug).sort().join(' ') === 'dodge-cancel mc-vault nine-tail-dash' && data.overlapNote === '', [said, (data.records ?? []).map(one => [one.slug, one.collisions.length])])
 expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
 
