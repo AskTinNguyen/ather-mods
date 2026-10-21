@@ -6,6 +6,7 @@ import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, 
 import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, SIMPLE_SHOWS, VIEW_LABELS, isShownIn, otherView, paneViewOf, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle, waitingCalls } from '../hooks/model.mjs'
+import { NO_PLACE } from '../hooks/handoff.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, callId, decidePrompt, decidedText, decidedView, findingAnswers, needsView, openedDecision, pruneDecided, ruleAnswers, rulePrompt, withDecided } from '../hooks/decide.mjs'
 import * as state from '../hooks/state.mjs'
 import { checkoutNames, checkoutOf, parseWorktrees, readWorkspace } from '../hooks/workspace.mjs'
@@ -2225,7 +2226,7 @@ describe('one pane over the workspace', () => {
     expect(pruneDecided([...decided, { id: 'call:login:F-1', answer: 'B', at: now }], id => waiting.has(id), now + 60000).map(one => one.id)).toEqual(['call:login:F-1'])
     // Drawn: both heads and every row, no element key twice.
     const press = () => () => undefined
-    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined }
+    const answer = { view: needsView(model.items, model.open, { ...FRESH_ANSWERS }, new Set(['web/login', 'login']), now, true), onOpen: press, onAnswer: press, onExplain: press, onType: press, onTyped: press, onFindings: press, onFold: () => undefined, whereOf: () => NO_PLACE }
     const keys = keysOf(needsRows(el, false, { items: model.items, open: model.open, opened: new Set(['web/login', 'login']), width: 100, key: () => undefined, onAct: press, onToggle: press, answer: /** @type {any} */ (answer) }))
     expect(repeated(keys)).toEqual([])
     expect(['calls-login', 'calls-web/login', 'item-call:login:F-1', 'item-call:web/login:F-1'].every(key => keys.includes(key))).toBe(true)

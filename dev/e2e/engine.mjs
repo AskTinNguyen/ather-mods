@@ -40,6 +40,9 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   let submitFails = false
   // What $.session.send answers: delivered, unless a test says the other session is gone.
   let sendResult = { isDelivered: true }
+  // The desktop app's own tools (mcp__ccd_…), by name: what each answers ({ text, isError }). One a test has not
+  // set is absent, as in the terminal: a call of it rejects, as the engine rejects a tool it has no name for.
+  const appTools = new Map()
   // The model turn running now, and the prompts the plugin submitted while it ran. The engine starts a turn of
   // its own with them once the session is idle, and $.prompt.submit resolves as that turn starts, not when the
   // prompt is queued (seen on Claude Code 2.1.296: two prompts queued behind one turn started one turn together).
@@ -99,6 +102,12 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
       return { result: { questions: input.questions, answers: { [question.question]: answer }, annotations: {} }, text: `answered: ${answer}` }
     }
     record.tools.push(input)
+    if (String(input.tool).startsWith('mcp__ccd_')) {
+      const answer = appTools.get(input.tool)
+      if (!answer) throw new Error(`ather-automata: tool.call: no tool named ${input.tool}`)
+      const { text, isError } = answer(input)
+      return { result: text, text, ...(isError ? { isError: true } : {}) }
+    }
     return { result: 'ok', text: input.__text ?? 'ok', isError: input.__isError ?? undefined }
   }
 
@@ -396,6 +405,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     setSend: value => {
       sendResult = value
     },
+    // The desktop app's tool `name` answers with `answer(input)` ({ text, isError }); undefined: the tool is absent.
+    setAppTool: (name, answer) => (answer ? appTools.set(name, answer) : appTools.delete(name)),
     render: (component, props, requestId, surface = 'terminal') => dispatch('ui.render', { component, surface, requestId, props }, () => null),
     // Whether the plugin's matchers on `event` may select `e`: the instances its $.ui.invalidate draws again.
     selects: (event, e) => hooks.some(one => one.event === event && matches(one.matcher, e)),
