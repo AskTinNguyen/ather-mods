@@ -1,11 +1,11 @@
 // End-to-end run of the Ather Automata hooks module against a sandbox copy of
 // the repo's intents, as the desktop app and the terminal drive it.
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { AFK, createEngine } from './engine.mjs'
 import { check, draw, layouts } from './screen.mjs'
+import { tempDir } from './harness.mjs'
 import { repoId } from './out/hooks/workspace.mjs'
 
 const OUT = process.argv[2]
@@ -28,7 +28,7 @@ const tzFor = hour => {
 
 const sandbox = () => {
   // The folder's real path: a checkout's id is made from it (macOS's temporary folder is behind a link).
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ather-e2e-')))
+  const root = fs.realpathSync(tempDir('ather-e2e-'))
   fs.cpSync(path.join(S2_ROOT, 'docs/intent'), path.join(root, 'docs/intent'), { recursive: true })
   // The skills the quick actions may name.
   fs.mkdirSync(path.join(root, '.agents/skill-library/visuals/show-me'), { recursive: true })
@@ -1359,7 +1359,7 @@ const hasFocus = tree => {
 
 {
   // The header names the session that holds the Editor by its title, read from Claude Code's record of it.
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-home-'))
+  const home = tempDir('ather-home-')
   const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' }, env: { USERPROFILE: home } })
   const records = path.join(home, '.claude/projects', root.replace(/[^a-zA-Z0-9]/g, '-'))
   fs.mkdirSync(records, { recursive: true })
@@ -1562,7 +1562,7 @@ const hasFocus = tree => {
 
 const HANVIET_ROOT = process.env.HANVIET_ROOT
 if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json'))) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-web-'))
+  const root = tempDir('ather-web-')
   for (const name of ['.ather/profile.json', 'package.json', 'AGENTS.md']) {
     fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true })
     fs.copyFileSync(path.join(HANVIET_ROOT, name), path.join(root, name))
@@ -1678,7 +1678,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
     fs.writeFileSync(path.join(root, name), text)
   }
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-bare-'))
+  const root = tempDir('ather-bare-')
   put(root, 'package.json', '{ "name": "new-here", "scripts": { "test": "node --test" } }\n')
   const engine = await start(root)
   const away = await run(engine, [], 'away', 'tonight')
@@ -1711,7 +1711,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
   fs.rmSync(root, { recursive: true, force: true })
 
   // A repository that already runs intents, with its readme and no profile.
-  const partial = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-bare-'))
+  const partial = tempDir('ather-bare-')
   put(partial, 'package.json', '{ "name": "runs-intents" }\n')
   put(partial, 'docs/intent/README.md', '# Intents\n\n## Areas\n\n- `app`: the app.\n')
   const second = await start(partial)
@@ -1723,7 +1723,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
 
 {
   // Every worker Claude Code lists is shown, those another worker started included; clocks are true.
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-home-'))
+  const home = tempDir('ather-home-')
   const { engine, root, done } = await boot({ surfaces: ['terminal'], store: { 'role:tinnguyen': 'engineer' }, env: { USERPROFILE: home } })
   // A worker started before Ather loaded: its start and model come from Claude Code's record of it.
   // The record's folder differs in case from the checkout path, as E--s2- did for E:\S2_.
@@ -1923,7 +1923,7 @@ if (HANVIET_ROOT && fs.existsSync(path.join(HANVIET_ROOT, '.ather/profile.json')
 {
   // A real git checkout behind its origin: main has intents the working tree lacks. Commits are dated
   // days apart; the checkout's folders all carry one pull time.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-git-'))
+  const base = tempDir('ather-git-')
   const git = (cwd, args, env = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', ...env }, stdio: ['ignore', 'pipe', 'pipe'] })
   const at = days => new Date(Date.now() - days * 86400000).toISOString()
   const write = (dir, file, text) => {
