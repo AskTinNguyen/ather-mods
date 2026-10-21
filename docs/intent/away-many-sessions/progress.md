@@ -4,7 +4,7 @@
 - Worker: away-many worker (Claude Opus 5.5 subagent)
 - Current step: none (stopped for the orchestrator)
 - Next step: orchestrator opens the PR (A6) with the body in the worker's scratchpad (`away-many-pr-body.md`); a live look in the desktop app is owed (S4)
-- PR: not opened (the branch is pushed; code commits `f389309`, `1a11046`)
+- PR: #83 (https://github.com/AskTinNguyen/ather-mods/pull/83), opened 2026-10-21 by the orchestrator, merged on Hai's go (2026-10-21: "Tôi không merge được, bạn tự làm tiếp nhé")
 
 ## Acceptance
 
@@ -17,7 +17,7 @@
 | A3 | met | S1, S2, S3. state.mjs `comeBack` (one step: this window ends, then every other running window of its group, each to its review); called by `/away stop` and by the review's press (the pane's "I'm back" ends this window, then presses its review). e2e: `/away stop` in another session of the group ends all three (review), the window outside the group keeps running, the held merge waits in its session's review; terminal: "I'm back" (the pane's end press) ends both others. Unit: `comeBack` → `{ isEnded: true, others: 2 }`, again → `{ false, 0 }`. |
 | A4 | met | S1, S5. away.mjs `pickedSessions` names sessions only on purpose: `all[: goal]` = the default-ticked sessions; `[only] in <name>, <name>[ only][: goal]` or leading `@name`s = this session and those named (`only`: those alone); a default-ticked session is named by a part of its title, branch or intent (3 letters at least), any other only by its whole title, branch or intent; plain words are always this session's goal; a name that matches no live session starts nothing and says so. Unit: Fable's probe (`sync`, `main`, `review`, `test`, `fix the pool`, `pool`, `walker`, `enemy`, `S2`, `deep dive: finish`, `all, bird`, `bird, all`, `feat`: each this session's goal), `in`, `only`, `@`, whole-name rules. e2e (terminal): `/away 4h in night only: finish the pass` opens only the session tracking `night-qa`; `/away 2h bird` is this session's goal alone though `bird` is another session's intent; `/away 4h in nobody: tidy` starts nothing and says so; `/away 4h all` opens this one and both others under one group. |
 | A5 | met | S2, S3, S5. Gates (see S5 for the numbers after the adversary fixes): unit 397/397 (base 390/390), board unit 73/73 (73/73), repos e2e 329/329 (304/304), board e2e 18/18 (18/18), S2 e2e 349/361 with the base's 12 failures (same set); type-check with the engine types clean on base and branch; `claude plugin validate` ✔ and `claude plugin test` 8 pass 0 fail on both; Paseo `shared modules in step` (0.6.6 taken), Ather Board `shared modules in step`. Version 0.6.6 in both manifests and the Paseo package, README Changes line. Thermo-nuclear review: pass 1 block (C1, fixed), pass 2 approve; after the adversary fixes pass 3 approve (its one correctness note, a ledger left by a refused session, fixed), pass 4 approve. |
-| A6 | open | The orchestrator's (PR and merge on Hai's go). |
+| A6 | met | PR #83 opened and merged by the orchestrator on Hai's go (2026-10-21). The live desktop check (D7) is owed to Hai. |
 
 ## Steps
 
