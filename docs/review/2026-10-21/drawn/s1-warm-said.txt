@@ -1,0 +1,3 @@
+{
+  "text": "Keep the cache warm: off. Cap 3 hours, from the plugin settings.\n/warm on keeps it warm while you are idle; /warm 2h sets the cap."
+}

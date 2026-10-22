@@ -1,0 +1,1 @@
+Ather: new here? Type /ather tour for a six-step tour of how this repository works with Claude Code.

@@ -1,0 +1,21 @@
+I N T E N T
+feat-x
+Scale the hero
+
+W H E R E   I T   S T A N D S
+Build · 1/3 met · yours
+Still open: A2 Scale shows in the HUD · A3 Scale survives a reload
+Open decisions: F-1 Should the HUD scale follow the OS text size,… (blocking) · F-2 Red or blue for the scale
+slider?
+From its files; what is met is what progress.md says.
+
+T O D A Y
+Nothing recorded yet today.
+
+N E X T
+n: Start the work
+   A background agent does the work in its own worktree, proved with the repository gates.
+
+s: Stop tracking   0: Back
+
+Enter chooses · Esc closes
