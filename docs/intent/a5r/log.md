@@ -324,3 +324,15 @@ Sent to this session by the "Sessions chờ Editor" session ("A5R insight from H
 > 3. OK
 
 (Answers: 1 = the Away-for-many-sessions mockup is approved (Ather work, its own intent); 2 = F-9, guard a half-done revert or cherry-pick like a merge; 3 = Go to session in Ather 0.6.5 checked.)
+
+## L-44 (2026-10-22) | class: intent | -> rev 40
+
+> Đây là trong trang A5R
+> Phần Editor Queue và Sessions có vẻ trùng chức năng
+> Orchestrate chức năng là gì không rõ
+
+With a screenshot of the A5R panel: EDITOR QUEUE · 4 WAITING (▶ sync-main granted 12:05 · no Editor yet · 81 min left; 1 avian-flight-attitude … wait held; 2 foxform-aobing-fix; 3 elite-hatred02-physicscontrol; 4 enhance-form; 24 h: 25 leases · median wait 38 min · launch 18% · 0 yields · 15 returns · 0 PIE aborts · sync 1.3 h), SESSIONS · 15 OPEN (queue #1–#4 repeated on the right), ORCHESTRATE (11:59 · sync-main (f41dc683) · unsure: "… Nothing is needed yet …").
+
+> Good.
+> Ngoài ra phần Editor, tôi muốn chức năng rearrange và resize.
+> Để có case tôi muốn ưu tiên session nào đó làm việc với editor lâu hơn cho xong. Hoặc đẩy session nào đó ưu tiên trong hàng đợi.
