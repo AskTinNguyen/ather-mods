@@ -7,6 +7,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { lockVersions } from "../../../dev/branch.mjs";
+import { mirror } from "../../../dev/mirror.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const from = path.resolve(here, "../../../ather-automata/hooks");
@@ -18,36 +20,13 @@ const isCheck = process.argv.includes("--check");
 const files = [];
 for (const dir of ["", "packs"]) {
   for (const name of fs.readdirSync(path.join(from, dir))) {
-    if (name.endsWith(".mjs") && !SKIP.has(name)) files.push(path.join(dir, name));
+    if (name.endsWith(".mjs") && !SKIP.has(name)) files.push(path.posix.join(dir, name));
   }
 }
 
-const drift = [];
-for (const file of files) {
-  // Line endings as committed, whatever the checkout's git settings did to them.
-  const text = fs.readFileSync(path.join(from, file), "utf8").replace(/\r\n/g, "\n").replace(/^\/\/ @ts-check\n/, "");
-  const target = path.join(to, file);
-  const current = fs.existsSync(target) ? fs.readFileSync(target, "utf8").replace(/\r\n/g, "\n") : null;
-  if (current === text) continue;
-  if (isCheck) drift.push(file);
-  else {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, text);
-    console.log(`synced ${file}`);
-  }
-}
+// Line endings as committed, whatever the checkout's git settings did to them; only the `// @ts-check` line is dropped.
 // A module removed upstream is removed here too.
-for (const dir of ["", "packs"]) {
-  for (const name of fs.readdirSync(path.join(to, dir))) {
-    const file = path.join(dir, name);
-    if (!name.endsWith(".mjs") || files.includes(file)) continue;
-    if (isCheck) drift.push(`${file} (removed upstream)`);
-    else {
-      fs.rmSync(path.join(to, file));
-      console.log(`removed ${file}`);
-    }
-  }
-}
+const drift = mirror({ from, to, files, isCheck, transform: (text) => text.replace(/^\/\/ @ts-check\n/, "") });
 
 // The plugin's version is the mod's: package.json carries the ather-automata release its copies match
 // (paseo-plugin.json is strict and has no version field).
@@ -55,7 +34,7 @@ const modVersion = JSON.parse(fs.readFileSync(path.resolve(from, "../.claude-plu
 // package.json and its lockfile both carry it; each is written back as npm writes it (two spaces, a final newline).
 const versioned = [
   { name: "package.json", versions: (json) => [json.version], set: (json) => void (json.version = modVersion) },
-  { name: "package-lock.json", versions: (json) => [json.version, json.packages?.[""]?.version], set: (json) => void (json.version = json.packages[""].version = modVersion) },
+  { name: "package-lock.json", versions: lockVersions, set: (json) => void (json.version = json.packages[""].version = modVersion) },
 ];
 for (const { name, versions, set } of versioned) {
   const file = path.resolve(here, "..", name);

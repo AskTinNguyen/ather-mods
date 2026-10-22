@@ -1,0 +1,87 @@
+# What every pull request into main keeps to, checked again whenever its code or labels change (the verdict also when
+# its description does):
+# - release: a changed mod raises its version above main's, everywhere it is written, with a Changes line
+#   (dev/check-release.mjs). The release-later label lets a fix ship in a later release PR. A change to the board's
+#   copies alone is a note: they ship with the board's next release.
+#   A pass is only as fresh as main was when it ran: main requires branches to be up to date before merging, so a
+#   PR whose version another merge took is checked again before it can merge.
+# - size: no source file crosses 1,000 lines, and none over 1,000 grows (dev/check-size.mjs). Only the owner's
+#   size-accepted label lets one PR through.
+# - description: a ready PR that changes code states its thermo-nuclear verdict, and it is not block (dev/check-verdict.mjs).
+name: pr rules
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled, ready_for_review]
+
+concurrency:
+  group: pr-rules-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release guard
+    # A description edit changes nothing these read.
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: A changed mod raises its version
+        env:
+          BASE: origin/${{ github.base_ref }}
+          LATER: ${{ contains(github.event.pull_request.labels.*.name, 'release-later') }}
+        run: |
+          set -- --base "$BASE"
+          if [ "$LATER" = true ]; then set -- "$@" --allow-unreleased; fi
+          node dev/check-release.mjs "$@"
+
+  size:
+    name: size ratchet
+    # A description edit changes nothing these read.
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: No big file grows
+        env:
+          BASE: origin/${{ github.base_ref }}
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'size-accepted') }}
+        run: |
+          if [ "$ACCEPTED" = true ]; then node dev/check-size.mjs --base "$BASE" --allow
+          else node dev/check-size.mjs --base "$BASE"; fi
+
+  description:
+    name: review verdict in the description
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: A code change states its thermo-nuclear verdict, and it is not block
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node dev/check-verdict.mjs --base "origin/${{ github.base_ref }}"
