@@ -197,9 +197,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await w.clock.advance(50) // record titles are looked up off the render
     const tree = await $.ui.render({ ...A5RPANE, surface } as never)
     // Since 0.8 (A26) the overview is a named list (one row per session) instead of one line; the same facts.
-    expect(text(find(tree, 'hai-overview-head'))).toBe('SESSIONS · 3 OPEN')
+    // Rev 40 (A116): B holds the Editor, so it is named in the Editor list (by the app's title), not among the other sessions.
+    expect(text(find(tree, 'hai-overview-head'))).toBe('OTHER SESSIONS · 2')
     expect(text(find(tree, `hai-session-${ME.slice(0, 8)}`))).toBe('★3️⃣ Loco fix' + 'no intent · now')
-    expect(text(find(tree, 'hai-session-bbbbbbbb'))).toBe('●Loco' + 'Editor →15:10 · 1m') // A31: the app's title and activity
+    expect(find(tree, 'hai-session-bbbbbbbb')).toBeUndefined()
+    expect(text(find(tree, 'hai-queue-holder-lane'))).toBe('Loco') // A31's app title names the Editor list's row
     expect(text(find(tree, 'hai-session-dddddddd'))).toBe('●Old' + 'no a5r · 3h')
   })
 }
@@ -210,8 +212,9 @@ test('A16: without the client\'s session list the overview falls back to Ather\'
   machine(w)
   await $.session.start(START)
   const tree = await $.ui.render(A5RPANE as never)
-  expect(text(find(tree, 'hai-overview-head'))).toBe('SESSIONS · 3 OPEN') // A31 fallback: live lanes
-  expect(['bbbbbbbb', 'dddddddd'].map(id8 => Boolean(find(tree, `hai-session-${id8}`)))).toEqual([true, true])
+  expect(text(find(tree, 'hai-overview-head'))).toBe('OTHER SESSIONS · 2') // A31 fallback: live lanes; rev 40 (A116): B holds the Editor (in the Editor list)
+  expect(['bbbbbbbb', 'dddddddd'].map(id8 => Boolean(find(tree, `hai-session-${id8}`)))).toEqual([false, true])
+  expect(text(find(tree, 'hai-queue-holder-lane'))).toBe('sync-lane') // no app list: the lane names it
 })
 
 test('A16: at the cutoff the holder sends each live S2 session without a5r 0.4 one standard message, and its notice names them', opts(), async ($, on) => {

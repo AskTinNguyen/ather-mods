@@ -23,7 +23,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       await w.clock.advance(50)
       const tree = still((await $.ui.render(P))) as Tree
       // One gap between blocks; the band full width with its words on the gutter; every other block on the gutter.
-      expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-overview', 'hai-a5r-rules'])
+      expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-queue', 'hai-overview', 'hai-a5r-rules']) // rev 40 (A116): the Editor list names the holder
       expect(tree.props?.rowGap).toBe(1)
       const band = find(tree, 'hai-a5r-band') as Tree
       expect([band.props?.backgroundColor, band.props?.paddingX, band.props?.width]).toEqual([V2.band, V2.gutter, '100%'])
@@ -42,7 +42,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       expect(mem).toBe('4.2 GB free · below launch gategate 38 GB with PIE, 28 without · PIE needs 5 GB')
       expect(all(find(tree, 'hai-tile-memory-main')).find(n => n.type === 'Text' && text(n) === ' · below launch gate')?.props?.color).toBe(V2.amber)
       // One label style: small, quiet, in capitals.
-      expect(find(tree, 'hai-overview-head')?.children?.[0]).toMatchObject({ type: 'Text', props: { color: V2.label }, children: ['SESSIONS · 1 OPEN'] })
+      expect(find(tree, 'hai-overview-head')?.children?.[0]).toMatchObject({ type: 'Text', props: { color: V2.label }, children: ['OTHER SESSIONS · 1'] }) // rev 40 (A116)
       // Nothing wider than the pane.
       for (const k of keys(tree)) expect([k, minWidth(find(tree, k)) <= columns]).toEqual([k, true])
     })

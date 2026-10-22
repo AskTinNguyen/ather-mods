@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import {
+  NO_MANUAL,
   CUTOFF_MS, DEFAULT_GATES, NOTICES, atNext, blankSession, classify, cleanupPlan, decide, endedSync, freeLine, gatesOf, gitWrites, heldLine, historyBlobs,
   isIntentFile, isLockPath, isSyncCommandOnly, livenessOf, mayAskYield, newSync, noticeIds, parseLockLine, parseMergeTree, parseProbe, presetTimes, queueOf, safeNote, syncPhase,
   writesLock, type GrantInput, type LockLine, type Probe, type SessionFile, type Want,
@@ -30,7 +31,7 @@ const sess = (id8: string, o: Partial<SessionFile> = {}): SessionFile => ({ ...b
 const PROBE = (free: number, procs: Probe['procs'] = []): Probe => ({ freeGb: free, diskGb: 40, procs })
 const held = (id8: string, end = '15:10') => parseLockLine(heldLine({ lane: `lane-${id8}`, sessionName: 'x', id8, since: T(14, 30), pid: null, end: T(Number(end.slice(0, 2)), Number(end.slice(3))), mode: 'interactive', pausable: true, nextSafe: 'after save', note: 'PIE proof' }))
 const FREE: LockLine = parseLockLine('free since 14:20\n')
-const input = (o: Partial<GrantInput>): GrantInput => ({ me8: 'aaaaaaaa', lock: FREE, files: [], lanes: [], now: NOW, sync: null, probe: PROBE(40), gates: { ...DEFAULT_GATES }, ...o })
+const input = (o: Partial<GrantInput>): GrantInput => ({ me8: 'aaaaaaaa', lock: FREE, files: [], lanes: [], now: NOW, sync: null, probe: PROBE(40), gates: { ...DEFAULT_GATES }, manual: NO_MANUAL, ...o })
 
 test('D2 lock lines: the standard\'s fields, and Ather\'s reader still finds holder, until and session', () => {
   const line = heldLine({ lane: '3️⃣ Loco fix', sessionName: 'Loco s3, take 2', id8: 'ab12cd34', since: T(14, 30), pid: 4242, end: T(15, 10), mode: 'interactive', pausable: true, nextSafe: '15:00', note: 'PIE proof until 15:00 · held by nobody; free for Tin; holder: me; session deadbeef' })
@@ -77,10 +78,10 @@ test('the queue: live requests, first requested first served, the sync holder fi
   const b = sess('bbbbbbbb', { want: want({ requestedAt: NOW - 9 * 60_000 }) })
   const gone = sess('cccccccc', { want: want({ requestedAt: NOW - 20 * 60_000 }), heartbeatAt: NOW - 5 * 60_000 })
   const holding = sess('dddddddd', { want: want(), holding: { since: NOW, end: NOW, extended: 0 } })
-  expect(queueOf([a, b, gone, holding], [], NOW, null).map(f => f.id8)).toEqual(['bbbbbbbb', 'aaaaaaaa'])
+  expect(queueOf([a, b, gone, holding], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['bbbbbbbb', 'aaaaaaaa'])
   const sync = newSync(T(15, 0), { session: 'aaaaaaaa-0000', id8: 'aaaaaaaa', lane: 'lane-a' }, 'lane-a', NOW)
-  expect(queueOf([a, b], [], NOW, sync).map(f => f.id8)).toEqual(['aaaaaaaa', 'bbbbbbbb']) // 14:40 is inside 15:00's cutoff
-  expect(queueOf([a, b], [], T(13, 0), sync).map(f => f.id8)).toEqual(['bbbbbbbb', 'aaaaaaaa'])
+  expect(queueOf([a, b], [], NOW, sync, NO_MANUAL).map(f => f.id8)).toEqual(['aaaaaaaa', 'bbbbbbbb']) // 14:40 is inside 15:00's cutoff
+  expect(queueOf([a, b], [], T(13, 0), sync, NO_MANUAL).map(f => f.id8)).toEqual(['bbbbbbbb', 'aaaaaaaa'])
 })
 
 test('the grant: only the head takes a free lock, the slot fits before the cutoff, the launch gate holds', () => {
@@ -108,7 +109,7 @@ test('the grant and the sync: a slot past the cutoff is deferred; inside the cut
   const me = sess('aaaaaaaa', { want: want({ minutes: 60 }) })
   const sync = newSync(T(16, 0), { session: 'bbbbbbbb-0000', id8: 'bbbbbbbb', lane: 'sync-lane' }, 'sync-lane', NOW)
   const late = decide(input({ files: [me], sync }))
-  expect(late).toEqual({ kind: 'wait', code: 'sync', why: 'a 60-min slot would end at 15:40, past the cutoff 15:30 of the sync at 16:00', next: 'ask again for ≤ 50 min, or wait until the sync is done', place: 1 })
+  expect(late).toEqual({ kind: 'wait', code: 'sync', why: 'a 60-min slot would end at 15:40, past the cutoff 15:30 of the sync at 16:00', next: 'ask again for ≤ 50 min, or wait until the sync is done', place: 1, reason: 'would cross the sync cutoff 15:30' }) // rev 40 (A116): its reason in plain words
   expect(decide(input({ files: [sess('aaaaaaaa', { want: want({ minutes: 50 }) })], sync })).kind).toBe('grant')
   const at = (now: number) => sess('aaaaaaaa', { want: want({ minutes: 60 }), heartbeatAt: now }) // a live session refreshes its file each minute
   const inCutoff = decide(input({ files: [at(T(15, 40))], sync, now: T(15, 40) }))

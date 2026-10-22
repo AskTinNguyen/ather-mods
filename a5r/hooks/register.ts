@@ -4,16 +4,16 @@ import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent
 import { bareTitle, hasMark } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, lockProblem, mcpCallKind, parseEditorLock } from './editor.ts'
 import {
-  CUTOFF_MS, DIR, HARD_END_WARN_MS, isHolderInSync, SYNC_BUILD_MIN, SYNC_MERGE_MIN, isSyncHolderGone, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
+  CUTOFF_MS, DIR, HARD_END_WARN_MS, isHolderInSync, SYNC_BUILD_MIN, SYNC_MERGE_MIN, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, LEASE_WARN_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
   movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, passNoLaunch, PASS_NO_LAUNCH_NEXT, PASS_MAX_MIN, type Grant,
   DEFAULT_GATES, isYieldMoment, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesOrder, isOrderPath, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want,
 } from './coord.ts'
 import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
-import { EDITOR_WORK, LEASES_FILE, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
+import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, appendCapped, endLease, holderText, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, idleMsOf, isIdle, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
@@ -22,10 +22,12 @@ import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, drySte
 import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, tellKey, testsOf, type BuildLog, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
 import { buildScriptText, buildStartCommand, isScriptAlive, syncBuildScript } from './buildscript.ts'
 import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG_MS, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, type Miss, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
+import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
+import { editorPanel, listText, needsLook } from './panel.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
-import { PIE_START_GB, acceptCard, ago, compactLine, queueBox, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
+import { PIE_START_GB, acceptCard, ago, compactLine, editorBox, lookBox, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5R off it draws nothing into Ather's
 // pane, status line or toasts and gates nothing (D1). A83: decisions are Ather's; A5R has no decision convention.
@@ -120,6 +122,9 @@ let probe: Probe | null = null
 let probeOk = true // A88 (c, re-review): whether the last reading this session tried answered (or the shared one was fresh)
 let gates: Gates & { source: string } = gatesOf(null, undefined, undefined)
 let syncFile: SyncFile | null = null
+let order: QueueOrder = NO_ORDER // A117: Saved/A5R/queue-order.json as last read (the person's order and minutes)
+let orderRaw: string | null = null
+let picked: string | null = null // A117: the Editor row whose controls this session's panel shows
 let touches: Touch[] = []
 const touched = new Set<string>() // repo-relative paths this session and its workers edited in the shared checkout
 let sharedShellAt: number | null = null // A82 (review 4): a shell command ran inside the shared checkout since this session's last commit there
@@ -833,6 +838,8 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
     $.fs.list(`${dir}/touch`).catch(() => []),
     sharedProbe($, opts, now),
   ])
+  orderRaw = await readJson($, `${dir}/${ORDER_FILE}`)
+  order = parseOrder(orderRaw)
   lockRaw = raw
   lock = parseLockLine(raw)
   const jsons = <T>(entries: { name: string; kind: string }[]) => entries.filter(f => f.kind === 'file' && f.name.endsWith('.json')) as T[]
@@ -1106,15 +1113,8 @@ async function findEngine($: Engine, opts: Opts, c: Checkout): Promise<EngineFin
   return pickEngine(read)
 }
 
-/** A79: the Editor slot the sync takes for its worker (its `what` names it, so the grant, lease and idle notices that are
- * meant for a person's own slot skip it). */
-const SYNC_SLOT = 'Sync main '
-// A session file from before rev 32 marks the worker's slot only by its `what` (`Sync main HH:MM`).
-const isSyncSlot = (w: Want | null | undefined): boolean => Boolean(w?.sync) || Boolean(w?.what.startsWith(SYNC_SLOT))
-/** The worker's own slot, which wakes nobody (A94: the holder's own request for its sync is granted with a notice). */
-const isWorkerSlot = (w: Want | null | undefined): boolean => (w?.sync ? w.sync.role === 'worker' : Boolean(w?.what.startsWith(SYNC_SLOT)))
 /** This session holds the Editor lock for a sync (its slot is a sync's). */
-const holdsSyncLock = (): boolean => holdsLock() && isSyncSlot(me?.want)
+const holdsSyncLock = (): boolean => holdsLock() && holdsSyncSlot(lock, me)
 
 /** A79: the holder's a5r requests the Editor for the sync in code (the editor tool's request: launch false, build per the
  * sync, unattended, up to the hard end) and is granted at once when the lock is free (the sync holder is first in the
@@ -1148,7 +1148,7 @@ async function releaseLock($: Engine, opts: Opts, now: number, why: Pick<LeaseEn
   const note = [pid ? `Editor open PID ${pid}, reusable` : 'Editor closed', dont.length ? `Don't-Save: ${dont.join(', ')}` : '', extra].filter(Boolean).join('; ')
   const line = freeLine({ since: now, by: me?.lane ?? me8, note, background: 'none' })
   if (!(await writeLock($, opts, line))) return { isWritten: false, line }
-  if (me) me = await recordEnd($, opts, { ...me, holding: me.holding && notedHolding(me.holding, now) }, { ...why, at: now, isEditorOpen: pid !== null })
+  if (me) me = await recordEnd($, opts, { ...me, holding: me.holding && notedHolding(heldNow(now), now) }, { ...why, at: now, isEditorOpen: pid !== null })
   await saveMe($, opts, now)
   return { isWritten: true, line }
 }
@@ -1191,7 +1191,7 @@ function releaseWhy(h: Holding, now: number): Pick<LeaseEnd, 'reason' | 'after'>
 async function releaseSyncSlot($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
-  if (holdsLock() && (isSyncSlot(me?.want) || lock.note.startsWith(SYNC_SLOT))) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${clockOf(s.at)} ended`)
+  if (holdsSyncLock()) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${clockOf(s.at)} ended`)
   else if (me && isSyncSlot(me.want)) {
     me = { ...me, want: null }
     await saveMe($, opts, now)
@@ -1205,9 +1205,10 @@ function syncLockRefusal(now: number): string | null {
   return blocked('Editor', `this lock is the Editor lock of the sync at ${clockOf(syncFile.at)}, which is still open (until done, abort or ${clockOf(syncFile.hardEnd)})`, "the sync's Editor lock is given back by the sync tool's done or abort; closing the Editor process is fine, the lock stays this session's")
 }
 
-/** This session's lease as it holds it (its file, else the lock line's times; an end it cannot read is `orEnd`). */
+/** This session's lease as it holds it (its file, else the lock line's times; an end it cannot read is `orEnd`), with the
+ * end its HELD line says once the person resized it (A117): the one accessor every reader and writer of this lease uses. */
 function heldNow(now: number, orEnd = now): Holding {
-  return me?.holding ?? { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? orEnd, extended: 0 }
+  return adoptLockEnd(me?.holding ?? { since: atNearest(lock.since.slice(0, 5), now) ?? now, end: atNearest(lock.end, now) ?? orEnd, extended: 0 }, lock, now)
 }
 
 /** The HELD line of this session's lease rewritten with a new end (the editor tool's extend, and the sync's moved hard end):
@@ -1332,7 +1333,7 @@ async function stageStep($: Engine, opts: Opts, s: SyncFile, now: number): Promi
 function takerOf(now: number): string | null {
   const all = me ? [me, ...peers] : peers
   const alive = all.filter(f => f.id8 === me8 || livenessOf(f.id8, all, lanes, now) === 'alive')
-  const queued = queueOf(alive, lanes, now, syncFile).map(f => f.id8)
+  const queued = queueNow(alive, now).map(f => f.id8)
   return [...queued, ...alive.map(f => f.id8).filter(id => !queued.includes(id)).sort()][0] ?? null
 }
 
@@ -1442,28 +1443,38 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   $.ui.invalidate('ui.render')
 }
 
-const grantInput = (now: number): GrantInput => ({ me8, lock, files: me ? [me, ...peers] : peers, lanes, now, sync: syncFile, probe, gates, conflictHead: conflictHead?.head })
+/** Every session's file as this session last read them (its own first). */
+const filesNow = (): SessionFile[] => (me ? [me, ...peers] : peers)
+/** A117: the person's order as the queue reads it now. */
+const manualNow = (now: number) => manualOf(order, filesNow(), now)
+/** The queue every session computes (A117: in the person's order), over the given session files. */
+const queueNow = (files: readonly SessionFile[], now: number): SessionFile[] => queueOf(files, lanes, now, syncFile, manualNow(now))
+const grantInput = (now: number): GrantInput => ({ me8, lock, files: filesNow(), lanes, now, sync: syncFile, probe, gates, conflictHead: conflictHead?.head, manual: manualNow(now) })
 const holdsLock = (): boolean => lock.id8 === me8 && me8 !== '' && (lock.kind === 'held' || lock.kind === 'handed')
 
-/** The lock written by read-compare-write: only if it still reads as when this session decided, then read back
- * (no compare-and-set exists; one more writer between the two reads loses, and the next tick decides again). */
+/** A shared file written by read-compare-write: only if it still reads `expected` (as when this session decided), then
+ * read back (no compare-and-set exists; one more writer between the two reads loses, and the next decision is made again):
+ * whether it now reads `text`, and what it reads. */
+async function writeChecked($: Engine, path: string, expected: string | null, text: string): Promise<{ isWritten: boolean; raw: string | null }> {
+  const before = await $.fs.read(path).catch(() => null)
+  if (before !== expected) return { isWritten: false, raw: before }
+  await $.fs.write(path, text).catch(err => $.ui.log(`a5r: ${path} not written: ${String(err)}`, { to: 'debug' }))
+  const raw = await $.fs.read(path).catch(() => null)
+  return { isWritten: raw === text, raw }
+}
+
+/** The lock, written by read-compare-write. */
 async function writeLock($: Engine, opts: Opts, line: string): Promise<boolean> {
-  const before = await $.fs.read(lockFile()).catch(() => null)
-  if (before !== lockRaw) {
-    lockRaw = before
-    lock = lockOf(before)
-    return false
-  }
-  await $.fs.write(lockFile(), `${line}\n`)
-  const after = await $.fs.read(lockFile()).catch(() => null)
-  lockRaw = after
-  lock = lockOf(after)
-  return (after ?? '').trim() === line
+  const w = await writeChecked($, lockFile(), lockRaw, `${line}\n`)
+  lockRaw = w.raw
+  lock = lockOf(w.raw)
+  return w.isWritten
 }
 
 /** The holder's side and the waiter's (leaseStep), then this session's wait on record (A112 / A114, waitStep), on every path. */
 async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
   await leaseStep($, opts, now)
+  for (const n of noticesFor(order, me8, now)) push(n) // A117: the person moved this session
   await waitStep($, opts, now)
 }
 
@@ -1472,6 +1483,7 @@ async function leaseStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (!me) return
   if (holdsLock()) {
     const h = notedHolding(heldNow(now, now + 30 * 60_000), now)
+    if (me.holding && h.end !== me.holding.end) push({ id: noticeIds.resized(h.since, h.end), text: NOTICES.resized(h.end, me.holding.end), isActionable: false }) // A117
     me = { ...me, holding: h }
     if (isSyncSlot(me.want)) {
       // A79: the sync's slot ends with its worker (released in code); its hard end has its own notice.
@@ -1642,7 +1654,7 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   }
   await logCandidates($, opts, now).catch(err => $.ui.log(`a5r: orchestrate log: ${String(err)}`, { to: 'debug' }))
   const all = [me, ...peers]
-  const waiting = queueOf(all, lanes, now, syncFile)
+  const waiting = queueNow(all, now)
   // A84: a hand-written line with no end or no holder is held 2 h from when it was written (the lock file's time).
   const writtenAt = lock.isStandard ? null : ((await $.fs.stat(lockFile()).catch(() => null))?.mtimeMs ?? null)
   const input = { lock, files: all, lanes, now, waiting, writtenAt, sync: syncFile }
@@ -1677,7 +1689,7 @@ let nudgeRead = { window: '', seen: new Set<string>() }
 async function nudgeStep($: Engine, opts: Opts, now: number, window: string | null): Promise<void> {
   if (!me) return
   const all = [{ ...me, agents: agentsNow ?? me.agents }, ...peers]
-  if (!window || queueOf(all, lanes, now, syncFile).length > 0) return
+  if (!window || queueNow(all, now).length > 0) return
   if (nudgeRead.window !== window) nudgeRead = { window, seen: new Set() }
   const pool = nudgeCandidates(all, lanes, now).filter(f => !nudgeRead.seen.has(`${f.id8}:${f.lastTurnAt}`))
   const dir = pool.length > 0 ? await recordsDir($, opts) : ''
@@ -1838,34 +1850,6 @@ function currentVerdicts(now: number): VerdictRow[] {
   })
 }
 
-/** A89: a verdict's time, with its date when it is not today. */
-const verdictTime = (at: number, now: number): string => (ymd(at) === ymd(now) ? clockOf(at) : `${ymd(at)} ${clockOf(at)}`)
-
-/** A65 / A89: the Orchestrate card: the verdicts of current incidents, one row each (time, dated when not today; session;
- * verdict), a quiet line of evidence and the recommendation under it; with none current, one quiet line naming the last
- * verdict (the judge is there and nothing is stalled now), rather than leaving the card out, which would hide that. */
-function orchestrateCard(el: { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }, rows: readonly VerdictRow[], now: number, last: VerdictRow | undefined): unknown {
-  const tone = (v: VerdictRow['verdict']) => (v === 'working' || v === 'done' ? STATUS.ok : v === 'stuck-or-crashed' ? STATUS.bad : STATUS.warn)
-  return el.Box({
-    key: 'hai-orchestrate',
-    flexDirection: 'column',
-    children: [
-      el.Box({ key: 'hai-orchestrate-head', children: [el.Text({ color: V2.label, children: 'ORCHESTRATE' })] }),
-      ...(rows.length === 0 && last ? [el.Box({ key: 'hai-orchestrate-none', children: [el.Text({ color: ATHER.quiet, wrap: 'wrap', children: `No stalled holder now · last verdict ${verdictTime(last.at, now)}` })] })] : []),
-      ...rows.slice(0, 3).map((r, i) =>
-        el.Box({
-          key: `hai-orchestrate-${i}`,
-          flexDirection: 'column',
-          children: [
-            el.Text({ wrap: 'wrap', children: [`${verdictTime(r.at, now)} · ${r.lane || r.id8} (${r.id8}) · `, el.Text({ color: tone(r.verdict), bold: true, children: r.verdict }), r.source === 'rule' ? ' (rule)' : ''] }),
-            el.Text({ color: ATHER.quiet, wrap: 'wrap', children: `${r.evidence ? `${r.evidence} → ` : ''}${r.recommendation}` }),
-          ],
-        }),
-      ),
-    ],
-  })
-}
-
 /** A55 / A59: the main loop ran (a prompt, a tool call or its return, a turn's end): its turn signal, and its last turn
  * (written with its file at the next save). */
 async function signalTurn($: Engine): Promise<void> {
@@ -1884,7 +1868,7 @@ async function notePid($: Engine, opts: Opts, fresh: boolean): Promise<void> {
   const pid = editorPid(reading)
   if (pid === null || pid === lock.pid) return
   const w = me.want
-  const h = me.holding
+  const h = heldNow(await $.clock.now())
   const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid, end: h.end, mode: w?.mode ?? (lock.mode === 'unattended' ? 'unattended' : 'interactive'), pausable: w?.pausable ?? lock.pausable, nextSafe: w?.nextSafe ?? 'after save', note: lock.note || w?.what || 'Editor work' })
   await writeLock($, opts, line)
 }
@@ -1895,7 +1879,7 @@ async function takeLock($: Engine, opts: Opts, d: Omit<Grant, 'kind'>, now: numb
   const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: now, pid: d.reuse, end: d.end, mode: w.mode, pausable: w.pausable, nextSafe: w.nextSafe, note: `${w.what}${w.pie ? ' (PIE)' : ''}${w.build ? ' (build)' : ''}` })
   if (!(await writeLock($, opts, line))) return
   // A100: the Editor it reuses (seen at the grant) and the queue behind it; A104: a kept place is spent by this grant.
-  const behind = queueOf([me, ...peers], lanes, now, syncFile).filter(f => f.id8 !== me8).length
+  const behind = queueNow(filesNow(), now).filter(f => f.id8 !== me8).length
   const { return: _spent, ...rest } = me
   const notes = { ...(d.reuse === null ? {} : { reuse: d.reuse, editorAt: now }), ...(behind > 0 ? { queue: behind } : {}) } // a reused Editor: no launch time
   me = { ...rest, holding: { since: now, end: d.end, extended: 0, ...(Object.keys(notes).length ? { notes } : {}), ...(d.pass ? { pass: d.pass } : {}) } }
@@ -1947,7 +1931,7 @@ async function runCleanup($: Engine, opts: Opts, plan: ReturnType<typeof cleanup
 const syncPath = (): string => `${hfDir()}/sync.json`
 const isLive = (id8: string, now: number): boolean => livenessOf(id8, me ? [me, ...peers] : peers, lanes, now) !== 'gone'
 /** The sync's phase for every reader alike, the freeze lease included (D8: hard end, holder gone). */
-const phaseOf = (s: SyncFile | null, now: number): Phase => syncPhase(s, now, isSyncHolderGone(s, me ? [me, ...peers] : peers, lanes, now))
+const phaseOf = (s: SyncFile | null, now: number): Phase => phaseIn({ sync: s, files: filesNow(), lanes, now })
 /** D8: how long a freeze may last past T, from the plugin options. */
 const freezeMinutes = (opts: Opts, build: boolean): number => {
   const v = Number(build ? opts.syncBuildMinutes : opts.syncMergeMinutes)
@@ -2867,6 +2851,7 @@ const A5R_HELP = [
   'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs on exact paths when no other session\'s uncommitted change is in its way (else it names the path and owner); with no paths, `.` or a top folder it is refused with the same command on exact paths; shared config, recursive deletes and removed test assertions run and are recorded for acceptance; a plain force push, push to main, git add . in the shared checkout, --no-verify, GIT_LFS_SKIP_SMUDGE, reset --hard, clean -x and moving the shared tree are refused with what to do instead; git push --force-with-lease to a branch of your own and git add . in a worktree of your own run.',
   'Editor: a build window is at most 45 min while anyone else is queued, longer when nobody is and no sync cutoff falls inside it. Sync main: at the sync time this session\'s a5r takes the Editor lock for the sync, starts the sync worker (it calls no a5r tool), records its SYNC DONE / SYNC ABORT line and releases the lock. Each notice reaches a session once; the cutoff notice only sessions with uncommitted changes in the shared checkout or on the Editor queue.',
   '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
+  `${EDITOR_USAGE}: the person's own order of the Editor queue and time of a turn (the panel's row controls do the same; no tool can)`,
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
 ].join('\n')
@@ -3041,6 +3026,9 @@ async function recordTouch($: Engine, opts: Opts, locs: Located[]): Promise<void
   await $.fs.write(`${hfDir()}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
 }
 
+/** A117: the person's queue order is his alone: a model's edit or command that writes it is refused. */
+const ORDER_REFUSAL = [ORDER_GATE, `Saved/A5R/${ORDER_FILE} is the person's: only his press on the A5R panel or his own /a5r editor command changes it`, 'request the Editor with the editor tool (action request) and wait for your turn'] as const
+
 /** A5R's coordination refusals before a tool runs: the lock is the editor tool's to write; notices are not
  * logged into intent files. */
 async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): Promise<string | null> {
@@ -3048,10 +3036,12 @@ async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): 
   if (EDIT_TOOLS.has(tool)) {
     const parts = await editParts($, tool, input)
     if (parts.some(([path]) => isLockPath(path))) return blocked('Editor lock', 'under A5R the lock is written by the editor tool, never by hand', viaTool)
+    if (parts.some(([path]) => isOrderPath(path))) return blocked(...ORDER_REFUSAL)
     if (parts.some(([path, old, neu]) => isIntentFile(path) && addsNotice(newLines(old, neu))))
       return blocked('Notices', 'a5r notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5R ·" line out; the files under Saved/A5R are the record')
   }
   if (SHELL_TOOLS.has(tool) && writesLock(str(input.command))) return blocked('Editor lock', 'under A5R the lock is written by the editor tool, never by a command', viaTool)
+  if (SHELL_TOOLS.has(tool) && writesOrder(str(input.command))) return blocked(...ORDER_REFUSAL)
   if (SHELL_TOOLS.has(tool) && writesNoticeToIntent(str(input.command)))
     return blocked('Notices', 'a5r notices are not logged in docs/intent files (D6: they would be noise in the intent\'s record)', 'leave the "A5R ·" line out; the files under Saved/A5R are the record')
   return null
@@ -3059,7 +3049,7 @@ async function coordProblem($: Engine, opts: Opts, tool: string, input: Input): 
 
 const placeText = (d: GrantDecision | null): string => {
   if (!d || d.kind === 'none') return 'no request from this session'
-  if (d.kind === 'mine') return `this session holds the Editor${me?.holding ? ` until ${clockOf(me.holding.end)}` : ''}`
+  if (d.kind === 'mine') return `this session holds the Editor${me?.holding ? ` until ${clockOf(heldNow(nowMs).end)}` : ''}`
   if (d.kind === 'wait') return `waiting (${d.place > 1 ? `${d.place}${d.place === 2 ? 'nd' : d.place === 3 ? 'rd' : 'th'} in the queue` : 'next'}): ${d.why} → ${d.next}`
   return d.kind === 'grant' ? `granted until ${clockOf(d.end)}` : 'recovering a stale lease'
 }
@@ -3086,7 +3076,7 @@ function wantFrom(e: Input, now: number): Want {
 function buildWindowProblem(want: Want, now: number): string | null {
   if (!want.build || want.minutes <= BUILD_WINDOW_MIN) return null
   if (isHolderInSync(syncFile, me8, phaseOf(syncFile, now))) return null // A94: the holder's build for its sync is not capped
-  const others = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile).filter(f => f.id8 !== me8)
+  const others = queueNow(filesNow(), now).filter(f => f.id8 !== me8)
   if (others.length > 0)
     return blocked('Editor', `${others.length} session${others.length === 1 ? ' is' : 's are'} queued for the Editor (${others.map(f => f.lane).join(', ')}), so a build window is at most ${BUILD_WINDOW_MIN} min (S2 standard); ${want.minutes} asked`, `batch the code changes into one window of ≤ ${BUILD_WINDOW_MIN} min and ask again`)
   const phase = phaseOf(syncFile, now)
@@ -3148,7 +3138,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     const answer = await editorSerial(async (): Promise<string> => {
       await editorPass($, opts, now)
       if (!me) return 'no session file'
-      if (holdsLock()) return tail(`this session already holds the Editor until ${me.holding ? clockOf(me.holding.end) : lock.end} → use it; extend if you need more`)
+      if (holdsLock()) return tail(`this session already holds the Editor until ${me.holding ? clockOf(heldNow(now).end) : lock.end} → use it; extend if you need more`)
       // A94: the holder's own request while its sync is open is the sync's slot (released with the sync).
       const forSync = syncFile && isHolderInSync(syncFile, me8, phaseOf(syncFile, now)) ? syncFile : null
       const want: Want = { ...wantFrom(e, now), ...(forSync ? { sync: { at: forSync.at, role: 'holder' as const } } : {}) }
@@ -3191,7 +3181,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     if (refusal) return refusal
     const h = heldNow(now)
     // A68: past its end a lease may still be extended while nobody waits; with someone waiting it may not.
-    const queue = queueOf([me, ...peers], lanes, now, syncFile)
+    const queue = queueNow(filesNow(), now)
     const queued = queue.length
     if (now >= h.end && queued > 0) return blocked('Editor', `the lease ended at ${clockOf(h.end)} and ${queued} session${queued === 1 ? '' : 's'} wait${queued === 1 ? 's' : ''}`, 'release now and ask again for the rest')
     const add = Math.max(5, Math.min(120, Math.round(Number(e.minutes) || 15)))
@@ -3199,8 +3189,8 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     // A113: a slot that went before a head waiting for memory stays within 30 min in all while that head is queued.
     if (h.pass && !passEndOk(h.pass, h.since, end, [me, ...peers])) return blocked('Editor', `this slot went before ${laneOf(h.pass)}, which waits for memory, so it is at most ${PASS_MAX_MIN} min in all; extended to ${clockOf(end)} it would be ${Math.round((end - h.since) / 60_000)} min`, `finish by ${clockOf(h.since + PASS_MAX_MIN * 60_000)}, release, and ask again for the rest`)
     const phase = phaseOf(syncFile, now)
-    if (syncFile && phase === 'planned' && end > syncFile.at - 30 * 60_000) return blocked('Editor', `the lease would end at ${clockOf(end)}, past the sync cutoff ${clockOf(syncFile.at - 30 * 60_000)}`, 'finish by the cutoff, or ask after the sync is done')
-    if (isSyncClaim(syncFile, me8, phase)) return blocked('Editor', `the sync at ${clockOf(syncFile.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, `release by ${clockOf(syncFile.at - 10 * 60_000)}`)
+    const limit = syncLimit(syncFile, phase, me8, end)
+    if (limit) return blocked('Editor', limit.why, limit.kind === 'cutoff' ? 'finish by the cutoff, or ask after the sync is done' : `release by ${clockOf(limit.releaseBy)}`)
     // A81 (review 3): the build window's cap counts the whole lease, an extension included.
     const total = Math.round((end - h.since) / 60_000)
     const isBuild = isBuildLease(lock, me)
@@ -3313,6 +3303,56 @@ function syncData(now: number): SyncData {
 
 type ButtonEl = { Button: (p: Record<string, unknown>) => unknown }
 
+/** A31 / A116: what matches the sessions to the app's own list (their titles name the Editor list's rows). */
+const appNow = (now: number, id8 = me8): AppFacts => ({ me8: id8, meTitle: me?.title ?? '', files: filesNow(), clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, names: sessionNames, now })
+/** A116: the Editor list and the other sessions (panel.ts), from the queue every session computes and the app's titles. */
+const editorNow = (now: number, id8 = me8) => editorPanel({ grant: { ...grantInput(now), me8: id8 }, app: appNow(now, id8), phase: phaseOf(syncFile, now), summary: leaseSummary(leaseLog, now) })
+
+/** A117: one change of the person's to the Editor queue (a press on the panel, or his own /a5r editor command), made by
+ * this session's A5R wherever he pressed: read fresh, decided by order.ts, the holder's HELD line rewritten for a resize,
+ * queue-order.json written by read-compare-write, logged (rule=manual); the sessions it moved tell themselves. */
+async function orderAction($: Engine, opts: Opts, a: OrderAction, via: string): Promise<string> {
+  const gate = ORDER_GATE
+  if (!(await readA5R($))) return blocked(gate, 'A5R is off', 'turn it on with /a5r on')
+  if (!(await isCheckoutHere($))) return noCheckout(gate)
+  await restoreMe($, opts)
+  const now = await $.clock.now()
+  return editorSerial(async () => {
+    await readWorld($, opts)
+    const r = applyOrder(grantInput(now), order, a, { by: `the person (${via} in ${me?.lane ?? me8})`, titleOf: appTitleOf(appNow(now)) })
+    if ('refusal' in r) return r.refusal
+    if (!(r.kind === 'resize' ? await writeLock($, opts, r.line) : await writeOrder($, opts, r.order))) return blocked(gate, `${r.kind === 'resize' ? 'the lock' : 'the queue order'} changed at the same moment (another press, or the holder's own write)`, 'look at the list again and press once more')
+    await orchestrateLog($, opts, { at: now, rule: 'manual', lane: me?.lane ?? '', id8: me8, procs: [], liveness: 'alive', lastTurnAt: me?.lastTurnAt ?? null, agents: agentsNow, build: false, acted: true, note: r.kind === 'order' ? `${r.text}; moved ${r.moved.join(',') || 'none'}` : r.text }).catch(() => undefined)
+    return noticeText(gate, r.text, r.kind === 'order' ? 'every session computes the queue this way from now; the sessions it moved are told' : 'the holder\'s A5R takes the new end at its next minute and is told')
+  })
+}
+
+/** A117: queue-order.json, written by read-compare-write against the copy this press read. */
+async function writeOrder($: Engine, opts: Opts, o: QueueOrder): Promise<boolean> {
+  const w = await writeChecked($, `${hfDir()}/${ORDER_FILE}`, orderRaw, JSON.stringify(o))
+  orderRaw = w.raw
+  order = parseOrder(w.raw)
+  return w.isWritten
+}
+
+/** A panel press's answer: its text as a toast, then a tick so every block shows the change. */
+async function answerPress($: Engine, opts: Opts, text: string): Promise<void> {
+  $.ui.toast(text.length > 200 ? `${text.slice(0, 197)}…` : text, { timeoutMs: 8_000 })
+  await runTick($, opts)
+}
+
+/** A117: `/a5r editor …`: the list, or the person's own change (never a plugin's, a peer's or a schedule's run). */
+async function editorCommand($: Engine, opts: Opts, args: string, origin: { kind: string } | undefined): Promise<string> {
+  const c = parseEditorCommand(args)
+  if ('usage' in c) return c.usage
+  if (c.kind === 'show') {
+    await runTick($, opts)
+    return listText(editorNow(await $.clock.now()).list, EDITOR_USAGE)
+  }
+  if (!isPersonOrigin(origin)) return blocked(ORDER_GATE, `only the person changes the Editor queue, and this command came from ${origin?.kind ?? 'elsewhere'}`, 'request the Editor with the editor tool (action request) and wait for your turn')
+  return orderAction($, opts, c, 'command')
+}
+
 /** D5 / A25: `/a5r gate <pie> <nopie>` sets the launch gate for every session (the plugin store, as the panel's
  * ±1 GB did before 0.8); `/a5r gate reset` goes back to the plugin options. */
 async function gateCommand($: Engine, opts: Opts, args: string): Promise<string> {
@@ -3340,9 +3380,7 @@ function editorAction($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolean): 
     plain: isDesktop ? undefined : true,
     onPress: () =>
       void (async () => {
-        const text = await editorTool($, opts, { action: 'release', dont_save: [] } as unknown as Input)
-        $.ui.toast(text.length > 200 ? `${text.slice(0, 197)}…` : text, { timeoutMs: 8_000 })
-        await runTick($, opts)
+        await answerPress($, opts, await editorTool($, opts, { action: 'release', dont_save: [] } as unknown as Input))
       })(),
   })
 }
@@ -3356,9 +3394,7 @@ function syncActionButton($: Engine, opts: Opts, el: ButtonEl, isDesktop: boolea
   const phase = phaseOf(s, now)
   const run = (action: string, a: { at?: string; note?: string; build?: boolean }) =>
     (async () => {
-      const text = await syncAction($, opts, action, a)
-      $.ui.toast(text.length > 200 ? `${text.slice(0, 197)}…` : text, { timeoutMs: 8_000 })
-      await runTick($, opts)
+      await answerPress($, opts, await syncAction($, opts, action, a))
     })()
   const refresh = async () => {
     syncAt = 0
@@ -3577,7 +3613,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   scheduleReads($, opts, now)
   if (isS2) {
     const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
-    const waiting = queueOf(me ? [me, ...peers] : peers, lanes, now, syncFile).length
+    const waiting = queueNow(filesNow(), now).length
     const plan = syncData(now)
     const tiles = [
       editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
@@ -3606,14 +3642,11 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
       t.icon = icon(el, name, color, motionFor(`pane-${t.key}`, `${t.value}|${color}`, color, now, t.key === 'main' && plan.isRunning, opts), isDesktop)
     }
     kids.push(tilesRow(el, tiles, isDesktop, PANE_INK()))
-    // A105: the Editor queue (the holder and each waiting session) with A100's 24-hour summary, while anyone waits or a
-    // lease ended in the last 24 h.
-    const queue = queueView({ ...grantInput(now), me8: id8 })
-    const leases = leaseSummary(leaseLog, now)
-    if (queue.rows.length > 0 || leases.leases > 0) kids.push(queueBox(el, queue, leases.leases > 0 ? summaryLine(leases) : '', PANE_INK()))
-    // A26: the sessions on this machine as a short named list, one line each.
-    const view = sessionsView({ me8: id8, meTitle: me?.title ?? '', files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now, phase: phaseOf(syncFile, now), names: sessionNames })
-    kids.push(sessionsBox(el, view, isDesktop, PANE_INK()))
+    // A116: one Editor list (the holder, the queue in order, the day's line) while anyone holds or waits or a lease ended in
+    // the last 24 h; A117: a row's mark selects it and shows the person's controls; then the other sessions (A26).
+    const { list, others } = editorNow(now, id8)
+    if (list.rows.length > 0 || list.today) kids.push(editorBox(el, list, { picked, onPick: pick => ((picked = picked === pick ? null : pick), $.ui.invalidate('ui.render')), onControl: (row, c: Control) => void orderAction($, opts, c.action(row), 'panel').then(text => answerPress($, opts, text)) }, PANE_INK()))
+    kids.push(sessionsBox(el, others, isDesktop, PANE_INK()))
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
@@ -3665,7 +3698,8 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     }
   if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
   // A65: the Orchestrate card, the judges' latest verdicts, last before the rules (the rules stay the foot, A27).
-  if (isS2 && verdicts.length > 0) kids.push(orchestrateCard(el as never, currentVerdicts(now), now, verdicts[0])) // A89: current incidents only
+  const look = isS2 ? needsLook(currentVerdicts(now), now) : [] // A116: only a current verdict that needs the person
+  if (look.length > 0) kids.push(lookBox(el, look, PANE_INK()))
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
   if (paneEnterAt === 0) paneEnterAt = now
@@ -3689,8 +3723,8 @@ export const register: Register = (on, options) => {
     await readTheme($) // A40
     await $.command.register({
       name: 'a5r',
-      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r pass <PR or slug> (let one through once) · /a5r help · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance at the end of the checklist; Editor holder, RAM and Sync main)',
-      argumentHint: 'on | off | status | accept | pass <PR or slug> | gate <pie> <nopie> | sync HH:MM | help',
+      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r pass <PR or slug> (let one through once) · /a5r help · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r editor [up|down|top <name> | time <name> <±minutes> | order reset] (the person\'s order of the Editor queue) · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance at the end of the checklist; Editor holder, RAM and Sync main)',
+      argumentHint: 'on | off | status | accept | pass <PR or slug> | gate <pie> <nopie> | editor … | sync HH:MM | help',
     })
     await readA5R($)
     a5rFlipAt = 0 // a session that starts with A5R already on does not stamp the seal
@@ -3720,6 +3754,7 @@ export const register: Register = (on, options) => {
     if (/^accept\b/i.test(e.args.trim())) return { text: await acceptCommand($, opts) }
     if (/^gate\b/i.test(e.args.trim())) return { text: await gateCommand($, opts, e.args.trim().slice(4)) }
     if (/^pass\b/i.test(e.args.trim())) return { text: await passCommand($, opts, e.args.trim().slice(4)) }
+    if (/^editor\b/i.test(e.args.trim())) return { text: await editorCommand($, opts, e.args.trim().slice(6), e.origin) }
     if (/^help\b/i.test(e.args.trim())) return { text: A5R_HELP }
     // A29: `/a5r` with no words opens the A5R pane; `/a5r status` keeps the text reply below.
     if (e.args.trim() === '') return { text: await openA5Pane($) }
@@ -3743,7 +3778,7 @@ export const register: Register = (on, options) => {
     const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put a5r first in CLAUDE_CODE_PLUGIN_DIRS`
     const coord =
       a5rOn && isS2
-        ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)} (holder ${syncFile.holder.lane}, hard end ${clockOf(syncFile.hardEnd)})` : 'none planned'}. ${overviewLine(overviewOf({ me8, files: me ? [me, ...peers] : peers, lanes, clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, lock, sync: syncFile, now: nowMs, phase: phaseOf(syncFile, nowMs) }))}.`
+        ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)} (holder ${syncFile.holder.lane}, hard end ${clockOf(syncFile.hardEnd)})` : 'none planned'}. ${overviewLine(overviewOf({ ...appNow(nowMs), lanes, lock, sync: syncFile, phase: phaseOf(syncFile, nowMs), manual: manualNow(nowMs) }))}.`
         : ''
     return { text: `A5R is ${a5rOn ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. a5r sits ${where2}.${coord}` }
   })

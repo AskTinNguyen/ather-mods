@@ -123,7 +123,7 @@ test('A65: a lease past its end spawns one read-only judge per incident with the
   expect(w.sent).toEqual([]) // no message to the holder
 })
 
-test('A65: the judge\'s verdict is logged, kept for the Orchestrate card and toasted; a new lease is a new incident', opts(), async ($, on) => {
+test('A65: the judge\'s verdict is logged, kept for NEEDS A LOOK (rev 40, A116: waiting on the person needs a look) and toasted; a new lease is a new incident', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
   on('turn.complete', async () => ({ text: '' }))
   incident(w, WAITING)
@@ -136,8 +136,8 @@ test('A65: the judge\'s verdict is logged, kept for the Orchestrate card and toa
   const toasts = ((w.calls['ui.toast'] ?? []) as Rec[]).map(t => String(t.text ?? t.message ?? JSON.stringify(t)))
   expect(toasts.some(t => t.includes('Orchestrate · lane-bbbbbbbb: waiting-on-Hai — answer it in that session'))).toBe(true)
   const tree = await $.ui.render(A5RPANE as never)
-  expect(text(find(tree, 'hai-orchestrate-0'))).toContain('lane-bbbbbbbb (bbbbbbbb) · waiting-on-Hai')
-  expect(text(find(tree, 'hai-orchestrate-0'))).toContain('its last message asks which blend to keep → answer it in that session')
+  expect(text(find(tree, 'hai-look-0'))).toContain('lane-bbbbbbbb: its last message asks which blend to keep, waiting for your answer')
+  expect(text(find(tree, 'hai-look-0'))).toContain('→ answer it in that session')
   // A new lease of the same holder, past its end too: a new incident, a new judge.
   w.put(LOCK, held('bbbbbbbb', T(14, 10), T(14, 20)))
   w.put(`${HF}/editor/bbbbbbbb.json`, peer('bbbbbbbb', { heartbeatAt: w.clock.now(), holding: { since: T(14, 10), end: T(14, 20), extended: 0 }, lastTurnAt: T(14, 35) }))

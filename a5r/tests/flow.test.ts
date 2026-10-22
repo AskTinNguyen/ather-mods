@@ -171,7 +171,7 @@ test('pane, A5R on: Ather\'s pane gains one compact A5R line under its strip; th
   await w.clock.advance(50) // the sync read runs off the render
   expect(keys(await $.ui.render(PANE as never))).toEqual(['head-words', 'strip', 'hai-a5r-line', 'foot'])
   const tree = await $.ui.render(A5RPANE as never)
-  expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-overview', 'hai-a5r-rules']) // A33: the band first
+  expect(keys(tree)).toEqual(['hai-a5r-band', 'hai-tiles', 'hai-queue', 'hai-overview', 'hai-a5r-rules']) // A33: the band first; rev 40 (A116): the Editor list names the holder
   expect(text(find(tree, 'hai-tile-editor'))).toContain('1006-walkerext-s9')
   expect(text(find(tree, 'hai-tile-editor'))).toContain('until 15:10 · 30 min left')
   expect(text(find(tree, 'hai-tile-memory'))).toContain('20.5 GB free')

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { DEFAULT_GATES, PASS_MAX_MIN, gitWrites, writesLock, blankSession, decide, heavyList, heldLine, mayAskYield, newSync, parseLockLine, parseProbe, passEndOk, queueOf, type Decision, type GrantInput, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
+import { DEFAULT_GATES, NO_MANUAL, PASS_MAX_MIN, gitWrites, writesLock, blankSession, decide, heavyList, heldLine, mayAskYield, newSync, parseLockLine, parseProbe, passEndOk, queueOf, type Decision, type GrantInput, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
 import { editorShellAct } from '../hooks/editor.ts'
 import { queueRowText, queueView } from '../hooks/lease.ts'
 import { NUDGE_IDLE_MS, idleMsOf, isIdle } from '../hooks/nudge.ts'
@@ -25,7 +25,7 @@ const file = (id8: string, o: Partial<SessionFile> = {}): SessionFile => ({ ...b
 const peer = (id8: string, o: Partial<SessionFile> = {}): string => JSON.stringify({ ...file(id8, o), heartbeatAt: NOW + 300 * MIN })
 const held = (id8: string, since: number, end: number) => `${heldLine({ lane: `lane-${id8}`, sessionName: `title-${id8}`, id8, since, pid: null, end, mode: 'interactive', pausable: true, nextSafe: 'after save', note: 'their slot' })}\n`
 const probe = (freeGb: number, o: Partial<Probe> = {}): Probe => ({ freeGb, diskGb: 40, procs: [], ...o })
-const input = (me8: string, files: SessionFile[], freeGb: number, o: Partial<GrantInput> = {}): GrantInput => ({ me8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: probe(freeGb), gates: DEFAULT_GATES, ...o })
+const input = (me8: string, files: SessionFile[], freeGb: number, o: Partial<GrantInput> = {}): GrantInput => ({ me8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: probe(freeGb), gates: DEFAULT_GATES, manual: NO_MANUAL, ...o })
 const grants = (files: SessionFile[], freeGb: number, o: Partial<GrantInput> = {}): string[] => files.filter(f => decide(input(f.id8, files, freeGb, o)).kind === 'grant').map(f => f.id8)
 const prompts = (w: ReturnType<typeof world>): string[] => (w.calls['prompt.submit'] ?? []).map(e => String((e as Rec).text))
 const out = (ran: { result?: unknown; text?: string; deny?: string }): string => String(ran.deny ?? ran.result ?? ran.text ?? '')
@@ -46,7 +46,7 @@ test('A113: unit: a 28 GB head with 27 GB free lets a launch:false build through
   const d = decide(input(BUILD.id8, files, 27))
   expect(d).toEqual({ kind: 'grant', end: NOW + PASS_MAX_MIN * MIN, reuse: null, pass: HEAD.id8 })
   expect(asWait(decide(input(HEAD.id8, files, 27)))?.code).toBe('ram')
-  expect(queueOf(files, [], NOW, null).map(f => f.id8)).toEqual([HEAD.id8, BUILD.id8]) // the head keeps its place
+  expect(queueOf(files, [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual([HEAD.id8, BUILD.id8]) // the head keeps its place
 })
 
 test('A113: unit: a PIE head at 38 GB with 30 GB free lets a no-PIE 28 GB request through; with 27 GB nobody fits and both wait on memory', () => {
@@ -76,7 +76,7 @@ test('A113: unit: every session computes the same single passer from the same fi
   const nopie = file(NOPIE.id8, { want: want({ minutes: 45, requestedAt: NOW - 12 * MIN }) })
   const late = file('e1e1e1e1', { want: want({ minutes: 20, build: true, launch: false, requestedAt: NOW - 5 * MIN }) })
   const files = [PIE_HEAD, nopie, BUILD, late]
-  expect(queueOf(files, [], NOW, null).map(f => f.id8)).toEqual([PIE_HEAD.id8, nopie.id8, BUILD.id8, late.id8])
+  expect(queueOf(files, [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual([PIE_HEAD.id8, nopie.id8, BUILD.id8, late.id8])
   expect(grants(files, 30)).toEqual([nopie.id8]) // both no-PIE and the builds fit: only the first in order passes
   expect(grants(files, 25)).toEqual([BUILD.id8]) // under 28 only the launch:false ones fit: the first of them
   for (const f of files) expect(queueView(input(f.id8, files, 30)).rows.map(r => r.wait)).toEqual(['ram', 'pass', 'queue', 'queue']) // the same in every session
@@ -165,7 +165,7 @@ test('rev 38 (thermo-nuclear review): one wrapper model and one program walker: 
 
 // ---------- A112: unit ----------
 test('A112: unit: a wait line is due on a place change, a new code held 2 min, else every 15 min; its note carries code, free RAM, gate, place and the heaviest processes', () => {
-  const d = { kind: 'wait' as const, code: 'ram' as const, why: '', next: '', place: 1 }
+  const d = { kind: 'wait' as const, code: 'ram' as const, why: '', next: '', place: 1, reason: '' }
   const q = { ...d, code: 'queue' as const }
   const last = { code: 'ram' as const, place: 1, at: NOW, next: null }
   expect(waitLogOf(null, d, NOW).isDue).toBe(true)
@@ -199,7 +199,7 @@ test('A112: unit: the queue view and status line give each queued session its wa
   const files = [HEAD, BUILD, NOPIE]
   const rows = queueView(input(ME8, files, 27)).rows
   expect(rows.map(r => [r.id8, r.wait])).toEqual([[HEAD.id8, 'ram'], [BUILD.id8, 'pass'], [NOPIE.id8, 'ram']])
-  expect(rows.map(queueRowText)).toEqual(['waited 30 min · asks 25 min · wait ram', `waited 10 min · asks 45 min · build · passes the head (≤ ${PASS_MAX_MIN} min)`, 'waited 10 min · asks 45 min · wait ram'])
+  expect(rows.map(queueRowText)).toEqual(['waiting 30 min · 25 min · needs 28 GB, 27 free · wait ram', `waiting 10 min · 45 min · build · goes before 1 for ≤ ${PASS_MAX_MIN} min`, 'waiting 10 min · 45 min · needs 28 GB, 27 free · wait ram']) // rev 40 (A116): the panel's words, the code beside them
   expect(queueView(input(ME8, files, 30)).rows.map(r => r.wait)).toEqual(['grant', 'queue', 'queue'])
 })
 
@@ -209,7 +209,7 @@ test('A114: unit: idle by the session\'s own facts; the memory note once an hour
   expect(idleMsOf({ now: NOW, lastTurnAt: NOW - 12 * MIN, turnSignalAt: 0, mainCalls: 1, agents: 0 })).toBe(0) // a long foreground call
   expect(idleMsOf({ now: NOW, lastTurnAt: NOW - 12 * MIN, turnSignalAt: 0, mainCalls: 0, agents: 1 })).toBe(0)
   expect([NUDGE_IDLE_MS, isIdle(10 * MIN), isIdle(10 * MIN - 1)]).toEqual([10 * MIN, true, false]) // A91's idle, one definition
-  const ram: Decision = { kind: 'wait', code: 'ram', why: '', next: '', place: 1 }
+  const ram: Decision = { kind: 'wait', code: 'ram', why: '', next: '', place: 1, reason: '' }
   expect(isMemoryNoteDue({ d: ram, idleMs: 60 * MIN, lastAt: 0, now: NOW })).toBe(true)
   expect(isMemoryNoteDue({ d: ram, idleMs: 59 * MIN, lastAt: 0, now: NOW })).toBe(false)
   expect(isMemoryNoteDue({ d: ram, idleMs: 300 * MIN, lastAt: NOW - 179 * MIN, now: NOW })).toBe(false) // D8: 3 h between notes

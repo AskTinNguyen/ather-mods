@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { DEFAULT_GATES, blankSession, decide, gatesOf, heldLine, isYieldMoment, mayAskYield, parseLockLine, type GrantInput, type SessionFile, type Want } from '../hooks/coord.ts'
+import { DEFAULT_GATES, NO_MANUAL, blankSession, decide, gatesOf, heldLine, isYieldMoment, mayAskYield, parseLockLine, type GrantInput, type SessionFile, type Want } from '../hooks/coord.ts'
 import { EDITOR_WORK, LEASES_MAX, appendCapped, endLease, isIdleHolder, isRetestExtension, keepableOf, leaseSummary, parseLeases, placeOf, queueView, releaseReason, returnOf, summaryLine, yieldTold, type LeaseRecord } from '../hooks/lease.ts'
 import { A5RPANE, LOCK, ME, NOW, PROJ, find, opts, text, world, type Rec } from './world.ts'
 
@@ -173,6 +173,7 @@ const yieldInput = (holder: Partial<SessionFile>, o: Partial<GrantInput> = {}): 
   sync: null,
   probe: null,
   gates: DEFAULT_GATES,
+  manual: NO_MANUAL,
   ...o,
 })
 test('A103: unit: the asker asks only when its holder made no Editor use for 5 min and 20 min of its lease remain', () => {
@@ -261,7 +262,7 @@ const raceWorld = (on: any, o: { isKept?: boolean; isAsked?: boolean } = {}) => 
   return w
 }
 const filesOf = (w: ReturnType<typeof world>): SessionFile[] => ['editor/' + ME8, 'editor/cccccccc', 'editor/dddddddd'].map(f => JSON.parse(w.read(`${HF}/${f}.json`)) as SessionFile)
-const decideFor = (w: ReturnType<typeof world>, id8: string) => decide({ me8: id8, lock: parseLockLine(w.read(LOCK)), files: filesOf(w), lanes: [], now: w.clock.now(), sync: null, probe: { freeGb: 40, diskGb: 40, procs: [] }, gates: DEFAULT_GATES })
+const decideFor = (w: ReturnType<typeof world>, id8: string) => decide({ me8: id8, lock: parseLockLine(w.read(LOCK)), files: filesOf(w), lanes: [], now: w.clock.now(), sync: null, probe: { freeGb: 40, diskGb: 40, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL })
 
 test('A104 / D1: the real race: A yields and asks again at once; B, the session it yielded to, is granted first; A is next, before the session that asked during its lease', opts(), async ($, on) => {
   const w = raceWorld(on)
@@ -360,11 +361,13 @@ test('A105: unit: the queue view: the holder from its file (granted, Editor seen
     JSON.parse(peer('cccccccc', { want: want({ minutes: 30, pie: true, requestedAt: T(14, 22) }) })) as SessionFile,
     JSON.parse(peer(ME8, { want: want({ minutes: 20, build: true, requestedAt: T(14, 36) }) })) as SessionFile,
   ]
-  const v = queueView({ me8: ME8, lock: parseLockLine(held('bbbbbbbb', T(14, 0), T(14, 52))), files, lanes: [], now: NOW, sync: null, probe: null, gates: DEFAULT_GATES }) // rev 38 (A112): with the decide inputs
-  expect(v.holder).toEqual({ lane: 'lane-bbbbbbbb', id8: 'bbbbbbbb', isMe: false, grantedAt: T(14, 0), editorAt: T(14, 4), pieAt: T(14, 20), extensions: 1, leftMin: 12 })
+  const v = queueView({ me8: ME8, lock: parseLockLine(held('bbbbbbbb', T(14, 0), T(14, 52))), files, lanes: [], now: NOW, sync: null, probe: null, gates: DEFAULT_GATES, manual: NO_MANUAL }) // rev 38 (A112): with the decide inputs
+  // Rev 40: the holder's end and whether its lease is the sync's (A117); each row's asked minutes, placed mark (A117) and
+  // reason in plain words (A116).
+  expect(v.holder).toEqual({ lane: 'lane-bbbbbbbb', id8: 'bbbbbbbb', isMe: false, grantedAt: T(14, 0), editorAt: T(14, 4), pieAt: T(14, 20), extensions: 1, end: T(14, 52), leftMin: 12, isSyncSlot: false })
   expect(v.rows).toEqual([
-    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, pie: true, build: false, wait: 'held' },
-    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, pie: false, build: true, wait: 'held' },
+    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, asked: 30, isPlaced: false, pie: true, build: false, wait: 'held', reason: 'behind lane-bbbbbbbb' },
+    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, asked: 20, isPlaced: false, pie: false, build: true, wait: 'held', reason: '' },
   ])
 })
 
@@ -381,20 +384,24 @@ for (const surface of ['terminal', 'desktop'] as const)
     await $.ui.render(P)
     await w.clock.advance(50)
     const tree = await $.ui.render(P)
-    expect(text(find(tree, 'hai-queue-head'))).toBe('EDITOR QUEUE · 2 WAITING')
-    expect(text(find(tree, 'hai-queue-holder'))).toBe('▶lane-bbbbbbbbgranted 14:00 · Editor 14:04 · PIE 14:20 · ext 1 · 12 min left')
-    expect(text(find(tree, 'hai-queue-cccccccc'))).toBe('1lane-ccccccccwaited 18 min · asks 30 min · PIE · wait held') // rev 38 (A112): the wait code
-    expect(text(find(tree, `hai-queue-${ME8}`))).toBe(`★2 ${mine(w).lane}waited 0 min · asks 20 min · build · wait held`)
-    expect(text(find(tree, 'hai-queue-summary'))).toBe('24 h: 1 lease · median wait 12 min · launch 20% · 1 yield · 0 returns · 0 PIE aborts · sync 0 h')
+    // Rev 40 (A116): one Editor list in plain words (no codes): the head says who has it and the time left, the holder row its
+    // grant, Editor and PIE, each queued row its wait, minutes, PIE / build and one reason; the day's line in plain words.
+    expect(text(find(tree, 'hai-queue-head'))).toBe('EDITOR· lane-bbbbbbbb has it · 12 min left')
+    expect(text(find(tree, 'hai-queue-holder'))).toBe('lane-bbbbbbbbgranted 14:00 · Editor 14:04 · PIE 14:20 · extended 1×')
+    expect(text(find(tree, 'hai-queue-cccccccc'))).toBe('lane-ccccccccwaiting 18 min · 30 min · PIE · behind lane-bbbbbbbb')
+    expect(text(find(tree, `hai-queue-${ME8}-line`))).toBe('waiting 0 min · 20 min · build')
+    expect([find(tree, 'hai-queue-pick-bbbbbbbb')?.props?.label, find(tree, 'hai-queue-pick-cccccccc')?.props?.label, find(tree, `hai-queue-pick-${ME8}`)?.props?.label]).toEqual(['▶', '1', '★2'])
+    expect(text(find(tree, 'hai-queue-summary'))).toBe('today: 1 turn · usually 12 min wait · 20% of turns spent opening the Editor')
     const status = JSON.parse(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never)).split('\n').filter(l => !l.startsWith('A5R ·')).join('\n')) as Record<string, unknown>
-    expect(status.holder).toBe('lane-bbbbbbbb (session bbbbbbbb): granted 14:00 · Editor 14:04 · PIE 14:20 · ext 1 · 12 min left')
-    expect(status.queue).toEqual(['1. lane-cccccccc (session cccccccc): waited 18 min · asks 30 min · PIE · wait held: their slot', `2. ${mine(w).lane} (session ${ME8}): waited 0 min · asks 20 min · build · wait held: tail VFX`])
+    // Rev 40 (A116): the status reads the panel's words (one renderer, lease.ts) with A112's wait code for models and logs.
+    expect(status.holder).toBe('lane-bbbbbbbb (session bbbbbbbb): granted 14:00 · Editor 14:04 · PIE 14:20 · extended 1× · 12 min left')
+    expect(status.queue).toEqual(['1. lane-cccccccc (session cccccccc): waiting 18 min · 30 min · PIE · behind lane-bbbbbbbb · wait held: their slot', `2. ${mine(w).lane} (session ${ME8}): waiting 0 min · 20 min · build · wait held: tail VFX`])
     expect(status.leases24h).toBe('24 h: 1 lease · median wait 12 min · launch 20% · 1 yield · 0 returns · 0 PIE aborts · sync 0 h')
   })
 
-test('A105: with nobody waiting and no lease in the last 24 h the pane adds no queue block', opts(), async ($, on) => {
+test('A105: with nobody holding or waiting and no lease in the last 24 h the pane adds no Editor list', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
-  w.put(LOCK, held('bbbbbbbb', T(14, 0), T(14, 52)))
+  w.put(LOCK, 'FREE since=14:00 2026-10-06 by=x note=none background=none · free since 14:00\n') // rev 40 (A116): a holder alone is listed now
   await $.session.start(START)
   await $.ui.render(A5RPANE as never)
   await w.clock.advance(50)

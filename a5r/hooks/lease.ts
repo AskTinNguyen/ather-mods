@@ -1,7 +1,8 @@
 // A5R rev 34 (L-38): the Editor lease's record and the rules that keep a slot with the session that needs it. Pure: no
 // `$`; register.ts reads and writes the files. A100 one record per lease (Saved/A5R/leases.jsonl) and its 24-hour summary;
-// A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it.
-import { IDLE_RELEASE_MS, PASS_MAX_MIN, YIELD_EVERY_MS, decide, hhmm, lockTimes, noticeIds, queueOf, type Decision, type GrantInput, type Holding, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
+// A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it
+// (A116: in plain words; A117: in the person's order, a holder's resized end).
+import { IDLE_RELEASE_MS, PASS_MAX_MIN, YIELD_EVERY_MS, decide, hhmm, holdsSyncSlot, isPlaced, lockTimes, noticeIds, queueOf, type Decision, type GrantInput, type Holding, type LockLine, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
 export const LEASES_FILE = 'leases.jsonl'
@@ -201,6 +202,9 @@ export const leaseSummary = (all: readonly LeaseRecord[], now: number): LeaseSum
 }
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+/** A116: the 24 hours in plain words, one small line on the panel ('' with no lease in them). */
+export const todayLine = (s: LeaseSummary): string =>
+  s.leases === 0 ? '' : [`today: ${count(s.leases, 'turn')}`, ...(s.medianWaitMin === null ? [] : [`usually ${s.medianWaitMin} min wait`]), ...(s.launchSharePct === null ? [] : [`${s.launchSharePct}% of turns spent opening the Editor`])].join(' · ')
 export const summaryLine = (s: LeaseSummary): string =>
   [
     `24 h: ${count(s.leases, 'lease')}`,
@@ -215,42 +219,68 @@ export const summaryLine = (s: LeaseSummary): string =>
     .join(' · ')
 
 // ---------- A105: the queue as Hai sees it ----------
-export type HolderRow = { lane: string; id8: string; isMe: boolean; grantedAt: number | null; editorAt: number | null; pieAt: number | null; extensions: number; leftMin: number | null }
+/** A117: a holder's lease takes the end its HELD line says once the person resized it from any session: the line every
+ * session reads is the truth. The rule holds while every writer of the holder's line other than the person's resize keeps
+ * the holder's own `holding` equal to it to the minute in the same step (the grant, extend, the sync's end, the pid note:
+ * all the holder's own, through heldNow), so another whole minute (the line says HH:MM; the holder's own end may carry
+ * seconds) with the same grant means the person rewrote it. Read through the holder's one accessor (register.ts heldNow) and
+ * by every queue view. */
+export const adoptLockEnd = (h: Holding, lock: LockLine, now: number): Holding => {
+  const t = lock.kind === 'held' && lock.isStandard ? lockTimes(lock, now) : null
+  return t && Math.abs(t.since - h.since) < 60_000 && Math.floor(t.end / 60_000) !== Math.floor(h.end / 60_000) ? { ...h, end: t.end } : h
+}
+
+/** A105: the holder; `end` its lease's end (A117: as its HELD line says once resized); `isSyncSlot` the sync's own slot. */
+export type HolderRow = { lane: string; id8: string; isMe: boolean; grantedAt: number | null; editorAt: number | null; pieAt: number | null; extensions: number; end: number | null; leftMin: number | null; isSyncSlot: boolean }
 /** A112: `wait`: the row's current wait code by decide, read from the files every session reads ('grant': it takes the
- * Editor at its next minute; 'pass': it goes before a head waiting for memory, A113). */
-export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; pie: boolean; build: boolean; wait: WaitCode | 'grant' | 'pass' | null }
+ * Editor at its next minute; 'pass': it goes before a head waiting for memory, A113). A116: `reason`, why in plain words.
+ * A117: `minutes` the slot it will be granted (the person's, else its own `asked`); `isPlaced`, placed by the person. */
+export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; asked: number; isPlaced: boolean; pie: boolean; build: boolean; wait: WaitCode | 'grant' | 'pass' | null; reason: string }
 export type QueueView = { holder: HolderRow | null; rows: QueueRow[] }
 
 /** A105: the holder (its file's lease, else the lock line's times) and each queued session in the order every session
- * computes; A112: with each one's wait code. */
+ * computes (A117: the person's order included); A112: with each one's wait code; A116: and its reason in plain words. */
 export const queueView = (x: GrantInput): QueueView => {
   const isHeld = x.lock.kind === 'held' || x.lock.kind === 'handed'
   const f = isHeld ? x.files.find(s => s.id8 === x.lock.id8) : undefined
-  const h = f?.holding
+  const h = f?.holding ? adoptLockEnd(f.holding, x.lock, x.now) : undefined
   const t = isHeld ? lockTimes(x.lock, x.now) : null
   const grantedAt = h?.since ?? (t && t.since !== t.end ? t.since : null)
   const end = h?.end ?? t?.end ?? null
   const holder: HolderRow | null = isHeld
-    ? { lane: f?.lane || x.lock.lane || x.lock.id8 || 'unknown', id8: x.lock.id8, isMe: x.lock.id8 !== '' && x.lock.id8 === x.me8, grantedAt, editorAt: h?.notes?.editorAt ?? null, pieAt: h?.notes?.pieAt ?? null, extensions: h?.extended ?? 0, leftMin: end === null ? null : Math.round((end - x.now) / 60_000) }
+    ? { lane: f?.lane || x.lock.lane || x.lock.id8 || 'unknown', id8: x.lock.id8, isMe: x.lock.id8 !== '' && x.lock.id8 === x.me8, grantedAt, editorAt: h?.notes?.editorAt ?? null, pieAt: h?.notes?.pieAt ?? null, extensions: h?.extended ?? 0, end, leftMin: end === null ? null : Math.round((end - x.now) / 60_000), isSyncSlot: holdsSyncSlot(x.lock, f) }
     : null
-  const rows = queueOf(x.files, x.lanes, x.now, x.sync).map((s, i): QueueRow => ({ place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: Math.max(0, Math.round((x.now - (s.want?.requestedAt ?? x.now)) / 60_000)), minutes: s.want?.minutes ?? 0, pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(decide({ ...x, me8: s.id8 })) }))
+  const rows = queueOf(x.files, x.lanes, x.now, x.sync, x.manual).map((s, i): QueueRow => {
+    const asked = s.want?.minutes ?? 0
+    const d = decide({ ...x, me8: s.id8 })
+    return { place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: Math.max(0, Math.round((x.now - (s.want?.requestedAt ?? x.now)) / 60_000)), minutes: x.manual.minutes[s.id8] ?? asked, asked, isPlaced: isPlaced(x.manual, s.id8), pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(d), reason: reasonOf(d) }
+  })
   return { holder, rows }
 }
 
-/** A105: the holder's facts in one line: granted at, Editor seen at, PIE since, extensions, time left. */
-export const holderText = (h: HolderRow): string =>
+/** A105 / A116: the holder's facts in plain words, one line (the panel's row): granted at (`sync` for the sync's own slot),
+ * Editor seen at, PIE since, extensions. */
+export const holderLine = (h: HolderRow): string =>
   [
-    h.grantedAt === null ? 'granted ?' : `granted ${hhmm(h.grantedAt)}`,
-    h.editorAt === null ? 'no Editor yet' : `Editor ${hhmm(h.editorAt)}`,
+    h.grantedAt === null ? 'granted ?' : `${h.isSyncSlot ? 'sync' : 'granted'} ${hhmm(h.grantedAt)}`,
+    h.editorAt === null ? 'Editor not open yet' : `Editor ${hhmm(h.editorAt)}`,
     ...(h.pieAt === null ? [] : [`PIE ${hhmm(h.pieAt)}`]),
-    ...(h.extensions > 0 ? [`ext ${h.extensions}`] : []),
-    h.leftMin === null ? 'no end' : h.leftMin < 0 ? `${-h.leftMin} min over` : `${h.leftMin} min left`,
+    ...(h.extensions > 0 ? [`extended ${h.extensions}×`] : []),
   ].join(' · ')
+/** The time left on the holder's lease, or past it ('' with no end). */
+export const leftText = (h: HolderRow): string => (h.leftMin === null ? '' : h.leftMin < 0 ? `${-h.leftMin} min over` : `${h.leftMin} min left`)
+/** A105: the holder in the editor tool's status: the panel's line and the time left. */
+export const holderText = (h: HolderRow): string => [holderLine(h), leftText(h)].filter(Boolean).join(' · ')
 
 const waitOf = (d: Decision): QueueRow['wait'] => (d.kind === 'wait' ? d.code : d.kind === 'grant' ? (d.pass ? 'pass' : 'grant') : null)
-const waitWords = (w: NonNullable<QueueRow['wait']>): string => (w === 'grant' ? 'granted next' : w === 'pass' ? `passes the head (≤ ${PASS_MAX_MIN} min)` : `wait ${w}`)
 
-/** A105: a queued session's facts in one line: waited for, minutes asked, PIE / build; A112: why it waits (or that it takes
- * the Editor next, or goes before a head waiting for memory). */
-export const queueRowText = (r: QueueRow): string =>
-  [`waited ${r.waitedMin} min`, `asks ${r.minutes} min`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : []), ...(r.wait === null ? [] : [waitWords(r.wait)])].join(' · ')
+/** A116: why a queued row waits, in plain words: the wait's own reason (decide), or that it takes the Editor next, or goes
+ * before a head waiting for memory (A113). */
+const reasonOf = (d: Decision): string => (d.kind === 'wait' ? d.reason : d.kind === 'grant' ? (d.pass ? `goes before 1 for ≤ ${PASS_MAX_MIN} min` : 'granted next') : '')
+
+/** A105 / A116: a queued session's facts in plain words, one line (the panel's row): waited for, its minutes (A117: set by
+ * hand), PIE / build, placed by hand, why it waits. */
+export const queuedLine = (r: QueueRow): string =>
+  [`waiting ${r.waitedMin} min`, r.minutes === r.asked ? `${r.minutes} min` : `${r.minutes} min (set by hand)`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : []), ...(r.isPlaced ? ['placed by hand'] : []), ...(r.reason ? [r.reason] : [])].join(' · ')
+/** A105 / A112: a queued session in the editor tool's status: the panel's line and its wait code (for the logs and models). */
+export const queueRowText = (r: QueueRow): string => [queuedLine(r), ...(r.wait && r.wait !== 'grant' && r.wait !== 'pass' ? [`wait ${r.wait}`] : [])].join(' · ')

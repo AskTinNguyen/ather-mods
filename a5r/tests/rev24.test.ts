@@ -141,7 +141,7 @@ test('A69: unit: a holder that closed the Editor and wrote FREE reads done (a st
   expect(JUDGE_SYSTEM).toContain('VERDICT: <working | done | waiting-on-Hai | stuck-or-crashed | unsure>')
 })
 
-test('A69: a judge answering done shows on the Orchestrate card as done (calm colour), nothing released', opts(), async ($, on) => {
+test('A69: a judge answering done is kept (log, verdicts.json) and needs no look: rev 40 (A116) NEEDS A LOOK stays away; nothing released', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
   on('turn.complete', async () => ({ text: '' }))
   w.put(LOCK, held('bbbbbbbb', T(13, 30), T(14, 0)))
@@ -151,6 +151,7 @@ test('A69: a judge answering done shows on the Orchestrate card as done (calm co
   expect(String(judges(w)[0]?.prompt)).toContain("A rule's first reading: done")
   await $.turn.complete({ agentId: 'w-judge-1', answer: 'VERDICT: done\nEVIDENCE:\n- it closed the Editor and wrote FREE at 13:50\nRECOMMENDATION: nothing from Hai; free the stale lease', durationMs: 1, isAborted: false, turnId: 'tj', reason: 'answer' } as never)
   const tree = await $.ui.render(A5RPANE as never)
-  expect(text(find(tree, 'hai-orchestrate-0'))).toContain('lane-bbbbbbbb (bbbbbbbb) · done')
+  expect(find(tree, 'hai-look')).toBeUndefined()
+  expect(w.read('E:/s2/Saved/A5R/verdicts.json')).toContain('"verdict":"done"')
   expect(parseLockLine(w.read(LOCK)).id8).toBe('bbbbbbbb')
 })

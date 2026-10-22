@@ -84,6 +84,16 @@ export type Want = { minutes: number; pie: boolean; build: boolean; what: string
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }
+/** A79: the Editor slot the sync takes for its worker (its `what` names it, so the grant, lease and idle notices that are
+ * meant for a person's own slot skip it). */
+export const SYNC_SLOT = 'Sync main '
+// A session file from before rev 32 marks the worker's slot only by its `what` (`Sync main HH:MM`).
+export const isSyncSlot = (w: Want | null | undefined): boolean => Boolean(w?.sync) || Boolean(w?.what.startsWith(SYNC_SLOT))
+/** The worker's own slot, which wakes nobody (A94: the holder's own request for its sync is granted with a notice). */
+export const isWorkerSlot = (w: Want | null | undefined): boolean => (w?.sync ? w.sync.role === 'worker' : Boolean(w?.what.startsWith(SYNC_SLOT)))
+/** A116 / A117: the holder's lease is the sync's own slot: its file says so, or (no file, or one from before rev 32) its
+ * lock note does. */
+export const holdsSyncSlot = (lock: LockLine, holder: SessionFile | null | undefined): boolean => isSyncSlot(holder?.want) || lock.note.startsWith(SYNC_SLOT)
 /** The lease a session holds, as it took it; A100: with what it notes for its record while it runs (lease.ts); A113: the
  * id8 of the head it went before (a pass slot). */
 export type Holding = { since: number; end: number; extended: number; notes?: LeaseNotes; pass?: string }
@@ -340,6 +350,12 @@ export const heldLine = (h: Held): string => {
   return `HELD lane=${lane} session=${safeWord(h.sessionName)} since=${stampOf(h.since)} pid=${h.pid ?? 'none'} end=${hhmm(h.end)} mode=${h.mode} pausable=${h.pausable ? 'yes' : 'no'} next_safe=${safeNextSafe(h.nextSafe)} note=${safeNote(h.note)} · held by ${lane}, session ${h.id8}, until ${hhmm(h.end)}`
 }
 
+/** A117: a standard HELD line naming one session (A5R wrote it, so A5R may rewrite its end). */
+export const isStandardHeld = (lock: LockLine): boolean => lock.kind === 'held' && lock.isStandard && lock.id8.length === 8
+/** A117: such a line with another end (its `end=` and the `until` older readers take), the rest as it was: the person's
+ * resize, written by whichever session's A5R he pressed in. */
+export const heldLineAt = (lock: LockLine, end: number): string => lock.raw.replace(/\bend=\d{1,2}:\d{2}/, `end=${hhmm(end)}`).replace(/\buntil \d{1,2}:\d{2}/, `until ${hhmm(end)}`)
+
 /** D2: the standard's FREE line, then the words every older reader takes for free. */
 export const freeLine = (f: { since: number; by: string; note: string; background: 'none' | 'unknown' }): string =>
   `FREE since=${stampOf(f.since)} by=${safeWord(f.by)} note=${safeNote(f.note)} background=${f.background} · free since ${hhmm(f.since)}`
@@ -475,7 +491,7 @@ export type OrchestrateEvent = {
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
    * running), holder-gone; or A65-judge (a verdict, advisory); A112: wait (a session's own wait decision, logged only).
    * A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait'
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' // manual: A117, the person's change of the queue
   lane: string
   id8: string
   procs: readonly string[]
@@ -623,12 +639,23 @@ export const heavyList = (probe: Probe, max = 4): string => {
 export const isSyncHolderGone = (s: SyncFile | null, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): boolean =>
   Boolean(s) && livenessOf(s?.holder.id8 ?? '', files, lanes, now) === 'gone'
 
-/** The order every session computes alike: live waiting requests, first requested first served, the sync holder
- * first while a sync is in its cutoff or freeze. */
-export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, sync: SyncFile | null): SessionFile[] => {
-  const phase = syncPhase(sync, now, isSyncHolderGone(sync, files, lanes, now))
+/** A117: the person's order as the queue reads it (order.ts resolves it from Saved/A5R/queue-order.json for the requests
+ * that still last): the sessions he placed, in his order, and the minutes he set for a queued request. */
+export type ManualOrder = { pins: readonly string[]; minutes: Readonly<Record<string, number>> }
+export const NO_MANUAL: ManualOrder = { pins: [], minutes: {} }
+/** A117: the person placed this session in the queue (a placed head is never passed, A113). */
+export const isPlaced = (m: ManualOrder, id8: string): boolean => m.pins.includes(id8)
+
+/** The sync's phase as every decision reads it from the shared files (a gone holder's freeze expires, D8). */
+export const phaseIn = (x: Pick<GrantInput, 'sync' | 'files' | 'lanes' | 'now'>): Phase => syncPhase(x.sync, x.now, isSyncHolderGone(x.sync, x.files, x.lanes, x.now))
+
+/** The order every session computes alike: live waiting requests, the sync holder first while a sync is in its cutoff or
+ * freeze, then (A117) the sessions the person placed, in his order, then first requested first served. */
+export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, sync: SyncFile | null, manual: ManualOrder): SessionFile[] => {
+  const phase = phaseIn({ sync, files, lanes, now })
   const first = phase === 'cutoff' || phase === 'frozen' ? sync?.holder.id8 : undefined
-  const rank = (f: SessionFile) => (first && f.id8 === first ? 0 : 1)
+  const pinned = (f: SessionFile) => manual.pins.indexOf(f.id8)
+  const rank = (f: SessionFile) => (first && f.id8 === first ? -1 : pinned(f) >= 0 ? pinned(f) : manual.pins.length)
   return files
     .filter(f => f.want && !f.holding && livenessOf(f.id8, files, lanes, now) === 'alive')
     .sort((a, b) => rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
@@ -644,7 +671,7 @@ export type Decision =
   | { kind: 'mine' }
   | Grant
   | { kind: 'recover'; holder: string }
-  | { kind: 'wait'; code: WaitCode; why: string; next: string; place: number }
+  | { kind: 'wait'; code: WaitCode; why: string; next: string; place: number; reason: string } // reason: A116, in plain words ('' behind the rows above)
 
 export type GrantInput = {
   me8: string
@@ -659,6 +686,8 @@ export type GrantInput = {
   conflictHead?: ConflictHead
   /** A88 (c): the RAM probe failed again on a fresh retry (no reading at all). */
   probeFailed?: boolean
+  /** A117: the person's order and the minutes he set (NO_MANUAL: first asked, first served). */
+  manual: ManualOrder
 }
 
 /** Whether this session may take the Editor now, and if not why and what next. Only the head of the queue takes
@@ -666,38 +695,38 @@ export type GrantInput = {
  * slotOf's. */
 export const decide = (x: GrantInput): Decision => {
   const { me8, lock, now, sync } = x
-  const queue = queueOf(x.files, x.lanes, now, sync)
+  const queue = queueOf(x.files, x.lanes, now, sync, x.manual)
   const mine = x.files.find(f => f.id8 === me8)
   if (lock.id8 === me8 && (lock.kind === 'held' || lock.kind === 'handed')) return { kind: 'mine' }
   if (!mine?.want) return { kind: 'none' }
   const place = Math.max(1, queue.findIndex(f => f.id8 === me8) + 1)
-  const wait = (code: WaitCode, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place })
+  const wait = (code: WaitCode, reason: string, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place, reason })
   const pid = editorPid(x.probe)
-  if (lock.kind === 'missing') return wait('missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', unrealPids(x.probe).length > 0 ? `an Unreal Editor runs with no lock (PID ${unrealPids(x.probe).join(', ')}): held by unknown until it ends, then A5R writes the FREE line; never kill or drive it, never write the lock by hand; do work that needs no Editor meanwhile` : 'A5R writes the FREE line once a fresh probe shows no Unreal Editor running (never write it by hand); do work that needs no Editor meanwhile')
+  if (lock.kind === 'missing') return wait('missing', 'the lock file is missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', unrealPids(x.probe).length > 0 ? `an Unreal Editor runs with no lock (PID ${unrealPids(x.probe).join(', ')}): held by unknown until it ends, then A5R writes the FREE line; never kill or drive it, never write the lock by hand; do work that needs no Editor meanwhile` : 'A5R writes the FREE line once a fresh probe shows no Unreal Editor running (never write it by hand); do work that needs no Editor meanwhile')
   if (lock.kind === 'held' || lock.kind === 'handed') {
     const who = lock.lane || 'another lane'
     const until = lock.end ? ` until ${lock.end}` : ''
     const live = livenessOf(lock.id8, x.files, x.lanes, now)
     // Round-2 review: never a FREE line without a process reading: a gone holder's lease waits for one (the next minute).
-    if (live === 'gone' && !x.probe && queue[0]?.id8 === me8) return wait('probe', `${who} (session ${lock.id8}) is gone, but there is no process reading to show no Editor or build runs`, 'it is read again at the next minute; do work that needs no Editor meanwhile')
+    if (live === 'gone' && !x.probe && queue[0]?.id8 === me8) return wait('probe', 'no process reading yet', `${who} (session ${lock.id8}) is gone, but there is no process reading to show no Editor or build runs`, 'it is read again at the next minute; do work that needs no Editor meanwhile')
     if (live === 'gone' && x.probe && unrealPids(x.probe).length === 0 && buildProcs(x.probe).length === 0 && queue[0]?.id8 === me8) return { kind: 'recover', holder: lock.id8 }
-    if (live === 'gone' && pid !== null) return wait('gone-editor', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (its lease is freed once no UnrealEditor runs); an Editor left hung is a finding for Ather\'s Needs you')
-    return wait('held', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}${isUnresolvedHand(lock) && lock.isReadable ? ' (a hand-written line naming no single live session)' : ''}`, `${place > 1 ? `you are ${ordinal(place)} in the queue` : 'you are next'}; do work that needs no Editor meanwhile${isUnresolvedHand(lock) && lock.isReadable ? '; a request turns it into a standard line for you once no other A5R session holds a lease and no Editor of another lane (the PID it names) runs, and it lapses 30 min past its end with nothing running' : ''}`)
+    if (live === 'gone' && pid !== null) return wait('gone-editor', 'its holder is gone, its Editor still open', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (its lease is freed once no UnrealEditor runs); an Editor left hung is a finding for Ather\'s Needs you')
+    return wait('held', place === 1 ? `behind ${who}` : '', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}${isUnresolvedHand(lock) && lock.isReadable ? ' (a hand-written line naming no single live session)' : ''}`, `${place > 1 ? `you are ${ordinal(place)} in the queue` : 'you are next'}; do work that needs no Editor meanwhile${isUnresolvedHand(lock) && lock.isReadable ? '; a request turns it into a standard line for you once no other A5R session holds a lease and no Editor of another lane (the PID it names) runs, and it lapses 30 min past its end with nothing running' : ''}`)
   }
   if (queue[0]?.id8 !== me8) {
     const head = queue[0]?.lane ?? 'another session'
     const behind = `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile`
     // A113: a head held back only by memory does not block a later request that fits now (one, the first in queue order).
     const h = headStateOf(x, queue)
-    if (!h.isMemory) return wait('queue', `the Editor is free but ${head} asked first`, behind)
+    if (!h.isMemory) return wait('queue', '', `the Editor is free but ${head} ${isPlaced(x.manual, queue[0]?.id8 ?? '') ? 'was placed first by the person' : 'asked first'}`, behind)
     if (h.passer?.id8 === me8) return h.passer.grant
     // A112: this request's own reason when its slot would not fit either (`ram`: its own launch gate is not met, as for
     // the head; its place says it is not first); capped at 30 min only while a pass is possible.
     const own = slotOf(x, mine, place, h.isAged ? Infinity : PASS_MAX_MIN)
     if (own.kind === 'wait') return { ...own, next: `${head} (first in the queue) waits for memory too; ${own.next}` }
-    if (h.passer) return wait('queue', `the Editor is free; ${head} waits for memory and ${h.passer.lane} goes before it for ≤ ${PASS_MAX_MIN} min (its slot fits now)`, behind)
+    if (h.passer) return wait('queue', '', `the Editor is free; ${head} waits for memory and ${h.passer.lane} goes before it for ≤ ${PASS_MAX_MIN} min (its slot fits now)`, behind)
     // Its slot fits and nobody passes: only because the head has waited 2 h (headStateOf tried this slot otherwise).
-    return wait('queue', `the Editor is free but ${head} asked first (it has waited ${PASS_AGING_MIN / 60} h or more for memory: nobody goes before it now)`, behind)
+    return wait('queue', '', `the Editor is free but ${head} asked first (it has waited ${PASS_AGING_MIN / 60} h or more for memory: nobody goes before it now)`, behind)
   }
   return slotOf(x, mine, place)
 }
@@ -710,32 +739,33 @@ export const PASS_AGING_MIN = 120
 /** The checks after the queue, for one session's request (its own, or a later one as if it were next, A113): no grant
  * over a merge in progress; the slot ends by a planned sync's cutoff and waits out a cutoff and freeze (the sync holder
  * excepted); launching needs the launch gate (an Editor already open is reused, its memory counted). `capMin`: the slot's
- * minutes at most (A113's pass). */
+ * minutes at most (A113's pass); A117: the minutes the person set for this request, else its own. */
 const slotOf = (x: GrantInput, f: SessionFile, place: number, capMin = Infinity): Decision => {
   const { now, sync } = x
   const want = f.want
   if (!want) return { kind: 'none' }
-  const wait = (code: WaitCode, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place })
+  const wait = (code: WaitCode, reason: string, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place, reason })
   // A61 / A115: no grant over a merge, revert or cherry-pick in progress (or left behind), whatever the sync's state says.
-  if (x.conflictHead) return wait('merge', `a ${opOf(x.conflictHead)} is in progress in the shared checkout (.git/${x.conflictHead})`, 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
-  const phase = syncPhase(sync, now, isSyncHolderGone(sync, x.files, x.lanes, now))
-  const minutes = Math.min(want.minutes, capMin)
+  if (x.conflictHead) return wait('merge', `waits for the ${opOf(x.conflictHead)} to finish`, `a ${opOf(x.conflictHead)} is in progress in the shared checkout (.git/${x.conflictHead})`, 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
+  const phase = phaseIn(x)
+  const minutes = Math.min(x.manual.minutes[f.id8] ?? want.minutes, capMin)
   const end = sync && isHolderInSync(sync, f.id8, phase) ? sync.hardEnd : now + minutes * 60_000 // A94: ends with the sync
-  if (sync && phase === 'planned' && end > sync.at - CUTOFF_MS) {
+  const limit = syncLimit(sync, phase, f.id8, end)
+  if (sync && limit?.kind === 'cutoff') {
     const room = Math.floor((sync.at - CUTOFF_MS - now) / 60_000)
-    return wait('sync', `a ${minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
+    return wait('sync', `would cross the sync cutoff ${hhmm(sync.at - CUTOFF_MS)}`, `a ${minutes}-min slot would end at ${hhmm(end)}, past the cutoff ${hhmm(sync.at - CUTOFF_MS)} of the sync at ${hhmm(sync.at)}`, room >= 5 ? `ask again for ≤ ${room} min, or wait until the sync is done` : 'wait until the sync is done')
   }
-  if (isSyncClaim(sync, f.id8, phase))
-    return wait('sync', `the sync at ${hhmm(sync.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, 'Editor grants wait until it is done')
+  if (sync && limit?.kind === 'claim')
+    return wait('sync', `sync ${phase === 'cutoff' ? 'cutoff, then freeze' : 'freeze'} until ${hhmm(sync.hardEnd)}`, `the sync at ${hhmm(sync.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, 'Editor grants wait until it is done')
   const pid = editorPid(x.probe)
   // The launch gate guards a launch: a slot that never launches the Editor (the sync worker's, a build) skips it.
   if (pid === null && want.launch !== false) {
     // A88 (c, re-review): a failed probe is read once more at once; failing twice, the launch is not allowed blind: the
     // agent reads free RAM itself and asks again with that number (`freeGb`), which the normal gate then reads.
-    if (!x.probe) return wait('probe', 'the RAM probe did not answer', x.probeFailed ? `read free RAM with ${FREE_RAM_READ} and call the editor tool request again with freeGb: <number>` : 'it is read again at once')
+    if (!x.probe) return wait('probe', 'no memory reading yet', 'the RAM probe did not answer', x.probeFailed ? `read free RAM with ${FREE_RAM_READ} and call the editor tool request again with freeGb: <number>` : 'it is read again at once')
     const gate = want.pie ? x.gates.pieGb : x.gates.nopieGb
     if (x.probe.freeGb < gate)
-      return wait('ram', `free RAM is ${x.probe.freeGb} GB after cleanup, under the launch gate of ${gate} GB for a slot ${want.pie ? 'with' : 'without'} PIE`, `the slot waits; memory is held by ${heavyList(x.probe)}`)
+      return wait('ram', `needs ${gate} GB, ${x.probe.freeGb} free`, `free RAM is ${x.probe.freeGb} GB after cleanup, under the launch gate of ${gate} GB for a slot ${want.pie ? 'with' : 'without'} PIE`, `the slot waits; memory is held by ${heavyList(x.probe)}`)
   }
   return { kind: 'grant', end, reuse: pid }
 }
@@ -745,11 +775,12 @@ const slotOf = (x: GrantInput, f: SessionFile, place: number, capMin = Infinity)
  * first in queue order whose own slot, capped at 30 min, is granted now (a request that never launches the Editor, or a
  * lower launch gate that free RAM meets; a sync's block, a merge in progress or a planned cutoff keep it waiting as they
  * would the head). Every session computes it from the same files and the shared machine reading, so they agree on who
- * passes; the lock's read-compare-write settles the rare split between two readings of free RAM. */
+ * passes; the lock's read-compare-write settles the rare split between two readings of free RAM. A117: a head the person
+ * placed is never passed (his order is the order). */
 type HeadState = { isMemory: false } | { isMemory: true; isAged: boolean; passer: { id8: string; lane: string; grant: Grant } | null }
 const headStateOf = (x: GrantInput, queue: readonly SessionFile[]): HeadState => {
   const [head, ...later] = queue
-  const d = head ? slotOf(x, head, 1) : null
+  const d = head && !isPlaced(x.manual, head.id8) ? slotOf(x, head, 1) : null
   if (!head?.want || d?.kind !== 'wait' || d.code !== 'ram') return { isMemory: false }
   const isAged = x.now - head.want.requestedAt >= PASS_AGING_MIN * 60_000
   for (const [i, f] of (isAged ? [] : later).entries()) {
@@ -791,7 +822,7 @@ export const mayAskYield = (x: GrantInput): { holder: string } | null => {
   const lease = x.files.find(f => f.id8 === x.lock.id8)
   if (lease?.holding?.pass === x.me8) return null // A113: a slot that passed this head (waiting for memory) is not asked to yield
   if (lease?.holding && !isYieldMoment({ now: x.now, since: lease.holding.since, end: lease.holding.end, editorUseAt: lease.editorUseAt })) return null
-  if (queueOf(x.files, x.lanes, x.now, x.sync)[0]?.id8 !== x.me8) return null
+  if (queueOf(x.files, x.lanes, x.now, x.sync, x.manual)[0]?.id8 !== x.me8) return null
   const asked = x.files.some(f => f.yieldAsks.some(a => a.holder === x.lock.id8 && x.now - a.at < YIELD_EVERY_MS))
   return asked ? null : { holder: x.lock.id8 }
 }
@@ -913,6 +944,14 @@ export const isOpenPhase = (p: Phase): boolean => p === 'planned' || p === 'cuto
 /** A94: this session holds the sync and it is in its cutoff or freeze: its own Editor slot goes first, uncapped, and ends
  * with the sync. */
 export const isHolderInSync = (s: SyncFile | null, me8: string, phase: Phase): boolean => Boolean(s && s.holder.id8 === me8 && (phase === 'cutoff' || phase === 'frozen'))
+/** A sync's limit on a lease of `id8` that would end at `end` (the editor tool's extend and the person's resize, A117): a
+ * planned sync's cutoff it would cross, or a sync in its cutoff or freeze that is not this session's (the Editor is the
+ * sync's: released by sync − 10 min); null when none. */
+export const syncLimit = (s: SyncFile | null, phase: Phase, id8: string, end: number): { kind: 'cutoff'; why: string } | { kind: 'claim'; why: string; releaseBy: number } | null => {
+  if (s && phase === 'planned' && end > s.at - CUTOFF_MS) return { kind: 'cutoff', why: `the lease would end at ${hhmm(end)}, past the sync cutoff ${hhmm(s.at - CUTOFF_MS)}` }
+  if (isSyncClaim(s, id8, phase)) return { kind: 'claim', why: `the sync at ${hhmm(s.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, releaseBy: s.at - RELEASE_BEFORE_MS }
+  return null
+}
 /** Another session's sync is in its cutoff or freeze: it needs the Editor (and the shared checkout) from this one. */
 export const isSyncClaim = (s: SyncFile | null, me8: string, phase: Phase): s is SyncFile => Boolean(s && s.holder.id8 !== me8 && (phase === 'cutoff' || phase === 'frozen'))
 
@@ -1086,18 +1125,25 @@ export const isSyncCommandOnly = (command: string): boolean => {
 /** An Edit/Write path that is the Editor owner lock. */
 export const isLockPath = (path: string): boolean => /(^|\/)Saved\/EDITOR_OWNER\.txt$/i.test((path ?? '').replace(/\\/g, '/'))
 
-const LOCK_WRITERS = new Set(['set-content', 'sc', 'add-content', 'ac', 'out-file', 'tee', 'tee-object', 'new-item', 'ni', 'copy-item', 'cp', 'copy', 'cpi', 'move-item', 'mv', 'move', 'mi', 'rm', 'del', 'erase', 'remove-item', 'ri', 'clear-content', 'clc', 'truncate', 'dd'])
+const FILE_WRITERS = new Set(['set-content', 'sc', 'add-content', 'ac', 'out-file', 'tee', 'tee-object', 'new-item', 'ni', 'copy-item', 'cp', 'copy', 'cpi', 'move-item', 'mv', 'move', 'mi', 'rm', 'del', 'erase', 'remove-item', 'ri', 'clear-content', 'clc', 'truncate', 'dd'])
 
-/** A shell command that writes the lock: a redirect into it, a writing verb that names it, an in-place sed,
- * or a .NET file write. Reading it is fine. */
-export const writesLock = (command: string): boolean =>
+/** A117: an Edit/Write path that is the person's queue order (Saved/A5R/queue-order.json). */
+export const isOrderPath = (path: string): boolean => /(^|\/)Saved\/A5R\/queue-order\.json$/i.test((path ?? '').replace(/\\/g, '/'))
+
+/** A shell command that writes the file `name` (a pattern of its file name): a redirect into it, a writing verb that names
+ * it, an in-place sed, or a .NET file write. Reading it is fine. */
+const writesFile = (command: string, name: RegExp): boolean =>
   programs(command).some(({ raw, verb, args }) => {
-    if (!/EDITOR_OWNER\.txt/i.test(raw)) return false
-    if (/(>>?|\|\s*(tee|Out-File|Set-Content|Add-Content)\b)[^|]*EDITOR_OWNER\.txt/i.test(raw)) return true
+    if (!name.test(raw)) return false
+    if (new RegExp(`(>>?|\\|\\s*(tee|Out-File|Set-Content|Add-Content)\\b)[^|]*${name.source}`, 'i').test(raw)) return true
     if (/WriteAll(Text|Lines|Bytes)|AppendAll(Text|Lines)/i.test(raw)) return true
     if (verb === 'sed' && args.some(a => /^-i/.test(a))) return true
-    return LOCK_WRITERS.has(verb)
+    return FILE_WRITERS.has(verb)
   })
+/** A shell command that writes the lock. */
+export const writesLock = (command: string): boolean => writesFile(command, /EDITOR_OWNER\.txt/i)
+/** A117: a shell command that writes the person's queue order. */
+export const writesOrder = (command: string): boolean => writesFile(command, /queue-order\.json/i)
 
 // ---------- notices (D6): one shape, one delivery per id per session ----------
 export type Notice = { id: string; text: string; isActionable: boolean }
@@ -1125,6 +1171,8 @@ export const NOTICES = {
     noticeText('Editor', `granted to this session until ${hhmm(end)}${pass ? ` (a slot of at most ${PASS_MAX_MIN} min before ${pass.lane}, first in the queue, which waits for memory)` : ''}${reuse ? ` (UnrealEditor PID ${reuse} is open: reuse it)` : ''}${cleanup ? `; cleanup: ${cleanup}` : ''}`, `${pass && !pass.launch ? 'do the work that launches no Editor (asked with launch: false; an Editor launch is refused in this slot)' : reuse ? 'use that Editor' : 'launch the Editor'}${pie ? ' (PIE needs 5 GB free to start)' : ''}; release with the editor tool (action release) when done, and before ${hhmm(end)}`),
   /** A113: an Unreal Editor runs in a pass slot that was asked with launch: false. */
   passLaunched: (pid: number, head: string): string => noticeText('Editor', `an Unreal Editor (PID ${pid}) runs in this session's slot, which went before ${head} (waiting for memory) because it was asked with launch: false`, 'close it now if it is yours (it takes the memory that head waits for), then do the work that launches no Editor; to launch one, release and request again without launch: false'),
+  /** A117: the person gave this session's lease another end (its HELD line, rewritten from any session's A5R). */
+  resized: (end: number, was: number): string => noticeText('Editor lease', `the person gave your lease another end: it now ends at ${hhmm(end)} (it ended at ${hhmm(was)})`, 'nothing to do: use the time; release with the editor tool when done'),
   /** Fable review D4: two grants met in the same minute (or the line was rewritten): this session lost the lock it took. */
   lockLost: (who: string): string => noticeText('Editor', `the lock names ${who}, not this session (two grants met in the same minute, or the line was rewritten)`, 'your request stays queued in its place; do work that needs no Editor meanwhile'),
   /** A114: a queued session idle an hour while the Editor is free and only memory holds its request back. */
@@ -1269,6 +1317,7 @@ export const noticeIds = {
   nudge: (window: string) => `editor:nudge:${window}`,
   passLaunched: (since: number, now: number) => `editor:pass-launch:${since}:${Math.floor(now / PASS_TELL_MS)}`,
   lockLost: (since: number) => `editor:lock-lost:${since}`,
+  resized: (since: number, end: number) => `editor:resized:${since}:${end}`,
   memory: (at: number) => `${MEMORY_NOTE_ID}${at}`,
   goneEditor: (holder: string, pid: number) => `editor:gone:${holder}:${pid}`,
   pieAbort: (n: number) => `ram:pie-abort:${n}`,
@@ -1320,7 +1369,7 @@ export const withoutModOf = (me8: string, files: readonly SessionFile[], lanes: 
 /** What the panel says about the sessions on this machine: how many run (the client's list), how many in S2 (Ather's
  * lanes and a5r's files), by intent, who holds or waits for the Editor, who holds the sync, and the live S2
  * sessions without a5r 0.4. */
-export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase }): Overview => {
+export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase; manual: ManualOrder }): Overview => {
   const { now } = x
   const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
   const ids = new Set<string>([x.me8, ...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...x.files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.id8)].filter(Boolean))
@@ -1336,7 +1385,7 @@ export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lane
     elsewhere: active ? active.filter(r => !x.isS2Cwd(r.cwd)).length : null,
     intents: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
     editor,
-    waiting: queueOf(x.files, x.lanes, now, x.sync).map(f => laneOf(f.id8)),
+    waiting: queueOf(x.files, x.lanes, now, x.sync, x.manual).map(f => laneOf(f.id8)),
     sync: x.sync && isOpenPhase(x.phase) ? `${x.sync.holder.id8 === x.me8 ? 'this session' : x.sync.holder.lane} ${hhmm(x.sync.at)} ${x.phase}` : 'none',
     withoutMod: withoutModOf(x.me8, x.files, x.lanes, now),
   }
@@ -1479,37 +1528,53 @@ export const SESSION_ROWS = 6
 /** The record title Claude Code keeps is cut to 60 characters (`titleFromRecord`); the app's is whole. */
 const titleKey = (s: string | undefined | null): string => oneLine(s).slice(0, 60).trim().toLowerCase()
 
-/** A26/A31: the S2 sessions that are open now, as a short named list: this session first (★), then whoever holds the
- * Editor or the sync or waits in the queue, then the most recently active; at most six rows and how many more.
+/** A31: what matches a session to the app's own session list: this session and its title, the session files, the app's
+ * list (`clients`, null when it could not be read), which of its folders are the S2 checkout, the record titles. */
+export type AppFacts = { me8: string; meTitle: string; files: readonly SessionFile[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; names: ReadonlyMap<string, string>; now: number }
+
+/** A31: a session's row in the app's own list. The app's ids are its own (`local_<uuid>`, MEASURED: not the CLI session ids
+ * that Ather's lanes and a5r's files use), so a session is matched by title: its Claude Code record title (`names`) or its
+ * a5r file title against the app's current title (first 60 characters). Undefined: no app list (the lanes decide); null:
+ * the app does not list it (closed, archived, or not matched). */
+export const appRowOf = (x: AppFacts): ((id8: string) => ClientRow | null | undefined) => {
+  const appRows = x.clients?.filter(r => !r.isArchived && x.isS2Cwd(r.cwd)) ?? null
+  const fresh = x.files.filter(f => x.now - f.heartbeatAt <= HEARTBEAT_STALE_MS)
+  return id8 => {
+    if (!appRows) return undefined
+    const keys = [x.names.get(id8), fresh.find(f => f.id8 === id8)?.title].map(titleKey).filter(Boolean)
+    return appRows.find(r => keys.includes(titleKey(r.title))) ?? null
+  }
+}
+/** A116: the app's title of a session ('' when the app does not list it), this one's own title for this session: what names
+ * the Editor list's rows and what the person types to name one. */
+export const appTitleOf = (x: AppFacts): ((id8: string) => string) => {
+  const rowOf = appRowOf(x)
+  return id8 => oneLine(id8 === x.me8 ? x.meTitle : rowOf(id8)?.title)
+}
+
+/** The sessions list's input: the app match, Ather's lanes, the sync and its phase, and (A116) the Editor list's sessions. */
+export type SessionsFacts = AppFacts & { lanes: readonly LaneBeat[]; sync: SyncFile | null; phase: Phase; inEditor: ReadonlySet<string> }
+
+/** A26/A31: the S2 sessions that are open now, as a short named list: this session first (★), then the sync's holder,
+ * then the most recently active; at most six rows and how many more. A116: the sessions in the Editor list (`inEditor`:
+ * its holder and its queue) are left out, so no session is listed twice.
  *
- * Open means in the app's own session list (`clients`: not archived, in the S2 checkout). The app's ids are its own
- * (`local_<uuid>`, MEASURED: not the CLI session ids that Ather's lanes and a5r's files use), so a live lane or a5r file
- * is matched to an app row by title: its Claude Code record title (`names`) or its a5r file title against the app's
- * current title (first 60 characters). A matched session shows the app's current title (a rename shows at once); a
- * session the app does not list (closed, archived, or not matched) is dropped. Without the app's list: live lanes
- * only (fresh, not ended), titled from the record. This session is always listed, titled from the app. */
-export const sessionsView = (x: { me8: string; meTitle: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase; names: ReadonlyMap<string, string> }): SessionsView => {
+ * Open means in the app's own session list (`clients`: not archived, in the S2 checkout), matched by appRowOf; a matched
+ * session shows the app's current title (a rename shows at once); a session the app does not list is dropped. Without
+ * the app's list: live lanes only (fresh, not ended), titled from the record. This session is always listed, titled from
+ * the app. */
+export const sessionsView = (x: SessionsFacts): SessionsView => {
   const { now } = x
   const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
   const freshFiles = x.files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS)
-  const appRows = x.clients?.filter(r => !r.isArchived && x.isS2Cwd(r.cwd)) ?? null
-  const candidates = [...new Set<string>([...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...(appRows ? freshFiles.map(f => f.id8) : [])].filter(id8 => id8 && id8 !== x.me8))]
-  const appOf = (id8: string): ClientRow | null | undefined => {
-    if (!appRows) return undefined // no app list: lanes decide
-    const keys = [x.names.get(id8), freshFiles.find(f => f.id8 === id8)?.title].map(titleKey).filter(Boolean)
-    return appRows.find(r => keys.includes(titleKey(r.title))) ?? null
-  }
-  const queue = queueOf(x.files, x.lanes, now, x.sync).map(f => f.id8)
+  const appOf = appRowOf(x)
+  const candidates = [...new Set<string>([...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...(x.clients ? freshFiles.map(f => f.id8) : [])].filter(id8 => id8 && id8 !== x.me8))]
   const syncOpen = x.sync && isOpenPhase(x.phase) ? x.sync : null
   const rowOf = (id8: string, app: ClientRow | null | undefined): SessionRow => {
     const lane = liveLanes.find(l => l.sessionId.toLowerCase().startsWith(id8))
     const file = freshFiles.find(f => f.id8 === id8)
     const isMe = id8 === x.me8
-    const holds: string[] = []
-    if (x.lock.id8 === id8 && (x.lock.kind === 'held' || x.lock.kind === 'handed')) holds.push(`Editor${x.lock.end ? ` →${x.lock.end}` : ''}`)
-    if (syncOpen && syncOpen.holder.id8 === id8) holds.push(`sync ${hhmm(syncOpen.at)}`)
-    const place = queue.indexOf(id8)
-    if (place >= 0) holds.push(`queue #${place + 1}`)
+    const holds = syncOpen && syncOpen.holder.id8 === id8 ? [`sync ${hhmm(syncOpen.at)}`] : []
     const activeAt = lane?.lastActiveAt ?? (app && app.lastActivityAt > 0 ? app.lastActivityAt : null)
     const seenAt = activeAt ?? (isMe ? now : (file?.heartbeatAt ?? lane?.mtimeMs ?? null))
     return {
@@ -1530,9 +1595,10 @@ export const sessionsView = (x: { me8: string; meTitle: string; files: readonly 
     if (app === undefined && !liveLanes.some(l => l.sessionId.toLowerCase().startsWith(id8))) continue
     rows.push(rowOf(id8, app))
   }
+  const listed = rows.filter(r => !x.inEditor.has(r.id8))
   const rank = (r: SessionRow) => (r.isMe ? 0 : r.holds.length > 0 ? 1 : 2)
-  rows.sort((a, b) => rank(a) - rank(b) || (a.activeMin ?? 1e9) - (b.activeMin ?? 1e9) || a.id8.localeCompare(b.id8))
-  return { header: `Sessions · ${rows.length} open`, rows: rows.slice(0, SESSION_ROWS), more: Math.max(0, rows.length - SESSION_ROWS), source: appRows ? 'app' : 'lanes' }
+  listed.sort((a, b) => rank(a) - rank(b) || (a.activeMin ?? 1e9) - (b.activeMin ?? 1e9) || a.id8.localeCompare(b.id8))
+  return { header: `Other sessions · ${listed.length}`, rows: listed.slice(0, SESSION_ROWS), more: Math.max(0, listed.length - SESSION_ROWS), source: x.clients ? 'app' : 'lanes' }
 }
 
 /** A29: a title on one line: newlines, tabs and runs of spaces become one space; blank stays blank (the row then

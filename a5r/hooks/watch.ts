@@ -4,7 +4,8 @@
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
-import { holderText, queueRowText, type QueueView } from './lease.ts'
+import { HOLDER_CONTROLS, QUEUED_CONTROLS, type Control } from './order.ts'
+import type { EditorList, EditorRow, LookRow } from './panel.ts'
 import { A5R_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
 
 // A31: this session's ★ takes the theme's gold (read at each draw, A40).
@@ -347,37 +348,80 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
   })
 }
 
-/** A105: the Editor queue under the tools, in the sessions list's style: a section label with how many wait, the holder
- * (▶, its lane, then a quiet line: granted at, Editor seen at, PIE since, extensions, time left), each queued session (its
- * place, ★ for this session, its lane, then a quiet line: waited, minutes asked, PIE / build), and A100's 24-hour summary.
- * Names shorten; every quiet line wraps inside the pane. */
-export const queueBox = (el: El, v: QueueView, summary: string, look?: { ink: string; quiet: string }): unknown => {
+/** A116 / A117: the one Editor list under the tools, in the sessions list's style: the label with its head (who has it,
+ * time left), the holder (▶) and each queued row: its mark, a plain Button the person presses to select the row; the
+ * name (the app's title, else the lane), which shortens; one quiet line that wraps (waited, minutes, PIE / build, placed by
+ * hand, one plain reason). Under the selected row, its controls, plain Buttons with one-key hotkeys that wrap inside the
+ * pane (A117: the person's own, never a tool's); then the day's line. */
+export const editorBox = (el: El, list: EditorList, ui: { picked: string | null; onPick: (id8: string) => void; onControl: (id8: string, c: Control) => void }, look?: { ink: string; quiet: string }): unknown => {
   const quiet = look?.quiet ?? ATHER.quiet
-  const { Box, Text } = el
-  const entry = (key: string, mark: unknown, name: string, line: string, isMe: boolean) =>
+  const { Box, Text, Button } = el
+  const controls = (r: EditorRow, key: string) =>
     Box({
+      key: `${key}-ctl`,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      columnGap: 2,
+      paddingLeft: 2,
+      width: '100%',
+      children: (r.isHolder ? HOLDER_CONTROLS : QUEUED_CONTROLS).map(c => Button({ key: `${key}-ctl-${c.id}`, label: c.label, hotkey: c.hotkey, plain: true, onPress: () => ui.onControl(r.id8, c) })),
+    })
+  const entry = (r: EditorRow) => {
+    const key = r.isHolder ? 'hai-queue-holder' : `hai-queue-${r.id8}`
+    return Box({
       key,
       flexDirection: 'column',
       width: '100%',
       children: [
-        Box({ key: `${key}-name`, flexDirection: 'row', columnGap: 1, children: [Box({ key: `${key}-mark`, flexShrink: 0, children: [mark] }), Box({ key: `${key}-lane`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ bold: isMe, wrap: 'truncate-end', ...(look ? { color: look.ink } : {}), children: name })] })] }),
-        Box({ key: `${key}-line`, paddingLeft: 2, width: '100%', children: [Text({ color: quiet, wrap: 'wrap', children: line })] }),
+        Box({
+          key: `${key}-name`,
+          flexDirection: 'row',
+          columnGap: 1,
+          children: [
+            Box({ key: `${key}-mark`, flexShrink: 0, children: [Button({ key: `hai-queue-pick-${r.id8 || 'holder'}`, label: r.mark, plain: true, dimColor: ui.picked !== r.id8, onPress: () => ui.onPick(r.id8) })] }),
+            Box({ key: `${key}-lane`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [Text({ bold: r.isMe, wrap: 'truncate-end', ...(look ? { color: look.ink } : {}), children: r.name })] }),
+          ],
+        }),
+        Box({ key: `${key}-line`, paddingLeft: 2, width: '100%', children: [Text({ color: quiet, wrap: 'wrap', children: r.line })] }),
+        ...(ui.picked === r.id8 ? [controls(r, key)] : []),
       ],
     })
-  const h = v.holder
+  }
   return Box({
     key: 'hai-queue',
     flexDirection: 'column',
     width: '100%',
     marginTop: 1,
     children: [
-      sectionLabel(el, 'hai-queue-head', `Editor queue · ${v.rows.length} waiting`),
-      ...(h ? [entry('hai-queue-holder', Text({ color: A5R_LOOK.gold, children: '▶' }), `${h.lane}${h.isMe ? ' ★' : ''}`, holderText(h), h.isMe)] : []),
-      ...v.rows.map(r => entry(`hai-queue-${r.id8}`, Text({ color: r.isMe ? A5R_LOOK.gold : quiet, children: r.isMe ? '★' : String(r.place) }), r.isMe ? `${r.place} ${r.lane}` : r.lane, queueRowText(r), r.isMe)),
-      ...(summary ? [Box({ key: 'hai-queue-summary', width: '100%', children: [Text({ color: quiet, wrap: 'wrap', children: summary })] })] : []),
+      sectionLabel(el, 'hai-queue-head', 'Editor', [Text({ color: quiet, wrap: 'wrap', children: `· ${list.head}` })]),
+      ...list.rows.map(entry),
+      ...(list.today ? [Box({ key: 'hai-queue-summary', paddingLeft: 2, width: '100%', children: [Text({ color: quiet, wrap: 'wrap', children: list.today })] })] : []),
     ],
   })
 }
+
+/** A116: NEEDS A LOOK, drawn only when a current verdict needs the person: per row a warning mark and its one-line reason,
+ * and its next step under it. */
+export const lookBox = (el: El, rows: readonly LookRow[], look?: { ink: string; quiet: string }): unknown =>
+  el.Box({
+    key: 'hai-look',
+    flexDirection: 'column',
+    width: '100%',
+    children: [
+      sectionLabel(el, 'hai-look-head', 'Needs a look'),
+      ...rows.map((r, i) =>
+        el.Box({
+          key: `hai-look-${i}`,
+          flexDirection: 'column',
+          width: '100%',
+          children: [
+            el.Box({ key: `hai-look-${i}-what`, flexDirection: 'row', columnGap: 1, width: '100%', children: [el.Text({ color: STATUS.warn, children: '⚠' }), el.Box({ key: `hai-look-${i}-text`, flexGrow: 1, flexShrink: 1, minWidth: 0, children: [el.Text({ wrap: 'wrap', ...(look ? { color: look.ink } : {}), children: r.what })] })] }),
+            el.Box({ key: `hai-look-${i}-next`, paddingLeft: 2, width: '100%', children: [el.Text({ color: look?.quiet ?? ATHER.quiet, wrap: 'wrap', children: `→ ${r.next}` })] }),
+          ],
+        }),
+      ),
+    ],
+  })
 
 /** A28/A30: one part of the compact A5R line in Ather's pane: its icon, an optional name that may shorten (the Editor
  * holder's), its value that never shortens (a time, free GB, a count), and whether it needs attention. */
