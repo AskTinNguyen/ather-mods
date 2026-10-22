@@ -66,3 +66,13 @@ export const until = async (test, ms = 20000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 150))) if (await test()) return true
   return false
 }
+
+// A booted session's own copy of the mod's hooks, as each Claude Code session loads the mod on its own: module state
+// (console.mjs's `places`, `intents` and the rest) belongs to one session there, so it does here. With one shared copy,
+// a second session's start reset the first's, and its reads landed in the other's pane.
+let booted = 0
+export const sessionHooks = async () => {
+  const dir = new URL(`./out/s${++booted}/`, import.meta.url)
+  fs.cpSync(new URL('./out/hooks/', import.meta.url), new URL('hooks/', dir), { recursive: true })
+  return import(new URL('hooks/ather.mjs', dir).href)
+}

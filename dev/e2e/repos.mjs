@@ -6,11 +6,10 @@ import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { aborts, createEngine } from './engine.mjs'
-import { byKey, checks, join, nodesOf, runArgs, sandbox, until, writeDrawn } from './harness.mjs'
+import { byKey, checks, join, nodesOf, runArgs, sandbox, sessionHooks, until, writeDrawn } from './harness.mjs'
 import { check } from './screen.mjs'
 
 const { report: REPORT, out: OUT } = runArgs()
-const { register } = await import('./out/hooks/ather.mjs')
 
 const BASE = sandbox('ather-checkouts-')
 const { expect, finish } = checks()
@@ -91,6 +90,7 @@ const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguy
   const engine = createEngine({ root, surfaces: [], user, writable, ghAt, kept, store })
   engine.setSessionId(sessionId)
   for (const [name, answer] of Object.entries(tools)) engine.setAppTool(name, answer)
+  const { register } = await sessionHooks()
   register(engine.on, { briefGate: 'warn' })
   await engine.start(true, cwd)
   // The timezone probe and the workspace read run in the background.
