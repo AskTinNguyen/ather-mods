@@ -144,7 +144,7 @@ export type SessionFile = {
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
  * running, A58) or an unseen grant passed on (no turn since it, 10 min); A60: kept in Saved/A5R/released/<id8>.json. */
-export type Released = { kind: 'lapsed' | 'unseen'; at: number; by: string; since: number; end: number; requestedAt?: number }
+export type Released = { kind: 'lapsed' | 'unseen' | 'released'; at: number; by: string; since: number; end: number; requestedAt?: number } // released: Fable review S3, freed by the person past its end
 
 export const blankSession = (session: string, lane: string, title: string, now: number): SessionFile => ({
   v: 1,
@@ -425,6 +425,12 @@ export const gitBusyNote = (b: GitBusy): { fact: string; step: string } => {
 
 /** A58: whether the lease is a build: the holder asked with build, or its lock line's note says so. */
 export const isBuildLease = (lock: LockLine, holder: SessionFile | undefined): boolean => Boolean(holder?.want?.build) || /\(build\)/i.test(lock.note)
+/** The lock note's build mark (takeLock writes it, isBuildLease reads it) and the note without it. */
+export const BUILD_MARK = ' (build)'
+export const withoutBuildMark = (note: string): string => (note.endsWith(BUILD_MARK) ? note.slice(0, -BUILD_MARK.length) : note)
+/** A118: a Focus lease's mark: its holder's request was made for a Focus, or its lock note starts with the Focus's own words. */
+export const FOCUS_NOTE = 'Focus: '
+export const isFocusLeaseMark = (lock: LockLine, holder: SessionFile | undefined): boolean => holder?.want?.focus !== undefined || lock.note.startsWith(FOCUS_NOTE.trim())
 
 /** A54 / A55: whether the lock's lease may be released by any session now, and why. Never while any Unreal Editor
  * process runs (the overrun notice stays) or while the lock's own pid still runs; never without a probe reading.
@@ -444,9 +450,10 @@ export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lane
   const t = focus ? { ...read, end: Math.min(read.end, focus.end) } : read
   if (unrealPids(x.probe).length > 0) return null
   if (lock.pid !== null && x.probe.procs.some(p => p.pid === lock.pid)) return null
-  // A58: never while a build or a game runs, nor for a build lease.
+  // A58: never while a build or a game runs, nor for a build lease. Fable review S3: a Focus lease is marked a build lease only
+  // for an A5R before 0.25.0; once its Focus is over (a running one returned above) it lapses as any lease.
   const holder = x.files.find(f => f.id8 === lock.id8)
-  if (buildProcs(x.probe).length > 0 || isBuildLease(lock, holder)) return null
+  if (buildProcs(x.probe).length > 0 || (isBuildLease(lock, holder) && !isFocusLeaseMark(lock, holder))) return null
   // A58: lapsed only as the S2 standard (section 2) allows: the holder is gone (and no Editor runs, above); a live
   // holder past its end keeps its lease and the overrun notice.
   if (now >= t.end + LAPSE_MS) return livenessOf(lock.id8, x.files, x.lanes, now) === 'gone' ? { kind: 'lapsed', at: now, by: '', since: t.since, end: t.end } : null
@@ -1211,6 +1218,8 @@ export const NOTICES = {
   lapsed: (r: Released): string => noticeText('Editor lease', `your lease (${hhmm(r.since)}–${hhmm(r.end)}) lapsed: ${Math.round((r.at - r.end) / 60_000)} min past its end with no Editor running, so ${r.by || 'another session'} released it at ${hhmm(r.at)} and the queue went on`, 'nothing of yours was closed; request the Editor again with the editor tool if you still need it'),
   /** A91: the Editor came free with nobody queued, and this session's last message said it was waiting for it. */
   nudge: (freeGb: number | null): string => noticeText('Editor', `the Editor is free now (free memory ${freeGb === null ? '?' : freeGb} GB)`, 'if your task was waiting for it, request it with the editor tool; otherwise ignore this'),
+  /** Fable review S3: the person freed this session's lock past its lease's end. */
+  releasedByPerson: (r: Released): string => noticeText('Editor lease', `your lease (${hhmm(r.since)}–${hhmm(r.end)}) was past its end, so ${r.by} freed the lock at ${hhmm(r.at)} and the queue went on`, 'stop using the Editor (nothing of yours was closed); request it again with the editor tool if you still need it'),
   passedOn: (r: Released): string => noticeText('Editor', `the Editor was granted to this session at ${hhmm(r.since)}, but this session ran no turn in the next ${Math.round((r.at - r.since) / 60_000)} min and launched no Editor, so ${r.by || 'another session'} passed it to the next in the queue at ${hhmm(r.at)}`, 'request it again with the editor tool when you are ready to use it'),
   goneEditor: (who: string, pid: number): string => noticeText('Editor', `${who} is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (the lease is freed once no UnrealEditor runs); if it is hung, add a finding for Ather\'s Needs you (AGENTS.md: force-kill only a hung Editor whose holder is confirmed gone)'),
   pieAbort: (free: number): string => noticeText('RAM', `free RAM is ${free} GB, under the ${PIE_ABORT_GB} GB abort line, while this session's PIE runs`, 'stop PIE now, then free memory before starting it again'),

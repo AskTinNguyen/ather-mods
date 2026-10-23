@@ -47,6 +47,11 @@
       "description": "The same hard end for a sync planned with a build (/a5r sync HH:MM build, or Build: on in the panel's Sync ⋯ dialog).",
       "default": 90
     },
+    "editorLaunchers": {
+      "type": "string",
+      "title": "A5R: your own Editor launcher scripts (optional)",
+      "description": "Script names (comma-separated, for example launch_s2.ps1) whose run starts an Unreal Editor, set in your own settings for the projects that have them. A5R then treats running one as an Editor launch (it needs the Editor lock, and while another session has a Focus it is refused). Unset: no script name is read as a launch (only UnrealEditor itself, Start-Process of it, and the probe)."
+    },
     "engineRoot": {
       "type": "string",
       "title": "A5R Sync main: engine root for the sync's build (per machine, optional)",

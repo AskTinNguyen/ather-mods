@@ -361,7 +361,7 @@ test('A117: the holder\'s +30 from the panel is accepted past the caps a model\'
   await pane($, w)
   await $.ui.press({ plugin: 'a5r', key: `hai-queue-pick-${ME8}`, surface: 'terminal' })
   const tree = await pane($, w)
-  expect((find(tree, `hai-queue-holder-ctl`)?.children ?? []).map(c => (c as Tree).props?.label)).toEqual(['+15 min', '+30 min', '+60 min', 'Focus…']) // rev 41 (A118): and Focus… while none runs
+  expect((find(tree, `hai-queue-holder-ctl`)?.children ?? []).map(c => (c as Tree).props?.label)).toEqual(['+15 min', '+30 min', '+60 min', 'Release', 'Focus…']) // rev 41 (A118): and Focus… while none runs
   await $.ui.press({ plugin: 'a5r', key: 'hai-queue-holder-ctl-add30', surface: 'terminal' })
   expect(parseLockLine(w.read(LOCK)).end).toBe('15:15')
   await w.clock.advance(MIN)

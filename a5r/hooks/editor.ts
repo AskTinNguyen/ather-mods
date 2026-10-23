@@ -68,7 +68,11 @@ const START_VERBS = new Set(['start-process', 'start', 'saps'])
 const STOP_VERBS = new Set(['stop-process', 'spps', 'taskkill', 'kill', 'pkill', 'killall'])
 const editorArg = (a: string): boolean => a.split(/[^\w.:\\/-]+/).some(w => EDITOR_BIN.test(program(w)))
 const isHeadless = (name: string): boolean => /unrealeditor-cmd/i.test(name)
-const actOf = ({ verb, args }: Program): EditorAct | null => {
+/** Fable review D3: the interpreters a launcher script runs under (`powershell -File x.ps1`, `python lab.py`); the script run
+ * by its own name counts too. */
+const SCRIPT_HOSTS = new Set(['powershell', 'pwsh', 'bash', 'sh', 'python', 'python3', 'py', 'node'])
+const actOf = ({ verb, args }: Program, launchers: readonly string[]): EditorAct | null => {
+  if (launchers.includes(verb) || (SCRIPT_HOSTS.has(verb) && args.some(a => launchers.includes(program(a))))) return 'launch'
   if (EDITOR_BIN.test(verb) && args.some(a => /\.uproject$/i.test(a))) return isHeadless(verb) ? 'headless' : 'launch'
   const named = args.find(editorArg)
   if (named && START_VERBS.has(verb)) return isHeadless(named) ? 'headless' : 'launch'
@@ -77,20 +81,25 @@ const actOf = ({ verb, args }: Program): EditorAct | null => {
 }
 /** What a tool call does to an Unreal Editor: an Unreal MCP call's kind (mcpCallKind), or a shell command's act. */
 export type EditorKind = ReturnType<typeof mcpCallKind> | EditorAct | null
-export const editorShellAct = (command: string): EditorAct | null => programs(command).map(actOf).find(act => act !== null) ?? null
+/** `launchers`: the person's own Editor launcher scripts (Fable review D3: the `editorLaunchers` option, script names in lower
+ * case; none by default, so no project's script is named in the plugin, A111). */
+export const editorShellAct = (command: string, launchers: readonly string[] = []): EditorAct | null => programs(command).map(p => actOf(p, launchers)).find(act => act !== null) ?? null
+/** The `editorLaunchers` option read: comma- or space-separated script names, in lower case. */
+export const launchersOf = (option: unknown): string[] => (typeof option === 'string' ? option.split(/[\s,;]+/).map(program).filter(Boolean) : [])
 
 /** A120 (rev 41): a build of an Unreal project: Build.bat / .sh / .cmd, UnrealBuildTool (or `dotnet …UnrealBuildTool.dll`),
- * RunUAT. */
-const isBuildProgram = ({ verb, args }: Program): boolean => /^(build\.(bat|sh|cmd)|unrealbuildtool|runuat(\.(bat|sh|command))?)$/.test(verb) || (verb === 'dotnet' && args.some(a => /unrealbuildtool\.dll$/i.test(a)))
+ * RunUAT; Fable review D3: MSBuild (of a project's .sln). */
+const isBuildProgram = ({ verb, args }: Program): boolean => /^(build\.(bat|sh|cmd)|unrealbuildtool|runuat(\.(bat|sh|command))?|msbuild)$/.test(verb) || (verb === 'dotnet' && args.some(a => /unrealbuildtool\.dll$/i.test(a)))
 export const isUnrealBuild = (command: string): boolean => programs(command).some(isBuildProgram)
-/** A120: the .uproject paths a command names (`-project=<path>`, a bare argument, inside a quoted argument list), resolved
- * against `cwd` when relative. A path with a space in it is not read whole (best effort, as every shell check here). */
+/** A120: the .uproject (Fable review D3: and .sln) paths a command names (`-project=<path>`, a bare argument, inside a quoted
+ * argument list), resolved against `cwd` when relative. A path with a space in it is not read whole (best effort, as every
+ * shell check here). */
 export const projectsOf = (command: string, cwd: string): string[] =>
-  [...(command ?? '').matchAll(/["'=\s]?((?:[A-Za-z]:)?[^"'\s=]*\.uproject)(?![\w.])/gi)].map(m => norm(m[1] ?? '', cwd))
+  [...(command ?? '').matchAll(/["'=\s]?((?:[A-Za-z]:)?[^"'\s=]*\.(?:uproject|sln))(?![\w.])/gi)].map(m => norm(m[1] ?? '', cwd))
 
 /** A shell command that opens or closes the shared Editor (headless UnrealEditor-Cmd is not it). */
-export const isEditorStartStop = (command: string): boolean => {
-  const act = editorShellAct(command)
+export const isEditorStartStop = (command: string, launchers: readonly string[] = []): boolean => {
+  const act = editorShellAct(command, launchers)
   return act === 'launch' || act === 'stop'
 }
 

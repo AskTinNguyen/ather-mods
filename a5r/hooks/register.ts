@@ -2,7 +2,7 @@ import type { EngineInterface as Engine, Register, RenderElement } from 'claude-
 import { A5R, SHELLS, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark } from './decision.ts'
-import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, lockProblem, mcpCallKind, parseEditorLock, type EditorKind } from './editor.ts'
+import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, launchersOf, lockProblem, mcpCallKind, parseEditorLock, type EditorKind } from './editor.ts'
 import {
   CUTOFF_MS, DIR, HARD_END_WARN_MS, isHolderInSync, SYNC_BUILD_MIN, SYNC_MERGE_MIN, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
@@ -10,9 +10,9 @@ import {
   PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, passNoLaunch, PASS_NO_LAUNCH_NEXT, PASS_MAX_MIN, type Grant,
   DEFAULT_GATES, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
-  type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want, type FocusLease, claimIn,
+  BUILD_MARK, withoutBuildMark, type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want, type FocusLease, claimIn,
 } from './coord.ts'
-import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
+import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, afterFocusWant, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
 import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, appendCapped, endLease, holderNotices, holderText, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
@@ -51,7 +51,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, editorBox, lookBox, session
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string }
+type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -387,11 +387,11 @@ async function editParts($: Engine, tool: string, e: Input): Promise<[string, st
 const isUnrealMcp = (tool: string): boolean => tool.startsWith('mcp__') && /unreal/i.test(tool)
 
 /** What a tool call does to an Unreal Editor: an Unreal MCP call's kind, a shell command's act (editor.ts). */
-const editorKindOf = (tool: string, e: Input): EditorKind => (isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) ? editorShellAct(str(e.command)) : null)
+const editorKindOf = (opts: Opts, tool: string, e: Input): EditorKind => (isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) ? editorShellAct(str(e.command), launchersOf(opts.editorLaunchers)) : null)
 
 /** The Editor gate: null when the call may touch the Editor, else why not and what to do. */
 async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Promise<string | null> {
-  const kind = editorKindOf(tool, e)
+  const kind = editorKindOf(opts, tool, e)
   if (!kind || kind === 'read') return null
   if (kind === 'save-all') return 'save-all saves every dirty package, other lanes\' included → list the dirty packages and save each one by exact path'
   // A113 (Fable review D1): a launch:false pass slot launches and drives no Editor, however one came to run; it may stop one.
@@ -1239,10 +1239,10 @@ function heldNow(now: number, orEnd = now): Holding {
 
 /** The HELD line of this session's lease rewritten with a new end (the editor tool's extend, and the sync's moved hard end):
  * the line written, or null when the lock changed meanwhile. */
-async function rewriteLease($: Engine, opts: Opts, h: Holding, end: number, now: number, extended = h.extended): Promise<string | null> {
+async function rewriteLease($: Engine, opts: Opts, h: Holding, end: number, now: number, extended = h.extended, note = lock.note || me?.want?.what || 'Editor work'): Promise<string | null> {
   if (!me) return null
   const w = me.want
-  const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid: lock.pid ?? editorPid(probe), end, mode: w?.mode ?? 'interactive', pausable: w?.pausable ?? true, nextSafe: w?.nextSafe ?? 'after save', note: lock.note || w?.what || 'Editor work' })
+  const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid: lock.pid ?? editorPid(probe), end, mode: w?.mode ?? 'interactive', pausable: w?.pausable ?? true, nextSafe: w?.nextSafe ?? 'after save', note })
   if (!(await writeLock($, opts, line))) return null
   me = { ...me, holding: { ...h, end, extended } }
   await saveMe($, opts, now)
@@ -1516,11 +1516,17 @@ async function focusStep($: Engine, opts: Opts, now: number): Promise<void> {
   const f = focusNow(now)
   if (!me || !focusFile) return
   const mine = f?.id8 === me8 ? f : null
-  if (mine?.isRunning) me = { ...me, want: focusWant(mine, now, me.want) }
+  // Fable review D2: the Focus's lease is no pass slot (it launches and keeps the Editor to its box end).
+  if (mine?.isRunning) me = { ...me, want: focusWant(mine, now, me.want), holding: me.holding && { ...me.holding, pass: undefined } }
   for (const n of focusNotices(focusFile, { ...grantInput(now), holds: holdsLock(), told: [...delivered, ...pending.map(p => p.id)], titleOf: appTitleOf(appNow(now)) })) push(n)
   if (!mine?.isRunning && me.want?.focus !== undefined && !holdsLock()) me = { ...me, want: null }
-  const h = mine && holdsLock() ? heldNow(now) : null
+  const h = holdsLock() && focusFile.id8 === me8 ? heldNow(now) : null
   if (mine && h && Math.floor(h.end / 60_000) !== Math.floor(mine.end / 60_000) && (mine.isRunning || mine.end < h.end)) await rewriteLease($, opts, h, mine.end, now)
+  // Fable review S3: its Focus over (the box ran out, or the person's end and its grace passed), the lease is an ordinary one.
+  else if (h && !mine?.isRunning && me.want?.focus !== undefined && now >= h.end) {
+    me = { ...me, want: afterFocusWant(me.want) }
+    await rewriteLease($, opts, h, h.end, now, h.extended, withoutBuildMark(lock.note))
+  }
 }
 
 /** The holder's side (lease end, overrun, idle, yield asks) and the waiter's (recover, cleanup, grant, yield). */
@@ -1635,7 +1641,9 @@ async function appendInbox<T>($: Engine, opts: Opts, box: Inbox<T>, id8: string,
   await $.fs.write(`${hfDir()}/${box.folder}/${id8}.json`, JSON.stringify({ v: 1, [box.field]: items })).catch(err => $.ui.log(`a5r: ${box.folder}/${id8}.json not written: ${String(err)}`, { to: 'debug' }))
 }
 /** A60: the releases other sessions made of this holder's lease (A54, A55). */
-const releases: Inbox<Released> = { folder: 'released', field: 'releases', isItem: r => typeof r.since === 'number' && (r.kind === 'lapsed' || r.kind === 'unseen') }
+/** What a holder is told of each kind of release another session's A5R made (A54, A55; Fable review S3 the person's). */
+const RELEASE_NOTICE: Record<Released['kind'], (r: Released) => string> = { lapsed: NOTICES.lapsed, unseen: NOTICES.passedOn, released: NOTICES.releasedByPerson }
+const releases: Inbox<Released> = { folder: 'released', field: 'releases', isItem: r => typeof r.since === 'number' && r.kind in RELEASE_NOTICE }
 /** A91: the nudges other sessions sent this session when the Editor came free. */
 type Nudge = { window: string; at: number; by: string; freeGb: number | null }
 const nudges: Inbox<Nudge> = { folder: 'nudges', field: 'nudges', isItem: n => typeof n.window === 'string' }
@@ -1686,7 +1694,7 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   for (const r of await readInbox($, opts, releases, me8)) {
     const id = noticeIds.released(r)
     if (!isUnsaid(id)) continue
-    push({ id, text: r.kind === 'lapsed' ? NOTICES.lapsed(r) : NOTICES.passedOn(r), isActionable: true })
+    push({ id, text: RELEASE_NOTICE[r.kind](r), isActionable: true })
     // The lease (or, once it is dropped, the request it served) is the released one: drop both; a newer request stays.
     const isThat = me.holding ? Math.abs(me.holding.since - r.since) < 60_000 : (me.want?.requestedAt ?? 0) <= r.since
     // A104: lapsed or passed on is forced: the place of the request it held is kept (the lapsing session wrote it down).
@@ -1709,13 +1717,17 @@ async function lapseStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (!(await writeLock($, opts, line))) return
   await orchestrateLog($, opts, { ...holderFacts(held, now, fresh), at: now, rule: r.kind === 'lapsed' ? 'A54-lapsed' : 'A55-unseen', acted: true, note: releasedNote(r, held) }).catch(() => undefined)
   if (held.id8.length !== 8) return // A84: a hand-written line naming no session has no holder file to tell
-  // A100 / A104: the lapsing session writes the lease's record and, in the holder's released file, the requestedAt of the
-  // request it held (the holder's A5R keeps that place when it reads why).
-  const holder = all.find(f => f.id8 === held.id8)
-  const after = holder ? await recordEnd($, opts, holder, { at: now, reason: r.kind, isEditorOpen: false }) : null
-  const keep = holder ? keepableOf(holder.want) : undefined // A104: a kept place is never kept again
-  const released: Released = { ...r, by: me.lane, ...(keep === undefined ? {} : { requestedAt: keep }) }
-  await appendInbox($, opts, releases, held.id8, released)
+  await tellReleased($, opts, held, { ...r, by: me.lane })
+}
+
+/** A lease another session's A5R released (lapsed, an unseen grant passed on; Fable review S3: freed by the person past its
+ * end): A100 / A104: the releasing session writes the lease's record and, in the holder's released file, the requestedAt of
+ * the request it held (the holder's A5R keeps that place when it reads why, for a forced reason); the holder is told there. */
+async function tellReleased($: Engine, opts: Opts, held: LockLine, r: Released): Promise<void> {
+  const holder = filesNow().find(f => f.id8 === held.id8)
+  const after = holder ? await recordEnd($, opts, holder, { at: r.at, reason: r.kind, isEditorOpen: false }) : null
+  const keep = holder && r.kind !== 'released' ? keepableOf(holder.want) : undefined // A104: a kept place is never kept again; the person's release keeps none
+  await appendInbox($, opts, releases, held.id8, { ...r, ...(keep === undefined ? {} : { requestedAt: keep }) })
   if (held.id8 === me8 && after) me = after
 }
 
@@ -1916,7 +1928,7 @@ async function notePid($: Engine, opts: Opts, fresh: boolean): Promise<void> {
 async function takeLock($: Engine, opts: Opts, d: Omit<Grant, 'kind'>, now: number): Promise<void> {
   const w = me?.want
   if (!me || !w) return
-  const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: now, pid: d.reuse, end: d.end, mode: w.mode, pausable: w.pausable, nextSafe: w.nextSafe, note: `${w.what}${w.pie ? ' (PIE)' : ''}${w.build ? ' (build)' : ''}` })
+  const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: now, pid: d.reuse, end: d.end, mode: w.mode, pausable: w.pausable, nextSafe: w.nextSafe, note: `${w.what}${w.pie ? ' (PIE)' : ''}${w.build ? BUILD_MARK : ''}` })
   if (!(await writeLock($, opts, line))) return
   // A100: the Editor it reuses (seen at the grant) and the queue behind it; A104: a kept place is spent by this grant.
   const behind = queueNow(filesNow(), now).filter(f => f.id8 !== me8).length
@@ -2961,7 +2973,7 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
  * git writes there are refused to every session but its owner (opguard.ts ownerOf), whatever sync.json says. */
 async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, input: Input): Promise<string | null> {
   const command = SHELL_TOOLS.has(tool) ? str(input.command) : ''
-  const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command))
+  const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command, launchersOf(opts.editorLaunchers)))
   const writes = command ? gitWrites(command) : []
   if (!isEditorUse && writes.length === 0) return null
   const s = parseSyncFile(await readJson($, syncPath()))
@@ -3394,8 +3406,16 @@ const orderAction = async ($: Engine, opts: Opts, a: OrderAction, via: string): 
   (await personChange($, opts, ORDER_GATE, now => {
     const r = applyOrder(grantInput(now), order, a, { by: by(via), titleOf: appTitleOf(appNow(now)) })
     if ('refusal' in r) return r
-    const isResize = r.kind === 'resize'
-    return { write: () => (r.kind === 'resize' ? writeLock($, opts, r.line) : writeOrder($, opts, r.order)), what: isResize ? 'the lock' : 'the queue order', rule: 'manual', note: r.kind === 'order' ? `${r.text}; moved ${r.moved.join(',') || 'none'}` : r.text, text: r.text, next: isResize ? 'the holder\'s A5R takes the new end at its next minute and is told' : 'every session computes the queue this way from now; the sessions it moved are told' }
+    if (r.kind === 'order') return { write: () => writeOrder($, opts, r.order), what: 'the queue order', rule: 'manual', note: `${r.text}; moved ${r.moved.join(',') || 'none'}`, text: r.text, next: 'every session computes the queue this way from now; the sessions it moved are told' }
+    if (r.kind === 'resize') return { write: () => writeLock($, opts, r.line), what: 'the lock', rule: 'manual', note: r.text, text: r.text, next: 'the holder\'s A5R takes the new end at its next minute and is told' }
+    // Fable review S3: the person frees a holder past its end; its record and its notice go where a lapse's go.
+    const held = lock
+    const write = async () => {
+      if (!(await writeLock($, opts, r.line))) return false
+      await tellReleased($, opts, held, { kind: 'released', at: now, by: by(via), since: r.holder.grantedAt ?? lockTimes(held, now)?.since ?? now, end: r.holder.end ?? now })
+      return true
+    }
+    return { write, what: 'the lock', rule: 'manual', note: r.text, text: r.text, next: 'the queue goes on; the holder is told at its next minute' }
   })).text
 
 /** A118: the person's start, extension or end of a Focus, or the focus session's own done (focus.ts): editor-focus.json. */
@@ -3424,11 +3444,11 @@ async function focusPress($: Engine, opts: Opts, id8: string): Promise<void> {
 
 /** A120: while a Focus runs, what a session other than the focus session (and the holder that still finishes its own lease)
  * may not do to the Editor or to the shared project's binaries; null: it may. */
-async function focusUseProblem($: Engine, tool: string, e: Input): Promise<string | null> {
+async function focusUseProblem($: Engine, opts: Opts, tool: string, e: Input): Promise<string | null> {
   const f = await othersFocus($)
   const command = SHELL_TOOLS.has(tool) ? str(e.command) : ''
-  const use = f && checkout ? editorUseOf(editorKindOf(tool, e), command, command ? await $.session.cwd() : '') : null
-  const r = f && checkout && use ? focusRefusal(f, use, { sharedProject: `${checkout.root}/${checkout.uproject}`, freeGb: probe?.freeGb ?? null, gateGb: gates.nopieGb }) : null
+  const use = f && checkout ? editorUseOf(editorKindOf(opts, tool, e), command, command ? await $.session.cwd() : '') : null
+  const r = f && checkout && use ? focusRefusal(f, use, { sharedRoot: checkout.root, freeGb: probe?.freeGb ?? null, gateGb: gates.nopieGb }) : null
   return r ? blocked(FOCUS_GATE, r.why, r.next) : null
 }
 
@@ -3932,7 +3952,7 @@ export const register: Register = (on, options) => {
     // The Editor gate is A5R's (D1): with A5R off nothing of a5r's refuses an Editor call.
     const frozen = isOn ? await freezeProblem($, opts, a5r, tool, input) : null
     if (frozen) return { deny: frozen }
-    const focused = isOn ? await focusUseProblem($, tool, input) : null // A120
+    const focused = isOn ? await focusUseProblem($, opts, tool, input) : null // A120
     if (focused) return { deny: focused }
     const editor = isOn ? await editorProblem($, opts, tool, input) : null
     if (editor) return { deny: blocked('Editor lock', editor.split(' → ')[0] ?? editor, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
@@ -4027,7 +4047,7 @@ export const register: Register = (on, options) => {
       const text = isUnrealMcp(tool) ? JSON.stringify(input).slice(0, 4000) : ''
       if (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && EDITOR_WORK.test(what))) lastEditorUseAt = await $.clock.now()
       // A66: the holder launched the Editor or reached it over MCP: name its pid in the lock line if it does not yet.
-      if (isS2 && (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && isEditorStartStop(what))) && holdsLock() && lock.pid === null) await notePid($, opts, true).catch(() => undefined)
+      if (isS2 && (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && isEditorStartStop(what, launchersOf(opts.editorLaunchers)))) && holdsLock() && lock.pid === null) await notePid($, opts, true).catch(() => undefined)
       if (text && mcpCallKind(tool, input as Record<string, unknown>) === 'pie') {
         if (!isPieRunning) pieStartedAt = await $.clock.now() // A100: the lease notes its first PIE start
         isPieRunning = true

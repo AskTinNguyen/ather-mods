@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { DEFAULT_GATES, NO_MANUAL, blankSession, claimIn, decide, heldLine, lapseOf, mayAskYield, newSync, parseLockLine, queueOf, type FocusLease, type GrantInput, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
-import { isUnrealBuild, projectsOf } from '../hooks/editor.ts'
-import { applyFocus, boxAnswer, boxMinutes, focusLease, focusLook, focusNotices, focusRefusal, parseFocus, parseFocusCommand, stateOf, type Focus, type FocusInput } from '../hooks/focus.ts'
+import { editorShellAct, isUnrealBuild, launchersOf, projectsOf } from '../hooks/editor.ts'
+import { applyFocus, boxAnswer, boxMinutes, focusLease, focusLook, focusNotices, focusRefusal, focusWant, parseFocus, parseFocusCommand, stateOf, type Focus, type FocusInput } from '../hooks/focus.ts'
 import { expectedStarts, holderNotices, queuedLine, queueView } from '../hooks/lease.ts'
 import { manualOf, writesPersonFile, type QueueOrder } from '../hooks/order.ts'
 import { A5RPANE, LOCK, ME, NOW, PROJ, find, opts, refused, still, text, world, type Rec, type Tree } from './world.ts'
@@ -356,14 +356,86 @@ test('A119: unit: the notices of one minute: the told value is read back from th
   expect(notices([`editor:focus-plan:${NOW}:${NOW + 110 * MIN}`])).toEqual([])
 })
 
+// ---------- the Fable adversary review of rev 41 ----------
+test('Fable review D1: after the Focus ends a queued session is told its start once, not every 15 min as a start counted from now drifts', () => {
+  const f = focusOf('cccccccc', { startedAt: NOW - 120 * MIN, endsAt: NOW + 60 * MIN, ended: { at: NOW - 5 * MIN, how: 'done', by: 'lane-cccccccc' } })
+  const files = [file('cccccccc'), file('aaaaaaaa', { want: want({ minutes: 45, pie: true, requestedAt: NOW - 90 * MIN }) }), file('bbbbbbbb', { want: want({ requestedAt: NOW - 80 * MIN }) })]
+  const told: string[] = []
+  for (let m = 0; m <= 60; m += 1) {
+    const now = NOW + m * MIN
+    for (const n of focusNotices(f, { ...input('bbbbbbbb', files, { now, probe: probe(10), focus: focusLease(f, now) }), holds: false, told, titleOf: () => '' })) if (!told.includes(n.id)) told.push(n.id)
+  }
+  expect(told).toEqual([`editor:focus-plan:${NOW - 120 * MIN}:after`])
+})
+
+test('Fable review D2: a focus session that held a launch:false pass slot launches and keeps the Editor: no launch:false, no sync slot, no pass', opts(), async ($, on) => {
+  const fl = leaseOf(focusOf(ME8))
+  const w0 = focusWant(fl, NOW, want({ launch: false, sync: { at: NOW + 60 * MIN, role: 'holder' }, minutes: 25 }))
+  expect([w0.launch, w0.sync, w0.build, w0.pausable, w0.focus]).toEqual([undefined, undefined, true, false, NOW])
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, held(ME8, 'tail-vfx', NOW - 5 * MIN, NOW + 25 * MIN))
+  w.put(`${HF}/editor/${ME8}.json`, meFile({ want: want({ launch: false, build: true, requestedAt: NOW - 10 * MIN }), holding: { since: NOW - 5 * MIN, end: NOW + 25 * MIN, extended: 0, pass: 'dddddddd' } }))
+  w.put(`${HF}/editor/dddddddd.json`, peer('dddddddd', { want: want({ pie: true, requestedAt: NOW - 60 * MIN }) }))
+  w.put(FOCUS, JSON.stringify(focusOf(ME8, { lane: 'tail-vfx' })))
+  await $.session.start(START)
+  await git($)
+  const mine = mineFile(w)
+  expect([mine.want?.launch, mine.holding?.pass, lockOf(w).end]).toEqual([undefined, undefined, '16:40'])
+  expect(refused(await $.tool.call({ tool: 'Bash', command: '"D:/UE/UnrealEditor.exe" E:/s2/S2.uproject' } as never))).toBeUndefined() // a launch is no longer a pass slot's refusal
+})
+
+test('Fable review D3: the person\'s launcher scripts (the editorLaunchers option, none by default) are launches; MSBuild of a .sln is a build, of the shared checkout\'s refused', () => {
+  const launchers = launchersOf('Launch_S2.ps1, lab.py')
+  expect(launchers).toEqual(['launch_s2.ps1', 'lab.py'])
+  expect(['powershell -File E:/s2/docs/handoff/pie-perf-tools/launch_s2.ps1', '& E:/s2/tools/launch_s2.ps1 -Map L_TALab', 'python E:/s2/tools/lab.py --scenario x', 'cat E:/s2/tools/launch_s2.ps1'].map(c => editorShellAct(c, launchers))).toEqual(['launch', 'launch', 'launch', null])
+  expect(editorShellAct('powershell -File E:/s2/docs/handoff/pie-perf-tools/launch_s2.ps1')).toBeNull() // no option: no script is named
+  expect([isUnrealBuild('msbuild E:/s2/S2.sln /t:Build'), isUnrealBuild('MSBuild.exe D:/wt/s2-bird/S2.sln')]).toEqual([true, true])
+  const f = leaseOf(focusOf('cccccccc'))
+  const x = { sharedRoot: 'E:/s2', freeGb: 40, gateGb: 28 }
+  expect(focusRefusal(f, { kind: 'build', projects: projectsOf('msbuild E:/s2/S2.sln /t:Build', 'E:/proj') }, x)?.why).toContain("uses the shared checkout's project")
+  expect(focusRefusal(f, { kind: 'build', projects: projectsOf('msbuild D:/wt/s2-bird/S2.sln', 'E:/proj') }, x)).toBeNull()
+  expect(focusRefusal(f, { kind: 'build', projects: ['E:/s2/wt/bird/S2.uproject'] }, x)).toBeNull() // a worktree inside the checkout folder is its own
+})
+
+test('Fable review S3: unit: a Focus lease lapses after its box (or the person\'s end and grace) like any lease, though its holder\'s file and note still mark a build lease', () => {
+  const f = focusOf('cccccccc', { startedAt: NOW - 180 * MIN, endsAt: NOW - 30 * MIN })
+  const real = focusWant(leaseOf(f, NOW - 100 * MIN), NOW - 100 * MIN, null) // the focus session's own file, as A5R writes it
+  const lock = parseLockLine(`${heldLine({ lane: 'lane-cccccccc', sessionName: 'lane-cccccccc', id8: 'cccccccc', since: NOW - 180 * MIN, pid: null, end: NOW - 30 * MIN, mode: real.mode, pausable: real.pausable, nextSafe: real.nextSafe, note: `${real.what} (build)` })}\n`)
+  const gone = { ...file('cccccccc', { want: real, holding: { since: NOW - 180 * MIN, end: NOW - 30 * MIN, extended: 0 }, lastTurnAt: NOW - 200 * MIN }), heartbeatAt: NOW - 120 * MIN }
+  const waiter = file('dddddddd', { want: want() })
+  const at = (now: number, focus: FocusLease | null, procs: Probe['procs'] = []) => lapseOf({ lock, files: [gone, waiter], lanes: [], now, probe: { ...probe(40), procs }, waiting: [waiter], sync: null, focus })
+  expect(at(NOW, focusLease(f, NOW))?.kind).toBe('lapsed') // 30 min past the box end, its session gone, nothing running
+  expect(at(NOW, null, [{ name: 'UnrealBuildTool', pid: 9, gb: 1, parentAlive: true }])).toBeNull() // a real build still holds it
+  const ended = { ...f, endsAt: NOW + 60 * MIN, ended: { at: NOW - 30 * MIN, how: 'ended' as const, by: 'p' } }
+  expect(at(NOW, focusLease(ended, NOW))?.kind).toBe('lapsed') // the person's end 30 min ago: its grace and the 10 min passed
+})
+
+test('Fable review S3: a live focus session past its box keeps its lock but it is an ordinary lease again; the person frees it past its end (rule=manual, the holder told)', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, held(ME8, 'tail-vfx', NOW - 150 * MIN, NOW + 5 * MIN))
+  w.put(`${HF}/editor/${ME8}.json`, meFile({ want: focusWant(leaseOf(focusOf(ME8, { startedAt: NOW - 150 * MIN, endsAt: NOW + 5 * MIN })), NOW - 150 * MIN, null), holding: { since: NOW - 150 * MIN, end: NOW + 5 * MIN, extended: 0 } }))
+  w.put(FOCUS, JSON.stringify(focusOf(ME8, { lane: 'tail-vfx', startedAt: NOW - 150 * MIN, endsAt: NOW + 5 * MIN })))
+  await $.session.start(START)
+  await git($)
+  expect(await run($, 'editor release tail-vfx')).toContain('holds the Editor for a Focus until 14:45')
+  await w.clock.advance(6 * MIN)
+  expect([mineFile(w).want?.build, mineFile(w).want?.focus, lockOf(w).note.includes('(build)'), lockOf(w).id8]).toEqual([false, undefined, false, ME8])
+  expect(await run($, 'editor release tail-vfx', { kind: 'plugin', name: 'x' })).toContain('only the person changes the Editor queue')
+  expect(await run($, 'editor release tail-vfx')).toContain("Tail's lock is free (its lease ended at 14:45), released by the person (command in tail-vfx)")
+  expect(lockOf(w).kind).toBe('free')
+  expect(w.read(LOG)).toContain('| rule=manual |')
+  await w.clock.advance(MIN)
+  expect(await told($, w)).toContain('A5R · Editor lease — your lease (12:10–14:45) was past its end, so the person (command in tail-vfx) freed the lock at 14:46')
+})
+
 // ---------- A120: the others around the focus Editor ----------
 test('A120: unit: what another session may not do while a Focus runs, each with its alternative; builds and headless runs of another project fit when memory allows', () => {
   const f = leaseOf(focusOf('cccccccc'))
-  const x = { sharedProject: 'E:/s2/S2.uproject', freeGb: 40, gateGb: 28 }
+  const x = { sharedRoot: 'E:/s2', freeGb: 40, gateGb: 28 }
   expect(focusRefusal(f, { kind: 'drive' }, x)?.why).toBe('lane-cccccccc has the Editor for a Focus until 16:40: Unreal MCP writes, PIE and stops are its alone')
   expect(focusRefusal(f, { kind: 'launch' }, x)?.why).toContain('a second Unreal Editor beside it would take the memory it needs')
   expect(focusRefusal(f, { kind: 'build', projects: ['E:/s2/S2.uproject'] }, x)?.why).toContain("uses the shared checkout's project, whose binaries the focus Editor loads")
-  expect(focusRefusal(f, { kind: 'build', projects: [] }, x)?.why).toContain("names no .uproject, so it is taken for the shared checkout's project")
+  expect(focusRefusal(f, { kind: 'build', projects: [] }, x)?.why).toContain("names no .uproject or .sln, so it is taken for the shared checkout's project")
   expect(focusRefusal(f, { kind: 'headless', projects: ['e:\\s2\\S2.uproject'] }, x)?.next).toContain("run it in your own worktree and name that worktree's .uproject")
   expect(focusRefusal(f, { kind: 'build', projects: ['D:/wt/s2-bird/S2.uproject'] }, x)).toBeNull()
   expect(focusRefusal(f, { kind: 'headless', projects: ['D:/wt/s2-bird/S2.uproject'] }, { ...x, freeGb: 20 })?.why).toContain('free RAM is 20 GB, under the 28 GB no-PIE launch gate')

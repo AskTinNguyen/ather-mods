@@ -4,7 +4,8 @@
 // the person (a press on the A5R panel or his own /a5r focus command, through whichever session's A5R he used) and by the
 // focus session's own `focus_done`; every session computes the same answers from it here. Pure: no `$`; register.ts reads,
 // writes and delivers.
-import { CUTOFF_MS, FREE_RAM_READ, hhmm, livenessOf, lockTimes, noticeText, oneLine, ordinal, ownersOf, samePath, type Claim, type FocusLease, type Gates, type GrantInput, type LaneBeat, type LookRow, type Notice, type Phase, type SessionFile, type SyncFile, type Touch, type Want } from './coord.ts'
+import { CUTOFF_MS, FOCUS_NOTE, FREE_RAM_READ, hhmm, livenessOf, lockTimes, noticeText, oneLine, ordinal, ownersOf, samePath, type Claim, type FocusLease, type Gates, type GrantInput, type LaneBeat, type LookRow, type Notice, type Phase, type SessionFile, type SyncFile, type Touch, type Want } from './coord.ts'
+import { norm } from './a5r.ts'
 import { isUnrealBuild, projectsOf, type EditorKind } from './editor.ts'
 import { expectedStarts } from './lease.ts'
 import { pickByName, type Parsed, type Who } from './order.ts'
@@ -212,32 +213,48 @@ export const focusNotices = (f: Focus | null, x: GrantInput & { holds: boolean; 
   if (state === 'running' && x.holds) out.push({ id: `focus:yield:${f.startedAt}`, text: noticeText(FOCUS_GATE, `the person gave ${name} the Editor for a Focus until ${hhmm(f.endsAt)}`, 'finish to a checkpoint (PIE stopped, your own assets saved) and release with the editor tool within 10 min; your next request keeps its place'), isActionable: true })
   const endedAt = state === 'running' ? null : (f.ended?.at ?? f.endsAt)
   if (!me?.want || x.holds || (endedAt !== null && x.now - endedAt > PLAN_AFTER_MS)) return out
-  // The Editor comes back to the queue at the box end while it runs; after it, at the end of the lease the lock names.
+  const told = [...x.told]
+  // Fable review D1: after the end the Editor comes back to the queue at the end of the lease the lock names, or now: a start
+  // counted from now drifts by a minute a minute, so it is told once, never re-planned.
+  const afterId = `${PLAN_ID(f)}after`
+  if (endedAt !== null && told.includes(afterId)) return out
   const held = x.lock.kind === 'held' || x.lock.kind === 'handed' ? lockTimes(x.lock, x.now)?.end ?? x.now : x.now
-  const starts = expectedStarts(x, state === 'running' ? f.endsAt : held)
+  const starts = expectedStarts(x, endedAt === null ? f.endsAt : held)
   const start = starts.get(x.me8)
-  const told = lastTold(f, x.told)
-  if (start === undefined || (told !== null && Math.abs(start - told) < PLAN_MOVE_MS)) return out
+  const last = lastTold(f, told)
+  if (start === undefined || (endedAt === null && last !== null && Math.abs(start - last) < PLAN_MOVE_MS)) return out
   const place = [...starts.keys()].indexOf(x.me8) + 1
-  const why = state === 'running' ? `the person gave ${name} a Focus until ${hhmm(f.endsAt)} (${milestoneText(f)}); the queue pauses behind it` : `${name}'s Focus ended at ${hhmm(endedAt ?? x.now)}; the queue runs on in its order`
-  out.push({ id: `${PLAN_ID(f)}${start}`, text: noticeText('Editor', `${why}: your turn is expected about ${hhmm(start)} (${ordinal(place)} ${state === 'running' ? 'after the Focus' : 'in the queue'})`, `batch your Editor needs into that one turn; meanwhile do what needs no Editor (edits on disk outside the focus session's files, builds and tests in your own worktree while free RAM is above the no-PIE launch gate); you are told again if it moves by 15 min or more`), isActionable: false })
+  const why = endedAt === null ? `the person gave ${name} a Focus until ${hhmm(f.endsAt)} (${milestoneText(f)}); the queue pauses behind it` : `${name}'s Focus ended at ${hhmm(endedAt)}; the queue runs on in its order`
+  out.push({ id: endedAt === null ? `${PLAN_ID(f)}${start}` : afterId, text: noticeText('Editor', `${why}: your turn is expected about ${hhmm(start)} (${ordinal(place)} ${endedAt === null ? 'after the Focus' : 'in the queue'})`, `batch your Editor needs into that one turn; meanwhile do what needs no Editor (edits on disk outside the focus session's files, builds and tests in your own worktree while free RAM is above the no-PIE launch gate)${endedAt === null ? '; you are told again if it moves by 15 min or more' : ''}`), isActionable: false })
   return out
 }
 
 /** A118: the request A5R makes for the focus session (when it had none, or to mark its own): until the box end, a build
- * lease that is not pausable (so an A5R before 0.25.0 never lapses, passes on or asks to yield it), kept in its place. */
-export const focusWant = (f: FocusLease, now: number, had: Want | null): Want => ({
-  minutes: Math.max(5, Math.ceil((f.end - now) / MIN)),
-  pie: false,
-  mode: 'interactive',
-  nextSafe: 'after save',
-  ...had,
-  requestedAt: had?.requestedAt ?? f.startedAt,
-  build: true,
-  pausable: false,
-  what: `Focus: ${f.milestone || 'milestone'}`.slice(0, 120),
-  focus: f.startedAt,
-})
+ * lease that is not pausable (so an A5R before 0.25.0 never lapses, passes on or asks to yield it), kept in its place; Fable
+ * review D2: never a launch:false slot or a sync's slot (the Focus launches, and ends with its box). */
+export const focusWant = (f: FocusLease, now: number, had: Want | null): Want => {
+  const { launch: _launch, sync: _sync, ...kept } = had ?? { requestedAt: f.startedAt }
+  return {
+    minutes: Math.max(5, Math.ceil((f.end - now) / MIN)),
+    pie: false,
+    mode: 'interactive',
+    nextSafe: 'after save',
+    ...kept,
+    requestedAt: had?.requestedAt ?? f.startedAt,
+    build: true,
+    pausable: false,
+    what: `${FOCUS_NOTE}${f.milestone || 'milestone'}`.slice(0, 120),
+    focus: f.startedAt,
+  }
+}
+
+/** Fable review S3: a Focus lease once its Focus is over (the box ran out, or the person's end and its grace passed): an
+ * ordinary lease again, no longer a build lease (so it lapses as any lease when its session goes, and an A5R before 0.25.0
+ * lets it lapse too); the lock note loses its `(build)`. */
+export const afterFocusWant = (w: Want): Want => {
+  const { focus: _focus, ...rest } = w
+  return { ...rest, build: false }
+}
 
 // ---------- A120: the others around the focus Editor ----------
 /** What a call of another session does to an Unreal Editor or build: an Unreal MCP write, PIE, stop or save-all; a windowed
@@ -251,13 +268,13 @@ export const editorUseOf = (kind: EditorKind, command: string, cwd: string): Edi
  * instead: MCP writes and PIE, a windowed Editor of any project, a headless run or build of the shared project (or naming
  * none) are refused; a headless run or build of another project (a worktree) runs while free RAM is at least the no-PIE
  * launch gate. */
-export const focusRefusal = (f: Pick<Claim, 'lane' | 'end'>, u: EditorUse, x: { sharedProject: string; freeGb: number | null; gateGb: number }): { why: string; next: string } | null => {
+export const focusRefusal = (f: Pick<Claim, 'lane' | 'end'>, u: EditorUse, x: { sharedRoot: string; freeGb: number | null; gateGb: number }): { why: string; next: string } | null => {
   const has = `${f.lane} has the Editor for a Focus until ${hhmm(f.end)}`
   const meanwhile = 'meanwhile edit on disk outside its files, build and test in your own worktree, read the Editor through MCP reads; your turn comes after the Focus'
   if (u.kind === 'drive') return { why: `${has}: Unreal MCP writes, PIE and stops are its alone`, next: meanwhile }
   if (u.kind === 'launch') return { why: `${has}: a second Unreal Editor beside it would take the memory it needs`, next: `run headless tests or builds in your own worktree (name its .uproject); ${meanwhile}` }
   const what = u.kind === 'build' ? 'build' : 'headless Unreal run'
-  if (u.projects.length === 0 || u.projects.some(p => samePath(p, x.sharedProject))) return { why: `${has}: this ${what} ${u.projects.length === 0 ? 'names no .uproject, so it is taken for' : 'uses'} the shared checkout's project${u.kind === 'build' ? ', whose binaries the focus Editor loads' : ''}`, next: `run it in your own worktree and name that worktree's .uproject (-project=<worktree>/<name>.uproject); ${meanwhile}` }
+  if (u.projects.length === 0 || u.projects.some(p => samePath(norm(p).replace(/\/[^/]*$/, ''), norm(x.sharedRoot).replace(/\/$/, '')))) return { why: `${has}: this ${what} ${u.projects.length === 0 ? 'names no .uproject or .sln, so it is taken for' : 'uses'} the shared checkout's project${u.kind === 'build' ? ', whose binaries the focus Editor loads' : ''}`, next: `run it in your own worktree and name that worktree's .uproject (-project=<worktree>/<name>.uproject); ${meanwhile}` }
   if (x.freeGb === null) return { why: `${has}, and there is no memory reading for this ${what}`, next: `read free RAM with ${FREE_RAM_READ}; it runs once a reading shows at least ${x.gateGb} GB free (the no-PIE launch gate)` }
   if (x.freeGb < x.gateGb) return { why: `${has}: free RAM is ${x.freeGb} GB, under the ${x.gateGb} GB no-PIE launch gate, and the focus Editor needs it`, next: `run this ${what} when free RAM is back at ${x.gateGb} GB or more, or after the Focus` }
   return null

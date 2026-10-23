@@ -5,7 +5,7 @@
 // command of his own. The editor tool has no such action and a model's edit of the file is refused (register.ts). Pure:
 // no `$`.
 import { READERS, isAbs, isDotNetWrite, norm, placeTracker, programs, writeDestinations, writesFiles } from './a5r.ts'
-import { claimIn, hash, heldLineAt, hhmm, isStandardHeld, livenessOf, noticeText, oneLine, phaseIn, queueOf, syncLimit, type GrantInput, type ManualOrder, type Notice, type SessionFile, type Want } from './coord.ts'
+import { claimIn, freeLine, hash, heldLineAt, hhmm, isStandardHeld, livenessOf, noticeText, oneLine, phaseIn, queueOf, syncLimit, type GrantInput, type ManualOrder, type Notice, type SessionFile, type Want } from './coord.ts'
 import { queueView, type HolderRow } from './lease.ts'
 
 export const ORDER_FILE = 'queue-order.json'
@@ -73,10 +73,10 @@ export type Move = 'up' | 'down' | 'top'
 export type TimeChange = { add: number } | { set: number }
 /** `who`: the row a panel press was on (its id8), or the name the person typed (an app title, lane or id8: pickByName). */
 export type Who = { id8: string } | { name: string }
-export type OrderAction = { kind: 'move'; how: Move; who: Who } | { kind: 'time'; who: Who; change: TimeChange } | { kind: 'reset' }
+export type OrderAction = { kind: 'move'; how: Move; who: Who } | { kind: 'time'; who: Who; change: TimeChange } | { kind: 'reset' } | { kind: 'release'; who: Who } // release: Fable review S3
 /** What one action changes: the order file (a move, a queued request's minutes, a reset), or the holder's HELD line (a
  * resize: its new line; the holder adopts its end and tells itself, lease.ts adoptLockEnd); `text` says it. */
-export type OrderResult = { refusal: string } | { kind: 'order'; order: QueueOrder; moved: string[]; text: string } | { kind: 'resize'; line: string; text: string }
+export type OrderResult = { refusal: string } | { kind: 'order'; order: QueueOrder; moved: string[]; text: string } | { kind: 'resize'; line: string; text: string } | { kind: 'free'; line: string; holder: HolderRow; text: string }
 /** The press's own facts: who pressed (for the record: "the person (panel in <lane>)"), and the app's titles. */
 export type Presser = { by: string; titleOf: (id8: string) => string }
 
@@ -113,8 +113,9 @@ export const applyOrder = (g: GrantInput, order: QueueOrder, a: OrderAction, p: 
   const name = p.titleOf(id8) || laneOf(id8)
   if (holder?.id8 === id8) {
     if (a.kind === 'move') return refuse(`${name} holds the Editor, so it has no place in the queue`, 'move a queued session, or give the holder more time')
-    return resize(g, holder, name, a.change, p)
+    return a.kind === 'release' ? release(g, holder, name, p) : resize(g, holder, name, a.change, p)
   }
+  if (a.kind === 'release') return refuse(`${name} does not hold the Editor`, 'release the holder (the ▶ row)')
   const i = before.indexOf(id8)
   const f = g.files.find(x => x.id8 === id8)
   if (i < 0 || !f?.want) return refuse(`${name} is not in the Editor queue`, 'pick a queued session (the A5R panel lists them)')
@@ -168,6 +169,19 @@ const resize = (g: GrantInput, h: HolderRow, name: string, c: TimeChange, p: Pre
   return { kind: 'resize', line: heldLineAt(g.lock, end), text: `${name}'s lease now ends at ${hhmm(end)} (it ended at ${hhmm(was)}) (by ${p.by})` }
 }
 
+/** Fable review S3: the person frees a holder's lock past its lease's end (a live session that keeps it idle is never lapsed:
+ * S2 §2): the FREE line, or why not: a running Focus (its End is the person's), the sync's own slot (it ends with the sync), a
+ * hand-written line, a lease that has not ended. */
+const release = (g: GrantInput, h: HolderRow, name: string, p: Presser): OrderResult => {
+  const claim = claimIn(g)
+  if (claim?.kind === 'focus' && claim.id8 === h.id8) return refuse(`${name} holds the Editor for a Focus until ${hhmm(claim.end)}`, 'end the Focus first (End on the panel\'s EDITOR line, or /a5r focus end)')
+  if (h.isSyncSlot) return refuse(`${name} holds the Editor for the sync, and that slot ends with the sync`, 'end the sync with the sync tool')
+  if (!isStandardHeld(g.lock)) return refuse(`${name}'s lock line is not a standard HELD line naming one session`, 'its holder\'s A5R turns it into one at its next request; or it lapses by itself once its end passes and nothing runs')
+  if (h.end === null || g.now < h.end) return refuse(`${name}'s lease runs to ${h.end === null ? 'an end it does not say' : hhmm(h.end)}`, 'give it less time (−15 on its row, or /a5r editor time <name> <minutes left>), or release it once its end has passed')
+  const text = `${name}'s lock is free (its lease ended at ${hhmm(h.end)}), released by ${p.by}`
+  return { kind: 'free', line: freeLine({ since: g.now, by: 'the-person', note: `released by the person past its end: ${h.lane} (session-${h.id8}), ended ${hhmm(h.end)}`, background: 'none' }), holder: h, text }
+}
+
 /** The notices of the changes that moved this session (its place or its minutes), each once (the caller's ids), within an
  * hour of the change. */
 export const noticesFor = (o: QueueOrder, me8: string, now: number): Notice[] =>
@@ -207,7 +221,7 @@ export const writesPersonFile = (command: string): boolean => {
 }
 
 // ---------- the person's commands and names ----------
-export const EDITOR_USAGE = '/a5r editor · the Editor list · /a5r editor up|down|top <name> · /a5r editor time <name> <+minutes|-minutes|minutes> (a queued request: its minutes; the holder: more time, or minutes left) · /a5r editor order reset · <name>: a row\'s title, lane or first 8 hex (a unique start is enough)'
+export const EDITOR_USAGE = '/a5r editor · the Editor list · /a5r editor up|down|top <name> · /a5r editor time <name> <+minutes|-minutes|minutes> (a queued request: its minutes; the holder: more time, or minutes left) · /a5r editor release <name> (a holder past its end) · /a5r editor order reset · <name>: a row\'s title, lane or first 8 hex (a unique start is enough)'
 
 /** A117 / A118: a person's command read: his action, `show` (the list), or its usage. */
 export type Parsed<A> = A | { kind: 'show' } | { usage: string }
@@ -222,6 +236,7 @@ export const parseEditorCommand = (args: string): Parsed<OrderAction> => {
   if (!v) return { kind: 'show' }
   if (v === 'order' && rest.join(' ').toLowerCase() === 'reset') return { kind: 'reset' }
   if ((v === 'up' || v === 'down' || v === 'top') && rest.length) return { kind: 'move', how: v, who: { name: rest.join(' ') } }
+  if (v === 'release' && rest.length) return { kind: 'release', who: { name: rest.join(' ') } }
   const m = /^([+\-−]?)(\d{1,3})$/.exec(rest.at(-1) ?? '')
   if (v === 'time' && rest.length >= 2 && m) {
     const n = Number(m[2])
@@ -260,4 +275,4 @@ export const QUEUED_CONTROLS: readonly Control[] = [
   { id: 'less', label: '−15 min', hotkey: 'm', action: id8 => ({ kind: 'time', who: { id8 }, change: { add: -15 } }) },
   { id: 'more', label: '+15 min', hotkey: 'p', action: id8 => ({ kind: 'time', who: { id8 }, change: { add: 15 } }) },
 ]
-export const HOLDER_CONTROLS: readonly Control[] = ([[15, '1'], [30, '3'], [60, '6']] as const).map(([n, hotkey]) => ({ id: `add${n}`, label: `+${n} min`, hotkey, action: (id8: string): OrderAction => ({ kind: 'time', who: { id8 }, change: { add: n } }) }))
+export const HOLDER_CONTROLS: readonly Control[] = [...([[15, '1'], [30, '3'], [60, '6']] as const).map(([n, hotkey]) => ({ id: `add${n}`, label: `+${n} min`, hotkey, action: (id8: string): OrderAction => ({ kind: 'time', who: { id8 }, change: { add: n } }) })), { id: 'release', label: 'Release', hotkey: 'r', action: id8 => ({ kind: 'release', who: { id8 } }) }]
