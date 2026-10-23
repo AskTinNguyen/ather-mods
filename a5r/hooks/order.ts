@@ -4,7 +4,8 @@
 // changes either, through whichever session's A5R he presses or types in: a press on the A5R panel or an `/a5r editor …`
 // command of his own. The editor tool has no such action and a model's edit of the file is refused (register.ts). Pure:
 // no `$`.
-import { hash, heldLineAt, hhmm, isStandardHeld, noticeText, oneLine, phaseIn, queueOf, syncLimit, type GrantInput, type ManualOrder, type Notice, type SessionFile, type Want } from './coord.ts'
+import { READERS, isAbs, isDotNetWrite, norm, placeTracker, programs, writeDestinations, writesFiles } from './a5r.ts'
+import { hash, heldLineAt, hhmm, isStandardHeld, livenessOf, noticeText, oneLine, phaseIn, queueOf, syncLimit, type GrantInput, type ManualOrder, type Notice, type SessionFile, type Want } from './coord.ts'
 import { queueView, type HolderRow } from './lease.ts'
 
 export const ORDER_FILE = 'queue-order.json'
@@ -137,6 +138,9 @@ export const applyOrder = (g: GrantInput, order: QueueOrder, a: OrderAction, p: 
     if (q !== id8 && had) placed.push(had)
     else if (w) placed.push({ ...turnOf(q, w), at: g.now, by: p.by })
   }
+  // Fable review D2: a placed session not in the queue this minute keeps its entry unchanged, after the new prefix (it comes
+  // back after the rows placed now)
+  placed.push(...live.placed.filter(e => !before.includes(e.id8)))
   const o = { placed, sized: live.sized }
   const place = idsWith(o).indexOf(id8) + 1
   const syncFirst = place - 1 > to ? `; ${g.sync?.holder.lane ?? 'the sync holder'} stays first while its sync is in its cutoff or freeze` : ''
@@ -150,6 +154,7 @@ export const applyOrder = (g: GrantInput, order: QueueOrder, a: OrderAction, p: 
  * person. */
 const resize = (g: GrantInput, h: HolderRow, name: string, c: TimeChange, p: Presser): OrderResult => {
   if (!isStandardHeld(g.lock)) return refuse(`${name}'s lock line is not a standard HELD line naming one session`, 'its holder\'s A5R turns it into one at its next request; resize it then')
+  if (livenessOf(h.id8, g.files, g.lanes, g.now) === 'gone') return refuse(`${name}: its session is gone`, 'its lease lapses by itself once nothing runs')
   if (h.isSyncSlot) return refuse(`${name} holds the Editor for the sync, and that slot ends with the sync`, 'move the sync or end it with the sync tool')
   const was = h.end ?? g.now
   const end = 'add' in c ? Math.max(was, g.now) + c.add * MIN : g.now + c.set * MIN
@@ -167,6 +172,36 @@ export const noticesFor = (o: QueueOrder, me8: string, now: number): Notice[] =>
   o.changes
     .filter(c => c.moved.includes(me8) && now - c.at < TELL_WITHIN_MS)
     .map(c => ({ id: `editor:manual:${c.at}:${hash(c.what)}`, text: noticeText(ORDER_GATE, `${c.what}, set by ${c.by} at ${hhmm(c.at)}`, 'nothing to do: A5R grants in that order (it lasts until that turn ends); keep working as before'), isActionable: false }))
+
+// ---------- A117 (Fable review D1): only the person writes the file ----------
+const ORDER_NAME = /(?<![\w.-])queue-order\.json(?![\w.-])/i
+const A5R_DIR = /saved\/+a5r(?![\w.-])/i // the folder itself, not Saved/A5Rx or Saved/A5R.bak
+/** Interpreters whose one-liner may write any file: refused when it names the order file or the Saved/A5R folder. */
+const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'deno', 'bun', 'ruby', 'perl', 'php', 'powershell', 'pwsh'])
+const slashed = (t: string): string => t.replace(/\\/g, '/')
+const inA5R = (t: string): boolean => A5R_DIR.test(`${norm(t).replace(/\/+$/, '')}/`)
+
+/** An Edit/Write path that is the person's queue order (Saved/A5R/queue-order.json; `.` and `..` resolved). */
+export const isOrderPath = (path: string): boolean => /(^|\/)Saved\/A5R\/queue-order\.json$/i.test(norm(path ?? ''))
+
+/** A shell command that may write the person's queue order, guarded the other way round from the lock's writer list: a
+ * segment that names the file is refused unless its verb only reads (a5r.ts READERS, and jq, diff, a git read) and it does
+ * not redirect into the file; a copy, move or rename whose destination is the file or lies in Saved/A5R (after a cd there,
+ * any relative destination; popd returns) is refused; so is an interpreter one-liner (python -c, node -e, pwsh -c, …) that
+ * names the file or the Saved/A5R folder. A path held in a variable (`$p='…queue-order.json'`) names it too. */
+export const writesOrder = (command: string): boolean => {
+  const cwd = placeTracker((_raw: string, target: string, here: true | null) => (inA5R(target) || (here && !isAbs(slashed(target))) ? true : null)) // a relative cd stays there
+  return programs(command).some(({ raw, verb, args }) => {
+    if (cwd.step(verb, args, raw)) return false
+    const text = slashed(raw)
+    if (INTERPRETERS.has(verb) && (ORDER_NAME.test(text) || A5R_DIR.test(text))) return true
+    const to = writeDestinations(verb, args) ?? []
+    if (to.some(d => ORDER_NAME.test(d) || inA5R(d) || (cwd.here() !== null && !isAbs(slashed(d))))) return true
+    if (!ORDER_NAME.test(text)) return false
+    const reads = READERS.has(verb) || verb === 'jq' || verb === 'diff' || (verb === 'git' && !writesFiles(raw, verb, args))
+    return !reads || writesFiles(raw, verb, args, t => ORDER_NAME.test(t)) || isDotNetWrite(raw)
+  })
+}
 
 // ---------- the person's commands and names ----------
 export const EDITOR_USAGE = '/a5r editor · the Editor list · /a5r editor up|down|top <name> · /a5r editor time <name> <+minutes|-minutes|minutes> (a queued request: its minutes; the holder: more time, or minutes left) · /a5r editor order reset · <name>: a row\'s title, lane or first 8 hex (a unique start is enough)'

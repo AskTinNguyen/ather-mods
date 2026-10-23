@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { DEFAULT_GATES, NO_MANUAL, blankSession, decide, heldLine, heldLineAt, isStandardHeld, newSync, parseLockLine, queueOf, writesOrder, type GrantInput, type ManualOrder, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
+import { DEFAULT_GATES, NO_MANUAL, blankSession, decide, heldLine, heldLineAt, isStandardHeld, newSync, parseLockLine, queueOf, type GrantInput, type ManualOrder, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
 import { adoptLockEnd, leaseSummary, queueView, type LeaseRecord } from '../hooks/lease.ts'
-import { NO_ORDER, applyOrder, isPersonOrigin, manualOf, parseEditorCommand, parseOrder, pickByName, type OrderAction, type QueueOrder } from '../hooks/order.ts'
+import { NO_ORDER, applyOrder, isPersonOrigin, writesOrder, manualOf, parseEditorCommand, parseOrder, pickByName, type OrderAction, type QueueOrder } from '../hooks/order.ts'
 import { editorPanel, needsLook } from '../hooks/panel.ts'
 import type { VerdictRow } from '../hooks/judge.ts'
 import { A5RPANE, LOCK, ME, NOW, PROJ, all, find, keys, minWidth, opts, placed, refused, still, text, world, type Rec, type Tree } from './world.ts'
@@ -445,7 +445,7 @@ test('A117: person-only: the editor tool has no order or resize action, an unkno
   expect(w.read(ORDER)).toBe('')
   expect(parseLockLine(w.read(LOCK)).end).toBe('16:01')
   const deny = refused(await $.tool.call({ tool: 'Write', file_path: ORDER, content: '{"v":1,"placed":[]}' } as never))
-  expect(deny).toBe('A5R · Editor order — Saved/A5R/queue-order.json is the person\'s: only his press on the A5R panel or his own /a5r editor command changes it → request the Editor with the editor tool (action request) and wait for your turn')
+  expect(deny).toBe('A5R · Editor order — Saved/A5R/queue-order.json is the person\'s: only his press on the A5R panel or his own /a5r editor command changes it → request the Editor with the editor tool (action request) and wait for your turn; to read the file, use cat, Get-Content, jq or rg') // Fable review D1
   expect(refused(await $.tool.call({ tool: 'Bash', command: `echo '{}' > ${ORDER}` } as never))).toContain('Editor order')
   expect(refused(await $.tool.call({ tool: 'PowerShell', command: `Set-Content -Path ${ORDER} -Value '{}'` } as never))).toContain('Editor order')
   expect(refused(await $.tool.call({ tool: 'Bash', command: `cat ${ORDER}` } as never))).toBeUndefined()

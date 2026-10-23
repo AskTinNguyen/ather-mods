@@ -35,14 +35,14 @@ export type Places = Record<string, string | undefined>
 /** Where a file lives: its git project root and its path inside it, or nulls outside any project. */
 export type Located = { root: string | null; rel: string | null }
 // A segment whose verb only reads may mention protected paths and never counts as a verify run.
-const READERS = new Set(['cat', 'type', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'ls', 'dir',
+export const READERS: ReadonlySet<string> = new Set(['cat', 'type', 'head', 'tail', 'less', 'more', 'grep', 'rg', 'findstr', 'select-string', 'sls', 'ls', 'dir',
   'get-childitem', 'gci', 'get-content', 'gc', 'wc', 'stat', 'file', 'test-path', 'get-item', 'gi', 'resolve-path', 'echo', 'write-output', 'write-host'])
 const DELETE_VERBS = new Set(['rm', 'rmdir', 'rd', 'del', 'erase', 'remove-item', 'ri'])
 // A76: moving into a folder writes nothing; after a `cd` into the live kit only commands that write files there are
 // refused (deletes, moves, copies, in-place edits, redirects, git writes, package installs); reads, tests and builds run.
-const CHDIR = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir'])
+export const CHDIR: ReadonlySet<string> = new Set(['cd', 'pushd', 'set-location', 'sl', 'chdir'])
 const FILE_WRITERS = new Set(['mv', 'move', 'move-item', 'mi', 'cp', 'copy', 'copy-item', 'cpi', 'touch', 'mkdir', 'md', 'new-item', 'ni', 'tee', 'tee-object',
-  'set-content', 'sc', 'add-content', 'ac', 'out-file', 'clear-content', 'rename-item', 'ren', 'rni', 'ln', 'chmod', 'truncate', 'patch', 'dd', 'install'])
+  'set-content', 'sc', 'add-content', 'ac', 'out-file', 'clear-content', 'clc', 'rename-item', 'ren', 'rni', 'ln', 'chmod', 'truncate', 'patch', 'dd', 'install'])
 const GIT_WRITES = new Set(['add', 'commit', 'checkout', 'switch', 'reset', 'restore', 'clean', 'rm', 'mv', 'stash', 'apply', 'am', 'merge', 'rebase', 'pull', 'cherry-pick', 'revert', 'init', 'clone', 'tag', 'worktree', 'submodule', 'config', 'update-index', 'sparse-checkout', 'lfs'])
 const PKG = new Set(['npm', 'pnpm', 'yarn', 'bun', 'pip', 'pip3'])
 const PKG_WRITES = new Set(['install', 'i', 'add', 'ci', 'update', 'upgrade', 'remove', 'rm', 'uninstall', 'un', 'link', 'init', 'create', 'unlink'])
@@ -75,19 +75,25 @@ export const writesFiles = (raw: string, verb: string, all: readonly string[], i
   if (PKG.has(verb)) return PKG_WRITES.has(sub)
   return false
 }
+/** A .NET file write in a shell command (PowerShell's [IO.File]::WriteAllText and the like). */
+export const isDotNetWrite = (raw: string): boolean => /WriteAll(Text|Lines|Bytes)|AppendAll(Text|Lines)/i.test(raw)
+
+/** The value of an option among a command's arguments (`-Destination x`, `-Destination:x`, `--target-directory=x`), or null. */
+const optionValue = (args: readonly string[], names: RegExp): string | null => {
+  for (let n = 0; n < args.length; n += 1) {
+    const a = args[n] ?? ''
+    const eq = /^(-{1,2}[\w-]+)[=:](.+)$/.exec(a)
+    if (eq && names.test(eq[1] ?? '')) return eq[2] ?? null
+    if (names.test(a)) return args[n + 1] ?? null
+  }
+  return null
+}
+
 /** 0.18.3: where a copy writes (cp, copy, Copy-Item, robocopy, xcopy), or null when the command is no copy or its
  * destination cannot be read. A move is no copy (it removes its source). */
 const copyDestinations = (verb: string, args: readonly string[]): string[] | null => {
   const positional = (a: string) => !a.startsWith('-') && !(verb === 'robocopy' || verb === 'xcopy' || verb === 'copy' ? a.startsWith('/') : false)
-  const valueOf = (names: RegExp): string | null => {
-    for (let n = 0; n < args.length; n += 1) {
-      const a = args[n] ?? ''
-      const eq = /^(-{1,2}[\w-]+)[=:](.+)$/.exec(a)
-      if (eq && names.test(eq[1] ?? '')) return eq[2] ?? null
-      if (names.test(a)) return args[n + 1] ?? null
-    }
-    return null
-  }
+  const valueOf = (names: RegExp) => optionValue(args, names)
   if (verb === 'cp') {
     const t = valueOf(/^(-t|--target-directory)$/i)
     if (t) return [t]
@@ -109,6 +115,47 @@ const copyDestinations = (verb: string, args: readonly string[]): string[] | nul
     return pos.length >= 2 ? [pos[pos.length - 1] ?? ''] : null
   }
   return null
+}
+
+/** A117 (Fable review D1): where a move or rename puts its file (mv, move, Move-Item; ren, rename, Rename-Item: a bare new
+ * name lands beside its source), or null when the command is neither or its destination cannot be read. */
+const moveDestinations = (verb: string, args: readonly string[]): string[] | null => {
+  const pos = args.filter((a, n) => !a.startsWith('-') && !/^-(path|literalpath|destination|newname)$/i.test(args[n - 1] ?? ''))
+  const valueOf = (names: RegExp) => optionValue(args, names)
+  if (verb === 'mv' || verb === 'move' || verb === 'move-item' || verb === 'mi') {
+    const d = valueOf(/^-dest(ination)?$/i) ?? (pos.length >= 2 ? pos[pos.length - 1] : null)
+    return d ? [d] : null
+  }
+  if (verb === 'ren' || verb === 'rename' || verb === 'rename-item' || verb === 'rni') {
+    const name = valueOf(/^-newname$/i) ?? pos[1] ?? null
+    const source = valueOf(/^-(path|literalpath)$/i) ?? pos[0] ?? ''
+    return name ? [/[\\/]/.test(name) ? name : `${source.replace(/[^\\/]*$/, '')}${name}`] : null
+  }
+  return null
+}
+/** A117: where a copy, move or rename writes (copyDestinations, else moveDestinations), or null. */
+export const writeDestinations = (verb: string, args: readonly string[]): string[] | null => copyDestinations(verb, args) ?? moveDestinations(verb, args)
+
+/** A76 / A117: follows `cd`/`pushd`/`popd` through a command's segments: what protected place the shell stands in now
+ * (`placeOf` reads a cd segment, its target and the place it stood in; null: none). */
+export const placeTracker = <T>(placeOf: (raw: string, target: string, here: T | null) => T | null) => {
+  let here: T | null = null
+  const stack: (T | null)[] = []
+  return {
+    here: (): T | null => here,
+    /** True when the segment was a cd, pushd or popd (consumed). */
+    step: (verb: string, args: readonly string[], raw: string): boolean => {
+      if (verb === 'popd') {
+        here = stack.pop() ?? null
+        return true
+      }
+      if (!CHDIR.has(verb)) return false
+      if (verb === 'pushd') stack.push(here)
+      const target = args.find(a => !a.startsWith('-')) ?? ''
+      here = placeOf(raw, target, here)
+      return true
+    },
+  }
 }
 
 /** A85 (orchestrator, re-review): the kit's read-only checks that may name the live kit: `claude plugin test|validate`,
@@ -447,22 +494,14 @@ export class A5R {
    * a git command that runs elsewhere (`git -C <own worktree> …`). Unknown means shared. */
   preShell(command: string, workdir = '', env: Places = {}, depth = 0, isShared: (dir: string) => boolean = () => true): Decision | null {
     let firstAsk: Decision | null = null
-    let inKit: string | null = null // A76: a `cd` into the live kit: what runs after it there may not write files
-    const dirs: (string | null)[] = []
+    const cwd = placeTracker((raw: string) => this.kitMentions.find(([re]) => re.test(raw.replace(/\\/g, '/').toLowerCase()))?.[1] ?? null) // A76: a `cd` into the live kit
     for (const raw of segments(stripHeredocs(command ?? ''))) {
       const bare = blankQuotes(raw)
       const applies = (r: Rule) => rx(r.re).test(bare) && (r.where !== 'shared' || isShared(gitTarget(raw, workdir)))
       for (const r of this.cfg.shell_deny) if (applies(r)) return decision('deny', 'D1/D5', r.why, r.id)
       const [verb, args] = commandVerb(tokenize(raw))
-      if (CHDIR.has(verb)) {
-        if (verb === 'pushd') dirs.push(inKit)
-        inKit = this.kitMentions.find(([re]) => re.test(raw.replace(/\\/g, '/').toLowerCase()))?.[1] ?? null
-        continue
-      }
-      if (verb === 'popd') {
-        inKit = dirs.pop() ?? null
-        continue
-      }
+      if (cwd.step(verb, args, raw)) continue
+      const inKit = cwd.here() // what runs after a cd into the kit may not write files there
       const kitHere = (t: string) => !isAbs(t.replace(/\\/g, '/')) || this.kitMentions.some(([re]) => re.test(norm(t).toLowerCase()))
       const outOnly = (copyDestinations(verb, args) ?? []).length > 0 && (copyDestinations(verb, args) ?? []).every(d => !kitHere(d)) // 0.18.3: a copy out of the kit
       if (inKit && !outOnly && writesFiles(raw, verb, args, kitHere)) return decision('deny', 'D1', `This command writes in the A5R kit (${inKit}). Agents may not change the enforcement kit.`, 'kit')

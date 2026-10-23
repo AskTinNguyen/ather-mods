@@ -4,7 +4,7 @@
 // alive: each session writes only its own files (Saved/A5R/editor/<id8>.json, touch/<id8>.json), the
 // sync holder alone writes Saved/A5R/sync.json, and the head of the queue alone takes a free lock.
 // Files are the truth; a notice is only a doorbell.
-import { commandVerb, gitTarget, programs, psQuote, segments, stripHeredocs, tokenize, under } from './a5r.ts'
+import { commandVerb, gitTarget, isDotNetWrite, norm, programs, psQuote, segments, stripHeredocs, tokenize, under, writesFiles } from './a5r.ts'
 import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from './syncrules.ts'
 import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
@@ -354,7 +354,7 @@ export const heldLine = (h: Held): string => {
 export const isStandardHeld = (lock: LockLine): boolean => lock.kind === 'held' && lock.isStandard && lock.id8.length === 8
 /** A117: such a line with another end (its `end=` and the `until` older readers take), the rest as it was: the person's
  * resize, written by whichever session's A5R he pressed in. */
-export const heldLineAt = (lock: LockLine, end: number): string => lock.raw.replace(/\bend=\d{1,2}:\d{2}/, `end=${hhmm(end)}`).replace(/\buntil \d{1,2}:\d{2}/, `until ${hhmm(end)}`)
+export const heldLineAt = (lock: LockLine, end: number): string => lock.raw.replace(/\bend=\d{1,2}:\d{2}/, `end=${hhmm(end)}`).replace(/(· held by .*\buntil )\d{1,2}:\d{2}$/, `$1${hhmm(end)}`)
 
 /** D2: the standard's FREE line, then the words every older reader takes for free. */
 export const freeLine = (f: { since: number; by: string; note: string; background: 'none' | 'unknown' }): string =>
@@ -728,7 +728,9 @@ export const decide = (x: GrantInput): Decision => {
     // Its slot fits and nobody passes: only because the head has waited 2 h (headStateOf tried this slot otherwise).
     return wait('queue', '', `the Editor is free but ${head} asked first (it has waited ${PASS_AGING_MIN / 60} h or more for memory: nobody goes before it now)`, behind)
   }
-  return slotOf(x, mine, place)
+  // A117: a head the person placed is never passed (headStateOf); waiting for memory, it says so.
+  const own = slotOf(x, mine, place)
+  return own.kind === 'wait' && own.code === 'ram' && isPlaced(x.manual, me8) ? { ...own, reason: `${own.reason}; placed by hand: nobody passes it` } : own
 }
 
 /** A113: a slot that goes before a head waiting for memory lasts at most this long; a head that has waited this long is
@@ -1122,28 +1124,15 @@ export const isSyncCommandOnly = (command: string): boolean => {
   })
 }
 
-/** An Edit/Write path that is the Editor owner lock. */
-export const isLockPath = (path: string): boolean => /(^|\/)Saved\/EDITOR_OWNER\.txt$/i.test((path ?? '').replace(/\\/g, '/'))
+/** An Edit/Write path that is the Editor owner lock (`.` and `..` resolved). */
+export const isLockPath = (path: string): boolean => /(^|\/)Saved\/EDITOR_OWNER\.txt$/i.test(norm(path ?? ''))
 
-const FILE_WRITERS = new Set(['set-content', 'sc', 'add-content', 'ac', 'out-file', 'tee', 'tee-object', 'new-item', 'ni', 'copy-item', 'cp', 'copy', 'cpi', 'move-item', 'mv', 'move', 'mi', 'rm', 'del', 'erase', 'remove-item', 'ri', 'clear-content', 'clc', 'truncate', 'dd'])
-
-/** A117: an Edit/Write path that is the person's queue order (Saved/A5R/queue-order.json). */
-export const isOrderPath = (path: string): boolean => /(^|\/)Saved\/A5R\/queue-order\.json$/i.test((path ?? '').replace(/\\/g, '/'))
-
-/** A shell command that writes the file `name` (a pattern of its file name): a redirect into it, a writing verb that names
- * it, an in-place sed, or a .NET file write. Reading it is fine. */
-const writesFile = (command: string, name: RegExp): boolean =>
-  programs(command).some(({ raw, verb, args }) => {
-    if (!name.test(raw)) return false
-    if (new RegExp(`(>>?|\\|\\s*(tee|Out-File|Set-Content|Add-Content)\\b)[^|]*${name.source}`, 'i').test(raw)) return true
-    if (/WriteAll(Text|Lines|Bytes)|AppendAll(Text|Lines)/i.test(raw)) return true
-    if (verb === 'sed' && args.some(a => /^-i/.test(a))) return true
-    return FILE_WRITERS.has(verb)
-  })
-/** A shell command that writes the lock. */
-export const writesLock = (command: string): boolean => writesFile(command, /EDITOR_OWNER\.txt/i)
-/** A117: a shell command that writes the person's queue order. */
-export const writesOrder = (command: string): boolean => writesFile(command, /queue-order\.json/i)
+const LOCK_NAME = /EDITOR_OWNER\.txt/i
+/** A shell command that writes the lock: a segment naming it that writes files (a5r.ts writesFiles: a redirect or tee into it,
+ * a writing or deleting verb, an in-place edit, a git write), or a .NET file write. Reading it is fine: agents read the lock
+ * with many tools, so this guard lists writers (the order file's, order.ts, lists readers instead). */
+export const writesLock = (command: string): boolean =>
+  programs(command).some(({ raw, verb, args }) => LOCK_NAME.test(raw) && (writesFiles(raw, verb, args, t => LOCK_NAME.test(t)) || isDotNetWrite(raw)))
 
 // ---------- notices (D6): one shape, one delivery per id per session ----------
 export type Notice = { id: string; text: string; isActionable: boolean }
