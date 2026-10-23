@@ -2,7 +2,7 @@
 // `$`; register.ts reads and writes the files. A100 one record per lease (Saved/A5R/leases.jsonl) and its 24-hour summary;
 // A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it
 // (A116: in plain words; A117: in the person's order, a holder's resized end).
-import { IDLE_RELEASE_MS, PASS_MAX_MIN, YIELD_EVERY_MS, decide, hhmm, holdsSyncSlot, isPlaced, lockTimes, noticeIds, queueOf, type Decision, type GrantInput, type Holding, type LockLine, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
+import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, lockTimes, noticeIds, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
 export const LEASES_FILE = 'leases.jsonl'
@@ -21,10 +21,11 @@ export const RETEST_LEASE_MAX_MIN = 90
 export const EDITOR_WORK = /Build\.(bat|sh|cmd)\b|UnrealEditor|RunUAT|launch_s2\.ps1|close_editor\.ps1|\blab\.py\b|\bmcp\.py\b/i
 
 /** A100: why a lease ended. `sync`: the sync's own slot ended with its sync; `cutoff`: a lease given up because a sync's
- * cutoff or freeze needed the Editor. */
-export type EndReason = 'released' | 'yielded' | 'idle' | 'overrun' | 'lapsed' | 'unseen' | 'sync' | 'cutoff'
-/** A104: the reasons the code forces on a holder (a yield ask it was told of, a sync's need, another session's lapse). */
-const FORCED: ReadonlySet<EndReason> = new Set(['yielded', 'cutoff', 'lapsed', 'unseen'])
+ * cutoff or freeze needed the Editor; A118 `focus`: given up because the person gave another session a Focus. */
+export type EndReason = 'released' | 'yielded' | 'idle' | 'overrun' | 'lapsed' | 'unseen' | 'sync' | 'cutoff' | 'focus'
+/** A104: the reasons the code forces on a holder (a yield ask it was told of, a sync's need, another session's lapse, A118 a
+ * Focus). */
+const FORCED: ReadonlySet<EndReason> = new Set(['yielded', 'cutoff', 'lapsed', 'unseen', 'focus'])
 
 export type LeaseRecord = {
   v: 1
@@ -109,7 +110,7 @@ export const endLease = (f: SessionFile, end: LeaseEnd): { record: LeaseRecord |
 /** A100: the file with one more line, kept to the last `max` lines. */
 export const appendCapped = (cur: string, line: string, max = LEASES_MAX): string => `${[...cur.split(/\r?\n/).filter(l => l.trim() !== ''), line].slice(-max).join('\n')}\n`
 
-const REASONS: readonly EndReason[] = ['released', 'yielded', 'idle', 'overrun', 'lapsed', 'unseen', 'sync', 'cutoff']
+const REASONS: readonly EndReason[] = ['released', 'yielded', 'idle', 'overrun', 'lapsed', 'unseen', 'sync', 'cutoff', 'focus']
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
 /** A100: the records of the file, each read field by field (a line another version or a half write left is skipped). */
@@ -128,10 +129,10 @@ export const parseLeases = (text: string | null): LeaseRecord[] =>
   })
 
 /** A100: the release's reason, from what the code knows: a yield ask it was told of within the notice's safe-point window
- * (D3: a later release is no yield), a sync's cutoff or freeze (not its holder), past its end, told it was idle; else a
- * plain release. Never a session's own word. */
-export const releaseReason = (x: { isYieldTold: boolean; isSyncNeed: boolean; isOver: boolean; isIdleTold: boolean }): EndReason =>
-  x.isYieldTold ? 'yielded' : x.isSyncNeed ? 'cutoff' : x.isOver ? 'overrun' : x.isIdleTold ? 'idle' : 'released'
+ * (D3: a later release is no yield), another session's claim (a sync's cutoff or freeze, A118 a Focus), past its end, told
+ * it was idle; else a plain release. Never a session's own word. */
+export const releaseReason = (x: { isYieldTold: boolean; claimedBy: Claim['kind'] | null; isOver: boolean; isIdleTold: boolean }): EndReason =>
+  x.isYieldTold ? 'yielded' : x.claimedBy === 'sync' ? 'cutoff' : x.claimedBy === 'focus' ? 'focus' : x.isOver ? 'overrun' : x.isIdleTold ? 'idle' : 'released'
 
 /** A104: the place a release keeps: a forced one keeps the request's requestedAt for 60 min (a yield ranks right after
  * the session it yielded to, `after`); any other keeps none. */
@@ -164,6 +165,19 @@ export const yieldAsksTo = (files: readonly SessionFile[], holder8: string, leas
  * no longer count (the end bounds a working holder's time): only Editor use, PIE or an agent keep the notice back. */
 export const isIdleHolder = (x: { now: number; since: number; end: number; editorUseAt: number; lastTurnAt: number | undefined; agents: number; isPie: boolean; isUnattended: boolean }): boolean =>
   !x.isPie && !x.isUnattended && x.agents === 0 && x.now - Math.max(x.editorUseAt, x.since) >= IDLE_RELEASE_MS && (x.now >= x.end || x.now - Math.max(x.lastTurnAt ?? 0, x.since) >= IDLE_RELEASE_MS)
+
+/** The holder's own notices for its lease this minute: its end is near (5 min), it is over, it is idle (A101), yields asked
+ * of it (A103, once it is between Editor work). A118: a lease a Focus gave hears its end from the Focus notices alone, and
+ * while this session's Focus runs (`isClaimed`: a Focus claim only; a sync's holder still hears it is idle) it is neither told
+ * it is idle nor asked to yield. */
+export const holderNotices = (h: Holding, x: { now: number; isFocusLease: boolean; isClaimed: boolean; editorUseAt: number; lastTurnAt: number | undefined; agents: number; isPie: boolean; isUnattended: boolean; asks: readonly { asker: SessionFile; ask: YieldAsk }[] }): Notice[] => {
+  const { now } = x
+  const ends: Notice[] = x.isFocusLease ? [] : now >= h.end ? [{ id: noticeIds.overrun(h.since, h.end), text: NOTICES.overrun(h.end), isActionable: true }] : now >= h.end - LEASE_WARN_MS ? [{ id: noticeIds.leaseEnding(h.since, h.end), text: NOTICES.leaseEnding(h.end), isActionable: true }] : []
+  if (x.isClaimed) return ends
+  const idle = isIdleHolder({ now, since: h.since, end: h.end, editorUseAt: x.editorUseAt, lastTurnAt: x.lastTurnAt, agents: x.agents, isPie: x.isPie, isUnattended: x.isUnattended }) ? [{ id: noticeIds.idle(h.since), text: NOTICES.idle(Math.round((now - Math.max(x.editorUseAt, h.since)) / 60_000)), isActionable: true }] : []
+  const yields = isYieldMoment({ now, since: h.since, end: h.end, editorUseAt: x.editorUseAt }) ? x.asks.map(({ asker, ask }) => ({ id: noticeIds.yield(asker.id8, ask.at), text: NOTICES.yield(asker.lane, ask.minutes), isActionable: true })) : []
+  return [...ends, ...idle, ...yields]
+}
 
 /** A102: a second extension while others wait is the retest one: at most 15 min, no build lease, an Unreal Editor running,
  * the whole lease within 90 min, asked before its end. */
@@ -234,8 +248,9 @@ export const adoptLockEnd = (h: Holding, lock: LockLine, now: number): Holding =
 export type HolderRow = { lane: string; id8: string; isMe: boolean; grantedAt: number | null; editorAt: number | null; pieAt: number | null; extensions: number; end: number | null; leftMin: number | null; isSyncSlot: boolean }
 /** A112: `wait`: the row's current wait code by decide, read from the files every session reads ('grant': it takes the
  * Editor at its next minute; 'pass': it goes before a head waiting for memory, A113). A116: `reason`, why in plain words.
- * A117: `minutes` the slot it will be granted (the person's, else its own `asked`); `isPlaced`, placed by the person. */
-export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; asked: number; isPlaced: boolean; pie: boolean; build: boolean; wait: WaitCode | 'grant' | 'pass' | null; reason: string }
+ * A117: `minutes` the slot it will be granted (the person's, else its own `asked`); `isPlaced`, placed by the person. A119:
+ * `startsAt`, when its turn is expected while a Focus runs (null otherwise, and for the focus session itself). */
+export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; asked: number; isPlaced: boolean; pie: boolean; build: boolean; wait: WaitCode | 'grant' | 'pass' | null; reason: string; startsAt: number | null }
 export type QueueView = { holder: HolderRow | null; rows: QueueRow[] }
 
 /** A105: the holder (its file's lease, else the lock line's times) and each queued session in the order every session
@@ -250,12 +265,30 @@ export const queueView = (x: GrantInput): QueueView => {
   const holder: HolderRow | null = isHeld
     ? { lane: f?.lane || x.lock.lane || x.lock.id8 || 'unknown', id8: x.lock.id8, isMe: x.lock.id8 !== '' && x.lock.id8 === x.me8, grantedAt, editorAt: h?.notes?.editorAt ?? null, pieAt: h?.notes?.pieAt ?? null, extensions: h?.extended ?? 0, end, leftMin: end === null ? null : Math.round((end - x.now) / 60_000), isSyncSlot: holdsSyncSlot(x.lock, f) }
     : null
-  const rows = queueOf(x.files, x.lanes, x.now, x.sync, x.manual).map((s, i): QueueRow => {
+  const claim = claimIn(x)
+  const starts = claim?.kind === 'focus' ? expectedStarts(x, claim.end) : new Map<string, number>() // A119
+  const rows = queueIn(x).map((s, i): QueueRow => {
     const asked = s.want?.minutes ?? 0
     const d = decide({ ...x, me8: s.id8 })
-    return { place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: Math.max(0, Math.round((x.now - (s.want?.requestedAt ?? x.now)) / 60_000)), minutes: x.manual.minutes[s.id8] ?? asked, asked, isPlaced: isPlaced(x.manual, s.id8), pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(d), reason: reasonOf(d) }
+    return { place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: Math.max(0, Math.round((x.now - (s.want?.requestedAt ?? x.now)) / 60_000)), minutes: x.manual.minutes[s.id8] ?? asked, asked, isPlaced: isPlaced(x.manual, s.id8), pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(d), reason: reasonOf(d), startsAt: starts.get(s.id8) ?? null }
   })
   return { holder, rows }
+}
+
+/** A119: when each queued session's turn is expected to start: the Editor comes back to the queue at `base` (now at the
+ * earliest), then each turn takes its minutes (the person's, A117, else its own) in the order every session computes; a
+ * Focus's session is left out (its time is the box). */
+export const expectedStarts = (x: Pick<GrantInput, 'files' | 'lanes' | 'now' | 'sync' | 'focus' | 'manual'>, base: number): Map<string, number> => {
+  const out = new Map<string, number>()
+  const claim = claimIn(x)
+  const focus8 = claim?.kind === 'focus' ? claim.id8 : undefined
+  let at = Math.max(base, x.now)
+  for (const f of queueIn(x)) {
+    if (f.id8 === focus8 || !f.want) continue
+    out.set(f.id8, at)
+    at += (x.manual.minutes[f.id8] ?? f.want.minutes) * 60_000
+  }
+  return out
 }
 
 /** A105 / A116: the holder's facts in plain words, one line (the panel's row): granted at (`sync` for the sync's own slot),
@@ -279,8 +312,8 @@ const waitOf = (d: Decision): QueueRow['wait'] => (d.kind === 'wait' ? d.code : 
 const reasonOf = (d: Decision): string => (d.kind === 'wait' ? d.reason : d.kind === 'grant' ? (d.pass ? `goes before 1 for ≤ ${PASS_MAX_MIN} min` : 'granted next') : '')
 
 /** A105 / A116: a queued session's facts in plain words, one line (the panel's row): waited for, its minutes (A117: set by
- * hand), PIE / build, placed by hand, why it waits. */
+ * hand), PIE / build, placed by hand, why it waits, A119 when its turn is expected after a Focus. */
 export const queuedLine = (r: QueueRow): string =>
-  [`waiting ${r.waitedMin} min`, r.minutes === r.asked ? `${r.minutes} min` : `${r.minutes} min (set by hand)`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : []), ...(r.isPlaced ? ['placed by hand'] : []), ...(r.reason ? [r.reason] : [])].join(' · ')
+  [`waiting ${r.waitedMin} min`, r.minutes === r.asked ? `${r.minutes} min` : `${r.minutes} min (set by hand)`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : []), ...(r.isPlaced ? ['placed by hand'] : []), ...(r.reason ? [r.reason] : []), ...(r.startsAt === null ? [] : [`starts ~${hhmm(r.startsAt)}`])].join(' · ')
 /** A105 / A112: a queued session in the editor tool's status: the panel's line and its wait code (for the logs and models). */
 export const queueRowText = (r: QueueRow): string => [queuedLine(r), ...(r.wait && r.wait !== 'grant' && r.wait !== 'pass' ? [`wait ${r.wait}`] : [])].join(' · ')

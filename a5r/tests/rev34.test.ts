@@ -173,7 +173,7 @@ const yieldInput = (holder: Partial<SessionFile>, o: Partial<GrantInput> = {}): 
   sync: null,
   probe: null,
   gates: DEFAULT_GATES,
-  manual: NO_MANUAL,
+  manual: NO_MANUAL, focus: null,
   ...o,
 })
 test('A103: unit: the asker asks only when its holder made no Editor use for 5 min and 20 min of its lease remain', () => {
@@ -246,8 +246,8 @@ test('A104 / D3: unit: a release is a yield only within the notice\'s 10-min saf
   expect(yieldTold(asks, told, T(14, 50))?.asker.id8).toBe('cccccccc')
   expect(yieldTold(asks, told, T(14, 51))).toBeUndefined()
   expect(yieldTold(asks, new Map(), T(14, 41))).toBeUndefined() // never told (held back by A103)
-  expect(releaseReason({ isYieldTold: true, isSyncNeed: false, isOver: true, isIdleTold: false })).toBe('yielded')
-  expect(releaseReason({ isYieldTold: false, isSyncNeed: false, isOver: true, isIdleTold: false })).toBe('overrun')
+  expect(releaseReason({ isYieldTold: true, claimedBy: null, isOver: true, isIdleTold: false })).toBe('yielded')
+  expect(releaseReason({ isYieldTold: false, claimedBy: null, isOver: true, isIdleTold: false })).toBe('overrun')
 })
 
 /** The race (D1): this session holds since 14:20 (asked 14:10); `cccccccc` asked 14:38 and asked it to yield; `dddddddd`
@@ -262,7 +262,7 @@ const raceWorld = (on: any, o: { isKept?: boolean; isAsked?: boolean } = {}) => 
   return w
 }
 const filesOf = (w: ReturnType<typeof world>): SessionFile[] => ['editor/' + ME8, 'editor/cccccccc', 'editor/dddddddd'].map(f => JSON.parse(w.read(`${HF}/${f}.json`)) as SessionFile)
-const decideFor = (w: ReturnType<typeof world>, id8: string) => decide({ me8: id8, lock: parseLockLine(w.read(LOCK)), files: filesOf(w), lanes: [], now: w.clock.now(), sync: null, probe: { freeGb: 40, diskGb: 40, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL })
+const decideFor = (w: ReturnType<typeof world>, id8: string) => decide({ me8: id8, lock: parseLockLine(w.read(LOCK)), files: filesOf(w), lanes: [], now: w.clock.now(), sync: null, probe: { freeGb: 40, diskGb: 40, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null })
 
 test('A104 / D1: the real race: A yields and asks again at once; B, the session it yielded to, is granted first; A is next, before the session that asked during its lease', opts(), async ($, on) => {
   const w = raceWorld(on)
@@ -361,13 +361,13 @@ test('A105: unit: the queue view: the holder from its file (granted, Editor seen
     JSON.parse(peer('cccccccc', { want: want({ minutes: 30, pie: true, requestedAt: T(14, 22) }) })) as SessionFile,
     JSON.parse(peer(ME8, { want: want({ minutes: 20, build: true, requestedAt: T(14, 36) }) })) as SessionFile,
   ]
-  const v = queueView({ me8: ME8, lock: parseLockLine(held('bbbbbbbb', T(14, 0), T(14, 52))), files, lanes: [], now: NOW, sync: null, probe: null, gates: DEFAULT_GATES, manual: NO_MANUAL }) // rev 38 (A112): with the decide inputs
+  const v = queueView({ me8: ME8, lock: parseLockLine(held('bbbbbbbb', T(14, 0), T(14, 52))), files, lanes: [], now: NOW, sync: null, probe: null, gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null }) // rev 38 (A112): with the decide inputs
   // Rev 40: the holder's end and whether its lease is the sync's (A117); each row's asked minutes, placed mark (A117) and
   // reason in plain words (A116).
   expect(v.holder).toEqual({ lane: 'lane-bbbbbbbb', id8: 'bbbbbbbb', isMe: false, grantedAt: T(14, 0), editorAt: T(14, 4), pieAt: T(14, 20), extensions: 1, end: T(14, 52), leftMin: 12, isSyncSlot: false })
   expect(v.rows).toEqual([
-    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, asked: 30, isPlaced: false, pie: true, build: false, wait: 'held', reason: 'behind lane-bbbbbbbb' },
-    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, asked: 20, isPlaced: false, pie: false, build: true, wait: 'held', reason: '' },
+    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, asked: 30, isPlaced: false, pie: true, build: false, wait: 'held', reason: 'behind lane-bbbbbbbb', startsAt: null },
+    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, asked: 20, isPlaced: false, pie: false, build: true, wait: 'held', reason: '', startsAt: null },
   ])
 })
 

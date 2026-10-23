@@ -1,6 +1,6 @@
 // A91 (rev 32): a nudge to waiting idle sessions when the Editor comes free. Pure: no `$`; register.ts reads the
 // transcript tails, claims each nudge, writes it to the target's inbox (Saved/A5R/nudges/<id8>.json) and delivers it there.
-import { hash, livenessOf, type LaneBeat, type LockLine, type Phase, type SessionFile } from './coord.ts'
+import { hash, livenessOf, type Claim, type LaneBeat, type LockLine, type SessionFile } from './coord.ts'
 
 export const NUDGE_IDLE_MS = 10 * 60_000 // A91 / A114: idle: no turn for this long (and nothing running: idleMsOf)
 export const NUDGE_ACTIVE_MS = 24 * 3_600_000 // and a turn within this long
@@ -8,9 +8,9 @@ export const NUDGE_MAX = 3 // nudges in one free window
 export const NUDGE_EVERY_MS = 60 * 60_000 // at most one nudge an hour per session, across windows
 
 /** The free window a FREE lock line opens (its since stamp, else the line itself), or null while the Editor is held, the
- * lock is missing, or a sync is in its cutoff or freeze (grants wait then). */
-export const freeWindowOf = (lock: LockLine, phase: Phase): string | null =>
-  lock.kind !== 'free' || phase === 'cutoff' || phase === 'frozen' ? null : lock.since || hash(lock.raw)
+ * lock is missing, or a claim stands (a sync in its cutoff or freeze, A118 a running Focus: grants wait for it). */
+export const freeWindowOf = (lock: LockLine, claim: Claim | null): string | null =>
+  lock.kind !== 'free' || claim ? null : lock.since || hash(lock.raw)
 
 /** A91 / A114: how long a session has been idle: no main-loop turn signal (a prompt, a tool call, a turn's end) since, no
  * main-loop tool call and no background agent running (0 while any runs). Another session's file has only its last turn

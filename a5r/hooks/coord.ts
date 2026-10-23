@@ -80,7 +80,7 @@ export const presetTimes = (now: number): number[] => {
 // ---------- session files (Saved/A5R/editor/<id8>.json, one writer each) ----------
 export type Mode = 'interactive' | 'unattended'
 /** What a session asked the Editor for. */
-export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean }
+export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean; focus?: number } // focus: A118, made for the Focus that started then
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }
@@ -137,6 +137,9 @@ export type SessionFile = {
   /** A113 (Fable review D3): written by A5R 0.23.0 and later, which take a pass when they are its passer; a file without it
    * (0.22.0) is never chosen as a passer (it would never take the lock and everyone behind it would wait). */
   canPass?: true
+  /** A118: written by A5R 0.25.0 and later, which take and keep a Focus; a file without it is never given one (it would
+   * never take the lock, and the queue would wait behind it for the whole box). */
+  knowsFocus?: true
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
@@ -155,13 +158,14 @@ export const blankSession = (session: string, lane: string, title: string, now: 
   yieldAsks: [],
   delivered: [],
   canPass: true,
+  knowsFocus: true,
 })
 
 export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}), ...(v.canPass === true ? { canPass: true as const } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}), ...(v.canPass === true ? { canPass: true as const } : {}), ...(v.knowsFocus === true ? { knowsFocus: true as const } : {}) }
   } catch {
     return null
   }
@@ -426,14 +430,18 @@ export const isBuildLease = (lock: LockLine, holder: SessionFile | undefined): b
  * process runs (the overrun notice stays) or while the lock's own pid still runs; never without a probe reading.
  * Lapsed: 10 min past its end. Unseen: 10 min after the grant its session ran no turn (its a5r writes `lastTurnAt`;
  * an older a5r that writes none is never judged), Ather's lane shows no activity since, and another session waits. */
-export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; probe: Probe | null; waiting: readonly SessionFile[]; sync: SyncFile | null; writtenAt?: number | null }): Released | null => {
+export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; probe: Probe | null; waiting: readonly SessionFile[]; sync: SyncFile | null; focus: FocusLease | null; writtenAt?: number | null }): Released | null => {
   const { lock, now } = x
-  // A96: the holder of a frozen sync keeps the Editor lock through every stage (never lapsed, never passed on).
-  if (x.sync?.holder.id8 === lock.id8 && syncPhase(x.sync, now, isSyncHolderGone(x.sync, x.files, x.lanes, now)) === 'frozen') return null
+  // A96 / A118: the claim's lease (a sync's holder in its cutoff and freeze, through every stage; a running Focus's session) is
+  // never lapsed, never passed on.
+  if (claimIn(x)?.id8 === lock.id8) return null
+  // A118: a Focus ended early lapses from its cut end, and a lease the person gave is never passed on as unseen.
+  const focus = x.focus?.id8 === lock.id8 ? x.focus : null
   if (lock.kind === 'held' && (!lock.isStandard || lock.id8.length !== 8) && x.probe) return handLapseOf({ ...x, probe: x.probe })
   if (lock.kind !== 'held' || !lock.isStandard || !lock.id8 || !x.probe) return null
-  const t = lockTimes(lock, now)
-  if (!t) return null
+  const read = lockTimes(lock, now)
+  if (!read) return null
+  const t = focus ? { ...read, end: Math.min(read.end, focus.end) } : read
   if (unrealPids(x.probe).length > 0) return null
   if (lock.pid !== null && x.probe.procs.some(p => p.pid === lock.pid)) return null
   // A58: never while a build or a game runs, nor for a build lease.
@@ -445,7 +453,7 @@ export const lapseOf = (x: { lock: LockLine; files: readonly SessionFile[]; lane
   const lane = x.lanes.find(l => l.sessionId.toLowerCase().startsWith(lock.id8))
   // A67: a holder working through a background agent is not idle.
   const isUnseen = typeof holder?.lastTurnAt === 'number' && holder.lastTurnAt < t.since && (lane?.lastActiveAt ?? 0) < t.since && (holder.agents ?? 0) === 0
-  if (isUnseen && now - t.since >= UNSEEN_MS && x.waiting.some(f => f.id8 !== lock.id8)) return { kind: 'unseen', at: now, by: '', since: t.since, end: t.end }
+  if (!focus && isUnseen && now - t.since >= UNSEEN_MS && x.waiting.some(f => f.id8 !== lock.id8)) return { kind: 'unseen', at: now, by: '', since: t.since, end: t.end }
   return null
 }
 
@@ -491,7 +499,7 @@ export type OrchestrateEvent = {
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
    * running), holder-gone; or A65-judge (a verdict, advisory); A112: wait (a session's own wait decision, logged only).
    * A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' // manual: A117, the person's change of the queue
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' // manual: A117, the person's change of the queue; focus: A118
   lane: string
   id8: string
   procs: readonly string[]
@@ -639,6 +647,9 @@ export const heavyList = (probe: Probe, max = 4): string => {
 export const isSyncHolderGone = (s: SyncFile | null, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): boolean =>
   Boolean(s) && livenessOf(s?.holder.id8 ?? '', files, lanes, now) === 'gone'
 
+/** A118: the lease a Focus gives its session (focus.ts reads it from Saved/A5R/editor-focus.json): while it runs, the Editor
+ * until the box end; ended early (done, or the person's end), the lease cut to `end`. */
+export type FocusLease = { id8: string; lane: string; milestone: string; startedAt: number; end: number; isRunning: boolean }
 /** A117: the person's order as the queue reads it (order.ts resolves it from Saved/A5R/queue-order.json for the requests
  * that still last): the sessions he placed, in his order, and the minutes he set for a queued request. */
 export type ManualOrder = { pins: readonly string[]; minutes: Readonly<Record<string, number>> }
@@ -649,21 +660,33 @@ export const isPlaced = (m: ManualOrder, id8: string): boolean => m.pins.include
 /** The sync's phase as every decision reads it from the shared files (a gone holder's freeze expires, D8). */
 export const phaseIn = (x: Pick<GrantInput, 'sync' | 'files' | 'lanes' | 'now'>): Phase => syncPhase(x.sync, x.now, isSyncHolderGone(x.sync, x.files, x.lanes, x.now))
 
-/** The order every session computes alike: live waiting requests, the sync holder first while a sync is in its cutoff or
- * freeze, then (A117) the sessions the person placed, in his order, then first requested first served. */
-export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, sync: SyncFile | null, manual: ManualOrder): SessionFile[] => {
-  const phase = phaseIn({ sync, files, lanes, now })
-  const first = phase === 'cutoff' || phase === 'frozen' ? sync?.holder.id8 : undefined
+/** The one lease every session's decisions protect at a time: the holder's of a sync in its cutoff or freeze (it goes first,
+ * its slot ends with the sync, and in the freeze it keeps the lock through every stage: D8, A94, A96), or the session's of a
+ * running Focus (A118). They never overlap: a Focus may not cross a sync's cutoff, and a sync's cutoff may not fall inside a
+ * Focus. */
+export type Claim = { kind: 'sync' | 'focus'; id8: string; lane: string; end: number }
+export const claimIn = (x: Pick<GrantInput, 'sync' | 'files' | 'lanes' | 'now' | 'focus'>): Claim | null => {
+  if (x.focus?.isRunning) return { kind: 'focus', id8: x.focus.id8, lane: x.focus.lane, end: x.focus.end }
+  const phase = phaseIn(x)
+  return x.sync && (phase === 'cutoff' || phase === 'frozen') ? { kind: 'sync', id8: x.sync.holder.id8, lane: x.sync.holder.lane, end: x.sync.hardEnd } : null
+}
+
+/** The order every session computes alike: live waiting requests, the claim's session first (a sync's holder in its cutoff or
+ * freeze, A118 a running Focus's session), then (A117) the sessions the person placed, in his order, then first requested
+ * first served. */
+export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, claim: Claim | null, manual: ManualOrder): SessionFile[] => {
   const pinned = (f: SessionFile) => manual.pins.indexOf(f.id8)
-  const rank = (f: SessionFile) => (first && f.id8 === first ? -1 : pinned(f) >= 0 ? pinned(f) : manual.pins.length)
+  const rank = (f: SessionFile) => (f.id8 === claim?.id8 ? -1 : pinned(f) >= 0 ? pinned(f) : manual.pins.length)
   return files
     .filter(f => f.want && !f.holding && livenessOf(f.id8, files, lanes, now) === 'alive')
     .sort((a, b) => rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
 }
+/** The queue of a decision's input. */
+export const queueIn = (x: Pick<GrantInput, 'files' | 'lanes' | 'now' | 'sync' | 'focus' | 'manual'>): SessionFile[] => queueOf(x.files, x.lanes, x.now, claimIn(x), x.manual)
 
 /** Why a request waits; `ram`: its own launch gate is not met by free RAM (the head's, or, A112, a later request's behind a
  * head that waits for memory: its place says which). */
-export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe' | 'merge' // merge: A115, a revert or cherry-pick too
+export type WaitCode = 'missing' | 'held' | 'gone-editor' | 'queue' | 'sync' | 'ram' | 'probe' | 'merge' | 'focus' // merge: A115, a revert or cherry-pick too; focus: A118
 /** A grant; A113: `pass` names the head of the queue this slot goes before (that head waits only for memory). */
 export type Grant = { kind: 'grant'; end: number; reuse: number | null; pass?: string }
 export type Decision =
@@ -688,6 +711,8 @@ export type GrantInput = {
   probeFailed?: boolean
   /** A117: the person's order and the minutes he set (NO_MANUAL: first asked, first served). */
   manual: ManualOrder
+  /** A118: the lease the person's Focus gives (running, or cut after an early end); null: none. */
+  focus: FocusLease | null
 }
 
 /** Whether this session may take the Editor now, and if not why and what next. Only the head of the queue takes
@@ -695,12 +720,15 @@ export type GrantInput = {
  * slotOf's. */
 export const decide = (x: GrantInput): Decision => {
   const { me8, lock, now, sync } = x
-  const queue = queueOf(x.files, x.lanes, now, sync, x.manual)
+  const queue = queueIn(x)
   const mine = x.files.find(f => f.id8 === me8)
   if (lock.id8 === me8 && (lock.kind === 'held' || lock.kind === 'handed')) return { kind: 'mine' }
   if (!mine?.want) return { kind: 'none' }
   const place = Math.max(1, queue.findIndex(f => f.id8 === me8) + 1)
   const wait = (code: WaitCode, reason: string, why: string, next: string): Decision => ({ kind: 'wait', code, why, next, place, reason })
+  // A118 / A119: while a Focus runs the queue pauses behind it, in its order (the focus session is ranked first).
+  const claim = claimIn(x)
+  if (claim?.kind === 'focus' && claim.id8 !== me8) return wait('focus', 'after the Focus', `the person gave ${claim.lane} the Editor for a Focus until ${hhmm(claim.end)}`, `the queue pauses until then and runs on in its order (you are ${ordinal(place)}); batch your Editor needs into your turn; meanwhile do what needs no Editor: edits on disk outside its files, builds and tests in your own worktree`)
   const pid = editorPid(x.probe)
   if (lock.kind === 'missing') return wait('missing', 'the lock file is missing', 'Saved/EDITOR_OWNER.txt is missing or empty: unknown, not free', unrealPids(x.probe).length > 0 ? `an Unreal Editor runs with no lock (PID ${unrealPids(x.probe).join(', ')}): held by unknown until it ends, then A5R writes the FREE line; never kill or drive it, never write the lock by hand; do work that needs no Editor meanwhile` : 'A5R writes the FREE line once a fresh probe shows no Unreal Editor running (never write it by hand); do work that needs no Editor meanwhile')
   if (lock.kind === 'held' || lock.kind === 'handed') {
@@ -751,7 +779,9 @@ const slotOf = (x: GrantInput, f: SessionFile, place: number, capMin = Infinity)
   if (x.conflictHead) return wait('merge', `waits for the ${opOf(x.conflictHead)} to finish`, `a ${opOf(x.conflictHead)} is in progress in the shared checkout (.git/${x.conflictHead})`, 'Editor grants wait until it is finished or aborted; do work that needs no Editor meanwhile')
   const phase = phaseIn(x)
   const minutes = Math.min(x.manual.minutes[f.id8] ?? want.minutes, capMin)
-  const end = sync && isHolderInSync(sync, f.id8, phase) ? sync.hardEnd : now + minutes * 60_000 // A94: ends with the sync
+  // A94 / A118: the claim's slot ends with the claim (the sync's hard end, the Focus's box end).
+  const claim = claimIn(x)
+  const end = claim?.id8 === f.id8 ? claim.end : now + minutes * 60_000
   const limit = syncLimit(sync, phase, f.id8, end)
   if (sync && limit?.kind === 'cutoff') {
     const room = Math.floor((sync.at - CUTOFF_MS - now) / 60_000)
@@ -761,7 +791,8 @@ const slotOf = (x: GrantInput, f: SessionFile, place: number, capMin = Infinity)
     return wait('sync', `sync ${phase === 'cutoff' ? 'cutoff, then freeze' : 'freeze'} until ${hhmm(sync.hardEnd)}`, `the sync at ${hhmm(sync.at)} is in its ${phase === 'cutoff' ? 'cutoff' : 'freeze'}`, 'Editor grants wait until it is done')
   const pid = editorPid(x.probe)
   // The launch gate guards a launch: a slot that never launches the Editor (the sync worker's, a build) skips it.
-  if (pid === null && want.launch !== false) {
+  // A118: a Focus takes the lock with no launch gate (the lock is no launch; its grant names free RAM against the gate).
+  if (pid === null && want.launch !== false && !(claim?.kind === 'focus' && claim.id8 === f.id8)) {
     // A88 (c, re-review): a failed probe is read once more at once; failing twice, the launch is not allowed blind: the
     // agent reads free RAM itself and asks again with that number (`freeGb`), which the normal gate then reads.
     if (!x.probe) return wait('probe', 'no memory reading yet', 'the RAM probe did not answer', x.probeFailed ? `read free RAM with ${FREE_RAM_READ} and call the editor tool request again with freeGb: <number>` : 'it is read again at once')
@@ -819,12 +850,14 @@ export const mayAskYield = (x: GrantInput): { holder: string } | null => {
   const mine = x.files.find(f => f.id8 === x.me8)
   const want = mine?.want
   if (!want || want.build || want.minutes > YIELD_MAX_MIN) return null
+  const claim = claimIn(x)
+  if (claim && claim.id8 !== x.me8) return null // A118: while a claim stands only its session may ask a yield (nobody else could be granted)
   if (x.lock.kind !== 'held' || !x.lock.id8 || x.lock.id8 === x.me8 || !x.lock.pausable) return null
   if (livenessOf(x.lock.id8, x.files, x.lanes, x.now) !== 'alive') return null
   const lease = x.files.find(f => f.id8 === x.lock.id8)
   if (lease?.holding?.pass === x.me8) return null // A113: a slot that passed this head (waiting for memory) is not asked to yield
   if (lease?.holding && !isYieldMoment({ now: x.now, since: lease.holding.since, end: lease.holding.end, editorUseAt: lease.editorUseAt })) return null
-  if (queueOf(x.files, x.lanes, x.now, x.sync, x.manual)[0]?.id8 !== x.me8) return null
+  if (queueIn(x)[0]?.id8 !== x.me8) return null
   const asked = x.files.some(f => f.yieldAsks.some(a => a.holder === x.lock.id8 && x.now - a.at < YIELD_EVERY_MS))
   return asked ? null : { holder: x.lock.id8 }
 }
@@ -1041,7 +1074,7 @@ export const parseTouch = (text: string | null): Touch | null => {
     return null
   }
 }
-const samePath = (a: string, b: string) => a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase()
+export const samePath = (a: string, b: string) => a.replace(/\\/g, '/').toLowerCase() === b.replace(/\\/g, '/').toLowerCase()
 export const ownersOf = (path: string, touches: readonly Touch[]): Touch[] => touches.filter(t => t.paths.some(p => samePath(p, path)))
 export const isBinaryAsset = (path: string): boolean => /\.(uasset|umap)$/i.test(path)
 
@@ -1136,6 +1169,8 @@ export const writesLock = (command: string): boolean =>
 
 // ---------- notices (D6): one shape, one delivery per id per session ----------
 export type Notice = { id: string; text: string; isActionable: boolean }
+/** A116 / A118: a NEEDS A LOOK row on the A5R panel: what needs the person's look, in one line, and his next step. */
+export type LookRow = { what: string; next: string }
 export const noticeText = (gate: string, what: string, todo: string): string => `${MARK} ${gate} — ${what} → ${todo}`
 export const isIntentFile = (path: string): boolean => /(^|\/)docs\/intent\//i.test((path ?? '').replace(/\\/g, '/'))
 /** A76: a line that IS a coordination notice: the prefix and a gate name at its start (after list or quote marks), then
@@ -1358,7 +1393,7 @@ export const withoutModOf = (me8: string, files: readonly SessionFile[], lanes: 
 /** What the panel says about the sessions on this machine: how many run (the client's list), how many in S2 (Ather's
  * lanes and a5r's files), by intent, who holds or waits for the Editor, who holds the sync, and the live S2
  * sessions without a5r 0.4. */
-export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase; manual: ManualOrder }): Overview => {
+export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase; manual: ManualOrder; focus: FocusLease | null }): Overview => {
   const { now } = x
   const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
   const ids = new Set<string>([x.me8, ...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...x.files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.id8)].filter(Boolean))
@@ -1374,7 +1409,7 @@ export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lane
     elsewhere: active ? active.filter(r => !x.isS2Cwd(r.cwd)).length : null,
     intents: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
     editor,
-    waiting: queueOf(x.files, x.lanes, now, x.sync, x.manual).map(f => laneOf(f.id8)),
+    waiting: queueIn(x).map(f => laneOf(f.id8)),
     sync: x.sync && isOpenPhase(x.phase) ? `${x.sync.holder.id8 === x.me8 ? 'this session' : x.sync.holder.lane} ${hhmm(x.sync.at)} ${x.phase}` : 'none',
     withoutMod: withoutModOf(x.me8, x.files, x.lanes, now),
   }

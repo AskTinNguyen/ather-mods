@@ -4,6 +4,7 @@
 // its box at any pane width: every long piece wraps or moves to the next line. The desktop rows are cards. Values stay in text ink; state rides the dot
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
+import { HEAD_CONTROLS, ROW_CONTROL, type FocusAction } from './focus.ts'
 import { HOLDER_CONTROLS, QUEUED_CONTROLS, type Control } from './order.ts'
 import type { EditorList, EditorRow, LookRow } from './panel.ts'
 import { A5R_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
@@ -349,23 +350,21 @@ export const sessionsBox = (el: El, v: SessionsView, isDesktop: boolean, look?: 
 }
 
 /** A116 / A117: the one Editor list under the tools, in the sessions list's style: the label with its head (who has it,
- * time left), the holder (▶) and each queued row: its mark, a plain Button the person presses to select the row; the
- * name (the app's title, else the lane), which shortens; one quiet line that wraps (waited, minutes, PIE / build, placed by
- * hand, one plain reason). Under the selected row, its controls, plain Buttons with one-key hotkeys that wrap inside the
- * pane (A117: the person's own, never a tool's); then the day's line. */
-export const editorBox = (el: El, list: EditorList, ui: { picked: string | null; onPick: (id8: string) => void; onControl: (id8: string, c: Control) => void }, look?: { ink: string; quiet: string }): unknown => {
+ * time left; A118: the Focus, its end and milestone, with the person's End / +30 / +60 under it), the holder (▶) and each
+ * queued row: its mark, a plain Button the person presses to select the row; the name (the app's title, else the lane),
+ * which shortens; one quiet line that wraps (waited, minutes, PIE / build, placed by hand, one plain reason, A119 its expected
+ * start). Under the selected row, its controls, plain Buttons with one-key hotkeys that wrap inside the pane (A117: the
+ * person's own, never a tool's; A118: Focus… while none runs; none on a holder while a Focus runs); then the day's line. */
+export const editorBox = (el: El, list: EditorList, ui: { picked: string | null; onPick: (id8: string) => void; onControl: (id8: string, c: Control) => void; onFocus: (id8: string) => void; onFocusControl: (a: FocusAction) => void }, look?: { ink: string; quiet: string }): unknown => {
   const quiet = look?.quiet ?? ATHER.quiet
   const { Box, Text, Button } = el
-  const controls = (r: EditorRow, key: string) =>
-    Box({
-      key: `${key}-ctl`,
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      columnGap: 2,
-      paddingLeft: 2,
-      width: '100%',
-      children: (r.isHolder ? HOLDER_CONTROLS : QUEUED_CONTROLS).map(c => Button({ key: `${key}-ctl-${c.id}`, label: c.label, hotkey: c.hotkey, plain: true, onPress: () => ui.onControl(r.id8, c) })),
-    })
+  const buttons = (key: string, items: readonly { id: string; label: string; hotkey: string; onPress: () => void }[]) =>
+    Box({ key, flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, paddingLeft: 2, width: '100%', children: items.map(c => Button({ key: `${key}-${c.id}`, label: c.label, hotkey: c.hotkey, plain: true, onPress: c.onPress })) })
+  const controls = (r: EditorRow, key: string) => {
+    const own = list.isFocus && r.isHolder ? [] : r.isHolder ? HOLDER_CONTROLS : QUEUED_CONTROLS
+    const focus = list.isFocus ? [] : [{ ...ROW_CONTROL, onPress: () => ui.onFocus(r.id8) }]
+    return buttons(`${key}-ctl`, [...own.map(c => ({ ...c, onPress: () => ui.onControl(r.id8, c) })), ...focus])
+  }
   const entry = (r: EditorRow) => {
     const key = r.isHolder ? 'hai-queue-holder' : `hai-queue-${r.id8}`
     return Box({
@@ -394,6 +393,7 @@ export const editorBox = (el: El, list: EditorList, ui: { picked: string | null;
     marginTop: 1,
     children: [
       sectionLabel(el, 'hai-queue-head', 'Editor', [Text({ color: quiet, wrap: 'wrap', children: `· ${list.head}` })]),
+      ...(list.isFocus ? [buttons('hai-queue-focus-ctl', HEAD_CONTROLS.map(c => ({ ...c, onPress: () => ui.onFocusControl(c.action) })))] : []),
       ...list.rows.map(entry),
       ...(list.today ? [Box({ key: 'hai-queue-summary', paddingLeft: 2, width: '100%', children: [Text({ color: quiet, wrap: 'wrap', children: list.today })] })] : []),
     ],

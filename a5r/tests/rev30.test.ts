@@ -37,7 +37,7 @@ test('A84: unit: the hand-written line is read for its holder (9b53d3, avian win
   expect(resolveLock(lock, [holder], [], D(11, 0)).id8).toBe('9b53d3e1')
   expect(resolveLock(lock, [], [{ sessionId: HOLDER, hasEnded: false, mtimeMs: D(11, 0) }], D(11, 0)).id8).toBe('9b53d3e1')
   // Re-review (orchestrator): a holder that resolves to no session lapses 30 min past its end with nothing running.
-  const x = { lock, files: [], lanes: [], waiting: [], sync: null }
+  const x = { lock, files: [], lanes: [], waiting: [], sync: null, focus: null }
   expect(lapseOf({ ...x, now: D(13, 36), probe: probe([]) })?.kind).toBe('lapsed') // past 13:06 + 30 min, PID 21832 gone
   expect(lapseOf({ ...x, now: D(13, 30), probe: probe([]) })).toBeNull() // inside the 30 min
   expect(lapseOf({ ...x, now: D(13, 40), probe: probe([UE]) })).toBeNull() // its Editor still runs
@@ -436,7 +436,7 @@ test('round 2: unit: a gone holder\'s lease is never recovered without a process
   const me = { ...blankSession(ME, 'me', 'me', NOW), want: { minutes: 30, pie: false, build: false, what: 'x', mode: 'interactive' as const, pausable: true, nextSafe: 'after save', requestedAt: NOW - MIN } }
   const holder = { ...blankSession('bbbbbbbb-1', 'gone-lane', 'gone', NOW - 30 * MIN) }
   const lock = parseLockLine(`HELD lane=gone-lane session=gone since=13:00 2026-10-06 pid=none end=14:00 mode=interactive pausable=yes next_safe=after-save note=x · held by gone-lane, session bbbbbbbb, until 14:00\n`)
-  const input = { me8: ME8, lock, files: [me, holder], lanes: [], now: NOW, sync: null, gates: { pieGb: 31, nopieGb: 28 }, manual: NO_MANUAL }
+  const input = { me8: ME8, lock, files: [me, holder], lanes: [], now: NOW, sync: null, gates: { pieGb: 31, nopieGb: 28 }, manual: NO_MANUAL, focus: null }
   expect(decide({ ...input, probe: null })).toMatchObject({ kind: 'wait', code: 'probe' })
   expect(decide({ ...input, probe: probe([]) })).toEqual({ kind: 'recover', holder: 'bbbbbbbb' })
 })

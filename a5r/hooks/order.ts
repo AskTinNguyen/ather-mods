@@ -5,7 +5,7 @@
 // command of his own. The editor tool has no such action and a model's edit of the file is refused (register.ts). Pure:
 // no `$`.
 import { READERS, isAbs, isDotNetWrite, norm, placeTracker, programs, writeDestinations, writesFiles } from './a5r.ts'
-import { hash, heldLineAt, hhmm, isStandardHeld, livenessOf, noticeText, oneLine, phaseIn, queueOf, syncLimit, type GrantInput, type ManualOrder, type Notice, type SessionFile, type Want } from './coord.ts'
+import { claimIn, hash, heldLineAt, hhmm, isStandardHeld, livenessOf, noticeText, oneLine, phaseIn, queueOf, syncLimit, type GrantInput, type ManualOrder, type Notice, type SessionFile, type Want } from './coord.ts'
 import { queueView, type HolderRow } from './lease.ts'
 
 export const ORDER_FILE = 'queue-order.json'
@@ -89,7 +89,7 @@ const refuse = (why: string, next: string): { refusal: string } => ({ refusal: n
  * session's own file); a time change on the holder gives its HELD line a new end. Each order change names the sessions
  * it moved. */
 export const applyOrder = (g: GrantInput, order: QueueOrder, a: OrderAction, p: Presser): OrderResult => {
-  const idsWith = (o: Entries): string[] => queueOf(g.files, g.lanes, g.now, g.sync, manualOf({ v: 1, ...o, changes: [] }, g.files, g.now)).map(f => f.id8)
+  const idsWith = (o: Entries): string[] => queueOf(g.files, g.lanes, g.now, claimIn(g), manualOf({ v: 1, ...o, changes: [] }, g.files, g.now)).map(f => f.id8)
   const before = idsWith(order)
   const live: Entries = { placed: order.placed.filter(e => lasts(e, g.files, g.now)), sized: order.sized.filter(e => lasts(e, g.files, g.now)) }
   const done = (o: Entries, what: string, moved: string[]): OrderResult => ({
@@ -153,6 +153,8 @@ export const applyOrder = (g: GrantInput, order: QueueOrder, a: OrderAction, p: 
  * applies (the one-extension limit, the 45-min build window, A113's 30-min pass): those bound a model's extend, not the
  * person. */
 const resize = (g: GrantInput, h: HolderRow, name: string, c: TimeChange, p: Presser): OrderResult => {
+  const claim = claimIn(g)
+  if (claim?.kind === 'focus' && claim.id8 === h.id8) return refuse(`${name} holds the Editor for a Focus until ${hhmm(claim.end)}`, 'the Focus box is the person\'s: +30 / +60 or End on the panel\'s EDITOR line, or /a5r focus +30|+60|end') // A118
   if (!isStandardHeld(g.lock)) return refuse(`${name}'s lock line is not a standard HELD line naming one session`, 'its holder\'s A5R turns it into one at its next request; resize it then')
   if (livenessOf(h.id8, g.files, g.lanes, g.now) === 'gone') return refuse(`${name}: its session is gone`, 'its lease lapses by itself once nothing runs')
   if (h.isSyncSlot) return refuse(`${name} holds the Editor for the sync, and that slot ends with the sync`, 'move the sync or end it with the sync tool')
@@ -173,23 +175,24 @@ export const noticesFor = (o: QueueOrder, me8: string, now: number): Notice[] =>
     .filter(c => c.moved.includes(me8) && now - c.at < TELL_WITHIN_MS)
     .map(c => ({ id: `editor:manual:${c.at}:${hash(c.what)}`, text: noticeText(ORDER_GATE, `${c.what}, set by ${c.by} at ${hhmm(c.at)}`, 'nothing to do: A5R grants in that order (it lasts until that turn ends); keep working as before'), isActionable: false }))
 
-// ---------- A117 (Fable review D1): only the person writes the file ----------
-const ORDER_NAME = /(?<![\w.-])queue-order\.json(?![\w.-])/i
+// ---------- A117 (Fable review D1): only the person writes his files (A118: the queue order and the Focus) ----------
+const ORDER_NAME = /(?<![\w.-])(?:queue-order|editor-focus)\.json(?![\w.-])/i
 const A5R_DIR = /saved\/+a5r(?![\w.-])/i // the folder itself, not Saved/A5Rx or Saved/A5R.bak
 /** Interpreters whose one-liner may write any file: refused when it names the order file or the Saved/A5R folder. */
 const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'deno', 'bun', 'ruby', 'perl', 'php', 'powershell', 'pwsh'])
 const slashed = (t: string): string => t.replace(/\\/g, '/')
 const inA5R = (t: string): boolean => A5R_DIR.test(`${norm(t).replace(/\/+$/, '')}/`)
 
-/** An Edit/Write path that is the person's queue order (Saved/A5R/queue-order.json; `.` and `..` resolved). */
-export const isOrderPath = (path: string): boolean => /(^|\/)Saved\/A5R\/queue-order\.json$/i.test(norm(path ?? ''))
+/** An Edit/Write path that is one of the person's files: the queue order or (A118) the Focus (Saved/A5R/queue-order.json,
+ * Saved/A5R/editor-focus.json; `.` and `..` resolved). */
+export const isPersonPath = (path: string): boolean => /(^|\/)Saved\/A5R\/(queue-order|editor-focus)\.json$/i.test(norm(path ?? ''))
 
-/** A shell command that may write the person's queue order, guarded the other way round from the lock's writer list: a
+/** A shell command that may write one of the person's files, guarded the other way round from the lock's writer list: a
  * segment that names the file is refused unless its verb only reads (a5r.ts READERS, and jq, diff, a git read) and it does
  * not redirect into the file; a copy, move or rename whose destination is the file or lies in Saved/A5R (after a cd there,
  * any relative destination; popd returns) is refused; so is an interpreter one-liner (python -c, node -e, pwsh -c, …) that
  * names the file or the Saved/A5R folder. A path held in a variable (`$p='…queue-order.json'`) names it too. */
-export const writesOrder = (command: string): boolean => {
+export const writesPersonFile = (command: string): boolean => {
   const cwd = placeTracker((_raw: string, target: string, here: true | null) => (inA5R(target) || (here && !isAbs(slashed(target))) ? true : null)) // a relative cd stays there
   return programs(command).some(({ raw, verb, args }) => {
     if (cwd.step(verb, args, raw)) return false
@@ -206,8 +209,13 @@ export const writesOrder = (command: string): boolean => {
 // ---------- the person's commands and names ----------
 export const EDITOR_USAGE = '/a5r editor · the Editor list · /a5r editor up|down|top <name> · /a5r editor time <name> <+minutes|-minutes|minutes> (a queued request: its minutes; the holder: more time, or minutes left) · /a5r editor order reset · <name>: a row\'s title, lane or first 8 hex (a unique start is enough)'
 
+/** A117 / A118: a person's command read: his action, `show` (the list), or its usage. */
+export type Parsed<A> = A | { kind: 'show' } | { usage: string }
+export const isUsage = <A>(c: Parsed<A>): c is { usage: string } => typeof c === 'object' && c !== null && 'usage' in c
+export const isShow = <A>(c: Parsed<A>): c is { kind: 'show' } => typeof c === 'object' && c !== null && 'kind' in c && c.kind === 'show'
+
 /** `/a5r editor …` read into the person's action (or `show`, the list), or its usage. */
-export const parseEditorCommand = (args: string): OrderAction | { kind: 'show' } | { usage: string } => {
+export const parseEditorCommand = (args: string): Parsed<OrderAction> => {
   const words = oneLine(args).split(' ').filter(Boolean)
   const [verb = '', ...rest] = words
   const v = verb.toLowerCase()

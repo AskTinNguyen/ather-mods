@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { DEFAULT_GATES, NO_MANUAL, blankSession, heldLine, heldLineAt, isLockPath, parseLockLine, queueOf, writesLock, type GrantInput, type SessionFile, type Want } from '../hooks/coord.ts'
 import { queueView, queuedLine } from '../hooks/lease.ts'
-import { NO_ORDER, applyOrder, isOrderPath, manualOf, writesOrder, type OrderAction, type QueueOrder } from '../hooks/order.ts'
+import { NO_ORDER, applyOrder, isPersonPath, manualOf, writesPersonFile, type OrderAction, type QueueOrder } from '../hooks/order.ts'
 import { LOCK, ME, NOW, PROJ, opts, refused, world } from './world.ts'
 
 // Rev 40, the Fable adversary review of 6e53ce9/9391de7/6dc277d ("fix first"): D1 the person's order file is guarded the
@@ -14,7 +14,7 @@ const ME8 = ME.slice(0, 8)
 const want = (o: Partial<Want> = {}): Want => ({ minutes: 30, pie: false, build: false, what: 'x', mode: 'unattended', pausable: true, nextSafe: 'after save', requestedAt: NOW - 30 * MIN, ...o })
 const file = (id8: string, o: Partial<SessionFile> = {}): SessionFile => ({ ...blankSession(`${id8}-1111-4000-8000-000000000000`, `lane-${id8}`, `title ${id8}`, NOW), lastTurnAt: NOW - 2 * MIN, ...o })
 const FREE = parseLockLine('FREE since=14:00 2026-10-06 by=x note=none background=none · free since 14:00\n')
-const input = (files: SessionFile[], o: Partial<GrantInput> = {}): GrantInput => ({ me8: ME8, lock: FREE, files, lanes: [], now: NOW, sync: null, probe: { freeGb: 45, diskGb: 40, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL, ...o })
+const input = (files: SessionFile[], o: Partial<GrantInput> = {}): GrantInput => ({ me8: ME8, lock: FREE, files, lanes: [], now: NOW, sync: null, probe: { freeGb: 45, diskGb: 40, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null, ...o })
 const PRESSER = { by: 'the person (panel in tail)', titleOf: () => '' }
 const apply = (files: SessionFile[], a: OrderAction, order: QueueOrder = NO_ORDER, o: Partial<GrantInput> = {}) => applyOrder(input(files, o), order, a, PRESSER)
 
@@ -45,19 +45,19 @@ test('Fable review D1: every measured write of the order file is refused (one-li
     `sort -o ${P} x.json`,
     'pushd E:/s2/Saved/A5R && popd && cd E:/s2/Saved/A5R && Move-Item ../x.json y.json',
   ]
-  for (const c of writes) expect([c, writesOrder(c)]).toEqual([c, true])
+  for (const c of writes) expect([c, writesPersonFile(c)]).toEqual([c, true])
   const reads = [`cat ${P}`, `type ${P.replace(/\//g, '\\')}`, `Get-Content ${P}`, `gc ${P} | ConvertFrom-Json`, `jq .placed ${P}`, `rg moved ${P}`, `head -c 200 ${P}`, `Select-String -Path ${P} -Pattern placed`, `ls -la E:/s2/Saved/A5R`, 'git grep queue-order.json -- a5r', 'cp E:/s2/Saved/A5R/probe.json C:/tmp/', 'python -c "print(1)"', 'Copy-Item a.json -Destination E:/s2/Saved/other/', 'pushd E:/s2/Saved/A5R && popd && cp x.json .', 'cp a5r/tests/fixtures/my-queue-order.json C:/tmp/']
-  for (const c of reads) expect([c, writesOrder(c)]).toEqual([c, false])
+  for (const c of reads) expect([c, writesPersonFile(c)]).toEqual([c, false])
   // The lock keeps its writer list (agents read it with many tools); its measured writers are still refused.
   expect([writesLock('cat E:/s2/Saved/EDITOR_OWNER.txt'), writesLock("python -c \"print(open('E:/s2/Saved/EDITOR_OWNER.txt').read())\""), writesLock('echo x > E:/s2/Saved/EDITOR_OWNER.txt'), writesLock('cp x E:/s2/Saved/EDITOR_OWNER.txt')]).toEqual([false, false, true, true])
-  expect([isOrderPath('E:/s2/Saved//A5R/queue-order.json'), isOrderPath('E:/s2/Saved/A5R/./queue-order.json'), isOrderPath('E:/s2/Saved/A5R/queue-order.json.tmp'), isOrderPath('E:/s2/Saved/X/../A5R/queue-order.json'), isLockPath('E:/s2/Saved/X/../EDITOR_OWNER.txt')]).toEqual([true, true, false, true, true])
+  expect([isPersonPath('E:/s2/Saved//A5R/queue-order.json'), isPersonPath('E:/s2/Saved/A5R/./queue-order.json'), isPersonPath('E:/s2/Saved/A5R/queue-order.json.tmp'), isPersonPath('E:/s2/Saved/X/../A5R/queue-order.json'), isLockPath('E:/s2/Saved/X/../EDITOR_OWNER.txt')]).toEqual([true, true, false, true, true])
 })
 
 test('Fable review D1: a model\'s one-liner writing the order file is refused at the call, with how to read it instead', opts(), async ($, on) => {
   world(on, { ram: '40' })
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const deny = refused(await $.tool.call({ tool: 'Bash', command: `python -c "open('${P}','w').write('{}')"` } as never))
-  expect(deny).toBe("A5R · Editor order — Saved/A5R/queue-order.json is the person's: only his press on the A5R panel or his own /a5r editor command changes it → request the Editor with the editor tool (action request) and wait for your turn; to read the file, use cat, Get-Content, jq or rg")
+  expect(deny).toBe("A5R · Editor order — Saved/A5R/queue-order.json and editor-focus.json are the person's: only his press on the A5R panel or his own /a5r editor or /a5r focus command changes them (and a focus session's own focus_done) → request the Editor with the editor tool (action request) and wait for your turn; to read a file, use cat, Get-Content, jq or rg")
   expect(refused(await $.tool.call({ tool: 'PowerShell', command: 'Copy-Item prepared.json -Destination E:\\s2\\Saved\\A5R\\' } as never))).toContain('Editor order')
   expect(refused(await $.tool.call({ tool: 'Bash', command: `jq .placed ${P}` } as never))).toBeUndefined()
 })

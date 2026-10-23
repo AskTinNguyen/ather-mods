@@ -25,7 +25,7 @@ const file = (id8: string, o: Partial<SessionFile> = {}): SessionFile => ({ ...b
 const peer = (id8: string, o: Partial<SessionFile> = {}): string => JSON.stringify({ ...file(id8, o), heartbeatAt: NOW + 300 * MIN })
 const held = (id8: string, since: number, end: number) => `${heldLine({ lane: `lane-${id8}`, sessionName: `title-${id8}`, id8, since, pid: null, end, mode: 'interactive', pausable: true, nextSafe: 'after save', note: 'their slot' })}\n`
 const probe = (freeGb: number, o: Partial<Probe> = {}): Probe => ({ freeGb, diskGb: 40, procs: [], ...o })
-const input = (me8: string, files: SessionFile[], freeGb: number, o: Partial<GrantInput> = {}): GrantInput => ({ me8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: probe(freeGb), gates: DEFAULT_GATES, manual: NO_MANUAL, ...o })
+const input = (me8: string, files: SessionFile[], freeGb: number, o: Partial<GrantInput> = {}): GrantInput => ({ me8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: probe(freeGb), gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null, ...o })
 const grants = (files: SessionFile[], freeGb: number, o: Partial<GrantInput> = {}): string[] => files.filter(f => decide(input(f.id8, files, freeGb, o)).kind === 'grant').map(f => f.id8)
 const prompts = (w: ReturnType<typeof world>): string[] => (w.calls['prompt.submit'] ?? []).map(e => String((e as Rec).text))
 const out = (ran: { result?: unknown; text?: string; deny?: string }): string => String(ran.deny ?? ran.result ?? ran.text ?? '')

@@ -39,7 +39,7 @@ test('A54: unit: the lease times from the HELD line, past midnight too (the 20:4
   const night = parseLockLine(held('10ab1488', new Date(2026, 9, 8, 23, 50).getTime(), new Date(2026, 9, 9, 0, 20).getTime()))
   expect(lockTimes(night, now)?.end).toBe(new Date(2026, 9, 9, 0, 20).getTime())
   const probe = (procs: { name: string; pid: number }[]) => ({ freeGb: 40, diskGb: 50, procs: procs.map(p => ({ ...p, gb: 1, parentAlive: true })) })
-  const x = { lock, files: [], lanes: [{ sessionId: '10ab1488-0000', hasEnded: true, mtimeMs: since }], now, waiting: [], sync: null }
+  const x = { lock, files: [], lanes: [{ sessionId: '10ab1488-0000', hasEnded: true, mtimeMs: since }], now, waiting: [], sync: null, focus: null }
   expect(lapseOf({ ...x, probe: probe([]) })?.kind).toBe('lapsed')
   expect(lapseOf({ ...x, probe: probe([{ name: 'UnrealEditor', pid: 7 }]) })).toBeNull()
   expect(lapseOf({ ...x, probe: probe([{ name: 'UnrealEditor-Cmd', pid: 8 }]) })).toBeNull()
@@ -126,7 +126,7 @@ test('A58: an ended or stale Ather lane never makes a session with a fresh a5r h
   const lock = parseLockLine(held('bbbbbbbb', T(13, 30), T(14, 0)))
   const files = [JSON.parse(peer('bbbbbbbb', { heartbeatAt: now - 30_000 })) as SessionFile]
   const lanes = [{ sessionId: SID('bbbbbbbb'), hasEnded: true, mtimeMs: now - 60 * MIN }]
-  expect(lapseOf({ lock, files, lanes, now, waiting: [], sync: null, probe: { freeGb: 40, diskGb: 50, procs: [] } })).toBeNull()
+  expect(lapseOf({ lock, files, lanes, now, waiting: [], sync: null, focus: null, probe: { freeGb: 40, diskGb: 50, procs: [] } })).toBeNull()
 })
 
 test('A54: two sessions racing: the one whose claim lands first writes the FREE line, the other writes nothing', opts(), async ($, on) => {

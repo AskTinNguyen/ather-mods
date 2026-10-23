@@ -12,4 +12,6 @@ export const REQUIRED_RULES_TEXT: { file: string; row: string; text: string }[] 
     row: 'A102',
     text: 'A fix that needs no C++ rebuild is retested in the same slot (extend for the retest); release when the test passes, when the slot ends, or when the fix needs a rebuild.',
   },
+  { file: 'rules/rules-a5r.md', row: 'A118', text: 'When the person gives this session a Focus (an `A5R · Focus` notice), the Editor stays yours to the box end through closes, rebuilds and reopens; call the editor tool with `focus_done` when the milestone is reached (a release keeps the lock).' },
+  { file: 'rules/rules-a5r.md', row: 'A120', text: 'While another session has a Focus, Editor launches, builds and headless runs of the shared project, Unreal MCP writes and PIE wait for it: keep working on disk outside its files, build and test in your own worktree, and batch your Editor needs into the turn A5R tells you.' },
 ]

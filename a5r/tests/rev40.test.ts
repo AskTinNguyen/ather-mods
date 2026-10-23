@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
-import { DEFAULT_GATES, NO_MANUAL, blankSession, decide, heldLine, heldLineAt, isStandardHeld, newSync, parseLockLine, queueOf, type GrantInput, type ManualOrder, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
+import { DEFAULT_GATES, NO_MANUAL, blankSession, claimIn, decide, heldLine, heldLineAt, isStandardHeld, newSync, parseLockLine, queueOf, type GrantInput, type ManualOrder, type Probe, type SessionFile, type Want } from '../hooks/coord.ts'
 import { adoptLockEnd, leaseSummary, queueView, type LeaseRecord } from '../hooks/lease.ts'
-import { NO_ORDER, applyOrder, isPersonOrigin, writesOrder, manualOf, parseEditorCommand, parseOrder, pickByName, type OrderAction, type QueueOrder } from '../hooks/order.ts'
+import { NO_ORDER, applyOrder, isPersonOrigin, writesPersonFile, manualOf, parseEditorCommand, parseOrder, pickByName, type OrderAction, type QueueOrder } from '../hooks/order.ts'
 import { editorPanel, needsLook } from '../hooks/panel.ts'
 import type { VerdictRow } from '../hooks/judge.ts'
 import { A5RPANE, LOCK, ME, NOW, PROJ, all, find, keys, minWidth, opts, placed, refused, still, text, world, type Rec, type Tree } from './world.ts'
@@ -25,7 +25,7 @@ const file = (id8: string, o: Partial<SessionFile> = {}): SessionFile => ({ ...b
 const peer = (id8: string, o: Partial<SessionFile> = {}): string => JSON.stringify({ ...file(id8, o), heartbeatAt: NOW + 600 * MIN }) // alive for the whole test
 const held = (id8: string, lane: string, since: number, end: number) => `${heldLine({ lane, sessionName: lane, id8, since, pid: null, end, mode: 'interactive', pausable: true, nextSafe: 'after save', note: 'their slot' })}\n`
 const probe = (freeGb: number): Probe => ({ freeGb, diskGb: 40, procs: [] })
-const input = (me8: string, files: SessionFile[], o: Partial<GrantInput> = {}): GrantInput => ({ me8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: probe(45), gates: DEFAULT_GATES, manual: NO_MANUAL, ...o })
+const input = (me8: string, files: SessionFile[], o: Partial<GrantInput> = {}): GrantInput => ({ me8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: probe(45), gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null, ...o })
 const grants = (files: SessionFile[], o: Partial<GrantInput> = {}): string[] => files.filter(f => decide(input(f.id8, files, o)).kind === 'grant').map(f => f.id8)
 const out = (ran: { result?: unknown; text?: string; deny?: string }): string => String(ran.deny ?? ran.result ?? ran.text ?? '')
 const ctx = (ran: unknown): string => ((ran as { context?: string[] }).context ?? []).join('\n')
@@ -143,7 +143,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       // The selected row (one only) shows its five controls, a row that wraps; the names shorten, the lines wrap.
       expect(all(tree).filter(n => /^hai-queue-.*-ctl$/.test(String(n.props?.key ?? ''))).map(n => n.props?.key)).toEqual(['hai-queue-dddddddd-ctl'])
       const ctl = find(tree, 'hai-queue-dddddddd-ctl')
-      expect([ctl?.props?.flexWrap, (ctl?.children ?? []).map(c => [(c as Tree).props?.label, (c as Tree).props?.hotkey])]).toEqual(['wrap', [['Up', 'u'], ['Down', 'd'], ['To top', 't'], ['−15 min', 'm'], ['+15 min', 'p']]])
+      expect([ctl?.props?.flexWrap, (ctl?.children ?? []).map(c => [(c as Tree).props?.label, (c as Tree).props?.hotkey])]).toEqual(['wrap', [['Up', 'u'], ['Down', 'd'], ['To top', 't'], ['−15 min', 'm'], ['+15 min', 'p'], ['Focus…', 'f']]])
       expect(find(tree, 'hai-queue-dddddddd-lane')?.children?.[0]).toMatchObject({ type: 'Text', props: { wrap: 'truncate-end' } })
       expect(find(tree, 'hai-queue-dddddddd-line')?.children?.[0]).toMatchObject({ type: 'Text', props: { wrap: 'wrap' } })
       expect(find(tree, 'hai-queue-pick-dddddddd')?.props).toMatchObject({ label: '2', plain: true })
@@ -183,7 +183,7 @@ test('A117: unit: the sync holder stays first in a cutoff or freeze; A113: a pla
   const holder = file('dddddddd', { want: want({ requestedAt: NOW - 5 * MIN, sync: { at: NOW - 5 * MIN, role: 'holder' } }) })
   const frozen = newSync(NOW - 5 * MIN, { session: SID('dddddddd'), id8: 'dddddddd', lane: 'sync-lane' }, 'x', NOW - 60 * MIN)
   const files = [A, B, holder]
-  expect(queueOf(files, [], NOW, frozen, manualOf(orderWith([B]), files, NOW)).map(f => f.id8)).toEqual(['dddddddd', B.id8, A.id8])
+  expect(queueOf(files, [], NOW, claimIn({ sync: frozen, files, lanes: [], now: NOW, focus: null }), manualOf(orderWith([B]), files, NOW)).map(f => f.id8)).toEqual(['dddddddd', B.id8, A.id8])
   // A memory-held head (gate 28, 27 free) is passed by a later launch:false request, unless the person placed that head.
   const head = file('e5e5e5e5', { want: want({ requestedAt: NOW - 40 * MIN }) })
   const build = file('f6f6f6f6', { want: want({ build: true, launch: false, minutes: 60, requestedAt: NOW - 10 * MIN }) })
@@ -361,7 +361,7 @@ test('A117: the holder\'s +30 from the panel is accepted past the caps a model\'
   await pane($, w)
   await $.ui.press({ plugin: 'a5r', key: `hai-queue-pick-${ME8}`, surface: 'terminal' })
   const tree = await pane($, w)
-  expect((find(tree, `hai-queue-holder-ctl`)?.children ?? []).map(c => (c as Tree).props?.label)).toEqual(['+15 min', '+30 min', '+60 min'])
+  expect((find(tree, `hai-queue-holder-ctl`)?.children ?? []).map(c => (c as Tree).props?.label)).toEqual(['+15 min', '+30 min', '+60 min', 'Focus…']) // rev 41 (A118): and Focus… while none runs
   await $.ui.press({ plugin: 'a5r', key: 'hai-queue-holder-ctl-add30', surface: 'terminal' })
   expect(parseLockLine(w.read(LOCK)).end).toBe('15:15')
   await w.clock.advance(MIN)
@@ -438,18 +438,18 @@ test('A117: person-only: the editor tool has no order or resize action, an unkno
   const tools = (w.calls['tool.register'] ?? []) as { name: string; inputSchema: { properties: Record<string, { enum?: string[] }> } }[]
   expect(tools.map(t => t.name)).toEqual(['editor', 'sync'])
   const editor = tools[0]?.inputSchema.properties ?? {}
-  expect(editor.action?.enum).toEqual(['request', 'release', 'extend', 'status'])
+  expect(editor.action?.enum).toEqual(['request', 'release', 'extend', 'status', 'focus_done']) // rev 41 (A118): the focus session's own report
   expect(Object.keys(editor).sort()).toEqual(['action', 'build', 'dont_save', 'freeGb', 'lane', 'launch', 'minutes', 'mode', 'next_safe', 'note', 'pausable', 'pie', 'pie_stopped', 'what'])
   for (const t of tools) expect(JSON.stringify(t.inputSchema)).not.toMatch(/queue-order|"(up|down|top|reset|order|resize|who)"/)
   for (const action of ['top', 'up', 'order', 'time', 'resize']) await $.tool.call({ tool: EDITOR, action, who: 'cccccccc', minutes: 60 } as never)
   expect(w.read(ORDER)).toBe('')
   expect(parseLockLine(w.read(LOCK)).end).toBe('16:01')
   const deny = refused(await $.tool.call({ tool: 'Write', file_path: ORDER, content: '{"v":1,"placed":[]}' } as never))
-  expect(deny).toBe('A5R · Editor order — Saved/A5R/queue-order.json is the person\'s: only his press on the A5R panel or his own /a5r editor command changes it → request the Editor with the editor tool (action request) and wait for your turn; to read the file, use cat, Get-Content, jq or rg') // Fable review D1
+  expect(deny).toBe('A5R · Editor order — Saved/A5R/queue-order.json and editor-focus.json are the person\'s: only his press on the A5R panel or his own /a5r editor or /a5r focus command changes them (and a focus session\'s own focus_done) → request the Editor with the editor tool (action request) and wait for your turn; to read a file, use cat, Get-Content, jq or rg') // Fable review D1
   expect(refused(await $.tool.call({ tool: 'Bash', command: `echo '{}' > ${ORDER}` } as never))).toContain('Editor order')
   expect(refused(await $.tool.call({ tool: 'PowerShell', command: `Set-Content -Path ${ORDER} -Value '{}'` } as never))).toContain('Editor order')
   expect(refused(await $.tool.call({ tool: 'Bash', command: `cat ${ORDER}` } as never))).toBeUndefined()
-  expect([writesOrder(`cat ${ORDER}`), writesOrder(`sed -i s/a/b/ ${ORDER}`), writesOrder(`cp x.json ${ORDER}`)]).toEqual([false, true, true])
+  expect([writesPersonFile(`cat ${ORDER}`), writesPersonFile(`sed -i s/a/b/ ${ORDER}`), writesPersonFile(`cp x.json ${ORDER}`)]).toEqual([false, true, true])
   expect(NO_MANUAL).toEqual({ pins: [], minutes: {} })
 })
 

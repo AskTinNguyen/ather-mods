@@ -130,7 +130,7 @@ test('A96: unit: lapseOf never lapses or passes on the lock of a frozen sync\'s 
   const lock = parseLockLine(`${heldLine({ lane: B.lane, sessionName: 'title-b', id8: B.id8, since: T(14, 25), pid: null, end: T(15, 10), mode: 'unattended', pausable: false, nextSafe: 'after the merge', note: 'Sync main 14:25' })}\n`)
   const holder = { ...(JSON.parse(peer('bbbbbbbb', { heartbeatAt: NOW, lastTurnAt: T(14, 20), agents: 0 })) as SessionFile) }
   const s: SyncFile = { ...newSync(T(14, 25), B, 'x', NOW - 30 * MIN), workerAt: T(14, 25), stage: 'manual', hardEnd: T(15, 10) }
-  const x = { lock, files: [holder], lanes: [], now: NOW, waiting: [JSON.parse(peer('cccccccc')) as SessionFile], probe: { freeGb: 40, diskGb: 50, procs: [] } }
+  const x = { lock, files: [holder], lanes: [], now: NOW, waiting: [JSON.parse(peer('cccccccc')) as SessionFile], focus: null, probe: { freeGb: 40, diskGb: 50, procs: [] } }
   expect(lapseOf({ ...x, sync: s })).toBeNull()
   expect(lapseOf({ ...x, sync: { ...s, state: 'aborted' } })?.kind).toBe('unseen') // A55 as before once the sync ended
   expect(lapseOf({ ...x, sync: null })?.kind).toBe('unseen')

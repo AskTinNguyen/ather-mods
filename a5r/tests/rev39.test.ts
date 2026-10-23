@@ -52,7 +52,7 @@ test('A115: unit: the sync\'s own git work includes ending a revert or cherry-pi
 
 test('A115: unit: no Editor grant while a revert or cherry-pick is in progress; the wait names the operation', () => {
   const f: SessionFile = { ...blankSession(ME, 'lane-me', 'me', NOW), want: { minutes: 20, pie: false, build: false, what: 'tail', mode: 'interactive', pausable: true, nextSafe: 'after save', requestedAt: NOW - MIN } }
-  const x: GrantInput = { me8: ME8, lock: parseLockLine(FREE), files: [f], lanes: [], now: NOW, sync: null, probe: { freeGb: 40, diskGb: 40, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL }
+  const x: GrantInput = { me8: ME8, lock: parseLockLine(FREE), files: [f], lanes: [], now: NOW, sync: null, probe: { freeGb: 40, diskGb: 40, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null }
   expect(decide(x).kind).toBe('grant')
   for (const [head, op] of HEADS) {
     const d = decide({ ...x, conflictHead: head })

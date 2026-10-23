@@ -1,7 +1,7 @@
 // The shared S2 Editor: who may drive it. Pure: no `$`.
 // Lock text is read the way Ather Automata's Unreal pack reads it (parseEditorLock), so both agree on
 // who holds the Editor; a session proves it is the holder by naming `session <first 8 of its id>`.
-import { program, programs, type Program } from './a5r.ts'
+import { norm, program, programs, type Program } from './a5r.ts'
 
 export type EditorLock = { state: 'free' | 'held' | 'unknown'; holder: string; until: string; isStale: boolean; session: string }
 
@@ -75,7 +75,18 @@ const actOf = ({ verb, args }: Program): EditorAct | null => {
   if (named && !isHeadless(named) && STOP_VERBS.has(verb)) return 'stop'
   return null
 }
+/** What a tool call does to an Unreal Editor: an Unreal MCP call's kind (mcpCallKind), or a shell command's act. */
+export type EditorKind = ReturnType<typeof mcpCallKind> | EditorAct | null
 export const editorShellAct = (command: string): EditorAct | null => programs(command).map(actOf).find(act => act !== null) ?? null
+
+/** A120 (rev 41): a build of an Unreal project: Build.bat / .sh / .cmd, UnrealBuildTool (or `dotnet …UnrealBuildTool.dll`),
+ * RunUAT. */
+const isBuildProgram = ({ verb, args }: Program): boolean => /^(build\.(bat|sh|cmd)|unrealbuildtool|runuat(\.(bat|sh|command))?)$/.test(verb) || (verb === 'dotnet' && args.some(a => /unrealbuildtool\.dll$/i.test(a)))
+export const isUnrealBuild = (command: string): boolean => programs(command).some(isBuildProgram)
+/** A120: the .uproject paths a command names (`-project=<path>`, a bare argument, inside a quoted argument list), resolved
+ * against `cwd` when relative. A path with a space in it is not read whole (best effort, as every shell check here). */
+export const projectsOf = (command: string, cwd: string): string[] =>
+  [...(command ?? '').matchAll(/["'=\s]?((?:[A-Za-z]:)?[^"'\s=]*\.uproject)(?![\w.])/gi)].map(m => norm(m[1] ?? '', cwd))
 
 /** A shell command that opens or closes the shared Editor (headless UnrealEditor-Cmd is not it). */
 export const isEditorStartStop = (command: string): boolean => {
