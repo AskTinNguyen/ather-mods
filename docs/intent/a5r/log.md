@@ -336,3 +336,13 @@ With a screenshot of the A5R panel: EDITOR QUEUE · 4 WAITING (▶ sync-main gra
 > Good.
 > Ngoài ra phần Editor, tôi muốn chức năng rearrange và resize.
 > Để có case tôi muốn ưu tiên session nào đó làm việc với editor lâu hơn cho xong. Hoặc đẩy session nào đó ưu tiên trong hàng đợi.
+
+## L-45 (2026-10-23) | class: intent | -> rev 41
+
+> Tôi cần cải tiến flow quản lý, Orchestrate nhiều session trên cùng một máy.
+> Hiện tại flow mặc định là mỗi session làm đến đâu sẽ xin phép A5R editor slot. Nhiều session sẽ đặt trước nhiều slot vào các khoảng thời gian khác nhau.
+> Nhưng đôi lúc tôi cần một số task làm focus cho xong trong một session dài hơi hơn (cỡ 2-3 tiếng), với nhiều lần thử sai, compile, đo đạc, reopen editor, cho đến khi đạt được những mốc quan trọng. Do đó cách orchestrate editor sẽ cần tập trung vào chất lượng deliver của task hơn là đơn thuần chia slots.
+> Nhiều lúc việc chia nhiều slot khiến các task cứ bị băm nhỏ phiên làm việc, có task đã gần xong đến nơi nhưng vì chưa đến turn nên phải chờ rất lâu.
+> Bạn nghĩ sao?
+
+> Ok, Task focus thì như bạn nói: Được giao editor trong khoảng thời gian dài, nhưng chỉ auto gỡ focus sau khoảng 2-3 tiếng không hoàn thành, chứ 60' thì cũng hơi ít. Các task khác tự động được A5R điều phối offset thời gian lấy slot editor nếu có biến động (đó thực ra là việc chính của Editor orchestrator anyway). Các task không có slot editor vẫn có thể thực hiện các tác vụ khác nếu có thể và không gây ảnh hưởng đến editor của task chính (focus)

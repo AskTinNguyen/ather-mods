@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 40
+- Rev: 41
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -176,6 +176,26 @@ The three share one clock and one message channel: hai-flow notices, delivered b
   - **Rearrange:** move a queued session up or down, or to the top. The order is written to the shared `Saved/A5R/queue-order.json`, so every session computes the same queue. A session placed by Hai keeps its place until its next turn ends, then the order returns to first-asked-first-served. The sync holder still goes first during a cutoff or freeze. A113's pass and aging respect the manual order.
   - **Resize:** give the holder more time (+15 / +30 / +60 min), beyond the build-window cap and the one-extension limit, by rewriting its HELD line's end. Change a queued request's minutes the same way.
   Each change is recorded in orchestrate.log (`rule=manual`, what, by the person) and told to the sessions it moves. Proof: engine tests (a manual order is the order every session computes; it lapses after that turn; the sync holder stays first in a freeze; a resize past the caps is accepted from the panel and refused from the editor tool; the change is logged and told).
+- A118 (rev 41): Focus: Hai gives one session the Editor for a milestone. Focus is person-only, in the same way as A117: a panel press on a session row, or `/a5r focus <name> <2h|3h|…>: <milestone>` (at most 3 h, default 3 h). Only one Focus runs at a time.
+  - **What the focus session keeps:** the Editor lock for the whole box, through any number of close, build, reopen, compile, PIE and measure cycles. It is never lapsed, passed on, asked to yield or told it is idle, and the 45-min build-window cap and the extension limits do not apply.
+  - **How it ends:**
+    - The session reports that it reached the milestone (the editor tool's release, or a `focus done` action of that tool, which the focus session may call for its own focus only).
+    - Hai ends it, or Hai extends the box (+30 / +60 min, person-only).
+    - The box runs out unfinished, at 2–3 h as Hai set it. Only then does A5R remove the Focus by itself; it never removes it for idleness.
+  - **When the focus session goes quiet:** no turn and no agent for 30 min puts it in NEEDS A LOOK for Hai, as a note only.
+  - **Planned syncs:** a Focus may not cross a planned sync's cutoff. A5R offers Hai the choice of moving the sync or shortening the Focus, and never decides by itself.
+  - **The panel** shows `EDITOR · FOCUS <session> until HH:MM · <milestone>`.
+
+  Proof: engine tests covering start (person-only; the tool cannot start one), keeping the lock across a close and reopen, no idle or yield notices, the end on done, on Hai's end, and on the box's end, the 30-min note, and the sync conflict.
+- A119 (rev 41): During a Focus, A5R re-plans the other sessions' Editor turns by itself. The queue keeps its order and pauses. Each queued session gets one notice with its new expected start, its place after the Focus, and a hint to batch its Editor needs. A5R re-plans those starts whenever the Focus ends early, is extended, or a session joins or leaves the queue, and tells a session again only when its start moves by 15 min or more. When the Focus ends, the queue runs on from the same order (A104 kept places and A117 manual order hold). The panel shows each queued row's expected start. Proof: engine tests (an expected start after the Focus end; a re-plan on an early end and on an extension; a notice only on a 15-min move; the order resumes).
+- A120 (rev 41): Other sessions keep working without touching the focus session's Editor.
+  - **Refused for non-focus sessions while a Focus runs, each with the reason and what to do instead:**
+    - launching any Unreal Editor or UnrealEditor-Cmd from the shared checkout's engine (headless runs included);
+    - a build of the shared checkout's targets (Build.bat or UBT on the shared .uproject), because it locks the binaries the focus Editor loads;
+    - Unreal MCP writes and PIE.
+  - **Allowed for non-focus sessions:** code and asset edits on disk outside the focus session's touch paths, builds and tests in their own worktrees when free RAM stays above the launch gate for a no-PIE slot, git work under the usual rules, and reading the Editor through MCP reads.
+
+  Proof: engine tests (each refused form, with its alternative text; a worktree build allowed; an MCP read allowed; a write refused).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -189,6 +209,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 41 (2026-10-23): L-45 (Hai: Editor orchestration should serve delivery; Focus for 2–3 h milestones): A118 Focus, A119 the others re-planned around it, A120 others keep working without touching the focus Editor.
 - rev 40 (2026-10-22): L-44 (Hai: EDITOR QUEUE and SESSIONS overlap, ORCHESTRATE unclear; mockup approved; rearrange and resize): A116 one Editor list, other sessions, NEEDS A LOOK; A117 person-only rearrange and resize.
 - rev 39 (2026-10-21): L-43 (Hai approves F-9): A115 a half-done revert or cherry-pick is guarded like a merge.
 - rev 38 (2026-10-21): L-42 (the "Sessions chờ Editor" session: the Editor sat free 13 h overnight while two sessions were queued): A112 wait decisions on record, A113 a memory-held head does not block requests that fit, A114 a grant wakes an idle session.
