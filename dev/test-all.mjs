@@ -97,6 +97,11 @@ sh(`node repos.mjs "${path.join(WORK, 'checkouts-report.md')}"`, e2e)
 console.log('== board e2e')
 sh(`node board.mjs "${path.join(WORK, 'board-report.md')}"`, e2e)
 
+// Ather Lanes against the real S2 lane scripts, on Windows, when LANES_SCRIPTS or S2_ROOT names them (skipped, and
+// said so, otherwise): Status' JSON and a real slot file read by Lanes' readers, all in the temp folder.
+console.log('== lanes contract')
+sh('node lanes-contract.mjs', e2e)
+
 // The Paseo plugin's server over a real checkout (dev/e2e/paseo.mts), where its npm install is in place.
 const PASEO_ATHER = path.join(PASEO, 'ather-automata')
 if (fs.existsSync(path.join(PASEO_ATHER, 'node_modules/@getpaseo'))) sh(`node --no-warnings --import ./server/test-resolve.mjs --experimental-strip-types "${path.join(e2e, 'paseo.mts')}" "${path.join(WORK, 'paseo-report.md')}"`, PASEO_ATHER)
