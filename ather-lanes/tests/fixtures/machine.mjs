@@ -59,8 +59,6 @@ export const PERF_SLOTS = {
   'build-1': slotFile('perf-capture', '20:04', 'perf', 'build-1'),
 }
 
-export const SLOT_COUNTS = '{\n  "full": 1,\n  "light": 2,\n  "build": 1\n}\n'
-
 // What editor-slot.ps1 Sync writes into EDITOR_OWNER.txt from the full slot above.
 export const POINTER = `held by combat-hitstop until 20:44; session -; kind full; slot full-1; machine-level Editor slots in ${LANES}\\_machine\\slots (s2-agent-lanes editor-slot.ps1)\r\n`
 

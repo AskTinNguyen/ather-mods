@@ -7,45 +7,40 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { AMBER, LIME } from '../hooks/ather/rows.mjs'
 import { parseEditorLock } from '../hooks/ather/packs/unreal.mjs'
-import { parseIntent } from '../hooks/ather/model.mjs'
 import { BEHIND_LIMIT, boardOf, foldText } from '../hooks/board.mjs'
 import { lineCells, paneLines } from '../hooks/pane.mjs'
-import { NO_SOURCES, laneBranches, laneRecords } from '../hooks/records.mjs'
-import { mainOfGitFile, prListArgs, readLaneBeat, readOrigin, readPrs, readReflogTime, readRefs, readSessionBeat, readSlot, readSlotCounts, readStatus } from '../hooks/sources.mjs'
+import { NO_SOURCES, beatsOf, intentOf, laneBranches, laneRecords } from '../hooks/records.mjs'
+import { laneZeroOf, prListArgs, readLaneBeat, readOrigin, readPrs, readReflogTime, readRefs, readSessionBeat, readSlot, readStatus } from '../hooks/sources.mjs'
 import * as M from './fixtures/machine.mjs'
 
 /** @param {Record<string, string>} files */
 const slotsOf = files => Object.entries(files).map(([id, text]) => readSlot(id, text, M.NOW_MINUTES)).filter(one => one !== null)
 
-/** @param {{ slots?: Record<string, string>, prs?: boolean }} [options] */
+// The sources as index.mjs builds them from the fixture machine’s files, through the same builders.
+/** @param {{ slots?: Record<string, string>, prs?: boolean }} [options] @returns {import('../hooks/records.mjs').Sources} */
 const sourcesOf = ({ slots = M.SLOTS, prs = true } = {}) => {
   const status = readStatus(M.STATUS)
-  const branches = laneBranches(status, { forPrs: true })
-  const laneBeats = new Map()
-  for (const [name, text] of Object.entries(M.LANE_BEATS)) {
-    const beat = readLaneBeat(text)
-    if (beat) laneBeats.set(name, beat)
+  const lanes = status?.lanes ?? []
+  const sessions = /** @type {Record<string, string>} */ (M.SESSION_BEATS)
+  const intents = /** @type {Record<string, { prompt: string, findings: string }>} */ (M.INTENTS)
+  return {
+    status,
+    slots: slotsOf(slots),
+    ...beatsOf(status, new Map(Object.entries(M.LANE_BEATS)), new Map(lanes.map(lane => [lane.path, [sessions[lane.name] ?? null]]))),
+    refs: readRefs(M.REFS),
+    prs: prs ? readPrs(M.PRS, M.REPO, laneBranches(status, { forPrs: true })) : null,
+    intents: new Map(lanes.filter(lane => lane.sidecar === 'registered' && lane.intent).map(lane => [lane.name, intentOf(lane.intent, { prompt: intents[lane.intent]?.prompt ?? null, findings: intents[lane.intent]?.findings ?? null, progress: null })])),
+    mainMovedAt: readReflogTime(M.REFLOG),
   }
-  const sessionBeats = new Map()
-  for (const one of status?.lanes ?? []) {
-    const beat = readSessionBeat(/** @type {Record<string, string>} */ (M.SESSION_BEATS)[one.name] ?? null, one.branch)
-    if (beat) sessionBeats.set(one.path, beat)
-  }
-  const intents = new Map()
-  for (const one of (status?.lanes ?? []).filter(lane => lane.sidecar === 'registered' && lane.intent)) {
-    const files = /** @type {Record<string, { prompt: string, findings: string }>} */ (M.INTENTS)[one.intent]
-    intents.set(one.name, files ? parseIntent({ slug: one.intent, prompt: files.prompt, findings: files.findings, progress: '', files: [], hasDebrief: false, updatedAt: 0, source: 'local', firstAuthor: '' }) : null)
-  }
-  return { status, slots: slotsOf(slots), laneBeats, sessionBeats, refs: readRefs(M.REFS), prs: prs ? readPrs(M.PRS, M.REPO, branches) : null, intents, mainMovedAt: readReflogTime(M.REFLOG) }
 }
 
-const counts = readSlotCounts(M.SLOT_COUNTS)
-
-/** @param {ReturnType<typeof sourcesOf>} sources */
-const boardFrom = sources => boardOf(laneRecords(sources), sources.slots, counts)
+/** @param {import('../hooks/records.mjs').Sources} sources */
+const boardFrom = sources => boardOf(laneRecords(sources), sources.slots)
 
 /** @param {ReturnType<typeof boardFrom>} board @param {Partial<import('../hooks/pane.mjs').View>} view */
-const linesOf = (board, view = {}) => paneLines(board, { width: 72, isDesktop: false, now: M.NOW, clock: () => '19:04', opened: '', isFoldOpen: false, refreshedAt: M.NOW - 40000, errors: [], slots: sourcesOf().slots, counts, ...view })
+const linesOf = (board, view = {}) => paneLines(board, { width: 72, isDesktop: false, now: M.NOW, clock: () => '19:04', opened: null, isFoldOpen: false, refreshedAt: M.NOW - 40000, errors: [], ...view })
+/** @param {string} name @param {'you' | 'look' | 'fold'} from */
+const at = (name, from) => ({ name, from })
 
 /** @param {import('../hooks/pane.mjs').Line[]} lines */
 const textOf = lines => lines.map(one => one.segments.map(segment => segment.text).join('')).join('\n')
@@ -77,7 +72,7 @@ describe('the readers (A1)', () => {
     expect(readSessionBeat('{"branch": "x", "updatedAt": "soon"}', 'x')).toBe(null)
     expect(readSessionBeat(M.SESSION_BEATS['combat-hitstop'], '')).toBe(null)
   })
-  test('refs, the reflog, the origin, a worktree\u2019s .git file, the slot counts', () => {
+  test('refs, the reflog, the origin, lane 0 from a git directory', () => {
     const refs = readRefs(M.REFS)
     expect(refs.get('fix/editor-filter')).toEqual({ ahead: 3, behind: 27, committedAt: Math.floor((M.NOW - 3600000) / 1000) * 1000 })
     expect(readRefs('fatal: bad\nmain x y z').size).toBe(0)
@@ -86,10 +81,8 @@ describe('the readers (A1)', () => {
     expect(readOrigin(M.GIT_CONFIG)).toBe(M.REPO)
     expect(readOrigin('[remote "origin"]\n\turl = https://example.com/a/b.git\n')).toBe('')
     expect(readOrigin(null)).toBe('')
-    expect(mainOfGitFile('gitdir: X:/work/game/.git/worktrees/editor-fix\n')).toBe('X:/work/game')
-    expect(mainOfGitFile('not a pointer')).toBe('')
-    expect(readSlotCounts(M.SLOT_COUNTS)).toEqual({ full: 1, light: 2, build: 1 })
-    expect(readSlotCounts('{"full": "one"}')).toBe(null)
+    expect(laneZeroOf('X:/work/game/.git/worktrees/editor-fix')).toBe('X:/work/game')
+    expect(laneZeroOf('X:\\work\\game\\.git')).toBe('X:/work/game')
   })
   test('gh: one PR per lane branch, an open one first; another branch\u2019s and bad JSON are left out', () => {
     const prs = readPrs(M.PRS, M.REPO, ['fix/editor-filter', 'feat/combat-hitstop', 'perf/frame-budget'])
@@ -136,7 +129,7 @@ describe('the lane records (A1)', () => {
   })
   test('no sources at all (no machine folder, no refresh yet): no records, and nothing throws', () => {
     expect(laneRecords(NO_SOURCES)).toEqual([])
-    expect(boardOf([], [], null).count).toBe(0)
+    expect(boardOf([], []).count).toBe(0)
   })
 })
 
@@ -154,6 +147,14 @@ describe('slots (A2)', () => {
     const why = Object.fromEntries(board.look.map(one => [one.lane.name, one.reasons.map(reason => reason.text)]))
     expect(why['perf-capture']).toEqual(['light-1 past its end 6m'])
     expect(why['editor-fix']).toEqual(['#398 checks failing', '27 behind main', 'needs editor, held by combat-hitstop'])
+  })
+  test('one rule for who waits: a hold’s waiting lanes are exactly the lanes A look says wait for it', () => {
+    for (const slots of [M.SLOTS, M.PERF_SLOTS, {}]) {
+      const board = boardFrom(sourcesOf({ slots }))
+      const fromHolds = [...new Set(board.holds.flatMap(hold => hold.waiting))].sort()
+      const fromLook = board.look.filter(one => one.reasons.some(reason => reason.short.startsWith('waits for'))).map(one => one.lane.name).sort()
+      expect(fromLook).toEqual(fromHolds)
+    }
   })
   test('a perf capture is one hold of every slot; with nothing held, all slots free and Editor free', () => {
     const perf = boardFrom(sourcesOf({ slots: M.PERF_SLOTS }))
@@ -181,13 +182,13 @@ describe('the pane (A3, design.md)', () => {
   })
   for (const width of [72, 110]) {
     test(`at ${width} columns: no line over the width, at rest, opened and unfolded`, () => {
-      for (const view of [{}, { isFoldOpen: true }, { opened: 'perf-capture:look' }, { opened: 'editor-fix:you' }, { opened: 'scratch-a:look' }, { isFoldOpen: true, opened: 'docs-sweep:fold' }]) {
+      for (const view of [{}, { isFoldOpen: true }, { opened: at('perf-capture', 'look') }, { opened: at('editor-fix', 'you') }, { opened: at('scratch-a', 'look') }, { isFoldOpen: true, opened: at('docs-sweep', 'fold') }]) {
         for (const one of linesOf(board, { width, ...view })) expect(`${lineCells(one) <= width} ${one.key}`).toBe(`true ${one.key}`)
       }
     })
   }
   test('colour: lime only on For you\u2019s label and count, amber only on A look\u2019s reasons', () => {
-    for (const view of [{}, { isFoldOpen: true }, { opened: 'editor-fix:you' }, { isDesktop: true, width: 60 }]) {
+    for (const view of [{}, { isFoldOpen: true }, { opened: at('editor-fix', 'you') }, { isDesktop: true, width: 60 }]) {
       for (const one of linesOf(board, view)) {
         for (const segment of one.segments) {
           if (segment.color === LIME) expect(segment.key).toMatch(/^you-(label|count)$/)
@@ -205,26 +206,26 @@ describe('the pane (A3, design.md)', () => {
     expect(textOf(open)).toContain('full-1   combat-hitstop · editor · 34m left · then editor-fix')
   })
   test('nothing waiting and no trouble: one line, then the fold', () => {
-    const calm = boardOf([], [], counts)
+    const calm = boardOf([], [])
     const text = textOf(linesOf(calm))
     expect(text).toContain('Nothing needs you.')
     expect(text).not.toContain('F O R')
     expect(text).toContain('▸ all 0 lanes · pool 0 ready, 0 building · Editor free')
   })
   test('an opened lane shows design.md\u2019s detail lines in its order; an unregistered one the Register line to copy', () => {
-    const editor = textOf(linesOf(board, { opened: 'editor-fix:you', width: 110 }))
+    const editor = textOf(linesOf(board, { opened: at('editor-fix', 'you'), width: 110 }))
     const order = ['F-2 ', 'answer them in the session that tracks editor-fix', 'PR    #398 open · checks failing · open on GitHub', 'main  27 behind · 3 ahead', 'slot  needs editor · full-1 held by combat-hitstop, 34m left', 'moved last commit 1h ago · no heartbeat here', 'lane  fix/editor-filter · editor-fix (Editor filter fix) · T2']
-    let at = -1
+    let cursor = -1
     for (const piece of order) {
-      const next = editor.indexOf(piece, at + 1)
-      expect(`${next > at} ${piece}`).toBe(`true ${piece}`)
-      at = next
+      const next = editor.indexOf(piece, cursor + 1)
+      expect(`${next > cursor} ${piece}`).toBe(`true ${piece}`)
+      cursor = next
     }
     expect(editor).toContain('▾ ')
-    const scratch = textOf(linesOf(board, { opened: 'scratch-a:look' }))
+    const scratch = textOf(linesOf(board, { opened: at('scratch-a', 'look') }))
     expect(scratch).toContain('lanes.ps1 -Action Register -Name scratch-a `')
     expect(scratch).toContain('-Intent <slug> -Tier <T0|T1|T2>')
-    expect(textOf(linesOf(board, { opened: 'scratch-a:look', width: 110 }))).toContain('lanes.ps1 -Action Register -Name scratch-a -Intent <slug> -Tier <T0|T1|T2>')
+    expect(textOf(linesOf(board, { opened: at('scratch-a', 'look'), width: 110 }))).toContain('lanes.ps1 -Action Register -Name scratch-a -Intent <slug> -Tier <T0|T1|T2>')
   })
   test('the header: main\u2019s age and the last refresh; errors said under it, the rest still drawn', () => {
     const lines = linesOf(board, { errors: ['No lanes.ps1 in X:/x: set Ather Lanes\u2019 scriptsDir.'] })

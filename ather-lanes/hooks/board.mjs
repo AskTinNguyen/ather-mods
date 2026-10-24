@@ -14,9 +14,12 @@ import { KIND_LANE_0, isPool, isPoolReady } from './sources.mjs'
  * @typedef {import('./sources.mjs').Slot} Slot
  * @typedef {{ text: string, short: string }} Reason one trouble: its words in A look, and its short form in the opened fold
  * @typedef {{ ids: string[], label: string, holder: string, kind: string, until: string, pastMinutes: number, leftMinutes: number, waiting: string[] }} Hold
- *   one hold: a slot, or every slot a perf capture took (`label` "every slot"); `waiting`: the lanes that need it and hold none of its kind
- * @typedef {{ forYou: { lane: LaneRecord, decisions: Decision[] }[], look: { lane: LaneRecord, reasons: Reason[] }[], rows: LaneRecord[],
+ *   one hold: a slot, or every slot a perf capture took (`label` "every slot"); `waiting`: the lanes that need a slot of its
+ *   kind and hold none (design.md: "needs a slot that another lane holds"; how many slots there are is F-8's to report)
+ * @typedef {{ lane: LaneRecord, reasons: Reason[] }} Row
+ * @typedef {{ forYou: { lane: LaneRecord, decisions: Decision[] }[], look: Row[], rows: Row[],
  *   pool: { ready: number, building: number }, count: number, holds: Hold[], editor: Hold | null }} Board
+ *   `rows`: every lane but the pool's, lane 0 first, then by name; `look`: those of them with a reason, in Status' order
  */
 
 // A lane this far behind `main` or more is worth a look (design.md: one constant in one place).
@@ -26,16 +29,17 @@ export const BEHIND_LIMIT = 25
 /** @param {string} id */
 const slotKindOf = id => id.replace(/-\d+$/, '')
 
-// "6m", "2h": a span of minutes in ageText's words.
+// "6m", "2h", "3d": a span of minutes, in the steps Ather's ages take (worklist.mjs ageText).
 /** @param {number} minutes */
-const spanText = minutes => ageText(1, 1 + minutes * 60000)
+export const minutesText = minutes => (minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`)
 
 // The Editor slot, in the words the board uses for a slot's kind.
 /** @param {string} kind */
 export const kindWord = kind => (kind === 'full' ? 'editor' : kind)
 
+// The held slots, a perf capture's as one hold, each with the lanes that wait for it: the one place that rule lives.
 /** @param {readonly Slot[]} slots @param {readonly LaneRecord[]} records @returns {Hold[]} */
-export const holdsOf = (slots, records) => {
+const holdsOf = (slots, records) => {
   /** @type {Hold[]} */
   const holds = []
   for (const slot of [...slots].sort((a, b) => a.id.localeCompare(b.id))) {
@@ -50,48 +54,37 @@ export const holdsOf = (slots, records) => {
   return holds
 }
 
-// A lane that needs a slot kind no free slot of is left of: every one of its kind is held by another lane.
-/** @param {LaneRecord} lane @param {readonly Slot[]} slots @param {Record<string, number> | null} counts */
-const waitsFor = (lane, slots, counts) => {
-  const need = lane.slotNeed
-  if (need === '' || lane.slotHeld.some(slot => slotKindOf(slot.id) === need)) return []
-  const others = slots.filter(slot => slotKindOf(slot.id) === need && slot.holder !== lane.name)
-  // Unread counts: one slot of each kind, as the skill ships them for the Editor.
-  return others.length >= (counts?.[need] ?? 1) && others.length > 0 ? [...new Set(others.map(slot => slot.holder))] : []
-}
-
-// A lane's reasons for A look, worst first; none for a pool lane (D7, design.md's list and nothing else).
-/** @param {LaneRecord} lane @param {readonly Slot[]} slots @param {Record<string, number> | null} counts @param {Hold[]} holds @returns {Reason[]} */
-export const reasonsOf = (lane, slots, counts, holds) => {
+// A lane's reasons for A look, worst first (D7, design.md's list and nothing else); none for a pool lane.
+/** @param {LaneRecord} lane @param {readonly Hold[]} holds @returns {Reason[]} */
+const reasonsOf = (lane, holds) => {
   if (isPool(lane.kind)) return []
   /** @type {Reason[]} */
   const reasons = []
   if (lane.pr && lane.pr.state === 'open' && lane.pr.checks === 'failing') reasons.push({ text: `#${lane.pr.number} checks failing`, short: 'checks failing' })
   if (lane.behind !== null && lane.behind >= BEHIND_LIMIT) reasons.push({ text: `${lane.behind} behind main`, short: `${lane.behind} behind main` })
-  for (const hold of holds.filter(one => one.holder === lane.name && one.pastMinutes > 0)) reasons.push({ text: `${hold.kind === 'perf' ? 'perf hold on every slot' : hold.label} past its end ${spanText(hold.pastMinutes)}`, short: 'slot past its end' })
-  const holders = waitsFor(lane, slots, counts)
+  for (const hold of holds.filter(one => one.holder === lane.name && one.pastMinutes > 0)) reasons.push({ text: `${hold.kind === 'perf' ? 'perf hold on every slot' : hold.label} past its end ${minutesText(hold.pastMinutes)}`, short: 'slot past its end' })
+  const holders = [...new Set(holds.filter(hold => hold.waiting.includes(lane.name)).map(hold => hold.holder))]
   if (holders.length > 0) reasons.push({ text: `needs ${kindWord(lane.slotNeed)}, held by ${holders.join(', ')}`, short: `waits for ${kindWord(lane.slotNeed)}` })
   if (lane.kind === 'lane' && lane.sidecar === 'unregistered') reasons.push({ text: 'unregistered, so no intent or claims', short: 'unregistered' })
   return reasons
 }
 
-/** @param {readonly LaneRecord[]} records @param {readonly Slot[]} slots @param {Record<string, number> | null} counts @returns {Board} */
-export const boardOf = (records, slots, counts) => {
+/** @param {readonly LaneRecord[]} records @param {readonly Slot[]} slots @returns {Board} */
+export const boardOf = (records, slots) => {
   const holds = holdsOf(slots, records)
   const oldest = (/** @type {Decision[]} */ list) => Math.min(...list.map(one => one.since || Number.MAX_SAFE_INTEGER))
   const forYou = records
     .filter(lane => lane.decisions.length > 0)
     .map(lane => ({ lane, decisions: lane.decisions }))
     .sort((a, b) => oldest(a.decisions) - oldest(b.decisions) || a.lane.name.localeCompare(b.lane.name))
-  const look = records.map(lane => ({ lane, reasons: reasonsOf(lane, slots, counts, holds) })).filter(one => one.reasons.length > 0)
-  const quiet = records.filter(lane => !isPool(lane.kind))
+  const lanes = records.filter(lane => !isPool(lane.kind)).map(lane => ({ lane, reasons: reasonsOf(lane, holds) }))
   const pools = records.filter(lane => isPool(lane.kind))
   return {
     forYou,
-    look,
-    rows: [...quiet].sort((a, b) => Number(b.kind === KIND_LANE_0) - Number(a.kind === KIND_LANE_0) || a.name.localeCompare(b.name)),
+    look: lanes.filter(one => one.reasons.length > 0),
+    rows: [...lanes].sort((a, b) => Number(b.lane.kind === KIND_LANE_0) - Number(a.lane.kind === KIND_LANE_0) || a.lane.name.localeCompare(b.lane.name)),
     pool: { ready: pools.filter(lane => isPoolReady(lane.kind)).length, building: pools.filter(lane => !isPoolReady(lane.kind)).length },
-    count: quiet.length,
+    count: lanes.length,
     holds,
     editor: holds.find(hold => hold.ids.some(id => slotKindOf(id) === 'full')) ?? null,
   }
@@ -104,7 +97,7 @@ export const poolText = pool => `${pool.ready} ready, ${pool.building} building`
 
 // "34m left", "past its end 6m", '' when the end is unknown.
 /** @param {Hold} hold */
-export const timeText = hold => (hold.pastMinutes > 0 ? `past its end ${spanText(hold.pastMinutes)}` : hold.leftMinutes > 0 ? `${spanText(hold.leftMinutes)} left` : hold.until ? `until ${hold.until}` : '')
+export const timeText = hold => (hold.pastMinutes > 0 ? `past its end ${minutesText(hold.pastMinutes)}` : hold.leftMinutes > 0 ? `${minutesText(hold.leftMinutes)} left` : hold.until ? `until ${hold.until}` : '')
 
 // The fold's line (design.md): how many lanes, the pool, and the Editor slot's holder with its time.
 /** @param {Board} board */
@@ -117,9 +110,9 @@ export const foldText = board => {
 /** @param {Hold} hold */
 export const holdText = hold => [hold.holder, kindWord(hold.kind), timeText(hold), hold.waiting.length > 0 ? `then ${hold.waiting.join(', ')}` : ''].filter(Boolean).join(' · ')
 
-// A lane's one phrase in the opened fold: its decisions, else its first reason, else nothing.
-/** @param {LaneRecord} lane @param {Reason[]} reasons */
-export const phraseOf = (lane, reasons) => (lane.decisions.length > 0 ? plural(lane.decisions.length, 'decision') : (reasons[0]?.short ?? ''))
+// A lane's one phrase in the opened fold: its decisions, else its first reason, else nothing (F-10: in ink).
+/** @param {Row} row */
+export const phraseOf = ({ lane, reasons }) => (lane.decisions.length > 0 ? plural(lane.decisions.length, 'decision') : (reasons[0]?.short ?? ''))
 
 // The glyph before a lane in the opened fold: lane 0, a registered lane, any other worktree.
 /** @param {LaneRecord} lane */

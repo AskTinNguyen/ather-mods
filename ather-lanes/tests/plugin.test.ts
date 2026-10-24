@@ -4,10 +4,8 @@
 // hooks answer for: its files, and lanes.ps1, git and gh's output.
 import { expect, mock, test } from 'claude-code/testing'
 
+import { AMBER, LIME } from '../hooks/ather/rows.mjs'
 import * as M from './fixtures/machine.mjs'
-
-const LIME = '#DDFF00'
-const AMBER = '#f2a516'
 
 // The engine hands hooks absolute paths of the machine's own form ("D:\work\game"): compared as "/work/game".
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '').replace(/\/+$/, '')
@@ -15,10 +13,10 @@ const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, ''
 type World = { ran: { argv: string[], at: number }[], toasts: string[], shown: boolean }
 
 const FILES: Record<string, string> = {
+  '/work/game/.git/HEAD': 'ref: refs/heads/main\n',
   '/work/game/.git/config': M.GIT_CONFIG,
   '/work/game/.git/logs/refs/remotes/origin/main': M.REFLOG,
   '/work/game/.agents/skills/s2-agent-lanes/scripts/lanes.ps1': '# lanes.ps1',
-  '/work/lanes/_machine/slot-counts.json': M.SLOT_COUNTS,
   ...Object.fromEntries(Object.entries(M.SLOTS).map(([id, text]) => [`/work/lanes/_machine/slots/${id}.txt`, text])),
   ...Object.fromEntries(Object.entries(M.LANE_BEATS).map(([name, text]) => [`/work/lanes/_machine/heartbeats/${name}.json`, text])),
   ...Object.fromEntries(Object.entries(M.SESSION_BEATS).map(([name, text]) => [`/work/lanes/${name}/Saved/AtherAutomata/lanes/s.json`, text])),

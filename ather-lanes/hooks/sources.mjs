@@ -4,6 +4,7 @@
 // No `$` here: index.mjs runs the processes and reads the files, and hands their text in.
 
 import { parseEditorLock } from './ather/packs/unreal.mjs'
+import { normalFolder, repoId } from './ather/workspace.mjs'
 
 /**
  * One worktree as `lanes.ps1 -Action Status -Json` lists it, its fields taken as they are (D2.1).
@@ -55,8 +56,8 @@ const minutesOf = clock => {
   return match ? Number(match[1]) * 60 + Number(match[2]) : null
 }
 
-// The minutes from now to `until` (negative once passed), read in the window parseEditorLock reads an end in:
-// up to 12 hours past it, else it is the next day's.
+// The minutes from now to `until` (negative once passed), read in the window parseEditorLock reads an end in
+// (packs/unreal.mjs: an end less than 12 hours ago has passed, else it is the next day's). Keep the two the same.
 /** @param {string} until @param {number} nowMinutes */
 const minutesTo = (until, nowMinutes) => {
   const end = minutesOf(until)
@@ -72,16 +73,6 @@ export const readSlot = (id, raw, nowMinutes) => {
   if (lock.state !== 'held') return null
   const to = minutesTo(lock.until, nowMinutes)
   return { id, holder: lock.holder, until: lock.until, kind: /\bkind\s+([a-z]+)/i.exec(first)?.[1]?.toLowerCase() ?? '', isStale: lock.isStale, pastMinutes: to !== null && to < 0 ? -to : 0, leftMinutes: to !== null && to > 0 ? to : 0 }
-}
-
-// The slot counts (`slot-counts.json`, the machine folder's else the skill's data folder): how many slots of each
-// kind there are, so a lane that needs one knows whether one is free. null when unread.
-/** @param {string | null} raw @returns {Record<string, number> | null} */
-export const readSlotCounts = raw => {
-  const data = json(raw ?? '')
-  if (!data || typeof data !== 'object') return null
-  const counts = Object.fromEntries(['full', 'light', 'build'].filter(kind => Number.isInteger(data[kind])).map(kind => [kind, Number(data[kind])]))
-  return Object.keys(counts).length > 0 ? counts : null
 }
 
 /**
@@ -134,23 +125,19 @@ export const readReflogTime = raw => {
   return match ? Number(match[1]) * 1000 : 0
 }
 
-// The GitHub `owner/repo` of `remote "origin"` in a `.git\config`; '' for none or another host (D2.4).
+// The GitHub `owner/repo` of `remote "origin"` in a `.git\config`, as Ather names a repository (workspace.mjs
+// repoId); '' for none or another host, which gh cannot ask (D2.4).
 /** @param {string | null} raw */
 export const readOrigin = raw => {
   const block = /\[remote "origin"\]([^[]*)/.exec(raw ?? '')?.[1] ?? ''
   const url = /^\s*url\s*=\s*(\S+)/m.exec(block)?.[1] ?? ''
-  const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url)
-  return match ? `${match[1]}/${match[2]}` : ''
+  return /github\.com[:/]/i.test(url) ? repoId(url, '') : ''
 }
 
-// Where a worktree's own `.git` file points (`gitdir: <main>/.git/worktrees/<id>`): the main checkout, lane 0; '' when
-// the text is no such pointer.
-/** @param {string | null} raw */
-export const mainOfGitFile = raw => {
-  const dir = /^gitdir:\s*(.+?)\s*$/m.exec(raw ?? '')?.[1]?.replace(/\\/g, '/') ?? ''
-  const match = /^(.*)\/\.git\/worktrees\/[^/]+$/.exec(dir)
-  return match ? match[1] ?? '' : ''
-}
+// Lane 0, the main checkout, from a checkout's git directory (workspace.mjs gitDirOf): a worktree's is
+// `<main>/.git/worktrees/<id>`, the main checkout's own `<main>/.git`.
+/** @param {string} gitDir */
+export const laneZeroOf = gitDir => normalFolder(gitDir).replace(/\/\.git(\/worktrees\/[^/]+)?$/, '')
 
 /**
  * A lane branch's PR (D2.4): its number and link, state, draft or not, and its checks rolled up.

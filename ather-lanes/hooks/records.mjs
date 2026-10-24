@@ -3,8 +3,8 @@
 // per worktree Status lists, in Status' order, its `kind` and `sidecar` as Status gave them. Nothing here decides
 // what a lane is: the S2 scripts do (D2.1); a field no source gave is unknown (null), never guessed.
 
-import { directorCalls } from './ather/model.mjs'
-import { KIND_LANE_0, isPool } from './sources.mjs'
+import { directorCalls, parseIntent } from './ather/model.mjs'
+import { KIND_LANE_0, isPool, readLaneBeat, readSessionBeat } from './sources.mjs'
 
 /**
  * @typedef {import('./sources.mjs').Status} Status
@@ -33,6 +33,28 @@ import { KIND_LANE_0, isPool } from './sources.mjs'
 /** A source that gave nothing: what a session with no machine folder, or before its first refresh, has. */
 /** @type {Sources} */
 export const NO_SOURCES = Object.freeze({ status: null, slots: [], laneBeats: new Map(), sessionBeats: new Map(), refs: null, prs: null, intents: new Map(), mainMovedAt: 0 })
+
+// A lane's intent folder read through Ather's parser (D2.5); null when the sidecar names an intent with no folder
+// (no prompt.md). The fields Ather's list reads from git (age, first author) have no meaning here.
+/** @param {string} slug @param {{ prompt: string | null, progress: string | null, findings: string | null }} files @returns {Intent | null} */
+export const intentOf = (slug, files) => (files.prompt === null ? null : parseIntent({ slug, prompt: files.prompt, progress: files.progress ?? '', findings: files.findings ?? '', files: [], hasDebrief: false, updatedAt: 0, source: 'local', firstAuthor: '' }))
+
+// The heartbeats from their files' text (D2.2): each lane's `_machine` heartbeat by its name, and each worktree's
+// newest Ather session heartbeat on its own branch, by its path.
+/** @param {Status | null} status @param {ReadonlyMap<string, string | null>} laneTexts @param {ReadonlyMap<string, readonly (string | null)[]>} sessionTexts */
+export const beatsOf = (status, laneTexts, sessionTexts) => {
+  /** @type {Map<string, Beat>} */
+  const laneBeats = new Map()
+  /** @type {Map<string, Beat>} */
+  const sessionBeats = new Map()
+  for (const lane of status?.lanes ?? []) {
+    const own = readLaneBeat(laneTexts.get(lane.name) ?? null)
+    if (own) laneBeats.set(lane.name, own)
+    const newest = (sessionTexts.get(lane.path) ?? []).map(text => readSessionBeat(text, lane.branch)).filter(/** @returns {one is Beat} */ one => one !== null).sort((a, b) => b.at - a.at)[0]
+    if (newest) sessionBeats.set(lane.path, newest)
+  }
+  return { laneBeats, sessionBeats }
+}
 
 // "## F-2 (2026-10-24, rev 1) | ..." gives 2026-10-24; 0 for a heading with no date.
 /** @param {string} source */
