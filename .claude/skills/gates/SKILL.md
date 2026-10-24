@@ -26,7 +26,7 @@ git status --short
 | `week-calendar/scripts/**` | `npm run embed` in `paseo/week-calendar` |
 | `.agents/skills/**` | `node dev/skills.mjs` |
 
-Never edit a copy by hand: `ather-board/hooks/ather/`, `paseo/ather-automata/server/ather/`, `*.generated.ts`, the copied folders in `.claude/skills/`. The shared-change skill covers what else a shared change needs.
+Never edit a copy by hand: `ather-board/hooks/ather/`, `ather-lanes/hooks/ather/`, `paseo/ather-automata/server/ather/`, `*.generated.ts`, the copied folders in `.claude/skills/`. The shared-change skill covers what else a shared change needs.
 
 ## 3. Pick the checks
 
@@ -43,7 +43,7 @@ Never edit a copy by hand: `ather-board/hooks/ather/`, `paseo/ather-automata/ser
 
 ## 4. When something fails, run the base too
 
-test-all stops at the first stage that fails, so the stages after it did not run. Say so. `node dev/test-all.mjs --only <stage>` runs one stage (copies, paseo, type-check, unit, repos, board or s2), to get past a known failure or to re-run the one you fixed. Before you blame your change, run the same stages on the base, in a worktree you remove afterwards:
+test-all stops at the first stage that fails, so the stages after it did not run. Say so. `node dev/test-all.mjs --only <stage>` runs one stage (copies, paseo, type-check, unit, repos, board, lanes or s2), to get past a known failure or to re-run the one you fixed. Before you blame your change, run the same stages on the base, in a worktree you remove afterwards:
 
 ```bash
 git worktree add --detach ../ather-base origin/main

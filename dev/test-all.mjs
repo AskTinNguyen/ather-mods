@@ -1,5 +1,5 @@
-// Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata (and the board's overlap check), and
-// ather-board's unit tests (its copies of Ather's modules must match first).
+// Check the copies, type-check, then run the unit tests (ather-automata, ather-board, ather-lanes, dev/) and the end-to-end
+// harnesses against ../ather-automata, the board's overlap check and the lanes contract.
 // The mod is plain .mjs: nothing to compile. Run from anywhere: `node dev/test-all.mjs`.
 // `--only <stage>` runs one stage: copies, paseo, type-check, unit, repos, board, lanes or s2 (CI runs paseo on its own).
 // Type-checking needs the engine's API types (dev/typecheck.mjs says where it finds them); without them it is skipped and says so.
