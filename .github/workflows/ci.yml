@@ -1,0 +1,136 @@
+# The gates that need no S2 checkout and no secret, on every pull request and on main, on Linux and on Windows
+# (agent PCs run Windows). What still needs a person's machine: the S2 e2e (S2_ROOT) and the engine type-check
+# (the engine's types). The gates skill (.agents/skills/gates/SKILL.md) says how to run those.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  DISABLE_AUTOUPDATER: 1
+
+jobs:
+  gates:
+    name: gates (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    # Windows reports but does not fail the run until main is green there (see the rollout in the proposal).
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [24]
+        include:
+          # The unit and e2e stages on Node 22 too (the newest 22.x), the line agent PCs run. This job installs no
+          # Paseo packages, so the Paseo e2e and its module.registerHooks (Node 22.15+) do not run here.
+          - os: ubuntu-latest
+            node: 22
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      # The e2e names checkouts by their path: a long or 8.3-style temp folder gives false failures.
+      - name: A short temp folder
+        run: |
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      # Copies first, then the rest. No npm install here, so test-all skips the Paseo stage (the paseo job runs it) and
+      # the S2 e2e (no S2_ROOT).
+      - name: node dev/test-all.mjs
+        run: node dev/test-all.mjs
+      - name: week-calendar unit tests
+        if: success() || failure()
+        run: node --test week-calendar/scripts/test/*.test.mjs
+      - name: Keep the reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports-${{ matrix.os }}-node${{ matrix.node }}
+          path: ${{ runner.temp }}/ather-test-*/*-report.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+  paseo:
+    name: paseo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    # As in gates: Windows reports but does not fail the run until it is green on main.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            paseo/ather-automata/package-lock.json
+            paseo/week-calendar/package-lock.json
+      - name: A short temp folder
+        run: |
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: npm ci
+        run: |
+          (cd paseo/ather-automata && npm ci --no-audit --no-fund)
+          (cd paseo/week-calendar && npm ci --no-audit --no-fund)
+      - name: node dev/test-all.mjs --only paseo
+        run: node dev/test-all.mjs --only paseo
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: paseo-report-${{ matrix.os }}
+          path: ${{ runner.temp }}/ather-test-*/paseo-report.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+  plugin:
+    name: claude plugin validate and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      # The Claude Code the plugin checks run on (.github/claude-code-version). The weekly workflow tries newer ones and
+      # says when to move it.
+      - name: Claude Code, as pinned
+        run: npm install -g "@anthropic-ai/claude-code@$(cat .github/claude-code-version)"
+      # No login and no API key: validate and test run offline from the model.
+      - name: validate --strict the marketplace and each mod, and run each mod's tests
+        env:
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/claude-config
+        run: |
+          claude --version
+          claude plugin validate --strict .
+          for mod in $(node -p "require('./.claude-plugin/marketplace.json').plugins.map(one => one.source).join(' ')"); do
+            claude plugin validate --strict "$mod"
+            claude plugin test "$mod"
+          done

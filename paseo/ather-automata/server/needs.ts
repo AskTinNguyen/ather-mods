@@ -2,7 +2,7 @@
 // draws (decide.mjs needsView), and what an answer does to that state. Handing the answer to the agent is
 // console.ts's (handOff); this keeps what is opened, unfolded and answered.
 
-import { DECIDED_SHOWN_MS, NONE_OPEN, decidedText, needsView, pruneDecided, withDecided } from "./ather/decide.mjs";
+import { DECIDED_SHOWN_MS, FRESH_ANSWERS, NONE_OPEN, decidedText, needsView, pruneDecided, withDecided } from "./ather/decide.mjs";
 import * as state from "./ather/state.mjs";
 import type { HomeView } from "../shared/contracts";
 import type { Io } from "./io";
@@ -54,7 +54,7 @@ export function needsOf(agentId: string, built: Any): HomeView["needs"] {
   const listed = new Set<string>(built.items.map((one: Any) => one.id));
   // The mod prunes against the intent files; the listed items are read from them, so a call no longer listed is resolved.
   answers.decided = pruneDecided(answers.decided, (id: string) => listed.has(id) || !id.startsWith("call:"), Date.now());
-  const laid = needsView(built.items, built.open, { opened: answers.opened, typing: "", isFoldOpen: false, decided: answers.decided }, answers.blocks, Date.now(), false);
+  const laid = needsView(built.items, built.open, { ...FRESH_ANSWERS, opened: answers.opened, decided: answers.decided }, answers.blocks, Date.now(), false);
   const fresh = new Map(laid.fresh.map((one: Any) => [one.id, one.answer]));
   const names = new Map<string, string>(built.items.map((one: Any) => [one.id, answeredName(one)]));
   return {

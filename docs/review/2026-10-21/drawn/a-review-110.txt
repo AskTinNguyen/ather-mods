@@ -1,0 +1,36 @@
+feat-x ›
+Build · 1 of 3 done                                                                       f: synced just now ↻
+Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○
+Role not set · /ather role
+
+Checklist 1/3 ━━━━━━━━━━ · Workers 0 · Needs you 3
+
+[ ＋ New intent ]  [ ✦ Create ]
+
+N E E D S   Y O U   ·   3
+◆ 1: Review: nothing recorded
+     Review what happened while you were away (nothing recorded)
+
+◆ 2: ▸ feat-x · 2 decisions · in this session
+
+N E E D S   A T T E N T I O N   ·   1
+✓ 3: login-errors · ready to close · Close it?
+
+N E X T
+n: Start the work
+   A background agent does the work in its own worktree, proved with the repository gates.
+
+T E A M M A T E S '   I N T E N T S   ·   2
+Read-only: their decisions stay theirs.
+a: ● enemy-waves                                                                     ▰▰▰▱▱  2/3  0m  Lena Park
+b: ● inventory-sort                                                                  ▱▱▱▱▱  0/1  0m  Hai Huynh
+i: Everything open ›
+
+S T E P P I N G   O U T ?
+Keep the prompt cache warm while you are away from the keyboard, so your next turn reads the context instead
+of paying to write it again.
+w: Keep the cache warm
+
+v: Simple view
+
+Enter chooses · Esc closes

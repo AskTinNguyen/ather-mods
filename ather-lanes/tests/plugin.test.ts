@@ -7,8 +7,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import { AMBER, LIME } from '../hooks/ather/rows.mjs'
 import * as M from './fixtures/machine.mjs'
 
-// The engine hands hooks absolute paths of the machine's own form ("D:\work\game"): compared as "/work/game".
-const norm = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '').replace(/\/+$/, '')
+// The engine hands hooks absolute paths of the machine's own form ("D:\work\game"): compared as "/work/game". Off Windows
+// a drive path is not absolute, so the engine puts the plugin's folder in front of it first: that part goes too.
+const norm = (path: string) => path.replace(/\\/g, '/').replace(/^(?:.*\/)?[A-Za-z]:(?=\/)/, '').replace(/\/+$/, '')
 
 type World = { ran: { argv: string[], at: number }[], toasts: string[], shown: boolean }
 

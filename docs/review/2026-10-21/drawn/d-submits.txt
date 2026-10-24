@@ -1,0 +1,1 @@
+Decide F-1 on feat-x: A — Only our own setting, simpler and testable. Record it as the intent skill's decision step says (mark the finding, fill its Resolution, fold an accepted amendment into prompt.md with a Rev bump and a Decisions entry); do not ask me again.

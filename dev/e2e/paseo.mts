@@ -4,7 +4,7 @@
 // `node --import ./server/test-resolve.mjs --experimental-strip-types ../../dev/e2e/paseo.mts [report.md]`.
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { checks, join, runArgs, sandbox, until } from "./harness.mjs";
+import { checks, join, removeDir, runArgs, sandbox, until } from "./harness.mjs";
 
 const { report: REPORT } = runArgs();
 const BASE = sandbox("ather-paseo-");
@@ -75,5 +75,5 @@ expect("… and Needs you no longer has it", !(await items()).some((one) => one.
 const pill = await bandOf(AGENT, tree);
 expect("with nothing needing you, the composer pill is the tracked intent's stage", pill?.urgent === false && pill.label === "● Build 1/2 · feat-x", pill);
 
-fs.rmSync(BASE, { recursive: true, force: true });
+removeDir(BASE);
 finish({ title: "Ather Automata for Paseo: the server over a real checkout", report: REPORT });

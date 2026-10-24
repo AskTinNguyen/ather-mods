@@ -1,0 +1,1 @@
+{"text":"Away until 00:44. The session may push branches, open PRs and merge with every gate passed; production deploys, migrations and secrets wait for you. The prompt cache is kept warm until you are back; /warm off stops it."}
