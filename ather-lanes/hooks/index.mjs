@@ -176,8 +176,7 @@ const refresh = async ($, options, force = false) => {
   try {
     const now = await $.clock.now()
     const isStatusDue = force || place === null || now - statusAt >= STATUS_EVERY_MS - SLACK_MS
-    if (isStatusDue) place = await placeOf($, options)
-    const at = /** @type {Place} */ (place)
+    const at = isStatusDue || place === null ? (place = await placeOf($, options)) : place
     if (at.errors.length > 0) {
       sources = { ...NO_SOURCES }
       runErrors = {}
