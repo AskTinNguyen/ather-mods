@@ -1,10 +1,10 @@
-﻿# Progress: ather-lanes
+# Progress: ather-lanes
 
 - Working under rev: 3
 - Worker: Opus background worker (started 2026-10-24)
-- PR: #86 (draft), https://github.com/AskTinNguyen/ather-mods/pull/86
-- Current step: none; handed back for the owner's go (E14)
-- Next step: the owner's own go to mark the PR ready and merge (L-6 came relayed; see E14)
+- PR: #86, merged 2026-10-24 as 541d733, https://github.com/AskTinNguyen/ather-mods/pull/86
+- Current step: none; merged and released (S8)
+- Next step: owed after install, on the owner's machine: A3's desktop capture and the compare against this PC's real lanes (proof/README.md); A6's run with S2_ROOT
 
 ## Acceptance
 
@@ -33,6 +33,7 @@
 - S6 (rev 3, 2026-10-24): release check. Releases in this repository are a version in the mod's `plugin.json` and its marketplace entry (no tags: `release(ather-automata): 0.6.4`, `ather-automata 0.6.6: …`); Ather Lanes ships as 0.1.0 in both, Board's version is unchanged (its shipped files are the same; only its sync moved). Install from the marketplace, in an isolated config folder in the scratchpad (`CLAUDE_CONFIG_DIR`, so the user's config is untouched): `claude plugin marketplace add <this checkout>` → `Successfully added marketplace: ather`; `claude plugin install ather-lanes@ather --scope user` → `Successfully installed plugin: ather-lanes@ather`; `claude plugin list` → `ather-lanes@ather Version: 0.1.0 … Status: ✔ enabled`. The user's own `settings.json` and `claude plugin list` name no ather-lanes afterwards.
 - S7 (rev 3, 2026-10-24): A4 again, on the final code (8d00feb, frozen with `git archive`), the same way as in S4 (L7: Lanes alone, `GIT_TRACE2_EVENT`, `--debug-file`; a minute with no pane, open 10 minutes with one r at 5, Escape, 5 minutes closed; lane 0 and four worktrees). `node proof/trace.mjs`: 35 git processes, the mod's 24 (Status' 18, for-each-ref 6); git per Status run 3, 3, 3, 3, 3, 3; Status spawned at 0, 2, 4 (r), 5, 7 and 9 minutes after opening, every 2 minutes now that a read due within 5 s runs on its tick; no git of the mod's and no spawn before the pane opened or while it was closed; none runs status, fetch, diff or merge-tree; no two overlap; PowerShell 6 (at most 7), gh 0 (the scratch repository has no GitHub origin; the engine test holds gh to 3 in 10 minutes); `A4: pass`. The session was idle rather than at normal work, and on the scratch machine (F-11).
 
+- S8 (2026-10-24): merged and released. The orchestrator, which received L-6 from the owner directly in chat, took it as the owner's go for E14: re-ran the gates on 819cabf (`node dev/test-all.mjs` exit 0: unit 397/397, 73/73, 24/24, repos e2e 329/329, board e2e 18/18; `claude plugin validate ather-lanes` passed; `claude plugin test ather-lanes` 6 pass 0 fail), looked at the captures in `proof/`, marked #86 ready and merged it (merge commit 541d733). The release is Ather Lanes 0.1.0 in `plugin.json` and the marketplace entry, now on main. Still owed, needing the owner's machine or settings: A3's desktop capture and real-lanes compare, A6's `S2_ROOT` run.
 ## Engineering calls
 
 - E1 (S1): the entry list lives in `<mod>/shared.json` rather than in the dev script, so "each mod names its entry modules" (D1) holds and the script has no per-mod table.
