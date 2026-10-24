@@ -1,21 +1,24 @@
-// Dev only: copies the Ather Automata modules the board reads intents with (../ather-automata/hooks)
-// into hooks/ather/, so the installed plugin carries them. They are the same code, byte for byte
-// (line endings folded to LF). Never edit hooks/ather/ by hand.
-//   node ather-board/sync.mjs           copy them
-//   node ather-board/sync.mjs --check   fail if any copy differs (dev/test-all.mjs runs this)
+// Dev only: copies the Ather Automata modules a mod reuses (ather-automata/hooks) into <mod>/hooks/ather/, so the
+// installed plugin carries them. They are the same code, byte for byte (line endings folded to LF). Never edit those
+// copies by hand. Each mod names its entry modules in <mod>/shared.json ({ "entries": [...] }); everything they import,
+// followed from their import lines and their JSDoc import() types, is copied with them, so the copy set is always whole.
+//   node dev/sync-shared.mjs <mod>           copy them
+//   node dev/sync-shared.mjs <mod> --check   fail if any copy differs (dev/test-all.mjs runs this for every mod with a shared.json)
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-const from = path.resolve(here, '../ather-automata/hooks')
-const to = path.join(here, 'hooks/ather')
-// The modules the board imports from Ather: the reader (team), the parsing (model, worklist), the overlap check and a
-// collision's words and actions (overlap, collide), and the row look (rows). Copied with everything they import, followed from their import lines and their
-// JSDoc import() types, so the copy set is always whole.
-const ENTRIES = ['team.mjs', 'model.mjs', 'worklist.mjs', 'rows.mjs', 'overlap.mjs', 'collide.mjs']
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const mod = process.argv.slice(2).find(arg => !arg.startsWith('--'))
+if (!mod) {
+  console.error('usage: node dev/sync-shared.mjs <mod> [--check]')
+  process.exit(2)
+}
+const from = path.join(root, 'ather-automata/hooks')
+const to = path.join(root, mod, 'hooks/ather')
+const { entries } = JSON.parse(fs.readFileSync(path.join(root, mod, 'shared.json'), 'utf8'))
 const FILES = []
-for (const queue = [...ENTRIES]; queue.length > 0; ) {
+for (const queue = [...entries]; queue.length > 0; ) {
   const file = queue.shift()
   if (FILES.includes(file)) continue
   FILES.push(file)
@@ -52,7 +55,7 @@ for (const dir of new Set(['', ...FILES.map(file => path.posix.dirname(file)).fi
 }
 
 if (isCheck && drift.length > 0) {
-  console.error(`ather-board is out of step with ather-automata: ${drift.join(', ')}. Run node ather-board/sync.mjs.`)
+  console.error(`${mod} is out of step with ather-automata: ${drift.join(', ')}. Run node dev/sync-shared.mjs ${mod}.`)
   process.exit(1)
 }
-console.log(isCheck ? 'ather-board: shared modules in step' : `ather-board: ${FILES.length} shared modules`)
+console.log(isCheck ? `${mod}: shared modules in step` : `${mod}: ${FILES.length} shared modules`)

@@ -48,8 +48,9 @@ for (const plugin of ['ather-automata', 'week-calendar']) {
   else console.log(`skipped: npm install in paseo/${plugin} to type-check it`)
 }
 
-console.log('== ather-board')
-sh(`${NODE} sync.mjs --check`, BOARD)
+// Every mod that reuses Ather's modules names them in its shared.json; its copies must match first.
+console.log('== shared modules')
+for (const mod of fs.readdirSync(path.resolve(HERE, '..')).filter(name => fs.existsSync(path.resolve(HERE, '..', name, 'shared.json')))) sh(`${NODE} sync-shared.mjs ${mod} --check`, HERE)
 
 console.log('== type-check')
 const types = process.env.CLAUDE_CODE_TYPES ?? [path.join(MOD, '.claude-plugin/types/claude-code/index.d.ts')].find(f => fs.existsSync(f))
