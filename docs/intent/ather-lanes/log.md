@@ -19,3 +19,9 @@ Classification: review (no user message).
 > go
 
 Classification: decision. Rev 2 approved as proposed; every open finding accepted with its recommended option A (F-8 goes to the parent's orchestrator). Worker started.
+
+## L-3 (2026-10-24) → rev 2 (unchanged; build paused)
+
+> one thing before you build any actual working, is to build mockup prototypes that we can discuss and agree on the UXUI
+
+Classification: intent (process). The worker paused before writing code (progress S0, 91ee662). Mockups of the pane drawn on a private design canvas: the board at 110 and 72 columns, a row opened in place, the desktop side panel, an alternative grouped by reason (B), and edge states. The agreed look becomes rev 3 (A3 and D4 made exact), then the worker resumes.
