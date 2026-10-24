@@ -9,6 +9,17 @@ import { check } from './screen.mjs'
 // Folders with forward slashes, as the hooks name a checkout: on Windows path.join and the temporary folder give backslashes.
 export const join = (...parts) => path.join(...parts).split(path.sep).join('/')
 
+// A run's folder removed at its end. Windows can still hold one of its files open for a moment: a few tries, then a
+// folder left behind is said, not a failure, so the run's checks are still reported.
+/** @param {string} dir */
+export const removeDir = dir => {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+  } catch (error) {
+    console.log(`left behind ${dir}: ${/** @type {NodeJS.ErrnoException} */ (error).code ?? error}`)
+  }
+}
+
 // A folder of the run's own, by its real path (git names a checkout by it; macOS's temporary folder is behind a link).
 // The person's own git settings (signing, hooks, default branch) stay out of its repositories and of the hooks' git calls.
 /** @param {string} prefix */

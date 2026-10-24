@@ -6,7 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import { aborts, createEngine } from './engine.mjs'
-import { byKey, checks, join, nodesOf, runArgs, sandbox, sessionHooks, until, writeDrawn } from './harness.mjs'
+import { byKey, checks, join, nodesOf, removeDir, runArgs, sandbox, sessionHooks, until, writeDrawn } from './harness.mjs'
 import { check } from './screen.mjs'
 
 const { report: REPORT, out: OUT } = runArgs()
@@ -1896,5 +1896,5 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
 
 // ---------------------------------------------------------------- report
 
-fs.rmSync(BASE, { recursive: true, force: true })
+removeDir(BASE)
 finish({ title: 'Ather Automata across checkouts', report: REPORT })
