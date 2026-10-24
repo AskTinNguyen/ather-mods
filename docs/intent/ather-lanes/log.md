@@ -25,3 +25,15 @@ Classification: decision. Rev 2 approved as proposed; every open finding accepte
 > one thing before you build any actual working, is to build mockup prototypes that we can discuss and agree on the UXUI
 
 Classification: intent (process). The worker paused before writing code (progress S0, 91ee662). Mockups of the pane drawn on a private design canvas: the board at 110 and 72 columns, a row opened in place, the desktop side panel, an alternative grouped by reason (B), and edge states. The agreed look becomes rev 3 (A3 and D4 made exact), then the worker resumes.
+
+## L-4 (2026-10-24) → rev 2 (unchanged)
+
+> Not quite there. Still cluttered and too much info all at once. Spawn Fable High to create 3 designs
+
+Classification: intent (process). Round 1 rejected; a Fable designer drew three directions on page Round 2 of the canvas: 1 Calm list, 2 Needs-you first, 3 Machine at a glance. Its recommendation: 2, with 1's opened lane.
+
+## L-5 (2026-10-24) → rev 3
+
+> Agree with what the designer recommends. Lock that as our intent to build Ather Lane
+
+Classification: decision. Direction 2 with 1's opened lane, recorded in `design.md`; D7 added; D4, D5, A2, A3 amended. Worker resumed.
