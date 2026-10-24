@@ -75,3 +75,12 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 - B: the fold's phrase takes its section's colour (lime for decisions, amber for a reason), and A3's colour check is read as "lime only on decisions, amber only on reasons".
 - C: as B, with both phrases where a lane has decisions and a reason, as the mockup draws.
 **Proposed amendment:** for A, design.md's fold paragraph reads "at most one phrase, in ink ("N decisions", else the first reason, else nothing)". For B or C, A3's colour sentence names the fold.
+
+## F-11 (2026-10-24, rev 3) | blocking: no | status: open (director)
+
+**Found:** A3's live check ("on this PC", the opened fold against `lanes.ps1 -Action Status -Json` at the same moment) and A4's trace "during normal work" need a Claude Code session opened in `D:\s2` or a lane: Lanes reads the lanes of the session's own checkout (D2.1 `-Repo <the session's checkout>`). Claude Code runs `git status` in its working folder when a session starts (the session's git context), and the worker's machine rules forbid `git status` in any lane or `D:\s2`. User-installed Ather Automata would also write its session heartbeat into that checkout. So the worker ran these proofs on a scratch machine in its scratchpad (lane 0 and four worktrees, its own `_machine`, the real scripts copied in), and cannot run them on the real lanes.
+**Options:**
+- A (recommended): the director (or a session already open in `D:\s2`) runs the real-PC compare once with the mod loaded (`claude --plugin-dir <ather-lanes>`, `scriptsDir` set to a lane with the scripts), using the worker's compare script; the scratch run stands for the rest of A3 and A4.
+- B: a `repo` setting, so a session opened anywhere reads a named checkout's lanes (the mod would pass it to Status as `-Repo`). This changes D2.1 and D6.
+- C: accept the scratch run as A3's and A4's live proofs.
+**Proposed amendment:** for A, none (A3's live sentence is met by the director's run). For B, D6 gains "a `repo` setting, empty by default: the checkout whose lanes are read". For C, A3 and A4 read "on a machine with lanes (a scratch one will do)".

@@ -29,13 +29,17 @@ const LABEL_CELLS = 6
 /** @param {string} key @param {Segment[]} segments @param {number} [marginTop] @returns {Line} */
 const line = (key, segments, marginTop) => ({ key, segments: segments.filter(one => one.text !== ''), ...(marginTop ? { marginTop } : {}) })
 
+// The cells a segment takes as the terminal draws it: a button's hotkey adds "r: " before its words.
+/** @param {Segment} one */
+const segmentCells = one => cells(one.text) + (one.hotkey ? cells(one.hotkey) + 2 : 0)
+
 // A line with words on the left and on the right, the gap between filled so it is `width` wide.
 /** @param {string} key @param {Segment[]} left @param {Segment} right @param {number} width @param {number} [marginTop] */
 const spread = (key, left, right, width, marginTop) => {
-  const used = left.reduce((sum, one) => sum + cells(one.text), 0)
-  const room = width - used - 1
+  const used = left.reduce((sum, one) => sum + segmentCells(one), 0)
+  const room = width - used - 1 - (right.hotkey ? cells(right.hotkey) + 2 : 0)
   const tail = { ...right, text: room >= 4 ? fit(right.text, room) : '' }
-  return line(key, [...left, { key: `${key}-gap`, text: ' '.repeat(Math.max(1, width - used - cells(tail.text))) }, tail], marginTop)
+  return line(key, [...left, { key: `${key}-gap`, text: ' '.repeat(Math.max(1, width - used - segmentCells(tail))) }, tail], marginTop)
 }
 
 // Words wrapped to `width` cells, each piece a line of its own; a word longer than the width is cut.
@@ -184,4 +188,4 @@ export const drawPane = (el, lines, { isDesktop, onPress }) =>
 
 // A line's width in cells, as the terminal draws it.
 /** @param {Line} one */
-export const lineCells = one => one.segments.reduce((sum, segment) => sum + cells(segment.text), 0)
+export const lineCells = one => one.segments.reduce((sum, segment) => sum + segmentCells(segment), 0)

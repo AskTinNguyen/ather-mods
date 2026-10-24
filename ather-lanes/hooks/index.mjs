@@ -25,6 +25,8 @@ const FILES_EVERY_MS = 30 * 1000
 const STATUS_EVERY_MS = 2 * 60 * 1000
 const PRS_EVERY_MS = 5 * 60 * 1000
 const GIT_ENV = { GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
+// A timer tick lands a little early or late: a read due within this much of its time runs on this tick, not the next.
+const SLACK_MS = 5 * 1000
 
 /** @type {{ -readonly [K in keyof Sources]: Sources[K] }} */
 let sources = { ...NO_SOURCES }
@@ -169,12 +171,12 @@ const refresh = async ($, options, force = false) => {
     const at = await placeOf($, options)
     if (at.canRun) {
       const now = await $.clock.now()
-      if (force || now - statusAt >= STATUS_EVERY_MS) {
+      if (force || now - statusAt >= STATUS_EVERY_MS - SLACK_MS) {
         statusAt = now
         await readLanes($, at, options)
       }
       await readFiles($, at, now)
-      if (now - prsAt >= PRS_EVERY_MS) {
+      if (now - prsAt >= PRS_EVERY_MS - SLACK_MS) {
         prsAt = now
         await readPrList($, at, now)
       }

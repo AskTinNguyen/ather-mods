@@ -71,13 +71,13 @@ function machine(on: any, { hasMachine = true }: { hasMachine?: boolean } = {}):
 const pane = (columns: number) => ({ component: 'Pane' as const, requestId: 'lanes', props: { title: 'LANES', isFocused: true, bodyColumns: columns } as any })
 
 // The drawn tree's lines (the row Boxes under the pane's own Box), each with its key and its pieces: the words of
-// each Text, Button and Link, and the Text's colour. The engine keeps a Box's and a Button's key, not a Text's.
-type Piece = { key: string, text: string, color?: string }
+// each Text, Button and Link, the Text's colour and the Button's hotkey (drawn as "r: " before its words). The engine keeps a Box's and a Button's key, not a Text's.
+type Piece = { key: string, text: string, color?: string, hotkey?: string }
 const piecesOf = (node: any, out: Piece[] = []): Piece[] => {
   if (!node || typeof node !== 'object') return out
   const kids = (node.children ?? []) as any[]
   const own = typeof node.props?.label === 'string' ? node.props.label : node.type === 'Text' || node.type === 'Link' ? kids.filter(kid => typeof kid === 'string').join('') : null
-  if (own !== null) out.push({ key: String(node.props?.key ?? ''), text: own, color: node.props?.color })
+  if (own !== null) out.push({ key: String(node.props?.key ?? ''), text: own, color: node.props?.color, hotkey: node.props?.hotkey })
   for (const kid of kids) piecesOf(kid, out)
   return out
 }
@@ -123,7 +123,7 @@ test('the board at 72 and 110 columns and on the desktop: its sections, no line 
           if (one.color === LIME) expect(`${line.key} ${one.text}`).toMatch(/^you (F O R {3}Y O U|FOR YOU|\d+ decisions?)$/)
           if (one.color === AMBER) expect(line.key).toMatch(/^look-/)
         }
-        if (surface === 'terminal') expect(`${line.key} ${line.pieces.reduce((sum, one) => sum + [...one.text].length, 0) <= columns}`).toBe(`${line.key} true`)
+        if (surface === 'terminal') expect(`${line.key} ${line.pieces.reduce((sum, one) => sum + [...one.text].length + (one.hotkey ? one.hotkey.length + 2 : 0), 0) <= columns}`).toBe(`${line.key} true`)
       }
       await ui.press({ key: 'fold-press' })
     }
