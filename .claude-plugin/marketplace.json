@@ -21,6 +21,14 @@
       "source": "./ather-board"
     },
     {
+      "name": "ather-lanes",
+      "description": "The machine's S2 agent lanes as a board: the decisions waiting for you, the lanes that need a look, and every lane with its slot, branch and PR. Read-only; costs nothing while the pane is closed.",
+      "version": "0.1.0",
+      "author": { "name": "Tin Nguyen" },
+      "category": "productivity",
+      "source": "./ather-lanes"
+    },
+    {
       "name": "week-calendar",
       "description": "Weekly calendar and agent-effectiveness report for agent PCs: PRs merged and productive agent time, published to the team's agent-reports repo.",
       "version": "0.4.0",
