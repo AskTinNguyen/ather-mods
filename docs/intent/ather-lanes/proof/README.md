@@ -95,6 +95,14 @@ Both mods loaded in one session (A5): `/ather` and `/lanes` open as two tabs of 
 
 ![Ather Automata and Ather Lanes](8-with-automata-96.png)
 
+## On the real lanes (owed, F-11)
+
+The worker could not open a session in the main checkout or a lane: Claude Code runs `git status` in its working folder when a session starts. For the owner, from a session already open there:
+
+1. A session-only settings file (no user setting changes) naming a folder with the lane scripts: `{ "pluginConfigs": { "ather-lanes": { "options": { "scriptsDir": "<a checkout's .agents\\skills\\s2-agent-lanes\\scripts>" } } } }`
+2. `claude --plugin-dir <ather-lanes> --settings <that file>` in the main checkout, then `/lanes` and Enter on the fold.
+3. Copy the screen to a text file, then `node compare.mjs <screen.txt> <scriptsDir>\lanes.ps1 <the main checkout>`: it prints `same lanes`, or what differs.
+
 ## Desktop side panel
 
 Not captured: loading a mod into the Claude desktop app means installing it there, a change to the user's settings that the worker does not make. The desktop surface is drawn and pressed by `claude plugin test ather-lanes` (FOR YOU with each lane in bold, A LOOK, the fold as a button and the Editor slot line), and the owner can capture it after installing the release.
