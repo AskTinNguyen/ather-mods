@@ -37,3 +37,9 @@ Classification: intent (process). Round 1 rejected; a Fable designer drew three 
 > Agree with what the designer recommends. Lock that as our intent to build Ather Lane
 
 Classification: decision. Direction 2 with 1's opened lane, recorded in `design.md`; D7 added; D4, D5, A2, A3 amended. Worker resumed.
+
+## L-6 (2026-10-24, relayed by the coordinator) → rev 3
+
+> Yes your goal is to finish that intent and merge it successfully and release its update. Ill be away from computer for the next 8 hours, so do not stop to get my permission, and just proceed throughout until the plan is thoroughly complete and validated with visual proofs. If there are any areas that you think should be added to make better and richer, any tools that should be installed to do your job better, feel free to do it and record your decision. You have full computer use autonomy,
+
+Classification: direction (scope: finish, PR, merge, release). Reached the worker through the coordinator; the merge into `main` waits for the owner's own go in a session the owner speaks to (progress.md E14).
