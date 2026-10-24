@@ -11,7 +11,7 @@ description: Bring a change to shared code along to every place that carries it 
 
 | Source | Copy | How |
 | --- | --- | --- |
-| `ather-automata/hooks/*.mjs`, `hooks/packs/*.mjs` | `ather-board/hooks/ather/` | `node ather-board/sync.mjs`. It copies what six modules import (team, model, worklist, rows, overlap, collide), following import lines and JSDoc `import()` types |
+| `ather-automata/hooks/*.mjs`, `hooks/packs/*.mjs` | `ather-board/hooks/ather/`, `ather-lanes/hooks/ather/` | `node dev/sync-shared.mjs <mod>` for each. It copies what the modules in `<mod>/shared.json` import, following import lines and JSDoc `import()` types |
 | the same, except `ather.mjs`, `watch.mjs` and `console.mjs` | `paseo/ather-automata/server/ather/` | `npm run sync` in `paseo/ather-automata`. It drops the `// @ts-check` line and writes the mod's version into `package.json` and `package-lock.json` |
 | `week-calendar/scripts` (four scripts and `lib/*`) | `paseo/week-calendar/server/scripts.generated.ts` | `npm run embed` in `paseo/week-calendar` |
 | `squad.mjs` kinds and props | `paseo/ather-automata/server/art.generated.ts` | `npm run art` in `paseo/ather-automata`. Nothing checks this one |

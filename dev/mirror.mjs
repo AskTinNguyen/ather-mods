@@ -1,4 +1,4 @@
-// Keeps a folder of copies in step with its source, file for file: what ather-board/sync.mjs,
+// Keeps a folder of copies in step with its source, file for file: what dev/sync-shared.mjs,
 // paseo/ather-automata/server/sync.mjs and dev/skills.mjs share. Each says which files to copy, how to change them on
 // the way (or not), and which files in the copy folder are its own; this compares, writes and removes.
 // Line endings are folded to LF on both sides, whatever the checkout's git settings did to them.

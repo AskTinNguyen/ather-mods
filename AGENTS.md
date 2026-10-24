@@ -4,9 +4,10 @@ Rules for every agent (Claude Code, Cursor, Codex) and every person who changes 
 
 ## Map
 
-- `.claude-plugin/marketplace.json`: the `ather` marketplace. It lists the three mods.
+- `.claude-plugin/marketplace.json`: the `ather` marketplace. It lists the four mods.
 - `ather-automata/`: Ather in Claude Code. `hooks/ather.mjs` loads two halves: `watch.mjs` (guards, the brief gate, keep-warm, away windows) and `console.mjs` (band, pane, pop-ups, `/ather`, `/away`). Pure modules sit beside them; `hooks/packs/` holds each stack's words, proofs and holds.
 - `ather-board/`: `/board` and the shareable page (`page/`). `hooks/ather/` is a copy.
+- `ather-lanes/`: `/lanes`, the machine's S2 agent lanes as a board. `hooks/ather/` is a copy.
 - `week-calendar/`: the weekly calendar and report for agent PCs (`scripts/`, `hooks/register.ts`).
 - `paseo/`: the same mods as Paseo plugins. `server/ather/` and `*.generated.ts` are copies.
 - `dev/`: the gates (`test-all.mjs`), the e2e harness, benches.
@@ -15,7 +16,7 @@ Rules for every agent (Claude Code, Cursor, Codex) and every person who changes 
 
 ## Golden rules
 
-- **Never edit a copy.** `ather-board/hooks/ather/`, `paseo/ather-automata/server/ather/`, `paseo/*/server/*.generated.ts` and `.claude/skills/` are written by scripts. Edit the source (`ather-automata/hooks/`, `week-calendar/scripts/`, `.agents/skills/`) and run the sync. A merge conflict in a copy: fix the source, sync again.
+- **Never edit a copy.** `ather-board/hooks/ather/`, `ather-lanes/hooks/ather/`, `paseo/ather-automata/server/ather/`, `paseo/*/server/*.generated.ts` and `.claude/skills/` are written by scripts. Edit the source (`ather-automata/hooks/`, `week-calendar/scripts/`, `.agents/skills/`) and run the sync. A merge conflict in a copy: fix the source, sync again.
 - **`$` stays in its host file.** In ather-automata and ather-board only `ather.mjs`, `watch.mjs`, `console.mjs` and `ather-board/hooks/index.mjs` touch `$` (week-calendar's host is `hooks/register.ts`). Other modules take closures (Io, Repo, Host). `claude plugin validate` refuses `$` passed into an imported function.
 - **Stored values go through `state.mjs`** (or a `*-store.mjs` beside it on the same `serial` queue). The store is one JSON file per machine, 4 MiB at most: a new kind of key says who deletes it. `serial` orders one session only.
 - **Hooks never block or fail the calls they watch,** except a held action, which refuses on purpose. Do not add a new `.catch(() => null)` on a hold path.
@@ -27,7 +28,7 @@ Rules for every agent (Claude Code, Cursor, Codex) and every person who changes 
 
 | You changed | Run |
 | --- | --- |
-| `ather-automata/hooks/**` | `node ather-board/sync.mjs`, then `npm run sync` in `paseo/ather-automata` (`npm run art` too if `squad.mjs` kinds or props changed) |
+| `ather-automata/hooks/**` | `node dev/sync-shared.mjs <mod>` for each mod with a `shared.json` (ather-board, ather-lanes), then `npm run sync` in `paseo/ather-automata` (`npm run art` too if `squad.mjs` kinds or props changed) |
 | `week-calendar/scripts/**` | `npm run embed` in `paseo/week-calendar`. A new `scripts/lib` file also goes in `SCRIPT_FILES` (`week-calendar/hooks/register.ts`) |
 | `.agents/skills/**` | `node dev/skills.mjs` |
 
@@ -35,7 +36,7 @@ Run them before the gates: `test-all` checks the copies first and stops there.
 
 ## Gates
 
-- Every code change: `node dev/test-all.mjs`. It stops at the first failing stage, and a skipped stage is not a pass. `S2_ROOT`, `CLAUDE_CODE_TYPES` and `npm ci` in `paseo/*` turn on its optional stages. The Paseo type-check fails on `main` today (`server/needs.ts:57`): compare with `origin/main`.
+- Every code change: `node dev/test-all.mjs`. It stops at the first failing stage, and a skipped stage is not a pass. `S2_ROOT`, `CLAUDE_CODE_TYPES` and `npm ci` in `paseo/*` turn on its optional stages.
 - `week-calendar/`: `node --test week-calendar/scripts/test/*.test.mjs` (not in test-all).
 - A changed mod: `claude plugin validate --strict <mod>` and `claude plugin test <mod>`. A changed marketplace: `claude plugin validate --strict .`.
 - When something fails, run the same on `origin/main` and compare FAIL lines by name.

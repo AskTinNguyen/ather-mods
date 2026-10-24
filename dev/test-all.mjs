@@ -1,7 +1,7 @@
 // Type-check, then run the unit tests and the end-to-end harnesses against ../ather-automata (and the board's overlap check), and
 // ather-board's unit tests (its copies of Ather's modules must match first).
 // The mod is plain .mjs: nothing to compile. Run from anywhere: `node dev/test-all.mjs`.
-// `--only <stage>` runs one stage: copies, paseo, type-check, unit, repos, board or s2 (CI runs paseo on its own).
+// `--only <stage>` runs one stage: copies, paseo, type-check, unit, repos, board, lanes or s2 (CI runs paseo on its own).
 // Type-checking needs the engine's API types (dev/typecheck.mjs says where it finds them); without them it is skipped and says so.
 import fs from 'fs'
 import os from 'os'
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const MOD = path.resolve(HERE, '../ather-automata')
 const BOARD = path.resolve(HERE, '../ather-board')
+const LANES = path.resolve(HERE, '../ather-lanes')
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'ather-test-'))
 const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: 'inherit' })
 
@@ -37,7 +38,7 @@ const NODE = `"${process.execPath}"`
 const PASEO = path.resolve(HERE, '../paseo')
 const e2e = path.join(HERE, 'e2e')
 
-const STAGES = ['copies', 'paseo', 'type-check', 'unit', 'repos', 'board', 's2']
+const STAGES = ['copies', 'paseo', 'type-check', 'unit', 'repos', 'board', 'lanes', 's2']
 const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : null
 if (only !== null && !STAGES.includes(only)) {
   console.error(`--only takes one of ${STAGES.join(', ')}, not "${only}".`)
@@ -54,13 +55,13 @@ const stage = (name, run) => {
 fs.rmSync(path.join(e2e, 'out'), { recursive: true, force: true })
 copy(path.join(MOD, 'hooks'), path.join(e2e, 'out/hooks'))
 
-// Every copy matches its source: the Paseo versions' copies of the mods' shared code, the board's copies of Ather's
-// modules, and Claude Code's copies of the repository's skills.
+// Every copy matches its source: the Paseo versions' copies of the mods' shared code, the copies of Ather's modules
+// in every mod that names them in its shared.json, and Claude Code's copies of the repository's skills.
 stage('copies', () => {
   sh(`${NODE} server/sync.mjs --check`, path.join(PASEO, 'ather-automata'))
   sh(`${NODE} server/embed.mjs --check`, path.join(PASEO, 'week-calendar'))
-  sh(`${NODE} sync.mjs --check`, BOARD)
-  sh(`${NODE} dev/skills.mjs --check`, path.resolve(HERE, '..'))
+  for (const mod of fs.readdirSync(path.resolve(HERE, '..')).filter(name => fs.existsSync(path.resolve(HERE, '..', name, 'shared.json')))) sh(`${NODE} sync-shared.mjs ${mod} --check`, HERE)
+  sh(`${NODE} skills.mjs --check`, HERE)
 })
 
 // The Paseo versions type-check, and the Paseo plugin's server runs over a real checkout (dev/e2e/paseo.mts), once
@@ -97,6 +98,8 @@ stage('unit', () => {
   runUnit(MOD, 'unit')
   // The board's hooks carry their copies of Ather's; its tests read its page too.
   runUnit(BOARD, 'board', ['page'])
+  // Ather Lanes' readers, records and pane lines, on fixtures (tests/fixtures/).
+  runUnit(LANES, 'lanes')
   // The dev tools' own tests (dev/*.test.mjs) run under node --test as they are.
   sh(`${NODE} --test ${fs.readdirSync(HERE).filter(f => f.endsWith('.test.mjs')).map(f => `"${path.join(HERE, f)}"`).join(' ')}`, HERE)
 })
@@ -110,6 +113,10 @@ stage('repos', () => {
 stage('board', () => {
   sh(`node board.mjs "${path.join(WORK, 'board-report.md')}"`, e2e)
 })
+
+// Ather Lanes against the real S2 lane scripts, on Windows, when LANES_SCRIPTS or S2_ROOT names them (skipped, and
+// said so, otherwise): Status' JSON and a real slot file read by Lanes' readers, all in the temp folder.
+stage('lanes', () => sh('node lanes-contract.mjs', e2e))
 
 // The S2 run copies an S2 checkout's docs/intent. Without S2_ROOT it is skipped and says so: this is for
 // people who do not work on the game (web, tools) and have no S2 checkout on their PC. A S2_ROOT that is

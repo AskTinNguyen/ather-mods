@@ -53,6 +53,15 @@ export const UNITS = [
     copyRoots: ['ather-board/hooks/ather/'],
   },
   {
+    name: 'ather-lanes',
+    roots: ['ather-lanes/'],
+    versionFile: 'ather-lanes/.claude-plugin/plugin.json',
+    market: 'ather-lanes',
+    readme: 'ather-lanes/README.md',
+    // Its copies of Ather's modules follow the board's rule.
+    copyRoots: ['ather-lanes/hooks/ather/'],
+  },
+  {
     name: 'week-calendar',
     roots: ['week-calendar/'],
     versionFile: 'week-calendar/.claude-plugin/plugin.json',
@@ -74,7 +83,8 @@ export const UNITS = [
 
 // Files inside a mod's folders that it does not ship: the dev scripts that make its copies, and its build settings.
 const DEV_ONLY = new Set([
-  'ather-board/sync.mjs',
+  'ather-board/shared.json',
+  'ather-lanes/shared.json',
   'paseo/ather-automata/server/sync.mjs',
   'paseo/ather-automata/server/test-resolve.mjs',
   'paseo/ather-automata/server/art/render.mjs',
@@ -82,7 +92,7 @@ const DEV_ONLY = new Set([
   ...['ather-automata', 'week-calendar'].flatMap(plugin => ['package-lock.json', 'tsconfig.json', '.gitignore'].map(name => `paseo/${plugin}/${name}`)),
 ])
 // Copies and generated files: their source is what a person edits (each has its own --check).
-const COPIES = [/^ather-board\/hooks\/ather\//, /^paseo\/ather-automata\/server\/ather\//, /\.generated\.ts$/]
+const COPIES = [/^[^/]+\/hooks\/ather\//, /^paseo\/ather-automata\/server\/ather\//, /\.generated\.ts$/]
 
 /** @param {string} file */
 export const isTest = file => /(^|\/)tests?\//.test(file) || /\.test\.[cm]?[jt]sx?$/.test(file)

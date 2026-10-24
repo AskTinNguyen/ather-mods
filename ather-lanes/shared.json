@@ -1,0 +1,4 @@
+{
+  "//": "The Ather Automata modules Ather Lanes reuses, copied with what they import into hooks/ather/ by node dev/sync-shared.mjs ather-lanes: the row look and cell widths (rows), ageText (worklist), parseIntent and directorCalls (model), parseEditorLock and the pack's local folder (packs/unreal), the checkout and repository helpers (workspace) and git's environment (team).",
+  "entries": ["rows.mjs", "worklist.mjs", "model.mjs", "packs/unreal.mjs", "workspace.mjs", "team.mjs"]
+}

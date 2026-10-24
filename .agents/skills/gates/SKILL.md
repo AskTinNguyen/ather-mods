@@ -22,7 +22,7 @@ git status --short
 
 | You changed | Run |
 | --- | --- |
-| `ather-automata/hooks/**` | `node ather-board/sync.mjs`, then `npm run sync` in `paseo/ather-automata` (and `npm run art` there if `squad.mjs` kinds or props changed) |
+| `ather-automata/hooks/**` | `node dev/sync-shared.mjs ather-board` and `node dev/sync-shared.mjs ather-lanes`, then `npm run sync` in `paseo/ather-automata` (and `npm run art` there if `squad.mjs` kinds or props changed) |
 | `week-calendar/scripts/**` | `npm run embed` in `paseo/week-calendar` |
 | `.agents/skills/**` | `node dev/skills.mjs` |
 
