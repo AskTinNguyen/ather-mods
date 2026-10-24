@@ -66,3 +66,12 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 - A (recommended): rev 2's D4: details in place, the PR as a link, the Register line to copy for an unregistered worktree; no prompts.
 - B: rev 1's D4: the three actions as prompts handed to the session.
 **Proposed amendment:** none for A.
+
+## F-10 (2026-10-24, rev 3) | blocking: no | status: open (director)
+
+**Found:** design.md's opened fold says each row has "at most one phrase (lime \"N decisions\", else the first amber reason, else nothing)", and its mockup shows one row with two ("3 decisions · checks failing"). D7 and A3 say "lime only for For you, amber only for A look's reasons", and A3's proof fails on "a colour out of place". The fold's text and D7 can't both hold.
+**Options:**
+- A (recommended, built): the opened fold's phrase is drawn in ink, one phrase a row (the decisions, else the first reason's short form). The colours then hold to D7 and A3 everywhere, and the phrase still says why.
+- B: the fold's phrase takes its section's colour (lime for decisions, amber for a reason), and A3's colour check is read as "lime only on decisions, amber only on reasons".
+- C: as B, with both phrases where a lane has decisions and a reason, as the mockup draws.
+**Proposed amendment:** for A, design.md's fold paragraph reads "at most one phrase, in ink (\"N decisions\", else the first reason, else nothing)". For B or C, A3's colour sentence names the fold.
