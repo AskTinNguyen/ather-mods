@@ -23,7 +23,7 @@
     {
       "name": "ather-lanes",
       "description": "The machine's S2 agent lanes as a board: the decisions waiting for you, the lanes that need a look, and every lane with its slot, branch and PR; a status line with this session's lane and what waits, and tools Claude calls to answer which lane it is in and to open the board. Read-only; starts no process while the pane is closed.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": { "name": "Tin Nguyen" },
       "category": "productivity",
       "source": "./ather-lanes"

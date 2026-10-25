@@ -9,6 +9,7 @@ import { AMBER, LIME, QUIET } from '../hooks/ather/rows.mjs'
 import { parseEditorLock } from '../hooks/ather/packs/unreal.mjs'
 import { checkoutOf } from '../hooks/ather/workspace.mjs'
 import { BEHIND_LIMIT, HERE, boardOf, foldText, lineText, sectionOf, summaryText } from '../hooks/board.mjs'
+import { keepFull, keepPrs, readFull, readKeptPrs } from '../hooks/lanes-store.mjs'
 import { lineCells, paneLines } from '../hooks/pane.mjs'
 import { NO_SOURCES, beatsOf, fullData, fullOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from '../hooks/records.mjs'
 import { laneZeroOf, prListArgs, readLaneBeat, readOrigin, readPrs, readReflogTime, readRefs, readSessionBeat, readSidecar, readSlot, readStatus } from '../hooks/sources.mjs'
@@ -333,6 +334,57 @@ describe('the lanes from files while the pane is closed (D8)', () => {
     expect([by.get('new-lane')?.kind, by.get('new-lane')?.sidecar, by.get('new-lane')?.branch]).toEqual(['lane', 'unregistered', ''])
     expect(by.has('perf-capture') || by.has('docs-sweep') || by.has('old-lane')).toBe(false)
     expect(status.machineDir).toBe('X:\\work\\lanes\\_machine')
+  })
+  test('a worktree the last Status found missing, back on disk, is not missing', () => {
+    const gone = { ...kept, lanes: kept.lanes.map(one => (one.name === 'editor-fix' ? { ...one, missing: true } : one)) }
+    const status = statusOfFiles({ kept: gone, main: 'X:\\work\\game', lanesRoot: 'X:/work/lanes', machineDir: 'X:/work/lanes/_machine', sidecars: [], entries: ['editor-fix'] })
+    expect(status.lanes.find(one => one.name === 'editor-fix')?.missing).toBe(false)
+  })
+})
+
+describe('the store (lanes-store.mjs)', () => {
+  /** @param {Record<string, unknown>} start @param {string[]} folders the folders that exist */
+  const storeWith = (start, folders) => {
+    const kept = new Map(Object.entries(start))
+    const io = {
+      get: async (/** @type {string} */ key) => kept.get(key),
+      set: async (/** @type {string} */ key, /** @type {unknown} */ value) => void kept.set(key, value),
+      keys: async () => [...kept.keys()],
+      remove: async (/** @type {string} */ key) => void kept.delete(key),
+      exists: async (/** @type {string} */ path) => folders.includes(path),
+    }
+    return { kept, io }
+  }
+  const full = { at: 5, status: readStatus(M.STATUS), refs: new Map(), prs: null }
+  test('a full read and a gh answer kept per lane 0 come back as they were kept', async () => {
+    const { io } = storeWith({}, ['X:/work/game'])
+    await keepFull(io, 'X:/work/game', full)
+    await keepPrs(io, 'X:/work/game', { at: 7, branches: ['feat/a'], stdout: '[]' })
+    expect((await readFull(io, 'x:\\WORK\\game'))?.status.lanes.map(one => one.name)).toEqual(full.status?.lanes.map(one => one.name))
+    expect(await readKeptPrs(io, 'X:/work/game')).toEqual({ at: 7, branches: ['feat/a'], stdout: '[]' })
+    expect([await readFull(io, 'X:/work/other'), await readKeptPrs(io, 'X:/work/other')]).toEqual([null, null])
+  })
+  test('a write deletes only the keys that name a lane 0 that is gone; one that names none (0.2.0) stays', async () => {
+    const { kept: store, io } = storeWith({ 'full:x:/gone': { main: 'X:/gone', at: 1 }, 'prs:x:/gone': { main: 'X:/gone', at: 1 }, 'full:x:/live': { main: 'X:/live', at: 1 }, 'prs:o/r': { at: 1, branches: [], stdout: '' }, 'other:key': { main: 'X:/gone' } }, ['X:/work/game', 'X:/live'])
+    await keepFull(io, 'X:/work/game', full)
+    expect([...store.keys()].sort()).toEqual(['full:x:/live', 'full:x:/work/game', 'other:key', 'prs:o/r'])
+  })
+  test('a key that cannot be read stays', async () => {
+    const { kept: store, io } = storeWith({ 'full:x:/gone': { main: 'X:/gone', at: 1 } }, [])
+    await keepFull({ ...io, get: key => (key === 'full:x:/gone' ? Promise.reject(new Error('x')) : io.get(key)) }, 'X:/work/game', full)
+    expect(store.has('full:x:/gone')).toBe(true)
+  })
+  test('a folder that cannot be looked at is taken as there; a gh answer of another shape is none', async () => {
+    const { kept: store, io } = storeWith({ 'full:x:/live': { main: 'X:/live', at: 1 }, 'prs:x:/work/game': { at: 1, branches: 'feat/a', stdout: '' } }, [])
+    await keepFull({ ...io, exists: () => Promise.reject(new Error('x')) }, 'X:/work/game', full)
+    expect(store.has('full:x:/live')).toBe(true)
+    expect(await readKeptPrs(io, 'X:/work/game')).toBe(null)
+  })
+  test('a store that fails keeps nothing and throws nothing', async () => {
+    const no = () => Promise.reject(new Error('x'))
+    const failing = { get: no, set: no, keys: no, remove: no, exists: no }
+    await keepFull(failing, 'X:/work/game', full)
+    expect([await readFull(failing, 'X:/work/game'), await readKeptPrs(failing, 'X:/work/game')]).toEqual([null, null])
   })
 })
 

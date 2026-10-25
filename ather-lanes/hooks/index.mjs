@@ -14,8 +14,9 @@ import { unreal } from './ather/packs/unreal.mjs'
 import { GIT_ENV } from './ather/team.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './ather/workspace.mjs'
 import { boardOf, lineText, sectionOf, summaryText } from './board.mjs'
+import { keepFull, keepPrs, readFull, readKeptPrs } from './lanes-store.mjs'
 import { drawPane, paneLines } from './pane.mjs'
-import { NO_SOURCES, beatsOf, fullData, fullOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from './records.mjs'
+import { NO_SOURCES, beatsOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from './records.mjs'
 import { REF_FORMAT, folderKey, laneZeroOf, prListArgs, readOrigin, readPrs, readRefs, readReflogTime, readSidecar, readSlot, readStatus } from './sources.mjs'
 
 /**
@@ -74,6 +75,10 @@ const read = ($, path) => $.fs.read(path).then(text => (typeof text === 'string'
 const exists = ($, path) => $.fs.exists(path).catch(() => false)
 /** @param {Engine} $ @param {string} path */
 const list = ($, path) => $.fs.list(path).catch(() => [])
+// The store as closures. Its `exists` passes a failed look through (unlike `exists` above), and the store keeps a key
+// whose folder it could not look at.
+/** @param {Engine} $ @returns {import('./lanes-store.mjs').StoreIo} */
+const storeOf = $ => ({ get: key => $.store.get(key), set: (key, value) => $.store.set(key, value), keys: () => $.store.keys(), remove: key => $.store.delete(key), exists: path => $.fs.exists(path) })
 /** @param {string} path */
 const parentOf = path => path.replace(/\/[^/]*$/, '')
 /** @param {number} ms */
@@ -173,7 +178,7 @@ const readLanes = async ($, at, options) => {
 // read again each time) for the rest and for its git and gh figures; then each registered lane's intent.
 /** @param {Engine} $ @param {Place} at */
 const readLaneFiles = async ($, at) => {
-  full = fullOf(await $.store.get(fullKey(at)).catch(() => undefined)) ?? full
+  full = (await readFull(storeOf($), at.main)) ?? full
   const [sidecarFiles, entries] = await Promise.all([list($, `${at.machineDir}/lanes`), list($, at.lanesRoot)])
   const sidecars = (await Promise.all(sidecarFiles.filter(one => one.kind === 'file' && one.name.endsWith('.json')).map(one => read($, `${at.machineDir}/lanes/${one.name}`)))).map(readSidecar)
   const folders = entries.filter(one => one.kind === 'dir' && folderKey(`${at.lanesRoot}/${one.name}`) !== folderKey(at.machineDir))
@@ -183,28 +188,25 @@ const readLaneFiles = async ($, at) => {
   await readIntents($, status)
 }
 
-/** @param {Place} at */
-const fullKey = at => `full:${folderKey(at.main)}`
-
-// The full read just made, kept for the closed pane and for other sessions (records.mjs fullData).
+// The full read just made, kept for the closed pane and for other sessions (lanes-store.mjs).
 /** @param {Engine} $ @param {Place} at @param {number} now */
-const keepFull = async ($, at, now) => {
+const keepRead = async ($, at, now) => {
   if (!sources.status) return
   full = { at: now, status: sources.status, refs: sources.refs, prs: sources.prs }
-  await $.store.set(fullKey(at), fullData(full)).catch(() => undefined)
+  await keepFull(storeOf($), at.main, full)
 }
 
 // gh's answer for some lane branches: the one another session kept in the last 5 minutes, else one gh run from the
 // machine folder (outside any checkout), kept for the next.
 /** @param {Engine} $ @param {Place} at @param {string[]} branches @param {number} now */
 const ghPrs = async ($, at, branches, now) => {
-  const key = `prs:${at.repo}`
-  const kept = /** @type {{ at: number, branches: string[], stdout: string } | undefined} */ (await $.store.get(key).catch(() => undefined))
+  const store = storeOf($)
+  const kept = await readKeptPrs(store, at.main)
   if (kept && now - kept.at < PRS_EVERY_MS && branches.every(branch => kept.branches.includes(branch))) return kept.stdout
   const ran = await run($, ['gh', ...prListArgs(at.repo, branches)], at.machineDir, 'gh pr list')
   runErrors.prs = ran.exitCode === 0 ? '' : failed('gh pr list', ran)
   if (ran.exitCode !== 0) return ''
-  await $.store.set(key, { at: now, branches, stdout: ran.stdout }).catch(() => undefined)
+  await keepPrs(store, at.main, { at: now, branches, stdout: ran.stdout })
   return ran.stdout
 }
 
@@ -246,7 +248,7 @@ const readShown = async ($, at, options, now, isStatusDue) => {
     prsAt = now
     await readPrList($, at, now)
   }
-  if (isStatusDue || isPrsDue) await keepFull($, at, now)
+  if (isStatusDue || isPrsDue) await keepRead($, at, now)
 }
 
 // The pane closed, or shown without the scripts (D8): files only, no process.
