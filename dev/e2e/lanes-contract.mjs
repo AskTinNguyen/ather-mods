@@ -1,6 +1,7 @@
 // Ather Lanes' contract with the S2 lane scripts (ather-lanes A6), on Windows: the real `lanes.ps1 -Action Status -Json`
-// on a scratch repository with two worktrees (one registered, one not) and a scratch machine folder, read by Lanes'
-// readers; and a real `editor-slot.ps1 -Action Take -Isolated` slot file and the pointer its Sync writes, read as A2 (i)
+// on a scratch repository with four worktrees (two lanes, one registered and one not, and two pool lanes) and a
+// scratch machine folder, read by Lanes' readers; the same lanes read from files alone as the closed pane reads them (D8: the sidecar Register wrote and the
+// lanes folder's listing); and a real `editor-slot.ps1 -Action Take -Isolated` slot file and the pointer its Sync writes, read as A2 (i)
 // says. Everything is written under the temp folder: the scripts are copied there first, every call names
 // -MachineDir, and the slot is taken -Isolated. The scripts come from LANES_SCRIPTS, else S2_ROOT's
 // .agents/skills/s2-agent-lanes/scripts; with neither, or off Windows, it is skipped and says so.
@@ -11,8 +12,8 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 
 import { parseEditorLock } from '../../ather-lanes/hooks/ather/packs/unreal.mjs'
-import { laneRecords, NO_SOURCES } from '../../ather-lanes/hooks/records.mjs'
-import { readSlot, readStatus } from '../../ather-lanes/hooks/sources.mjs'
+import { laneRecords, NO_SOURCES, statusOfFiles } from '../../ather-lanes/hooks/records.mjs'
+import { kindOfEntry, readSidecar, readSlot, readStatus } from '../../ather-lanes/hooks/sources.mjs'
 
 const from = process.env.LANES_SCRIPTS || (process.env.S2_ROOT ? path.join(process.env.S2_ROOT, '.agents/skills/s2-agent-lanes/scripts') : '')
 if (process.platform !== 'win32') {
@@ -56,12 +57,15 @@ try {
   git(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'one'])
   git(['worktree', 'add', '-q', '-b', 'feat/one', path.join(lanes, 'lane-one')])
   git(['worktree', 'add', '-q', '-b', 'feat/two', path.join(lanes, 'lane-two')])
+  git(['worktree', 'add', '-q', '-b', 'pool/01', path.join(lanes, '_pool-01')])
+  git(['worktree', 'add', '-q', '-b', 'pool/02', path.join(lanes, '_poolbuild-02')])
   ps('lanes.ps1', ['-Action', 'Register', '-Name', 'lane-one', '-Path', path.join(lanes, 'lane-one'), '-Intent', 'demo-intent', '-Tier', 'T1', '-Slot', 'light', '-MachineDir', machine, '-Repo', main])
 
   const status = readStatus(ps('lanes.ps1', ['-Action', 'Status', '-Json', '-Repo', main, '-MachineDir', machine]))
   const byName = new Map((status?.lanes ?? []).map(one => [one.name, one]))
   check('Status -Json reads as Lanes reads it', status !== null, status)
-  check('three worktrees: lane 0 and two lanes', status?.lanes.length === 3, status?.lanes.map(one => one.name))
+  check('five worktrees: lane 0, two lanes and two pool lanes', status?.lanes.length === 5, status?.lanes.map(one => one.name))
+  check('kindOfEntry gives each folder of the lanes folder the kind Status gives it', ['lane-one', 'lane-two', '_pool-01', '_poolbuild-02'].every(name => kindOfEntry(name) === byName.get(name)?.kind), (status?.lanes ?? []).map(one => [one.name, one.kind, kindOfEntry(one.name)]))
   check('lane 0 is the main checkout', byName.get('game')?.kind === 'main checkout (lane 0)', byName.get('game'))
   const one = byName.get('lane-one')
   check('the registered lane: kind lane, sidecar registered', one?.kind === 'lane' && one?.sidecar === 'registered', one)
@@ -71,6 +75,15 @@ try {
   check('machineDir is the scratch folder', path.resolve(status?.machineDir ?? '') === path.resolve(machine), status?.machineDir)
   const records = laneRecords({ ...NO_SOURCES, status })
   check('each record keeps Status’ kind', records.every(record => record.kind === byName.get(record.name)?.kind), records.map(record => record.kind))
+
+  // D8: what the closed pane reads instead of Status, before any Status run and after one.
+  const sidecars = fs.readdirSync(path.join(machine, 'lanes')).map(name => readSidecar(fs.readFileSync(path.join(machine, 'lanes', name), 'utf8'))).filter(one => one !== null)
+  const entries = fs.readdirSync(lanes).filter(name => fs.existsSync(path.join(lanes, name, '.git')))
+  const fields = (/** @type {import('../../ather-lanes/hooks/sources.mjs').Status | null} */ one) => JSON.stringify((one?.lanes ?? []).map(lane => [lane.name, lane.kind, lane.sidecar, lane.intent, lane.tier, lane.slotNeed, path.resolve(lane.path).toLowerCase()]).sort())
+  check('the sidecar Register wrote reads as Status reads it', sidecars.length === 1 && sidecars[0]?.name === 'lane-one' && sidecars[0]?.intent === 'demo-intent' && sidecars[0]?.slotNeed === 'light', sidecars)
+  const fromFiles = statusOfFiles({ kept: null, main, lanesRoot: lanes, machineDir: machine, sidecars, entries })
+  check('from files alone, before any Status: the same lanes, kinds and sidecars', fields(fromFiles) === fields(status), { fromFiles: fields(fromFiles), status: fields(status) })
+  check('from files after a Status: the same, branches kept', fields(statusOfFiles({ kept: status, main, lanesRoot: lanes, machineDir: machine, sidecars, entries })) === fields(status) && statusOfFiles({ kept: status, main, lanesRoot: lanes, machineDir: machine, sidecars, entries }).lanes.every(lane => lane.branch === byName.get(lane.name)?.branch))
 
   ps('editor-slot.ps1', ['-Action', 'Take', '-Kind', 'full', '-Lane', 'lane-one', '-Minutes', '45', '-MachineDir', machine, '-Repo', main, '-Isolated'])
   const now = new Date()

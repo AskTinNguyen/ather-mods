@@ -5,12 +5,13 @@
 // you and amber only on A look's reasons, a quiet lane absent until the fold opens.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { AMBER, LIME } from '../hooks/ather/rows.mjs'
+import { AMBER, LIME, QUIET } from '../hooks/ather/rows.mjs'
 import { parseEditorLock } from '../hooks/ather/packs/unreal.mjs'
-import { BEHIND_LIMIT, boardOf, foldText } from '../hooks/board.mjs'
+import { checkoutOf } from '../hooks/ather/workspace.mjs'
+import { BEHIND_LIMIT, HERE, boardOf, foldText, lineText, sectionOf, summaryText } from '../hooks/board.mjs'
 import { lineCells, paneLines } from '../hooks/pane.mjs'
-import { NO_SOURCES, beatsOf, intentOf, laneBranches, laneRecords } from '../hooks/records.mjs'
-import { laneZeroOf, prListArgs, readLaneBeat, readOrigin, readPrs, readReflogTime, readRefs, readSessionBeat, readSlot, readStatus } from '../hooks/sources.mjs'
+import { NO_SOURCES, beatsOf, fullData, fullOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from '../hooks/records.mjs'
+import { laneZeroOf, prListArgs, readLaneBeat, readOrigin, readPrs, readReflogTime, readRefs, readSessionBeat, readSidecar, readSlot, readStatus } from '../hooks/sources.mjs'
 import * as M from './fixtures/machine.mjs'
 
 /** @param {Record<string, string>} files */
@@ -34,8 +35,8 @@ const sourcesOf = ({ slots = M.SLOTS, prs = true } = {}) => {
   }
 }
 
-/** @param {import('../hooks/records.mjs').Sources} sources */
-const boardFrom = sources => boardOf(laneRecords(sources), sources.slots)
+/** @param {import('../hooks/records.mjs').Sources} sources @param {string} [here] */
+const boardFrom = (sources, here = '') => boardOf(laneRecords(sources), sources.slots, here)
 
 /** @param {ReturnType<typeof boardFrom>} board @param {Partial<import('../hooks/pane.mjs').View>} view */
 const linesOf = (board, view = {}) => paneLines(board, { width: 72, isDesktop: false, now: M.NOW, clock: () => '19:04', opened: null, isFoldOpen: false, refreshedAt: M.NOW - 40000, errors: [], ...view })
@@ -235,8 +236,142 @@ describe('the pane (A3, design.md)', () => {
   })
 })
 
+describe('this session (A9, D10)', () => {
+  const status = readStatus(M.STATUS)
+  test('the session\u2019s checkout is matched to its worktree by path, case and slashes aside; a checkout inside another is its own', async () => {
+    expect(laneOf(status, 'X:/work/game')).toBe('game')
+    expect(laneOf(status, 'X:\\work\\lanes\\editor-fix')).toBe('editor-fix')
+    expect(laneOf(status, 'x:/WORK/Lanes/Editor-Fix/')).toBe('editor-fix')
+    // A folder nested in a lane: Ather's checkoutOf takes it up to the lane's folder first, as the engine half does.
+    const files = { exists: async (/** @type {string} */ path) => path === 'X:/work/lanes/editor-fix/.git', read: async (/** @type {string} */ path) => (path === 'X:/work/lanes/editor-fix/.git' ? 'gitdir: X:/work/game/.git/worktrees/editor-fix' : null) }
+    expect(laneOf(status, (await checkoutOf(files, 'X:\\work\\lanes\\editor-fix\\Source\\Game')) ?? '')).toBe('editor-fix')
+    expect(laneOf(status, 'X:/work/lanes/editor-fix/Source')).toBe('')
+    // A harness worktree lies inside lane 0: it is its own worktree, not lane 0.
+    expect(laneOf(status, 'X:/work/game/.claude/worktrees/agent-1')).toBe('agent-1')
+    expect(laneOf({ machineDir: '', lanes: (status?.lanes ?? []).filter(one => one.name !== 'agent-1') }, 'X:/work/game/.claude/worktrees/agent-1')).toBe('')
+    expect(laneOf(status, 'X:/work/lanes/editor-fixed')).toBe('')
+    expect(laneOf(status, 'Y:/elsewhere')).toBe('')
+    expect(laneOf(status, '')).toBe('')
+    expect(laneOf(null, 'X:/work/game')).toBe('')
+  })
+  test('"this session" (quiet) beside its name in For you and A look, in its opened details and its fold row; the fold lists it after lane 0', () => {
+    const board = boardFrom(sourcesOf(), 'editor-fix')
+    for (const width of [72, 110]) {
+      const rest = linesOf(board, { width })
+      const you = rest.find(one => one.key === 'you-editor-fix-F-2')
+      const look = rest.find(one => one.key === 'look-editor-fix')
+      for (const one of [you, look]) {
+        expect(one?.segments.find(segment => segment.text === HERE)?.color).toBe(QUIET)
+        expect(lineCells(/** @type {any} */ (one))).toBe(width)
+      }
+      // Only the lane's first decision carries it, and no other lane's line.
+      expect(rest.filter(one => one.segments.some(segment => segment.text.includes(HERE))).map(one => one.key)).toEqual(['you-editor-fix-F-2', 'look-editor-fix'])
+      const open = linesOf(board, { width, isFoldOpen: true, opened: at('editor-fix', 'fold') })
+      expect(open.filter(one => one.key.startsWith('row-')).map(one => one.key).slice(0, 3)).toEqual(['row-game', 'row-editor-fix', 'row-agent-1'])
+      expect(textOf(open.filter(one => one.key === 'row-editor-fix'))).toMatch(/this session · 1h$/)
+      expect(textOf(open.filter(one => one.key.startsWith('detail-editor-fix-')))).toContain(`lane  ${HERE} · fix/editor-filter`)
+      for (const one of open) expect(`${lineCells(one) <= width} ${one.key}`).toBe(`true ${one.key}`)
+    }
+    const desktop = linesOf(board, { isDesktop: true, width: 60 })
+    expect(desktop.find(one => one.key === 'you-editor-fix')?.segments.map(segment => segment.text)).toEqual(['editor-fix', `  ${HERE}`])
+    expect(textOf(linesOf(boardFrom(sourcesOf(), 'scratch-a'), { opened: at('scratch-a', 'look') }))).toMatch(new RegExp(`${HERE}\\n.*No sidecar`))
+  })
+  test('a session in no lane marks nothing, and the fold keeps lane 0 first, then by name', () => {
+    for (const view of [{}, { isFoldOpen: true }, { opened: at('editor-fix', 'you') }]) expect(textOf(linesOf(boardFrom(sourcesOf()), view))).not.toContain(HERE)
+    expect(boardFrom(sourcesOf(), 'game').rows.map(one => one.lane.name).slice(0, 2)).toEqual(['game', 'agent-1'])
+  })
+})
+
+describe('the status line (A7, D8)', () => {
+  test('the session\u2019s lane, then For you\u2019s and A look\u2019s counts as the pane counts them, each hidden at zero', () => {
+    const sources = sourcesOf()
+    const board = boardFrom(sources, 'editor-fix')
+    const decisions = board.forYou.reduce((sum, one) => sum + one.decisions.length, 0)
+    expect(lineText(board)).toBe(`lane editor-fix · ◆ ${decisions} for you · ${board.look.length} to look at`)
+    expect(lineText(board)).toBe('lane editor-fix · ◆ 4 for you · 6 to look at')
+    // The pane's own counts: For you's "N decisions" and A look's number.
+    expect(textOf(linesOf(board))).toMatch(/F O R {3}Y O U +4 decisions\n/)
+    expect(textOf(linesOf(board))).toMatch(/A {3}L O O K +6\n/)
+    expect(lineText(boardFrom(sources, 'game'))).toBe('lane 0 · ◆ 4 for you · 6 to look at')
+    expect(lineText(boardFrom(sources, 'scratch-a'))).toBe('lane scratch-a · ◆ 4 for you · 6 to look at')
+    expect(lineText(boardFrom(sources))).toBe('not in a lane · ◆ 4 for you · 6 to look at')
+    expect(lineText(boardOf([], []))).toBe('not in a lane')
+    const quiet = laneRecords(sources).filter(one => one.name === 'docs-sweep')
+    expect(lineText(boardOf(quiet, [], 'docs-sweep'))).toBe('lane docs-sweep')
+  })
+})
+
+describe('the lanes from files while the pane is closed (D8)', () => {
+  const kept = readStatus(M.STATUS)
+  const sidecar = (/** @type {string} */ name, /** @type {Record<string, string>} */ fields = {}) => JSON.stringify({ name, path: `X:\\work\\lanes\\${name}`, branch: `feat/${name}`, origin: 'register', intent: name, tier: 'T1', claims: [], session: '', slot: 'light', written: '2026-10-24T19:00:00+07:00', host: 'PC-0', ...fields }, null, 4)
+  test('a sidecar is read as Status reads it; a half-written one is none', () => {
+    expect(readSidecar(sidecar('lane-a'))).toEqual({ name: 'lane-a', path: 'X:\\work\\lanes\\lane-a', branch: 'feat/lane-a', intent: 'lane-a', tier: 'T1', slotNeed: 'light' })
+    for (const bad of [null, '', '{"name": "x"', '{"name": "x"}', '[]']) expect(readSidecar(bad)).toBe(null)
+  })
+  test('no full read yet: lane 0, each worktree folder with its sidecar or unregistered, the pool by its name', () => {
+    const status = statusOfFiles({ kept: null, main: 'X:/work/game', lanesRoot: 'X:/work/lanes', machineDir: 'X:/work/lanes/_machine', sidecars: [readSidecar(sidecar('lane-a'))].filter(one => one !== null), entries: ['lane-a', 'lane-b', '_pool-01', '_poolbuild-02'] })
+    expect(status.lanes.map(one => [one.name, one.kind, one.sidecar, one.intent])).toEqual([
+      ['game', 'main checkout (lane 0)', '(lane 0, no sidecar)', ''],
+      ['_pool-01', 'pool (ready)', 'unregistered', ''],
+      ['_poolbuild-02', 'pool (building)', 'unregistered', ''],
+      ['lane-a', 'lane', 'registered', 'lane-a'],
+      ['lane-b', 'lane', 'unregistered', ''],
+    ])
+    expect(status.machineDir).toBe('X:/work/lanes/_machine')
+  })
+  test('after a full read: Status\u2019 kind, branch and order kept; a new folder added, a gone one dropped, a removed sidecar unregistered, a new one registered', () => {
+    const sidecars = [readSidecar(sidecar('combat-hitstop', { path: 'x:/WORK/lanes/combat-hitstop', intent: 'combat-hitstop' })), readSidecar(sidecar('scratch-a'))].filter(one => one !== null)
+    const entries = ['_pool-01', '_poolbuild-02', 'combat-hitstop', 'editor-fix', 'scratch-a', 'probe', 'new-lane']
+    const status = statusOfFiles({ kept, main: 'X:\\work\\game', lanesRoot: 'X:/work/lanes', machineDir: 'X:/work/lanes/_machine', sidecars, entries })
+    const by = new Map(status.lanes.map(one => [one.name, one]))
+    expect(status.lanes.map(one => one.name)).toEqual(['game', '_pool-01', '_poolbuild-02', 'combat-hitstop', 'editor-fix', 'scratch-a', 'probe', 'agent-1', 'new-lane'])
+    expect(by.get('combat-hitstop')?.branch).toBe('feat/combat-hitstop')
+    expect(by.get('editor-fix')?.sidecar).toBe('unregistered')
+    expect([by.get('scratch-a')?.sidecar, by.get('scratch-a')?.intent, by.get('scratch-a')?.branch]).toEqual(['registered', 'scratch-a', 'feat/scratch-a'])
+    expect(by.get('probe')?.branch).toBe('(detached)')
+    expect(by.get('agent-1')?.kind).toBe('harness worktree (.claude\\worktrees)')
+    expect([by.get('new-lane')?.kind, by.get('new-lane')?.sidecar, by.get('new-lane')?.branch]).toEqual(['lane', 'unregistered', ''])
+    expect(by.has('perf-capture') || by.has('docs-sweep') || by.has('old-lane')).toBe(false)
+    expect(status.machineDir).toBe('X:\\work\\lanes\\_machine')
+  })
+})
+
+describe('the summary lanes_summary gives (A8, D9)', () => {
+  test('lanes_open opens a lane from the first section that lists it; an unknown or pool lane from none', () => {
+    const board = boardFrom(sourcesOf())
+    expect(['editor-fix', 'combat-hitstop', 'perf-capture', 'game', 'docs-sweep', '_pool-01', 'nobody'].map(name => sectionOf(board, name))).toEqual(['you', 'you', 'look', 'look', 'fold', null, null])
+  })
+  test('a full read survives the store: kept as plain JSON and read back the same; anything else is none', () => {
+    const sources = sourcesOf()
+    const status = sources.status
+    if (!status) throw new Error('the fixture Status')
+    const full = { at: M.NOW, status, refs: sources.refs, prs: sources.prs }
+    const back = fullOf(JSON.parse(JSON.stringify(fullData(full))))
+    expect(back?.at).toBe(M.NOW)
+    expect(back?.status).toEqual(status)
+    expect([...(back?.refs ?? [])]).toEqual([...(sources.refs ?? [])])
+    expect([...(back?.prs ?? [])]).toEqual([...(sources.prs ?? [])])
+    expect(fullOf(JSON.parse(JSON.stringify(fullData({ ...full, prs: null }))))?.prs).toBe(null)
+    for (const bad of [undefined, null, 3, {}, { at: 'x', status }, { at: 1, status: { lanes: 3 } }]) expect(fullOf(bad)).toBe(null)
+  })
+  test('this session\u2019s lane with its details, every For you and A look item; on a quiet machine "Nothing needs you."', () => {
+    const board = boardFrom(sourcesOf(), 'editor-fix')
+    const text = summaryText(board, { now: M.NOW, readAt: M.NOW - 60000, clock: () => '19:04' })
+    expect(text.split('\n')[0]).toBe('This session: lane editor-fix.')
+    for (const piece of ['PR: #398 open · checks failing', 'main: 27 behind · 3 ahead', 'slot: needs editor', 'lane: this session · fix/editor-filter · editor-fix (Editor filter fix) · T2', 'as of 19:04']) expect(text).toContain(piece)
+    for (const { lane, decisions } of board.forYou) for (const call of decisions) expect(text).toContain(`- ${lane.name} ${call.id}: `)
+    for (const { lane, reasons } of board.look) expect(text).toContain(`- ${lane.name}: ${reasons.map(one => one.text).join(' · ')}`)
+    expect(text).not.toContain('Nothing needs you.')
+    expect(summaryText(boardFrom(sourcesOf(), 'scratch-a'), { now: M.NOW, readAt: null, clock: () => '' })).toMatch(/^This session: lane scratch-a, unregistered \(register it with: lanes\.ps1 -Action Register -Name scratch-a/)
+    const calm = summaryText(boardOf([], []), { now: M.NOW, readAt: null, clock: () => '' })
+    expect(calm).toContain('This session: not in a lane.')
+    expect(calm).toContain('Nothing needs you.')
+    expect(calm).toContain('not read yet')
+  })
+})
+
 describe('coexistence (A5)', () => {
-  test('the module hooks only its command, its pane and the session start: no tool call, prompt, turn or band', async () => {
+  test('the module hooks only its command, its pane, its own two tools and the session start: no other tool call, prompt, turn or band (F-12)', async () => {
     const { register } = await import('../hooks/index.mjs')
     /** @type {string[]} */
     const hooked = []
@@ -245,7 +380,8 @@ describe('coexistence (A5)', () => {
       return { catch: () => undefined }
     }
     register(/** @type {any} */ (on), {})
-    expect(hooked).toEqual(['session.start', 'command.run{"command":"lanes"}', 'ui.close{"id":"lanes"}', 'ui.render{"component":"Pane","requestId":"lanes"}'])
-    for (const one of hooked) expect(/^(tool\.|prompt\.|turn\.)|AbovePrompt/.test(one)).toBe(false)
+    expect(hooked).toEqual(['session.start', 'command.run{"command":"lanes"}', 'tool.call{"tool":"mcp__ather-lanes__lanes_summary"}', 'tool.call{"tool":"mcp__ather-lanes__lanes_open"}', 'ui.render{"component":"Pane","requestId":"lanes"}'])
+    // A tool.call hook only on the mod's own tools' names, so it never sees another tool's call (D9, F-12).
+    for (const one of hooked) expect(/^(tool\.(?!call\{"tool":"mcp__ather-lanes__)|prompt\.|turn\.)|AbovePrompt/.test(one)).toBe(false)
   })
 })

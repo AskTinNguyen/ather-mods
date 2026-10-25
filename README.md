@@ -6,7 +6,7 @@ Claude Code mods for the S2 team. This repository is the `ather` plugin marketpl
 |---|---|
 | [ather-automata](ather-automata/README.md) | Type `/ather` to see what needs you and what to do next. New here? `/ather tour`. Leaving? `/away tonight`. Too much on screen? `/ather simple` (or `v` on Home) shows only what needs you and what is next. |
 | [ather-board](ather-board/README.md) | Type `/board` to see the team's intents as a board: what is stuck, what collides (two branches changing the same lines), every intent by owner, area or stage, the open acceptance items. `/board open` for the full page, `/board publish` to share it. Read-only. |
-| [ather-lanes](ather-lanes/README.md) | For a machine that runs several S2 agent lanes: type `/lanes` to see the decisions waiting for you, the lanes that need a look (failing checks, far behind `main`, a slot past its end or held by another lane, unregistered), and every lane with its slot, branch and PR. Read-only. |
+| [ather-lanes](ather-lanes/README.md) | For a machine that runs several S2 agent lanes: type `/lanes` to see the decisions waiting for you, the lanes that need a look (failing checks, far behind `main`, a slot past its end or held by another lane, unregistered), and every lane with its slot, branch and PR. The status line names the session's lane and what waits; ask Claude "which lane am I in?" or "show the lanes". Read-only. |
 | [week-calendar](week-calendar/README.md) | For agent PCs: a weekly calendar of every session and a weekly report (PRs merged, productive agent time) pushed to the team's agent-reports repo. Install it only where sessions should be reported. |
 
 ## Install (once)

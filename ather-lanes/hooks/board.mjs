@@ -6,7 +6,7 @@
 
 import { ageText } from './ather/worklist.mjs'
 import { plural } from './ather/model.mjs'
-import { KIND_LANE_0, isPool, isPoolReady } from './sources.mjs'
+import { KIND_LANE, KIND_LANE_0, isPool, isPoolReady } from './sources.mjs'
 
 /**
  * @typedef {import('./records.mjs').LaneRecord} LaneRecord
@@ -18,8 +18,9 @@ import { KIND_LANE_0, isPool, isPoolReady } from './sources.mjs'
  *   kind and hold none (design.md: "needs a slot that another lane holds"; how many slots there are is F-8's to report)
  * @typedef {{ lane: LaneRecord, reasons: Reason[] }} Row
  * @typedef {{ forYou: { lane: LaneRecord, decisions: Decision[] }[], look: Row[], rows: Row[],
- *   pool: { ready: number, building: number }, count: number, holds: Hold[], editor: Hold | null }} Board
- *   `rows`: every lane but the pool's, lane 0 first, then by name; `look`: those of them with a reason, in Status' order
+ *   pool: { ready: number, building: number }, count: number, holds: Hold[], editor: Hold | null, here: LaneRecord | null }} Board
+ *   `rows`: every lane but the pool's, lane 0 first, then this session's lane, then by name (D10); `look`: those of them
+ *   with a reason, in Status' order; `here`: this session's lane, null for none
  */
 
 // A lane this far behind `main` or more is worth a look (design.md: one constant in one place).
@@ -65,12 +66,16 @@ const reasonsOf = (lane, holds) => {
   for (const hold of holds.filter(one => one.holder === lane.name && one.pastMinutes > 0)) reasons.push({ text: `${hold.kind === 'perf' ? 'perf hold on every slot' : hold.label} past its end ${minutesText(hold.pastMinutes)}`, short: 'slot past its end' })
   const holders = [...new Set(holds.filter(hold => hold.waiting.includes(lane.name)).map(hold => hold.holder))]
   if (holders.length > 0) reasons.push({ text: `needs ${kindWord(lane.slotNeed)}, held by ${holders.join(', ')}`, short: `waits for ${kindWord(lane.slotNeed)}` })
-  if (lane.kind === 'lane' && lane.sidecar === 'unregistered') reasons.push({ text: 'unregistered, so no intent or claims', short: 'unregistered' })
+  if (lane.kind === KIND_LANE && lane.sidecar === 'unregistered') reasons.push({ text: 'unregistered, so no intent or claims', short: 'unregistered' })
   return reasons
 }
 
-/** @param {readonly LaneRecord[]} records @param {readonly Slot[]} slots @returns {Board} */
-export const boardOf = (records, slots) => {
+// The opened fold's order (D10): lane 0, then this session's lane, then the rest.
+/** @param {LaneRecord} lane @param {string} hereName */
+const rankOf = (lane, hereName) => (lane.kind === KIND_LANE_0 ? 0 : hereName !== '' && lane.name === hereName ? 1 : 2)
+
+/** @param {readonly LaneRecord[]} records @param {readonly Slot[]} slots @param {string} [hereName] this session's lane (records.mjs laneOf), '' for none @returns {Board} */
+export const boardOf = (records, slots, hereName = '') => {
   const holds = holdsOf(slots, records)
   const oldest = (/** @type {Decision[]} */ list) => Math.min(...list.map(one => one.since || Number.MAX_SAFE_INTEGER))
   const forYou = records
@@ -82,15 +87,44 @@ export const boardOf = (records, slots) => {
   return {
     forYou,
     look: lanes.filter(one => one.reasons.length > 0),
-    rows: [...lanes].sort((a, b) => Number(b.lane.kind === KIND_LANE_0) - Number(a.lane.kind === KIND_LANE_0) || a.lane.name.localeCompare(b.lane.name)),
+    rows: [...lanes].sort((a, b) => rankOf(a.lane, hereName) - rankOf(b.lane, hereName) || a.lane.name.localeCompare(b.lane.name)),
     pool: { ready: pools.filter(lane => isPoolReady(lane.kind)).length, building: pools.filter(lane => !isPoolReady(lane.kind)).length },
     count: lanes.length,
     holds,
     editor: holds.find(hold => hold.ids.some(id => slotKindOf(id) === 'full')) ?? null,
+    here: hereName === '' ? null : (records.find(lane => lane.name === hereName) ?? null),
   }
 }
 
 // ---------------------------------------------------------------- words
+
+// The quiet mark on this session's lane (D10).
+export const HERE = 'this session'
+
+/** @param {Board} board @param {LaneRecord} lane */
+export const isHere = (board, lane) => board.here?.name === lane.name
+
+// The section a lane is first listed in (For you, A look, else the opened fold), for lanes_open (D9); null for a lane
+// the board does not list (an unknown name, a pool lane).
+/** @param {Board} board @param {string} name @returns {'you' | 'look' | 'fold' | null} */
+export const sectionOf = (board, name) => {
+  const listed = (/** @type {{ lane: LaneRecord }[]} */ rows) => rows.some(one => one.lane.name === name)
+  return listed(board.forYou) ? 'you' : listed(board.look) ? 'look' : listed(board.rows) ? 'fold' : null
+}
+
+/** @param {Board} board */
+export const decisionCount = board => board.forYou.reduce((sum, one) => sum + one.decisions.length, 0)
+
+// The status line (D8): this session's lane, then For you's and A look's counts, each only when not zero.
+/** @param {Board} board */
+export const lineText = board => {
+  const decisions = decisionCount(board)
+  return [whereText(board.here), decisions > 0 ? `◆ ${decisions} for you` : '', board.look.length > 0 ? `${board.look.length} to look at` : ''].filter(Boolean).join(' · ')
+}
+
+// Where this session is, in the status line's and the summary's words.
+/** @param {LaneRecord | null} lane */
+const whereText = lane => (lane === null ? 'not in a lane' : lane.kind === KIND_LANE_0 ? 'lane 0' : `lane ${lane.name}`)
 
 /** @param {{ ready: number, building: number }} pool */
 export const poolText = pool => `${pool.ready} ready, ${pool.building} building`
@@ -152,13 +186,43 @@ const movedText = (lane, now) => {
 /** @param {LaneRecord} lane */
 export const registerLine = lane => `lanes.ps1 -Action Register -Name ${lane.name} -Intent <slug> -Tier <T0|T1|T2>`
 
-// The opened lane's lines, in design.md's order: decisions, PR, main, slot, moved, lane.
-/** @param {LaneRecord} lane @param {Hold[]} holds @param {number} now @returns {Detail[]} */
-export const detailsOf = (lane, holds, now) => [
-  ...(lane.decisions.length > 0 ? [...lane.decisions.map(one => ({ label: one.id, text: one.full || one.title })), { label: '', text: `answer them in the session that tracks ${lane.intent}` }] : []),
+// The lane's decisions, full titles, and where to answer them; none for a lane with none.
+/** @param {LaneRecord} lane @returns {Detail[]} */
+const decisionDetails = lane => (lane.decisions.length > 0 ? [...lane.decisions.map(one => ({ label: one.id, text: one.full || one.title })), { label: '', text: `answer them in the session that tracks ${lane.intent}` }] : [])
+
+// The lane's own lines: PR, main, slot, moved, lane (this session's marked, D10).
+/** @param {LaneRecord} lane @param {Board} board @param {number} now @returns {Detail[]} */
+export const laneDetails = (lane, board, now) => [
   { label: 'PR', text: prText(lane.pr), ...(lane.pr ? { link: lane.pr.url } : {}) },
   { label: 'main', text: mainText(lane) },
-  { label: 'slot', text: slotText(lane, holds) },
+  { label: 'slot', text: slotText(lane, board.holds) },
   { label: 'moved', text: movedText(lane, now) },
-  { label: 'lane', text: [lane.branch, lane.intentTitle ? `${lane.intent} (${lane.intentTitle})` : lane.intent, lane.tier, lane.path].filter(Boolean).join(' · ') },
+  { label: 'lane', text: [isHere(board, lane) ? HERE : '', lane.branch, lane.intentTitle ? `${lane.intent} (${lane.intentTitle})` : lane.intent, lane.tier, lane.path].filter(Boolean).join(' · ') },
 ]
+
+// The opened lane's lines, in design.md's order: decisions, PR, main, slot, moved, lane.
+/** @param {LaneRecord} lane @param {Board} board @param {number} now @returns {Detail[]} */
+export const detailsOf = (lane, board, now) => [...decisionDetails(lane), ...laneDetails(lane, board, now)]
+
+// ---------------------------------------------------------------- the summary a tool gives (D9)
+
+// lanes_summary's text: this session's lane with its details (the opened lane's lines), then every For you and A
+// look item, or "Nothing needs you."; `readAt`: when git and gh were last read (the PR and behind-main reasons), null
+// for never.
+/** @param {Board} board @param {{ now: number, readAt: number | null, clock: (ms: number) => string }} at */
+export const summaryText = (board, { now, readAt, clock }) => {
+  const { here } = board
+  const lines = [`This session: ${whereText(here)}${here?.sidecar === 'unregistered' ? `, unregistered (register it with: ${registerLine(here)})` : ''}.`]
+  if (here) lines.push(...laneDetails(here, board, now).map(one => `  ${one.label}: ${one.text}`))
+  if (board.forYou.length > 0) {
+    lines.push('', `For you (${plural(decisionCount(board), 'decision')}):`)
+    for (const { lane, decisions } of board.forYou) for (const call of decisions) lines.push(`- ${lane.name} ${call.id}: ${call.full || call.title}`)
+  }
+  if (board.look.length > 0) {
+    lines.push('', `A look (${plural(board.look.length, 'lane')}):`)
+    for (const { lane, reasons } of board.look) lines.push(`- ${lane.name}: ${reasons.map(one => one.text).join(' · ')}`)
+  }
+  if (board.forYou.length === 0 && board.look.length === 0) lines.push('', 'Nothing needs you.')
+  lines.push('', `${foldText(board)}.`, readAt === null ? 'PR checks and behind-main counts are not read yet: the pane reads them while it is open.' : `PR checks and behind-main counts as of ${clock(readAt)}.`, 'The pane: /lanes, or the lanes_open tool.')
+  return lines.join('\n')
+}

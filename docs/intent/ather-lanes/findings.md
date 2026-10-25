@@ -84,3 +84,22 @@ Discoveries that may change the intent. The worker adds entries; the orchestrato
 - B: a `repo` setting, so a session opened anywhere reads a named checkout's lanes (the mod would pass it to Status as `-Repo`). This changes D2.1 and D6.
 - C: accept the scratch run as A3's and A4's live proofs.
 **Proposed amendment:** for A, none (A3's live sentence is met by the director's run). For B, D6 gains "a `repo` setting, empty by default: the checkout whose lanes are read". For C, A3 and A4 read "on a machine with lanes (a scratch one will do)".
+
+## F-12 (2026-10-25, rev 4) | blocking: no | status: open (director)
+
+**Found:** D9's tools and A5's hook rule can't both hold as written. A5 (and A9, which carries it into rev 4) says validate lists "no hook on `tool.call`". This engine serves a tool registered with `$.tool.register` only through a `tool.call` hook whose matcher is that tool's own name (`{ tool: 'mcp__<plugin>__<name>' }`; the plugin-authoring reference, and Automata does the same, `ather-automata/hooks/watch.mjs:166-168`). A call that no hook answers fails.
+**Options:**
+- A (recommended, built): two `tool.call` hooks, each matched to one of the mod's own tools (`mcp__ather-lanes__lanes_summary`, `mcp__ather-lanes__lanes_open`). Such a hook never sees another tool's call, so it raises no toast on an `Edit` or a merge and adds nothing to any other call's time, which is what A5 is there to protect. The `register` unit test asserts that no other `tool.call` matcher exists.
+- B: no tools (D9 dropped). A5 then holds as written.
+**Proposed amendment:** for A, A5 reads "no hook on `tool.call` but on the mod's own tools' names, `tool.result`, `prompt.*`, `turn.*` or `AbovePrompt`".
+
+## F-13 (2026-10-25, rev 4) | blocking: no | status: open (director)
+
+**Found:** two parts of D8 can't be built on this engine.
+- **Colour.** `$.ui.status(text)` takes a plain string, so `◆ n for you` can't be lime and `n to look at` can't be amber. Seen live (`proof/rev4-status-closed.png`): the engine draws a plugin's status line as one of its pinned notices. It prefixes `⚠ ather-lanes:` and paints the whole line in its own warning colour, an amber close to A look's.
+- **Press.** The line takes no press or hotkey. D8 foresaw this and asked for the README to say that `/lanes` opens the pane; the README now says so.
+**Options:**
+- A (recommended, built): the line as text, in the engine's colours, with `/lanes` and the `lanes_open` tool as the ways in. D7's colour rule is then read as applying to the pane only.
+- B: ask the engine side for coloured segments, or a plain-notice style, on `$.ui.status`, and colour the counts when that exists.
+- C: draw the counts in a band above the prompt instead (`AbovePrompt`). That breaks the Non-Goals and A5, so it is not recommended.
+**Proposed amendment:** for A, D8's "(lime)" and "(amber)" read "(in the engine's status-line colour; the pane keeps D7's colours)".

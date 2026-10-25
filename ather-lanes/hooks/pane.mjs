@@ -7,7 +7,7 @@
 import { AMBER, INK, LIME, QUIET, cells, fit, padCells } from './ather/rows.mjs'
 import { plural } from './ather/model.mjs'
 import { ageText } from './ather/worklist.mjs'
-import { detailsOf, foldText, glyphOf, holdText, minutesText, phraseOf, poolText, registerLine } from './board.mjs'
+import { HERE, decisionCount, detailsOf, foldText, glyphOf, holdText, isHere, minutesText, phraseOf, poolText, registerLine } from './board.mjs'
 
 /**
  * @typedef {import('./board.mjs').Board} Board
@@ -68,21 +68,42 @@ const wrap = (text, width) => {
 /** @param {string} text */
 const spaced = text => text.toUpperCase().split('').join(' ')
 
+// The quiet "this session" a desktop item, or an unregistered lane's opened lines, carry after its words (D10).
+/** @param {string} key @param {string} [lead] @returns {Segment} */
+const hereMark = (key, lead = '  ') => ({ key: `${key}-here`, text: `${lead}${HERE}`, color: QUIET })
+
+// An item's line, with "this session" quiet at its right end when it is this session's lane (D10): the words are cut
+// to leave it room.
+/** @param {string} key @param {Segment[]} left @param {boolean} here @param {number} width */
+const marked = (key, left, here, width) => {
+  if (!here) return line(key, left)
+  const room = width - cells(HERE) - 2
+  let used = 0
+  const cut = left.map(one => {
+    const text = fit(one.text, Math.max(0, room - used))
+    used += cells(text)
+    return { ...one, text }
+  })
+  return spread(key, cut, { key: `${key}-here`, text: HERE, color: QUIET }, width)
+}
+
 // The opened lane's lines (D4, design.md's order), under the item it was opened from.
 /** @param {LaneRecord} lane @param {Board} board @param {View} view @returns {Line[]} */
 const openedLines = (lane, board, view) => {
   const indent = view.isDesktop ? '' : DETAIL_INDENT
   const room = Math.max(20, view.width - cells(indent) - LABEL_CELLS)
+  const here = isHere(board, lane) ? [line(`open-${lane.name}-here`, [hereMark(`open-${lane.name}`, indent)])] : []
   if (lane.sidecar === 'unregistered') {
     const command = registerLine(lane)
     // Too wide for the pane: broken where PowerShell's line continuation (a backtick) keeps it one command to copy.
     const commandLines = view.isDesktop || cells(indent) + cells(command) <= view.width ? [command] : [command.replace(/ -Intent .*$/, ' `'), `  ${command.replace(/^.* (-Intent .*)$/, '$1')}`]
     return [
+      ...here,
       ...wrap('No sidecar, so the board knows no intent, tier or claims for this worktree. Register it with:', view.width - cells(indent)).map((text, index) => line(`open-${lane.name}-why-${index}`, [{ key: `open-${lane.name}-why-${index}-text`, text: `${indent}${text}`, color: QUIET }])),
       ...commandLines.map((text, index) => line(`register-${lane.name}-${index}`, [{ key: `register-${lane.name}-${index}-text`, text: `${indent}${fit(text, view.width - cells(indent))}` }])),
     ]
   }
-  return detailsOf(lane, board.holds, view.now).flatMap((detail, index) => {
+  return detailsOf(lane, board, view.now).flatMap((detail, index) => {
     const key = `detail-${lane.name}-${index}`
     const pieces = view.isDesktop ? [detail.text] : wrap(detail.text, room)
     const link = detail.link ? [{ key: `${key}-link`, text: ' · open on GitHub ↗', link: detail.link, color: QUIET }] : []
@@ -113,13 +134,13 @@ export const paneLines = (board, view) => {
   if (board.forYou.length === 0 && board.look.length === 0) out.push(line('nothing', [{ key: 'nothing-text', text: 'Nothing needs you.', color: INK }], 1))
 
   if (board.forYou.length > 0) {
-    const count = plural(board.forYou.reduce((sum, one) => sum + one.decisions.length, 0), 'decision')
+    const count = plural(decisionCount(board), 'decision')
     out.push(spread('you', [{ key: 'you-label', text: isDesktop ? 'FOR YOU' : spaced('for you'), color: LIME, bold: true }], { key: 'you-count', text: count, color: LIME }, width, 1))
     for (const { lane, decisions } of board.forYou) {
-      if (isDesktop) out.push(line(`you-${lane.name}`, [{ key: `you-${lane.name}-name`, text: lane.name, bold: true, press: laneAt(lane.name, 'you') }]))
+      if (isDesktop) out.push(line(`you-${lane.name}`, [{ key: `you-${lane.name}-name`, text: lane.name, bold: true, press: laneAt(lane.name, 'you') }, ...(isHere(board, lane) ? [hereMark(`you-${lane.name}`)] : [])]))
       for (const [index, call] of decisions.entries()) {
         const lead = isDesktop ? '' : `${index === decisions.length - 1 ? markOf(view, lane.name, 'you') : INDENT}${padCells(index === 0 ? fit(lane.name, NAME_CELLS - 2) : '', NAME_CELLS)}`
-        out.push(line(`you-${lane.name}-${call.id}`, [{ key: `you-${lane.name}-${call.id}-press`, text: fit(`${lead}${padCells(call.id, 5)}${call.title}`, width), press: laneAt(lane.name, 'you') }]))
+        out.push(marked(`you-${lane.name}-${call.id}`, [{ key: `you-${lane.name}-${call.id}-press`, text: fit(`${lead}${padCells(call.id, 5)}${call.title}`, width), press: laneAt(lane.name, 'you') }], !isDesktop && index === 0 && isHere(board, lane), width))
       }
       if (isOpenAt(view, lane.name, 'you')) out.push(...openedLines(lane, board, view))
     }
@@ -130,7 +151,9 @@ export const paneLines = (board, view) => {
     for (const { lane, reasons } of board.look) {
       const lead = isDesktop ? lane.name : `${markOf(view, lane.name, 'look')}${padCells(fit(lane.name, NAME_CELLS - 2), NAME_CELLS)}`
       const words = reasons.map(one => one.text).join(' · ')
-      out.push(line(`look-${lane.name}`, [{ key: `look-${lane.name}-press`, text: lead, press: laneAt(lane.name, 'look'), bold: isDesktop }, { key: `look-${lane.name}-why`, text: isDesktop ? `  ${words}` : fit(words, width - cells(lead)), color: AMBER }]))
+      const why = { key: `look-${lane.name}-why`, text: isDesktop ? `  ${words}` : fit(words, width - cells(lead)), color: AMBER }
+      const here = isHere(board, lane)
+      out.push(isDesktop ? line(`look-${lane.name}`, [{ key: `look-${lane.name}-press`, text: lead, press: laneAt(lane.name, 'look'), bold: true }, ...(here ? [hereMark(`look-${lane.name}`)] : []), why]) : marked(`look-${lane.name}`, [{ key: `look-${lane.name}-press`, text: lead, press: laneAt(lane.name, 'look') }, why], here, width))
       if (isOpenAt(view, lane.name, 'look')) out.push(...openedLines(lane, board, view))
     }
   }
@@ -155,8 +178,9 @@ const foldLines = (board, view) => {
     const isOpen = isOpenAt(view, lane.name, 'fold')
     const phrase = phraseOf(row)
     const age = lane.lastMoved ? ageText(lane.lastMoved.at, view.now) || '0m' : ''
+    const right = [isHere(board, lane) ? HERE : '', age].filter(Boolean).join(' · ')
     const lead = `${isOpen ? '▾ ' : INDENT}${glyphOf(lane)} ${padCells(fit(lane.name, NAME_CELLS - 2), NAME_CELLS)}`
-    out.push(spread(`row-${lane.name}`, [{ key: `row-${lane.name}-press`, text: isDesktop ? `${glyphOf(lane)} ${lane.name}` : lead, press: laneAt(lane.name, 'fold') }, { key: `row-${lane.name}-phrase`, text: isDesktop ? `  ${phrase}` : fit(phrase, Math.max(0, width - cells(lead) - 6)) }], { key: `row-${lane.name}-age`, text: age, color: QUIET }, width))
+    out.push(spread(`row-${lane.name}`, [{ key: `row-${lane.name}-press`, text: isDesktop ? `${glyphOf(lane)} ${lane.name}` : lead, press: laneAt(lane.name, 'fold') }, { key: `row-${lane.name}-phrase`, text: isDesktop ? `  ${phrase}` : fit(phrase, Math.max(0, width - cells(lead) - Math.max(6, cells(right) + 2))) }], { key: `row-${lane.name}-age`, text: right, color: QUIET }, width))
     if (isOpen) out.push(...openedLines(lane, board, view))
   }
   if (board.pool.ready + board.pool.building > 0) out.push(line('row-pool', [{ key: 'row-pool-text', text: fit(`${INDENT}  ${padCells('pool', NAME_CELLS)}${board.pool.ready} ready · ${board.pool.building} building`, width), color: QUIET }]))
