@@ -2,7 +2,7 @@
 
 - Working under rev: 4
 - Worker: Opus background worker (rev 1-3 from 2026-10-24; rev 4 from 2026-10-25)
-- PR: rev 1-3 #86, merged 2026-10-24 as 541d733, https://github.com/AskTinNguyen/ather-mods/pull/86; rev 4 PR__REV4__
+- PR: rev 1-3 #86, merged 2026-10-24 as 541d733, https://github.com/AskTinNguyen/ather-mods/pull/86; rev 4 #87, https://github.com/AskTinNguyen/ather-mods/pull/87 (open, not merged)
 - Current step: S14, the PR opened for the orchestrator to merge (L-9)
 - Next step: the orchestrator checks the evidence and merges. Still owed from rev 3, on the owner's machine: A3's desktop capture and the real-lanes compare; A6's run with `S2_ROOT`. F-12 and F-13 await the director.
 
@@ -64,7 +64,7 @@
   - Status line: kept fresh from files throughout.
   - `node proof/trace.mjs`: 35 git processes, 24 of them the mod's (Status' 18, for-each-ref 6). Git per Status run: 3, 3, 3, 3, 3, 3. No git and no spawn before the pane opened or while it was closed. None runs status, fetch, diff or merge-tree, and no two overlap. PowerShell 6 (at most 7), gh 0. `A4: pass`.
   - Gates on the final code: `LANES_SCRIPTS=... CLAUDE_CODE_TYPES=... node dev/test-all.mjs` exit 0 (type-check clean, unit 397/397, 73/73, lanes 34/34, repos e2e 329/329, board e2e 18/18, lanes contract 15/15). Without `LANES_SCRIPTS` it also exits 0, the contract skipped and said so. `claude plugin validate ather-lanes` passed; its hooks are session.start, command.run{lanes}, tool.call{mcp__ather-lanes__lanes_summary}, tool.call{mcp__ather-lanes__lanes_open}, ui.render{Pane lanes}. `claude plugin test ather-lanes`: 18 pass, 0 fail.
-- S14 (rev 4, 2026-10-25): progress, findings (F-12, F-13) and proofs committed; branch pushed; PR__REV4__ opened to main, ready for review, not merged (the orchestrator merges, L-9).
+- S14 (rev 4, 2026-10-25): progress, findings (F-12, F-13) and proofs committed; branch pushed; #87 opened to main, ready for review, not merged (the orchestrator merges, L-9).
 
 ## Engineering calls
 
