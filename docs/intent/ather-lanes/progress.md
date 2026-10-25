@@ -67,6 +67,7 @@
 - S14 (rev 4, 2026-10-25): progress, findings (F-12, F-13) and proofs committed; branch pushed; #87 opened to main, ready for review, not merged (the orchestrator merges, L-9).
 
 - S15 (2026-10-25): merged on the owner's go (L-9). The orchestrator re-ran the gates on 5291336 (`node dev/test-all.mjs` exit 0: unit 397/397, 73/73, lanes 34/34, repos e2e 329/329, board e2e 18/18; `claude plugin validate ather-lanes` passed; `claude plugin test ather-lanes` 18 pass 0 fail; 0.2.0 in plugin.json and the marketplace; every hooks file under 500 lines), looked at `proof/rev4-*.png`, and merged #87 (merge commit 658d7c9). F-12 and F-13 were built as their option A and stay open for the director.
+- S16 (2026-10-25): Codex's two findings on #87 fixed in #88, Ather Lanes 0.2.1 (merge commit 2c31419): the full-read and gh caches through `hooks/lanes-store.mjs`, kept per lane 0, a write deleting only keys naming a lane 0 whose folder is gone; a worktree found on disk again is no longer missing. Thermo-nuclear review: block, block, approve (no critical finding open). Gates: test-all exit 0 (lanes 40/40), plugin validate, plugin test 18/18, all 9 CI checks green, Codex no findings. #87's description gained its Verdict line after the merge (the orchestrator merged it with that check failing).
 ## Engineering calls
 
 - E1 (S1): the entry list lives in `<mod>/shared.json` rather than in the dev script, so "each mod names its entry modules" (D1) holds and the script has no per-mod table.
