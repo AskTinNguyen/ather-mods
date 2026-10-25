@@ -144,7 +144,8 @@ export const statusOfFiles = ({ kept, main, lanesRoot, machineDir, sidecars, ent
   const zero = keptBy.get(folderKey(main)) ?? { ...unknown(main, KIND_LANE_0), sidecar: '(lane 0, no sidecar)' }
   const folders = entries.map(name => {
     const path = `${lanesRoot}/${name}`
-    const base = keptBy.get(folderKey(path)) ?? unknown(path, kindOfEntry(name))
+    // Found on disk with its `.git` just now, so not missing, whatever the last Status said.
+    const base = { ...(keptBy.get(folderKey(path)) ?? unknown(path, kindOfEntry(name))), missing: false }
     const sidecar = sidecarBy.get(folderKey(path))
     return sidecar
       ? { ...base, name: sidecar.name, branch: sidecar.branch || base.branch, sidecar: 'registered', intent: sidecar.intent, tier: sidecar.tier, slotNeed: sidecar.slotNeed }

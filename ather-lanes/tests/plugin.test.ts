@@ -6,7 +6,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { AMBER, LIME } from '../hooks/ather/rows.mjs'
-import { fullData, laneBranches } from '../hooks/records.mjs'
+import { keepFull } from '../hooks/lanes-store.mjs'
+import { laneBranches } from '../hooks/records.mjs'
 import { readPrs, readRefs, statusOf } from '../hooks/sources.mjs'
 import * as M from './fixtures/machine.mjs'
 
@@ -382,7 +383,8 @@ test('closed, a newer full read another session kept is taken up: its git and gh
   // Another session's pane made a full read and kept it: lanes.ps1 Status, the for-each-ref and gh, as the store holds them.
   const status = statusOf(JSON.parse(local(M.STATUS)))
   if (!status) throw new Error('the fixture Status')
-  store.set('full:/work/game', JSON.parse(JSON.stringify(fullData({ at: clock.now(), status, refs: readRefs(M.REFS), prs: readPrs(M.PRS, M.REPO, laneBranches(status, { forPrs: true })) }))))
+  const io = { get: async (key: string) => store.get(key), set: async (key: string, value: unknown) => void store.set(key, JSON.parse(JSON.stringify(value))), keys: async () => [...store.keys()], remove: async (key: string) => void store.delete(key), exists: async () => true }
+  await keepFull(io, '/work/game', { at: clock.now(), status, refs: readRefs(M.REFS), prs: readPrs(M.PRS, M.REPO, laneBranches(status, { forPrs: true })) })
   await clock.advance(60 * 1000)
   expect(lastLine(world)).toBe('lane editor-fix · ◆ 4 for you · 5 to look at')
   const text = await callTool($, 'lanes_summary')

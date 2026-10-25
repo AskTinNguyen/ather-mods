@@ -54,6 +54,7 @@ Outside a git checkout, without the scripts, or without a machine folder, the pa
 
 ## Changes
 
+- **0.2.1** The store's two caches (the last full read, gh's answer) go through `hooks/lanes-store.mjs`, both kept per lane 0 (two lane 0 checkouts of one repository no longer share gh's answer), and a write deletes those that name a lane 0 whose folder is gone (0.2.0's, which name none, are left: a session not yet reloaded may still write them); a worktree the last Status found missing is shown again as soon as its folder is back.
 - **0.2.0** The status line (this session's lane, For you and A look's counts), kept fresh from files while the pane is closed, never a process; the `lanes_summary` and `lanes_open` tools; this session's lane marked in the pane and listed after lane 0 in the opened fold.
 - **0.1.0** First release: For you, A look, the fold and every lane opened in place, from `lanes.ps1 -Action Status -Json`, the slot and heartbeat files, one `for-each-ref` and one gh call.
 
