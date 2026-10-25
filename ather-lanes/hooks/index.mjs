@@ -31,8 +31,11 @@ import { REF_FORMAT, folderKey, laneZeroOf, prListArgs, readOrigin, readPrs, rea
  */
 
 const PANE_ID = 'lanes'
-const SUMMARY_TOOL = 'lanes_summary'
-const OPEN_TOOL = 'lanes_open'
+// The two tools as the model calls them (mcp__<plugin>__<name>); each is registered by the name after the prefix.
+const SUMMARY_TOOL = 'mcp__ather-lanes__lanes_summary'
+const OPEN_TOOL = 'mcp__ather-lanes__lanes_open'
+/** @param {string} tool */
+const shortName = tool => tool.replace(/^mcp__ather-lanes__/, '')
 const TICK_MS = 30 * 1000
 const CLOSED_EVERY_MS = 60 * 1000
 const STATUS_EVERY_MS = 2 * 60 * 1000
@@ -329,13 +332,13 @@ const summaryTool = async ($, options) => {
 /** @param {Engine} $ */
 const registerTools = async $ => {
   await $.tool.register({
-    name: SUMMARY_TOOL,
+    name: shortName(SUMMARY_TOOL),
     description: "Ather Lanes: which S2 agent lane this session is in (name, branch, intent, tier, slot, PR) and what on this machine's lanes waits for the user (For you: decisions) or needs a look (A look: failing checks, far behind main, slots, unregistered). Read-only text.",
     inputSchema: { type: 'object', properties: {} },
     isDeferred: false,
   })
   await $.tool.register({
-    name: OPEN_TOOL,
+    name: shortName(OPEN_TOOL),
     description: 'Ather Lanes: open the Lanes pane beside the chat, as /lanes does, for the user to see the lanes; with `lane`, that lane opened in place. Read-only.',
     inputSchema: { type: 'object', properties: { lane: { type: 'string', description: 'A lane to open in place, by its name' } } },
     isDeferred: false,
@@ -355,8 +358,8 @@ const onPress = ($, options, press) => {
 }
 
 // A tool hook that failed answers the call with what went wrong, never leaves it unanswered.
-/** @param {Engine} $ @param {unknown} e @param {{ error: unknown }} next */
-const failedTool = ($, e, next) => ({ result: `Ather Lanes could not answer: ${String(next.error)}` })
+/** @param {unknown} _$ @param {unknown} _e @param {import('claude-code').Caught} next */
+const failedTool = (_$, _e, next) => ({ result: `Ather Lanes could not answer: ${next.error.message ?? next.error.kind}` })
 
 /** @param {import('claude-code').On} on @param {Record<string, unknown>} options */
 export function register(on, options) {
@@ -386,8 +389,8 @@ export function register(on, options) {
   })
 
   // The two tools' own names only, so these hooks never see another tool's call (F-12). A failure answers in words.
-  on('tool.call', { tool: 'mcp__ather-lanes__lanes_summary' }, async $ => ({ result: await summaryTool($, options) })).catch(failedTool)
-  on('tool.call', { tool: 'mcp__ather-lanes__lanes_open' }, async ($, e) => {
+  on('tool.call', { tool: SUMMARY_TOOL }, async $ => ({ result: await summaryTool($, options) })).catch(failedTool)
+  on('tool.call', { tool: OPEN_TOOL }, async ($, e) => {
     const input = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))
     return { result: await openTool($, options, typeof input.lane === 'string' ? input.lane.trim() : '') }
   }).catch(failedTool)

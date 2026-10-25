@@ -390,3 +390,11 @@ test('closed, a newer full read another session kept is taken up: its git and gh
   expect(text).toMatch(/PR checks and behind-main counts as of 20:1\d\./)
   expect(world.ran.length).toBe(0)
 })
+
+test('a tool that fails answers with what went wrong, never "[object Object]" (D9)', async ($, on) => {
+  // No clock beneath the mod in this test: the summary's own clock read throws, and the hook's .catch answers.
+  machine(on, { root: '/work/lanes/editor-fix', shown: false })
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  expect(await callTool($, 'lanes_summary')).toBe('Ather Lanes could not answer: no implementation for clock.now')
+})
