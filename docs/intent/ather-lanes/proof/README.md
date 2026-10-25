@@ -106,3 +106,106 @@ The worker could not open a session in the main checkout or a lane: Claude Code 
 ## Desktop side panel
 
 Not captured: loading a mod into the Claude desktop app means installing it there, a change to the user's settings that the worker does not make. The desktop surface is drawn and pressed by `claude plugin test ather-lanes` (FOR YOU with each lane in bold, A LOOK, the fold as a button and the Editor slot line), and the owner can capture it after installing the release.
+
+# Rev 4: the status line, the tools and this session's lane
+
+These are captures of live sessions of Claude Code 2.1.296 on the same scratch machine, with Ather Lanes 0.2.0 loaded by `--plugin-dir` from a frozen copy of 35ffbff and a session-only `--settings` file. Each session was opened in a lane: `lane-one` (registered, with one decision) or `lane-three` (registered, no decision). In the PNGs, a row that names the scratch folder (the worker's temp folder) is covered, and the cover says so.
+
+## The status line, the pane closed (A7)
+
+![The status line in lane-three, the pane closed](rev4-status-closed.png)
+
+```
+❯ Try "how does <filepath> work?"
+  ⚠ ather-lanes: lane lane-three · ◆ 1 for you · 1 to look at
+```
+
+A full slot was taken for `lane-one` on the scratch machine folder at 08:26:57 (`editor-slot.ps1 -Action Take -Kind full -Lane lane-one -Isolated`), with the pane closed. By 08:27:59 the line in `lane-three`'s session (that lane needs the Editor) had moved from `1 to look at` to `2 to look at`. After the release at 08:28:06 it read `1 to look at` again at 08:29:09. Both changes landed within 65 s, and the session's debug log names no spawn at all.
+
+![The line after the slot was taken](rev4-status-slot-taken.png)
+
+The line is there from the session's start, read from files alone (D8). The engine prefixes `⚠ ather-lanes:` and draws the line in its own warning colour: `$.ui.status` takes plain text, so the counts can't be lime or amber, and the line takes no press (F-13). `/lanes` or the `lanes_open` tool opens the pane.
+
+## The status line beside the open pane, "this session" marked (A7, A9)
+
+![lane-one's session: the pane open beside the status line](rev4-status-beside-pane.png)
+
+```
+F O R   Y O U                                                     1 decision
+  lane-one        F-1  Keep the demo lane for one more day?     this session
+A   L O O K                                                                1
+  lane-two        unregistered, so no intent or claims
+▸ all 4 lanes · pool 1 ready, 0 building · Editor free
+  ⚠ ather-lanes: lane lane-one · ◆ 1 for you · 1 to look at
+```
+
+The line's counts are the pane's: 1 decision in For you, 1 lane in A look.
+
+## The opened fold: this session's lane right after lane 0 (A9)
+
+The session in `lane-three` asked Claude to "open lane-three in the lanes pane", and the `lanes_open` tool opened the lane in place. `lane-three` comes after lane 0 (`game`) and before `lane-one`, which sorts first by name.
+
+![The opened fold in lane-three's session](rev4-fold-this-session.png)
+
+```
+▾ all 4 lanes · pool 1 ready, 0 building
+  ◆ game                                                                    9h
+▾ ● lane-three                                                this session · 9h
+    PR    none yet
+    main  up to date · 2 ahead
+    slot  needs editor
+    moved last commit 9h ago · no heartbeat here
+    lane  this session · feat/three · demo-three (Demo three) · T2 ·
+          <the scratch folder>
+  ● lane-one        1 decision                                              9h
+  ○ lane-two        unregistered                                            9h
+    pool            1 ready · 0 building
+  all slots free
+```
+
+## Claude calls the tools (A8)
+
+"which lane am I in?": Claude called `lanes_summary` and answered from its text. The pane was closed, so no process ran. The "main" figures come from the full read the earlier session's pane kept in the store.
+
+![lanes_summary](rev4-tool-summary.png)
+
+```
+❯ which lane am I in?
+● ather-lanes - lanes_summary (MCP)
+  ⎿  This session: lane lane-three.
+       PR: none yet
+       main: up to date · 2 ahead
+     … +14 lines
+● You're in lane-three, on branch feat/three. Its intent is demo-three ("Demo three") and it's risk tier T2.
+  ...
+  - Waiting on you: lane-one asks "Keep the demo lane for one more day?"
+  - Worth a look: lane-two isn't registered, so it has no intent or claims.
+```
+
+"show the lanes": Claude called `lanes_open`, and the pane opened beside the chat.
+
+![lanes_open](rev4-tool-open.png)
+
+```
+❯ show the lanes
+● ather-lanes - lanes_open (MCP)
+  ⎿  Lanes opened.
+● The Lanes pane is open next to the chat.
+```
+
+## A4 again, on the final code (rev 4)
+
+The run followed S7's method. The session ran in lane 0 (`game`) with Ather Lanes 0.2.0 alone, `GIT_TRACE2_EVENT` and `--debug-file`. It went one minute with no pane, then the pane was open for 10 minutes (with one `r` at 5), then Escape, then 5 minutes closed. For the whole session the status line was kept fresh from files: `lane 0 · ◆ 1 for you · 1 to look at`. `node trace.mjs t4-trace.json t4-debug.log t4-times.txt`:
+
+```
+git processes in the trace: 35; the mod's: 24 (Status' 18, for-each-ref 6)
+open 10 min, then closed 5 min; spawns while open: powershell 6, git 6, gh 0
+git per Status run: 3, 3, 3, 3, 3, 3 (rev-parse --show-toplevel | worktree list --porcelain)
+ok   no git of the mod’s and no spawn before the pane opened
+ok   none of the mod’s git runs status, fetch, diff or merge-tree
+ok   no two of the mod’s git overlap
+ok   each Status run started exactly three git
+ok   PowerShell at most 7 (6 plus one per r), gh at most 3
+ok   no git of the mod’s and no spawn while closed
+A4: pass
+```

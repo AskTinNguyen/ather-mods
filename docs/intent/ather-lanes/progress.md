@@ -1,10 +1,10 @@
 # Progress: ather-lanes
 
-- Working under rev: 3
-- Worker: Opus background worker (started 2026-10-24)
-- PR: #86, merged 2026-10-24 as 541d733, https://github.com/AskTinNguyen/ather-mods/pull/86
-- Current step: none; merged and released (S8)
-- Next step: owed after install, on the owner's machine: A3's desktop capture and the compare against this PC's real lanes (proof/README.md); A6's run with S2_ROOT
+- Working under rev: 4
+- Worker: Opus background worker (rev 1-3 from 2026-10-24; rev 4 from 2026-10-25)
+- PR: rev 1-3 #86, merged 2026-10-24 as 541d733, https://github.com/AskTinNguyen/ather-mods/pull/86; rev 4 PR__REV4__
+- Current step: S14, the PR opened for the orchestrator to merge (L-9)
+- Next step: the orchestrator checks the evidence and merges. Still owed from rev 3, on the owner's machine: A3's desktop capture and the real-lanes compare; A6's run with `S2_ROOT`. F-12 and F-13 await the director.
 
 ## Acceptance
 
@@ -16,6 +16,9 @@
 | A4 | met (scratch machine, F-11) | S7: git trace and spawn log on the final code, `proof/trace.mjs` all six checks pass; gh not exercised live (no GitHub origin on the scratch machine), held to 3 per 10 minutes by the engine test |
 | A5 | met | validate lists only session.start, command.run, ui.close, ui.render; the `register` unit test; live: Automata 0.6.6 and Lanes in one session, both panes draw, an Edit and a `gh pr merge` attempt give no toast from either, the same as Automata alone (S4, `proof/8-with-automata-96.png`) |
 | A6 | open | test-all green with the contract test 11/11 (`LANES_SCRIPTS`) and without any variable (skipped, said); Board's tests unchanged; validate and plugin test pass; marketplace entry and README; review PASS with no critical finding (S5). Owed: the run with `S2_ROOT` set (refused by this session's permission check; `LANES_SCRIPTS` stands as the evidence, E13) and the PR's section |
+| A7 (rev 4) | met (F-13: text only, the engine's colour) | Engine tests (S10): the line on lane 0, a registered lane, an unregistered lane (from a folder inside it) and a harness worktree outside the lanes folder; counts hidden at zero (`lane docs-sweep`); no line and no tools with no machine folder or outside a checkout; shown, the line equals the pane's For you and A look counts; closed, a new decision and a slot past its end move the line within 60 s with the spawn log empty; a newer full read another session kept is taken up. The line takes no press (F-13); the README says `/lanes`. Live (S12): `proof/rev4-status-closed.png`, `proof/rev4-status-beside-pane.png`, and a full slot taken and released with the pane closed moved the line within 65 s with no spawn (`proof/rev4-status-slot-taken.png`) |
+| A8 (rev 4) | met | Engine tests (S10): `lanes_summary` names the session's lane, its details, and every For you and A look item of the fixture, with no process and no write; on a quiet machine it says "Nothing needs you."; `lanes_open` shows the pane, opens a named lane in place, and on an unknown lane says so and leaves the pane folded; a failing tool says why. Live (S12): asked "which lane am I in?", Claude called `lanes_summary` and answered from it (`proof/rev4-tool-summary.png`); asked "show the lanes", it called `lanes_open` and the pane opened (`proof/rev4-tool-open.png`); asked to open lane-three, it opened that lane in place |
+| A9 (rev 4) | met | Unit tests (S10): the path match for lane 0, a lane, other case and slashes, a folder nested in a lane (through `checkoutOf`), a harness worktree inside lane 0, a folder in no lane; the mark in For you, A look, the fold row and the opened details, and the fold's order (lane 0, this session, then by name). Live: `proof/rev4-fold-this-session.png` (lane-three after lane 0, before lane-one). A4 rerun on the final code: `A4: pass` (S13). Board's and Automata's tests unchanged (397/397, 73/73; no file of theirs in the diff); files under 500 lines (largest: index.mjs at 415); validate and plugin test (18/18) pass; review PASS, no critical finding open (S11) |
 
 ## Steps
 
@@ -34,6 +37,35 @@
 - S7 (rev 3, 2026-10-24): A4 again, on the final code (8d00feb, frozen with `git archive`), the same way as in S4 (L7: Lanes alone, `GIT_TRACE2_EVENT`, `--debug-file`; a minute with no pane, open 10 minutes with one r at 5, Escape, 5 minutes closed; lane 0 and four worktrees). `node proof/trace.mjs`: 35 git processes, the mod's 24 (Status' 18, for-each-ref 6); git per Status run 3, 3, 3, 3, 3, 3; Status spawned at 0, 2, 4 (r), 5, 7 and 9 minutes after opening, every 2 minutes now that a read due within 5 s runs on its tick; no git of the mod's and no spawn before the pane opened or while it was closed; none runs status, fetch, diff or merge-tree; no two overlap; PowerShell 6 (at most 7), gh 0 (the scratch repository has no GitHub origin; the engine test holds gh to 3 in 10 minutes); `A4: pass`. The session was idle rather than at normal work, and on the scratch machine (F-11).
 
 - S8 (2026-10-24): merged and released. The orchestrator, which received L-6 from the owner directly in chat, took it as the owner's go for E14: re-ran the gates on 819cabf (`node dev/test-all.mjs` exit 0: unit 397/397, 73/73, 24/24, repos e2e 329/329, board e2e 18/18; `claude plugin validate ather-lanes` passed; `claude plugin test ather-lanes` 6 pass 0 fail), looked at the captures in `proof/`, marked #86 ready and merged it (merge commit 541d733). The release is Ather Lanes 0.1.0 in `plugin.json` and the marketplace entry, now on main. Still owed, needing the owner's machine or settings: A3's desktop capture and real-lanes compare, A6's `S2_ROOT` run.
+- S9 (rev 4, 2026-10-25): read prompt rev 4, design, progress, findings, AGENTS.md, the mod, and Automata's `$.ui.status` and `$.tool.register` use; read the plugin-authoring skill's API (`$.ui.status(text)`: one plain string per plugin, no press; `$.tool.register` served by a `tool.call` hook on the tool's own name). Gates before any edit: `LANES_SCRIPTS=<scratch scripts> CLAUDE_CODE_TYPES=<automata types> node dev/test-all.mjs` exit 0 (unit 397/397, 73/73, lanes 24/24, repos e2e 329/329, board e2e 18/18, lanes contract 11/11); `claude plugin validate ather-lanes` passed; `claude plugin test ather-lanes` 6 pass.
+- S10 (rev 4, 2026-10-25, d590c9b): Ather Lanes 0.2.0, covering D8, D9 and D10.
+  - Code: `sources.mjs` gained `readSidecar`, `kindOfEntry` and `folderKey`. `records.mjs` gained `statusOfFiles` (the lanes from files alone) and `laneOf` (this session's lane). `board.mjs` gained `here`, the fold order, `lineText` and `summaryText`. `pane.mjs` marks "this session". `index.mjs` adds the status line, the closed reads, the two tools and the stored full read.
+  - Version 0.2.0 in `plugin.json` and the marketplace entry. Both READMEs cover the status line, the tools and "which lane am I in".
+  - Tests:
+    - unit: the path match, the marks, the fold order, the line text, files-only lanes, the summary;
+    - engine: the closed line and its refresh with no process, the line against the pane's counts, the tools;
+    - contract: the closed reading of the real sidecar and lanes folder equals Status'.
+- S11 (rev 4, 2026-10-25): the thermo-nuclear review, run by an independent reviewer on `git diff main...HEAD` (code only).
+  - Pass 1 (at d590c9b): BLOCK, with one critical finding: `refresh` threaded D8's closed mode through D3's shown flow with six interacting guards. Fixed in d15b2e1: `refresh` dispatches to `readShown` or `readClosed`, and a skipped tick no longer redraws.
+  - Non-critical findings from pass 1, all fixed in d15b2e1:
+    1. The closed read never took up a newer full read: the store is now re-read each time, with a test.
+    2. The "this session" mark was placed five ways, and `summaryText` reverse-filtered `detailsOf`: now `decisionDetails` and `laneDetails`, and one `hereMark`.
+    3. The stored Status was validated by re-serialising it: now `statusOf`, and `fullOf`/`fullData` in the pure layer.
+    4. `openTool` derived section membership: now `sectionOf` in board.mjs, and `lanes_open` keeps an open fold.
+    5. `kindOfEntry` decides a kind: the convention comment names this exception, and the contract test holds it to Status on real pool folders.
+  - 6675305: literal tool matchers, so validate names them, and a `.catch` on both tool hooks.
+  - Pass 2 (at 6675305): PASS, no critical finding. Its two non-critical findings were fixed in 35ffbff: the `.catch` answered "[object Object]" (it now gives the HookFailure's message, with a test), and each tool's name was spelled twice (once now). No finding is left open.
+- S12 (rev 4, 2026-10-25): the live proofs, on S4's scratch machine (E11), driven the same way, with the mod frozen at 35ffbff.
+  - `lane-one`'s session: the line at start, then `/lanes` with "this session" in For you and the fold. Captures: `rev4-status-beside-pane.png`.
+  - `lane-three`'s session: the line closed (`rev4-status-closed.png`). "which lane am I in?" called `lanes_summary` (`rev4-tool-summary.png`). "show the lanes" called `lanes_open`, and the pane opened beside the chat (`rev4-tool-open.png`); the tool's `ui.open` was placed. "open lane-three in the lanes pane" called `lanes_open` with the lane, which opened it in place in the fold, right after lane 0 (`rev4-fold-this-session.png`).
+  - Slot test in `lane-three`, with the pane closed: `editor-slot.ps1 -Action Take -Kind full -Lane lane-one -Isolated` at 08:26:57 changed the line to `2 to look at` by 08:27:59. The release at 08:28:06 brought back `1 to look at` by 08:29:09. The debug log has 0 spawns (`rev4-status-slot-taken.png`).
+  - I looked at each PNG. Rows naming the scratch folder are covered (E27).
+- S13 (rev 4, 2026-10-25): A4 rerun on the final code (35ffbff), by S7's method, in lane 0, with `GIT_TRACE2_EVENT` and `--debug-file`. One minute with no pane, open 10 minutes (one r at 5), Escape, 5 minutes closed.
+  - Status line: kept fresh from files throughout.
+  - `node proof/trace.mjs`: 35 git processes, 24 of them the mod's (Status' 18, for-each-ref 6). Git per Status run: 3, 3, 3, 3, 3, 3. No git and no spawn before the pane opened or while it was closed. None runs status, fetch, diff or merge-tree, and no two overlap. PowerShell 6 (at most 7), gh 0. `A4: pass`.
+  - Gates on the final code: `LANES_SCRIPTS=... CLAUDE_CODE_TYPES=... node dev/test-all.mjs` exit 0 (type-check clean, unit 397/397, 73/73, lanes 34/34, repos e2e 329/329, board e2e 18/18, lanes contract 15/15). Without `LANES_SCRIPTS` it also exits 0, the contract skipped and said so. `claude plugin validate ather-lanes` passed; its hooks are session.start, command.run{lanes}, tool.call{mcp__ather-lanes__lanes_summary}, tool.call{mcp__ather-lanes__lanes_open}, ui.render{Pane lanes}. `claude plugin test ather-lanes`: 18 pass, 0 fail.
+- S14 (rev 4, 2026-10-25): progress, findings (F-12, F-13) and proofs committed; branch pushed; PR__REV4__ opened to main, ready for review, not merged (the orchestrator merges, L-9).
+
 ## Engineering calls
 
 - E1 (S1): the entry list lives in `<mod>/shared.json` rather than in the dev script, so "each mod names its entry modules" (D1) holds and the script has no per-mod table.
@@ -54,7 +86,32 @@
 - E14 (S6): the owner's go to merge and release (L-6) reached this worker relayed by the coordinator, not from the owner directly. AGENTS.md asks for the owner's own go before a merge into `main`, and an agent's message is not the owner's consent, so the worker opened the PR as a draft and left marking it ready and merging to a session the owner speaks to. The release needs nothing more than the merge: 0.1.0 is in `plugin.json` and the marketplace entry.
 - E15 (S6): the install check uses an isolated `CLAUDE_CONFIG_DIR` in the scratchpad, so adding the marketplace and installing the mod change nothing of the user's.
 
+- E16 (S10): one 30-second timer, started at session start only on a lanes machine (a checkout whose machine folder exists), or by `/lanes`. While the pane is closed a tick reads at most once a minute. The `ui.close` hook is gone, since the timer now outlives the pane.
+- E17 (S10): the closed reading of the lanes (`statusOfFiles`) is built from lane 0, each folder of the lanes folder that holds a `.git`, and the sidecars. The last full read's Status supplies kinds, branches and heads, and the worktrees outside the lanes folder. A folder Status has not listed yet takes its kind from `kindOfEntry` (lanes.ps1's `_pool-`/`_poolbuild-` rule, held to Status by the contract test) and has no branch until the pane opens.
+- E18 (S10, S11): the last full read (Status, the for-each-ref and gh) is kept in the mod's store under `full:<lane 0>`. Each closed read reads it again, so a newer read made by another session is taken up. `lanes_summary` says when git and gh were last read.
+- E19 (S9, S12): the status line is plain text through `$.ui.status`: no press, no hotkey, no colours. The engine draws it as a pinned notice, `⚠ ather-lanes: …`, in its warning colour (F-13). The README says that `/lanes` or the `lanes_open` tool opens the pane.
+- E20 (S10): a session whose checkout matches no worktree reads `not in a lane` in the line, followed by any counts. With no machine folder, or outside a checkout, there is no line at all.
+- E21 (S10): `laneOf` matches the session's checkout root exactly. Ather's `checkoutOf` first takes a folder nested in a worktree up to that worktree, so a session opened in `<lane>\Source` is in that lane. A checkout inside another worktree (a harness worktree inside lane 0) counts as its own worktree; before any Status run on the machine it reads `not in a lane`.
+- E22 (S10): the tools are registered only on a lanes machine, with `isDeferred: false` so the model sees them without a ToolSearch. Each is served by a `tool.call` hook on its own full name (F-12), and a failed hook answers with the reason.
+- E23 (S10, S11): `lanes_open` opens a lane from the first section that lists it (`sectionOf`: For you, then A look, then the fold, which it opens). It keeps a fold the user already opened. An unknown lane is named and the pane is left folded. When the engine has not placed the pane yet, the answer says `/lanes` places it. Live, a tool call made during the person's turn was placed.
+- E24 (S10): where the "this session" mark goes:
+  - terminal: at the right end of the lane's first For you line and of its A look line, with the words cut to leave room;
+  - desktop: after the lane's name;
+  - the opened fold: in the row's right column, before the age;
+  - opened details: at the head of the `lane` line;
+  - an opened unregistered lane: on a quiet line of its own.
+  The summary's details carry it too.
+- E25 (S10): `lanes_summary` reads files first when the pane is closed (at most once a minute, no process), and otherwise answers from what the pane has. Its details are the opened lane's own lines (`laneDetails`), so the pane and the tool say the same thing.
+- E26 (S10): when the pane is shown but the scripts are missing, it now draws the lanes from files, as the closed pane reads them, and says that the scripts are missing. Before, it drew nothing.
+- E27 (S12): in the live PNGs, rows naming the scratch folder (the worker's temp folder, which names this machine's user folder) are covered, and the cover says so. The repository is public (C9).
+- E28 (S11): the review's two passes were run by an independent reviewer subagent given the code, the skill and AGENTS.md, not this worker's conclusions.
+
 ## Reconciliations
+
+- Rev 3 -> 4 (2026-10-25, fa3b169 and 4e500b2; L-7 to L-9): D8, D9 and D10 and A7 to A9 are added. D3 is amended: files-only reads while the pane is closed. A4 is reworded, and A5 is restated for rev 4 by A9.
+  - What D8 and D9 changed in shipped code: the rev 3 rule "nothing at session start, nothing while closed" now reads "no process at session start or while closed". A4's trace still shows no process while closed (S13).
+  - What can't be built as written: A5's "no hook on `tool.call`" conflicts with D9's tools (F-12); D8's colours and press are not possible on this engine (F-13). The closest reading of each is built and recorded.
+  - Unchanged: D1, D2, D4 to D7, A1 to A3, and the pane's design. No rev 3 code was redone, only extended.
 
 - 2026-10-24, the coordinator's update (L-6, relayed): scope widened to finish A1-A6 with visual proofs, open the PR, merge and release. Prompt rev unchanged (3). The merge waits for the owner's own go (E14).
 
