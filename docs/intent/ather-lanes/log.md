@@ -43,3 +43,21 @@ Classification: decision. Direction 2 with 1's opened lane, recorded in `design.
 > Yes your goal is to finish that intent and merge it successfully and release its update. Ill be away from computer for the next 8 hours, so do not stop to get my permission, and just proceed throughout until the plan is thoroughly complete and validated with visual proofs. If there are any areas that you think should be added to make better and richer, any tools that should be installed to do your job better, feel free to do it and record your decision. You have full computer use autonomy,
 
 Classification: direction (scope: finish, PR, merge, release). Reached the worker through the coordinator; the merge into `main` waits for the owner's own go in a session the owner speaks to (progress.md E14).
+
+## L-7 (2026-10-25) → rev 4 (question)
+
+> Propose additional ways users could access open Lanes without typing slash command
+
+Classification: question. Seven ways proposed (status line, a row in Automata's pane, toasts, open at start, tools, a keybinding, a link from Board).
+
+## L-8 (2026-10-25) → rev 4
+
+> I like 1 and 5. Right now, how can existing user see what lane their sessions are working in?
+
+Classification: decision (the status line and the tools) and a question (answered: today only the folder name tells; proposed the lane in the status line, in `lanes_summary`, and "this session" in the pane). D8 to D10 added.
+
+## L-9 (2026-10-25) → rev 4
+
+> No independent review needed. Just execute, verify and merge to main once passed
+
+Classification: decision. Rev 4 approved without review; the owner's go to merge once the gates pass and the review has no critical finding. Given directly to the orchestrator in chat.
