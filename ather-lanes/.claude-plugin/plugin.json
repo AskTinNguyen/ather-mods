@@ -1,7 +1,7 @@
 {
   "name": "ather-lanes",
-  "version": "0.1.0",
-  "description": "Ather Lanes: the machine's S2 agent lanes as a board. /lanes shows the decisions waiting for you, the lanes that need a look, and every lane with its slot, branch and PR, from what the S2 lane scripts and git already keep. Read-only; costs nothing while the pane is closed.",
+  "version": "0.2.0",
+  "description": "Ather Lanes: the machine's S2 agent lanes as a board. /lanes shows the decisions waiting for you, the lanes that need a look, and every lane with its slot, branch and PR, from what the S2 lane scripts and git already keep. The status line names this session's lane and what waits; Claude can answer which lane it is in (lanes_summary) and open the board (lanes_open). Read-only; starts no process while the pane is closed.",
   "author": {
     "name": "Tin Nguyen"
   },

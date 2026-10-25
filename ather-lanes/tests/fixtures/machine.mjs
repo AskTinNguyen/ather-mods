@@ -123,3 +123,13 @@ export const INTENTS = {
 }
 
 export const PATHS = { MAIN: MAIN.replace(/\\/g, '/'), LANES: LANES.replace(/\\/g, '/'), MACHINE: `${LANES.replace(/\\/g, '/')}/_machine` }
+
+// The sidecars `_machine\lanes\<name>.json` behind STATUS' registered lanes, as lanes.ps1 Register writes them.
+export const SIDECARS = Object.fromEntries(
+  JSON.parse(STATUS)
+    .lanes.filter((/** @type {any} */ one) => one.sidecar === 'registered')
+    .map((/** @type {any} */ one) => [one.name, JSON.stringify({ name: one.name, path: one.path, branch: one.branch, origin: one.origin, intent: one.intent, tier: one.tier, claims: [], session: '', slot: one.slotNeed, written: '2026-10-24T19:00:00.0000000+07:00', host: 'PC-0' }, null, 4)]),
+)
+
+// The worktree folders of the lanes folder (each with its `.git` file); old-lane's folder is gone.
+export const LANE_FOLDERS = ['_pool-01', '_poolbuild-02', 'combat-hitstop', 'editor-fix', 'perf-capture', 'docs-sweep', 'scratch-a', 'probe']

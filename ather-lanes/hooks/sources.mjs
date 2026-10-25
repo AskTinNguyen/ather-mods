@@ -38,10 +38,35 @@ export const readStatus = stdout => {
 
 // Status' kinds, as `lanes.ps1` writes them; the mod shows them, it does not decide them.
 export const KIND_LANE_0 = 'main checkout (lane 0)'
+export const KIND_LANE = 'lane'
+const KIND_POOL_READY = 'pool (ready)'
+const KIND_POOL_BUILDING = 'pool (building)'
 /** @param {string} kind */
-export const isPool = kind => kind.startsWith('pool (')
+export const isPool = kind => kind === KIND_POOL_READY || kind === KIND_POOL_BUILDING
 /** @param {string} kind */
-export const isPoolReady = kind => kind === 'pool (ready)'
+export const isPoolReady = kind => kind === KIND_POOL_READY
+
+// A folder as two spellings of it compare: slashes one way, no trailing one, lowercased (D10).
+/** @param {string} folder */
+export const folderKey = folder => normalFolder(folder).toLowerCase()
+
+/**
+ * A sidecar `_machine\lanes\<name>.json` (D8), as `lanes.ps1` writes it and Status reads it: the lane's name, its
+ * worktree, branch, intent, tier and slot need.
+ * @typedef {{ name: string, path: string, branch: string, intent: string, tier: string, slotNeed: string }} Sidecar
+ */
+
+/** @param {string | null} raw @returns {Sidecar | null} */
+export const readSidecar = raw => {
+  const data = json(raw ?? '')
+  if (!data || typeof data !== 'object' || text(data.name) === '' || text(data.path) === '') return null
+  return { name: text(data.name), path: text(data.path), branch: text(data.branch), intent: text(data.intent), tier: text(data.tier), slotNeed: text(data.slot) }
+}
+
+// The kind Status gives a folder of the lanes folder by its name (lanes.ps1: `_pool-*`, `_poolbuild-*`, else a lane),
+// for a worktree Status has not listed yet while the pane is closed (D8). Status' own kind wins once it has run.
+/** @param {string} name */
+export const kindOfEntry = name => (name.startsWith('_pool-') ? KIND_POOL_READY : name.startsWith('_poolbuild-') ? KIND_POOL_BUILDING : KIND_LANE)
 
 /**
  * One slot file `slots\<id>.txt` (D2.2): its first line through Ather's `parseEditorLock` (holder, end, past its

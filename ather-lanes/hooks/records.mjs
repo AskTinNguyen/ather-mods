@@ -4,7 +4,7 @@
 // what a lane is: the S2 scripts do (D2.1); a field no source gave is unknown (null), never guessed.
 
 import { directorCalls, parseIntent } from './ather/model.mjs'
-import { KIND_LANE_0, isPool, readLaneBeat, readSessionBeat } from './sources.mjs'
+import { KIND_LANE_0, folderKey, isPool, kindOfEntry, readLaneBeat, readSessionBeat } from './sources.mjs'
 
 /**
  * @typedef {import('./sources.mjs').Status} Status
@@ -12,6 +12,8 @@ import { KIND_LANE_0, isPool, readLaneBeat, readSessionBeat } from './sources.mj
  * @typedef {import('./sources.mjs').Beat} Beat
  * @typedef {import('./sources.mjs').Ref} Ref
  * @typedef {import('./sources.mjs').Pr} Pr
+ * @typedef {import('./sources.mjs').StatusLane} StatusLane
+ * @typedef {import('./sources.mjs').Sidecar} Sidecar
  * @typedef {import('./ather/model.mjs').Intent} Intent
  * @typedef {{ id: string, title: string, full: string, since: number }} Decision `since`: the date in its heading (ms), 0 for none
  * @typedef {{
@@ -115,3 +117,51 @@ export const laneBranches = (status, { forPrs = false } = {}) => [
       .filter(branch => branch !== '' && branch !== '(detached)' && /^[\w./-]+$/.test(branch)),
   ),
 ]
+
+// The last part of a folder's path, as Status names an unregistered worktree.
+/** @param {string} path */
+const leafOf = path => path.replace(/[\\/]+$/, '').replace(/^.*[\\/]/, '')
+
+// The lanes as files alone show them while the pane is closed (D8): no process, so no `git worktree list`. Lane 0;
+// each worktree folder of the lanes folder (`entries`, one listing), with its sidecar when it has one, else
+// unregistered; the worktrees Status last listed elsewhere (harness and other worktrees) as it listed them. A
+// worktree Status has listed keeps its kind, branch and head; one it has not yet takes its kind by its name
+// (kindOfEntry) and no branch, until the pane opens and Status runs. Lane 0 first, then Status' order, new folders
+// after.
+/**
+ * @param {{ kept: Status | null, main: string, lanesRoot: string, machineDir: string, sidecars: readonly Sidecar[], entries: readonly string[] }} files
+ * @returns {Status}
+ */
+export const statusOfFiles = ({ kept, main, lanesRoot, machineDir, sidecars, entries }) => {
+  const known = kept?.lanes ?? []
+  const keptBy = new Map(known.map(lane => [folderKey(lane.path), lane]))
+  const sidecarBy = new Map(sidecars.map(one => [folderKey(one.path), one]))
+  const inLanes = `${folderKey(lanesRoot)}/`
+  /** @param {string} path @param {string} kind @returns {StatusLane} */
+  const unknown = (path, kind) => ({ name: leafOf(path), path, branch: '', head: '', kind, missing: false, sidecar: 'unregistered', intent: '', tier: '', slotNeed: '' })
+  const zero = keptBy.get(folderKey(main)) ?? { ...unknown(main, KIND_LANE_0), sidecar: '(lane 0, no sidecar)' }
+  const folders = entries.map(name => {
+    const path = `${lanesRoot}/${name}`
+    const base = keptBy.get(folderKey(path)) ?? unknown(path, kindOfEntry(name))
+    const sidecar = sidecarBy.get(folderKey(path))
+    return sidecar
+      ? { ...base, name: sidecar.name, branch: sidecar.branch || base.branch, sidecar: 'registered', intent: sidecar.intent, tier: sidecar.tier, slotNeed: sidecar.slotNeed }
+      : { ...base, name: leafOf(path), sidecar: 'unregistered', intent: '', tier: '', slotNeed: '' }
+  })
+  const elsewhere = known.filter(lane => lane.kind !== KIND_LANE_0 && !folderKey(lane.path).startsWith(inLanes))
+  const order = (/** @type {StatusLane} */ lane) => {
+    const at = known.findIndex(one => folderKey(one.path) === folderKey(lane.path))
+    return lane === zero ? -1 : at < 0 ? known.length : at
+  }
+  const lanes = [zero, ...elsewhere, ...folders].sort((a, b) => order(a) - order(b) || a.name.localeCompare(b.name))
+  return { machineDir: kept?.machineDir || machineDir, lanes }
+}
+
+// This session's lane (D10): the worktree whose folder is the session's checkout (`root`: Ather's checkoutOf, which
+// takes a folder nested in a worktree up to it), case and slashes aside. Only that folder: a checkout inside another
+// worktree (a harness worktree inside lane 0) is not that worktree. '' for none.
+/** @param {Status | null} status @param {string} root */
+export const laneOf = (status, root) => {
+  const at = folderKey(root)
+  return at === '' ? '' : ((status?.lanes ?? []).find(lane => folderKey(lane.path) === at)?.name ?? '')
+}

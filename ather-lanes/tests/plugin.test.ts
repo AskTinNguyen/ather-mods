@@ -1,7 +1,8 @@
 // Ather Lanes as the engine loads it (`claude plugin test ather-lanes`). The pure modules are covered by
 // lanes.test.mjs under node; this checks /lanes, its pane on the terminal (72 and 110 columns) and the desktop,
-// presses, and when processes run (D3), against the made-up machine of fixtures/machine.mjs, which the test's
-// hooks answer for: its files, and lanes.ps1, git and gh's output.
+// presses, when processes run (D3), the status line from files while the pane is closed (D8) and the two tools (D9),
+// against the made-up machine of fixtures/machine.mjs, which the test's hooks answer for: its files, and lanes.ps1,
+// git and gh's output.
 import { expect, mock, test } from 'claude-code/testing'
 
 import { AMBER, LIME } from '../hooks/ather/rows.mjs'
@@ -11,13 +12,20 @@ import * as M from './fixtures/machine.mjs'
 // a drive path is not absolute, so the engine puts the plugin's folder in front of it first: that part goes too.
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^(?:.*\/)?[A-Za-z]:(?=\/)/, '').replace(/\/+$/, '')
 
-type World = { ran: { argv: string[], at: number }[], toasts: string[], shown: boolean }
+// The fixture's paths in the form this test hands the mod (no drive), so a sidecar's or Status' path and the session's
+// folder name the same worktree, as they do on a real machine.
+const local = (text: string) => text.replaceAll('X:', '')
+
+type World = { ran: { argv: string[], at: number }[], toasts: string[], shown: boolean, lines: (string | undefined)[], tools: string[], writes: string[], opened: string[], files: Record<string, string> }
 
 const FILES: Record<string, string> = {
   '/work/game/.git/HEAD': 'ref: refs/heads/main\n',
   '/work/game/.git/config': M.GIT_CONFIG,
   '/work/game/.git/logs/refs/remotes/origin/main': M.REFLOG,
   '/work/game/.agents/skills/s2-agent-lanes/scripts/lanes.ps1': '# lanes.ps1',
+  '/work/game/.claude/worktrees/agent-1/.git': 'gitdir: /work/game/.git/worktrees/agent-1\n',
+  ...Object.fromEntries(M.LANE_FOLDERS.map(name => [`/work/lanes/${name}/.git`, `gitdir: /work/game/.git/worktrees/${name}\n`])),
+  ...Object.fromEntries(Object.entries(M.SIDECARS).map(([name, text]) => [`/work/lanes/_machine/lanes/${name}.json`, local(text)])),
   ...Object.fromEntries(Object.entries(M.SLOTS).map(([id, text]) => [`/work/lanes/_machine/slots/${id}.txt`, text])),
   ...Object.fromEntries(Object.entries(M.LANE_BEATS).map(([name, text]) => [`/work/lanes/_machine/heartbeats/${name}.json`, text])),
   ...Object.fromEntries(Object.entries(M.SESSION_BEATS).map(([name, text]) => [`/work/lanes/${name}/Saved/AtherAutomata/lanes/s.json`, text])),
@@ -27,19 +35,38 @@ const FILES: Record<string, string> = {
   })),
 }
 
-// The machine: lane 0 at /work/game (the session's checkout), its lanes and machine folder beside it.
-function machine(on: any, { hasMachine = true }: { hasMachine?: boolean } = {}): World {
-  const world: World = { ran: [], toasts: [], shown: true }
-  const files = Object.fromEntries(Object.entries(FILES).filter(([path]) => hasMachine || !path.startsWith('/work/lanes/_machine')))
+// The machine: lane 0 at /work/game, its lanes and machine folder beside it; the session's folder is `root`.
+function machine(on: any, { hasMachine = true, root = '/work/game', shown = true }: { hasMachine?: boolean, root?: string, shown?: boolean } = {}): World {
+  // The lane scripts in the session's own checkout too, where the mod looks for them by default (D6).
+  const own = { [`${root.replace(/\/Source$/, '')}/.agents/skills/s2-agent-lanes/scripts/lanes.ps1`]: '# lanes.ps1' }
+  const files = Object.fromEntries(Object.entries({ ...FILES, ...own }).filter(([path]) => hasMachine || !path.startsWith('/work/lanes/_machine')))
+  const world: World = { ran: [], toasts: [], shown, lines: [], tools: [], writes: [], opened: [], files }
   const dirs = new Set(['/work/game/.git', ...Object.keys(files).flatMap(path => path.split('/').slice(1, -1).map((_, index, parts) => `/${parts.slice(0, index + 1).join('/')}`))])
-  on('session.root', () => ({ value: '/work/game' }))
+  on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('session.root', () => ({ value: root }))
+  on('ui.status', (_$: unknown, e: { text: string | undefined }) => {
+    world.lines.push(e.text)
+    return { value: undefined }
+  })
+  on('tool.register', (_$: unknown, e: { name: string }) => {
+    world.tools.push(e.name)
+    return { value: { tool: `mcp__ather-lanes__${e.name}` } }
+  })
+  on('fs.write', (_$: unknown, e: { path: string }) => {
+    world.writes.push(e.path)
+    return { value: undefined }
+  })
   on('session.id', () => ({ value: 'lanes-test-session' }))
   on('ui.log', () => ({ value: undefined }))
   on('ui.toast', (_$: unknown, e: { text: string }) => {
     world.toasts.push(e.text)
     return { value: undefined }
   })
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_$: unknown, e: { id: string }) => {
+    world.opened.push(e.id)
+    world.shown = true
+    return { value: { isPlaced: true } }
+  })
   on('ui.panes', () => ({ value: world.shown ? [{ id: 'lanes', title: 'LANES', isShown: true, isFocused: true, isPlaced: true }] : [] }))
   on('command.register', () => ({ value: undefined }))
   on('fs.exists', (_$: unknown, e: { path: string }) => ({ value: norm(e.path) in files || dirs.has(norm(e.path)) }))
@@ -61,7 +88,7 @@ function machine(on: any, { hasMachine = true }: { hasMachine?: boolean } = {}):
   })
   on('process.run', (_$: unknown, e: { argv: readonly string[] }) => {
     world.ran.push({ argv: [...e.argv], at: Date.now() })
-    const stdout = e.argv[0] === 'powershell' ? M.STATUS : e.argv[0] === 'git' ? M.REFS : e.argv[0] === 'gh' ? M.PRS : ''
+    const stdout = e.argv[0] === 'powershell' ? local(M.STATUS) : e.argv[0] === 'git' ? M.REFS : e.argv[0] === 'gh' ? M.PRS : ''
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })
   return world
@@ -83,6 +110,22 @@ const piecesOf = (node: any, out: Piece[] = []): Piece[] => {
 const linesOf = (drawn: any) => ((drawn?.children ?? []) as any[]).map(line => ({ key: String(line.props?.key ?? ''), pieces: piecesOf(line) }))
 const textOf = (drawn: any) => linesOf(drawn).map(line => line.pieces.map(one => one.text).join('')).join('\n')
 const count = (world: World, name: string) => world.ran.filter(one => one.argv[0] === name).length
+// The fixture's slot files are written for 20:10 local time (M.NOW_MINUTES): the clock starts there.
+const EVENING = new Date(2026, 9, 24, 20, 10).getTime()
+const start = ($: any) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+const lastLine = (world: World) => world.lines.at(-1)
+// The pane's own counts, as its For you and A look headers draw them: "lane x · ◆ 4 for you · 6 to look at".
+const paneCounts = (text: string) => {
+  const decisions = /F O R {3}Y O U +(\d+) decisions?/.exec(text)?.[1]
+  const look = /A {3}L O O K +(\d+)/.exec(text)?.[1]
+  return [decisions ? `◆ ${decisions} for you` : '', look ? `${look} to look at` : ''].filter(Boolean).join(' · ')
+}
+// A slot file whose end passed ten minutes ago by the session's clock.
+const pastSlot = (clock: { now: () => number }, holder: string, id: string) => {
+  const end = new Date(clock.now() - 10 * 60 * 1000)
+  return M.slotFile(holder, `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`, 'light', id)
+}
+const callTool = async ($: any, name: string, input: Record<string, unknown> = {}) => String(((await $.tool.call({ tool: `mcp__ather-lanes__${name}`, ...input })) as any).result ?? '')
 
 test('/lanes opens the pane, and nothing runs before it is opened (A4, D3)', async ($, on) => {
   const clock = mock.clock(on)
@@ -203,4 +246,119 @@ test('an Edit and a merge attempt raise no Lanes toast and start nothing (A5)', 
   await clock.advance(60 * 1000)
   expect(world.toasts).toEqual([])
   expect(world.ran.length).toBe(0)
+})
+
+test('the pane closed: the status line from files alone at session start and each minute, no process (A7, D8)', async ($, on) => {
+  const clock = mock.clock(on, { now: EVENING })
+  const world = machine(on, { root: '/work/lanes/editor-fix', shown: false })
+  await start($)
+  await clock.advance(10)
+  expect(world.ran.length).toBe(0)
+  // No git or gh read yet: the reasons from files only (two unregistered lanes, a slot past its end, a slot held).
+  expect(lastLine(world)).toBe('lane editor-fix · ◆ 4 for you · 4 to look at')
+  // A new decision in an intent file and a slot taken show within 60 s.
+  world.files['/work/lanes/combat-hitstop/docs/intent/combat-hitstop/findings.md'] += '\n## F-3 (2026-10-23, rev 1) | blocking: no | status: open (director)\n\nKeep the old timing?\n\n**Options:**\n- A (recommended): yes\n- B: no\n'
+  world.files['/work/lanes/_machine/slots/light-3.txt'] = pastSlot(clock, 'docs-sweep', 'light-3')
+  await clock.advance(60 * 1000)
+  expect(lastLine(world)).toBe('lane editor-fix · ◆ 5 for you · 5 to look at')
+  await clock.advance(10 * 60 * 1000)
+  expect(world.ran.length).toBe(0)
+  expect(world.writes).toEqual([])
+})
+
+test('shown, the line counts what the pane counts; closed again, the git and gh reasons of the last full read stay (A7, D8)', async ($, on) => {
+  const clock = mock.clock(on, { now: EVENING })
+  const world = machine(on, { root: '/work/lanes/editor-fix' })
+  await start($)
+  await $.command.run({ command: 'lanes', args: '' })
+  await clock.advance(10)
+  const ui = await $.ui.mount({ plugin: 'ather-lanes', surface: 'terminal', ...pane(110) })
+  const text = textOf(await ui.drawn())
+  expect(lastLine(world)).toBe(`lane editor-fix · ${paneCounts(text)}`)
+  expect(lastLine(world)).toBe('lane editor-fix · ◆ 4 for you · 6 to look at')
+  await ui.unmount()
+  world.shown = false
+  const ran = world.ran.length
+  await clock.advance(5 * 60 * 1000)
+  expect(world.ran.length).toBe(ran)
+  // Checks failing and behind main come from the kept read; the missing worktree's folder is gone, so it is not listed.
+  expect(lastLine(world)).toBe('lane editor-fix · ◆ 4 for you · 5 to look at')
+})
+
+// Outside the lanes folder: a harness worktree inside lane 0, which only Status lists (none has run here yet).
+for (const [root, line] of [['/work/game', 'lane 0 · ◆ 4 for you · 4 to look at'], ['/work/lanes/scratch-a/Source', 'lane scratch-a · ◆ 4 for you · 4 to look at'], ['/work/game/.claude/worktrees/agent-1', 'not in a lane · ◆ 4 for you · 4 to look at']] as const) {
+  test(`the line in ${root}: "${line}" (A7, D8)`, async ($, on) => {
+    const clock = mock.clock(on, { now: EVENING })
+    const world = machine(on, { root, shown: false })
+    await start($)
+    await clock.advance(10)
+    expect(lastLine(world)).toBe(line)
+    expect(world.tools).toEqual(['lanes_summary', 'lanes_open'])
+    expect(world.ran.length).toBe(0)
+  })
+}
+
+for (const [what, options] of [['no machine folder', { hasMachine: false }], ['no checkout', { root: '/elsewhere' }]] as const) {
+  test(`${what}: no status line, no tools, nothing read on a timer (A7, D8)`, async ($, on) => {
+    const clock = mock.clock(on, { now: EVENING })
+    const world = machine(on, { ...options, shown: false })
+    await start($)
+    await clock.advance(5 * 60 * 1000)
+    expect(world.lines.filter(one => one !== undefined)).toEqual([])
+    expect(world.tools).toEqual([])
+    expect(world.ran.length).toBe(0)
+  })
+}
+
+test('lanes_summary: this session\u2019s lane and every For you and A look item, from files while closed, no process, no write (A8, D9)', async ($, on) => {
+  const clock = mock.clock(on, { now: EVENING })
+  const world = machine(on, { root: '/work/lanes/editor-fix', shown: false })
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  await clock.advance(10)
+  const text = await callTool($, 'lanes_summary')
+  expect(text.split('\n')[0]).toBe('This session: lane editor-fix.')
+  for (const piece of ['lane: fix/editor-filter · editor-fix (Editor filter fix) · T2', 'slot: needs editor', '- editor-fix F-2: ', '- editor-fix F-4: ', '- editor-fix F-5: ', '- combat-hitstop F-2: ', '- perf-capture: light-1 past its end', '- scratch-a: unregistered', '- probe: unregistered', '- editor-fix: needs editor, held by combat-hitstop', 'not read yet']) expect(text).toContain(piece)
+  expect(world.ran.length).toBe(0)
+  expect(world.writes).toEqual([])
+})
+
+test('lanes_summary on a machine where nothing needs you says so (A8, D9)', async ($, on) => {
+  const clock = mock.clock(on, { now: EVENING })
+  const world = machine(on, { root: '/work/lanes/docs-sweep', shown: false })
+  for (const path of Object.keys(world.files)) if (/\/(slots\/|docs\/intent\/)/.test(path) || /\/(scratch-a|probe)\/\.git$/.test(path)) delete world.files[path]
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  await clock.advance(10)
+  const text = await callTool($, 'lanes_summary')
+  expect(text).toContain('This session: lane docs-sweep.')
+  expect(text).toContain('Nothing needs you.')
+  expect(lastLine(world)).toBe('lane docs-sweep')
+})
+
+test('lanes_open: the pane shown as /lanes shows it; a lane opened in place; an unknown lane said, the pane folded (A8, D9)', async ($, on) => {
+  const clock = mock.clock(on, { now: EVENING })
+  const world = machine(on, { root: '/work/lanes/editor-fix', shown: false })
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  await clock.advance(10)
+  expect(await callTool($, 'lanes_open')).toBe('Lanes opened.')
+  expect(world.opened).toEqual(['lanes'])
+  await clock.advance(10)
+  expect(count(world, 'powershell')).toBe(1)
+  expect(await callTool($, 'lanes_open', { lane: 'docs-sweep' })).toBe('Lanes opened, with docs-sweep open in place.')
+  const ui = await $.ui.mount({ plugin: 'ather-lanes', surface: 'terminal', ...pane(110) })
+  let text = textOf(await ui.drawn())
+  expect(text).toContain('▾ ● docs-sweep')
+  expect(text).toMatch(/moved +lane heartbeat/)
+  expect(await callTool($, 'lanes_open', { lane: 'editor-fix' })).toBe('Lanes opened, with editor-fix open in place.')
+  text = textOf(await ui.drawn())
+  expect(text).toContain('answer them in the session that tracks editor-fix')
+  expect(text).toContain('this session · fix/editor-filter')
+  expect(await callTool($, 'lanes_open', { lane: 'no-such-lane' })).toBe('No lane named no-such-lane here; Lanes opened, folded.')
+  text = textOf(await ui.drawn())
+  expect(text).toContain('▸ all ')
+  expect(text).not.toContain('answer them in the session')
+  await ui.unmount()
+  expect(world.writes).toEqual([])
 })
