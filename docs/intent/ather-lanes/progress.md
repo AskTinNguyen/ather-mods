@@ -2,9 +2,9 @@
 
 - Working under rev: 4
 - Worker: Opus background worker (rev 1-3 from 2026-10-24; rev 4 from 2026-10-25)
-- PR: rev 1-3 #86, merged 2026-10-24 as 541d733, https://github.com/AskTinNguyen/ather-mods/pull/86; rev 4 #87, https://github.com/AskTinNguyen/ather-mods/pull/87 (open, not merged)
-- Current step: S14, the PR opened for the orchestrator to merge (L-9)
-- Next step: the orchestrator checks the evidence and merges. Still owed from rev 3, on the owner's machine: A3's desktop capture and the real-lanes compare; A6's run with `S2_ROOT`. F-12 and F-13 await the director.
+- PR: rev 1-3 #86, merged 2026-10-24 as 541d733, https://github.com/AskTinNguyen/ather-mods/pull/86; rev 4 #87, merged 2026-10-25 as 658d7c9, https://github.com/AskTinNguyen/ather-mods/pull/87
+- Current step: none; rev 4 merged and 0.2.0 released (S15)
+- Next step: still owed from rev 3, on the owner's machine: A3's desktop capture and the real-lanes compare; A6's run with `S2_ROOT`. F-12 and F-13 await the director.
 
 ## Acceptance
 
@@ -66,6 +66,7 @@
   - Gates on the final code: `LANES_SCRIPTS=... CLAUDE_CODE_TYPES=... node dev/test-all.mjs` exit 0 (type-check clean, unit 397/397, 73/73, lanes 34/34, repos e2e 329/329, board e2e 18/18, lanes contract 15/15). Without `LANES_SCRIPTS` it also exits 0, the contract skipped and said so. `claude plugin validate ather-lanes` passed; its hooks are session.start, command.run{lanes}, tool.call{mcp__ather-lanes__lanes_summary}, tool.call{mcp__ather-lanes__lanes_open}, ui.render{Pane lanes}. `claude plugin test ather-lanes`: 18 pass, 0 fail.
 - S14 (rev 4, 2026-10-25): progress, findings (F-12, F-13) and proofs committed; branch pushed; #87 opened to main, ready for review, not merged (the orchestrator merges, L-9).
 
+- S15 (2026-10-25): merged on the owner's go (L-9). The orchestrator re-ran the gates on 5291336 (`node dev/test-all.mjs` exit 0: unit 397/397, 73/73, lanes 34/34, repos e2e 329/329, board e2e 18/18; `claude plugin validate ather-lanes` passed; `claude plugin test ather-lanes` 18 pass 0 fail; 0.2.0 in plugin.json and the marketplace; every hooks file under 500 lines), looked at `proof/rev4-*.png`, and merged #87 (merge commit 658d7c9). F-12 and F-13 were built as their option A and stay open for the director.
 ## Engineering calls
 
 - E1 (S1): the entry list lives in `<mod>/shared.json` rather than in the dev script, so "each mod names its entry modules" (D1) holds and the script has no per-mod table.
