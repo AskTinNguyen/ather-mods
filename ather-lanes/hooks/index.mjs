@@ -13,9 +13,9 @@
 import { unreal } from './ather/packs/unreal.mjs'
 import { GIT_ENV } from './ather/team.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './ather/workspace.mjs'
-import { boardOf, lineText, summaryText } from './board.mjs'
+import { boardOf, lineText, sectionOf, summaryText } from './board.mjs'
 import { drawPane, paneLines } from './pane.mjs'
-import { NO_SOURCES, beatsOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from './records.mjs'
+import { NO_SOURCES, beatsOf, fullData, fullOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from './records.mjs'
 import { REF_FORMAT, folderKey, laneZeroOf, prListArgs, readOrigin, readPrs, readRefs, readReflogTime, readSidecar, readSlot, readStatus } from './sources.mjs'
 
 /**
@@ -27,8 +27,7 @@ import { REF_FORMAT, folderKey, laneZeroOf, prListArgs, readOrigin, readPrs, rea
  * @typedef {{ root: string, main: string, lanesRoot: string, machineDir: string, scriptsDir: string, repo: string, isMachine: boolean, errors: string[] }} Place
  *   the session's checkout and lane 0, the lanes and machine folders and the scripts; `isMachine`: a checkout with a
  *   machine folder, so a lanes machine; `errors`: what could not be found (empty: Status may run)
- * @typedef {{ at: number, status: Status, refs: Sources['refs'], prs: Sources['prs'] }} Full
- *   the last full read (Status, the for-each-ref and gh), kept in the store for the closed pane and other sessions
+ * @typedef {import('./records.mjs').Full} Full
  */
 
 const PANE_ID = 'lanes'
@@ -54,8 +53,8 @@ let filesAt = -Infinity
 // When the pane was last refreshed; null before the first.
 /** @type {number | null} */
 let refreshedAt = null
-/** @type {Full | null | undefined} undefined: the store not looked in yet */
-let full
+/** @type {Full | null} */
+let full = null
 let isBusy = false
 /** @type {Record<string, string>} */
 let runErrors = {}
@@ -168,11 +167,11 @@ const readLanes = async ($, at, options) => {
 }
 
 // D8, the pane closed: the lanes from files alone (records.mjs statusOfFiles), no process. The sidecars, the lanes
-// folder's one listing (a folder with a `.git` in it is a worktree), the last full read's Status for the rest, and its
-// git and gh figures; then each registered lane's intent.
+// folder's one listing (a folder with a `.git` in it is a worktree), the last full read in the store (any session's,
+// read again each time) for the rest and for its git and gh figures; then each registered lane's intent.
 /** @param {Engine} $ @param {Place} at */
 const readLaneFiles = async ($, at) => {
-  full ??= await keptFull($, at)
+  full = fullOf(await $.store.get(fullKey(at)).catch(() => undefined)) ?? full
   const [sidecarFiles, entries] = await Promise.all([list($, `${at.machineDir}/lanes`), list($, at.lanesRoot)])
   const sidecars = (await Promise.all(sidecarFiles.filter(one => one.kind === 'file' && one.name.endsWith('.json')).map(one => read($, `${at.machineDir}/lanes/${one.name}`)))).map(readSidecar)
   const folders = entries.filter(one => one.kind === 'dir' && folderKey(`${at.lanesRoot}/${one.name}`) !== folderKey(at.machineDir))
@@ -185,22 +184,12 @@ const readLaneFiles = async ($, at) => {
 /** @param {Place} at */
 const fullKey = at => `full:${folderKey(at.main)}`
 
-// The last full read another session (or this one, before a reload) kept; null for none or a shape not understood.
-/** @param {Engine} $ @param {Place} at @returns {Promise<Full | null>} */
-const keptFull = async ($, at) => {
-  const kept = /** @type {{ at?: unknown, status?: unknown, refs?: unknown, prs?: unknown } | undefined} */ (await $.store.get(fullKey(at)).catch(() => undefined))
-  const status = readStatus(JSON.stringify(kept?.status ?? null))
-  if (!kept || !status || typeof kept.at !== 'number') return null
-  const mapOf = (/** @type {unknown} */ entries) => (Array.isArray(entries) ? new Map(entries) : null)
-  return { at: kept.at, status, refs: mapOf(kept.refs), prs: mapOf(kept.prs) }
-}
-
+// The full read just made, kept for the closed pane and for other sessions (records.mjs fullData).
 /** @param {Engine} $ @param {Place} at @param {number} now */
 const keepFull = async ($, at, now) => {
   if (!sources.status) return
   full = { at: now, status: sources.status, refs: sources.refs, prs: sources.prs }
-  const entries = (/** @type {ReadonlyMap<string, unknown> | null} */ map) => (map ? [...map] : null)
-  await $.store.set(fullKey(at), { at: now, status: sources.status, refs: entries(sources.refs), prs: entries(sources.prs) }).catch(() => undefined)
+  await $.store.set(fullKey(at), fullData(full)).catch(() => undefined)
 }
 
 // gh's answer for some lane branches: the one another session kept in the last 5 minutes, else one gh run from the
@@ -240,45 +229,61 @@ const showLine = $ => {
   $.ui.status(text)
 }
 
-// One refresh. Shown (D3): when Status is due (or forced) the lanes are found again first, so a machine folder that
-// went away stops every process; the files each time; gh when due; the full read kept. Closed (D8): at most once a
-// minute, files only. Without the scripts the shown pane reads the files as the closed one does. Skipped while
-// another runs.
+// The pane shown, with the scripts (D3): Status when due, the files each time, gh when due, the full read kept.
+// Until a Status run gives the lanes, they are read from files as the closed pane reads them.
+/** @param {Engine} $ @param {Place} at @param {Record<string, unknown>} options @param {number} now @param {boolean} isStatusDue */
+const readShown = async ($, at, options, now, isStatusDue) => {
+  if (isStatusDue) {
+    statusAt = now
+    await readLanes($, at, options)
+  }
+  if (sources.status === null) await readLaneFiles($, at)
+  await readFiles($, at, now)
+  const isPrsDue = now - prsAt >= PRS_EVERY_MS - SLACK_MS
+  if (isPrsDue) {
+    prsAt = now
+    await readPrList($, at, now)
+  }
+  if (isStatusDue || isPrsDue) await keepFull($, at, now)
+}
+
+// The pane closed, or shown without the scripts (D8): files only, no process.
+/** @param {Engine} $ @param {Place} at @param {number} now */
+const readClosed = async ($, at, now) => {
+  await readLaneFiles($, at)
+  await readFiles($, at, now)
+}
+
+// One refresh: shown with the scripts, readShown; else readClosed, at most once a minute while closed. The lanes are
+// found again (files only) for each closed read and when Status is due, so a machine folder that went away stops
+// every read. Skipped while another runs.
 /** @param {Engine} $ @param {Record<string, unknown>} options @param {boolean} [force] */
 const refresh = async ($, options, force = false) => {
   if (isBusy) return
   isBusy = true
+  let isRead = false
   try {
     const now = await $.clock.now()
     const isOpen = await isShown($)
     if (!isOpen && now - filesAt < CLOSED_EVERY_MS - SLACK_MS) return
-    const isStatusDue = isOpen && (force || place === null || now - statusAt >= STATUS_EVERY_MS - SLACK_MS)
-    const at = isStatusDue || !isOpen || place === null ? (place = await placeOf($, options)) : place
-    const canRun = isOpen && at.errors.length === 0
-    if (!at.isMachine) {
+    isRead = true
+    const isStatusDue = force || now - statusAt >= STATUS_EVERY_MS - SLACK_MS
+    if (!isOpen || isStatusDue || place === null) place = await placeOf($, options)
+    if (!place.isMachine) {
       sources = { ...NO_SOURCES }
       runErrors = {}
-    } else {
-      if (canRun && isStatusDue) {
-        statusAt = now
-        await readLanes($, at, options)
-      } else if (!canRun || sources.status === null) await readLaneFiles($, at)
-      await readFiles($, at, now)
-      const isPrsDue = canRun && now - prsAt >= PRS_EVERY_MS - SLACK_MS
-      if (isPrsDue) {
-        prsAt = now
-        await readPrList($, at, now)
-      }
-      if (canRun && (isStatusDue || isPrsDue)) await keepFull($, at, now)
-    }
+    } else if (isOpen && place.errors.length === 0) await readShown($, place, options, now, isStatusDue)
+    else await readClosed($, place, now)
     filesAt = now
     refreshedAt = await $.clock.now()
   } catch (error) {
     $.ui.log(`Ather Lanes: the refresh failed: ${String(error)}`, { to: 'debug' })
   } finally {
     isBusy = false
-    showLine($)
-    $.ui.invalidate('ui.render')
+    if (isRead) {
+      showLine($)
+      $.ui.invalidate('ui.render')
+    }
   }
 }
 
@@ -304,11 +309,10 @@ const openTool = async ($, options, name) => {
   const shown = await openPane($, options)
   let said = 'Lanes opened.'
   if (name !== '') {
-    const board = currentBoard()
-    /** @type {Opened['from'] | null} */
-    const from = board.forYou.some(one => one.lane.name === name) ? 'you' : board.look.some(one => one.lane.name === name) ? 'look' : board.rows.some(one => one.lane.name === name) ? 'fold' : null
+    const from = sectionOf(currentBoard(), name)
     opened = from === null ? null : { name, from }
-    isFoldOpen = from === 'fold'
+    // A lane listed only in the fold opens it; an unknown one leaves the pane folded (D9).
+    isFoldOpen = from === 'fold' || (from !== null && isFoldOpen)
     said = from === null ? `No lane named ${name} here; Lanes opened, folded.` : `Lanes opened, with ${name} open in place.`
     $.ui.invalidate('ui.render')
   }

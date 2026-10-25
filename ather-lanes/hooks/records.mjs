@@ -4,7 +4,7 @@
 // what a lane is: the S2 scripts do (D2.1); a field no source gave is unknown (null), never guessed.
 
 import { directorCalls, parseIntent } from './ather/model.mjs'
-import { KIND_LANE_0, folderKey, isPool, kindOfEntry, readLaneBeat, readSessionBeat } from './sources.mjs'
+import { KIND_LANE_0, folderKey, isPool, kindOfEntry, readLaneBeat, readSessionBeat, statusOf } from './sources.mjs'
 
 /**
  * @typedef {import('./sources.mjs').Status} Status
@@ -30,6 +30,8 @@ import { KIND_LANE_0, folderKey, isPool, kindOfEntry, readLaneBeat, readSessionB
  *   refs: ReadonlyMap<string, Ref> | null, prs: ReadonlyMap<string, Pr> | null, intents: ReadonlyMap<string, Intent | null>, mainMovedAt: number,
  * }} Sources
  * `sessionBeats` and `intents` are keyed by worktree path and lane name; an intent's null is a sidecar intent with no folder.
+ * @typedef {{ at: number, status: Status, refs: Sources['refs'], prs: Sources['prs'] }} Full
+ *   the last full read (Status, the for-each-ref and gh), kept in the store for the closed pane and other sessions
  */
 
 /** A source that gave nothing: what a session with no machine folder, or before its first refresh, has. */
@@ -164,4 +166,17 @@ export const statusOfFiles = ({ kept, main, lanesRoot, machineDir, sidecars, ent
 export const laneOf = (status, root) => {
   const at = folderKey(root)
   return at === '' ? '' : ((status?.lanes ?? []).find(lane => folderKey(lane.path) === at)?.name ?? '')
+}
+
+// A full read as the store keeps it (plain JSON: the maps as their entries), and back; fullOf gives null for none or
+// a shape not understood.
+/** @param {Full} full */
+export const fullData = full => ({ at: full.at, status: full.status, refs: full.refs ? [...full.refs] : null, prs: full.prs ? [...full.prs] : null })
+
+/** @param {any} data @returns {Full | null} */
+export const fullOf = data => {
+  const status = statusOf(data?.status)
+  if (!status || typeof data.at !== 'number') return null
+  const mapOf = (/** @type {unknown} */ entries) => (Array.isArray(entries) ? new Map(entries) : null)
+  return { at: data.at, status, refs: mapOf(data.refs), prs: mapOf(data.prs) }
 }

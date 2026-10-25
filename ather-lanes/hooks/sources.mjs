@@ -27,8 +27,12 @@ const json = raw => {
 
 // Status' JSON (D2.1); null when it is not that JSON (a script error, a cut output).
 /** @param {string} stdout @returns {Status | null} */
-export const readStatus = stdout => {
-  const data = json(stdout)
+export const readStatus = stdout => statusOf(json(stdout))
+
+// Status' shape checked on a value already parsed (Status' JSON, or a full read kept in the store); null when it is
+// not that shape.
+/** @param {any} data @returns {Status | null} */
+export const statusOf = data => {
   if (!data || typeof data !== 'object' || !Array.isArray(data.lanes)) return null
   const lanes = data.lanes
     .filter((/** @type {any} */ one) => one && typeof one === 'object' && text(one.name) !== '')
@@ -36,7 +40,8 @@ export const readStatus = stdout => {
   return { machineDir: text(data.machineDir), lanes }
 }
 
-// Status' kinds, as `lanes.ps1` writes them; the mod shows them, it does not decide them.
+// Status' kinds, as `lanes.ps1` writes them; the mod shows them, it does not decide them, with one exception:
+// kindOfEntry below, for a folder Status has not listed yet (D8), held to Status by the contract test.
 export const KIND_LANE_0 = 'main checkout (lane 0)'
 export const KIND_LANE = 'lane'
 const KIND_POOL_READY = 'pool (ready)'

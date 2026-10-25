@@ -8,9 +8,9 @@ import { describe, expect, test } from 'claude-code/testing'
 import { AMBER, LIME, QUIET } from '../hooks/ather/rows.mjs'
 import { parseEditorLock } from '../hooks/ather/packs/unreal.mjs'
 import { checkoutOf } from '../hooks/ather/workspace.mjs'
-import { BEHIND_LIMIT, HERE, boardOf, foldText, lineText, summaryText } from '../hooks/board.mjs'
+import { BEHIND_LIMIT, HERE, boardOf, foldText, lineText, sectionOf, summaryText } from '../hooks/board.mjs'
 import { lineCells, paneLines } from '../hooks/pane.mjs'
-import { NO_SOURCES, beatsOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from '../hooks/records.mjs'
+import { NO_SOURCES, beatsOf, fullData, fullOf, intentOf, laneBranches, laneOf, laneRecords, statusOfFiles } from '../hooks/records.mjs'
 import { laneZeroOf, prListArgs, readLaneBeat, readOrigin, readPrs, readReflogTime, readRefs, readSessionBeat, readSidecar, readSlot, readStatus } from '../hooks/sources.mjs'
 import * as M from './fixtures/machine.mjs'
 
@@ -337,11 +337,28 @@ describe('the lanes from files while the pane is closed (D8)', () => {
 })
 
 describe('the summary lanes_summary gives (A8, D9)', () => {
+  test('lanes_open opens a lane from the first section that lists it; an unknown or pool lane from none', () => {
+    const board = boardFrom(sourcesOf())
+    expect(['editor-fix', 'combat-hitstop', 'perf-capture', 'game', 'docs-sweep', '_pool-01', 'nobody'].map(name => sectionOf(board, name))).toEqual(['you', 'you', 'look', 'look', 'fold', null, null])
+  })
+  test('a full read survives the store: kept as plain JSON and read back the same; anything else is none', () => {
+    const sources = sourcesOf()
+    const status = sources.status
+    if (!status) throw new Error('the fixture Status')
+    const full = { at: M.NOW, status, refs: sources.refs, prs: sources.prs }
+    const back = fullOf(JSON.parse(JSON.stringify(fullData(full))))
+    expect(back?.at).toBe(M.NOW)
+    expect(back?.status).toEqual(status)
+    expect([...(back?.refs ?? [])]).toEqual([...(sources.refs ?? [])])
+    expect([...(back?.prs ?? [])]).toEqual([...(sources.prs ?? [])])
+    expect(fullOf(JSON.parse(JSON.stringify(fullData({ ...full, prs: null }))))?.prs).toBe(null)
+    for (const bad of [undefined, null, 3, {}, { at: 'x', status }, { at: 1, status: { lanes: 3 } }]) expect(fullOf(bad)).toBe(null)
+  })
   test('this session\u2019s lane with its details, every For you and A look item; on a quiet machine "Nothing needs you."', () => {
     const board = boardFrom(sourcesOf(), 'editor-fix')
     const text = summaryText(board, { now: M.NOW, readAt: M.NOW - 60000, clock: () => '19:04' })
     expect(text.split('\n')[0]).toBe('This session: lane editor-fix.')
-    for (const piece of ['PR: #398 open · checks failing', 'main: 27 behind · 3 ahead', 'slot: needs editor', 'lane: fix/editor-filter · editor-fix (Editor filter fix) · T2', 'as of 19:04']) expect(text).toContain(piece)
+    for (const piece of ['PR: #398 open · checks failing', 'main: 27 behind · 3 ahead', 'slot: needs editor', 'lane: this session · fix/editor-filter · editor-fix (Editor filter fix) · T2', 'as of 19:04']) expect(text).toContain(piece)
     for (const { lane, decisions } of board.forYou) for (const call of decisions) expect(text).toContain(`- ${lane.name} ${call.id}: `)
     for (const { lane, reasons } of board.look) expect(text).toContain(`- ${lane.name}: ${reasons.map(one => one.text).join(' · ')}`)
     expect(text).not.toContain('Nothing needs you.')

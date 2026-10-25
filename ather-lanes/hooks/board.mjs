@@ -101,6 +101,17 @@ export const boardOf = (records, slots, hereName = '') => {
 // The quiet mark on this session's lane (D10).
 export const HERE = 'this session'
 
+/** @param {Board} board @param {LaneRecord} lane */
+export const isHere = (board, lane) => board.here?.name === lane.name
+
+// The section a lane is first listed in (For you, A look, else the opened fold), for lanes_open (D9); null for a lane
+// the board does not list (an unknown name, a pool lane).
+/** @param {Board} board @param {string} name @returns {'you' | 'look' | 'fold' | null} */
+export const sectionOf = (board, name) => {
+  const listed = (/** @type {{ lane: LaneRecord }[]} */ rows) => rows.some(one => one.lane.name === name)
+  return listed(board.forYou) ? 'you' : listed(board.look) ? 'look' : listed(board.rows) ? 'fold' : null
+}
+
 /** @param {Board} board */
 export const decisionCount = board => board.forYou.reduce((sum, one) => sum + one.decisions.length, 0)
 
@@ -175,16 +186,23 @@ const movedText = (lane, now) => {
 /** @param {LaneRecord} lane */
 export const registerLine = lane => `lanes.ps1 -Action Register -Name ${lane.name} -Intent <slug> -Tier <T0|T1|T2>`
 
-// The opened lane's lines, in design.md's order: decisions, PR, main, slot, moved, lane.
-/** @param {LaneRecord} lane @param {Hold[]} holds @param {number} now @param {boolean} isHere @returns {Detail[]} */
-export const detailsOf = (lane, holds, now, isHere) => [
-  ...(lane.decisions.length > 0 ? [...lane.decisions.map(one => ({ label: one.id, text: one.full || one.title })), { label: '', text: `answer them in the session that tracks ${lane.intent}` }] : []),
+// The lane's decisions, full titles, and where to answer them; none for a lane with none.
+/** @param {LaneRecord} lane @returns {Detail[]} */
+const decisionDetails = lane => (lane.decisions.length > 0 ? [...lane.decisions.map(one => ({ label: one.id, text: one.full || one.title })), { label: '', text: `answer them in the session that tracks ${lane.intent}` }] : [])
+
+// The lane's own lines: PR, main, slot, moved, lane (this session's marked, D10).
+/** @param {LaneRecord} lane @param {Board} board @param {number} now @returns {Detail[]} */
+export const laneDetails = (lane, board, now) => [
   { label: 'PR', text: prText(lane.pr), ...(lane.pr ? { link: lane.pr.url } : {}) },
   { label: 'main', text: mainText(lane) },
-  { label: 'slot', text: slotText(lane, holds) },
+  { label: 'slot', text: slotText(lane, board.holds) },
   { label: 'moved', text: movedText(lane, now) },
-  { label: 'lane', text: [isHere ? HERE : '', lane.branch, lane.intentTitle ? `${lane.intent} (${lane.intentTitle})` : lane.intent, lane.tier, lane.path].filter(Boolean).join(' · ') },
+  { label: 'lane', text: [isHere(board, lane) ? HERE : '', lane.branch, lane.intentTitle ? `${lane.intent} (${lane.intentTitle})` : lane.intent, lane.tier, lane.path].filter(Boolean).join(' · ') },
 ]
+
+// The opened lane's lines, in design.md's order: decisions, PR, main, slot, moved, lane.
+/** @param {LaneRecord} lane @param {Board} board @param {number} now @returns {Detail[]} */
+export const detailsOf = (lane, board, now) => [...decisionDetails(lane), ...laneDetails(lane, board, now)]
 
 // ---------------------------------------------------------------- the summary a tool gives (D9)
 
@@ -195,7 +213,7 @@ export const detailsOf = (lane, holds, now, isHere) => [
 export const summaryText = (board, { now, readAt, clock }) => {
   const { here } = board
   const lines = [`This session: ${whereText(here)}${here?.sidecar === 'unregistered' ? `, unregistered (register it with: ${registerLine(here)})` : ''}.`]
-  if (here) lines.push(...detailsOf(here, board.holds, now, false).filter(one => one.label !== '' && !here.decisions.some(call => call.id === one.label)).map(one => `  ${one.label}: ${one.text}`))
+  if (here) lines.push(...laneDetails(here, board, now).map(one => `  ${one.label}: ${one.text}`))
   if (board.forYou.length > 0) {
     lines.push('', `For you (${plural(decisionCount(board), 'decision')}):`)
     for (const { lane, decisions } of board.forYou) for (const call of decisions) lines.push(`- ${lane.name} ${call.id}: ${call.full || call.title}`)

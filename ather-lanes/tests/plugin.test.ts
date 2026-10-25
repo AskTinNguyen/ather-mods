@@ -6,6 +6,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { AMBER, LIME } from '../hooks/ather/rows.mjs'
+import { fullData, laneBranches } from '../hooks/records.mjs'
+import { readPrs, readRefs, statusOf } from '../hooks/sources.mjs'
 import * as M from './fixtures/machine.mjs'
 
 // The engine hands hooks absolute paths of the machine's own form ("D:\work\game"): compared as "/work/game". Off Windows
@@ -318,7 +320,7 @@ test('lanes_summary: this session\u2019s lane and every For you and A look item,
   await clock.advance(10)
   const text = await callTool($, 'lanes_summary')
   expect(text.split('\n')[0]).toBe('This session: lane editor-fix.')
-  for (const piece of ['lane: fix/editor-filter · editor-fix (Editor filter fix) · T2', 'slot: needs editor', '- editor-fix F-2: ', '- editor-fix F-4: ', '- editor-fix F-5: ', '- combat-hitstop F-2: ', '- perf-capture: light-1 past its end', '- scratch-a: unregistered', '- probe: unregistered', '- editor-fix: needs editor, held by combat-hitstop', 'not read yet']) expect(text).toContain(piece)
+  for (const piece of ['lane: this session · fix/editor-filter · editor-fix (Editor filter fix) · T2', 'slot: needs editor', '- editor-fix F-2: ', '- editor-fix F-4: ', '- editor-fix F-5: ', '- combat-hitstop F-2: ', '- perf-capture: light-1 past its end', '- scratch-a: unregistered', '- probe: unregistered', '- editor-fix: needs editor, held by combat-hitstop', 'not read yet']) expect(text).toContain(piece)
   expect(world.ran.length).toBe(0)
   expect(world.writes).toEqual([])
 })
@@ -361,4 +363,30 @@ test('lanes_open: the pane shown as /lanes shows it; a lane opened in place; an 
   expect(text).not.toContain('answer them in the session')
   await ui.unmount()
   expect(world.writes).toEqual([])
+})
+
+test('closed, a newer full read another session kept is taken up: its git and gh reasons, and the summary says when (A7, D8)', async ($, on) => {
+  const clock = mock.clock(on, { now: EVENING })
+  const world = machine(on, { root: '/work/lanes/editor-fix', shown: false })
+  // The store across sessions, which this test stands for.
+  const store = new Map<string, unknown>()
+  on('store.get', (_$: unknown, e: { key: string }) => ({ value: store.get(e.key) }))
+  on('store.set', (_$: unknown, e: { key: string, value: unknown }) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  await clock.advance(10)
+  expect(lastLine(world)).toBe('lane editor-fix · ◆ 4 for you · 4 to look at')
+  // Another session's pane made a full read and kept it: lanes.ps1 Status, the for-each-ref and gh, as the store holds them.
+  const status = statusOf(JSON.parse(local(M.STATUS)))
+  if (!status) throw new Error('the fixture Status')
+  store.set('full:/work/game', JSON.parse(JSON.stringify(fullData({ at: clock.now(), status, refs: readRefs(M.REFS), prs: readPrs(M.PRS, M.REPO, laneBranches(status, { forPrs: true })) }))))
+  await clock.advance(60 * 1000)
+  expect(lastLine(world)).toBe('lane editor-fix · ◆ 4 for you · 5 to look at')
+  const text = await callTool($, 'lanes_summary')
+  expect(text).toContain('- editor-fix: #398 checks failing · 27 behind main')
+  expect(text).toMatch(/PR checks and behind-main counts as of 20:1\d\./)
+  expect(world.ran.length).toBe(0)
 })
