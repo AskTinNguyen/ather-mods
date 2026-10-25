@@ -9,7 +9,7 @@ import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
 import { createEngine } from './engine.mjs'
 import { check } from './screen.mjs'
-import { byKey, checks, join, nodesOf, runArgs, sandbox, until, writeDrawn } from './harness.mjs'
+import { byKey, checks, join, nodesOf, removeDir, runArgs, sandbox, until, writeDrawn } from './harness.mjs'
 
 const { report: REPORT, out: OUT } = runArgs()
 const BOARD = new URL('../../ather-board/', import.meta.url)
@@ -173,5 +173,5 @@ if (OUT) {
 }
 
 await engine.end('other')
-fs.rmSync(BASE, { recursive: true, force: true })
+removeDir(BASE)
 finish({ title: 'Ather Board: the overlap check', report: REPORT, cut: 1200 })

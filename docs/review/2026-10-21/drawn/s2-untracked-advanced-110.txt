@@ -1,0 +1,39 @@
+What next?
+                                                                                          f: synced just now ↻
+Role not set · /ather role
+
+Yours 2 · Workers 0 · Needs you 2
+
+[ ＋ New intent ]  [ ✦ Create ]
+
+N E E D S   Y O U   ·   2
+◆ 1: ▸ feat-x · 2 decisions · no session tracks it
+
+N E E D S   A T T E N T I O N   ·   1
+✓ 2: login-errors · ready to close · Close it?
+
+N E X T
+n: Pick up feat-x
+   Unsorted · 1/3 · 2 need you
+
+A L S O   Y O U R S
+a: ✓ login-errors                                                                    ▰▰▰▰▰  2/2  0m           
+
+T E A M M A T E S '   I N T E N T S   ·   2
+Read-only: their decisions stay theirs.
+b: ● enemy-waves                                                                     ▰▰▰▱▱  2/3  0m  Lena Park
+c: ● inventory-sort                                                                  ▱▱▱▱▱  0/1  0m  Hai Huynh
+i: Everything open ›
+
+H E A D I N G   O F F ?
+Let AI work while you zZz
+u: Until done   8 hours   4 hours
+
+S T E P P I N G   O U T ?
+Keep the prompt cache warm while you are away from the keyboard, so your next turn reads the context instead
+of paying to write it again.
+w: Keep the cache warm
+
+v: Simple view
+
+Enter chooses · Esc closes

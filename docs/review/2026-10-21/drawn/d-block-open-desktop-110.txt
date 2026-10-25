@@ -1,0 +1,45 @@
+  feat-x ›
+  Build · 1 of 3 done                                                                        synced just now ↻
+  Plan ✓ ─ Build ● ─ Prove ○ ─ Ship ○
+  Engineer
+
+Checklist  Workers Needs you
+1/3        0       2
+━━━━━━━━━━ running things waiting
+
+[ ＋ New intent ]  [ ✦ Create ]
+
+N E E D S   Y O U   ·   2
+◆ ▾ feat-x · 2 decisions · in this session
+  · F-1 · Should the HUD scale follow the OS text size, or only our own setting?
+     Should the HUD scale follow the OS text size, or only our own setting?
+     in this session
+     [ A: Only our own setting (recommended) ]
+     [ B: Follow the OS text size too ]
+     Explain   Type an answer   Open findings ›
+  · F-2 · Red or blue for the scale slider?
+     Red or blue for the scale slider?
+
+N E E D S   A T T E N T I O N   ·   1
+✓ login-errors · ready to close · Close it?
+
+N E X T
+Start the work
+ A background agent does the work in its own worktree, proved with the repository gates.
+
+T E A M M A T E S '   I N T E N T S   ·   2
+Read-only: their decisions stay theirs.
+● enemy-waves  2/3  0m  Lena Park
+● inventory-sort  0/1  0m  Hai Huynh
+[ Everything open › ]
+
+H E A D I N G   O F F ?
+Let AI work while you zZz
+[ Until done ]   [ 8 hours ]   [ 4 hours ]
+
+S T E P P I N G   O U T ?
+Keep the prompt cache warm while you are away from the keyboard, so your next turn reads the context instead
+of paying to write it again.
+[ Keep the cache warm ]
+
+Simple view

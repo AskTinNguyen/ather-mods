@@ -9,6 +9,17 @@ import { check } from './screen.mjs'
 // Folders with forward slashes, as the hooks name a checkout: on Windows path.join and the temporary folder give backslashes.
 export const join = (...parts) => path.join(...parts).split(path.sep).join('/')
 
+// A run's folder removed at its end. Windows can still hold one of its files open for a moment: a few tries, then a
+// folder left behind is said, not a failure, so the run's checks are still reported.
+/** @param {string} dir */
+export const removeDir = dir => {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+  } catch (error) {
+    console.log(`left behind ${dir}: ${/** @type {NodeJS.ErrnoException} */ (error).code ?? error}`)
+  }
+}
+
 // A folder of the run's own, by its real path (git names a checkout by it; macOS's temporary folder is behind a link).
 // The person's own git settings (signing, hooks, default branch) stay out of its repositories and of the hooks' git calls.
 /** @param {string} prefix */
@@ -65,4 +76,14 @@ export const byKey = (tree, key) => nodesOf(tree).find(node => node.props?.key =
 export const until = async (test, ms = 20000) => {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 150))) if (await test()) return true
   return false
+}
+
+// A booted session's own copy of the mod's hooks, as each Claude Code session loads the mod on its own: module state
+// (console.mjs's `places`, `intents` and the rest) belongs to one session there, so it does here. With one shared copy,
+// a second session's start reset the first's, and its reads landed in the other's pane.
+let booted = 0
+export const sessionHooks = async () => {
+  const dir = new URL(`./out/s${++booted}/`, import.meta.url)
+  fs.cpSync(new URL('./out/hooks/', import.meta.url), new URL('hooks/', dir), { recursive: true })
+  return import(new URL('hooks/ather.mjs', dir).href)
 }
