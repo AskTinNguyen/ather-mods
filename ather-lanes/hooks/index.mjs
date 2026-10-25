@@ -31,7 +31,6 @@ import { REF_FORMAT, folderKey, laneZeroOf, prListArgs, readOrigin, readPrs, rea
  */
 
 const PANE_ID = 'lanes'
-const PLUGIN = 'ather-lanes'
 const SUMMARY_TOOL = 'lanes_summary'
 const OPEN_TOOL = 'lanes_open'
 const TICK_MS = 30 * 1000
@@ -355,6 +354,10 @@ const onPress = ($, options, press) => {
   $.ui.invalidate('ui.render')
 }
 
+// A tool hook that failed answers the call with what went wrong, never leaves it unanswered.
+/** @param {Engine} $ @param {unknown} e @param {{ error: unknown }} next */
+const failedTool = ($, e, next) => ({ result: `Ather Lanes could not answer: ${String(next.error)}` })
+
 /** @param {import('claude-code').On} on @param {Record<string, unknown>} options */
 export function register(on, options) {
   // On a lanes machine (files only): the tools, the timer, and one closed read after the start returns (D8).
@@ -382,11 +385,12 @@ export function register(on, options) {
     }
   })
 
-  on('tool.call', { tool: `mcp__${PLUGIN}__${SUMMARY_TOOL}` }, async $ => ({ result: await summaryTool($, options).catch(error => `Ather Lanes: ${String(error)}`) }))
-  on('tool.call', { tool: `mcp__${PLUGIN}__${OPEN_TOOL}` }, async ($, e) => {
+  // The two tools' own names only, so these hooks never see another tool's call (F-12). A failure answers in words.
+  on('tool.call', { tool: 'mcp__ather-lanes__lanes_summary' }, async $ => ({ result: await summaryTool($, options) })).catch(failedTool)
+  on('tool.call', { tool: 'mcp__ather-lanes__lanes_open' }, async ($, e) => {
     const input = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e))
-    return { result: await openTool($, options, typeof input.lane === 'string' ? input.lane.trim() : '').catch(error => `Ather Lanes: ${String(error)}`) }
-  })
+    return { result: await openTool($, options, typeof input.lane === 'string' ? input.lane.trim() : '') }
+  }).catch(failedTool)
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
     const el = $.ui.resolve(e)
