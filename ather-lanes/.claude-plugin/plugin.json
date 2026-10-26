@@ -1,0 +1,22 @@
+{
+  "name": "ather-lanes",
+  "version": "0.2.1",
+  "description": "Ather Lanes: the machine's S2 agent lanes as a board. /lanes shows the decisions waiting for you, the lanes that need a look, and every lane with its slot, branch and PR, from what the S2 lane scripts and git already keep. The status line names this session's lane and what waits; Claude can answer which lane it is in (lanes_summary) and open the board (lanes_open). Read-only; starts no process while the pane is closed.",
+  "author": {
+    "name": "Tin Nguyen"
+  },
+  "userConfig": {
+    "scriptsDir": {
+      "type": "string",
+      "title": "Lane scripts folder",
+      "description": "The folder holding the S2 lane scripts (lanes.ps1). Empty: the session's own checkout's .agents\\skills\\s2-agent-lanes\\scripts.",
+      "default": ""
+    },
+    "machineDir": {
+      "type": "string",
+      "title": "Machine folder",
+      "description": "The lanes' machine folder, passed to lanes.ps1 as -MachineDir. Empty: the lanes folder next to the main checkout, then _machine. Set it only for a scratch proof.",
+      "default": ""
+    }
+  }
+}

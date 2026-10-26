@@ -78,6 +78,7 @@ Then sign in to it from `/mcp` in a Claude Code terminal. Without it, the sessio
 
 ## Changes
 
+- **0.3.1** No change to what you see: the page opens through Ather's shared system opener (`opener.mjs`, also behind Ather Automata's Go to session, ather-automata 0.6.8). A page path with a character cmd would read as a second command (`&`, `%`, `"` and the like) is no longer handed to `start`: the board says where the page was written instead.
 - **0.3.0** Counts that open: in People and Areas each count is a press (Enter in the pane, a click on the page) that opens what it counts. The page gains **Timeline**, a lane per owner over the last 12 weeks. A count of one open item now reads "1 item".
 - **0.2.2** No change to what you see: a collision's words and actions come from Ather's `collide.mjs`, shared with Ather Automata's Needs you (ather-automata 0.5.0), and the check runs through its shared background job.
 - **0.2.1** Colliding names the intent behind a change on `main` ("hitstop-retune changed these lines on origin/main 6m ago (Lena Park)"), read from the pull request's merge or squash commit that brought it. A large first check runs in short runs and shows collisions as they are found.
@@ -87,4 +88,4 @@ Then sign in to it from `/mcp` in a Claude Code terminal. Without it, the sessio
 
 ## Maintainers
 
-The board reads intents with Ather Automata's own modules, copied into `hooks/ather/` by `node ather-board/sync.mjs`; never edit those copies. After a change to them in `ather-automata/hooks/`, run the sync; `node dev/test-all.mjs` fails while the copies differ, and runs the board's unit tests (`tests/*.test.mjs`). Then `claude plugin validate ather-board` and `claude plugin test ather-board`, bump `version` in `.claude-plugin/plugin.json` and the repository's `.claude-plugin/marketplace.json`, and add a line under Changes.
+The board reads intents with Ather Automata's own modules, copied into `hooks/ather/` by `node dev/sync-shared.mjs ather-board` (the entry modules are named in `shared.json`); never edit those copies. After a change to them in `ather-automata/hooks/`, run the sync; `node dev/test-all.mjs` fails while the copies differ, and runs the board's unit tests (`tests/*.test.mjs`). Then `claude plugin validate ather-board` and `claude plugin test ather-board`, bump `version` in `.claude-plugin/plugin.json` and the repository's `.claude-plugin/marketplace.json`, and add a line under Changes.

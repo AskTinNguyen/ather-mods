@@ -1,0 +1,15 @@
+A W A Y
+Heading off?
+The session keeps working; production deploys, migrations and secret
+changes wait for your review.
+
+1: Until done
+   Ends when the work is done, 24 hours at most.
+2: 8 hours
+   Ends in 8 hours.
+3: 4 hours
+   Ends in 4 hours.
+
+0: Back
+
+Enter chooses · Esc closes

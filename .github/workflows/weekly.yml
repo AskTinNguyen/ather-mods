@@ -1,0 +1,148 @@
+# Every Monday morning (08:17 in Ho Chi Minh City), and on demand:
+# - engine: the mods against the newest Claude Code (npm tags stable and latest), so an engine change shows up here
+#   before it shows up on a teammate's PC. A failure opens, or adds to, one issue per engine version.
+# - health: what each mod changed since its version last moved, and the largest files, in one issue the team reads.
+# - engine-types (opt-in): the engine type-check against the newest engine's own types. Set the repository variable
+#   ENGINE_TYPES to on and the secret ANTHROPIC_API_KEY. It costs one short model call.
+name: weekly
+
+on:
+  schedule:
+    - cron: '17 1 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  DISABLE_AUTOUPDATER: 1
+
+jobs:
+  engine:
+    name: newest engine (${{ matrix.tag }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      # One at a time: when stable and latest name the same version, the second finds the first one's issue.
+      max-parallel: 1
+      matrix:
+        tag: [stable, latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Claude Code (${{ matrix.tag }})
+        run: |
+          npm install -g "@anthropic-ai/claude-code@${{ matrix.tag }}"
+          echo "ENGINE=$(claude --version | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "PINNED=$(cat .github/claude-code-version)" >> "$GITHUB_ENV"
+      - name: validate --strict and test every mod
+        id: run
+        env:
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/claude-config
+        run: |
+          set +e
+          : > "$RUNNER_TEMP/failed.md"
+          check() {
+            echo "::group::$*"
+            "$@"
+            code=$?
+            echo "::endgroup::"
+            if [ "$code" -ne 0 ]; then echo "- \`$*\` exited $code" >> "$RUNNER_TEMP/failed.md"; fi
+          }
+          check claude plugin validate --strict .
+          for mod in $(node -p "require('./.claude-plugin/marketplace.json').plugins.map(one => one.source).join(' ')"); do
+            check claude plugin validate --strict "$mod"
+            check claude plugin test "$mod"
+          done
+          if [ -s "$RUNNER_TEMP/failed.md" ]; then echo "failed=true" >> "$GITHUB_OUTPUT"; fi
+          echo "Claude Code $ENGINE (${{ matrix.tag }}); CI pins $PINNED." >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/failed.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Open or add to the drift issue
+        if: steps.run.outputs.failed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          title="Engine drift: Claude Code $ENGINE fails a mod check"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body=$(printf 'Claude Code %s (npm tag `%s`) fails these. CI pins %s in `.github/claude-code-version`.\n\n%s\n\nRun: %s\n\nFix the mod before moving the pin. Close this when the pin moves past it.\n' "$ENGINE" "$TAG" "$PINNED" "$(cat "$RUNNER_TEMP/failed.md")" "$run_url")
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then gh issue comment "$number" --body "$body"
+          else gh issue create --title "$title" --body "$body"; fi
+      - name: Fail when the newest engine does
+        if: steps.run.outputs.failed == 'true'
+        run: exit 1
+
+  health:
+    name: unreleased changes and big files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Write this week's health
+        run: |
+          {
+            echo "## Unreleased"
+            echo
+            echo "Shipped files each mod changed since its version last moved (dev/check-release.mjs --unreleased):"
+            echo
+            GITHUB_ACTIONS= node dev/check-release.mjs --unreleased | sed 's/^/- /'
+            echo
+            echo "## Largest files"
+            echo
+            echo "Over 1,000 lines may not grow (dev/check-size.mjs --report):"
+            echo
+            echo '```'
+            node dev/check-size.mjs --report
+            echo '```'
+            echo
+            echo "## Merged into main this week"
+            echo
+            git log --first-parent --since='7 days ago' --format='- %s (%h)' origin/main
+          } > "$RUNNER_TEMP/health.md"
+          cat "$RUNNER_TEMP/health.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Add it to the health issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Weekly health"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then gh issue comment "$number" --body-file "$RUNNER_TEMP/health.md"
+          else gh issue create --title "$title" --body-file "$RUNNER_TEMP/health.md"; fi
+
+  engine-types:
+    name: type-check against the newest engine's types
+    if: vars.ENGINE_TYPES == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Claude Code (latest)
+        run: npm install -g @anthropic-ai/claude-code@latest
+      # The engine writes .claude-plugin/types/ into a mod's folder when it loads the mod (.gitignore). validate, test
+      # and init do not. This loads both mods in one short session, within a 5-cent cap. If a print-mode session does
+      # not write them either, the next step says so and stops.
+      - name: Load the mods once
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/claude-config
+        run: claude -p "Reply with the single word OK." --plugin-dir ./ather-automata --plugin-dir ./ather-board --max-budget-usd 0.05
+      # dev/typecheck.mjs finds the types the engine wrote, or warns that there are none and stops.
+      - name: Type-check the hooks against them
+        run: node dev/typecheck.mjs

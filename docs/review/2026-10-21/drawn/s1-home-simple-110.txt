@@ -1,0 +1,19 @@
+feat-x ›
+Build · 1 of 3 done                                                                       f: synced just now ↻
+
+N E E D S   Y O U   ·   3
+◆ 1: Bring origin/main into feat/x
+     ▲ 1 overlap: origin/main changed these lines 0m ago (Lena Park). src/a.js:1
+
+◆ 2: ▸ feat-x · 2 decisions · in this session
+
+N E E D S   A T T E N T I O N   ·   1
+✓ 3: login-errors · ready to close · Close it?
+
+N E X T
+n: Start the work
+   A background agent does the work in its own worktree, proved with the repository gates.
+
+v: Advanced view
+
+Enter chooses · Esc closes

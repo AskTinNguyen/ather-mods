@@ -16,6 +16,7 @@ import { mergeSuggestions, plainSuggestions } from './focus.mjs'
 import { choosePack } from './ather/packs/index.mjs'
 import { GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchMain, isFetchDue, syncError, syncText } from './ather/team.mjs'
 import { fetchBranches, overlapJob, readOverlaps } from './ather/overlap.mjs'
+import { openWith } from './ather/opener.mjs'
 import { sidesOf, withCollisions } from './records.mjs'
 import { boardPane } from './pane.mjs'
 import { renderPage } from './page.mjs'
@@ -190,15 +191,11 @@ const writePage = async $ => {
   return path
 }
 
-// Opens a file with the system's own handler: `start` on Windows (a drive-letter path), else `open`, then `xdg-open`.
+// Opens a file with the system's own handler (ather/opener.mjs): a drive-letter path is Windows's, given with backslashes.
 /** @param {Engine} $ @param {string} path */
-const openFile = async ($, path) => {
-  const tries = /^[A-Za-z]:/.test(path) ? [['cmd', '/c', 'start', '', path.replace(/\//g, '\\')]] : [['open', path], ['xdg-open', path]]
-  for (const argv of tries) {
-    const ran = await $.process.run(argv, { timeoutMs: 15000 }).catch(() => undefined)
-    if (ran?.exitCode === 0) return true
-  }
-  return false
+const openFile = ($, path) => {
+  const isWindows = /^[A-Za-z]:/.test(path)
+  return openWith(argv => $.process.run(argv, { timeoutMs: 15000 }), isWindows ? path.replace(/\//g, '\\') : path, isWindows)
 }
 
 // What the session is asked to do with the written page.

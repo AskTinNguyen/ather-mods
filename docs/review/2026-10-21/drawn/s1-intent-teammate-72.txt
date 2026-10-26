@@ -1,0 +1,23 @@
+Everything open
+5 open · yours first                                f: synced just now ↻
+
+s: Search…   o: Sort: Recent   g: Group: Person
+
+▾ Y O U R   I N T E N T S   ·   2
+1: ● feat-x                                    ▰▰▱▱▱  1/3  0m           
+2: ✓ login-errors                              ▰▰▰▰▰  2/2  0m           
+
+▾ A S S I G N E D   I S S U E S   ·   1
+3: #31360 Cheaper rain particles on low …                  1d           
+
+r: ↻ Refresh GitHub issues
+
+▾ T E A M M A T E S '   I N T E N T S   ·   2
+▾ Hai Huynh · 1
+4: ● inventory-sort                            ▱▱▱▱▱  0/1  0m  Hai Huynh
+▾ Lena Park · 1
+5: ● enemy-waves local                         ▰▰▰▱▱  2/3  0m  Lena Park
+
+● Building  ◐ Items met, PR not merged  ✓ Ready to close  ‖ Parked
+
+0: Back
