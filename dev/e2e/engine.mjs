@@ -40,6 +40,8 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   let submitFails = false
   // What $.session.send answers: delivered, unless a test says the other session is gone.
   let sendResult = { isDelivered: true }
+  // What the system's own handler exits with (setHandlerExit): 0, opened, unless a test says otherwise.
+  let handlerExit = 0
   // The desktop app's own tools (mcp__ccd_…), by name: what each answers ({ text, isError }). One a test has not
   // set is absent, as in the terminal: a call of it rejects, as the engine rejects a tool it has no name for.
   const appTools = new Map()
@@ -186,10 +188,11 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
           aborts.times -= 1
           throw new Error(`$.process.run(${argv[0]}) aborted`)
         }
-        // The system's own handler never runs for real: it would open a browser on the developer's screen. Answered as opened.
+        // The system's own handler never runs for real: it would open a browser on the developer's screen. Answered as
+        // opened, or with the exit code a test set.
         if (isHandler(argv)) {
           record.handlerRuns.push([...argv])
-          return { exitCode: 0, stdout: '', stderr: '' }
+          return { exitCode: handlerExit, stdout: '', stderr: '' }
         }
         // gh never runs for real: the issues are a fixture, and without one gh is signed out.
         if (argv[0] === 'gh') record.ghRuns.push(argv.join(' '))
@@ -404,6 +407,9 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     queued: () => queue.map(one => one.text),
     setSend: value => {
       sendResult = value
+    },
+    setHandlerExit: code => {
+      handlerExit = code
     },
     // The desktop app's tool `name` answers with `answer(input)` ({ text, isError }); undefined: the tool is absent.
     setAppTool: (name, answer) => (answer ? appTools.set(name, answer) : appTools.delete(name)),

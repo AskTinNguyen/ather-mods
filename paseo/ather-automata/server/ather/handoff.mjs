@@ -9,6 +9,7 @@
 // second press of the same thing sends nothing; and what follows a prompt happens when the session has it.
 
 import { cutWords } from './model.mjs'
+import { isStartable } from './opener.mjs'
 
 /**
  * What a press did: 'sent' with the session idle, 'queued' behind a running turn, 'pending' nothing (it
@@ -158,27 +159,108 @@ export const appSessionOf = text => {
   }
 }
 
-// The best guess for an intent no live session tracks (A3b), from the app's `search_session_transcripts` for its
-// folder name: of the sessions whose transcript mentions it, the most recently active one that is not archived and is
-// not this one (`selfId`, its app id); '' when there is none. The app answers a line of words, then the hits as a JSON
-// list (`sessionId`, `title`, `isArchived`, `lastActivityAt`, and a `snippet` of the transcript, never read here);
-// with none, only words ("No matching sessions found.").
-/** @param {string} text @param {string} selfId */
-export const guessedSession = (text, selfId) => {
+/**
+ * A hit of the app's transcript search: the session's app id, title, branch ('' where the reply carries none), last
+ * activity (ms; 0 when unknown) and the snippet of its transcript around the match (only matched, never followed).
+ * @typedef {{ id: string, title: string, branch: string, at: number, snippet: string }} Hit
+ */
+
+// The app's answer to `search_session_transcripts` for an intent's folder name (A3b): the hits that are not archived
+// and not this session (`selfId`, its app id), the most recently active first (the app's own order without times).
+// The app answers a line of words, then the hits as a JSON list (`sessionId`, `title`, `isArchived`,
+// `lastActivityAt`, `snippet`); with none, only words ("No matching sessions found.").
+/** @param {string} text @param {string} selfId @returns {Hit[]} */
+export const searchHits = (text, selfId) => {
   /** @type {unknown} */
   let hits = []
   try {
     hits = JSON.parse(text.slice(text.indexOf('[')))
   } catch {
-    return ''
+    return []
   }
-  if (!Array.isArray(hits)) return ''
-  return (
-    hits
-      .map(hit => ({ id: textOf(hit?.sessionId), at: Date.parse(String(hit?.lastActivityAt ?? '')) || 0, isArchived: hit?.isArchived === true }))
-      .filter(hit => hit.id !== '' && hit.id !== selfId && !hit.isArchived)
-      .sort((a, b) => b.at - a.at)[0]?.id ?? ''
-  )
+  if (!Array.isArray(hits)) return []
+  return hits
+    .filter(hit => hit?.isArchived !== true)
+    .map(hit => ({ id: textOf(hit?.sessionId), title: textOf(hit?.title), branch: textOf(hit?.branch ?? hit?.gitBranch), at: Date.parse(String(hit?.lastActivityAt ?? '')) || 0, snippet: textOf(hit?.snippet) }))
+    .filter(hit => hit.id !== '' && hit.id !== selfId)
+    .sort((a, b) => b.at - a.at)
+}
+
+// Whether a hit works on the intent rather than mentions it (A7): its title and branch carry at least half the folder
+// name's words (those of three letters or more), or its snippet shows the intent's prompt.md or progress.md.
+/** @param {Hit} hit @param {string} slug */
+export const isIntentHit = (hit, slug) => {
+  const words = slug.toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length >= 3)
+  const named = `${hit.title} ${hit.branch}`.toLowerCase()
+  const snippet = hit.snippet.toLowerCase().replace(/\\+/g, '/')
+  return (words.length > 0 && words.filter(word => named.includes(word)).length >= Math.ceil(words.length / 2)) || ['prompt.md', 'progress.md'].some(file => snippet.includes(`${slug.toLowerCase()}/${file}`))
+}
+
+// A session that is the most recent hit for this many of one read's untracked intents reads them all (a sync or
+// review thread), and is no one's guess (A7).
+export const WIDE_HITS = 3
+
+// The best guesses for the intents no live session tracks, across one read of the pane (A3b, A7): for each, the most
+// recently active hit that works on it (isIntentHit), leaving out a session that is the top hit of WIDE_HITS or more
+// of them; an intent with no such hit has no guess ("no session tracks it"). By the intent's key, the app id.
+/** @param {readonly { key: string, slug: string, hits: readonly Hit[] }[]} searched @returns {Map<string, string>} */
+export const guessedSessions = searched => {
+  /** @type {Map<string, number>} */
+  const tops = new Map()
+  for (const { hits: [top] } of searched) if (top) tops.set(top.id, (tops.get(top.id) ?? 0) + 1)
+  /** @type {Map<string, string>} */
+  const picks = new Map()
+  for (const { key, slug, hits } of searched) {
+    const hit = hits.find(one => (tops.get(one.id) ?? 0) < WIDE_HITS && isIntentHit(one, slug))
+    if (hit) picks.set(key, hit.id)
+  }
+  return picks
+}
+
+// How long a guess's search, and a guessed session's title and link, are kept before the app is asked again.
+export const GUESS_MS = 10 * 60 * 1000
+
+/**
+ * The app's tools as the guesses ask them (console.mjs: appTool of `$.tool.call`): its transcript search for an
+ * intent's folder name, its `get_session` for an app id; `selfId`: this session's app id.
+ * @typedef {{ search: (slug: string) => Promise<{ isDone: boolean, text: string }>, session: (id: string) => Promise<{ isDone: boolean, text: string }>, selfId: string, now?: () => number }} GuessIo
+ */
+
+// The guesses for the intents no live session tracks (A3b, A7). One per module: it starts empty with each session.
+export const createGuesses = () => {
+  /** @type {Map<string, { at: number, value: Promise<{ isDone: boolean, text: string }> }>} */
+  const asked = new Map()
+  /** @param {string} key @param {() => Promise<{ isDone: boolean, text: string }>} ask @param {number} now */
+  const once = (key, ask, now) => {
+    const kept = asked.get(key)
+    if (kept && now - kept.at < GUESS_MS) return kept.value
+    const value = ask()
+    asked.set(key, { at: now, value })
+    return value
+  }
+  return {
+    // The place of each untracked intent's guess, by its key (guessedSessions across all of them, then the picked
+    // session's title and link); an intent with no guess is left out.
+    /** @param {GuessIo} io @param {readonly { key: string, slug: string }[]} untracked @returns {Promise<Map<string, Place>>} */
+    async placesOf(io, untracked) {
+      const now = (io.now ?? Date.now)()
+      const searched = await Promise.all(
+        untracked.map(async ({ key, slug }) => {
+          const found = await once(`search:${key}`, () => io.search(slug), now)
+          return { key, slug, hits: found.isDone ? searchHits(found.text, io.selfId) : [] }
+        }),
+      )
+      const picked = await Promise.all(
+        [...guessedSessions(searched)].map(async ([key, id]) => {
+          const got = await once(`session:${id}`, () => io.session(id), now)
+          const app = got.isDone ? appSessionOf(got.text) : null
+          return app ? [/** @type {[string, Place]} */ ([key, guessPlace(app)])] : []
+        }),
+      )
+      return new Map(picked.flat())
+    },
+    reset: () => asked.clear(),
+  }
 }
 
 // Whether the app's `send_message` took the message: every answer ends "(delivery: …; message_id: …)", and only
@@ -236,9 +318,19 @@ export const placeOf = (slug, isTrackedHere, peers) => {
 /** @param {AppSession} app @returns {Place} */
 export const guessPlace = app => ({ kind: 'guess', link: app.link, name: sessionName(app.title, 'another session') })
 
-// The link that opens a place's session in the app ('' for this session, none, or a session that recorded none).
+// Another session's place, which has a name and may have a link: one that tracks the intent, or a guess.
+/** @param {Place} place @returns {place is Extract<Place, { kind: 'other' | 'guess' }>} */
+const isElsewhere = place => place.kind === 'other' || place.kind === 'guess'
+
+// The link that opens a place's session in the app ('' for this session, none, or a session that recorded none). Only
+// the app's own `claude://` links, and only those the system's opener may be handed (opener.mjs): a lane file or a
+// reply carrying another kind of address opens nothing.
 /** @param {Place} place */
-export const placeLink = place => (place.kind === 'other' || place.kind === 'guess' ? place.link : '')
+export const placeLink = place => (isElsewhere(place) && /^claude:\/\/\S+$/.test(place.link) && isStartable(place.link) ? place.link : '')
+
+// What a decision's row says when Go to session could not open the session (A6): where to find it by hand.
+/** @param {Place} place */
+export const unopenedText = place => `could not open it; open ${isElsewhere(place) ? place.name : 'it'} from the sidebar`
 
 // What a decision's row says of its place: where it is worked on, "Sent to …" once a press of it went to the
 // session that still works on it (`sentTo`: the CLI id of the session it went to), "probably in …" for a guess.

@@ -33,7 +33,8 @@ import { nextGroup, nextSort } from './worklist.mjs'
 import { LIME, QUIET, choiceRow, findingRows, fit, homePreview, label, masthead, mergeRow, metaRow, needsRows, section, stageRow, statusLine, summaryStrip } from './rows.mjs'
 import { awayPaneRows, awayRows, awayWindowRows, createRows, intentRows, issueRows, pickRows, skillsRows } from './modes.mjs'
 import { DECIDED_SHOWN_MS, FRESH_ANSWERS, callId, needsView, pruneDecided, withDecided } from './decide.mjs'
-import { NO_PLACE, appSessionOf, appTool, createOutbox, guessPlace, guessedSession, isSentReply, placeOf, routedText, toldText } from './handoff.mjs'
+import { NO_PLACE, appSessionOf, appTool, createGuesses, createOutbox, isSentReply, placeOf, routedText, toldText } from './handoff.mjs'
+import { openWith } from './opener.mjs'
 
 /** @typedef {import('claude-code').EngineInterface} Engine */
 /** @typedef {'home' | 'pick' | 'away' | 'skills' | 'issue' | 'intent' | 'create' | 'finding'} Mode */
@@ -70,10 +71,8 @@ let turnRunning = ''
 // Where each intent with a decision waiting is worked on (handoff.mjs placeOf), by its key, as last read.
 /** @type {Map<string, import('./handoff.mjs').Place>} */
 let places = new Map()
-// The guesses for intents no live session tracks (A3b), by key, each asked of the app at most every GUESS_MS.
-/** @type {Map<string, { at: number, place: Promise<import('./handoff.mjs').Place> }>} */
-const guesses = new Map()
-const GUESS_MS = 10 * 60 * 1000
+// The guesses for intents no live session tracks (A3b, A7), each asked of the app at most every ten minutes.
+const guesses = createGuesses()
 let paneMode = /** @type {Mode} */ ('home')
 // Heading off?: the live sessions of this checkout as last read when it opened (away.mjs awaySessions), and the ids ticked.
 /** @type {import('./away.mjs').AwaySession[]} */
@@ -549,7 +548,7 @@ async function openConsole($, folder) {
   homeView.reset()
   callsOpen.clear()
   answerState = { ...FRESH_ANSWERS }
-  guesses.clear()
+  guesses.reset()
   findingShown = ''
   isSearchOpen = false
   teamCaches.clear()
@@ -1109,33 +1108,24 @@ async function readPlaces($) {
     return kept
   }
   const waiting = intents.filter(one => directorCalls(one).length > 0)
-  return new Map(
-    await Promise.all(
-      waiting.map(async one => {
-        const place = await placeFor($, one, tracked, peersOf)
-        return /** @type {const} */ ([one.key, place.kind === 'none' ? await guessFor($, one) : place])
-      }),
-    ),
-  )
+  const placed = await Promise.all(waiting.map(async one => ({ one, place: await placeFor($, one, tracked, peersOf) })))
+  // For those no live session tracks, a guess (A3b, A7): shown with its link only; presses still go here.
+  const untracked = placed.filter(({ place }) => place.kind === 'none').map(({ one }) => one)
+  const app = {
+    search: (/** @type {string} */ query) => appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__search_session_transcripts', query, limit: 20 })),
+    session: (/** @type {string} */ session_id) => appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__get_session', session_id })),
+    selfId: state.appSession()?.id ?? '',
+  }
+  const guessed = await guesses.placesOf(app, untracked)
+  return new Map(placed.map(({ one, place }) => [one.key, guessed.get(one.key) ?? place]))
 }
 
-// For an intent no live session tracks, the session that probably works on it (A3b): the app's transcript search
-// for its folder name, then that session's title and link. Shown with its link only; presses still go here.
-// Without the app's tools, or with no hit, none.
-/** @param {Engine} $ @param {import('./model.mjs').Intent} intent */
-function guessFor($, intent) {
-  const kept = guesses.get(intent.key)
-  if (kept && Date.now() - kept.at < GUESS_MS) return kept.place
-  const place = (async () => {
-    const found = await appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__search_session_transcripts', query: intent.slug, limit: 20 }))
-    const id = found.isDone ? guessedSession(found.text, state.appSession()?.id ?? '') : ''
-    if (!id) return NO_PLACE
-    const got = await appTool(() => $.tool.call({ tool: 'mcp__ccd_session_mgmt__get_session', session_id: id }))
-    const app = got.isDone ? appSessionOf(got.text) : null
-    return app ? guessPlace(app) : NO_PLACE
-  })()
-  guesses.set(intent.key, { at: Date.now(), place })
-  return place
+// Opens the app's link to another session with the system's own opener (A6): on the desktop the pane's anchor does
+// not open a claude:// link. Nothing is sent and no turn starts. Windows by its OS variable: the engine names no platform.
+/** @param {Engine} $ @param {string} link */
+async function openLink($, link) {
+  const isWindows = (await $.env.get('OS').catch(() => undefined)) === 'Windows_NT'
+  return openWith(argv => $.process.run(argv, { timeoutMs: 15000 }), link, isWindows)
 }
 
 // Where a press about an intent goes (A3): to the live session that tracks it when that is another one, else here
@@ -1153,6 +1143,14 @@ async function whereTo($, key) {
 /** @param {Engine} $ @param {string} id @param {Target} target */
 function noteSent($, id, target) {
   answerState = { ...answerState, sentTo: { ...answerState.sentTo, [id]: { sessionId: target.sessionId, name: target.name } } }
+  $.ui.invalidate('ui.render')
+}
+
+// The row's "could not open it" once a Go to session press could not open the session, cleared once one does (A6).
+/** @param {Engine} $ @param {string} id @param {boolean} isOpen */
+function noteOpened($, id, isOpen) {
+  const { [id]: _, ...unopened } = answerState.unopened
+  answerState = { ...answerState, unopened: isOpen ? unopened : { ...unopened, [id]: true } }
   $.ui.invalidate('ui.render')
 }
 
@@ -2106,6 +2104,7 @@ function answering($, model, hasInput) {
     onFindings: one => () => ((findingShown = one.id), (paneMode = 'finding'), change({ typing: '' })),
     onFold: () => change({ isFoldOpen: !answerState.isFoldOpen }),
     whereOf: slug => places.get(slug) ?? NO_PLACE,
+    onGo: (one, link) => () => void openLink($, link).then(isOpen => noteOpened($, one.id, isOpen)),
   }
 }
 

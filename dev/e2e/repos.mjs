@@ -86,8 +86,8 @@ const addTree = (root, folder) => {
 // A session opened in `root`, started as the app starts it.
 // `tools`: the desktop app's tools the session has from its start ({ name: answer }; none: the terminal). `store`: the
 // plugin's store shared with other sessions of the run (its own otherwise).
-const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', writable, ghAt, kept, cwd, tools = {}, store }) => {
-  const engine = createEngine({ root, surfaces: [], user, writable, ghAt, kept, store })
+const boot = async ({ root, sessionId = 'harness-session-0001', user = 'Tin Nguyen', writable, ghAt, kept, cwd, tools = {}, store, env }) => {
+  const engine = createEngine({ root, surfaces: [], user, writable, ghAt, kept, store, env })
   engine.setSessionId(sessionId)
   for (const [name, answer] of Object.entries(tools)) engine.setAppTool(name, answer)
   const { register } = await sessionHooks()
@@ -1493,7 +1493,7 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await first.engine.timers()
   expect('the app is asked again only after a while, not at every heartbeat', first.engine.record.tools.filter(one => one.tool === GET).length === 1, first.engine.record.tools.filter(one => one.tool === GET).length)
 
-  const { engine } = await boot({ root: web, sessionId: 'harness-session-0041' })
+  const { engine } = await boot({ root: web, sessionId: 'harness-session-0041', env: { OS: 'Windows_NT' } })
   engine.setSurfaces(['desktop'])
   engine.setAppTool(GET, () => ({ text: JSON.stringify({ sessionId: 'local_second', title: 'S2 sync main' }) }))
   engine.setAppTool(SEND, () => ({ text: 'Queued behind its current work. (delivery: queued; message_id: m1)' }))
@@ -1506,9 +1506,24 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   expect("the second session's heartbeat carries its own app identity", own?.app?.id === 'local_second', own)
   expect('the row names the session that tracks login by its app title', (await placeShown()) === 'in "Login page work"', await placeShown())
 
-  // Go to session: a link to that session's own app link, which the app opens from any session; nothing is sent.
+  // Go to session on the desktop (A6): a press that hands that session's own app link to the system's opener (the
+  // pane's anchor does not open a claude:// link there); nothing is sent and no turn starts. A failure is said on the row.
   const jump = byKey(await pane(), `jump-${CALL}`)
-  expect("the row offers Go to session as a link to that session's app link", jump?.type === 'Link' && jump.props.href === LINK && jump.props.label === 'Go to session ›' && engine.record.sends.length === 0 && engine.record.submits.length === 0, jump)
+  expect('on the desktop Go to session is a press, not a link', jump?.type === 'Button' && jump.props.label === 'Go to session ›', jump)
+  jump?.props.onPress()
+  await engine.flush()
+  expect("the press runs the system's opener with that session's app link (cmd start on Windows), and nothing is sent or submitted", JSON.stringify(engine.record.handlerRuns.at(-1)) === JSON.stringify(['cmd', '/c', 'start', '', LINK]) && engine.record.sends.length === 0 && engine.record.submits.length === 0 && engine.record.tools.every(one => one.tool !== SEND), [engine.record.handlerRuns, engine.record.sends, engine.record.submits])
+  expect('opened: the row still names the session', (await placeShown()) === 'in "Login page work"', await placeShown())
+  engine.setHandlerExit(1)
+  byKey(await pane(), `jump-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('the opener failed: the row says so and names the session to open from the sidebar', (await placeShown()) === 'could not open it; open "Login page work" from the sidebar', await placeShown())
+  engine.setHandlerExit(0)
+  byKey(await pane(), `jump-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect('a later press that opens it clears the failure', (await placeShown()) === 'in "Login page work"', await placeShown())
+  const terminalJump = byKey(await engine.render('Pane', { bodyColumns: 110 }, 'ather', 'terminal'), `jump-${CALL}`)
+  expect('on the terminal Go to session stays a link to that app link, which the terminal opens', terminalJump?.type === 'Link' && terminalJump.props.href === LINK, terminalJump)
 
   // Explain: through the app's send_message to its app id; this session starts no turn.
   byKey(await pane(), `explain-${CALL}`)?.props.onPress()
@@ -1559,8 +1574,9 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   const searched = engine.record.tools.filter(one => one.tool === SEARCH)
   expect("the app's transcripts are searched for the intent's folder name", searched.length === 1 && searched[0].query === 'login', searched)
   expect('the row says where it probably is, labelled as a guess, from the most recently active open hit', (await placeShown()) === 'probably in "Login worker"', await placeShown())
-  const jump = byKey(await pane(), `jump-${CALL}`)
-  expect("Go to session is the guessed session's own app link", jump?.type === 'Link' && jump.props.href === LINK, jump)
+  byKey(await pane(), `jump-${CALL}`)?.props.onPress()
+  await engine.flush()
+  expect("Go to session opens the guessed session's own app link", engine.record.handlerRuns.at(-1)?.at(-1) === LINK, engine.record.handlerRuns)
   const submits = engine.record.submits.length
   byKey(await pane(), `explain-${CALL}`)?.props.onPress()
   await engine.flush()
