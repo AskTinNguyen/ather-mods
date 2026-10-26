@@ -160,15 +160,15 @@ export const appSessionOf = text => {
 }
 
 /**
- * A hit of the app's transcript search: the session's app id, title, branch ('' where the reply carries none), last
- * activity (ms; 0 when unknown) and the snippet of its transcript around the match (only matched, never followed).
- * @typedef {{ id: string, title: string, branch: string, at: number, snippet: string }} Hit
+ * A hit of the app's transcript search: the session's app id, title, last activity (ms; 0 when unknown) and the snippet
+ * of its transcript around the match (only matched, never followed).
+ * @typedef {{ id: string, title: string, at: number, snippet: string }} Hit
  */
 
 // The app's answer to `search_session_transcripts` for an intent's folder name (A3b): the hits that are not archived
 // and not this session (`selfId`, its app id), the most recently active first (the app's own order without times).
-// The app answers a line of words, then the hits as a JSON list (`sessionId`, `title`, `isArchived`,
-// `lastActivityAt`, `snippet`); with none, only words ("No matching sessions found.").
+// The app answers a line of words, then the hits as a JSON list (`sessionId`, `title`, `cwd`, `isArchived`,
+// `lastActivityAt`, `snippet`; no branch); with none, only words ("No matching sessions found.").
 /** @param {string} text @param {string} selfId @returns {Hit[]} */
 export const searchHits = (text, selfId) => {
   /** @type {unknown} */
@@ -181,19 +181,24 @@ export const searchHits = (text, selfId) => {
   if (!Array.isArray(hits)) return []
   return hits
     .filter(hit => hit?.isArchived !== true)
-    .map(hit => ({ id: textOf(hit?.sessionId), title: textOf(hit?.title), branch: textOf(hit?.branch ?? hit?.gitBranch), at: Date.parse(String(hit?.lastActivityAt ?? '')) || 0, snippet: textOf(hit?.snippet) }))
+    .map(hit => ({ id: textOf(hit?.sessionId), title: textOf(hit?.title), at: Date.parse(String(hit?.lastActivityAt ?? '')) || 0, snippet: textOf(hit?.snippet) }))
     .filter(hit => hit.id !== '' && hit.id !== selfId)
     .sort((a, b) => b.at - a.at)
 }
 
-// Whether a hit works on the intent rather than mentions it (A7): its title and branch carry at least half the folder
-// name's words (those of three letters or more), or its snippet shows the intent's prompt.md or progress.md.
+// Whether a hit works on the intent rather than mentions it (A7): its title carries at least half the folder name's
+// words as whole words (those of three letters or more), or its snippet shows the intent's own place: its branch
+// (`intent/<slug>`, which `docs/intent/<slug>/` contains too) or one of its files (`<slug>/prompt.md`, progress.md,
+// log.md, findings.md).
 /** @param {Hit} hit @param {string} slug */
 export const isIntentHit = (hit, slug) => {
-  const words = slug.toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length >= 3)
-  const named = `${hit.title} ${hit.branch}`.toLowerCase()
-  const snippet = hit.snippet.toLowerCase().replace(/\\+/g, '/')
-  return (words.length > 0 && words.filter(word => named.includes(word)).length >= Math.ceil(words.length / 2)) || ['prompt.md', 'progress.md'].some(file => snippet.includes(`${slug.toLowerCase()}/${file}`))
+  const name = slug.toLowerCase()
+  const words = name.split(/[^a-z0-9]+/).filter(word => word.length >= 3)
+  const titled = new Set(hit.title.toLowerCase().split(/[^\p{L}\p{N}]+/u))
+  const isTitled = words.length > 0 && words.filter(word => titled.has(word)).length >= Math.ceil(words.length / 2)
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const ownPlace = new RegExp(`(?:^|[^a-z0-9-])(?:intent/${escaped}(?![a-z0-9-])|${escaped}/(?:prompt|progress|log|findings)\\.md)`)
+  return isTitled || ownPlace.test(hit.snippet.toLowerCase().replace(/\\+/g, '/'))
 }
 
 // A session that is the most recent hit for this many of one read's untracked intents reads them all (a sync or

@@ -337,10 +337,10 @@ describe('which session a press about an intent is for (A1)', () => {
       { sessionId: 'local_old', title: 'Old', lastActivityAt: '2026-10-18T08:00:00Z', snippet: 'kawaii-physics-toolset, see local_zzz' },
       { sessionId: 'local_me', title: 'S2 sync main', lastActivityAt: '2026-10-19T11:00:00Z' },
       { sessionId: 'local_gone', title: 'Archived', lastActivityAt: '2026-10-19T10:59:00Z', isArchived: true },
-      { sessionId: 'local_new', title: 'Kawaii toolset', branch: 'intent/kawaii', lastActivityAt: '2026-10-19T10:00:00Z' },
+      { sessionId: 'local_new', title: 'Kawaii toolset', cwd: 'E:\\Projects\\s2', lastActivityAt: '2026-10-19T10:00:00Z', snippet: 'into intent/kawaii 7662f31' },
     ]), 'local_me')
     expect(hits.map(hit => hit.id)).toEqual(['local_new', 'local_old'])
-    expect(hits[0]).toEqual({ id: 'local_new', title: 'Kawaii toolset', branch: 'intent/kawaii', at: Date.parse('2026-10-19T10:00:00Z'), snippet: '' })
+    expect(hits[0]).toEqual({ id: 'local_new', title: 'Kawaii toolset', at: Date.parse('2026-10-19T10:00:00Z'), snippet: 'into intent/kawaii 7662f31' })
     // No activity time: the app's own order (a stable sort keeps it); an id in a snippet is never a hit.
     expect(searchHits(reply([{ sessionId: 'local_a', snippet: 'local_zzz' }, { sessionId: 'local_b' }]), 'local_me').map(hit => hit.id)).toEqual(['local_a', 'local_b'])
     expect(searchHits(SAID + '[]', 'local_me')).toEqual([])
@@ -351,17 +351,32 @@ describe('which session a press about an intent is for (A1)', () => {
   })
 
   /** @param {string} id @param {Partial<import('../hooks/handoff.mjs').Hit>} [more] @returns {import('../hooks/handoff.mjs').Hit} */
-  const hit = (id, more = {}) => ({ id, title: '', branch: '', at: 0, snippet: '', ...more })
+  const hit = (id, more = {}) => ({ id, title: '', at: 0, snippet: '', ...more })
 
-  test('A7: a hit works on an intent when its title and branch carry most of its words, or its snippet shows the intent\'s prompt.md or progress.md', () => {
+  test('A7: a hit works on an intent when its title carries most of its words as whole words, or its snippet shows the intent\'s branch or files', () => {
     expect(isIntentHit(hit('a', { title: 'Kawaii toolset' }), 'kawaii-physics-toolset')).toBe(true)
     expect(isIntentHit(hit('a', { title: 'Physics pass' }), 'kawaii-physics-toolset')).toBe(false)
-    expect(isIntentHit(hit('a', { title: 'Worker', branch: 'intent/elite-hatred02-physicscontrol' }), 'elite-hatred02-physicscontrol')).toBe(true)
     expect(isIntentHit(hit('a', { title: 'Login worker' }), 'login')).toBe(true)
+    // Whole words only: "you" is not in "layout", "session" not in "sessions".
+    expect(isIntentHit(hit('a', { title: 'Layout sessions jumper' }), 'needs-you-session-jump')).toBe(false)
+    expect(isIntentHit(hit('a', { title: 'Needs you: session jump' }), 'needs-you-session-jump')).toBe(true)
     expect(isIntentHit(hit('a', { title: 'Build typed Breakable conversion' }), 'customizer-weapon-fit-closeout')).toBe(false)
     expect(isIntentHit(hit('a', { title: 'Night shift', snippet: 'wrote docs\\intent\\tower-stair-pcg\\progress.md' }), 'tower-stair-pcg')).toBe(true)
     expect(isIntentHit(hit('a', { title: 'Night shift', snippet: 'Edit docs/intent/tower-stair-pcg/prompt.md' }), 'tower-stair-pcg')).toBe(true)
     expect(isIntentHit(hit('a', { title: 'Night shift', snippet: 'reading tower-stair-pcg findings' }), 'tower-stair-pcg')).toBe(false)
+    expect(isIntentHit(hit('a', { snippet: 'appended L-3 to tower-stair-pcg/log.md' }), 'tower-stair-pcg')).toBe(true)
+    expect(isIntentHit(hit('a', { snippet: 'see docs/intent/tower-stair-pcg/ for the rows' }), 'tower-stair-pcg')).toBe(true)
+    // Another intent whose name starts with this one's is not this one.
+    expect(isIntentHit(hit('a', { snippet: 'pushed intent/tower-stair-pcg-v2 a1b2c3d' }), 'tower-stair-pcg')).toBe(false)
+    expect(isIntentHit(hit('a', { snippet: 'mytower-stair-pcg/prompt.md' }), 'tower-stair-pcg')).toBe(false)
+  })
+
+  test('A7: on the live reply shape (no branch field), the branch is read from the snippet', () => {
+    // sessionId, title, cwd, isArchived, lastActivityAt, snippet: what the app's search answers.
+    const [worker] = searchHits(reply([{ sessionId: 'local_w', title: 'Fix the pane', cwd: 'D:\\Projects\\ather-mods', isArchived: false, lastActivityAt: '2026-10-26T09:00:00Z', snippet: '…merged into intent/needs-you-session-jump 7662f31 and pushed…' }]), 'local_me')
+    expect(worker && isIntentHit(worker, 'needs-you-session-jump')).toBe(true)
+    const [reader] = searchHits(reply([{ sessionId: 'local_r', title: 'S2 sync main', cwd: 'E:\\Projects\\s2', isArchived: false, lastActivityAt: '2026-10-26T09:00:00Z', snippet: '…the needs-you-session-jump decision is waiting…' }]), 'local_me')
+    expect(reader && isIntentHit(reader, 'needs-you-session-jump')).toBe(false)
   })
 
   test(`A7: a session that is the top hit of ${WIDE_HITS} or more of one read's intents is nobody's guess; a hit that works on the intent wins over a plain mention; none without one`, () => {
