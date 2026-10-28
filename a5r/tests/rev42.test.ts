@@ -6,8 +6,8 @@ import { focusLease, parseFocus, type Focus } from '../hooks/focus.ts'
 import { hintOf, judgePrompt, type JudgeFacts } from '../hooks/judge.ts'
 import { endLease, holderNotices, leaseSummary, type LeaseRecord } from '../hooks/lease.ts'
 import { COMEBACK_N, comebackLook, comebackOf, overrunLook } from '../hooks/looks.ts'
-import { closeArgv, closeAnswer, isNight, namesProject, orphanLook, orphanNotice, orphanOf, type OrphanInput, type OrphanRecord } from '../hooks/orphan.ts'
-import { isNoEditorLease, isSyncConcerned, liveWait, liveWaitMin, pieSeen, prunable, pruneArgv, staleWants, waitStart } from '../hooks/truth.ts'
+import { askLook, closeArgv, closeAnswer, idleArgv, isNight, orphanLook, orphanNotice, orphanOf, parseIdle, sharedEditorPid, type OrphanInput, type OrphanRecord } from '../hooks/orphan.ts'
+import { isNoEditorLease, isSyncConcerned, liveWait, liveWaitMin, namesPath, pieSeen, prunable, pruneArgv, staleWants, waitStart } from '../hooks/truth.ts'
 import { CONFIG } from './config.fixture.ts'
 import { A5RPANE, LOCK, ME, NOW, PROJ, find, opts, still, text, world, type Tree } from './world.ts'
 
@@ -124,17 +124,19 @@ test('A122: the person\'s Release on the overrun row frees the lock (rule=manual
 
 // ---------- A123: an orphan Editor closed, gracefully, only when certain ----------
 const SINCE = NOW - 60 * MIN
+const SHARED = { root: 'E:/s2', uproject: UPROJECT }
 const S2_EDITOR: Proc = { name: 'UnrealEditor', pid: 777, gb: 22, parentAlive: false, cmd: '"D:\\GameEditors\\5.8\\Engine\\Binaries\\Win64\\UnrealEditor.exe" "E:\\s2\\S2.uproject" -unattended', startedAt: SINCE + 3 * MIN }
 const OTHER_EDITOR: Proc = { name: 'UnrealEditor', pid: 888, gb: 10, parentAlive: true, cmd: '"D:\\UE\\UnrealEditor.exe" "E:\\Projects\\FluidNinjaLIVE\\FluidNinja.uproject"', startedAt: SINCE + 5 * MIN }
 const goneHolder = (o: Partial<SessionFile> = {}): SessionFile => ({ ...file('bbbbbbbb'), heartbeatAt: NOW - 40 * MIN, lastTurnAt: NOW - 45 * MIN, agents: 0, holding: { since: SINCE, end: NOW + 30 * MIN, extended: 0 }, ...o })
-const orphanIn = (o: Partial<OrphanInput> = {}): OrphanInput => ({ lock: parseLockLine(held('bbbbbbbb', 'lane-bbbbbbbb', SINCE, NOW + 30 * MIN)), files: [goneHolder()], lanes: [], now: NOW, probe: probe([S2_EDITOR]), uproject: UPROJECT, queued: 1, claim: null, pieDrivers: [], ...o })
+const lockWith = (pid: number | null, since = SINCE, end = NOW + 30 * MIN) => parseLockLine(held('bbbbbbbb', 'lane-bbbbbbbb', since, end, pid))
+const orphanIn = (o: Partial<OrphanInput> = {}): OrphanInput => ({ lock: lockWith(777), files: [goneHolder()], lanes: [], now: NOW, probe: probe([S2_EDITOR]), shared: SHARED, queued: 1, claim: null, pieDrivers: [], watchedSince: NOW - 2 * H, idle: null, ...o })
 
-test('A123: unit: every condition holds → close that one PID; each condition failed alone keeps it', () => {
+test('A123: unit: every condition holds → close the PID the lock names; each condition failed alone keeps it', () => {
   const ok = orphanOf(orphanIn())
   expect(ok).toMatchObject({ kind: 'close', pid: 777, id8: 'bbbbbbbb', since: SINCE })
-  expect(ok.kind === 'close' && ok.why).toContain('started 13:43, during the lease')
+  expect(ok.kind === 'close' && ok.why).toContain('(the PID its lock line names)')
   const keep = (o: Partial<OrphanInput>) => orphanOf(orphanIn(o)).kind
-  // 1 the holder certainly gone (30 min: no heartbeat, no lane beat, no turn, no agent)
+  // 1 the holder certainly gone (30 min: no heartbeat, no lane beat, no turn, no agent), watched 30 min by this A5R
   expect(keep({ files: [goneHolder({ heartbeatAt: NOW - MIN })] })).toBe('keep') // alive
   expect(keep({ files: [goneHolder({ heartbeatAt: NOW - 20 * MIN })] })).toBe('keep') // gone, but not 30 min
   expect(keep({ files: [goneHolder({ lastTurnAt: NOW - 10 * MIN })] })).toBe('keep') // a turn 10 min ago
@@ -142,33 +144,51 @@ test('A123: unit: every condition holds → close that one PID; each condition f
   expect(keep({ files: [goneHolder({ agents: 1 })] })).toBe('keep') // an agent runs
   expect(keep({ lanes: [{ sessionId: SID('bbbbbbbb'), hasEnded: true, mtimeMs: NOW - 10 * MIN }] })).toBe('keep') // its lane beat 10 min ago
   expect(keep({ files: [] })).toBe('keep') // no file to read
-  // 2 the process: its command line names the shared .uproject, its PID the lock's or started in the lease
+  expect(keep({ watchedSince: NOW - 10 * MIN })).toBe('keep') // Fable review D3: A5R just turned on (or this session just started): it has not watched the 30 min itself
+  // 2 the process: its command line names the shared .uproject and its PID is the lock's
   expect(keep({ probe: probe([{ ...S2_EDITOR, cmd: '"D:\\UE\\UnrealEditor.exe" "E:\\s2-wt\\S2.uproject"' }]) })).toBe('keep')
   expect(keep({ probe: probe([{ ...S2_EDITOR, cmd: undefined }]) })).toBe('keep') // unread command line
-  expect(keep({ probe: probe([{ ...S2_EDITOR, startedAt: SINCE - MIN }]) })).toBe('keep') // started before the lease, not the lock's PID
-  expect(orphanOf(orphanIn({ probe: probe([{ ...S2_EDITOR, startedAt: SINCE - MIN }]), lock: parseLockLine(held('bbbbbbbb', 'lane-bbbbbbbb', SINCE, NOW + 30 * MIN, 777)) }))).toMatchObject({ kind: 'close', pid: 777 }) // the lock's PID
-  expect(keep({ probe: probe([S2_EDITOR, { ...S2_EDITOR, pid: 779 }]) })).toBe('keep') // two: uncertain
-  expect(keep({ probe: probe([{ ...S2_EDITOR, parentAlive: true }]) })).toBe('keep') // review C2: started in the lease but its parent lives: the person may have opened it by hand
-  expect(keep({ lock: parseLockLine(held('bbbbbbbb', 'lane-bbbbbbbb', SINCE, NOW + 30 * MIN, 999)) })).toBe('keep') // review C2: the lock names another PID: only that one is ever its Editor
+  expect(keep({ lock: lockWith(999) })).toBe('keep') // the lock names another PID: only that one is ever its Editor
   expect(keep({ probe: null })).toBe('keep') // no reading
   // 3 no build, test or PIE
   expect(keep({ probe: probe([S2_EDITOR, { name: 'UnrealBuildTool', pid: 5, gb: 1, parentAlive: true }]) })).toBe('keep')
   expect(keep({ probe: probe([S2_EDITOR, { name: 'UnrealEditor-Cmd', pid: 6, gb: 4, parentAlive: true, cmd: 'x' }]) })).toBe('keep')
   expect(keep({ probe: probe([{ ...S2_EDITOR, title: 'S2 Preview [NetMode: Standalone 0]  (64-bit/PC D3D SM6)' }]) })).toBe('keep')
   expect(keep({ probe: probe([S2_EDITOR, { name: 'python', pid: 7, gb: 0.1, parentAlive: true, cmd: 'python E:/s2/docs/handoff/pie-perf-tools/lab.py run' }]), pieDrivers: ['lab.py'] })).toBe('keep')
-  // 4 someone queued, or night
+  expect(keep({ probe: probe([S2_EDITOR, { name: 'python', pid: 7, gb: 0.1, parentAlive: true, cmd: 'python docs/handoff/pie-perf-tools/lab.py run' }]), pieDrivers: ['lab.py'] })).toBe('keep') // review pass 3: run from inside the checkout it names no path: unknown is PIE
+  // 4 someone queued; or night with the workstation idle 30 min or locked (Fable review D5)
   expect(keep({ queued: 0 })).toBe('keep')
-  expect(orphanOf(orphanIn({ queued: 0, now: at(21, 0), lock: parseLockLine(held('bbbbbbbb', 'lane-bbbbbbbb', at(20, 0), at(21, 30))), files: [goneHolder({ heartbeatAt: at(20, 10), lastTurnAt: at(20, 5), holding: null })], probe: probe([{ ...S2_EDITOR, startedAt: at(20, 3) }]) })).kind).toBe('close')
+  const night = (idle: OrphanInput['idle']) => orphanOf(orphanIn({ queued: 0, now: at(21, 30), lock: lockWith(777, at(20, 0), at(22, 0)), files: [goneHolder({ heartbeatAt: at(20, 10), lastTurnAt: at(20, 5), holding: null })], watchedSince: at(19, 0), idle }))
+  expect(night(null)).toMatchObject({ kind: 'keep', needsIdle: true }) // no idle reading yet: the step reads it, never closes without it
+  expect(night({ idleMin: 10, locked: false })).toMatchObject({ kind: 'keep' }) // Hai at the machine at 21:30
+  expect(night({ idleMin: 45, locked: false }).kind).toBe('close')
+  expect(night({ idleMin: 2, locked: true }).kind).toBe('close')
+  expect(orphanOf(orphanIn({ now: at(21, 30), lock: lockWith(777, at(20, 0), at(22, 0)), files: [goneHolder({ heartbeatAt: at(20, 10), lastTurnAt: at(20, 5), holding: null })], watchedSince: at(19, 0), idle: { idleMin: 1, locked: false } })).kind).toBe('close') // someone queued: the rules as by day
   expect([isNight(at(20, 0)), isNight(at(8, 59)), isNight(at(9, 0)), isNight(at(19, 59))]).toEqual([true, true, false, false])
+  expect([parseIdle('{"idleMin":45,"upMin":5711,"locked":false}'), parseIdle('{"idleMin":-1,"upMin":5711,"locked":false}'), parseIdle('{"idleMin":65000,"upMin":5711,"locked":false}'), parseIdle('{"idleMin":45,"locked":false}'), parseIdle('oops'), parseIdle(undefined)]).toEqual([{ idleMin: 45, locked: false }, null, null, null, null, null]) // review pass 3: idle longer than the uptime is a broken reading, never idle
+  expect(idleArgv().join(' ')).toContain('[A5R.LastInput]::GetTickCount()') // the same 32-bit tick as GetLastInputInfo
+  expect(idleArgv().join(' ')).not.toContain('TickCount64') // absent in Windows PowerShell 5.1: it read as 0 and every night as idle
   // 5 no Focus on it
   expect(keep({ claim: { kind: 'focus', id8: 'bbbbbbbb', lane: 'lane-bbbbbbbb', end: NOW + H } })).toBe('keep')
 })
 
-test('A123: unit: another project\'s Editor is never closed, whatever else holds; the close is a WM_CLOSE to one PID, checked again, never a kill', () => {
+test('A123 (Fable review D1): with no PID in the lock nothing is closed: the one Editor of the checkout started in the lease is only shown to the person', () => {
+  const ask = orphanOf(orphanIn({ lock: lockWith(null) }))
+  expect(ask).toMatchObject({ kind: 'ask', pid: 777 })
+  expect(askLook(ask)[0]?.what).toContain("lane-bbbbbbbb (session bbbbbbbb) looks gone and the shared checkout's Editor PID 777 may be its own")
+  expect(askLook(ask)[0]?.next).toContain('A5R closes only an Editor its holder\'s lock line names')
+  expect(orphanOf(orphanIn({ lock: lockWith(null), probe: probe([{ ...S2_EDITOR, parentAlive: true }]) })).kind).toBe('ask') // a hand launch too: shown, never closed
+  expect(orphanOf(orphanIn({ lock: lockWith(null), probe: probe([{ ...S2_EDITOR, startedAt: SINCE - MIN }]) })).kind).toBe('keep') // started before the lease: not even shown
+  expect(orphanOf(orphanIn({ lock: lockWith(null), probe: probe([S2_EDITOR, { ...S2_EDITOR, pid: 779 }]) })).kind).toBe('keep') // two: uncertain
+  expect(askLook(orphanOf(orphanIn()))).toEqual([]) // a close is no question
+})
+
+test('A123: unit: another project\'s Editor is never closed, whatever else holds; the close is a WM_CLOSE to one PID, checked again, never a kill; the HELD line names the shared Editor', () => {
   expect(orphanOf(orphanIn({ probe: probe([OTHER_EDITOR]) })).kind).toBe('keep')
   expect(orphanOf(orphanIn({ probe: probe([OTHER_EDITOR, S2_EDITOR]) }))).toMatchObject({ kind: 'close', pid: 777 })
-  expect(orphanOf(orphanIn({ probe: probe([OTHER_EDITOR]), lock: parseLockLine(held('bbbbbbbb', 'lane-bbbbbbbb', SINCE, NOW + 30 * MIN, 888)) })).kind).toBe('keep') // even the PID the lock names
-  expect([namesProject('"E:\\s2\\S2.uproject" -x', UPROJECT), namesProject('E:/s2/S2.uproject', UPROJECT), namesProject('"E:\\s2\\S2.uproject.bak"', UPROJECT), namesProject('"X:\\E:\\s2\\S2.uproject"', UPROJECT)]).toEqual([true, true, false, false])
+  expect(orphanOf(orphanIn({ probe: probe([OTHER_EDITOR]), lock: lockWith(888) })).kind).toBe('keep') // even the PID the lock names
+  expect([namesPath('"E:\\s2\\S2.uproject" -x', UPROJECT), namesPath('E:/s2/S2.uproject', UPROJECT), namesPath('"E:\\s2\\S2.uproject.bak"', UPROJECT), namesPath('"X:\\E:\\s2\\S2.uproject"', UPROJECT), namesPath('python E:\\s2\\x.py', 'E:/s2', true), namesPath('python E:\\s2-wt\\x.py', 'E:/s2', true)]).toEqual([true, true, false, false, true, false])
+  expect([sharedEditorPid(probe([OTHER_EDITOR, S2_EDITOR]), UPROJECT), sharedEditorPid(probe([OTHER_EDITOR]), UPROJECT), sharedEditorPid(probe([{ ...S2_EDITOR, cmd: undefined }]), UPROJECT)]).toEqual([777, null, null]) // Fable review D2
   const argv = closeArgv(777, UPROJECT).join(' ')
   expect(argv).toContain("Get-CimInstance Win32_Process -Filter 'ProcessId = 777'")
   expect(argv).toContain("Contains('e:/s2/s2.uproject')")
@@ -180,17 +200,21 @@ test('A123: unit: another project\'s Editor is never closed, whatever else holds
   expect(orphanLook(r, probe([S2_EDITOR]), NOW + 2 * MIN)).toEqual([]) // within 3 min
   expect(orphanLook(r, probe([S2_EDITOR]), NOW + 3 * MIN)[0]?.what).toContain('was asked to close at 14:40 and still runs (it may be showing its own save prompt)')
   expect(orphanLook(r, probe([]), NOW + 10 * MIN)).toEqual([]) // it exited
+  expect(orphanLook(r, probe([{ name: 'python', pid: 777, gb: 0.1, parentAlive: true }]), NOW + 10 * MIN)).toEqual([]) // Fable review D4: the PID reused by another program
+  expect(orphanLook(r, probe([{ ...S2_EDITOR, startedAt: NOW + 5 * MIN }]), NOW + 10 * MIN)).toEqual([]) // reused by a later Editor
   expect(orphanNotice(r, 'bbbbbbbb')[0]?.text).toContain('A5R asked your Editor (PID 777) to close at 14:40')
   expect(orphanNotice(r, ME8)).toEqual([])
 })
 
-test('A123: the orphan is closed by one session with one WM_CLOSE to its PID (logged rule=orphan-close, recorded); another project\'s Editor beside it is never touched', opts(), async ($, on) => {
+test('A123: the orphan is closed by one session with one WM_CLOSE to the PID its lock names, once this A5R has watched 30 min (logged rule=orphan-close, recorded); another project\'s Editor beside it is never touched', opts(), async ($, on) => {
   const w = world(on, { ram: '40', procs: [S2_EDITOR, OTHER_EDITOR], git: { CloseMainWindow: { stdout: 'sent' } } })
-  w.put(LOCK, held('bbbbbbbb', 'lane-bbbbbbbb', SINCE, NOW + 30 * MIN))
-  w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify(goneHolder({ want: want() })))
+  w.put(LOCK, held('bbbbbbbb', 'lane-bbbbbbbb', SINCE, NOW + 90 * MIN, 777))
+  w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify(goneHolder({ want: want(), holding: { since: SINCE, end: NOW + 90 * MIN, extended: 0 } })))
   w.put(`${HF}/editor/${ME8}.json`, meFile({ want: want({ requestedAt: NOW - 5 * MIN }) }))
   await $.session.start(START)
-  await w.clock.advance(MIN)
+  await w.clock.advance(20 * MIN)
+  expect(w.runs.filter(r => r.includes('CloseMainWindow')).length).toBe(0) // this session started 20 min ago: it has not watched 30 min
+  await w.clock.advance(11 * MIN)
   const closes = w.runs.filter(r => r.includes('CloseMainWindow'))
   expect(closes.length).toBe(1)
   expect(closes[0]).toContain("ProcessId = 777'")
@@ -199,7 +223,27 @@ test('A123: the orphan is closed by one session with one WM_CLOSE to its PID (lo
   expect(JSON.parse(w.read(`${HF}/orphan-close.json`))).toMatchObject({ pid: 777, id8: 'bbbbbbbb', answer: 'sent', by: ME8 })
   await w.clock.advance(3 * MIN) // still running: the person looks (its save prompt), A5R never asks again
   expect(w.runs.filter(r => r.includes('CloseMainWindow')).length).toBe(1)
-  expect(text(find(await pane($, w), 'hai-look'))).toContain('the Editor (PID 777) left by lane-bbbbbbbb (session bbbbbbbb, gone) was asked to close at 14:40 and still runs')
+  expect(text(find(await pane($, w), 'hai-look'))).toContain('the Editor (PID 777) left by lane-bbbbbbbb (session bbbbbbbb, gone) was asked to close at')
+})
+
+test('A123 (Fable review D1): with no PID in the lock A5R closes nothing and NEEDS A LOOK names the candidate', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', procs: [S2_EDITOR], git: { CloseMainWindow: { stdout: 'sent' } } })
+  w.put(LOCK, held('bbbbbbbb', 'lane-bbbbbbbb', SINCE, NOW + 90 * MIN))
+  w.put(`${HF}/editor/bbbbbbbb.json`, JSON.stringify(goneHolder({ want: want(), holding: { since: SINCE, end: NOW + 90 * MIN, extended: 0 } })))
+  w.put(`${HF}/editor/${ME8}.json`, meFile({ want: want({ requestedAt: NOW - 5 * MIN }) }))
+  await $.session.start(START)
+  await w.clock.advance(31 * MIN)
+  expect(w.runs.filter(r => r.includes('CloseMainWindow')).length).toBe(0)
+  expect(text(find(await pane($, w), 'hai-look'))).toContain("the shared checkout's Editor PID 777 may be its own")
+})
+
+test('A66 (Fable review D2): the holder\'s HELD line names the shared checkout\'s Editor, not another project\'s that the probe lists first', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', procs: [OTHER_EDITOR, S2_EDITOR] })
+  w.put(LOCK, held(ME8, 'tail-vfx', NOW - 5 * MIN, NOW + 40 * MIN))
+  w.put(`${HF}/editor/${ME8}.json`, meFile({ want: want(), holding: { since: NOW - 5 * MIN, end: NOW + 40 * MIN, extended: 0 } }))
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(lockOf(w).pid).toBe(777)
 })
 
 test('A125: this session\'s own wait counts minute by minute while it is alive, from 0 at its request', opts(), async ($, on) => {
@@ -261,10 +305,20 @@ test('A124: the conductor\'s own A5R plans the sync by itself through the sync p
   await $.session.start(START)
   await w.clock.advance(MIN)
   const s = parseSyncFile(w.read(SYNC))
-  expect([s?.state, s?.holder.id8, s?.at, s?.build]).toEqual(['planned', ME8, at(10, 45), true])
+  expect([s?.state, s?.holder.id8, s?.at, s?.build]).toEqual(['planned', ME8, at(10, 45), false]) // merge only unless autoSyncBuild (pending Hai's word)
   expect(w.read(LOG)).toContain('| rule=auto-sync |')
   await w.clock.advance(MIN)
   expect(parseSyncFile(w.read(SYNC))?.at).toBe(at(10, 45)) // not planned again
+})
+
+test('A124: the autoSyncBuild option plans the sync with a build', { ...opts(), options: { ...opts().options, autoSyncBuild: true } }, async ($, on) => {
+  const w = world(on, { ram: '40', now: at(10, 0) })
+  w.put(LOCK, FREE)
+  w.put(SYNC, JSON.stringify(sync({ at: at(1, 0), updatedAt: at(1, 30) })))
+  w.put(`${HF}/editor/${ME8}.json`, meFile({ lane: 'sync-main', title: 'S2 sync main', heartbeatAt: at(10, 0) }))
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(parseSyncFile(w.read(SYNC))?.build).toBe(true)
 })
 
 test('A124: a session that is not the would-be holder never plans', opts(), async ($, on) => {
@@ -301,7 +355,10 @@ test('A125: unit: requests of sessions gone 2 h are withdrawn; PIE is seen from 
   expect(staleWants([stale, { ...stale, id8: 'dddddddd', heartbeatAt: NOW - 100 * MIN }, { ...stale, id8: 'eeeeeeee', holding: { since: 0, end: 0, extended: 0 } }], [], NOW).map(f => f.id8)).toEqual(['cccccccc'])
   expect(staleWants([stale], [{ sessionId: SID('cccccccc'), hasEnded: true, mtimeMs: NOW - 30 * MIN }], NOW)).toEqual([]) // its lane beat 30 min ago
   const py: Proc = { name: 'python', pid: 9, gb: 0.1, parentAlive: true, cmd: '"C:\\Python\\python.exe" E:\\s2\\docs\\handoff\\pie-perf-tools\\lab.py --pie' }
-  expect([pieSeen(probe([py]), []), pieSeen(probe([py]), ['lab.py']), pieSeen(probe([py]), ['ab.py']), pieSeen(probe([{ name: 'UnrealEditor', pid: 1, gb: 1, parentAlive: true, title: 'S2 Preview [NetMode: Standalone 0]' }]), []), pieSeen(probe([{ name: 'UnrealEditor', pid: 1, gb: 1, parentAlive: true, title: 'S2 - Unreal Editor' }]), [])]).toEqual([false, true, false, true, false])
+  const win = (title: string, cmd = S2_EDITOR.cmd): Proc => ({ name: 'UnrealEditor', pid: 1, gb: 1, parentAlive: true, title, cmd })
+  expect([pieSeen(probe([py]), [], SHARED), pieSeen(probe([py]), ['lab.py'], SHARED), pieSeen(probe([py]), ['ab.py'], SHARED), pieSeen(probe([win('S2 Preview [NetMode: Standalone 0]')]), [], SHARED), pieSeen(probe([win('S2 - Unreal Editor')]), [], SHARED)]).toEqual([false, true, false, true, false])
+  // Another checkout's PIE is not this checkout's: a PIE window of another .uproject, a driver run from another folder.
+  expect([pieSeen(probe([win('FluidNinja Preview [NetMode: Standalone 0]', OTHER_EDITOR.cmd)]), [], SHARED), pieSeen(probe([{ ...py, cmd: 'python E:\\Projects\\FluidNinjaLIVE\\lab.py' }]), ['lab.py'], SHARED), pieSeen(probe([{ ...py, cmd: 'python lab.py' }]), ['lab.py'], SHARED)]).toEqual([false, false, false])
   const lock = parseLockLine(held('bbbbbbbb', 'lane-bbbbbbbb', NOW - 40 * MIN, NOW + 20 * MIN))
   const holder = (notes: object) => file('bbbbbbbb', { holding: { since: NOW - 40 * MIN, end: NOW + 20 * MIN, extended: 0, notes } })
   expect(isNoEditorLease({ lock, holder: holder({}), now: NOW, probe: probe() })).toBe(true)

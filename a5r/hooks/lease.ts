@@ -2,7 +2,7 @@
 // `$`; register.ts reads and writes the files. A100 one record per lease (Saved/A5R/leases.jsonl) and its 24-hour summary;
 // A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it
 // (A116: in plain words; A117: in the person's order, a holder's resized end).
-import { liveWaitMin } from './truth.ts'
+import { liveWaitMin, waitStart } from './truth.ts'
 import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, lockTimes, noticeIds, noticeText, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
@@ -150,6 +150,25 @@ export const returnOf = (reason: EndReason, requestedAt: number | undefined, at:
  * forced release's place within its 60 min, marked kept (used once: a release of that request keeps nothing). */
 export const placeOf = (me: Pick<SessionFile, 'want' | 'return'> | null, now: number): Pick<Want, 'requestedAt' | 'isKept'> =>
   me?.want ? { requestedAt: me.want.requestedAt, ...(me.want.isKept ? { isKept: true } : {}) } : me?.return && now < me.return.until ? { requestedAt: me.return.requestedAt, isKept: true } : { requestedAt: now }
+
+/** A string field of a tool's input ('' when it is no string). */
+export const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+/** A request's slot as a session's file keeps it, from the editor tool's input (the sync's own request, A79, alike): asking
+ * again keeps the place in the queue (A104: so does a forced release, once, 60 min) and, A125, the live wait so far. */
+export const wantOf = (me: Pick<SessionFile, 'want' | 'return'> | null, e: Record<string, unknown>, now: number): Want => {
+  return {
+    minutes: Math.max(5, Math.min(180, Math.round(Number(e.minutes) || 30))),
+    pie: e.pie === true,
+    build: e.build === true,
+    what: str(e.what).slice(0, 120) || 'Editor work',
+    mode: e.mode === 'unattended' ? 'unattended' : 'interactive',
+    pausable: e.pausable === undefined ? e.pie !== true : e.pausable !== false, // A103: a PIE request is not pausable unless it says so
+    nextSafe: str(e.next_safe) || 'after save',
+    ...placeOf(me, now),
+    ...waitStart(me?.want, now),
+    ...(e.launch === false ? { launch: false } : {}),
+  }
+}
 
 /** D3: the window a yield notice gives the holder (its text: "at your next safe point (≤ 10 min)"). */
 export const YIELD_SAFE_MS = 10 * 60_000

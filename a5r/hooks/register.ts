@@ -14,7 +14,7 @@ import {
 } from './coord.ts'
 import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, afterFocusWant, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
 import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
-import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, appendCapped, endLease, holderNotices, holderText, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
+import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, str, wantOf, appendCapped, endLease, holderNotices, holderText, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, idleMsOf, isIdle, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
@@ -27,9 +27,9 @@ import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isU
 import { editorPanel, listText, needsLook } from './panel.ts'
 import { BINARY_EXCLUDES, BINARY_EXT, addedLines, diffInBatches, fileDiff, remotesOf, urlIsRepo, type GivenDiff } from './diffs.ts'
 import { COMEBACK_BOX_MIN, comebackLook, overrunLook, type LookPress } from './looks.ts'
-import { ORPHAN_FILE, closeAnswer, closeArgv, orphanLook, orphanNotice, orphanOf, parseOrphan, type OrphanRecord } from './orphan.ts'
+import { ORPHAN_FILE, askLook, closeAnswer, closeArgv, idleArgv, orphanLook, orphanNotice, orphanOf, parseIdle, parseOrphan, sharedEditorPid, type Idle, type OrphanRecord } from './orphan.ts'
 import { autoSyncOf, holderMissingText } from './autosync.ts'
-import { isNoEditorLease, isSyncConcerned, liveWait, waitStart, pieSeen, pruneArgv, prunable, staleWants } from './truth.ts'
+import { isNoEditorLease, isSyncConcerned, liveWait, pieSeen, pruneArgv, prunable, staleWants, type Shared } from './truth.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -56,7 +56,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, editorBox, lookBox, session
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string; pieDrivers?: string }
+type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string; pieDrivers?: string; autoSyncBuild?: boolean }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -166,6 +166,7 @@ let pieStartedAt = 0 // A100: when this session's PIE last started (the lease no
 let leaseLog: LeaseRecord[] = [] // A100: Saved/A5R/leases.jsonl as last read (the 24-hour summary)
 let leaseLogAt = 0
 let orphanRec: OrphanRecord | null = null // A123: Saved/A5R/orphan-close.json as last read
+let watchedSince = 0 // A123 (Fable review D3): since when this session's A5R has coordinated without a break (0: off)
 const LEASE_LOG_EVERY_MS = 5 * 60_000
 let isPieLow = false
 let pieLowSince = 0
@@ -193,7 +194,6 @@ const s2Cwds = new Map<string, boolean>() // A16: whether a client session's fol
 const MAX_CLASSIFIED = 40 // conflicted paths checked against rule 11; the rest count as foreign
 const MAX_ADDED_CHECKED = 5_000 // paths origin/main adds that are checked on disk at the cutoff (A11)
 
-const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const parentOf = (p: string): string => {
   const i = p.lastIndexOf('/')
   return i < 0 ? '' : p.slice(0, i)
@@ -1140,7 +1140,7 @@ async function takeSyncLock($: Engine, opts: Opts, s: SyncFile, now: number): Pr
   lockRaw = await $.fs.read(lockFile()).catch(() => null)
   lock = lockOf(lockRaw)
   const minutes = Math.ceil((s.hardEnd - now) / 60_000)
-  const want: Want = { sync: { at: s.at, role: 'worker' }, ...wantFrom({ action: 'request', minutes, build: s.build, launch: false, mode: 'unattended', pausable: false, what: `${SYNC_SLOT}${clockOf(s.at)}`, next_safe: 'after the merge' } as unknown as Input, now), requestedAt: now }
+  const want: Want = { sync: { at: s.at, role: 'worker' }, ...wantOf(me, { action: 'request', minutes, build: s.build, launch: false, mode: 'unattended', pausable: false, what: `${SYNC_SLOT}${clockOf(s.at)}`, next_safe: 'after the merge' } as unknown as Input, now), requestedAt: now }
   if (holdsLock()) {
     // Review 5: the holder still holds the Editor at T (its cutoff notice said so): the lease becomes the sync's, so the
     // worker may use or close that Editor and a5r releases it when the sync ends.
@@ -1445,6 +1445,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await readTheme($)
   if ((await readA5R($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
   if (!(await readA5R($))) {
+    watchedSince = 0
     await syncSlotWhenOff($, opts).catch(err => $.ui.log(`a5r: sync slot: ${String(err)}`, { to: 'debug' }))
     showStatus($)
     return
@@ -1453,6 +1454,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await ensureTools($)
   await restoreMe($, opts)
   const now = await $.clock.now()
+  watchedSince ||= now
   await editorSerial(() => editorPass($, opts, now))
   await readLeaseLog($, opts, now)
   await refreshClients($, opts, now)
@@ -1929,7 +1931,7 @@ async function notePid($: Engine, opts: Opts, fresh: boolean): Promise<void> {
   const reading = fresh ? ((await freshProbe($, opts)) ?? probe) : probe
   if (!reading) return
   if (lock.pid !== null && reading.procs.some(p => p.pid === lock.pid)) return
-  const pid = editorPid(reading)
+  const pid = sharedEditorPid(reading, sharedNow().uproject) // Fable review D2: the shared checkout's Editor, never another project's
   if (pid === null || pid === lock.pid) return
   const w = me.want
   const h = heldNow(await $.clock.now())
@@ -2986,7 +2988,7 @@ function ramStep(opts: Opts, now: number): void {
   // to read it itself (no silent pass), once per minute of failure.
   if (isPieRunning && holdsLock() && (!probe || !probeOk)) push({ id: `pie:probe-failed:${Math.floor(now / 60_000)}`, text: NOTICES.pieProbeFailed(), isActionable: true })
   if (!probe || !probeOk) return
-  const isPie = holdsLock() && (isPieRunning || pieSeen(probe, launchersOf(opts.pieDrivers))) // A125: or a PIE window, or the person's PIE drivers
+  const isPie = holdsLock() && (isPieRunning || pieSeen(probe, launchersOf(opts.pieDrivers), sharedNow())) // A125: or a PIE window, or the person's PIE drivers
   if (isPie && pieStartedAt < (me?.holding?.since ?? now)) pieStartedAt = now // the lease notes its first PIE (A100)
   if (isPie && probe.freeGb < PIE_ABORT_GB) {
     if (!isPieLow) pieLowSince = now
@@ -3067,22 +3069,6 @@ const placeText = (d: GrantDecision | null): string => {
 
 const BUILD_WINDOW_MIN = 45 // the S2 standard's build window while anyone waits (A81)
 
-/** A request's slot as this session's file keeps it: the editor tool's request and the sync's own request (A79) alike. */
-function wantFrom(e: Input, now: number): Want {
-  return {
-    minutes: Math.max(5, Math.min(180, Math.round(Number(e.minutes) || 30))),
-    pie: e.pie === true,
-    build: e.build === true,
-    what: str(e.what).slice(0, 120) || 'Editor work',
-    mode: e.mode === 'unattended' ? 'unattended' : 'interactive',
-    pausable: e.pausable === undefined ? e.pie !== true : e.pausable !== false, // A103: a PIE request is not pausable unless it says so
-    nextSafe: str(e.next_safe) || 'after save',
-    ...placeOf(me, now), // asking again keeps the place in the queue; A104: so does a forced release, once, 60 min
-    ...waitStart(me?.want, now), // A125
-    ...(e.launch === false ? { launch: false } : {}),
-  }
-}
-
 /** A81 (rev 28): a build window over 45 min (the S2 standard) is granted when nobody else is queued for the Editor and no
  * sync cutoff falls inside it; with someone queued the 45-minute cap stays. Read after a fresh tick. */
 function buildWindowProblem(want: Want, now: number): string | null {
@@ -3155,7 +3141,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       const forSync = syncFile && isHolderInSync(syncFile, me8, phaseOf(syncFile, now)) ? syncFile : null
       const claim = claimNow(now)
       const focus = claim?.kind === 'focus' && claim.id8 === me8 ? focusNow(now) : null // A118: its own request is the Focus's
-      const want: Want = focus ? focusWant(focus, now, wantFrom(e, now)) : { ...wantFrom(e, now), ...(forSync ? { sync: { at: forSync.at, role: 'holder' as const } } : {}) }
+      const want: Want = focus ? focusWant(focus, now, wantOf(me, e, now)) : { ...wantOf(me, e, now), ...(forSync ? { sync: { at: forSync.at, role: 'holder' as const } } : {}) }
       const long = focus ? null : buildWindowProblem(want, now)
       if (long) return long
       me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
@@ -3380,15 +3366,20 @@ const focusAction = ($: Engine, opts: Opts, a: FocusAction, via: string) =>
 const lookPress = async ($: Engine, opts: Opts, p: LookPress): Promise<void> =>
   answerPress($, opts, p.kind === 'focus' ? (await focusAction($, opts, { kind: 'start', who: { id8: p.id8 }, minutes: COMEBACK_BOX_MIN, milestone: '' }, 'panel')).text : await orderAction($, opts, { kind: 'release', who: { id8: p.id8 } }, 'panel'))
 
-/** A123: an Editor certainly orphaned (orphan.ts) is asked to close by one session (the alert claim, a fresh probe first):
- * a WM_CLOSE to that one PID; the record is kept for NEEDS A LOOK and its holder, and logged. */
+/** The shared checkout as command lines name it (its folder and its .uproject). */
+const sharedNow = (): Shared => ({ root: s2Root(), uproject: checkout?.uproject ? `${s2Root()}/${checkout.uproject}` : '' })
+/** A123: the orphan question on a reading (the panel's and the step's alike); `idle` only when a night close needs it. */
+const orphanNow = (opts: Opts, now: number, p: Probe | null, idle: Idle | null = null) => orphanOf({ lock, files: filesNow(), lanes, now, probe: p, shared: sharedNow(), queued: queueNow(filesNow(), now).length, claim: claimNow(now), pieDrivers: launchersOf(opts.pieDrivers), watchedSince, idle })
+/** A123: an Editor certainly orphaned (orphan.ts) is asked to close by one session (the alert claim, a fresh probe first, and
+ * at night with nobody queued the workstation's idle reading): a WM_CLOSE to that one PID; the record is kept for NEEDS A
+ * LOOK and its holder, and logged. */
 async function orphanStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const uproject = checkout?.uproject ? `${s2Root()}/${checkout.uproject}` : ''
-  const orphan = (p: Probe | null) => orphanOf({ lock, files: filesNow(), lanes, now, probe: p, uproject, queued: queueNow(filesNow(), now).length, claim: claimNow(now), pieDrivers: launchersOf(opts.pieDrivers) })
-  if (orphan(probe).kind !== 'close') return
-  const o = orphan(await freshProbe($, opts))
+  const first = orphanNow(opts, now, probe)
+  if (first.kind !== 'close' && !(first.kind === 'keep' && first.needsIdle)) return
+  const fresh = await freshProbe($, opts)
+  const o = orphanNow(opts, now, fresh, first.kind === 'keep' ? parseIdle((await $.process.run(idleArgv(), { timeoutMs: 20_000 }).catch(() => null))?.stdout) : null)
   if (o.kind !== 'close' || !(await claimAlert($, opts, `orphan-close-${o.pid}-${o.since}`))) return
-  const answer = closeAnswer((await $.process.run(closeArgv(o.pid, uproject), { timeoutMs: 20_000 }).catch(() => null))?.stdout)
+  const answer = closeAnswer((await $.process.run(closeArgv(o.pid, sharedNow().uproject), { timeoutMs: 20_000 }).catch(() => null))?.stdout)
   orphanRec = { v: 1, pid: o.pid, at: now, id8: o.id8, lane: o.lane, cmd: o.cmd, why: o.why, by: me8, answer }
   await $.fs.write(`${hfDir()}/${ORPHAN_FILE}`, JSON.stringify(orphanRec)).catch(() => undefined)
   await orchestrateLog($, opts, { ...holderFacts(lock, now, probe), at: now, rule: 'orphan-close', acted: answer === 'sent', note: `${answer}: PID ${o.pid} (${o.cmd}); ${o.why}` }).catch(() => undefined)
@@ -3402,7 +3393,7 @@ async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
   const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: queueNow(filesNow(), now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
   const log = (note: string) => orchestrateLog($, opts, actedEvent('auto-sync', note, now)).catch(() => undefined)
   const s = syncFile
-  if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: true })}`)
+  if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: opts.autoSyncBuild === true })}`)
   else if (a.kind === 'take' && a.holder.id8 === me8 && s && (await claimAlert($, opts, `auto-sync-take-${s.id}-${s.updatedAt}`))) await log(`handed on (its holder ${s.holder.lane} is gone): ${await syncAction($, opts, 'takeover', {})}`)
   else if (a.kind === 'cancel' && s && (await writeSync($, opts, endedSync(s, 'cancelled', a.note, now), s))) await log(`cancelled the sync at ${clockOf(s.at)}: ${a.note}`) // one writer: sync.json's read-compare-write
   if ((a.kind === 'cancel' || a.kind === 'no-holder') && (await claimAlert($, opts, `auto-sync-told-${a.kind}-${a.kind === 'cancel' ? (s?.id ?? '') : ymd(now)}`))) $.ui.toast(holderMissingText(a, now), { timeoutMs: 15_000 })
@@ -3837,7 +3828,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
   // A65: the Orchestrate card, the judges' latest verdicts, last before the rules (the rules stay the foot, A27).
   const titleOf = appTitleOf(appNow(now))
-  const look = isS2 ? [...overrunLook({ ...grantInput(now), titleOf }), ...comebackLook({ records: leaseLog, files: filesNow(), lanes, now, isFocusRunning: focusNow(now)?.isRunning === true, titleOf }), ...orphanLook(orphanRec, probe, now), ...focusLook(focusFile, filesNow(), lanes, now, titleOf), ...needsLook(currentVerdicts(now), now)] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look; A121-A124
+  const look = isS2 ? [...overrunLook({ ...grantInput(now), titleOf }), ...comebackLook({ records: leaseLog, files: filesNow(), lanes, now, isFocusRunning: focusNow(now)?.isRunning === true, titleOf }), ...orphanLook(orphanRec, probe, now), ...askLook(orphanNow(opts, now, probe)), ...focusLook(focusFile, filesNow(), lanes, now, titleOf), ...needsLook(currentVerdicts(now), now)] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look; A121-A124
   if (look.length > 0) kids.push(lookBox(el, look, PANE_INK(), p => void lookPress($, opts, p)))
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).

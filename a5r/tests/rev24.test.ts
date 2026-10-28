@@ -16,7 +16,7 @@ const held = (id8: string, since: number, end: number, pid: number | null = null
 const peer = (id8: string, o: Partial<SessionFile> = {}): string => JSON.stringify({ ...blankSession(SID(id8), `lane-${id8}`, `title ${id8}`, NOW), ...o })
 const mineHolding = (w: ReturnType<typeof world>, since: number, end: number) =>
   w.put(`${HF}/editor/${ME8}.json`, JSON.stringify({ ...blankSession(ME, 'tail-vfx', 'Tail', NOW), lastTurnAt: NOW, holding: { since, end, extended: 0 } }))
-const EDITOR_PROC = { name: 'UnrealEditor', pid: 45392, gb: 26, parentAlive: true }
+const EDITOR_PROC = { name: 'UnrealEditor', pid: 45392, gb: 26, parentAlive: true, cmd: '"D:/UE/UnrealEditor.exe" "E:/s2/S2.uproject"' } // rev 42 (Fable review D2): the HELD line names only the shared checkout's Editor
 const want = (o: Partial<Want> = {}): Want => ({ minutes: 30, pie: false, build: false, what: 'their slot', mode: 'interactive', pausable: true, nextSafe: 'after save', requestedAt: NOW - 5 * MIN, ...o })
 const judges = (w: ReturnType<typeof world>): Rec[] => ((w.calls['agent.spawn'] ?? []) as Rec[]).filter(s => (s.subagent_type ?? s.subagentType) === 'a5r:judge')
 const out = (ran: { result?: unknown; text?: string; deny?: string }): string => String(ran.deny ?? ran.result ?? ran.text ?? '')

@@ -183,7 +183,7 @@ test('A118: the focus session takes the free lock to its box end (no launch gate
   expect(out(await $.tool.call({ tool: EDITOR, action: 'extend', minutes: 30 } as never))).toContain('the lease runs to the box end, which only the person moves')
   expect(lockOf(w).id8).toBe(ME8)
   // An Editor opens, closes; 50 quiet minutes pass (no turn, no Editor use): the lock stays, with no idle, yield or overrun notice.
-  w.machine.procs = [{ name: 'UnrealEditor', pid: 4242, gb: 20, parentAlive: true }]
+  w.machine.procs = [{ name: 'UnrealEditor', pid: 4242, gb: 20, parentAlive: true, cmd: '"D:/UE/UnrealEditor.exe" "E:/s2/S2.uproject"' }]
   await w.clock.advance(MIN)
   expect(lockOf(w).pid).toBe(4242)
   w.machine.procs = []

@@ -51,10 +51,30 @@ export const staleWants = (files: readonly SessionFile[], lanes: readonly LaneBe
  * the level viewport changes no window title. */
 export const PIE_WINDOW = /\bPreview \[NetMode|\(PIE\)/i
 const escaped = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** Whether the probe sees PIE running: an Unreal Editor's PIE window, or a Python run of one of the person's PIE drivers
- * (the `pieDrivers` option, script names in lower case; none by default, so no project's script is named in the plugin). */
-export const pieSeen = (probe: Probe | null, drivers: readonly string[]): boolean =>
-  (probe?.procs ?? []).some(p => (isUnrealProc(p) && PIE_WINDOW.test(p.title ?? '')) || (/^python/i.test(p.name) && drivers.some(d => new RegExp(`(^|[\\\\/\\s"'])${escaped(d)}($|[\\s"'])`, 'i').test(p.cmd ?? ''))))
+export const slash = (s: string): string => s.replace(/\\/g, '/').toLowerCase()
+/** Whether a command line names this path as a whole (quoted or bare; never a longer name that starts with it): a file
+ * (a .uproject) ends at a space or quote; a folder (`isDir`) may go on with a `/`. */
+export const namesPath = (cmd: string, path: string, isDir = false): boolean => {
+  const want = slash(path).replace(/\/$/, '')
+  const at = want ? slash(cmd).indexOf(want) : -1
+  if (at < 0) return false
+  const before = slash(cmd)[at - 1] ?? ' '
+  const after = slash(cmd)[at + want.length] ?? ' '
+  return /[\s"'=]/.test(before) && (isDir ? /[\s"'/]/ : /[\s"']/).test(after)
+}
+/** The shared checkout as a command line may name it: its folder and its .uproject. */
+export type Shared = { root: string; uproject: string }
+/** Whether the probe sees PIE running: an Unreal Editor whose window title is a PIE window, or a Python run of one of the
+ * person's PIE drivers (the `pieDrivers` option, script names in lower case; none by default, so no project's script is named
+ * in the plugin). With `shared`, only the shared checkout's: a PIE window of its .uproject, a driver whose command line names
+ * the checkout or its .uproject (the lease's PIE note: another project's PIE is not this lease's). With null, any (A123's
+ * close: a driver run from inside the checkout names no path, and unknown is PIE). */
+export const pieSeen = (probe: Probe | null, drivers: readonly string[], shared: Shared | null): boolean =>
+  (probe?.procs ?? []).some(p =>
+    isUnrealProc(p)
+      ? PIE_WINDOW.test(p.title ?? '') && (!shared || namesPath(p.cmd ?? '', shared.uproject))
+      : /^python/i.test(p.name) && drivers.some(d => new RegExp(`(^|[\\\\/\\s"'])${escaped(d)}($|[\\s"'])`, 'i').test(p.cmd ?? '')) && (!shared || namesPath(p.cmd ?? '', shared.root, true) || namesPath(p.cmd ?? '', shared.uproject)),
+  )
 
 // ---------- the no-editor alert ----------
 /** A lease held this long with no Unreal Editor and no build at any point is worth the no-editor line. */
