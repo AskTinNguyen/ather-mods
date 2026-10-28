@@ -346,3 +346,15 @@ With a screenshot of the A5R panel: EDITOR QUEUE · 4 WAITING (▶ sync-main gra
 > Bạn nghĩ sao?
 
 > Ok, Task focus thì như bạn nói: Được giao editor trong khoảng thời gian dài, nhưng chỉ auto gỡ focus sau khoảng 2-3 tiếng không hoàn thành, chứ 60' thì cũng hơi ít. Các task khác tự động được A5R điều phối offset thời gian lấy slot editor nếu có biến động (đó thực ra là việc chính của Editor orchestrator anyway). Các task không có slot editor vẫn có thể thực hiện các tác vụ khác nếu có thể và không gây ảnh hưởng đến editor của task chính (focus)
+
+## L-46 (2026-10-28) | class: intent | -> rev 42
+
+> Audit những gì tôi làm việc trên máy này tuần qua và suggest có gì cần upgrade cải thiện workflow phía A5R lẫn AtherAutomata không?
+
+(The orchestrator's audit of 2026-10-21..28 from Saved/A5R logs, the S2 session transcripts and S2 git/intents; its A5R findings are the MEASURED lines of A121–A125.)
+
+> Có cho A5R đóng Editor mồ côi của session đã chết không (mục A5R-3)?
+> Có, nếu không tạo ra kết quả mà duy trì blocker thì đương nhiên nên đóng. Tuy nhiên cần tránh đóng nhầm
+
+> Giờ sync cố định là mấy giờ?
+> Ngày ít nhất 2 lần, còn giờ cố định thì tôi nghĩ nên linh động tùy vào tình hình các session

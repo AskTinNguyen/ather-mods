@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 41
+- Rev: 42
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -196,6 +196,38 @@ The three share one clock and one message channel: hai-flow notices, delivered b
   - **Allowed for non-focus sessions:** code and asset edits on disk outside the focus session's touch paths, builds and tests in their own worktrees when free RAM stays above the launch gate for a no-PIE slot, git work under the usual rules, and reading the Editor through MCP reads.
 
   Proof: engine tests (each refused form, with its alternative text; a worktree build allowed; an MCP read allowed; a write refused).
+- A121 (rev 42): A lane that keeps coming back is offered Focus. A lane is offered when it re-requests the Editor 3 or more times within 2 h, counting a request made within 60 min of its own release; the count comes from leases.jsonl and the session files. NEEDS A LOOK then shows `<lane> asked for the Editor N times in 2 h (re-launching each time) → Focus it for 2 h?`, with a one-press Focus (person-only, as A118). The rules text drops "release when done" in favour of: release when the task's Editor work is done, not between a test and its fix. MEASURED 2026-10-21..28 (audit): 85 of 137 leases were re-requests within 60 min (median gap 3.7 min), 73 of them lost to another session, 74 re-launched the Editor; 82.6 h of the week's 124.5 h live wait; Focus used 0 times. Proof: engine tests (the third re-request in 2 h shows the offer; a press starts Focus; no offer below the threshold).
+- A122 (rev 42): An overrun with people waiting is never judged "working" for running an Editor. When a lease is 30 min past its end and anyone is queued, the panel's NEEDS A LOOK shows the holder, how long it has overrun, how many sessions wait and how long, with the person's release control (A117/rev 41). The judge's rule "an Unreal Editor runs → working" no longer applies past the end. The holder is woken with the overrun. MEASURED (audit): breakable-authoring-toolset held 433 and 791 min against 45–60 asked, on 26 Oct 02:48–10:02 and 26 Oct 20:52 to 27 Oct 10:03, while 20.5 session-hours waited. The judge said "working (rule): an Unreal Editor runs" three times. Proof: engine tests.
+- A123 (rev 42): An Editor left by a gone session is closed, gracefully and only when it is certainly orphaned (Hai, 2026-10-28: "nếu không tạo ra kết quả mà duy trì blocker thì đương nhiên nên đóng. Tuy nhiên cần tránh đóng nhầm").
+  - A5R closes it only when every condition holds:
+    - the lock's holder session is gone (no heartbeat and no lane beat for 30 min or more, no turn and no agent);
+    - the Editor process's command line names the shared checkout's `.uproject`, and its PID is the one the lock line names or was first seen during that lease;
+    - no build, test or PIE process of the checkout runs;
+    - someone is queued, or it is night (20:00–09:00);
+    - no Focus of a live session holds it.
+  - How it closes: a graceful WM_CLOSE to that PID only, never to every UnrealEditor and never a kill.
+    - If the Editor has unsaved work, it shows its own save prompt and does not exit. A5R does not touch that prompt, and Hai is told.
+    - If the Editor has not exited 3 min after the close, Hai is told.
+    - Once it has exited, the lease lapses as usual and the next session is granted.
+  - Every close is logged (`rule=orphan-close`: the PID, its command line, its holder, and why), and the holder session is told if it comes back.
+
+  MEASURED (audit): 22 Oct 20:49 to 23 Oct 10:21 a gone session's Editor held the lock 812 min. Its last turn was at 22:42, and holder-gone was logged only at 10:09. Proof: engine tests for each condition, each failing it on its own; a test that a non-S2 Editor (another .uproject) is never closed.
+- A124 (rev 42): Sync main at least twice a day, timed to the sessions (Hai: "Ngày ít nhất 2 lần, còn giờ cố định thì tôi nghĩ nên linh động tùy vào tình hình các session").
+  - **When:** when no sync has run or been planned for 6 h, A5R plans one in the next quiet window. A quiet window has no Focus, a queue of 0–1, no lease that would cross its cutoff, and is at least 45 min ahead. A5R aims for 2 or more syncs a day (morning–noon and evening), and never plans a sync whose freeze would fall inside a running Focus.
+  - **Holder:** the session whose title or lane marks it as the sync conductor (as A118's side-session rule reads it), else the last sync's holder while it is alive. With neither, no sync is planned, and Hai is told once a day that no sync holder is live.
+  - **Gone holder:** a planned sync whose holder is gone before the cutoff is handed to the next live candidate, or cancelled and re-planned with Hai told; it no longer expires.
+  - Hai can move or cancel any auto-planned sync as today.
+
+  MEASURED (audit): 2 merges of main in 7 days; the shared branch was 312 commits off main; 3 wip/revert pairs came from the drift. The 28 Oct 15:00 sync expired because its holder (mc-ik-hitstop) was gone. Proof: engine tests (6 h without a sync → planned in a quiet window; never across a Focus; holder chosen; a gone holder handed on).
+- A125 (rev 42): The numbers and alerts tell the truth.
+  - **Stale requests:** a request whose session is gone for 2 h or more is withdrawn, logged, and shown nowhere.
+  - **Waits:** the 24 h summary and the panel count only live waits, while the session is alive.
+  - **PIE:** PIE is seen from the probe (an Unreal PIE window, or the `lab.py`/`mcp.py` drivers the README names, via a plugin option `pieDrivers` with no default) as well as from MCP, so `pieAt` and PIE aborts are recorded.
+  - **The `no-editor` alert:** fires only when a lock is held 30 min or more with no Editor and no build at any point in the lease, once per lease. Alert files are pruned after 7 days.
+  - **The kit guard:** no longer refuses read-only commands on the kit (`sed -n`, `cat`, `rg`, `head`).
+  - **Notices:** the sync cutoff and freeze notices go only to sessions with uncommitted changes in the shared checkout, sessions queued or holding the Editor, and the holder. Others hear only the lift.
+
+  MEASURED (audit): recorded wait 421 h against 124.5 h live; `pieAt` 0 of 87; `no-editor` on 133 of 137 leases; 338 alert files kept; 7 stale requests on file; `sed -n` refused; about 30 sessions told per sync. Proof: engine tests for each.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -209,6 +241,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 42 (2026-10-28): L-46 (the week's audit; Hai: close an orphan Editor safely; sync at least twice a day, timed to the sessions): A121 offer Focus to a lane that keeps coming back, A122 overruns with waiters shown, A123 graceful orphan close, A124 auto-planned syncs, A125 true numbers and fewer alerts.
 - rev 41 (2026-10-23): L-45 (Hai: Editor orchestration should serve delivery; Focus for 2–3 h milestones): A118 Focus, A119 the others re-planned around it, A120 others keep working without touching the focus Editor.
 - rev 40 (2026-10-22): L-44 (Hai: EDITOR QUEUE and SESSIONS overlap, ORCHESTRATE unclear; mockup approved; rearrange and resize): A116 one Editor list, other sessions, NEEDS A LOOK; A117 person-only rearrange and resize.
 - rev 39 (2026-10-21): L-43 (Hai approves F-9): A115 a half-done revert or cherry-pick is guarded like a merge.
