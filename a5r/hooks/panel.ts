@@ -2,7 +2,7 @@
 // queueView), the other sessions (coord.ts sessionsView without the list's rows) and NEEDS A LOOK, as Hai's approved mockup
 // (2026-10-22) lays them out: rows named by the app's titles, reasons in plain words, never the queue's codes. Pure: no
 // `$`; watch.ts draws them, register.ts reads the files.
-import { appTitleOf, claimIn, hhmm, sessionsView, ymd, type AppFacts, type GrantInput, type Phase, type SessionsView } from './coord.ts'
+import { appTitleOf, claimIn, hhmm, sessionsView, ymd, type AppFacts, type GrantInput, type LookRow, type Phase, type SessionsView } from './coord.ts'
 import type { Verdict, VerdictRow } from './judge.ts'
 import { focusHead } from './focus.ts'
 import { holderLine, leftText, queuedLine, queueView, todayLine, type LeaseSummary } from './lease.ts'
@@ -38,7 +38,6 @@ const verdictTime = (at: number, now: number): string => (ymd(at) === ymd(now) ?
 
 /** A116: the verdicts that need the person: a holder likely stuck, or one waiting for his answer. */
 const NEEDS_PERSON: readonly Verdict[] = ['stuck-or-crashed', 'waiting-on-Hai']
-export type LookRow = { what: string; next: string }
 /** NEEDS A LOOK: the current verdicts that need the person (at most three), each its one-line reason and next step; none
  * means the block is left out (`working`, `done`, `unsure` stay in /a5r status and orchestrate.log). */
 export const needsLook = (current: readonly VerdictRow[], now: number): LookRow[] =>

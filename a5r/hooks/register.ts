@@ -25,6 +25,11 @@ import { buildScriptText, buildStartCommand, isScriptAlive, syncBuildScript } fr
 import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG_MS, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, type Miss, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
+import { BINARY_EXCLUDES, BINARY_EXT, addedLines, diffInBatches, fileDiff, remotesOf, urlIsRepo, type GivenDiff } from './diffs.ts'
+import { COMEBACK_BOX_MIN, comebackLook, overrunLook, type LookPress } from './looks.ts'
+import { ORPHAN_FILE, closeAnswer, closeArgv, orphanLook, orphanNotice, orphanOf, parseOrphan, type OrphanRecord } from './orphan.ts'
+import { autoSyncOf, holderMissingText } from './autosync.ts'
+import { isNoEditorLease, isSyncConcerned, liveWait, waitStart, pieSeen, pruneArgv, prunable, staleWants } from './truth.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
 import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
 import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
@@ -51,7 +56,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, editorBox, lookBox, session
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string }
+type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string; pieDrivers?: string }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -160,6 +165,7 @@ let isPieRunning = false // this session started PIE and no stop was seen
 let pieStartedAt = 0 // A100: when this session's PIE last started (the lease notes its first one)
 let leaseLog: LeaseRecord[] = [] // A100: Saved/A5R/leases.jsonl as last read (the 24-hour summary)
 let leaseLogAt = 0
+let orphanRec: OrphanRecord | null = null // A123: Saved/A5R/orphan-close.json as last read
 const LEASE_LOG_EVERY_MS = 5 * 60_000
 let isPieLow = false
 let pieLowSince = 0
@@ -871,6 +877,7 @@ async function readWorld($: Engine, opts: Opts): Promise<void> {
   touches = (await Promise.all(jsons<{ name: string }>(touchList).map(async f => parseTouch(await readJson($, `${dir}/touch/${f.name}`))))).filter((t): t is Touch => t !== null && t.id8 !== me8)
   probe = shared
   conflictHead = await headIn($, root) // A61 / A115
+  orphanRec = parseOrphan(await readJson($, `${dir}/${ORPHAN_FILE}`)) // A123
   verdicts = await readVerdicts($, opts) // A65
 }
 
@@ -1163,7 +1170,7 @@ async function releaseLock($: Engine, opts: Opts, now: number, why: Pick<LeaseEn
 
 /** A100: this session's lease with what it noted since the last minute (the first Editor seen, the first PIE start, a
  * PIE abort). */
-const notedHolding = (h: Holding, now: number): Holding => noteLease(h, { now, editorRuns: unrealPids(probe).length > 0, pieStartedAt, isPieLow })
+const notedHolding = (h: Holding, now: number): Holding => noteLease(h, { now, editorRuns: unrealPids(probe).length > 0, buildRuns: buildProcs(probe).length > 0, pieStartedAt, isPieLow })
 
 /** A100: a lease ends: its record goes to Saved/A5R/leases.jsonl (read, appended, kept to the last 2,000 lines, written
  * whole: two sessions writing in the same instant can lose one line, as orchestrate.log can); the holder's file after
@@ -1454,6 +1461,9 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
   await nudgeStep($, opts, now, window).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
   await syncStep($, opts, now)
+  await orphanStep($, opts, now).catch(err => $.ui.log(`a5r: orphan: ${String(err)}`, { to: 'debug' })) // A123
+  await autoSyncStep($, opts, now).catch(err => $.ui.log(`a5r: auto sync: ${String(err)}`, { to: 'debug' })) // A124
+  await tidyStep($, opts, now).catch(err => $.ui.log(`a5r: tidy: ${String(err)}`, { to: 'debug' })) // A125
   await claimStep($, now)
   await mergeGuardStep($, opts, now)
   currentVerdicts(now) // A89: note which verdicts' incidents are current, so an ended one stays 30 min
@@ -1503,6 +1513,8 @@ async function writeLock($: Engine, opts: Opts, line: string): Promise<boolean> 
 
 /** The holder's side and the waiter's (leaseStep), then this session's wait on record (A112 / A114, waitStep), on every path. */
 async function editorStep($: Engine, opts: Opts, now: number): Promise<void> {
+  if (me?.want && !me.holding) me = { ...me, want: liveWait(me.want, now) } // A125: its wait counts while it is alive
+  for (const n of orphanNotice(orphanRec, me8)) push(n) // A123: told of its Editor closed while it was gone
   await focusStep($, opts, now)
   await leaseStep($, opts, now)
   for (const n of noticesFor(order, me8, now)) push(n) // A117: the person moved this session
@@ -1543,7 +1555,7 @@ async function leaseStep($: Engine, opts: Opts, now: number): Promise<void> {
     }
     // Its end near or past, idle (A101), yields asked of it (A103); A118: what a Focus covers, the Focus notices say (focusStep).
     const claim = claimNow(now) // a sync's holder keeps its idle notice; only a Focus's session goes without
-    for (const n of holderNotices(h, { now, isFocusLease: isFocusLeaseOf(focusFile, me8, h.since), isClaimed: claim?.kind === 'focus' && claim.id8 === me8, editorUseAt: lastEditorUseAt, lastTurnAt: me.lastTurnAt, agents: agentsNow ?? 0, isPie: isPieRunning, isUnattended: me.want?.mode === 'unattended', asks: yieldAsksTo(peers, me8, h, now) })) push(n)
+    for (const n of holderNotices(h, { now, isFocusLease: isFocusLeaseOf(focusFile, me8, h.since), isClaimed: claim?.kind === 'focus' && claim.id8 === me8, editorUseAt: lastEditorUseAt, lastTurnAt: me.lastTurnAt, agents: agentsNow ?? 0, isPie: isPieRunning, isUnattended: me.want?.mode === 'unattended', asks: yieldAsksTo(peers, me8, h, now), waiting: queueNow(filesNow(), now).length })) push(n)
     // A113: a pass slot asked with launch: false began with no Editor (a head waiting for memory means none ran): one that
     // runs now was launched in it.
     const passed = noLaunchPass(me)
@@ -1678,7 +1690,7 @@ async function logCandidates($: Engine, opts: Opts, now: number): Promise<void> 
   const once = async (rule: OrchestrateEvent['rule'], note: string) => {
     if (await claimAlert($, opts, `log-${rule}-${held.id8}-${t.since}`)) await orchestrateLog($, opts, { ...facts, at: now, rule, acted: false, note })
   }
-  if (unrealPids(probe).length === 0 && buildProcs(probe).length === 0) await once('no-editor', `lease ${clockOf(t.since)}-${clockOf(t.end)} held with no Unreal Editor or build process running`)
+  if (isNoEditorLease({ lock: held, holder: filesNow().find(f => f.id8 === held.id8), now, probe })) await once('no-editor', `lease ${clockOf(t.since)}-${clockOf(t.end)} held 30 min or more with no Unreal Editor or build process at any point`)
   if (facts.liveness === 'gone') await once('holder-gone', `the holder's session is gone; lease ${clockOf(t.since)}-${clockOf(t.end)}`)
 }
 
@@ -2149,13 +2161,14 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   if (isHolder && phase === 'frozen' && now >= s.hardEnd - HARD_END_WARN_MS) push({ id: noticeIds.hardEndSoon(s), text: NOTICES.hardEndSoon(s), isActionable: true })
   if (isHolder && isOpenPhase(phase) && !s.plannedBy.includes(me8)) push({ id: noticeIds.holderNamed(s), text: NOTICES.syncHolderNamed(s), isActionable: true })
   // A82: the cutoff concerns the holder and the sessions with uncommitted changes in the shared checkout (their touch
-  // set) or holding or queued for the Editor; any other session hears only the one line at the freeze.
+  // set) or holding or queued for the Editor; A125: so does the freeze; any other session hears only the lift.
   // Review 4: a shell command run inside the shared checkout since the last commit there counts too (err on telling). The
   // dry-run's conflicts and untracked files reach their owners through the same touch set (ownerConflicts below).
-  const isConcerned = isHolder || touched.size > 0 || sharedShellAt !== null || holdsLock() || Boolean(me.want)
+  const isConcerned = isSyncConcerned({ isHolder, touched: touched.size, sharedShellAt, holds: holdsLock(), wants: Boolean(me.want) })
   if (phase === 'cutoff' && isConcerned) push({ id: noticeIds.cutoff(s), text: NOTICES.cutoff(s, isHolder, holdsLock()), isActionable: true })
   if (!isHolder && holdsLock() && ((phase === 'cutoff' && now >= s.at - RELEASE_BEFORE_MS) || phase === 'frozen')) push({ id: noticeIds.releaseBy(s), text: NOTICES.releaseBy(s), isActionable: true })
-  if (phase === 'frozen') push({ id: noticeIds.frozen(s), text: isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s), isActionable: false })
+  if (phase === 'frozen' && isConcerned) push({ id: noticeIds.frozen(s), text: isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s), isActionable: false })
+  else if (phase === 'frozen') delivered.add(`${noticeIds.frozen(s)}:seen`) // A125: not told the freeze, it hears the lift
   // A107: the holder fetches and dry-runs at the cutoff and again at T (off the tick chain); the worker starts after T's.
   const dry = isHolder ? dryStep(s, phase, dryJob, now) : null
   if (dry?.start) startDryRun($, opts, s, dry.start)
@@ -2170,7 +2183,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
     if (isHolder && s.state === 'expired' && now - (s.endedAt ?? s.updatedAt) < 6 * 3_600_000) push({ id: noticeIds.lifted(s), text: NOTICES.expired(s), isActionable: true })
     // The lift reaches the sessions that were told of this sync, and only for a while after it ended.
     const stale = [noticeIds.cutoff(s), noticeIds.frozen(s), noticeIds.releaseBy(s)]
-    const wasTold = stale.some(id => delivered.has(id) || pending.some(n => n.id === id))
+    const wasTold = [...stale, `${noticeIds.frozen(s)}:seen`].some(id => delivered.has(id) || pending.some(n => n.id === id))
     if (wasTold && now - (s.endedAt ?? s.updatedAt) < 6 * 3_600_000) {
       // A82: a session told only the freeze line hears the lift at its next turn; one told to act wakes for it.
       const wasAsked = [noticeIds.cutoff(s), noticeIds.releaseBy(s)].some(id => delivered.has(id))
@@ -2418,16 +2431,6 @@ async function passCommand($: Engine, opts: Opts, arg: string): Promise<string> 
 /** A22: what a PR tool's input names (repository `owner/name`, head and base branches), all optional. */
 type PrRefs = { repo?: string; head?: string; base?: string; problem?: string } // A46: problem: the call's refs cannot be read
 
-/** A47 (b): a repository's remotes from `git remote -v`. */
-const remotesOf = (text: string): { name: string; url: string }[] =>
-  [...new Map(text.split(/\r?\n/).map(l => /^(\S+)\s+(\S+)/.exec(l)).filter((m): m is RegExpExecArray => Boolean(m)).map(m => [m[1] ?? '', { name: m[1] ?? '', url: m[2] ?? '' }])).values()]
-/** A47 (b): whether a remote URL is `owner/name` (https, ssh or scp form, with or without .git). */
-const urlIsRepo = (url: string, repo: string): boolean => {
-  const u = url.replace(/\.git$/i, '').toLowerCase()
-  const r = repo.replace(/\.git$/i, '').toLowerCase()
-  return u.endsWith(`/${r}`) || u.endsWith(`:${r}`)
-}
-
 /** A42: the a5r kit's rules/ and tests/ folders as paths in the repository at `root`: where the kit sits inside it, else
  * under the kit's own folder name (the same mod checked out in another worktree of that repository). */
 const kitDirsIn = (root: string): string[] => {
@@ -2456,63 +2459,6 @@ async function prTarget($: Engine, start: string, refs: PrRefs): Promise<{ root:
   }
   for (const ref of [`origin/${headName}`, headName]) if ((await run(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]))?.exitCode === 0) return { root: start, head: ref, branch: headName, problem: null }
   return { root: start, head: null, branch: headName, problem: `head ${headName} is neither checked out in a worktree of this repository nor at origin/${headName}: fetch it, or open the PR from its own checkout` }
-}
-
-/** A52: a PR's diff read from GitHub (`gh pr diff`): its file names, its patch, why it could not be read whole, its head. */
-type GivenDiff = { files: string; patch: string; why: string | null; branch: string }
-
-/** A52: one file's part of a whole patch (`diff --git a/<path> b/<path>` to the next file), or ''. */
-const fileDiff = (patch: string, path: string): string => {
-  const parts = patch.replace(/\r/g, '').split(/^(?=diff --git )/m)
-  return parts.find(p => p.startsWith('diff --git ') && (p.split('\n')[0] ?? '').endsWith(` b/${path}`)) ?? ''
-}
-
-/** A88 (a): the -U0 text of a branch diff read in batches of paths (at most 40 paths or 12,000 characters of them per git
- * call); a batch whose output passes 4 MiB is halved and read again, so only a single file can stay unread: its name is
- * the reason, and the score refuses with it (an unread diff never passes). */
-async function diffInBatches(paths: readonly string[], whole: (args: string[]) => Promise<{ out: string; why: string | null }>, range: string): Promise<{ out: string; why: string | null }> {
-  const batches: string[][] = []
-  let cur: string[] = []
-  let size = 0
-  for (const p of paths) {
-    if (cur.length >= 40 || size + p.length > 12_000) {
-      batches.push(cur)
-      cur = []
-      size = 0
-    }
-    cur.push(p)
-    size += p.length + 1
-  }
-  if (cur.length) batches.push(cur)
-  const outs: string[] = []
-  while (batches.length > 0) {
-    const b = batches.shift() ?? []
-    const r = await whole(['diff', '-U0', '--no-color', range, '--', ...b])
-    if (!r.why) {
-      outs.push(r.out)
-      continue
-    }
-    if (!r.why.endsWith('passed 4 MiB')) return { out: '', why: r.why }
-    if (b.length === 1) return { out: '', why: `git diff -U0 of ${b[0]} alone passed 4 MiB (split it, or open it in a PR of its own)` }
-    batches.unshift(b.slice(0, Math.ceil(b.length / 2)), b.slice(Math.ceil(b.length / 2)))
-  }
-  return { out: outs.join('\n'), why: null }
-}
-
-/** Binaries left out of the added-lines diff (they carry no lines to score and make it big). */
-const BINARY_TYPES = ['uasset', 'umap', 'ubulk', 'uexp', 'png', 'jpg', 'jpeg', 'tga', 'exr', 'hdr', 'psd', 'fbx', 'abc', 'wav', 'ogg', 'mp4', 'dll', 'exe', 'pdb', 'lib', 'zip', '7z']
-const BINARY_EXCLUDES = BINARY_TYPES.map(x => `:(exclude,icase)*.${x}`)
-const BINARY_EXT = new RegExp(`\\.(${BINARY_TYPES.join('|')})$`, 'i')
-
-/** The added lines per file of `git diff -U0`. */
-const addedLines = (diff: string): Map<string, string[]> => {
-  const out = new Map<string, string[]>()
-  let file = ''
-  for (const l of diff.replace(/\r/g, '').split('\n')) {
-    if (l.startsWith('+++ ')) file = l.replace(/^\+\+\+ (b\/)?/, '').trim()
-    else if (l.startsWith('+') && file && file !== '/dev/null') out.set(file, [...(out.get(file) ?? []), l.slice(1)])
-  }
-  return out
 }
 
 /** The PR body a `gh pr create` / `gh api …/pulls` command carries (inline, or the file it names). */
@@ -3040,7 +2986,9 @@ function ramStep(opts: Opts, now: number): void {
   // to read it itself (no silent pass), once per minute of failure.
   if (isPieRunning && holdsLock() && (!probe || !probeOk)) push({ id: `pie:probe-failed:${Math.floor(now / 60_000)}`, text: NOTICES.pieProbeFailed(), isActionable: true })
   if (!probe || !probeOk) return
-  if (isPieRunning && holdsLock() && probe.freeGb < PIE_ABORT_GB) {
+  const isPie = holdsLock() && (isPieRunning || pieSeen(probe, launchersOf(opts.pieDrivers))) // A125: or a PIE window, or the person's PIE drivers
+  if (isPie && pieStartedAt < (me?.holding?.since ?? now)) pieStartedAt = now // the lease notes its first PIE (A100)
+  if (isPie && probe.freeGb < PIE_ABORT_GB) {
     if (!isPieLow) pieLowSince = now
     isPieLow = true
     push({ id: noticeIds.pieAbort(pieLowSince), text: NOTICES.pieAbort(probe.freeGb), isActionable: true })
@@ -3130,6 +3078,7 @@ function wantFrom(e: Input, now: number): Want {
     pausable: e.pausable === undefined ? e.pie !== true : e.pausable !== false, // A103: a PIE request is not pausable unless it says so
     nextSafe: str(e.next_safe) || 'after save',
     ...placeOf(me, now), // asking again keeps the place in the queue; A104: so does a forced release, once, 60 min
+    ...waitStart(me?.want, now), // A125
     ...(e.launch === false ? { launch: false } : {}),
   }
 }
@@ -3395,11 +3344,13 @@ async function personChange($: Engine, opts: Opts, gate: string, plan: (now: num
     const c = plan(now)
     if ('refusal' in c) return no(c.refusal)
     if (!(await c.write())) return no(blocked(gate, `${c.what} changed at the same moment (another press, or its own session's write)`, 'look at the list again and press once more'))
-    await orchestrateLog($, opts, { at: now, rule: c.rule, lane: me?.lane ?? '', id8: me8, procs: [], liveness: 'alive', lastTurnAt: me?.lastTurnAt ?? null, agents: agentsNow, build: false, acted: true, note: c.note }).catch(() => undefined)
+    await orchestrateLog($, opts, actedEvent(c.rule, c.note, now)).catch(() => undefined)
     return { text: noticeText(gate, c.text, c.next), isWritten: true }
   })
 }
 const by = (via: string) => `the person (${via} in ${me?.lane ?? me8})`
+/** An acted orchestrate.log line about one session (this one by default): its lane, liveness, last turn and agents. */
+const actedEvent = (rule: OrchestrateEvent['rule'], note: string, now: number, f: SessionFile | null = me, liveness: OrchestrateEvent['liveness'] = 'alive'): OrchestrateEvent => ({ at: now, rule, lane: f?.lane ?? '', id8: f?.id8 ?? me8, procs: [], liveness, lastTurnAt: f?.lastTurnAt ?? null, agents: f?.id8 === me8 ? agentsNow : (f?.agents ?? null), build: false, acted: true, note })
 
 /** A117: the person's change to the Editor queue (order.ts): the holder's HELD line for a resize, else queue-order.json. */
 const orderAction = async ($: Engine, opts: Opts, a: OrderAction, via: string): Promise<string> =>
@@ -3424,6 +3375,53 @@ const focusAction = ($: Engine, opts: Opts, a: FocusAction, via: string) =>
     const r = applyFocus({ focus: focusFile, me8, files: filesNow(), lanes, now, sync: syncFile, phase: phaseOf(syncFile, now), titleOf: appTitleOf(appNow(now)) }, a, a.kind === 'done' ? (me?.lane ?? me8) : by(via))
     return 'refusal' in r ? r : { write: () => writeFocus($, r.focus), what: 'the Focus', rule: 'focus', note: r.text, text: r.text, next: a.kind === 'done' ? 'the queue runs on in its order' : 'every session reads it at its next minute; the sessions it concerns are told' }
   })
+
+/** A121 / A122: a NEEDS A LOOK press, the person's own (as a row's): a Focus of 2 h, or the release of a holder past its end. */
+const lookPress = async ($: Engine, opts: Opts, p: LookPress): Promise<void> =>
+  answerPress($, opts, p.kind === 'focus' ? (await focusAction($, opts, { kind: 'start', who: { id8: p.id8 }, minutes: COMEBACK_BOX_MIN, milestone: '' }, 'panel')).text : await orderAction($, opts, { kind: 'release', who: { id8: p.id8 } }, 'panel'))
+
+/** A123: an Editor certainly orphaned (orphan.ts) is asked to close by one session (the alert claim, a fresh probe first):
+ * a WM_CLOSE to that one PID; the record is kept for NEEDS A LOOK and its holder, and logged. */
+async function orphanStep($: Engine, opts: Opts, now: number): Promise<void> {
+  const uproject = checkout?.uproject ? `${s2Root()}/${checkout.uproject}` : ''
+  const orphan = (p: Probe | null) => orphanOf({ lock, files: filesNow(), lanes, now, probe: p, uproject, queued: queueNow(filesNow(), now).length, claim: claimNow(now), pieDrivers: launchersOf(opts.pieDrivers) })
+  if (orphan(probe).kind !== 'close') return
+  const o = orphan(await freshProbe($, opts))
+  if (o.kind !== 'close' || !(await claimAlert($, opts, `orphan-close-${o.pid}-${o.since}`))) return
+  const answer = closeAnswer((await $.process.run(closeArgv(o.pid, uproject), { timeoutMs: 20_000 }).catch(() => null))?.stdout)
+  orphanRec = { v: 1, pid: o.pid, at: now, id8: o.id8, lane: o.lane, cmd: o.cmd, why: o.why, by: me8, answer }
+  await $.fs.write(`${hfDir()}/${ORPHAN_FILE}`, JSON.stringify(orphanRec)).catch(() => undefined)
+  await orchestrateLog($, opts, { ...holderFacts(lock, now, probe), at: now, rule: 'orphan-close', acted: answer === 'sent', note: `${answer}: PID ${o.pid} (${o.cmd}); ${o.why}` }).catch(() => undefined)
+}
+
+/** A124: the would-be holder plans the sync (or takes over one whose holder is lost: syncAction's takeover, which also takes
+ * a merge, revert or cherry-pick a gone session left, as by hand) through the person's own sync path, once per proposed
+ * time; with no live holder any one session cancels a lost holder's sync at T − 10 min, and the person is told (once a day
+ * when no holder is live at all). */
+async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
+  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: queueNow(filesNow(), now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
+  const log = (note: string) => orchestrateLog($, opts, actedEvent('auto-sync', note, now)).catch(() => undefined)
+  const s = syncFile
+  if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: true })}`)
+  else if (a.kind === 'take' && a.holder.id8 === me8 && s && (await claimAlert($, opts, `auto-sync-take-${s.id}-${s.updatedAt}`))) await log(`handed on (its holder ${s.holder.lane} is gone): ${await syncAction($, opts, 'takeover', {})}`)
+  else if (a.kind === 'cancel' && s && (await writeSync($, opts, endedSync(s, 'cancelled', a.note, now), s))) await log(`cancelled the sync at ${clockOf(s.at)}: ${a.note}`) // one writer: sync.json's read-compare-write
+  if ((a.kind === 'cancel' || a.kind === 'no-holder') && (await claimAlert($, opts, `auto-sync-told-${a.kind}-${a.kind === 'cancel' ? (s?.id ?? '') : ymd(now)}`))) $.ui.toast(holderMissingText(a, now), { timeoutMs: 15_000 })
+}
+
+/** A125: a request whose session has been gone 2 h is withdrawn from its file (the one write to another session's file:
+ * read-compare-write, so one writer) and logged; alert files older than 7 days are removed once a day. */
+async function tidyStep($: Engine, opts: Opts, now: number): Promise<void> {
+  for (const f of staleWants(filesNow(), lanes, now)) {
+    const path = `${hfDir()}/editor/${f.id8}.json`
+    const raw = await readJson($, path)
+    const cur = parseSessionFile(raw)
+    if (!cur?.want || cur.want.requestedAt !== f.want?.requestedAt || !(await writeChecked($, path, raw, JSON.stringify({ ...cur, want: null }))).isWritten) continue // one writer: the read-compare-write
+    await orchestrateLog($, opts, actedEvent('withdrawn', `its request (asked ${clockOf(cur.want.requestedAt)}, ${cur.want.minutes} min) withdrawn: its session gone since ${clockOf(f.heartbeatAt)}`, now, f, 'gone')).catch(() => undefined)
+  }
+  if (!(await claimAlert($, opts, `prune-alerts-${ymd(now)}`))) return
+  const old = prunable(await $.fs.list(`${hfDir()}/alerts`).catch(() => []), now)
+  if (old.length > 0) await $.process.run(pruneArgv(`${hfDir()}/alerts`, old), { timeoutMs: 60_000 }).catch(() => null)
+}
 
 /** A118: editor-focus.json, written by read-compare-write against the copy this press read. */
 async function writeFocus($: Engine, f: Focus): Promise<boolean> {
@@ -3838,8 +3836,9 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     }
   if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
   // A65: the Orchestrate card, the judges' latest verdicts, last before the rules (the rules stay the foot, A27).
-  const look = isS2 ? [...focusLook(focusFile, filesNow(), lanes, now, appTitleOf(appNow(now))), ...needsLook(currentVerdicts(now), now)] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look
-  if (look.length > 0) kids.push(lookBox(el, look, PANE_INK()))
+  const titleOf = appTitleOf(appNow(now))
+  const look = isS2 ? [...overrunLook({ ...grantInput(now), titleOf }), ...comebackLook({ records: leaseLog, files: filesNow(), lanes, now, isFocusRunning: focusNow(now)?.isRunning === true, titleOf }), ...orphanLook(orphanRec, probe, now), ...focusLook(focusFile, filesNow(), lanes, now, titleOf), ...needsLook(currentVerdicts(now), now)] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look; A121-A124
+  if (look.length > 0) kids.push(lookBox(el, look, PANE_INK(), p => void lookPress($, opts, p)))
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
   if (paneEnterAt === 0) paneEnterAt = now

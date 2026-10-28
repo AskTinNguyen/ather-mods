@@ -2,7 +2,8 @@
 // `$`; register.ts reads and writes the files. A100 one record per lease (Saved/A5R/leases.jsonl) and its 24-hour summary;
 // A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it
 // (A116: in plain words; A117: in the person's order, a holder's resized end).
-import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, lockTimes, noticeIds, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
+import { liveWaitMin } from './truth.ts'
+import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, lockTimes, noticeIds, noticeText, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
 export const LEASES_FILE = 'leases.jsonl'
@@ -12,6 +13,8 @@ export const RETURN_MS = 60 * 60_000
 /** A100: the summary's window, and the same lane asking again within this counts as a return. */
 export const SUMMARY_MS = 24 * 3_600_000
 export const RETURN_WITHIN_MS = 60 * 60_000
+/** A100 / A121: a request asked again within 60 min of the same lane's previous lease end (a kept place, asked before it, too). */
+export const isReturnAsk = (requestedAt: number | null, prevEnd: number): boolean => requestedAt !== null && requestedAt - prevEnd <= RETURN_WITHIN_MS
 /** A102: the retest extension: at most this many minutes, the whole lease at most this long. */
 export const RETEST_MAX_MIN = 15
 export const RETEST_LEASE_MAX_MIN = 90
@@ -46,19 +49,22 @@ export type LeaseRecord = {
   pie: boolean
   build: boolean
   pieAborted: boolean
+  /** A125: how long the request waited while its session was alive (absent: an A5R before 0.26.0). */
+  liveWaitMs?: number
 }
 
 /** A100: what a holder notes about its lease for the record (kept in its Holding, so a reload and a lapsing session read
  * it): the Editor it reused and the queue behind it at the grant, the first Editor seen (the grant itself when it reused
  * one: no launch), the first PIE start, a PIE abort. */
-export type LeaseNotes = { reuse?: number; queue?: number; editorAt?: number; pieAt?: number; pieAborted?: boolean }
+export type LeaseNotes = { reuse?: number; queue?: number; editorAt?: number; pieAt?: number; pieAborted?: boolean; buildAt?: number } // buildAt: A125, the first build seen
 
 /** A100: the holder's lease with what it noted since the last minute. */
-export const noteLease = (h: Holding, f: { now: number; editorRuns: boolean; pieStartedAt: number; isPieLow: boolean }): Holding => {
+export const noteLease = (h: Holding, f: { now: number; editorRuns: boolean; buildRuns: boolean; pieStartedAt: number; isPieLow: boolean }): Holding => {
   const n = h.notes ?? {}
   const notes: LeaseNotes = {
     ...n,
     ...(n.editorAt === undefined && f.editorRuns ? { editorAt: f.now } : {}),
+    ...(n.buildAt === undefined && f.buildRuns ? { buildAt: f.now } : {}),
     ...(n.pieAt === undefined && f.pieStartedAt >= h.since ? { pieAt: f.pieStartedAt } : {}),
     ...(f.isPieLow ? { pieAborted: true } : {}),
   }
@@ -102,6 +108,7 @@ export const endLease = (f: SessionFile, end: LeaseEnd): { record: LeaseRecord |
         pie: f.want?.pie === true,
         build: f.want?.build === true,
         pieAborted: n.pieAborted === true,
+        ...(f.want?.waited === undefined ? {} : { liveWaitMs: f.want.waited }),
       }
     : null
   return { record, after: { ...rest, want: null, holding: null, ...(back ? { return: back } : {}) } }
@@ -122,7 +129,7 @@ export const parseLeases = (text: string | null): LeaseRecord[] =>
       const endAt = num(v.endAt)
       const reason = REASONS.find(r => r === v.endReason)
       if (grantedAt === null || endAt === null || reason === undefined || typeof v.lane !== 'string') return []
-      return [{ v: 1, lane: v.lane, id8: String(v.id8 ?? ''), requestedAt: num(v.requestedAt), grantedAt, reusedPid: num(v.reusedPid), minutes: num(v.minutes) ?? 0, firstEditorSeenAt: num(v.firstEditorSeenAt), pieAt: num(v.pieAt), extensions: num(v.extensions) ?? 0, endAt, endReason: reason, editorLeftOpen: v.editorLeftOpen === true, queueAtGrant: num(v.queueAtGrant) ?? 0, pie: v.pie === true, build: v.build === true, pieAborted: v.pieAborted === true }]
+      return [{ v: 1, lane: v.lane, id8: String(v.id8 ?? ''), requestedAt: num(v.requestedAt), grantedAt, reusedPid: num(v.reusedPid), minutes: num(v.minutes) ?? 0, firstEditorSeenAt: num(v.firstEditorSeenAt), pieAt: num(v.pieAt), extensions: num(v.extensions) ?? 0, endAt, endReason: reason, editorLeftOpen: v.editorLeftOpen === true, queueAtGrant: num(v.queueAtGrant) ?? 0, pie: v.pie === true, build: v.build === true, pieAborted: v.pieAborted === true, ...(typeof v.liveWaitMs === 'number' ? { liveWaitMs: v.liveWaitMs } : {}) }]
     } catch {
       return []
     }
@@ -170,14 +177,20 @@ export const isIdleHolder = (x: { now: number; since: number; end: number; edito
  * of it (A103, once it is between Editor work). A118: a lease a Focus gave hears its end from the Focus notices alone, and
  * while this session's Focus runs (`isClaimed`: a Focus claim only; a sync's holder still hears it is idle) it is neither told
  * it is idle nor asked to yield. */
-export const holderNotices = (h: Holding, x: { now: number; isFocusLease: boolean; isClaimed: boolean; editorUseAt: number; lastTurnAt: number | undefined; agents: number; isPie: boolean; isUnattended: boolean; asks: readonly { asker: SessionFile; ask: YieldAsk }[] }): Notice[] => {
+export const holderNotices = (h: Holding, x: { now: number; isFocusLease: boolean; isClaimed: boolean; editorUseAt: number; lastTurnAt: number | undefined; agents: number; isPie: boolean; isUnattended: boolean; asks: readonly { asker: SessionFile; ask: YieldAsk }[]; waiting: number }): Notice[] => {
   const { now } = x
-  const ends: Notice[] = x.isFocusLease ? [] : now >= h.end ? [{ id: noticeIds.overrun(h.since, h.end), text: NOTICES.overrun(h.end), isActionable: true }] : now >= h.end - LEASE_WARN_MS ? [{ id: noticeIds.leaseEnding(h.since, h.end), text: NOTICES.leaseEnding(h.end), isActionable: true }] : []
+  const ends: Notice[] = x.isFocusLease ? [] : now >= h.end ? [{ id: noticeIds.overrun(h.since, h.end), text: NOTICES.overrun(h.end), isActionable: true }, ...overrunWait(h, now, x.waiting)] : now >= h.end - LEASE_WARN_MS ? [{ id: noticeIds.leaseEnding(h.since, h.end), text: NOTICES.leaseEnding(h.end), isActionable: true }] : []
   if (x.isClaimed) return ends
   const idle = isIdleHolder({ now, since: h.since, end: h.end, editorUseAt: x.editorUseAt, lastTurnAt: x.lastTurnAt, agents: x.agents, isPie: x.isPie, isUnattended: x.isUnattended }) ? [{ id: noticeIds.idle(h.since), text: NOTICES.idle(Math.round((now - Math.max(x.editorUseAt, h.since)) / 60_000)), isActionable: true }] : []
   const yields = isYieldMoment({ now, since: h.since, end: h.end, editorUseAt: x.editorUseAt }) ? x.asks.map(({ asker, ask }) => ({ id: noticeIds.yield(asker.id8, ask.at), text: NOTICES.yield(asker.lane, ask.minutes), isActionable: true })) : []
   return [...ends, ...idle, ...yields]
 }
+
+/** A122: 30 min past its end with sessions waiting, the holder is woken once more (an actionable notice reaches it idle). */
+export const OVERRUN_WAIT_MS = 30 * 60_000
+const OVERRUN_WAIT_ID = 'editor:overrun-wait:'
+const overrunWait = (h: Holding, now: number, waiting: number): Notice[] =>
+  now >= h.end + OVERRUN_WAIT_MS && waiting > 0 ? [{ id: `${OVERRUN_WAIT_ID}${h.since}`, text: noticeText('Editor lease', `your lease ended at ${hhmm(h.end)}, ${Math.round((now - h.end) / 60_000)} min ago, and ${waiting} session${waiting === 1 ? '' : 's'} wait${waiting === 1 ? 's' : ''} for the Editor`, 'release it now with the editor tool if your Editor work is done (stop PIE and save your own assets first); if it is not, say so: the person may give you more time or free the lock'), isActionable: true }] : []
 
 /** A102: a second extension while others wait is the retest one: at most 15 min, no build lease, an Unreal Editor running,
  * the whole lease within 90 min, asked before its end. */
@@ -202,8 +215,8 @@ export const leaseSummary = (all: readonly LeaseRecord[], now: number): LeaseSum
   const own = recs.filter(r => r.endReason !== 'sync')
   const held = own.reduce((n, r) => n + Math.max(0, r.endAt - r.grantedAt), 0)
   const launching = own.reduce((n, r) => n + Math.max(0, Math.min(r.firstEditorSeenAt ?? r.endAt, r.endAt) - r.grantedAt), 0)
-  const returns = recs.filter(r => all.some(n => n.lane === r.lane && n.grantedAt > r.endAt && n.requestedAt !== null && n.requestedAt <= r.endAt + RETURN_WITHIN_MS)).length
-  const wait = median(own.filter(r => r.requestedAt !== null).map(r => Math.max(0, r.grantedAt - (r.requestedAt ?? r.grantedAt)) / 60_000))
+  const returns = recs.filter(r => all.some(n => n.lane === r.lane && n.grantedAt > r.endAt && isReturnAsk(n.requestedAt, r.endAt))).length
+  const wait = median(own.filter(r => r.requestedAt !== null).map(r => Math.max(0, r.liveWaitMs ?? r.grantedAt - (r.requestedAt ?? r.grantedAt)) / 60_000)) // A125: the live wait
   return {
     leases: recs.length,
     medianWaitMin: wait === null ? null : Math.round(wait),
@@ -270,7 +283,7 @@ export const queueView = (x: GrantInput): QueueView => {
   const rows = queueIn(x).map((s, i): QueueRow => {
     const asked = s.want?.minutes ?? 0
     const d = decide({ ...x, me8: s.id8 })
-    return { place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: Math.max(0, Math.round((x.now - (s.want?.requestedAt ?? x.now)) / 60_000)), minutes: x.manual.minutes[s.id8] ?? asked, asked, isPlaced: isPlaced(x.manual, s.id8), pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(d), reason: reasonOf(d), startsAt: starts.get(s.id8) ?? null }
+    return { place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: s.want ? liveWaitMin(s.want, x.now) : 0, minutes: x.manual.minutes[s.id8] ?? asked, asked, isPlaced: isPlaced(x.manual, s.id8), pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(d), reason: reasonOf(d), startsAt: starts.get(s.id8) ?? null }
   })
   return { holder, rows }
 }

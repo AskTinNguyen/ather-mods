@@ -64,7 +64,7 @@ test('A100: a released lease leaves one record: requested and granted, the Edito
   await w.clock.advance(MIN) // 14:42
   expect(out(await $.tool.call({ tool: EDITOR, action: 'release', note: 'done' } as never))).toContain('released:')
   expect(parseLeases(w.read(LEASES))).toEqual([
-    { v: 1, lane: mine(w).lane, id8: ME8, requestedAt: NOW, grantedAt: NOW, reusedPid: 45392, minutes: 20, firstEditorSeenAt: NOW, pieAt: T(14, 41), extensions: 1, endAt: T(14, 42), endReason: 'released', editorLeftOpen: true, queueAtGrant: 0, pie: false, build: false, pieAborted: false },
+    { v: 1, lane: mine(w).lane, id8: ME8, requestedAt: NOW, grantedAt: NOW, reusedPid: 45392, minutes: 20, firstEditorSeenAt: NOW, pieAt: T(14, 41), extensions: 1, endAt: T(14, 42), endReason: 'released', editorLeftOpen: true, queueAtGrant: 0, pie: false, build: false, pieAborted: false, liveWaitMs: 0 },
   ])
   // status gives the 24-hour summary from it
   expect(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never))).toContain('"leases24h": "24 h: 1 lease · median wait 0 min · launch 0% · 0 yields · 0 returns · 0 PIE aborts · sync 0 h"')

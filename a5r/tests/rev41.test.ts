@@ -134,7 +134,7 @@ test('A118: unit: the focus session goes first and takes a free lock to its box 
 
 test('A118: unit: what a holder is told: a Focus lease hears no end, idle or yield notice; a sync holder keeps its idle notice', () => {
   const h = { since: NOW - 60 * MIN, end: NOW - MIN, extended: 0 }
-  const base = { now: NOW, isFocusLease: false, isClaimed: false, editorUseAt: NOW - 40 * MIN, lastTurnAt: NOW - 40 * MIN, agents: 0, isPie: false, isUnattended: false, asks: [] }
+  const base = { now: NOW, isFocusLease: false, isClaimed: false, editorUseAt: NOW - 40 * MIN, lastTurnAt: NOW - 40 * MIN, agents: 0, isPie: false, isUnattended: false, asks: [], waiting: 0 }
   expect(holderNotices(h, base).map(n => n.id.split(':')[1])).toEqual(['overrun', 'idle'])
   expect(holderNotices(h, { ...base, isFocusLease: true, isClaimed: true })).toEqual([])
   expect(holderNotices(h, { ...base, isFocusLease: true }).map(n => n.id.split(':')[1])).toEqual(['idle']) // a Focus ended early: an ordinary lease's idle notice again

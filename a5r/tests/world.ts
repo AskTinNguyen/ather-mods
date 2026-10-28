@@ -34,7 +34,7 @@ export const find = (t: unknown, key: string): Tree | undefined => {
 export const firstText = (t: unknown, key: string): unknown => ((find(t, key)?.children ?? [])[0] as Tree | undefined)?.props?.color
 export const text = (t: unknown): string => (typeof t === 'string' ? t : ((t as Tree)?.children ?? []).map(text).join(''))
 
-export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean; cmd?: string }
+export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean; cmd?: string; startedAt?: number; title?: string }
 /** The engine beneath the plugin. `out` maps a Bash command (or a tool name) to the text it prints; `ram`,
  * `disk`, `procs` and `top` are what the machine probe reads (a function of the run count to change it over time). */
 export function world(on: any, { out = {} as Record<string, string>, ram = '20.5', a5r = true, disk = 40, procs = [] as Proc[], top = [] as { name: string; n: number; gb: number }[], git = {} as Record<string, { stdout: string; exitCode?: number; truncated?: boolean; deny?: string; hold?: Promise<void> }>, store = {} as Record<string, unknown>, ask = undefined as string | undefined, rules = 'A5R RULES {SESSION8}', theme = 'dark', cwd = PROJ, now = NOW } = {}) {

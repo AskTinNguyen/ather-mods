@@ -80,7 +80,7 @@ export const presetTimes = (now: number): number[] => {
 // ---------- session files (Saved/A5R/editor/<id8>.json, one writer each) ----------
 export type Mode = 'interactive' | 'unattended'
 /** What a session asked the Editor for. */
-export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean; focus?: number } // focus: A118, made for the Focus that started then
+export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean; focus?: number; waited?: number; waitAt?: number } // focus: A118, made for the Focus that started then; waited / waitAt: A125, the ms its own live session waited (truth.ts liveWait) and when it last counted
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }
@@ -506,7 +506,7 @@ export type OrchestrateEvent = {
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
    * running), holder-gone; or A65-judge (a verdict, advisory); A112: wait (a session's own wait decision, logged only).
    * A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' // manual: A117, the person's change of the queue; focus: A118
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' | 'orphan-close' | 'auto-sync' | 'withdrawn' // manual: A117, the person's change of the queue; focus: A118; A123 orphan-close, A124 auto-sync, A125 withdrawn
   lane: string
   id8: string
   procs: readonly string[]
@@ -548,16 +548,16 @@ export const gatesOf = (stored: unknown, pieOpt: unknown, nopieOpt: unknown): Ga
 
 /** `cmd`: a git process's command line (A108: whose checkout it works in), or a cmd.exe's that runs a sync's build script
  * (A109, review: only those cmd.exe are listed). */
-export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean; cmd?: string }
+export type Proc = { name: string; pid: number; gb: number; parentAlive: boolean; cmd?: string; startedAt?: number; title?: string } // A123 / A125: an Unreal Editor's start time and window title
 /** A112 / A114: what holds the machine's memory: every process grouped by name (claude and Chrome included), heaviest first. */
 export type Heavy = { name: string; n: number; gb: number }
 export type Probe = { freeGb: number; diskGb: number | null; procs: Proc[]; top?: Heavy[] }
 
 const isName = (p: Proc, name: string) => p.name.toLowerCase().replace(/\.exe$/, '') === name.toLowerCase()
 /** Rev 30 re-review: every `UnrealEditor*.exe` counts (UnrealEditor-Win64-DebugGame and the like), headless -Cmd included. */
-const isUnrealProc = (p: Proc): boolean => /^unrealeditor/i.test(p.name)
+export const isUnrealProc = (p: Proc): boolean => /^unrealeditor/i.test(p.name)
 /** An Editor with a window: any `UnrealEditor*` but the headless UnrealEditor-Cmd. */
-const isEditorProc = (p: Proc): boolean => isUnrealProc(p) && !/^unrealeditor-cmd(\.exe)?$/i.test(p.name)
+export const isEditorProc = (p: Proc): boolean => isUnrealProc(p) && !/^unrealeditor-cmd(\.exe)?$/i.test(p.name)
 export const editorPid = (probe: Probe | null): number | null => probe?.procs.find(isEditorProc)?.pid ?? null
 
 /** The machine probe's JSON (`ramProbe`), or null when it did not answer. */
@@ -570,7 +570,7 @@ export const parseProbe = (stdout: string): Probe | null => {
     const raw = Array.isArray(v.procs) ? v.procs : v.procs && typeof v.procs === 'object' ? [v.procs] : []
     const procs = raw
       .map(p => p as Record<string, unknown>)
-      .map(p => ({ name: String(p.name ?? '').replace(/\.exe$/i, ''), pid: Number(p.pid), gb: Number(p.gb ?? 0), parentAlive: p.parentAlive !== false, ...(typeof p.cmd === 'string' && p.cmd ? { cmd: p.cmd.slice(0, 500) } : {}) }))
+      .map(p => ({ name: String(p.name ?? '').replace(/\.exe$/i, ''), pid: Number(p.pid), gb: Number(p.gb ?? 0), parentAlive: p.parentAlive !== false, ...(typeof p.cmd === 'string' && p.cmd ? { cmd: p.cmd.slice(0, 1000) } : {}), ...(Number(p.startedAt) > 0 ? { startedAt: Number(p.startedAt) } : {}), ...(typeof p.title === 'string' && p.title ? { title: p.title.slice(0, 200) } : {}) }))
       .filter(p => p.name && Number.isFinite(p.pid))
     const top = (Array.isArray(v.top) ? v.top : v.top && typeof v.top === 'object' ? [v.top] : [])
       .map(t => t as Record<string, unknown>)
@@ -609,11 +609,11 @@ export const ramProbe = (drive: string): string[] => [
     // A111: the checkout's own drive, never a default one (no letter: no disk reading, -1)
     `$d = ${/^[A-Za-z]/.test(drive) ? `Get-PSDrive -Name '${drive.slice(0, 1)}' -ErrorAction SilentlyContinue` : '$null'}`,
     '$disk = if ($d) { [math]::Round($d.Free / 1GB, 1) } else { -1 }',
-    '$all = @(Get-Process); $alive = @{}; $all | ForEach-Object { $alive[[int]$_.Id] = 1 }',
+    '$all = @(Get-Process); $alive = @{}; $titles = @{}; $all | ForEach-Object { $alive[[int]$_.Id] = 1; $titles[[int]$_.Id] = [string]$_.MainWindowTitle }',
     // A112 / A114: the heaviest names among all processes (claude, Chrome, …), which the named list below never shows
     '$top = @($all | Group-Object ProcessName | ForEach-Object { [pscustomobject]@{ name = $_.Name; n = $_.Count; gb = [math]::Round((($_.Group | Measure-Object WorkingSet64 -Sum).Sum) / 1GB, 2) } } | Sort-Object gb -Descending | Select-Object -First 6)',
     "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe','dotnet.exe','UnrealBuildTool.exe','cl.exe','link.exe','MSBuild.exe','UnrealGame.exe','S2.exe')",
-    `$procs = @(Get-CimInstance Win32_Process | Where-Object { ($names -contains $_.Name) -or ($_.Name -like 'UnrealEditor*.exe') -or ($_.Name -eq 'cmd.exe' -and ([string]$_.CommandLine) -like '*${SCRIPT_SUFFIX}*') } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId); cmd = $(if ($_.Name -eq 'git.exe' -or $_.Name -eq 'cmd.exe') { [string]$_.CommandLine } else { '' }) } })`,
+    `$procs = @(Get-CimInstance Win32_Process | Where-Object { ($names -contains $_.Name) -or ($_.Name -like 'UnrealEditor*.exe') -or ($_.Name -eq 'cmd.exe' -and ([string]$_.CommandLine) -like '*${SCRIPT_SUFFIX}*') } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId); cmd = $(if ($_.Name -eq 'git.exe' -or $_.Name -eq 'cmd.exe' -or $_.Name -eq 'python.exe' -or $_.Name -like 'UnrealEditor*') { [string]$_.CommandLine } else { '' }); startedAt = $(if ($_.Name -like 'UnrealEditor*' -and $_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }); title = $(if ($_.Name -like 'UnrealEditor*') { $titles[[int]$_.ProcessId] } else { '' }) } })`,
     '[pscustomobject]@{ freeGb = $free; diskGb = $disk; procs = $procs; top = $top } | ConvertTo-Json -Compress -Depth 3',
   ].join('; '),
 ]
@@ -1177,7 +1177,7 @@ export const writesLock = (command: string): boolean =>
 // ---------- notices (D6): one shape, one delivery per id per session ----------
 export type Notice = { id: string; text: string; isActionable: boolean }
 /** A116 / A118: a NEEDS A LOOK row on the A5R panel: what needs the person's look, in one line, and his next step. */
-export type LookRow = { what: string; next: string }
+export type LookRow = { what: string; next: string; press?: { kind: 'focus' | 'release'; id8: string; label: string } } // A121 / A122: the person's one press on the row (looks.ts)
 export const noticeText = (gate: string, what: string, todo: string): string => `${MARK} ${gate} — ${what} → ${todo}`
 export const isIntentFile = (path: string): boolean => /(^|\/)docs\/intent\//i.test((path ?? '').replace(/\\/g, '/'))
 /** A76: a line that IS a coordination notice: the prefix and a gate name at its start (after list or quote marks), then

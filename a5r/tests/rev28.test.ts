@@ -285,7 +285,7 @@ test('A82 (guard for once a day; proof for the text): the disk notice is said on
   expect(noticeIds.disk(ymd(NOW))).toBe(noticeIds.disk(ymd(NOW + 9 * 60 * MIN)))
 })
 
-test('A82: an idle session with nothing uncommitted and no Editor request gets no cutoff notice: one line at the freeze, the lift at its next turn', opts(), async ($, on) => {
+test('A82 / A125: an idle session with nothing uncommitted and no Editor request gets no cutoff and no freeze notice, only the lift at its next turn', opts(), async ($, on) => {
   const w = world(on)
   on('turn.complete', async () => ({ text: '' }))
   repo(w, 'E:/s2')
@@ -297,7 +297,7 @@ test('A82: an idle session with nothing uncommitted and no Editor request gets n
   expect(prompts(w)).toEqual([]) // never woken
   const contexts: string[] = []
   await call($, contexts, { tool: 'Bash', command: 'echo working' })
-  expect(contexts.filter(c => c.startsWith('A5R · Sync main'))).toEqual(['A5R · Sync main — frozen: sync-lane merges origin/main since 15:00 → no git writes in the shared checkout and no Editor use until it is done; keep working without them (or in your own worktree); you will be told when it lifts'])
+  expect(contexts.filter(c => c.startsWith('A5R · Sync main'))).toEqual([]) // A125 (rev 42): the freeze line too goes only to the sessions it concerns
   await idle($)
   w.put(SYNC, JSON.stringify({ ...newSync(T(15, 0), B, 'sync-lane (session bbbbbbbb)', NOW), state: 'done', endedAt: T(15, 10), note: 'merged 1a2b3c' }))
   await advance(w, 10)

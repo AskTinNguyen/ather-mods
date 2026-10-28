@@ -95,6 +95,9 @@ export type JudgeFacts = {
   procsKnown?: boolean
 }
 
+/** A122: an Editor lease past its end (the judge no longer reads a running Editor as work). */
+const isPastEnd = (f: JudgeFacts): boolean => f.kind === 'editor' && f.end !== null && f.now > f.end
+
 const minAgo = (now: number, at: number | null): string => (at === null ? 'unknown' : `${Math.max(0, Math.round((now - at) / 60_000))} min ago`)
 
 /** A first reading of the facts and the transcript, by rule: the judge confirms or corrects it, and it stands in when
@@ -115,8 +118,9 @@ export const hintOf = (f: JudgeFacts, events: readonly TranscriptEvent[]): { ver
   // A69: a tool call left open counts as work only while the transcript moved in the last 30 min (a call open for hours
   // with nothing running is a stopped turn, not a long one).
   const isFresh = lastAt !== null && f.now - lastAt < 30 * 60_000
-  if (f.hasEditor || f.hasBuild || (running.length > 0 && isFresh) || (lastAt !== null && f.now - lastAt < 10 * 60_000))
-    return { verdict: 'working', evidence: [f.hasBuild ? 'a build process runs' : f.hasEditor ? 'an Unreal Editor runs' : running.length ? `a tool is still running: ${running.map(t => t.name).join(', ')}` : `transcript active ${minAgo(f.now, lastAt)}`, `last transcript event ${minAgo(f.now, lastAt)}`] }
+  const isEditorWork = f.hasEditor && !isPastEnd(f) // A122: past the lease end an Editor that merely runs is no work
+  if (isEditorWork || f.hasBuild || (running.length > 0 && isFresh) || (lastAt !== null && f.now - lastAt < 10 * 60_000))
+    return { verdict: 'working', evidence: [f.hasBuild ? 'a build process runs' : isEditorWork ? 'an Unreal Editor runs' : running.length ? `a tool is still running: ${running.map(t => t.name).join(', ')}` : `transcript active ${minAgo(f.now, lastAt)}`, `last transcript event ${minAgo(f.now, lastAt)}`] }
   // A69: the tail's last word on its Editor work says it is over.
   const said = [...events].reverse().slice(0, 40).find(e => (e.role === 'assistant' && FINISHED.test(e.text)) || e.tools.some(t => FINISHED.test(t.input ?? '')))
   if (said) return { verdict: 'done', evidence: [said.text && FINISHED.test(said.text) ? `it said: "${(said.text.match(new RegExp(`[^.]*(${FINISHED.source})[^.]*`, 'i'))?.[0] ?? said.text).trim().slice(0, 140)}"` : `it ran: ${said.tools.find(t => FINISHED.test(t.input ?? ''))?.name ?? 'a release'} (${(said.tools.find(t => FINISHED.test(t.input ?? ''))?.input ?? '').slice(0, 100)})`, `${said.at ? `${minAgo(f.now, said.at)}; ` : ''}nothing runs since: the lease or lock line is stale`] }
@@ -150,6 +154,7 @@ export const judgePrompt = (f: JudgeFacts, hint: { verdict: Verdict; evidence: s
       : `Processes on the machine now: ${f.procs.length ? [...f.procs].sort().join(', ') : 'none of the watched ones'} (Unreal Editor running: ${f.hasEditor ? 'yes' : 'no'}; build or game running: ${f.hasBuild ? 'yes' : 'no'}).`,
     `Editor pid in the lock line: ${typeof f.lockPid === 'number' ? `${f.lockPid} (${f.lockPidRunning === undefined ? 'unknown whether it runs' : f.lockPidRunning ? 'still running' : "no longer running: the holder's Editor died or was closed"})` : f.lockPid === null ? 'none (no Editor recorded for this lease yet)' : 'unknown'}.`,
     `Transcript file: ${f.transcript || 'not found'}.`,
+    ...(isPastEnd(f) ? ['The lease is past its end: an Unreal Editor that merely runs is no evidence of work; judge by the transcript (a build, a test or a tool making progress), and say working only on that.'] : []),
     `A rule's first reading: ${hint.verdict} (${hint.evidence.join('; ')}). Confirm or correct it.`,
     '',
     'The transcript\'s last events (local time, who, first words, tools called):',

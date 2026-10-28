@@ -6,7 +6,9 @@
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
 import { HEAD_CONTROLS, ROW_CONTROL, type FocusAction } from './focus.ts'
 import { HOLDER_CONTROLS, QUEUED_CONTROLS, type Control } from './order.ts'
-import type { EditorList, EditorRow, LookRow } from './panel.ts'
+import type { EditorList, EditorRow } from './panel.ts'
+import type { LookRow } from './coord.ts'
+import type { LookPress } from './looks.ts'
 import { A5R_LOOK, ATHER, STATUS, TRACK, V2, hairline } from './theme.ts'
 
 // A31: this session's ★ takes the theme's gold (read at each draw, A40).
@@ -401,8 +403,8 @@ export const editorBox = (el: El, list: EditorList, ui: { picked: string | null;
 }
 
 /** A116: NEEDS A LOOK, drawn only when a current verdict needs the person: per row a warning mark and its one-line reason,
- * and its next step under it. */
-export const lookBox = (el: El, rows: readonly LookRow[], look?: { ink: string; quiet: string }): unknown =>
+ * and its next step under it; A121 / A122: a row's one press (the person's), a plain Button under it. */
+export const lookBox = (el: El, rows: readonly LookRow[], look?: { ink: string; quiet: string }, onPress?: (p: LookPress) => void): unknown =>
   el.Box({
     key: 'hai-look',
     flexDirection: 'column',
@@ -417,6 +419,7 @@ export const lookBox = (el: El, rows: readonly LookRow[], look?: { ink: string; 
           children: [
             el.Box({ key: `hai-look-${i}-what`, flexDirection: 'row', columnGap: 1, width: '100%', children: [el.Text({ color: STATUS.warn, children: '⚠' }), el.Box({ key: `hai-look-${i}-text`, flexGrow: 1, flexShrink: 1, minWidth: 0, children: [el.Text({ wrap: 'wrap', ...(look ? { color: look.ink } : {}), children: r.what })] })] }),
             el.Box({ key: `hai-look-${i}-next`, paddingLeft: 2, width: '100%', children: [el.Text({ color: look?.quiet ?? ATHER.quiet, wrap: 'wrap', children: `→ ${r.next}` })] }),
+            ...(r.press && onPress ? [el.Box({ key: `hai-look-${i}-press`, paddingLeft: 2, children: [el.Button({ key: `hai-look-${r.press.kind}-${r.press.id8}`, label: r.press.label, plain: true, onPress: () => r.press && onPress(r.press) })] })] : []),
           ],
         }),
       ),

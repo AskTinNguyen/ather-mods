@@ -159,7 +159,7 @@ export const placeTracker = <T>(placeOf: (raw: string, target: string, here: T |
 }
 
 /** A85 (orchestrator, re-review): the kit's read-only checks that may name the live kit: `claude plugin test|validate`,
- * `tsc -p`/`--noEmit` (bare or through npx), `bun test`, `node --test`, `git log|status|diff|show` (after `-C <dir>`).
+ * `tsc -p`/`--noEmit` (bare or through npx), `bun test`, `node --test`, `sed -n <lines>p` (A125), `git log|status|diff|show` (after `-C <dir>`).
  * The readers (rg, grep, cat, ls, head, tail, Get-Content, Select-String …) pass through READERS before this. Anything
  * else naming the kit (robocopy, xcopy, tar, curl -o, Invoke-WebRequest, Expand-Archive, [IO.File]::Write…, npm --prefix,
  * python or node on a kit script) is refused. */
@@ -169,6 +169,7 @@ const isKitCheck = (verb: string, args: readonly string[]): boolean => {
   const tscAt = verb === 'tsc' ? -1 : verb === 'npx' ? low.indexOf('tsc') : -2
   if (tscAt >= -1) return low.slice(tscAt + 1).some(a => a === '-p' || a === '--project' || a === '--noemit')
   if (verb === 'bun') return low[0] === 'test'
+  if (verb === 'sed') return isSedPrint(low)
   // Round-2 review: `node [--experimental-strip-types] <kit>/tests/<file>.mjs` (the README's scan) reads the kit too.
   if (verb === 'node') return !low.some(a => /^(-e|--eval|-p|--print|-r|--require|--import)$/.test(a)) && (low.includes('--test') || low.some(a => !a.startsWith('-') && /(^|\/)tests\/[^/\s]+\.(mjs|cjs|js)$/.test(a.replace(/\\/g, '/'))))
   if (verb === 'git') {
@@ -176,6 +177,15 @@ const isKitCheck = (verb: string, args: readonly string[]): boolean => {
     return ['log', 'status', 'diff', 'show'].includes(rest.find(a => !a.startsWith('-')) ?? '')
   }
   return false
+}
+/** A125 (rev 42): `sed -n` that only prints lines (a range or a pattern, then `p`) reads the kit: -n with no other option but
+ * -e, and every script (each -e's, else the first argument) a print script; -i, -f, w, e or s/// are never read as reads. */
+const SED_ADDR = String.raw`(\d+|\$|/[^/]*/)(,(\d+|\$|/[^/]*/))?p`
+const SED_PRINT = new RegExp(`^${SED_ADDR}(;${SED_ADDR})*$`)
+const isSedPrint = (low: readonly string[]): boolean => {
+  const scripts = low.flatMap((a, i) => (low[i - 1] === '-e' ? [a] : []))
+  const options = low.filter((a, i) => a.startsWith('-') && low[i - 1] !== '-e')
+  return options.includes('-n') && options.every(a => a === '-n' || a === '-e') && (scripts.length ? scripts : low.filter(a => !a.startsWith('-')).slice(0, 1)).every(x => SED_PRINT.test(x))
 }
 const WRAPPERS = new Set(['&', 'sudo', 'command', 'builtin', 'exec', 'time', 'nohup', 'xargs', 'call'])
 const PS_VALUE_PARAMS = new Set(['-erroraction', '-ea', '-exclude', '-include', '-filter', '-warningaction', '-wa'])
