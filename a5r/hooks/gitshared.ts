@@ -1,6 +1,7 @@
 // A74 (rev 27, adversary review): git in the shared checkout that can discard work or move the tree, read segment by
 // segment with the folder each one runs in. Pure: no `$`; register.ts reads git status and the touch files and decides.
 import { blankQuotes, commandVerb, norm, segments, stripHeredocs, tokenize, under } from './a5r.ts'
+import type { Touch } from './coord.ts'
 
 /** One command segment with the folder it runs in (after `cd`, `pushd`, `popd`, `Set-Location` before it). */
 export type Seg = { raw: string; dir: string; verb: string; args: string[] }
@@ -71,6 +72,9 @@ export type GitAct =
   | { kind: 'stash-apply'; verb: string; ref: string }
   /** rev 27 follow-up: `git checkout <word>`: a file (then `checkout -- <word>`) or a branch (moves the tree). */
   | { kind: 'checkout-word'; word: string }
+  /** A126 (rev 43): a commit without paths takes the whole shared index: every staged path must be this session's. (A
+   * commit or an add of paths is a `check` of what it takes under them: sub `commit` or `add`, isIndexSub.) */
+  | { kind: 'staged' }
 
 const WORKTREE = 'a worktree of your own (git worktree add <dir> <branch>)'
 const refuse = (why: string, alt: string): GitAct => ({ kind: 'refuse', why, alt })
@@ -88,6 +92,68 @@ const pathsOf = (rest: string[], valued: string[] = []): string[] => {
     else if (!a.startsWith('-')) out.push(a)
   }
   return out
+}
+
+/** A126: how a git subcommand's options are read: the short letters whose value is the rest of the cluster or the next
+ * word (`short`) or attached only (`attached`), its long options (any unambiguous prefix stands for one, as git reads
+ * them) and those of them that take the next word (`valued`). */
+type OptionTable = { short: string; attached: string; long: readonly string[]; valued: readonly string[] }
+/** A long option as git reads it: itself, or the one long option it is an unambiguous prefix of. */
+const longName = (name: string, long: readonly string[]): string => {
+  const hits = long.filter(o => o.startsWith(name))
+  return long.includes(name) || hits.length !== 1 ? name : (hits[0] ?? name)
+}
+/** A126: a git command's options (each short letter of a cluster, each long one by its full name) and its pathspecs
+ * (after `--`, else the words that are no option value); a shell redirection (`2>&1`, `> log`) is neither. */
+const readArgs = (args: string[], t: OptionTable): { flags: Set<string>; paths: string[] } => {
+  const flags = new Set<string>()
+  const paths: string[] = []
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i] ?? ''
+    const redirect = /^(\d*|&)(>>?|<)(.*)$/.exec(a)
+    if (redirect) i += redirect[3] === '' ? 1 : 0
+    else if (a === '--') return { flags, paths: [...paths, ...args.slice(i + 1)] }
+    else if (a.startsWith('--')) {
+      const name = longName(a.split('=')[0] ?? a, t.long)
+      flags.add(name)
+      if (!a.includes('=') && t.valued.includes(name)) i += 1
+    } else if (/^-./.test(a)) {
+      for (let k = 1; k < a.length; k += 1) {
+        const ch = a[k] ?? ''
+        flags.add(`-${ch}`)
+        if (t.short.includes(ch) || t.attached.includes(ch)) {
+          if (k === a.length - 1 && t.short.includes(ch)) i += 1
+          break
+        }
+      }
+    } else paths.push(a)
+  }
+  return { flags, paths }
+}
+const COMMIT_VALUED = ['--message', '--file', '--reuse-message', '--reedit-message', '--fixup', '--squash', '--author', '--date', '--cleanup', '--template', '--trailer', '--pathspec-from-file']
+const COMMIT_OPTIONS: OptionTable = { short: 'mFCct', attached: 'Su', valued: COMMIT_VALUED, long: [...COMMIT_VALUED, '--all', '--patch', '--reset-author', '--short', '--branch', '--porcelain', '--long', '--null', '--signoff', '--no-signoff', '--no-verify', '--verify', '--allow-empty', '--allow-empty-message', '--edit', '--no-edit', '--amend', '--no-post-rewrite', '--include', '--only', '--pathspec-file-nul', '--untracked-files', '--verbose', '--quiet', '--dry-run', '--status', '--no-status', '--gpg-sign', '--no-gpg-sign'] }
+const ADD_OPTIONS: OptionTable = { short: '', attached: '', valued: ['--chmod', '--pathspec-from-file'], long: ['--chmod', '--pathspec-from-file', '--all', '--no-all', '--update', '--dry-run', '--verbose', '--force', '--interactive', '--patch', '--edit', '--intent-to-add', '--refresh', '--ignore-errors', '--ignore-missing', '--no-warn-embedded-repo', '--renormalize', '--pathspec-file-nul', '--sparse', '--ignore-removal', '--no-ignore-removal'] }
+export const COMMIT_PATHS_ALT = 'commit exactly your own paths, which leaves the rest of the index staged: git commit -m "…" -- <your paths>'
+export const ADD_PATHS_ALT = 'stage exact paths: git add -- <path> ...'
+/** A126: a commit or an add, which takes what it names into the shared index (or a commit). */
+export const isIndexSub = (sub: string): boolean => sub === 'commit' || sub === 'add'
+/** A126: a commit in the shared checkout. `--amend` is refused there: HEAD is the last commit of the branch every session
+ * commits on, so it may be another lane's, and A5R records no commit's author session to tell. */
+const commitAct = ({ flags, paths }: { flags: Set<string>; paths: string[] }): GitAct => {
+  const on = (...names: string[]) => names.some(n => flags.has(n))
+  if (on('--dry-run')) return null
+  if (on('--amend')) return refuse('git commit --amend rewrites HEAD, the last commit on the branch every session commits on, which may be another lane\'s', `make a new commit instead: ${COMMIT_PATHS_ALT}`)
+  if (on('-a', '--all')) return refuse('git commit -a stages and commits every changed tracked file of the shared checkout, other lanes\' work included', COMMIT_PATHS_ALT)
+  if (on('--pathspec-from-file') || (paths.length > 0 && on('-i', '--include'))) return refuse('a commit that adds paths to what is staged (--include), or reads its paths from a file, cannot be checked against the other sessions\' work', COMMIT_PATHS_ALT)
+  return paths.length > 0 ? { kind: 'check', sub: 'commit', paths, untracked: false } : { kind: 'staged' }
+}
+/** A126: an add in the shared checkout; it can stage untracked files. The whole tree (`.`, `-A`, `--all` in any form:
+ * `-- .`, `-Av`, `--al`) is refused here, where rule 1's add-all pattern reads only `add .`/`-A`/`--all` (A80). */
+const addAct = ({ flags, paths }: { flags: Set<string>; paths: string[] }): GitAct => {
+  if (flags.has('-n') || flags.has('--dry-run')) return null
+  if (flags.has('-A') || flags.has('--all') || paths.includes('.')) return refuse('git add of the whole tree (., -A, --all) stages every lane\'s changes in the shared checkout', ADD_PATHS_ALT)
+  if (flags.has('--pathspec-from-file') || ((flags.has('-u') || flags.has('--update')) && paths.length === 0)) return refuse('this git add stages paths A5R cannot check against the other sessions\' (every changed tracked file, or a list in a file)', ADD_PATHS_ALT)
+  return paths.length > 0 ? { kind: 'check', sub: 'add', paths, untracked: true } : null
 }
 
 /** A git command's act in the shared checkout (args without -C/-c). */
@@ -145,6 +211,10 @@ export const classifyGit = (args: string[]): GitAct => {
       return (has(rest, '-D') || ((has(rest, '-d', '--delete')) && has(rest, '-f', '--force'))) ? refuse('git branch -D deletes a branch even when its commits are merged nowhere', 'git branch -d <name> (merged branches only), or leave the branch') : null
     case 'submodule':
       return (rest[0] ?? '').toLowerCase() === 'update' && has(rest, '--force', '-f') ? refuse('git submodule update --force throws away changes inside the submodules', 'git submodule update without --force') : null
+    case 'commit':
+      return commitAct(readArgs(rest, COMMIT_OPTIONS))
+    case 'add':
+      return addAct(readArgs(rest, ADD_OPTIONS))
     default:
       return null
   }
@@ -194,6 +264,8 @@ export const exactAlternative = (sub: string): string =>
   : sub === 'restore' ? 'name the files: git restore -- <paths>'
   : sub === 'stash' ? 'name the files: git stash push -- <paths>'
   : sub === 'clean' ? 'name the files: git clean -f -- <paths>'
+  : sub === 'commit' ? COMMIT_PATHS_ALT
+  : sub === 'add' ? ADD_PATHS_ALT
   : 'name the files: git rm -- <paths>'
 
 /** A pathspec resolved to the repository: its repo-relative path, or why it cannot be read on facts (a variable, a glob,
@@ -209,6 +281,30 @@ export const repoPath = (spec: string, dir: string, root: string): { rel: string
   // rev 27 follow-up: a dotless top-level name may be a file (LICENSE, Makefile): the caller checks which.
   if (!rel.includes('/') && !rel.includes('.')) return { rel, top: true }
   return { rel }
+}
+
+/** A74 / A126: whose a changed path is, from the touch records: null when this session touched it and no other live
+ * session claims it; else a note naming its owner (or nobody). `mine`: this session's paths, lowercased. */
+const whose = (p: string, mine: ReadonlySet<string>, others: readonly Touch[]): string | null => {
+  const t = others.find(o => o.paths.some(x => x.toLowerCase() === p.toLowerCase()))
+  if (t) return `${p} (${t.lane}'s, session ${t.id8}${mine.has(p.toLowerCase()) ? '; this session touched it too' : ''})`
+  return mine.has(p.toLowerCase()) ? null : `${p} (no session claims it)`
+}
+export const foreignPaths = (paths: readonly string[], mine: ReadonlySet<string>, others: readonly Touch[]): string[] => paths.flatMap(p => whose(p, mine, others) ?? [])
+/** At most six named, then how many more. */
+export const listed = (items: readonly string[]): string => `${items.slice(0, 6).join('; ')}${items.length > 6 ? `; and ${items.length - 6} more` : ''}`
+
+/** A126 (rev 43): whether a commit without paths may run in the shared checkout, whose index every session shares; null:
+ * it may. `staged`: the staged paths (`git diff --cached --name-only`), null when they could not be read; `mine`: this
+ * session's touch paths, lowercased; `others`: the other live sessions' touch records. Every staged path must be this
+ * session's: one another live session claims, or nobody does, is foreign. */
+export const indexProblem = (staged: readonly string[] | null, mine: ReadonlySet<string>, others: readonly Touch[]): { why: string; alt: string } | null => {
+  if (staged === null) return { why: 'the shared index could not be read within 8 s, so a commit without paths might take another session\'s staged work', alt: COMMIT_PATHS_ALT }
+  const owner = staged.map(p => ({ p, note: whose(p, mine, others) }))
+  const foreign = owner.flatMap(o => o.note ?? [])
+  if (foreign.length === 0) return null
+  const own = owner.filter(o => o.note === null).map(o => o.p)
+  return { why: `a commit without paths takes the whole shared index, which holds work that is not this session's: ${listed(foreign)}`, alt: own.length > 0 ? `commit exactly your own paths, which leaves the others staged: git commit -m "…" -- ${own.join(' ')}` : COMMIT_PATHS_ALT }
 }
 
 /** Whether a segment's (blanked) text is git at all (cheap pre-filter). */

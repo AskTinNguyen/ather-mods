@@ -297,7 +297,7 @@ test('A124: unit: a planned sync whose holder is gone is handed to the conductor
   expect(autoSyncOf(autoIn({ sync: endedSync(s, 'cancelled', 'not today', at(16, 50)), phase: 'cancelled', now: at(17, 0) })).kind).toBe('none') // the person's cancel waits 6 h
 })
 
-test('A124: the conductor\'s own A5R plans the sync by itself through the sync path (sync.json, its cutoff told), once; another session does not', opts(), async ($, on) => {
+test('A124: the conductor\'s own A5R plans the sync by itself through the sync path (sync.json, its cutoff told), once; another session does not', { ...opts(), options: { ...opts().options, autoSyncBuild: false } }, async ($, on) => {
   const w = world(on, { ram: '40', now: at(10, 0) })
   w.put(LOCK, FREE)
   w.put(SYNC, JSON.stringify(sync({ at: at(1, 0), updatedAt: at(1, 30) })))
@@ -305,13 +305,13 @@ test('A124: the conductor\'s own A5R plans the sync by itself through the sync p
   await $.session.start(START)
   await w.clock.advance(MIN)
   const s = parseSyncFile(w.read(SYNC))
-  expect([s?.state, s?.holder.id8, s?.at, s?.build]).toEqual(['planned', ME8, at(10, 45), false]) // merge only unless autoSyncBuild (pending Hai's word)
+  expect([s?.state, s?.holder.id8, s?.at, s?.build]).toEqual(['planned', ME8, at(10, 45), false]) // merge only: autoSyncBuild set off
   expect(w.read(LOG)).toContain('| rule=auto-sync |')
   await w.clock.advance(MIN)
   expect(parseSyncFile(w.read(SYNC))?.at).toBe(at(10, 45)) // not planned again
 })
 
-test('A124: the autoSyncBuild option plans the sync with a build', { ...opts(), options: { ...opts().options, autoSyncBuild: true } }, async ($, on) => {
+test('A124 (rev 43, Hai 2026-10-29): an auto-planned sync builds by default (autoSyncBuild unset)', opts(), async ($, on) => {
   const w = world(on, { ram: '40', now: at(10, 0) })
   w.put(LOCK, FREE)
   w.put(SYNC, JSON.stringify(sync({ at: at(1, 0), updatedAt: at(1, 30) })))

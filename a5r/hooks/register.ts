@@ -1,22 +1,23 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5R, SHELLS, commandVerb, deleteTargets, gitTargets, nestedCommand, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
+import { A5R, SHELLS, commandVerb, gitTargets, nestedCommand, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, launchersOf, lockProblem, mcpCallKind, parseEditorLock, type EditorKind } from './editor.ts'
 import {
   CUTOFF_MS, DIR, HARD_END_WARN_MS, isHolderInSync, SYNC_BUILD_MIN, SYNC_MERGE_MIN, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
-  movedSync, newSync, noticeIds, noticeText, ownersOf, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
+  movedSync, newSync, noticeIds, noticeText, ownersOf, samePath, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, passNoLaunch, PASS_NO_LAUNCH_NEXT, PASS_MAX_MIN, type Grant,
   DEFAULT_GATES, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
   syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   BUILD_MARK, withoutBuildMark, type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want, type FocusLease, claimIn,
 } from './coord.ts'
 import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, afterFocusWant, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
-import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, gitPlace, isGit, leasePushTargets, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
+import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, foreignPaths, gitPlace, indexProblem, isGit, isIndexSub, leasePushTargets, listed, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, str, wantOf, appendCapped, endLease, holderNotices, holderText, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, idleMsOf, isIdle, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
+import { actOf, recordTarget, type Recorded } from './acts.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
@@ -160,6 +161,8 @@ const OP_CLAIM_MS = 2 * 60 * 60_000 // never seen running (a reading older than 
 let agentsNow: number | null = null // A62: this session's running background agents at the last minute
 let agentKindsNow: string[] = [] // A67: their kinds
 let tickChain: Promise<void> = Promise.resolve()
+let tickSince = 0 // A127: when the running tick started (0: none runs)
+let saveChain: Promise<void> = Promise.resolve()
 let lastEditorUseAt = 0 // A103: published in this session's file (editorUseAt), read back after a reload
 let isPieRunning = false // this session started PIE and no stop was seen
 let pieStartedAt = 0 // A100: when this session's PIE last started (the lease notes its first one)
@@ -260,6 +263,10 @@ async function startCoordination($: Engine, opts: Opts): Promise<void> {
 /** The minute timer: the tick while this session coordinates (it reads files and probes; it wakes the model only for an
  * event addressed to this session); while no checkout is found, the find again, and the coordination once one is. */
 async function minute($: Engine, opts: Opts): Promise<void> {
+  // A127: a tick still running does not hold this session's heartbeat back (a stale one reads as gone), and no tick queues
+  // behind it; a tick stuck for 10 min stops the beat (its a5r file then reads stale; its Ather lane may still keep it alive).
+  const running = isS2 && tickSince > 0 ? (await $.clock.now()) - tickSince : -1
+  if (running >= 0) return running >= EDITOR_PERIOD_MS && running < LANE_STALE_MS ? saveMe($, opts) : undefined
   if (isS2) return runTick($, opts)
   if (checkout !== null) return
   await findAgain($, opts)
@@ -447,32 +454,6 @@ async function logSupplied($: Engine, opts: Opts, gb: number, what: string, now:
   await orchestrateLog($, opts, { at: now, rule: 'ram-supplied', lane: me?.lane ?? me8, id8: me8, procs: [], liveness: 'alive', lastTurnAt: me?.lastTurnAt ?? null, agents: agentsNow, build: false, acted: true, note: `${what}: the RAM probe failed twice; the agent read ${gb} GB of RAM available and gave it to the editor tool` }).catch(() => undefined)
 }
 
-/** A73: what a rule-1 match does at the action. Nothing asks and nothing waits: a call is refused only with an alternative
- * the agent can carry out itself (`refuse`), runs after a check of the facts (`check`, A74: git that can discard work in
- * the shared checkout), or runs and is recorded for nghiem thu (`record`, A75: shared config, recursive deletes, removed
- * test assertions, edits outside a scope file, global git config). The permission mode and an away window change nothing. */
-type Act = { act: 'refuse' | 'check' | 'record'; alt?: string }
-const ACTIONS: Record<string, Act> = {
-  'no-verify': { act: 'refuse', alt: 'fix what the hook reports, then commit without --no-verify' },
-  'lfs-skip-smudge': { act: 'refuse', alt: 'let LFS fetch the objects (git lfs pull), or work in a worktree of your own' },
-  'sparse-checkout': { act: 'refuse', alt: 'make a worktree of your own and set its sparse layout there' },
-  kit: { act: 'refuse', alt: 'change the mod in a worktree of its repository (git -C <repository> worktree add <folder of your own> <branch>), never in the live plugin folder' },
-  secret: { act: 'refuse', alt: 'keep the secret in an environment variable or a config file outside the repository' },
-  'force-push': { act: 'refuse', alt: 'use git push --force-with-lease to a branch of your own (it runs), or push to a new branch and open a PR; never rewrite shared history' },
-  'push-main': { act: 'refuse', alt: 'push your branch and open a PR' },
-  'add-all': { act: 'refuse', alt: 'stage exact paths: git add -- <path> ...' },
-  // git-discard and git-switch are read by gitSharedProblem (segment by segment, on facts).
-  'git-switch': { act: 'check' },
-  'git-discard': { act: 'check' },
-}
-/** A75 (review 6): global git keys whose change breaks every repository on the machine; p4 obliterate cannot be undone. */
-const GLOBAL_CONFIG_REFUSED = /\bconfig\s+--global\s+(?:--\S+\s+)*(credential\.|lfs\.|core\.(autocrlf|eol|hookspath|fsmonitor)\b|filter\.)/i
-const actOf = (d: Decision, command = ''): Act => {
-  if (d.key === 'git-config-global' && GLOBAL_CONFIG_REFUSED.test(command)) return { act: 'refuse', alt: 'set it for this repository (git config --local <key> <value>) or for one command (git -c <key>=<value> <command>)' }
-  if (d.key === 'p4-destructive' && /\bp4\s+obliterate\b/i.test(command)) return { act: 'refuse', alt: 'p4 obliterate cannot be undone: use p4 delete (a recoverable revision), or leave the files' }
-  return ACTIONS[d.key] ?? (d.kind === 'deny' ? { act: 'refuse', alt: 'do it another way' } : { act: 'record' })
-}
-
 /** A74 (rev 27, after the adversary review): git in the shared checkout, segment by segment with the folder each runs
  * in (`cd`, `pushd`, `popd`, `-C`). Moving the tree, reset --hard, clean -x and the other forms that cannot be read on
  * facts are refused with the alternative; a discard runs when the exact paths it names (resolved to the repository)
@@ -481,6 +462,7 @@ const actOf = (d: Decision, command = ''): Act => {
  * the whole S2 tree takes 36-82 s). One path-scoped `git status` per segment, 8 s at most. Null: it may run. */
 async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<string | null> {
   const gate = gateOf('D1')
+  addsChecked.delete(command)
   const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
   for (const seg of walk(command, cwd, home)) {
     if (!isGit(seg)) continue
@@ -497,6 +479,14 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
       act = isFile && !isRef ? { kind: 'check', sub: 'checkout', paths: [word], untracked: false } : { kind: 'refuse', why: 'git checkout <branch> moves the shared working tree under every session', alt: 'work in a worktree of your own (git worktree add <dir> <branch>)' }
     }
     if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared S2 checkout ${s2Root()})`, act.alt)
+    // A126: the index is shared. While a merge, revert or cherry-pick waits, its owner stages and commits what it brings:
+    // the merge guard decides who writes (A14, A115).
+    if ((act.kind === 'staged' || (act.kind === 'check' && isIndexSub(act.sub))) && (await headIn($, root))) continue
+    if (act.kind === 'staged') {
+      const p = indexProblem(await stagedIn($, root, []), mineLower(), liveTouches(await $.clock.now()))
+      if (p) return blocked(gate, p.why, p.alt)
+      continue
+    }
     if (act.kind === 'stash-drop') {
       const list = await $.process.run(['git', '-C', root, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
       const n = list?.exitCode === 0 ? list.stdout.split(/\r?\n/).filter(Boolean).length : null
@@ -527,23 +517,21 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
       }
     }
     const ran = await $.process.run(['git', '-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${untracked ? 'all' : 'no'}`, '--', ...rels], { timeoutMs: 8_000 }).catch(() => null)
-    if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would discard is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
+    if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would ${isIndexSub(sub) ? 'take' : 'discard'} is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
     // A97: resolving a conflict is not a discard: `checkout --ours|--theirs` passes the unmerged paths while a merge, revert
     // or cherry-pick waits to be resolved.
     const isResolving = act.kind === 'check' && act.side !== undefined && (await headIn($, root)) !== null
     const changed = discardedPaths(ran.stdout, isResolving)
-    const now = await $.clock.now()
-    const mine = new Set([...touched].map(p => p.toLowerCase()))
-    const others = touches.filter(t => isLive(t.id8, now))
-    const foreign: string[] = []
-    for (const p of changed) {
-      const t = others.find(o => o.paths.some(x => x.toLowerCase() === p.toLowerCase()))
-      // A74 (review 5): a path another live session claims is its, even when this session touched it too.
-      if (t) foreign.push(`${p} (${t.lane}'s, session ${t.id8}${mine.has(p.toLowerCase()) ? '; this session touched it too' : ''})`)
-      else if (!mine.has(p.toLowerCase())) foreign.push(`${p} (no session claims it)`)
-    }
+    // A74 (review 5): a path another live session claims is its, even when this session touched it too. A126: a commit or
+    // an add takes a path it names exactly unless another live session claims it; what it sweeps in under a folder must
+    // be this session's own.
+    const others = liveTouches(await $.clock.now())
+    const named = new Set(rels.map(r => r.toLowerCase()))
+    const foreign = foreignPaths(isIndexSub(sub) ? changed.filter(p => !named.has(p.toLowerCase()) || ownersOf(p, others).length > 0) : changed, mineLower(), others)
+    if (foreign.length > 0 && isIndexSub(sub)) return blocked(gate, `git ${sub} would take work that is not this session's: ${listed(foreign)}`, `leave it to its owner and ${exactAlternative(sub)} (your own)`)
     if (foreign.length > 0)
-      return blocked(gate, `git ${sub} would ${sub.startsWith('stash ') ? 'write over' : 'discard'} uncommitted changes in the shared checkout: ${foreign.slice(0, 6).join('; ')}${foreign.length > 6 ? `; and ${foreign.length - 6} more` : ''}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
+      return blocked(gate, `git ${sub} would ${sub.startsWith('stash ') ? 'write over' : 'discard'} uncommitted changes in the shared checkout: ${listed(foreign)}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
+    if (sub === 'add') addsChecked.set(command, [...(addsChecked.get(command) ?? []), { root, rels }]) // A126: noted once it ran
   }
   return null
 }
@@ -610,6 +598,16 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
 }
 const EVALS = new Set(['eval', 'source', '.', 'iex', 'invoke-expression', 'xargs'])
 
+const mineLower = (): Set<string> => new Set([...touched].map(p => p.toLowerCase()))
+const liveTouches = (now: number): Touch[] => touches.filter(t => isLive(t.id8, now))
+/** A126: the adds the shared-checkout check passed, by command: once the command ran, the files they named exactly and
+ * staged join this session's touch set (a plain commit of them runs); what a folder swept in does not. */
+const addsChecked = new Map<string, { root: string; rels: string[] }[]>()
+/** A126: the staged paths of the shared checkout (under `rels` when given): one fast read, 8 s; null when unread. */
+async function stagedIn($: Engine, root: string, rels: readonly string[]): Promise<string[] | null> {
+  const r = await $.process.run(['git', '-C', root, 'diff', '--cached', '--name-only', '-z', ...(rels.length > 0 ? ['--', ...rels] : [])], { timeoutMs: 8_000 }).catch(() => null)
+  return r?.exitCode === 0 ? r.stdout.split('\0').filter(Boolean) : null
+}
 /** A74 (review 5): after this session commits in the shared checkout, its touch set keeps only the paths still changed
  * (a committed path is no longer its uncommitted work). */
 async function pruneTouched($: Engine, opts: Opts): Promise<void> {
@@ -628,16 +626,6 @@ async function pruneTouched($: Engine, opts: Opts): Promise<void> {
   await $.fs.write(`${hfDir()}/touch/${me8}.json`, JSON.stringify(t)).catch(() => undefined)
 }
 
-/** A75: one action that ran and is recorded for nghiem thu: Saved/A5R/recorded/<id8>.json, this session's file. */
-type Recorded = { at: number; id8: string; lane: string; kind: string; rule: string; path: string; target?: string; root: string | null; why: string }
-/** A75 (review 6): what a recorded shell action is about, for nghiem thu to look for in progress.md or findings.md: a
- * delete's targets, a config key, a depot path; else the command. */
-const recordTarget = (kind: string, command: string): string => {
-  const [, args] = commandVerb(tokenize(command))
-  if (kind === 'delete') return deleteTargets(args).join(' ') || command.slice(0, 120)
-  if (kind === 'git-config-global') return /--global\s+(?:--\S+\s+)*(\S+)/.exec(command)?.[1] ?? command.slice(0, 120)
-  return args.filter(a => !a.startsWith('-')).slice(-1)[0] ?? command.slice(0, 120)
-}
 async function recordAction($: Engine, opts: Opts, r: Omit<Recorded, 'at' | 'id8' | 'lane'>): Promise<void> {
   if (!(await isCheckoutHere($))) return
   const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
@@ -757,7 +745,7 @@ async function moveAfterClear($: Engine, opts: Opts, oldSid: string, newSid: str
   if (typeof me.sharedShellAt === 'number') sharedShellAt = me.sharedShellAt // 0.16.1: kept across a reload
   for (const n of me.prsKnown ?? []) prsKnown.add(n)
   for (const slug of me.prBaseline ?? []) prBaseline.add(slug)
-  await saveMe($, opts, now)
+  await saveMe($, opts)
   if (src) await $.fs.write(`${dir}/editor/${old8}.json`, JSON.stringify({ ...src, want: null, holding: null, yieldAsks: [], heartbeatAt: 0 })).catch(() => undefined)
   const t = parseTouch(await readJson($, `${dir}/touch/${old8}.json`))
   for (const p of t?.paths ?? []) touched.add(p)
@@ -793,10 +781,15 @@ function followClear($: Engine, opts: Opts, oldSid: string, tries: number): void
   })
 }
 
-/** Writes this session's file (its heartbeat with it); one writer: this session. */
-async function saveMe($: Engine, opts: Opts, at?: number): Promise<void> {
+/** Writes this session's file with its heartbeat: the time of this write (A127: a tick's start time made a slow tick's
+ * heartbeat minutes old as written); one writer: this session. */
+function saveMe($: Engine, opts: Opts): Promise<void> {
+  saveChain = saveChain.then(() => writeMe($)).catch(err => $.ui.log(`a5r: session file: ${String(err)}`, { to: 'debug' })) // A127: one write at a time (the minute's beat, a detached score, the tick)
+  return saveChain
+}
+async function writeMe($: Engine): Promise<void> {
   if (!me) return
-  const now = at ?? (await $.clock.now())
+  const now = await $.clock.now()
   const { sharedShellAt: _was, ...rest } = me
   me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir()}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
@@ -1145,13 +1138,13 @@ async function takeSyncLock($: Engine, opts: Opts, s: SyncFile, now: number): Pr
     // Review 5: the holder still holds the Editor at T (its cutoff notice said so): the lease becomes the sync's, so the
     // worker may use or close that Editor and a5r releases it when the sync ends.
     me = { ...me, want }
-    await saveMe($, opts, now)
+    await saveMe($, opts)
     return
   }
   me = { ...me, want }
-  await saveMe($, opts, now)
+  await saveMe($, opts)
   await editorStep($, opts, now)
-  await saveMe($, opts, now)
+  await saveMe($, opts)
 }
 
 /** The FREE line for this session's lease (the editor tool's release and the sync's own, A79): a fresh probe names an
@@ -1164,7 +1157,7 @@ async function releaseLock($: Engine, opts: Opts, now: number, why: Pick<LeaseEn
   const line = freeLine({ since: now, by: me?.lane ?? me8, note, background: 'none' })
   if (!(await writeLock($, opts, line))) return { isWritten: false, line }
   if (me) me = await recordEnd($, opts, { ...me, holding: me.holding && notedHolding(heldNow(now), now) }, { ...why, at: now, isEditorOpen: pid !== null })
-  await saveMe($, opts, now)
+  await saveMe($, opts)
   return { isWritten: true, line }
 }
 
@@ -1222,7 +1215,7 @@ async function releaseSyncSlot($: Engine, opts: Opts, s: SyncFile, now: number):
   if (holdsSyncLock()) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${clockOf(s.at)} ended`)
   else if (me && isSyncSlot(me.want)) {
     me = { ...me, want: null }
-    await saveMe($, opts, now)
+    await saveMe($, opts)
   }
 }
 
@@ -1252,7 +1245,7 @@ async function rewriteLease($: Engine, opts: Opts, h: Holding, end: number, now:
   const line = heldLine({ lane: me.lane, sessionName: me.title || me.lane, id8: me8, since: h.since, pid: lock.pid ?? editorPid(probe), end, mode: w?.mode ?? 'interactive', pausable: w?.pausable ?? true, nextSafe: w?.nextSafe ?? 'after save', note })
   if (!(await writeLock($, opts, line))) return null
   me = { ...me, holding: { ...h, end, extended } }
-  await saveMe($, opts, now)
+  await saveMe($, opts)
   return line
 }
 
@@ -1394,13 +1387,16 @@ async function syncSlotWhenOff($: Engine, opts: Opts): Promise<void> {
   if (holdsLock()) await releaseLock($, opts, now, { reason: 'sync' }, `${SYNC_SLOT}${s ? clockOf(s.at) : ''} ${s?.state ?? 'gone'}`)
   else {
     me = { ...me, want: null }
-    await saveMe($, opts, now)
+    await saveMe($, opts)
   }
 }
 
 /** One minute tick, serialized with the tool's own runs: read, decide, write this session's files, notify. */
 function runTick($: Engine, opts: Opts): Promise<void> {
-  tickChain = tickChain.then(() => tick($, opts)).catch(err => $.ui.log(`a5r tick: ${String(err)}`, { to: 'debug' }))
+  tickChain = tickChain.then(async () => {
+    tickSince = await $.clock.now()
+    await tick($, opts).finally(() => (tickSince = 0))
+  }).catch(err => $.ui.log(`a5r tick: ${String(err)}`, { to: 'debug' }))
   return tickChain
 }
 
@@ -1443,7 +1439,7 @@ async function missingLockStep($: Engine, opts: Opts, now: number): Promise<void
 
 async function tick($: Engine, opts: Opts): Promise<void> {
   await readTheme($)
-  if ((await readA5R($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) await refreshAccept($, opts)
+  if ((await readA5R($)) && !isScoring && (prDirty || (await $.clock.now()) - shipCheckedAt >= SHIP_CHECK_MS)) void refreshAccept($, opts).catch(err => $.ui.log(`a5r: score: ${String(err)}`, { to: 'debug' }))
   if (!(await readA5R($))) {
     watchedSince = 0
     await syncSlotWhenOff($, opts).catch(err => $.ui.log(`a5r: sync slot: ${String(err)}`, { to: 'debug' }))
@@ -1473,7 +1469,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running') // A62, A67
   agentsNow = running.length
   agentKindsNow = running.map(a => a.type || 'agent')
-  await saveMe($, opts, now)
+  await saveMe($, opts)
   showMachine($, now)
   clearStaleBusy(now)
   await deliverIdle($, opts)
@@ -3026,9 +3022,9 @@ async function sharedRels($: Engine, locs: readonly Located[]): Promise<string[]
   return out
 }
 
-async function recordTouch($: Engine, opts: Opts, locs: Located[]): Promise<void> {
+async function recordTouch($: Engine, rels: readonly string[]): Promise<void> {
   let isNew = false
-  for (const rel of await sharedRels($, locs)) {
+  for (const rel of rels) {
     if (!touched.has(rel)) {
       touched.add(rel)
       isNew = true
@@ -3145,10 +3141,10 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
       const long = focus ? null : buildWindowProblem(want, now)
       if (long) return long
       me = { ...me, want, lane: str(e.lane) ? safeWord(str(e.lane)) : me.lane }
-      await saveMe($, opts, now)
+      await saveMe($, opts)
       await editorPass($, opts, now)
       convertNote = await convertHandLock($, opts, now)
-      await saveMe($, opts, now)
+      await saveMe($, opts)
       return ''
     })
     if (answer) return answer
@@ -3162,7 +3158,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     lock = lockOf(lockRaw)
     if (!holdsLock()) {
       if (me) me = { ...me, want: null, holding: null }
-      await saveMe($, opts, now)
+      await saveMe($, opts)
       return tail(blocked('Editor', 'the lock does not name this session', 'nothing to release (any request of this session is withdrawn)'))
     }
     const refusal = claimRefusal(now, 'release')
@@ -3393,7 +3389,7 @@ async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
   const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: queueNow(filesNow(), now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
   const log = (note: string) => orchestrateLog($, opts, actedEvent('auto-sync', note, now)).catch(() => undefined)
   const s = syncFile
-  if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: opts.autoSyncBuild === true })}`)
+  if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: opts.autoSyncBuild !== false })}`)
   else if (a.kind === 'take' && a.holder.id8 === me8 && s && (await claimAlert($, opts, `auto-sync-take-${s.id}-${s.updatedAt}`))) await log(`handed on (its holder ${s.holder.lane} is gone): ${await syncAction($, opts, 'takeover', {})}`)
   else if (a.kind === 'cancel' && s && (await writeSync($, opts, endedSync(s, 'cancelled', a.note, now), s))) await log(`cancelled the sync at ${clockOf(s.at)}: ${a.note}`) // one writer: sync.json's read-compare-write
   if ((a.kind === 'cancel' || a.kind === 'no-holder') && (await claimAlert($, opts, `auto-sync-told-${a.kind}-${a.kind === 'cancel' ? (s?.id ?? '') : ymd(now)}`))) $.ui.toast(holderMissingText(a, now), { timeoutMs: 15_000 })
@@ -3988,6 +3984,8 @@ export const register: Register = (on, options) => {
       const problem = await gitSharedProblem($, opts, a5r, what, await $.session.cwd())
       if (problem) {
         count('D1')
+        addsChecked.delete(what) // an add it passed before a later segment was refused is not noted
+        await orchestrateLog($, opts, actedEvent('shared-git', `refused: ${problem}`, await $.clock.now())).catch(() => undefined) // A126: on record
         return { deny: problem }
       }
     }
@@ -4043,9 +4041,11 @@ export const register: Register = (on, options) => {
         isPieRunning = true
       }
       if (text && PIE_STOP.test(text)) isPieRunning = false
-      if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, opts, locs)
+      if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, await sharedRels($, locs))
       // A74 (review 5): a commit in the shared checkout takes its committed paths out of this session's touch set.
       if (isS2 && SHELL_TOOLS.has(tool) && /\bgit\b[^\n]*\bcommit\b/.test(what)) await pruneTouched($, opts).catch(() => undefined)
+      for (const a of addsChecked.get(what) ?? []) await recordTouch($, ((await stagedIn($, a.root, a.rels)) ?? []).filter(p => a.rels.some(r => samePath(r, p))))
+      addsChecked.delete(what)
       // A82 (review 4): a shell command run inside the shared checkout may have changed files there (Edit/Write are in
       // `touched`); the session counts as concerned by a cutoff until its next commit there.
       if (isS2 && SHELL_TOOLS.has(tool)) {

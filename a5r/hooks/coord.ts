@@ -14,7 +14,7 @@ import { engineLabel, type EngineFind } from './machine.ts'
 import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type EntryTell, type StageTell, type SyncStage } from './syncstage.ts'
 
 export const DIR = 'Saved/A5R'
-export const HEARTBEAT_STALE_MS = 3 * 60_000 // a session file not refreshed for 3 min: that session is gone
+export const HEARTBEAT_STALE_MS = 3 * 60_000 // a session file not refreshed for 3 min: gone, unless its lane lives (A127: mod-less only past LANE_STALE_MS)
 export const LANE_STALE_MS = 10 * 60_000 // Ather's lane heartbeat (30 s) not written for 10 min: gone
 export const YIELD_MAX_MIN = 20 // a request this short, without a build, may ask the holder to yield
 export const YIELD_EVERY_MS = 60 * 60_000 // at most one interruption per holder per hour
@@ -506,7 +506,7 @@ export type OrchestrateEvent = {
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
    * running), holder-gone; or A65-judge (a verdict, advisory); A112: wait (a session's own wait decision, logged only).
    * A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' | 'orphan-close' | 'auto-sync' | 'withdrawn' // manual: A117, the person's change of the queue; focus: A118; A123 orphan-close, A124 auto-sync, A125 withdrawn
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' | 'orphan-close' | 'auto-sync' | 'withdrawn' | 'shared-git' // manual: A117, the person's change of the queue; focus: A118; A123 orphan-close, A124 auto-sync, A125 withdrawn, A126 shared-git (a refused git write in the shared checkout)
   lane: string
   id8: string
   procs: readonly string[]
@@ -1390,9 +1390,9 @@ export const parseClients = (text: string): ClientRow[] | null => {
 export type NoMod = { sessionId: string; id8: string; intent: string; branch: string }
 export type Overview = { active: number | null; s2: number; elsewhere: number | null; intents: [string, number][]; editor: string; waiting: string[]; sync: string; withoutMod: NoMod[] }
 
-/** Live S2 sessions that run without a5r 0.4: a fresh Ather lane with no fresh a5r session file. */
+/** Live S2 sessions that run without a5r 0.4: a fresh Ather lane whose a5r session file is missing or as stale as a gone lane (A127: 10 min, not 3). */
 export const withoutModOf = (me8: string, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): NoMod[] => {
-  const fresh = new Set(files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.id8))
+  const fresh = new Set(files.filter(f => now - f.heartbeatAt <= LANE_STALE_MS).map(f => f.id8))
   return lanes
     .filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
     .map(l => ({ sessionId: l.sessionId, id8: l.sessionId.slice(0, 8).toLowerCase(), intent: l.intent || 'no intent', branch: l.branch ?? '' }))

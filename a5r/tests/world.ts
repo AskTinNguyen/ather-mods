@@ -97,6 +97,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     if (hit?.deny) return { deny: hit.deny } // the run rejects, as a timeout does
     const stdout = hit ? hit.stdout
       : argv.includes('ConvertTo-Json') ? JSON.stringify({ freeGb: Number(machine.ram), diskGb: machine.disk, procs: machine.procs, ...(machine.top.length ? { top: machine.top } : {}) })
+        : argv.includes('diff --cached') ? '' // A126: nothing staged unless a test says so
         : argv.includes('rev-parse') ? 'HaiHuynh/20261005'
           : argv.includes('rev-list') ? '3\t12'
             : argv.includes('--merges') ? 'def5678 · 3 days ago'
