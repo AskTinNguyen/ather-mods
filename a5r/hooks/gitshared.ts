@@ -1,6 +1,6 @@
 // A74 (rev 27, adversary review): git in the shared checkout that can discard work or move the tree, read segment by
 // segment with the folder each one runs in. Pure: no `$`; register.ts reads git status and the touch files and decides.
-import { blankQuotes, commandVerb, norm, segments, stripHeredocs, tokenize, under } from './a5r.ts'
+import { SHELLS, blankQuotes, commandVerb, nestedCommand, norm, program, segments, stripHeredocs, tokenize, under } from './a5r.ts'
 import type { Touch } from './coord.ts'
 
 /** One command segment with the folder it runs in (after `cd`, `pushd`, `popd`, `Set-Location` before it). */
@@ -31,6 +31,34 @@ export const walk = (command: string, cwd: string, home = ''): Seg[] => {
   }
   return out
 }
+
+/** A command that runs code it was handed (eval, source, Invoke-Expression, a script file): what it runs cannot be read. */
+const EVALS = new Set(['eval', 'source', '.', 'iex', 'invoke-expression'])
+/** Review 1 (rev 28) / Fable review 1 (rev 43): the segments of a command and of the shells it runs (`bash -c "…"`,
+ * `powershell -Command "…"`, `cmd /c "…"`, two levels at most), each with its folder; `unread`: the segments whose own
+ * command cannot be read (a shell fed a script file or stdin, deeper nesting, eval, a script file, a program run through
+ * xargs, whose arguments come from stdin: commandVerb steps over xargs, so it is looked for before the verb). */
+const viaXargs = (seg: Seg): boolean => {
+  const words = tokenize(seg.raw).map(program)
+  return words.slice(0, words.indexOf(seg.verb)).includes('xargs')
+}
+export const walkDeep = (command: string, cwd: string, home = '', depth = 0): { segs: Seg[]; unread: Seg[] } => {
+  const segs: Seg[] = []
+  const unread: Seg[] = []
+  for (const seg of walk(command, cwd, home)) {
+    const inner = SHELLS.has(seg.verb) && depth < 2 ? nestedCommand(seg.verb, seg.args) : ''
+    if (inner) {
+      const deep = walkDeep(inner, seg.dir, home, depth + 1)
+      segs.push(...deep.segs)
+      unread.push(...deep.unread)
+    } else if (SHELLS.has(seg.verb) || EVALS.has(seg.verb) || viaXargs(seg) || /\.(sh|bash|ps1|psm1|bat|cmd|py)$/i.test(seg.verb)) unread.push(seg)
+    else segs.push(seg)
+  }
+  return { segs, unread }
+}
+
+/** Fable review 1 (rev 43): git that writes the index or the tree, named in a segment whose command cannot be read. */
+export const HIDDEN_GIT_WRITE = /\bgit\b[\s\S]*\b(commit|add|rm|checkout|restore|stash|reset|clean|switch)\b/i
 
 /** A git segment's folder: its last `-C <path>` (relative to the segment's folder), else the segment's folder; and its
  * arguments with every `-C <path>` and `-c <key=value>` removed. */
@@ -303,7 +331,7 @@ export const indexProblem = (staged: readonly string[] | null, mine: ReadonlySet
   const owner = staged.map(p => ({ p, note: whose(p, mine, others) }))
   const foreign = owner.flatMap(o => o.note ?? [])
   if (foreign.length === 0) return null
-  const own = owner.filter(o => o.note === null).map(o => o.p)
+  const own = owner.filter(o => o.note === null).map(o => (/\s/.test(o.p) ? `"${o.p}"` : o.p))
   return { why: `a commit without paths takes the whole shared index, which holds work that is not this session's: ${listed(foreign)}`, alt: own.length > 0 ? `commit exactly your own paths, which leaves the others staged: git commit -m "…" -- ${own.join(' ')}` : COMMIT_PATHS_ALT }
 }
 

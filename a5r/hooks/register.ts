@@ -1,5 +1,5 @@
 import type { EngineInterface as Engine, Register, RenderElement } from 'claude-code'
-import { A5R, SHELLS, commandVerb, gitTargets, nestedCommand, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
+import { A5R, commandVerb, gitTargets, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark } from './decision.ts'
 import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, launchersOf, lockProblem, mcpCallKind, parseEditorLock, type EditorKind } from './editor.ts'
@@ -13,7 +13,7 @@ import {
   BUILD_MARK, withoutBuildMark, type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want, type FocusLease, claimIn,
 } from './coord.ts'
 import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, afterFocusWant, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
-import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, foreignPaths, gitPlace, indexProblem, isGit, isIndexSub, leasePushTargets, listed, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
+import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, foreignPaths, gitPlace, HIDDEN_GIT_WRITE, indexProblem, isGit, isIndexSub, walkDeep, leasePushTargets, listed, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, str, wantOf, appendCapped, endLease, holderNotices, holderText, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { NUDGE_EVERY_MS, NUDGE_MAX, freeWindowOf, idleMsOf, isIdle, nudgeCandidates, saysWaitingForEditor } from './nudge.ts'
@@ -463,8 +463,13 @@ async function logSupplied($: Engine, opts: Opts, gb: number, what: string, now:
 async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string, cwd: string): Promise<string | null> {
   const gate = gateOf('D1')
   addsChecked.delete(command)
-  const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
-  for (const seg of walk(command, cwd, home)) {
+  const { segs, unread } = walkDeep(command, cwd, (places.USERPROFILE ?? '').replace(/\\/g, '/'))
+  // Fable review 1 (rev 43): nested shells are read inside; git that writes, hidden where it cannot be read, is refused.
+  if (s2Root() && unread.some(seg => HIDDEN_GIT_WRITE.test(seg.raw) && (under(seg.dir, s2Root()) || seg.raw.replace(/\\/g, '/').toLowerCase().includes(s2Root().toLowerCase()))))
+    return blocked(gate, 'this git command sits inside a script, eval or deeper shell, so what it does in the shared checkout cannot be read', 'run it as one plain git command')
+  const ownHere = new Set<string>() // Fable review 5: what an earlier add or rm of this command named, it staged
+  const along: string[] = [] // Fable review 2: told once the whole command passed
+  for (const seg of segs) {
     if (!isGit(seg)) continue
     const { dir, args } = gitPlace(seg)
     let act = classifyGit(args)
@@ -483,7 +488,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     // the merge guard decides who writes (A14, A115).
     if ((act.kind === 'staged' || (act.kind === 'check' && isIndexSub(act.sub))) && (await headIn($, root))) continue
     if (act.kind === 'staged') {
-      const p = indexProblem(await stagedIn($, root, []), mineLower(), liveTouches(await $.clock.now()))
+      const p = indexProblem(await stagedIn($, root, []), new Set([...mineLower(), ...ownHere]), liveTouches(await $.clock.now()))
       if (p) return blocked(gate, p.why, p.alt)
       continue
     }
@@ -523,16 +528,23 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     const isResolving = act.kind === 'check' && act.side !== undefined && (await headIn($, root)) !== null
     const changed = discardedPaths(ran.stdout, isResolving)
     // A74 (review 5): a path another live session claims is its, even when this session touched it too. A126: a commit or
-    // an add takes a path it names exactly unless another live session claims it; what it sweeps in under a folder must
-    // be this session's own.
+    // an add takes a path it names exactly when no other live session claims it, or this session touched it too (Fable
+    // review 2: the other lane's changes to it go along, and it is told); what it sweeps in under a folder must be its own.
     const others = liveTouches(await $.clock.now())
-    const named = new Set(rels.map(r => r.toLowerCase()))
-    const foreign = foreignPaths(isIndexSub(sub) ? changed.filter(p => !named.has(p.toLowerCase()) || ownersOf(p, others).length > 0) : changed, mineLower(), others)
+    const mine = new Set([...mineLower(), ...ownHere])
+    const named = (p: string) => rels.some(r => samePath(r, p)) && (mine.has(p.toLowerCase()) || ownersOf(p, others).length === 0)
+    const foreign = foreignPaths(isIndexSub(sub) ? changed.filter(p => !named(p)) : changed, mine, others)
     if (foreign.length > 0 && isIndexSub(sub)) return blocked(gate, `git ${sub} would take work that is not this session's: ${listed(foreign)}`, `leave it to its owner and ${exactAlternative(sub)} (your own)`)
     if (foreign.length > 0)
       return blocked(gate, `git ${sub} would ${sub.startsWith('stash ') ? 'write over' : 'discard'} uncommitted changes in the shared checkout: ${listed(foreign)}`, 'commit or move those changes first (their owner does), or run it in a worktree of your own (git worktree add)')
-    if (sub === 'add') addsChecked.set(command, [...(addsChecked.get(command) ?? []), { root, rels }]) // A126: noted once it ran
+    for (const p of isIndexSub(sub) ? changed.filter(named) : []) {
+      const owners = ownersOf(p, others).map(o => o.lane)
+      if (owners.length > 0) along.push(`${p} (also ${owners.join(', ')}'s): another lane's changes to it go along in this ${sub}`)
+    }
+    if (sub === 'add' || sub === 'rm') addsChecked.set(command, [...(addsChecked.get(command) ?? []), { root, rels }]) // A126: noted once it ran
+    if (sub === 'add' || sub === 'rm') for (const r of rels) ownHere.add(r.toLowerCase())
   }
+  if (along.length > 0) push({ id: `index-along:${await $.clock.now()}:${along.join(',')}`, text: `A5R · ${gate} — ${along.join('; ')}`, isActionable: false })
   return null
 }
 
@@ -554,7 +566,7 @@ async function addsAllInShared($: Engine, opts: Opts, a5r: A5R, command: string,
 /** A80 (rev 28): `git push --force-with-lease` (or `--force-if-includes`) runs to a branch of one's own; it is refused only
  * when it would rewrite main/master/develop or the branch the shared checkout has checked out (every session commits on
  * it). A push with no refspec (or `HEAD`) writes the current branch of the folder it runs in (one `rev-parse`, 8 s). */
-async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: string, depth = 0): Promise<string | null> {
+async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: string): Promise<string | null> {
   const gate = gateOf('D1')
   const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
   const branchOf = async (dir: string): Promise<string> => {
@@ -564,23 +576,12 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
   const LEASE = /--force-(with-lease|if-includes)/
   const unread = blocked(gate, 'this force push with a lease sits inside a nested shell, eval or script, so the branch it writes cannot be read', 'write it as one plain git command: git push --force-with-lease origin <your-branch>')
   let shared: string | null = null
-  for (const seg of walk(command, cwd, home)) {
-    if (!LEASE.test(seg.raw)) continue
-    // Review 1: `bash -c "…"`, `powershell -Command "…"`, `cmd /c "…"` are read inside (two levels at most); a shell fed a
-    // script file or stdin (`bash -s`, `bash x.sh`) cannot be.
-    if (SHELLS.has(seg.verb)) {
-      const inner = nestedCommand(seg.verb, seg.args)
-      if (!inner || depth >= 2) return unread
-      const problem = await leasePushProblem($, opts, inner, seg.dir, depth + 1)
-      if (problem) return problem
-      continue
-    }
-    if (seg.verb !== 'git') {
-      // 0.16.1: only a command that runs code it was handed (eval, source, Invoke-Expression, a script file) is unread;
-      // text inside echo, printf or any other argument is no command.
-      if (EVALS.has(seg.verb) || /\.(sh|bash|ps1|psm1|bat|cmd|py)$/i.test(seg.verb)) return unread
-      continue
-    }
+  // Review 1: nested shells are read inside (walkDeep); 0.16.1: only code a command was handed is unread (text inside echo,
+  // printf or any other argument is no command).
+  const { segs, unread: hidden } = walkDeep(command, cwd, home)
+  if (hidden.some(seg => LEASE.test(seg.raw))) return unread
+  for (const seg of segs) {
+    if (!LEASE.test(seg.raw) || seg.verb !== 'git') continue
     const { dir, args } = gitPlace(seg)
     const targets = leasePushTargets(args)
     if (!targets) continue // a commit message or a grep that names the flag
@@ -596,7 +597,6 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
   }
   return null
 }
-const EVALS = new Set(['eval', 'source', '.', 'iex', 'invoke-expression', 'xargs'])
 
 const mineLower = (): Set<string> => new Set([...touched].map(p => p.toLowerCase()))
 const liveTouches = (now: number): Touch[] => touches.filter(t => isLive(t.id8, now))

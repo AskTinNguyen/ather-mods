@@ -238,8 +238,10 @@ export const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`
 /** Drop quoted text holding spaces (commit messages); keep quoted single words and paths. */
 export const blankQuotes = (seg: string): string => seg.replace(/"[^"]*"|'[^']*'/g, m => (/\s/.test(m.slice(1, -1)) ? '""' : m))
 
+/** Words as a shell splits them: a quoted span keeps its spaces wherever it sits in the word (`"a b"`, `--author="A B"`,
+ * `-m"two words"`), and its quotes go (Fable review 3, rev 43). */
 export const tokenize = (seg: string): string[] =>
-  (seg.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(t => (t.length > 1 && t[0] === t[t.length - 1] && (t[0] === '"' || t[0] === "'") ? t.slice(1, -1) : t))
+  (seg.match(/(?:[^\s"']*(?:"[^"]*"|'[^']*'))+[^\s"']*|\S+/g) ?? []).map(t => t.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'))
 
 /** 0.16.1 / rev 38: wrapper verbs that take arguments of their own (`timeout 120`, `nice -n 5`, `env A=1`, `stdbuf -o0`,
  * `ionice -c3`), stepped over to the program they run; each with the flags of its own that take a separate value (`env -i`
