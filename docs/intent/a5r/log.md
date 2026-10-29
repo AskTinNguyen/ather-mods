@@ -358,3 +358,9 @@ With a screenshot of the A5R panel: EDITOR QUEUE · 4 WAITING (▶ sync-main gra
 
 > Giờ sync cố định là mấy giờ?
 > Ngày ít nhất 2 lần, còn giờ cố định thì tôi nghĩ nên linh động tùy vào tình hình các session
+
+## L-47 (2026-10-29) | class: intent | -> rev 43
+
+> Đọc mấy ý của @[♾️S2 sync main] thì thấy dạo này có nhiều lane commit nhầm đồ của nhau quá. Vai trò quản lý lane của A5R đang không tốt
+
+(Read in the sync conductor's transcript, 2026-10-29: the Walker lane's docs/intent/walker-unification F-5 files were committed inside the Markerless lane's commit 282bff1f, because both were staged in the shared index; and at the 11:00 cutoff A5R listed 8 live sessions, the active avian lane among them, as running "without a5r 0.4".)

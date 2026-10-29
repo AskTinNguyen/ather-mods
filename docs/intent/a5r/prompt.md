@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 42
+- Rev: 43
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -228,6 +228,22 @@ The three share one clock and one message channel: hai-flow notices, delivered b
   - **Notices:** the sync cutoff and freeze notices go only to sessions with uncommitted changes in the shared checkout, sessions queued or holding the Editor, and the holder. Others hear only the lift.
 
   MEASURED (audit): recorded wait 421 h against 124.5 h live; `pieAt` 0 of 87; `no-editor` on 133 of 137 leases; 338 alert files kept; 7 stale requests on file; `sed -n` refused; about 30 sessions told per sync. Proof: engine tests for each.
+- A126 (rev 43): No lane commits another lane's work. In the shared checkout the index is shared, so one lane's `git commit` (without paths) takes whatever another lane staged.
+  - **A plain `git commit`** runs only when every staged path (`git diff --cached --name-only`, a fast read) is this session's own: touched by it, and claimed by no other live session. Otherwise it is refused, naming each foreign staged path and its owner, with the alternative `git commit -m "…" -- <your paths>`. Git's path form commits exactly those paths and leaves the others staged.
+  - **A path-limited commit** (`git commit … -- <paths>`, `--only`) runs when none of its paths is claimed by another live session.
+  - **`git commit -a`/`--all`/`-am`** is refused in the shared checkout, with the path-limited form as the alternative.
+  - **`git add <paths>`** of a path another live session claims is refused, naming the owner.
+  - Worktrees and other repositories are unchanged.
+  - Every refusal is recorded. The rules text tells every session to commit with `-- <paths>`.
+
+  MEASURED 2026-10-29 (the sync conductor's transcript): the Walker lane's three `docs/intent/walker-unification` files (F-5, rev 7) went into the Markerless lane's commit 282bff1f "because they were staged in the shared index at the time". Hai: "dạo này có nhiều lane commit nhầm đồ của nhau quá. Vai trò quản lý lane của A5R đang không tốt". Proof: engine tests covering:
+  - a plain commit with a foreign staged path is refused and names it;
+  - a commit with `-- <own paths>` runs while a foreign path is staged;
+  - a commit whose own paths are another live session's is refused;
+  - `commit -a` is refused;
+  - `add` of another session's path is refused;
+  - a worktree is untouched.
+- A127 (rev 43): Every live A5R session is seen at the sync cutoff. MEASURED 2026-10-29 11:00 (cutoff of the 11:30 sync): A5R listed 8 live S2 sessions "without a5r 0.4", including the active avian lane fda91548 and mc-ik-hitstop eea4eb20, and sent each the standard message. Yet their session files were fresh by 11:21, so they did run A5R. `withoutModOf` (coord.ts:1394) calls a session mod-less when its session file's heartbeat is more than 3 min old while its Ather lane is fresh. Find why heartbeats went stale around 11:00 (a minute tick held up by the new probes of rev 42 under load? a reload?), fix it, and call a session mod-less only when its file is missing or stale beyond a longer margin (e.g. 10 min, matching the lane) and its lane says it has no a5r. Proof: engine test with a heartbeat 4 min old: not mod-less. Write the cause into progress as MEASURED or INFERRED.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -241,6 +257,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 43 (2026-10-29): L-47 (Hai: lanes commit each other's work; A5R's lane management is not good): A126 no commit of another lane's staged work, A127 live A5R sessions seen at the cutoff.
 - rev 42 (2026-10-28): L-46 (the week's audit; Hai: close an orphan Editor safely; sync at least twice a day, timed to the sessions): A121 offer Focus to a lane that keeps coming back, A122 overruns with waiters shown, A123 graceful orphan close, A124 auto-planned syncs, A125 true numbers and fewer alerts.
 - rev 41 (2026-10-23): L-45 (Hai: Editor orchestration should serve delivery; Focus for 2–3 h milestones): A118 Focus, A119 the others re-planned around it, A120 others keep working without touching the focus Editor.
 - rev 40 (2026-10-22): L-44 (Hai: EDITOR QUEUE and SESSIONS overlap, ORCHESTRATE unclear; mockup approved; rearrange and resize): A116 one Editor list, other sessions, NEEDS A LOOK; A117 person-only rearrange and resize.
