@@ -43,7 +43,8 @@ export const freezeStepOf = (phase: Phase, stage: SyncStage | null, build: Build
 export const editNeed = (rel: string, mergeChanged: ReadonlySet<string>): Need => (/^(source|plugins)(\/|$)/i.test(rel) || mergeChanged.has(rel.toLowerCase()) ? 'source' : 'edit')
 /** Fable 9: the edit needs of a shell command's segments (gitshared.ts walkDeep): where each segment but git (a git write)
  * may write in the shared tree (gitshared.ts writtenIn), by the same rule as an edit (editNeed: a folder under Source/ or
- * Plugins/ is one there). */
+ * Plugins/ is one there). Known limit: a command run at the checkout's top folder that writes under Source/ by an argument
+ * (`cd <checkout> && cp x Source/y`) counts as a plain edit: copy and move arguments are not read as targets. */
 export const shellNeeds = (segs: readonly Seg[], root: string, mergeChanged: ReadonlySet<string>): Need[] => {
   const top = root.replace(/\/$/, '').length + 1
   return segs.filter(seg => seg.verb !== 'git').flatMap(seg => writtenIn(seg, root)).map(p => editNeed(p.slice(top), mergeChanged))
