@@ -1910,6 +1910,74 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   await engine.end('other')
 }
 
+// ---------------------------------------------------------------- auto-track (0.7.0, docs/intent/auto-track)
+
+{
+  // A session tracks the intent it works on by itself: one row of the intent's Acceptance per check, on real checkouts.
+  const { s2, web } = makeWorkspace()
+  const put = (root, slug, status = 'active') => {
+    fs.mkdirSync(join(root, `docs/intent/${slug}`), { recursive: true })
+    fs.writeFileSync(join(root, `docs/intent/${slug}/prompt.md`), LOGIN.replace('- Status: active', `- Status: ${status}`))
+  }
+  for (const slug of ['alpha', 'beta', 'gamma', 'shared']) put(s2, slug)
+  put(web, 'login')
+  const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0040', writable: [s2, web] })
+  const pinned = () => engine.store.get(`pinned:${sid}`)
+  const idle = () => engine.store.set(`pinMeta:${sid}`, { ...engine.store.get(`pinMeta:${sid}`), at: Date.now() - 31 * 60 * 1000 })
+  const write = async (file, agentId) => {
+    await (agentId ? engine.agentTool(agentId, { tool: 'Write', file_path: file, content: '# x\n' }) : engine.modelTool({ tool: 'Write', file_path: file, content: '# x\n' }))
+    await engine.flush()
+  }
+
+  await engine.spawn({ agentId: 'w-auto', description: 'Alpha worker', prompt: 'Implement alpha A1.' })
+  await write('docs/intent/alpha/progress.md', 'w-auto')
+  expect("auto-track A1: a worker's write into alpha's progress.md tracks alpha for the session, and says how to stop it", pinned() === 'alpha' && engine.record.toasts.includes('Ather: Now tracking alpha: this session works on it. /ather untrack stops that.'), [pinned(), engine.record.toasts.slice(-1)])
+
+  await write('docs/intent/beta/findings.md')
+  expect('auto-track A4: work on beta while alpha had work less than 30 min ago keeps alpha', pinned() === 'alpha', pinned())
+  idle()
+  await write('docs/intent/beta/proof/a1.txt')
+  expect("auto-track A2 and A4: 30 min after alpha's last work, a write of any file in beta's folder (proof/a1.txt) takes over", pinned() === 'beta', pinned())
+
+  idle()
+  await bash(engine, 'git commit -m "intent(nope): rev 1"')
+  await engine.modelTool({ tool: 'Bash', command: 'git commit -m "intent(gamma): rev 1"', __isError: true })
+  await engine.flush()
+  expect('auto-track A3: a commit for an intent with no folder, or one that failed, tracks nothing', pinned() === 'beta', pinned())
+  await bash(engine, `cd ../web && git add -A && git commit -m "$(cat <<'EOF'\nintent(login): rev 1\n\nCo-Authored-By: x\nEOF\n)"`)
+  await engine.flush()
+  expect("auto-track A3: an intent(login) commit run in ../web tracks web's login", JSON.stringify(pinned()) === JSON.stringify({ slug: 'login', root: web }), pinned())
+
+  fs.mkdirSync(join(s2, 'Saved/AtherAutomata/lanes'), { recursive: true })
+  fs.writeFileSync(join(s2, 'Saved/AtherAutomata/lanes/harness-session-peer.json'), JSON.stringify({ sessionId: 'harness-session-peer', intent: 'shared', branch: 'feat/x', updatedAt: Date.now(), away: 'off', hasEnded: false }))
+  idle()
+  await write('docs/intent/shared/log.md')
+  expect('auto-track A5: work on an intent another live session tracks never takes it', JSON.stringify(pinned()) === JSON.stringify({ slug: 'login', root: web }), pinned())
+  await engine.command('ather', 'intent shared')
+  expect('… while tracking it on purpose still works: a second session is shown, not prevented (track-guard)', pinned() === 'shared', pinned())
+
+  put(s2, 'shared', 'completed')
+  await engine.timers()
+  expect('auto-track A6: a deliberate track stays when its intent is completed', pinned() === 'shared', pinned())
+  await engine.command('ather', 'untrack')
+  await write('docs/intent/gamma/log.md')
+  put(s2, 'gamma', 'parked: waiting on art')
+  await engine.timers()
+  const beat = readJson(join(s2, 'Saved/AtherAutomata/lanes', `${sid}.json`))
+  expect('auto-track A6: an auto-tracked intent set to parked is let go at the next tick, said, and the heartbeat says so', pinned() === undefined && engine.record.toasts.includes('Ather: Stopped tracking gamma: it is completed or parked.') && beat?.intent === null && !(engine.store.get(`untracked:${sid}`) ?? []).includes('gamma'), [pinned(), engine.record.toasts.slice(-2), beat?.intent, engine.store.get(`untracked:${sid}`)])
+
+  await engine.command('ather', 'intent alpha')
+  await engine.command('ather', 'untrack')
+  await write('docs/intent/alpha/log.md', 'w-auto')
+  await bash(engine, 'git commit -m "intent(alpha): rev 2"')
+  await engine.flush()
+  expect('auto-track A7: after /ather untrack, neither a worker\'s write nor a commit tracks alpha again in this session', pinned() === undefined, pinned())
+  await write('docs/intent/beta/log.md')
+  expect('… and work on another intent still does', pinned() === 'beta', pinned())
+  expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
+  await engine.end('other')
+}
+
 // ---------------------------------------------------------------- report
 
 removeDir(BASE)

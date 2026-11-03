@@ -1414,35 +1414,40 @@ const hasFocus = tree => {
 }
 
 {
-  // A3: only the session's own orchestration tracks: a main-thread Write or Edit of prompt.md or log.md, once it ran.
+  // Auto-track (0.7.0, docs/intent/auto-track; it replaces track-guard A3): work on an intent tracks it. A write into
+  // any file of its folder, by the main thread or a worker, once it ran; never a closed intent; a switch waits 30 min,
+  // except for a new prompt.md the main thread writes; an intent untracked in this session stays untracked.
   const { engine, root, done } = await boot({ store: { 'role:tinnguyen': 'engineer' } })
   const pinned = () => engine.store.get('pinned:harness-session-0001')
   const file = (slug, name) => path.join(root, 'docs/intent', slug, name)
-  await engine.spawn({ agentId: 'w-intent', description: 'Box worker', prompt: 'Implement box-scale-tool A1.' })
-  await engine.agentTool('w-intent', { tool: 'Write', file_path: file('box-scale-tool', 'progress.md'), content: '# box-scale-tool: Progress\n' })
-  await engine.agentTool('w-intent', { tool: 'Edit', file_path: file('box-scale-tool', 'log.md'), old_string: 'not there', new_string: 'x' })
+  const intent = (slug, status = 'active') => {
+    fs.mkdirSync(path.join(root, 'docs/intent', slug), { recursive: true })
+    fs.writeFileSync(file(slug, 'prompt.md'), `# ${slug}\n\n- Rev: 1\n- Status: ${status}\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: It works.\n`)
+  }
+  intent('zz-auto-a')
+  intent('zz-auto-b')
+  intent('zz-auto-done', 'completed')
+  await engine.modelTool({ tool: 'Write', file_path: file('zz-auto-done', 'progress.md'), content: '# Progress\n' })
+  await engine.modelTool({ tool: 'Write', file_path: 'docs/intent/zz-auto-a/log.md', content: 'x', __isError: true })
   await engine.flush()
-  expect("a worker's writes into an intent (progress.md, log.md) never track it", pinned() === undefined, pinned())
-  await engine.modelTool({ tool: 'Edit', file_path: file('box-scale-tool', 'progress.md'), old_string: ': Progress', new_string: ': progress' })
-  await engine.modelTool({ tool: 'Write', file_path: 'docs/intent/box-scale-tool/log.md', content: 'x', __isError: true })
+  expect('work on a completed intent, or a write that failed, does not track an intent', pinned() === undefined, pinned())
+  await engine.spawn({ agentId: 'w-intent', description: 'Auto worker', prompt: 'Implement zz-auto-a A1.' })
+  await engine.agentTool('w-intent', { tool: 'Write', file_path: file('zz-auto-a', 'notes/plan.md'), content: '# Plan\n' })
   await engine.flush()
-  expect('a main-thread write of progress.md, or a write of log.md that failed, does not track the intent', pinned() === undefined, pinned())
-  await engine.modelTool({ tool: 'Edit', file_path: file('box-scale-tool', 'log.md'), old_string: 'not there', new_string: 'x' })
+  expect("a worker's write into any file of an intent's folder tracks it for the session, and says so", pinned() === 'zz-auto-a' && engine.record.toasts.includes('Ather: Now tracking zz-auto-a: this session works on it. /ather untrack stops that.'), [pinned(), engine.record.toasts.slice(-1)])
+  await engine.modelTool({ tool: 'Write', file_path: file('zz-auto-b', 'progress.md'), content: '# Progress\n' })
   await engine.flush()
-  expect('a main-thread edit of log.md tracks the intent once it ran', pinned() === 'box-scale-tool', pinned())
-  await engine.modelTool({ tool: 'Edit', file_path: file('fluid-snow-sand-look', 'prompt.md'), old_string: 'not there', new_string: 'x' })
-  await engine.flush()
-  expect("a main-thread edit of another intent's prompt.md does not switch the tracked one", pinned() === 'box-scale-tool', pinned())
+  expect('work on another intent within 30 min does not switch the tracked one', pinned() === 'zz-auto-a', pinned())
   await engine.modelTool({ tool: 'Write', file_path: file('zz-captured', 'prompt.md'), content: '# Captured\n\n- Rev: 1\n- Status: active\n- Area: Tools\n- Owner: Tin Nguyen\n\n## Acceptance\n\n- A1: It works.\n' })
   await engine.flush()
-  expect('capturing a new intent (a write that creates its prompt.md) switches the pin to it', pinned() === 'zz-captured', pinned())
+  expect('capturing a new intent (a main-thread write that creates its prompt.md) switches the pin to it', pinned() === 'zz-captured', pinned())
   await run(engine, [], 'ather', 'untrack')
   await engine.modelTool({ tool: 'Write', file_path: file('zz-captured', 'log.md'), content: '# Log\n' })
   await engine.flush()
   expect('after /ather untrack, a write into that intent does not track it again in this session', pinned() === undefined, pinned())
-  await engine.modelTool({ tool: 'Write', file_path: file('box-scale-tool', 'log.md'), content: '# Log\n' })
+  await engine.modelTool({ tool: 'Write', file_path: file('zz-auto-b', 'log.md'), content: '# Log\n' })
   await engine.flush()
-  expect('another intent still tracks from a write', pinned() === 'box-scale-tool', pinned())
+  expect('another intent still tracks from a write', pinned() === 'zz-auto-b', pinned())
   expect('no hook threw in the auto-track scenarios', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }

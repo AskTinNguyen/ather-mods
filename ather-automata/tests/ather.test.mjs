@@ -17,7 +17,7 @@ import { crewHeading, crewOf, crewTree } from '../hooks/crew.mjs'
 import { QUIET, cells, fit, needsRows, statusLine, workGroups, workLine } from '../hooks/rows.mjs'
 import { awayPickText, awayWindowRows, intentRows } from '../hooks/modes.mjs'
 import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
-import { intentChanges, intentFileOf, orchestrationFileOf } from '../hooks/changes.mjs'
+import { intentChanges, intentFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
 import { editorLockLine, readShell, unreal } from '../hooks/packs/unreal.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncError, syncSummary, syncText } from '../hooks/team.mjs'
@@ -1087,11 +1087,10 @@ describe('track guard', () => {
     files.set('R/docs/intent/pause-ai/prompt.md', '# P')
     await state.track(io, 'R', 'spawner')
     await state.untrack(io, 'Tin Nguyen')
-    expect(await state.track(io, 'R', 'spawner', { isAuto: true, onlyIfNone: true })).toBe(false)
-    expect(await state.track(io, 'R', 'spawner', { isAuto: true })).toBe(false)
+    expect(await state.autoTrack(io, 'R', 'spawner')).toBe(false)
     expect(await state.readPinned(io)).toBe(null)
     // Another intent still tracks from a write.
-    expect(await state.track(io, 'R', 'pause-ai', { isAuto: true, onlyIfNone: true })).toBe(true)
+    expect(await state.autoTrack(io, 'R', 'pause-ai')).toBe(true)
     expect(await state.track(io, 'R', 'spawner')).toBe(true)
     expect(store.has('untracked:s1')).toBe(false)
     // The stop follows the lane after /clear.
@@ -1118,12 +1117,6 @@ describe('track guard', () => {
     expect(intentStands(SPAWNER, 'Build', 'Tin Nguyen')).toBe('spawner: Build, 1/2 done, yours.')
     expect(intentStands(THEIRS, 'Build', 'Tin Nguyen', 'Also tracked in 1 other session · active now')).toBe("pause-ai: Build, 1/2 done, TienPham's. Also tracked in 1 other session · active now.")
     expect(trackConsequence()).toBe('This session gets its next step, your builds and PIE count as its proof, other sessions see you on it; /ather untrack undoes it.')
-  })
-
-  test("auto-track (A3) reads only the orchestrator's files: an intent's prompt.md and log.md", () => {
-    expect(orchestrationFileOf('E:/S2/docs/intent/spawner/prompt.md')).toEqual({ slug: 'spawner', file: 'prompt.md' })
-    expect(orchestrationFileOf('docs\\intent\\spawner\\log.md')).toEqual({ slug: 'spawner', file: 'log.md' })
-    for (const other of ['docs/intent/spawner/progress.md', 'docs/intent/spawner/findings.md', 'docs/intent/spawner/decisions.md', 'docs/intent/README.md', 'docs/intent/spawner/notes/prompt.md.bak', 42]) expect(orchestrationFileOf(other)).toBe(null)
   })
 
   test('the heartbeat is written again at once on track and untrack (D4), with the last activity', async () => {
@@ -1670,8 +1663,8 @@ describe('several repositories on one machine', () => {
     await state.track(io, '/s3stop/web', 'login')
     await state.untrack(io, 'Tin Nguyen')
     expect(memory.store.get('untracked:s1')).toEqual([{ slug: 'login', root: '/s3stop/web' }])
-    expect(await state.track(io, '/s3stop/web', 'login', { isAuto: true })).toBe(false)
-    expect(await state.track(io, 'R', 'login', { isAuto: true })).toBe(true)
+    expect(await state.autoTrack(io, '/s3stop/web', 'login')).toBe(false)
+    expect(await state.autoTrack(io, 'R', 'login')).toBe(true)
     expect(memory.store.get('pinned:s1')).toBe('login')
     // Stopping the own one keeps its plain slug; tracking web's on purpose lifts only web's stop.
     await state.untrack(io, 'Tin Nguyen')

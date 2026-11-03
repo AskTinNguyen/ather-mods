@@ -75,5 +75,25 @@ expect("… and Needs you no longer has it", !(await items()).some((one) => one.
 const pill = await bandOf(AGENT, tree);
 expect("with nothing needing you, the composer pill is the tracked intent's stage", pill?.urgent === false && pill.label === "● Build 1/2 · feat-x", pill);
 
+// Auto-track (0.7.0): another agent's commit `intent(feat-y)` tracks feat-y for it; once feat-y is completed, the
+// next tick lets it go. The plugin's own turn-end and tick, with a stand-in daemon that only takes timeline notes.
+const { onTurnEnded, tick } = await import("../../paseo/ather-automata/server/watch.ts");
+const { ctxOf } = await import("../../paseo/ather-automata/server/lane.ts");
+const state = await import("../../paseo/ather-automata/server/ather/state.mjs");
+const notes: string[] = [];
+const daemon = { agents: { ref: () => ({ timeline: { append: async (item: { data: { text: string } }) => void notes.push(item.data.text) }, refresh: async () => ({ agent: { status: "idle" } }) }) } };
+const AUTO = { id: "paseo-agent-0002", cwd: tree, provider: "claude", workspaceId: null, parentAgentId: null, title: null };
+const FEAT_Y = FEAT.replace("# Scale", "# Why").replace("- Branch: `feat/x`\n", "");
+fs.mkdirSync(join(tree, "docs/intent/feat-y"), { recursive: true });
+fs.writeFileSync(join(tree, "docs/intent/feat-y/prompt.md"), FEAT_Y);
+const shell = (command: string) => ({ type: "tool_call", status: "completed", name: "Bash", detail: { type: "shell", command, output: "", exitCode: 0 } });
+const turn = (items: unknown[]) => onTurnEnded({ agent: AUTO, timeline: [{ type: "user_message" }, ...items] } as never, { paseo: daemon } as never);
+const pinnedOf = () => state.readPinned(ctxOf(AUTO as never).io as never);
+await turn([shell('git commit -m "intent(feat-y): rev 1"')]);
+expect("auto-track: an intent(feat-y) commit tracks feat-y for the agent, and its timeline says so", (await pinnedOf()) === "feat-y" && notes.includes("Now tracking feat-y: this session works on it. /ather untrack stops that."), [await pinnedOf(), notes]);
+fs.writeFileSync(join(tree, "docs/intent/feat-y/prompt.md"), FEAT_Y.replace("- Status: active", "- Status: completed"));
+await tick();
+expect("auto-track: once feat-y is completed, the next tick lets it go", (await pinnedOf()) === null && notes.includes("Stopped tracking feat-y: it is completed or parked."), [await pinnedOf(), notes]);
+
 removeDir(BASE);
 finish({ title: "Ather Automata for Paseo: the server over a real checkout", report: REPORT });

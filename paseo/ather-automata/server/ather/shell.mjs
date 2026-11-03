@@ -2,9 +2,12 @@
 // (split outside quotes, heredoc bodies dropped), the folder each runs in, and
 // where a push sends. Pure: no `$`.
 
+// A heredoc: its tag, then the rest of the tag's line and its body, up to the line that ends it.
+const HEREDOC = /<<-?\s*['"]?(\w+)['"]?([\s\S]*?)\n\1\b/g
+
 // A heredoc's body is text being written, not a command being run.
 /** @param {string} command */
-export const withoutHeredocs = command => command.replace(/<<-?\s*['"]?(\w+)['"]?[\s\S]*?\n\1\b/g, '')
+export const withoutHeredocs = command => command.replace(HEREDOC, '')
 
 // A filter after a pipe makes the exit the filter's, unless `pipefail` hands the build's back.
 /** @param {string} command */
@@ -52,6 +55,22 @@ export const withFolders = command => {
 // The folders a command's git segments run in, for the caller to look up their branches.
 /** @param {string} command */
 export const gitFolders = command => [...new Set(withFolders(command).filter(one => /^git\b/i.test(one.segment)).map(one => one.folder))]
+
+// A commit whose message starts with `intent(<slug>)`: the intent it names (auto-track counts it as work on that
+// intent) and the folder the commit runs in (null: the session's). Read from the commit's own segment, its first
+// message only: a heredoc message (`-m "$(cat <<'EOF'`) stands as its first line, a PowerShell here-string (`-m @'`)
+// is one quoted word; `-F <file>` is not read.
+/** @param {string} command @returns {{ slug: string, folder: string | null } | null} */
+export const commitIntentOf = command => {
+  const inline = command.replace(HEREDOC, (_, _tag, /** @type {string} */ body) => ` ${body.split('\n')[1] ?? ''}`)
+  const commit = withFolders(inline).find(one => GIT_COMMIT.test(one.segment))
+  const options = commit?.segment.replace(GIT_COMMIT, '') ?? ''
+  const flag = /\s(?:-[a-zA-Z]*m|--message)(?:=|\s*)/.exec(options)
+  const slug = flag ? /^(?:\$\(\s*cat\s+)?@?\s*intent\(([\w.-]+)\)/.exec(options.slice(flag.index + flag[0].length))?.[1] : undefined
+  return commit && slug ? { slug, folder: commit.folder } : null
+}
+// `git commit`, with any `-C <folder>` or `-c <setting>` before it; not `git commit-tree`.
+const GIT_COMMIT = /^git(?:\s+-[Cc]\s+\S+)*\s+commit(?=\s|$)/i
 
 export const MAIN = /^(?:refs\/heads\/)?(main|master)$/
 

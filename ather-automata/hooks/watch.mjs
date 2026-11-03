@@ -14,11 +14,12 @@ import { STAGE_LABELS, andList, currentStage, directorCalls, isPersonOrigin, loc
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
-import { intentChanges, intentFileOf, orchestrationFileOf } from './changes.mjs'
+import { intentChanges, intentFileOf, intentFolderOf } from './changes.mjs'
+import { autoTrackText, autoUntrackText } from './autotrack.mjs'
 import { trackedByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
 import { appSessionOf, appTool } from './handoff.mjs'
-import { withFolders } from './shell.mjs'
+import { commitIntentOf, withFolders } from './shell.mjs'
 import { checkoutOf, gitDirOf, normalFolder } from './workspace.mjs'
 import { IDLE_ENV, PING_PROMPT, initialWarm, stepWarm } from './warm.mjs'
 import * as warmStore from './warm-store.mjs'
@@ -242,11 +243,10 @@ export function register(on, options) {
     }
     const path = /** @type {{ file_path?: unknown }} */ (e).file_path
     const isWrite = /^(Write|Edit|MultiEdit)$/.test(tool)
-    // The session's own orchestration (its main thread, never a worker) writing an intent's prompt.md or log.md
-    // tracks that intent, in the checkout the write lands in, once the write has gone through; creating a
-    // prompt.md switches to the new intent.
-    const orchestrated = isWrite && e.agentId === undefined ? orchestrationFileOf(path) : null
-    const isNewIntent = orchestrated?.file === 'prompt.md' && !(await io($).exists(await fullPath($, String(path))))
+    // Auto-track: a write into an intent's folder, by the main thread or a worker, is work on that intent, in the
+    // checkout the write lands in, once it has gone through. The main thread creating a prompt.md started that intent.
+    const worked = isWrite ? intentFolderOf(path) : null
+    const isNewIntent = worked?.file === 'prompt.md' && e.agentId === undefined && !(await io($).exists(await fullPath($, String(path))))
     // An edit to an intent's prompt, findings or progress: what it changed, read off the file before and after.
     const intentFile = isWrite ? intentFileOf(path) : null
     const before = intentFile ? ((await readFile($, String(path))) ?? '') : ''
@@ -255,7 +255,7 @@ export function register(on, options) {
     const settled = () => (e.agentId ? recordHeard(e.agentId, Date.now()) : undefined)
     const ran = await during({ loop: e.agentId ?? '', toolUseId: String(e.tool_use_id ?? ''), tool, input: /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), at: Date.now() }, () => next(e), settled, next.signal)
     const hasRun = ran.deny === undefined && ran.isError !== true
-    if (orchestrated && hasRun) void intentRootOf($, String(path)).then(root => state.track(io($), root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent })).catch(() => undefined)
+    if (worked && hasRun) void intentRootOf($, String(path)).then(root => workedOn($, root, worked.slug, isNewIntent)).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
     if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
     return ran
@@ -273,7 +273,13 @@ async function fullPath($, path) {
 // The folder holding the docs/intent an intent file is in: the checkout it lands in.
 /** @param {Engine} $ @param {string} path */
 async function intentRootOf($, path) {
-  return normalFolder((await fullPath($, path)).replace(/[\\/]docs[\\/]intent[\\/][^\\/]+[\\/][^\\/]+$/i, ''))
+  return normalFolder(intentFolderOf(await fullPath($, path))?.root ?? '')
+}
+
+// Work on an intent (auto-track): it is tracked when state.mjs autoTrack takes it; the person is told, with the way back.
+/** @param {Engine} $ @param {string} root @param {string} slug @param {boolean} isNew */
+async function workedOn($, root, slug, isNew) {
+  if (await state.autoTrack(io($), root, slug, isNew)) $.ui.toast(`Ather: ${autoTrackText(slug)}`, { timeoutMs: 12000 })
 }
 
 /** @param {Engine} $ @param {string} path */
@@ -451,6 +457,9 @@ async function stillTracking($) {
 // Every 30 seconds: the heartbeat, quiet workers, and the end of an autonomy window.
 /** @param {Engine} $ */
 async function tick($) {
+  // Auto-untrack before the heartbeat, so peers see it at once.
+  const closed = await state.untrackClosed(io($)).catch(() => '')
+  if (closed) $.ui.toast(`Ather: ${autoUntrackText(closed)}`, { timeoutMs: 12000 })
   await heartbeat($, false)
   const now = Date.now()
   for (const agent of await $.agent.list().catch(() => [])) {
@@ -673,6 +682,9 @@ async function afterShell($, command, ran) {
   if (!isSearchCommand(command)) await noteTraps($, text, pack)
   const guard = explainGuard(command)
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
+  // An `intent(<slug>)` commit is work on that intent, in the checkout the commit runs in (auto-track).
+  const commit = commitIntentOf(command)
+  if (commit && ran.deny === undefined && ran.isError !== true) void checkoutLane($, commit.folder).then(({ lane: at }) => workedOn($, at.root, commit.slug, false)).catch(() => undefined)
   const reading = pack.readShell(command, text, ran)
   for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value, one.gates)
   context.push(...reading.context)
