@@ -39,18 +39,19 @@ test('A128: unit: the turn is held by the earliest live claim of another session
   expect(parseGitTurn('null')).toBeNull()
   const live = () => true
   const none = new Map<string, number>()
-  expect(heldBy([], { me8: ME8, now: NOW, isLive: live, gone: none })).toBeNull()
-  expect(heldBy([t], { me8: 'cccccccc', now: NOW, isLive: live, gone: none })).toBeNull() // its own
-  expect(heldBy([t], { me8: ME8, now: NOW, isLive: live, gone: none })).toBe(t)
-  expect(heldBy([t, u], { me8: ME8, now: NOW, isLive: live, gone: none })).toBe(u) // the earlier claim
-  expect(heldBy([t], { me8: ME8, now: NOW, isLive: () => false, gone: none })).toBeNull() // its session gone
+  expect(heldBy([], { me8: ME8, now: NOW, isLive: live, gone: none, fresh: new Set() })).toBeNull()
+  expect(heldBy([t], { me8: 'cccccccc', now: NOW, isLive: live, gone: none, fresh: new Set() })).toBeNull() // its own
+  expect(heldBy([t], { me8: ME8, now: NOW, isLive: live, gone: none, fresh: new Set() })).toBe(t)
+  expect(heldBy([t, u], { me8: ME8, now: NOW, isLive: live, gone: none, fresh: new Set() })).toBe(u) // the earlier claim
+  expect(heldBy([t], { me8: ME8, now: NOW, isLive: () => false, gone: none, fresh: new Set() })).toBeNull() // its session gone
   const gone = goneAfter(none, [t], false, NOW)
   expect(goneAfter(gone, [t], false, NOW + MIN).get(turnKey(t))).toBe(NOW) // the first sighting counts
-  expect(heldBy([t], { me8: ME8, now: NOW + MIN, isLive: live, gone })).toBe(t)
-  expect(heldBy([t], { me8: ME8, now: NOW + 2 * MIN, isLive: live, gone })).toBeNull()
+  expect(heldBy([t], { me8: ME8, now: NOW + MIN, isLive: live, gone, fresh: new Set() })).toBe(t)
+  expect(heldBy([t], { me8: ME8, now: NOW + 2 * MIN, isLive: live, gone, fresh: new Set() })).toBeNull()
+  expect(heldBy([t], { me8: ME8, now: NOW + 2 * MIN, isLive: live, gone, fresh: new Set([turnKey(t)]) })).toBe(t) // its owner rewrote it: its call runs
   expect(goneAfter(gone, [t], true, NOW + MIN).size).toBe(0) // git seen running again
   expect(goneAfter(gone, [t], null, NOW + MIN).size).toBe(0) // an unread process list never counts as gone
-  expect(heldBy([t], { me8: ME8, now: NOW + 9 * MIN, isLive: live, gone: goneAfter(none, [{ ...t, startedAt: 1 }], false, NOW) })).toBe(t) // another claim's sighting
+  expect(heldBy([t], { me8: ME8, now: NOW + 9 * MIN, isLive: live, gone: goneAfter(none, [{ ...t, startedAt: 1 }], false, NOW), fresh: new Set() })).toBe(t) // another claim's sighting
 })
 
 test('A128: a second writer is refused at once naming the holder, and is woken when the turn frees', opts(), async ($, on) => {

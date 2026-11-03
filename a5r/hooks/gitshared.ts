@@ -386,23 +386,24 @@ const GIT_READS = new Set(['log', 'status', 'diff', 'show', 'rev-parse', 'rev-li
 
 /** 0.16.1 (A82): whether a segment may change files inside `root`: a redirection or tee target there (from any folder), or
  * a command that is not a plain read run with its folder (after `cd`, or `git -C`) there. */
-export const writesInside = (seg: Seg, root: string): boolean => {
-  const inside = (p: string) => under(norm(p.replace(/\\/g, '/'), seg.dir), root)
-  for (const m of seg.raw.matchAll(/(?:^|[^<>&\d])(?:\d*>>?|&>>?)\s*(?:"([^"]+)"|'([^']+)'|([^\s;|&<>]+))/g)) {
-    const target = m[1] ?? m[2] ?? m[3] ?? ''
-    if (target && !/^(&\d|\/dev\/null$|nul$|\$null$)/i.test(target) && inside(target)) return true
-  }
-  if (['tee', 'tee-object', 'out-file', 'set-content', 'add-content', 'sc', 'ac'].includes(seg.verb) && seg.args.some(a => !a.startsWith('-') && inside(a))) return true
-  const isGitSeg = seg.verb === 'git'
-  const place = isGitSeg ? gitPlace(seg) : null
-  if (!under(place?.dir ?? seg.dir, root)) return false
-  if (READ_VERBS.has(seg.verb)) return false
+export const writesInside = (seg: Seg, root: string): boolean => writtenIn(seg, root).length > 0
+/** Rev 44 (Fable 9): where a segment may write inside `root`: its redirection and tee targets there, else the folder it
+ * runs in when that is there and the command is not a plain read (writesInside's rule); [] when it writes nothing there. */
+export const writtenIn = (seg: Seg, root: string): string[] => {
+  const abs = (p: string) => norm(p.replace(/\\/g, '/'), seg.dir)
+  const redirects = [...seg.raw.matchAll(/(?:^|[^<>&\d])(?:\d*>>?|&>>?)\s*(?:"([^"]+)"|'([^']+)'|([^\s;|&<>]+))/g)].map(m => m[1] ?? m[2] ?? m[3] ?? '').filter(t => t && !/^(&\d|\/dev\/null$|nul$|\$null$)/i.test(t))
+  const tees = ['tee', 'tee-object', 'out-file', 'set-content', 'add-content', 'sc', 'ac'].includes(seg.verb) ? seg.args.filter(a => !a.startsWith('-')) : []
+  const targets = [...redirects, ...tees].map(abs).filter(p => under(p, root))
+  if (targets.length > 0) return targets
+  const place = seg.verb === 'git' ? gitPlace(seg) : null
+  const dir = place?.dir ?? seg.dir
+  if (!under(dir, root) || READ_VERBS.has(seg.verb)) return []
   if (place) {
     const sub = (place.args[0] ?? '').toLowerCase()
-    if (GIT_READS.has(sub)) return false
-    if (sub === 'branch' && place.args.slice(1).every(a => /^(--list|-a|-r|-v|-vv|--all|--remotes|--show-current)$/.test(a))) return false
+    if (GIT_READS.has(sub)) return []
+    if (sub === 'branch' && place.args.slice(1).every(a => /^(--list|-a|-r|-v|-vv|--all|--remotes|--show-current)$/.test(a))) return []
   }
-  return true
+  return [dir]
 }
 
 /** A80: the branches no force push may rewrite, whatever its lease. */

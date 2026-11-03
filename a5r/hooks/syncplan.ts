@@ -4,7 +4,7 @@
 // 15 min past one) and what each Editor wait waits for. A134: the band above the prompt, the prompt's context line, the
 // toast, and Saved/A5R/status.json. Pure: no `$`; register.ts reads the files and logs, decides with these, and writes.
 import { CUTOFF_MS, RELEASE_BEFORE_MS, hhmm, type Phase, type SyncFile } from './coord.ts'
-import { walkDeep, writesInside } from './gitshared.ts'
+import { writtenIn, type Seg } from './gitshared.ts'
 import type { BuildLogRead, SyncStage } from './syncstage.ts'
 
 // ---------- A131: the steps of a freeze and what each holds ----------
@@ -40,12 +40,14 @@ export const freezeStepOf = (phase: Phase, stage: SyncStage | null, build: Build
   return stage
 }
 /** A131: an edit of `rel` (repo-relative) needs `source` under Source/ or Plugins/ or on a path the merge changed, else `edit`. */
-export const editNeed = (rel: string, mergeChanged: ReadonlySet<string>): Need => (/^(source|plugins)\//i.test(rel) || mergeChanged.has(rel.toLowerCase()) ? 'source' : 'edit')
-/** Fable 9: the edit needs of a shell command: each of its segments (but git, which is a git write) that may write in the
- * shared tree (gitshared.ts writesInside: a redirection there, or a command that is not a plain read run there), as
- * `source` when it names Source/ or Plugins/, else `edit`. */
-export const shellNeeds = (command: string, cwd: string, root: string): Need[] =>
-  walkDeep(command, cwd).segs.filter(seg => seg.verb !== 'git' && writesInside(seg, root)).map(seg => (/(^|[\\/\s"'=])(source|plugins)[\\/]/i.test(seg.raw) ? 'source' : 'edit'))
+export const editNeed = (rel: string, mergeChanged: ReadonlySet<string>): Need => (/^(source|plugins)(\/|$)/i.test(rel) || mergeChanged.has(rel.toLowerCase()) ? 'source' : 'edit')
+/** Fable 9: the edit needs of a shell command's segments (gitshared.ts walkDeep): where each segment but git (a git write)
+ * may write in the shared tree (gitshared.ts writtenIn), by the same rule as an edit (editNeed: a folder under Source/ or
+ * Plugins/ is one there). */
+export const shellNeeds = (segs: readonly Seg[], root: string, mergeChanged: ReadonlySet<string>): Need[] => {
+  const top = root.replace(/\/$/, '').length + 1
+  return segs.filter(seg => seg.verb !== 'git').flatMap(seg => writtenIn(seg, root)).map(p => editNeed(p.slice(top), mergeChanged))
+}
 const WAIT_NEXT = 'do work that needs no Editor and no build of the shared project; A5R tells you (and wakes you) when it is allowed again'
 /** Each need: its words, its word in the band's "new … work" (null: an edit, said apart), why a refusal of it waits
  * (`merged`: when git and Source/ edits are free again) and what to do meanwhile. */

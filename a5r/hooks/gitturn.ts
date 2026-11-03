@@ -30,21 +30,25 @@ export const turnVerb = (seg: Seg): string => (seg.verb === 'git' ? (gitWrites(s
 export const turnOf = (me: { session: string; id8: string; lane: string }, verbs: readonly string[], now: number): GitTurn => ({ v: 1, session: me.session, id8: me.id8, lane: me.lane, command: `git ${verbs.join(', git ')}`, startedAt: now })
 export const turnKey = (t: GitTurn): string => `${t.id8}:${t.startedAt}`
 
-/** A128: the claim that holds the turn against this session: the earliest live claim of another session that has not
- * lapsed (its session gone, or `gone`: this reader has seen no git of the checkout and no index.lock for 2 min since it
- * stood), else null. */
-export const heldBy = (claims: readonly GitTurn[], x: { me8: string; now: number; isLive: (id8: string) => boolean; gone: ReadonlyMap<string, number> }): GitTurn | null =>
-  claims
-    .filter(c => c.id8 !== x.me8 && x.isLive(c.id8) && x.now - (x.gone.get(turnKey(c)) ?? x.now) < TURN_LAPSE_MS)
-    .sort((a, b) => a.startedAt - b.startedAt || a.id8.localeCompare(b.id8))[0] ?? null
+/** A128: when a claim lapses, three ways for three cases: its session is gone (a crash, an exit); or this reader has seen
+ * its git gone for 2 min (`gone`: no git of the checkout runs and no index.lock younger than 2 min: a backgrounded command
+ * that ended) while its owner has not rewritten it within 2 min (`fresh`: an owner rewrites its claim each minute while
+ * its foreground call runs, so a long commit git cannot be seen in never lapses). */
+export const isLapsed = (c: GitTurn, x: { now: number; isLive: (id8: string) => boolean; gone: ReadonlyMap<string, number>; fresh: ReadonlySet<string> }): boolean =>
+  !x.isLive(c.id8) || (!x.fresh.has(turnKey(c)) && x.now - (x.gone.get(turnKey(c)) ?? x.now) >= TURN_LAPSE_MS)
+/** A128: the claim that holds the turn against this session: the earliest claim of another session that has not lapsed. */
+export const heldBy = (claims: readonly GitTurn[], x: { me8: string; now: number; isLive: (id8: string) => boolean; gone: ReadonlyMap<string, number>; fresh: ReadonlySet<string> }): GitTurn | null =>
+  claims.filter(c => c.id8 !== x.me8 && !isLapsed(c, x)).sort((a, b) => a.startedAt - b.startedAt || a.id8.localeCompare(b.id8))[0] ?? null
 /** A128: since when this reader has seen each claim's git gone, after one more look: `isRunning` true (a git of the
  * checkout, or its index.lock) or null (the process list unread) clears them; false keeps the first sighting. */
 export const goneAfter = (prev: ReadonlyMap<string, number>, claims: readonly GitTurn[], isRunning: boolean | null, now: number): Map<string, number> =>
   new Map(isRunning === false ? claims.map(c => [turnKey(c), prev.get(turnKey(c)) ?? now] as const) : [])
 export const TURN_GATE = 'Git turn'
-export const busyText = (t: GitTurn): string => `git busy: ${t.lane} runs \`${t.command}\` since ${hhmm(t.startedAt)}`
+/** A128 / Fable 2: what a refused git waits for: another session's claim, or an index.lock no claim explains. */
+export type Wait = { kind: 'claim'; turn: GitTurn } | { kind: 'lock'; since: number }
+export const busyText = (w: Wait): string => (w.kind === 'claim' ? `git busy: ${w.turn.lane} runs \`${w.turn.command}\` since ${hhmm(w.turn.startedAt)}` : `git busy: .git/index.lock stands in the shared checkout (seen ${hhmm(w.since)}), another git still works there`)
 export const TURN_NEXT = 'A5R tells you when it is free (work without git meanwhile; never delete .git/index.lock)'
-export const turnFreeText = (t: { lane: string; command: string }): string => `git is free again in the shared checkout (${t.lane}'s \`${t.command}\` returned) → run your git command again now`
+export const turnFreeText = (w: Wait): string => `git is free again in the shared checkout (${w.kind === 'claim' ? `${w.turn.lane}'s \`${w.turn.command}\` returned` : '.git/index.lock is gone'}) → run your git command again now`
 
 // ---------- A129: a git write is never killed halfway ----------
 /** A129: the tool timeout a call that writes the shared checkout's git gets at least (the engine's foreground maximum). */
@@ -75,7 +79,8 @@ export const cutProblem = (command: string, segs: readonly Seg[], writes: readon
 const plainAlt = (seg: Seg): string => `run the git command alone, in the foreground and unwrapped: git -C ${gitPlace(seg).dir} ${gitPlace(seg).args.join(' ')} (A5R gives the call a 10-min timeout; a slow commit is fine)`
 
 // ---------- A130: a stale index.lock moved aside ----------
-/** Fable 4: the git and git-lfs processes whose command line names no folder (`cd <checkout> && git commit`) or cannot be
+/** Fable 4: the git and git-lfs processes whose command line names no folder (the other half of coord.ts checkoutGitPids,
+ * which reads those that name the checkout) (`cd <checkout> && git commit`) or cannot be
  * read: they may work in the checkout, so no lock is moved while one runs (git's fsmonitor daemon excluded). */
 export const untargetedGitPids = (probe: Probe | null): number[] =>
   (probe?.procs ?? []).filter(p => /^git(-lfs)?(\.exe)?$/i.test(p.name) && !/fsmonitor--daemon/i.test(p.cmd ?? '') && (!p.cmd || gitTarget(p.cmd, '') === '')).map(p => p.pid)

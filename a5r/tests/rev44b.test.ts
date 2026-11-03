@@ -48,6 +48,20 @@ test('Fable 1: a claim its owner keeps rewriting (its foreground call runs) does
   expect(refused(await $.tool.call({ tool: 'Bash', command: ADD }))).toContain('git busy: lane-cccccccc')
 })
 
+test('Fable 1: this session rewrites its claim each minute while its git write runs, so the others never lapse it', opts(), async ($, on) => {
+  const w = world(on)
+  shared(w)
+  await $.session.start(START)
+  let release = () => {}
+  w.toolHolds.set(ADD, new Promise<void>(r => (release = r)))
+  const call = $.tool.call({ tool: 'Bash', command: ADD } as never)
+  for (let n = 0; n < 50 && !w.read(`${HF}/git-turn/${ME8}.json`).includes(ME8); n += 1) await new Promise(r => (globalThis as unknown as { setTimeout: (f: (v: unknown) => void, ms: number) => void }).setTimeout(r, 2))
+  await w.clock.advance(3 * MIN)
+  expect(w.mtimes.get(k(`${HF}/git-turn/${ME8}.json`))).toBe(w.clock.now()) // written again at the last minute
+  release()
+  await call
+})
+
 const syncMine = (w: ReturnType<typeof world>) => {
   const s: SyncFile = { ...newSync(NOW - 5 * MIN, { session: ME, id8: ME8, lane: 'sync-main' }, 'sync-main', NOW - 60 * MIN), workerAt: NOW - 5 * MIN }
   w.put(`${HF}/sync.json`, JSON.stringify(s))
@@ -64,7 +78,7 @@ test('Fable 2: the holder\'s own merge waits while another session\'s claim or a
   expect(refused(await $.tool.call({ tool: 'Bash', command: `git -C ${S2} merge --no-edit origin/main` }))).toContain('git busy: lane-cccccccc runs `git commit`')
   w.put(`${HF}/git-turn/cccccccc.json`, 'null')
   w.put(LOCKF, 'lock', NOW)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: `git -C ${S2} merge --no-edit origin/main` }))).toContain('git busy: .git/index.lock runs `a git command`')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: `git -C ${S2} merge --no-edit origin/main` }))).toContain('git busy: .git/index.lock stands in the shared checkout')
   await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
   w.files.delete(k(LOCKF))
   await w.clock.advance(MIN)
@@ -101,7 +115,7 @@ test('Fable 3: a session outside the S2 checkout writing its git with -C takes t
   w.put(`${HF}/git-turn/cccccccc.json`, claim('cccccccc'))
   await $.session.start({ cwd: 'D:/Projects/ather-mods', surface: 'terminal', isInteractive: true } as never)
   await w.clock.advance(MIN)
-  expect(refused(await $.tool.call({ tool: 'Bash', command: ADD }))).toContain('git busy: lane-cccccccc')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: ADD }))).toContain('git busy: lane-cccccccc runs `git commit` since 14:40 → run it again in a minute')
   w.put(`${HF}/git-turn/cccccccc.json`, 'null')
   expect(refused(await $.tool.call({ tool: 'Bash', command: ADD }))).toBeUndefined()
   expect((w.seen.filter(e => e.tool === 'Bash').pop() as { timeout?: number }).timeout).toBe(600_000)
@@ -150,9 +164,11 @@ test('Fable 8: the build\'s own Result: Succeeded in the log lifts git and Sourc
 })
 
 test('Fable 9: a shell write into the shared tree is an edit to the freeze (merging), a Source/ write while building', opts(), async ($, on) => {
-  expect(shellNeeds('echo x > E:/s2/docs/a.md', PROJ, S2)).toEqual(['edit'])
-  expect(shellNeeds('cd E:/s2 && cp a.cpp Source/S2/a.cpp', PROJ, S2)).toEqual(['source'])
-  expect(shellNeeds('cat E:/s2/docs/a.md; echo x > out.txt', PROJ, S2)).toEqual([])
+  const needs = (c: string) => shellNeeds(walkDeep(c, PROJ).segs, S2, new Set(['config/defaultgame.ini']))
+  expect(needs('echo x > E:/s2/docs/a.md')).toEqual(['edit'])
+  expect(needs('cd E:/s2/Source/S2 && cp ../a.cpp b.cpp')).toEqual(['source'])
+  expect(needs('echo x > E:/s2/Config/DefaultGame.ini')).toEqual(['source']) // a file the merge changed (pass 3, C1)
+  expect(needs('cat E:/s2/docs/a.md; echo x > out.txt')).toEqual([])
   const w = world(on)
   shared(w)
   w.put(`${HF}/sync.json`, JSON.stringify({ ...newSync(NOW - 5 * MIN, B, 'sync-main', NOW - 60 * MIN), workerAt: NOW - 5 * MIN }))

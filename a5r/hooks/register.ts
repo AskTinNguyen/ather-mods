@@ -2901,7 +2901,7 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   const use = command && !isEditorUse ? editorUseOf(editorKindOf(opts, tool, input), command, await $.session.cwd()) : null
   const isBuild = (use?.kind === 'build' || use?.kind === 'headless') && (use.projects.length === 0 || use.projects.some(p => under(p, s2Root())))
   const rels = EDIT_TOOLS.has(tool) && isS2 ? await sharedRels($, await Promise.all((await editParts($, tool, input)).map(([p]) => locate($, a5r, p)))) : []
-  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, freeze.changed())), ...(command ? shellNeeds(command, await $.session.cwd(), s2Root()) : [])]
+  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, freeze.changed())), ...(command ? shellNeeds(walkDeep(command, await $.session.cwd(), (places.USERPROFILE ?? '').replace(/\\/g, '/')).segs, s2Root(), freeze.changed()) : [])]
   const need = needs.find(n => heldIn(step).has(n))
   if (!need) return null
   freeze.refused(s, need) // A132: woken at the step that frees it

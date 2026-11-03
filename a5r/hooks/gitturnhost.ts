@@ -6,7 +6,7 @@
 import { DIR, checkoutGitPids, isOpenPhase, type GitBusy, type LookRow, type Notice, type Phase, type Probe, type SessionFile, type SyncFile } from './coord.ts'
 import type { FileIo } from './hostio.ts'
 import { gitPlace, walkDeep, type Seg } from './gitshared.ts'
-import { GIT_TURN_DIR, LOCK_UNREAD_LOOK, STALE_LOCK_MS, TURN_LAPSE_MS, untargetedGitPids, STALE_LOCK_MOVED_FILE, TURN_GATE, TURN_NEXT, busyText, cutProblem, goneAfter, heldBy, lockMovedText, moveLockArgv, parseGitTurn, parseLockMoved, raisedTimeout, staleLockAct, staleLockName, turnFreeText, turnKey, turnOf, turnVerb, type GitTurn } from './gitturn.ts'
+import { GIT_TURN_DIR, LOCK_UNREAD_LOOK, STALE_LOCK_MS, TURN_LAPSE_MS, untargetedGitPids, STALE_LOCK_MOVED_FILE, TURN_GATE, TURN_NEXT, busyText, cutProblem, goneAfter, heldBy, lockMovedText, moveLockArgv, parseGitTurn, parseLockMoved, raisedTimeout, staleLockAct, staleLockName, turnFreeText, turnKey, turnOf, turnVerb, type GitTurn, type Wait } from './gitturn.ts'
 
 /** The engine's reads and writes for one call, and the host's own checks this needs. */
 export type TurnIo = FileIo & {
@@ -38,46 +38,41 @@ export type TurnState = {
   root: () => string
 }
 
-/** Fable 2: the stand-in claim for an index.lock no claim explains (its id8 is empty: told free once the lock is gone). */
-const LOCK_TURN = (now: number): GitTurn => ({ v: 1, session: '', id8: '', lane: '.git/index.lock', command: 'a git command', startedAt: now })
+/** A claim as read from its file, with when its owner last wrote it. */
+type Claimed = { turn: GitTurn; at: number }
 
 export const gitTurns = (h: TurnState) => {
   /** In this process: this session's foreground calls under its claim and whether a backgrounded one ran under it, since
-   * when this reader has seen each claim's git gone, the claim that refused it, its last git that failed on index.lock,
-   * the NEEDS A LOOK row. */
+   * when this reader has seen each claim's git gone, what refused it, its last git that failed on index.lock, the NEEDS A
+   * LOOK row, and its id8 as its claim names it (its file's, else its own id's when it does not coordinate: Fable 3). */
   let calls = 0
   let isBackground = false
   let gone = new Map<string, number>()
-  let wait: GitTurn | null = null
+  let wait: Wait | null = null
   let lockFailAt = 0
   let look: LookRow | null = null
-  const claimDir = (): string => `${h.dir()}/${GIT_TURN_DIR}`
-  /** This session's id8 as its claim names it (its file's, else its own id's: Fable 3). */
   let self = ''
   const me8 = (): string => h.me8() || self
+  const claimDir = (): string => `${h.dir()}/${GIT_TURN_DIR}`
   const mine = (): string => `${claimDir()}/${me8()}.json`
-  /** The claims on file, each with when its owner last wrote it (an owner rewrites its claim every minute while its
-   * foreground call runs). */
-  const claimsAt = async (io: FileIo): Promise<{ turn: GitTurn; at: number }[]> => (await Promise.all((await io.list(claimDir())).filter(f => f.name.endsWith('.json')).map(async f => ({ turn: parseGitTurn(await io.read(`${claimDir()}/${f.name}`)), at: f.mtimeMs })))).flatMap(c => (c.turn ? [{ turn: c.turn, at: c.at }] : []))
-  /** Fable 1: a claim's git is seen gone when no git of the checkout runs and its index.lock, if any, is 2 min old or
-   * older (a lock git left behind keeps no claim alive), unless its owner rewrote the claim within 2 min (its call runs). */
-  const observe = async (io: FileIo, now: number): Promise<{ all: GitTurn[]; lockSt: { mtimeMs: number } | null; pids: number[] | null }> => {
-    const lockSt = await io.stat(`${h.root()}/.git/index.lock`)
-    const pids = checkoutGitPids(h.probe(), h.root())
-    const at = await claimsAt(io)
-    const isRunning = pids === null ? null : pids.length > 0 || (lockSt !== null && now - lockSt.mtimeMs < STALE_LOCK_MS)
-    gone = goneAfter(gone, at.map(c => c.turn), isRunning, now)
-    return { all: at.map(c => c.turn), lockSt, pids }
-  }
-  /** The claim that holds the turn against this session; a claim its owner rewrote within 2 min does not lapse. */
-  const holder = async (io: FileIo, now: number): Promise<GitTurn | null> => {
-    const at = await claimsAt(io)
-    const fresh = new Set(at.filter(c => now - c.at < TURN_LAPSE_MS).map(c => turnKey(c.turn)))
-    return heldBy(at.map(c => c.turn), { me8: me8(), now, isLive: id => h.isLive(id, now), gone: new Map([...gone].filter(([k]) => !fresh.has(k))) })
+  const lockPath = (): string => `${h.root()}/.git/index.lock`
+  /** The claims on file, each with when its owner last wrote it. */
+  const claimsAt = async (io: FileIo): Promise<Claimed[]> => (await Promise.all((await io.list(claimDir())).filter(f => f.name.endsWith('.json')).map(async f => ({ turn: parseGitTurn(await io.read(`${claimDir()}/${f.name}`)), at: f.mtimeMs })))).flatMap(c => (c.turn ? [{ turn: c.turn, at: c.at }] : []))
+  /** The claim that holds the turn against this session, from claims already read (gitturn.ts isLapsed). */
+  const holderOf = (at: readonly Claimed[], now: number): GitTurn | null => heldBy(at.map(c => c.turn), { me8: me8(), now, isLive: id => h.isLive(id, now), gone, fresh: new Set(at.filter(c => now - c.at < TURN_LAPSE_MS).map(c => turnKey(c.turn))) })
+  const holder = async (io: FileIo, now: number): Promise<GitTurn | null> => holderOf(await claimsAt(io), now)
+  /** What another session's git holds this one to: its claim, else an index.lock (Fable 2), else nothing. */
+  const busyWith = async (io: FileIo, now: number): Promise<Wait | null> => {
+    const t = await holder(io, now)
+    return t ? { kind: 'claim', turn: t } : (await io.stat(lockPath())) ? { kind: 'lock', since: now } : null
   }
   const release = (io: FileIo): Promise<void> => io.write(mine(), 'null')
   /** Fable 4: the git processes that may hold the lock: those of the checkout and those whose folder cannot be read. */
   const lockPids = (pids: number[] | null): number[] | null => (pids === null ? null : [...pids, ...untargetedGitPids(h.probe())])
+  const refuse = (w: Wait, isTicking: boolean) => {
+    if (isTicking) wait = w // Fable 3: a session that runs no tick is never told free: it is told to retry
+    return { deny: `A5R · ${TURN_GATE} — ${busyText(w)} → ${isTicking ? TURN_NEXT : 'run it again in a minute (this session does not coordinate the checkout, so A5R cannot tell it when git is free)'}`, isTaken: false }
+  }
 
   /** A130: every condition read again, fresh (the processes, the lock, the claims), by one session (the alert claim): the
    * lock file is moved, never deleted; the move is logged and written for the others to read. */
@@ -85,7 +80,7 @@ export const gitTurns = (h: TurnState) => {
     const fresh = await io.gitBusy()
     if (staleLockAct({ lockAgeMs: fresh.lockAgeMs, gitPids: lockPids(fresh.gitPids), isTurnHeld: isClaimed || (await holder(io, now)) !== null }) !== 'move' || !(await io.claimAlert(`stale-index-lock-${now - (fresh.lockAgeMs ?? 0)}`))) return
     const to = `${h.dir()}/${staleLockName(now)}`
-    const ran = await io.run(moveLockArgv(`${h.root()}/.git/index.lock`, to), 30_000)
+    const ran = await io.run(moveLockArgv(lockPath(), to), 30_000)
     if (ran?.exitCode !== 0 || !(await io.stat(to))) return
     const m = { at: now, to: `${DIR}/${staleLockName(now)}`, ageMin: Math.floor((fresh.lockAgeMs ?? 0) / 60_000) }
     await io.write(`${h.dir()}/${STALE_LOCK_MOVED_FILE}`, JSON.stringify(m))
@@ -94,12 +89,14 @@ export const gitTurns = (h: TurnState) => {
 
   return {
     /** A128 / A129: before a git write in the shared checkout runs: a call that could cut it short is refused; the call
-     * gets a long timeout; this session claims the turn, or is refused at once naming the claim that holds it. Null: no
-     * such write. The sync holder's own merge commands in its freeze take no turn; its worker is this session. */
+     * gets a long timeout; this session claims the turn, or is refused at once naming what holds it. Null: no such write.
+     * The sync holder's own merge commands in its freeze take no claim (its freeze covers them; its worker is this
+     * session) but wait for another session's git (Fable 2). */
     start: async (io: TurnIo, command: string, input: { timeout?: unknown; run_in_background?: unknown }): Promise<{ deny?: string; timeout?: number; isTaken: boolean } | null> => {
-      const id = await io.sessionId()
-      const me = h.me() ?? { session: id, id8: id.slice(0, 8).toLowerCase(), lane: `session-${id.slice(0, 8).toLowerCase()}` } // Fable 3: a session outside the checkout writes it too
+      const id = (await io.sessionId()).slice(0, 8).toLowerCase()
+      const me = h.me() ?? { session: id, id8: id, lane: `session-${id}` } // Fable 3: a session outside the checkout writes it too
       self = me.id8
+      const isTicking = h.me() !== null
       const segs = walkDeep(command, await io.cwd(), h.home()).segs
       const writes: Seg[] = []
       for (const seg of segs) if (turnVerb(seg) && (await io.isShared(gitPlace(seg).dir))) writes.push(seg)
@@ -108,19 +105,17 @@ export const gitTurns = (h: TurnState) => {
       if (cut) return { deny: `A5R · ${TURN_GATE} — ${cut.why} → ${cut.alt}`, isTaken: false }
       const timeout = raisedTimeout(input.timeout, input.run_in_background === true) ?? undefined
       const now = await io.now()
-      const refuse = (t: GitTurn) => {
-        wait = t
-        return { deny: `A5R · ${TURN_GATE} — ${busyText(t)} → ${TURN_NEXT}`, isTaken: false }
+      if (h.isSyncCommand(command) && (await io.isFrozenHolder())) {
+        const busy = await busyWith(io, now)
+        return busy ? refuse(busy, isTicking) : { timeout, isTaken: false }
       }
       const before = await holder(io, now)
-      if (before) return refuse(before)
-      // Fable 2: the sync's own merge takes no claim (its freeze covers it) but never runs over another session's git.
-      if (h.isSyncCommand(command) && (await io.isFrozenHolder())) return (await io.stat(`${h.root()}/.git/index.lock`)) ? refuse(LOCK_TURN(now)) : { timeout, isTaken: false }
+      if (before) return refuse({ kind: 'claim', turn: before }, isTicking)
       if (calls === 0 && !isBackground) await io.write(mine(), JSON.stringify(turnOf(me, writes.map(turnVerb), now)))
       const after = await holder(io, now) // another claim written meanwhile: both step back, neither writes over the other
       if (after) {
         if (calls === 0 && !isBackground) await release(io)
-        return refuse(after)
+        return refuse({ kind: 'claim', turn: after }, isTicking)
       }
       calls += 1
       isBackground ||= input.run_in_background === true
@@ -132,20 +127,25 @@ export const gitTurns = (h: TurnState) => {
       calls = Math.max(0, calls - 1)
       if (calls === 0 && !isBackground) await release(io)
     },
-    /** A128 / A130 at the minute: each claim's git seen gone or not; a backgrounded claim of this session given back once
-     * its git is gone; the session a claim refused told when the turn frees (woken when idle); an index.lock git left
-     * behind moved aside; a moved lock told to the sessions it failed and to the sync holder. */
+    /** A128 / A130 at the minute: each claim's git seen gone or not (Fable 1: a lock 2 min old with no git keeps no claim
+     * alive); this session's claim rewritten while its call runs, or given back once its backgrounded git is gone; what
+     * refused it told when free (woken when idle); an index.lock git left behind moved aside; a moved lock told to the
+     * sessions it failed and to the sync holder. */
     tick: async (io: TurnIo, now: number): Promise<void> => {
-      const { all, lockSt, pids } = await observe(io, now)
-      const own = all.find(c => c.id8 === me8())
+      const lockSt = await io.stat(lockPath())
+      const pids = checkoutGitPids(h.probe(), h.root())
+      const at = await claimsAt(io)
+      gone = goneAfter(gone, at.map(c => c.turn), pids === null ? null : pids.length > 0 || (lockSt !== null && now - lockSt.mtimeMs < STALE_LOCK_MS), now)
+      const own = at.find(c => c.turn.id8 === me8())?.turn
       if (own && calls > 0) await io.write(mine(), JSON.stringify(own)) // its call runs: the claim stays fresh
       if (own && calls === 0 && isBackground && now - (gone.get(turnKey(own)) ?? now) >= TURN_LAPSE_MS) {
         isBackground = false
         await release(io)
       }
-      const held = await holder(io, now)
-      if (wait && !held && !(wait.id8 === '' && lockSt)) h.push({ id: `git-turn:free:${wait.id8}:${wait.startedAt}`, text: `A5R · ${TURN_GATE} — ${turnFreeText(wait)}`, isActionable: true })
-      if (!held && !(wait?.id8 === '' && lockSt)) wait = null
+      const held = holderOf(at, now)
+      const isFree = !held && !(wait?.kind === 'lock' && lockSt)
+      if (wait && isFree) h.push({ id: `git-turn:free:${wait.kind === 'claim' ? turnKey(wait.turn) : `lock:${wait.since}`}`, text: `A5R · ${TURN_GATE} — ${turnFreeText(wait)}`, isActionable: true })
+      if (isFree) wait = null
       const isClaimed = held !== null || calls > 0 || isBackground
       const act = staleLockAct({ lockAgeMs: lockSt ? now - lockSt.mtimeMs : null, gitPids: lockPids(pids), isTurnHeld: isClaimed })
       look = act === 'unread' ? LOCK_UNREAD_LOOK : null
@@ -158,10 +158,10 @@ export const gitTurns = (h: TurnState) => {
     /** Fable 2: whether the sync's worker must wait for another session's git (a live claim, or .git/index.lock); the
      * holder is told once a minute and woken when it is free. */
     blocksMerge: async (io: FileIo, now: number): Promise<boolean> => {
-      const t = (await holder(io, now)) ?? ((await io.stat(`${h.root()}/.git/index.lock`)) ? LOCK_TURN(now) : null)
-      if (!t) return false
-      wait = t
-      h.push({ id: `git-turn:merge-waits:${Math.floor(now / 60_000)}`, text: `A5R · ${TURN_GATE} — the sync's merge waits: ${busyText(t)} → A5R starts the sync worker once git is free (you are told)`, isActionable: false })
+      const busy = await busyWith(io, now)
+      if (!busy) return false
+      wait = busy
+      h.push({ id: `git-turn:merge-waits:${Math.floor(now / 60_000)}`, text: `A5R · ${TURN_GATE} — the sync's merge waits: ${busyText(busy)} → A5R starts the sync worker once git is free (you are told)`, isActionable: false })
       return true
     },
     /** A130: the NEEDS A LOOK rows while a stale-looking lock cannot be judged (none otherwise). */
