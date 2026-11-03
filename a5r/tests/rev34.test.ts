@@ -388,8 +388,8 @@ for (const surface of ['terminal', 'desktop'] as const)
     // grant, Editor and PIE, each queued row its wait, minutes, PIE / build and one reason; the day's line in plain words.
     expect(text(find(tree, 'hai-queue-head'))).toBe('EDITOR· lane-bbbbbbbb has it · 12 min left')
     expect(text(find(tree, 'hai-queue-holder'))).toBe('lane-bbbbbbbbgranted 14:00 · Editor 14:04 · PIE 14:20 · extended 1×')
-    expect(text(find(tree, 'hai-queue-cccccccc'))).toBe('lane-ccccccccwaiting 18 min · 30 min · PIE · behind lane-bbbbbbbb')
-    expect(text(find(tree, `hai-queue-${ME8}-line`))).toBe('waiting 0 min · 20 min · build')
+    expect(text(find(tree, 'hai-queue-cccccccc'))).toBe("lane-ccccccccwaiting 18 min · 30 min · PIE · behind lane-bbbbbbbb · after lane-bbbbbbbb's turn (~14:52)") // A133 (rev 44): what it waits for
+    expect(text(find(tree, `hai-queue-${ME8}-line`))).toBe("waiting 0 min · 20 min · build · after lane-cccccccc's turn (~15:22)") // A133 (rev 44)
     expect([find(tree, 'hai-queue-pick-bbbbbbbb')?.props?.label, find(tree, 'hai-queue-pick-cccccccc')?.props?.label, find(tree, `hai-queue-pick-${ME8}`)?.props?.label]).toEqual(['▶', '1', '★2'])
     expect(text(find(tree, 'hai-queue-summary'))).toBe('today: 1 turn · usually 12 min wait · 20% of turns spent opening the Editor')
     const status = JSON.parse(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never)).split('\n').filter(l => !l.startsWith('A5R ·')).join('\n')) as Record<string, unknown>

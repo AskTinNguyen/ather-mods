@@ -57,7 +57,7 @@ test('A28: only what waits on Hai or this session turns the warning colour: RAM 
   on('ui.render', { component: 'Pane', requestId: 'ather' }, async () => atherTree(true))
   await $.session.start({ cwd: PROJ, surface: 'terminal', isInteractive: true } as never)
   const tree = await $.ui.render(PANE as never)
-  expect([partText(tree, 'memory'), partText(tree, 'main')]).toEqual(['▥4.2 GB ⚠', '⎇14:30 ❄'])
+  expect([partText(tree, 'memory'), partText(tree, 'main')]).toEqual(['▥4.2 GB ⚠', '⎇14:30 ❄ ▸ merging (time unknown) · builds again at the latest 15:15']) // A133 (rev 44): the sync's step and when builds are free again
   expect([partColor(tree, 'editor'), partColor(tree, 'memory'), partColor(tree, 'main')]).toEqual([WARN, WARN, WARN])
 })
 

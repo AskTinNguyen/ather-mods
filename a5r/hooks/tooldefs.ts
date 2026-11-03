@@ -1,0 +1,73 @@
+// The A5R model tools' definitions (the editor and sync tools) and `/a5r help`, moved out of register.ts (rev 44) so the
+// host file can take rev 44's wiring without growing. Pure text: no `$`.
+import { FOCUS_USAGE } from './focus.ts'
+import { EDITOR_USAGE } from './order.ts'
+import { RULE_FORM } from './syncrules.ts'
+
+export const EDITOR_TOOL_DEF = {
+  name: 'editor',
+  description:
+    'a5r A5R Editor holder for the shared S2 checkout: the only way to take or give the Unreal Editor while A5R is on. ' +
+    '"request" asks for a slot (minutes, pie, build, what): sessions are served in the order they asked, a slot must end before the next sync cutoff, and launching needs the RAM launch gate; ' +
+    'you are granted at once when you are at the head and the lock is free, else you get your place and are told when it is yours. ' +
+    '"release" gives it back (stop PIE and every background process of yours that could call MCP first; list packages to discard in dont_save). ' +
+    '"extend" adds minutes before your lease ends, if it still fits. "status" reads the holder, the queue, RAM and the next sync. "focus_done" (note: what was reached): only when the person gave this session a Focus, once its milestone is reached: it ends the Focus and gives the Editor back (during a Focus, release and extend keep the lock to the box end). Never write Saved/EDITOR_OWNER.txt yourself.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['request', 'release', 'extend', 'status', 'focus_done'] },
+      minutes: { type: 'number', description: 'request: how long you need the Editor (5–180, default 30; ≤ 20 without a build may ask the holder to yield). extend: how many more minutes.' },
+      pie: { type: 'boolean', description: 'request: the slot starts PIE (the launch gate is higher).' },
+      launch: { type: 'boolean', description: 'request: false when the slot never launches the Editor (it holds the lock to keep the Editor down, as the sync worker does, or for a build): the RAM launch gate is skipped, and such a request may go before a head that waits only for memory, for at most 30 min, launching no Editor in that slot.' },
+      build: { type: 'boolean', description: 'request: the Editor must be closed for a build (one window ≤ 45 min while anyone is queued; longer when nobody is and no sync cutoff falls inside it).' },
+      what: { type: 'string', description: 'request: what the slot is for, one line.' },
+      lane: { type: 'string', description: 'request: the lane name written into the lock (default: this session\'s title).' },
+      mode: { type: 'string', enum: ['interactive', 'unattended'] },
+      pausable: { type: 'boolean', description: 'request: whether you can yield at a safe point (default true; false for a PIE request unless given).' },
+      next_safe: { type: 'string', description: 'request: your next safe point, HH:MM or "after save".' },
+      freeGb: { type: 'number', description: 'any action: free RAM in GB you read yourself, only when A5R said the RAM probe failed twice (used for 2 min, through the normal gates, logged).' },
+      note: { type: 'string', description: 'release: one line for the lock note. focus_done: what was reached.' },
+      dont_save: { type: 'array', items: { type: 'string' }, description: 'release: dirty packages to discard (Don\'t-Save), each confirmed by its owning lane.' },
+      pie_stopped: { type: 'boolean', description: 'release: PIE this session started has ended (needed only when no stop was seen).' },
+    },
+    required: ['action'],
+  },
+}
+
+export const SYNC_TOOL_DEF = {
+  name: 'sync',
+  description:
+    'a5r A5R Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
+    'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and every session is told. At the sync time the holder\'s a5r starts the sync worker, which runs the merge and ends with done or abort. ' +
+    '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; rules; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "rules" (rules: the conflict rules the worker applies, until it starts), "done" (note, with the post-merge test result line), "abort" (note: why), "takeover" (a sync, or a merge, revert or cherry-pick left half done in the shared checkout, whose holder is gone), "status". Only the holder changes a planned sync. A worker that aborts hands the sync back to its holder, still frozen: finish it by hand and call done, or abort.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['plan', 'move', 'build', 'cancel', 'conflicts', 'rules', 'done', 'abort', 'takeover', 'status'] },
+      build: { type: 'boolean', description: 'plan, move, build: the sync includes a build (a longer freeze).' },
+      at: { type: 'string', description: 'plan, move: the sync time, HH:MM (the next time it comes round).' },
+      holder: { type: 'string', description: 'plan: the session that will run the merge (its first 8 hex or its lane); default this session.' },
+      paths: { type: 'array', items: { type: 'string' }, description: 'conflicts: repo-relative conflicted paths.' },
+      rules: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }], description: `plan, rules: the holder's conflict rules for the worker, ${RULE_FORM}; the worker resolves a conflicted path a rule matches with that side, .uasset/.umap included (git checkout --<side> -- <path>), and a path no rule matches as before.` },
+      note: { type: 'string', description: 'done, abort: one line (what merged, or why it was aborted).' },
+    },
+    required: ['action'],
+  },
+}
+
+/** A57: `/a5r help`. */
+export const A5R_HELP = [
+  'A5R commands:',
+  '/a5r · opens the A5R pane',
+  '/a5r on | off · the five rules and the Editor, RAM and Sync main coordination, for every session',
+  '/a5r status · the state as text',
+  '/a5r accept · A5R acceptance now, for this session\'s repository (the full list)',
+  '/a5r pass <intent slug | PR number> · lets the next PR call or close of that intent (or that PR\'s after-the-fact score) through once, even if acceptance fails; acceptance never asks',
+  'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs on exact paths when no other session\'s uncommitted change is in its way (else it names the path and owner); with no paths, `.` or a top folder it is refused with the same command on exact paths; shared config, recursive deletes and removed test assertions run and are recorded for acceptance; a plain force push, push to main, git add . in the shared checkout, --no-verify, GIT_LFS_SKIP_SMUDGE, reset --hard, clean -x and moving the shared tree are refused with what to do instead; git push --force-with-lease to a branch of your own and git add . in a worktree of your own run.',
+  'Editor: a build window is at most 45 min while anyone else is queued, longer when nobody is and no sync cutoff falls inside it. Sync main: at the sync time this session\'s a5r takes the Editor lock for the sync, starts the sync worker (it calls no a5r tool), records its SYNC DONE / SYNC ABORT line and releases the lock. Each notice reaches a session once; the cutoff notice only sessions with uncommitted changes in the shared checkout or on the Editor queue.',
+  '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
+  `${EDITOR_USAGE}: the person's own order of the Editor queue and time of a turn (the panel's row controls do the same; no tool can)`,
+  `${FOCUS_USAGE}: the person gives one session the Editor for a milestone (the panel's Focus… and the EDITOR line's End / +30 / +60 do the same; no tool can); the focus session ends it with the editor tool's focus_done`,
+  '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
+  'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
+].join('\n')

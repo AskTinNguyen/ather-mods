@@ -506,7 +506,7 @@ export type OrchestrateEvent = {
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
    * running), holder-gone; or A65-judge (a verdict, advisory); A112: wait (a session's own wait decision, logged only).
    * A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' | 'orphan-close' | 'auto-sync' | 'withdrawn' | 'shared-git' // manual: A117, the person's change of the queue; focus: A118; A123 orphan-close, A124 auto-sync, A125 withdrawn, A126 shared-git (a refused git write in the shared checkout)
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' | 'orphan-close' | 'auto-sync' | 'withdrawn' | 'shared-git' | 'stale-index-lock' // manual: A117, the person's change of the queue; focus: A118; A123 orphan-close, A124 auto-sync, A125 withdrawn, A126 shared-git (a refused git write in the shared checkout)
   lane: string
   id8: string
   procs: readonly string[]

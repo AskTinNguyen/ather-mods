@@ -75,10 +75,10 @@ test('A116: one Editor list (the holder, the queue in order, plain reasons, the 
   const tree = await pane($, w)
   expect(text(find(tree, 'hai-queue-head'))).toBe('EDITOR· sync-main has it · 81 min left')
   expect(text(find(tree, 'hai-queue-holder'))).toBe('♾️S2 sync maingranted 14:00 · Editor not open yet')
-  expect(text(find(tree, 'hai-queue-cccccccc'))).toBe('Hệ thống enemy chim mớiwaiting 77 min · 45 min · PIE · behind sync-main')
-  expect(text(find(tree, 'hai-queue-dddddddd'))).toBe('AoBing fox form weaponwaiting 74 min · 75 min · PIE')
-  expect(text(find(tree, 'hai-queue-eeeeeeee'))).toBe('Limbshake trong Enemy S2waiting 65 min · 45 min · build')
-  expect(text(find(tree, 'hai-queue-ffffffff'))).toBe('Enhance Form materialwaiting 49 min · 15 min')
+  expect(text(find(tree, 'hai-queue-cccccccc'))).toBe("Hệ thống enemy chim mớiwaiting 77 min · 45 min · PIE · behind sync-main · after sync-main's turn (~16:01)") // A133 (rev 44): what it waits for
+  expect(text(find(tree, 'hai-queue-dddddddd'))).toBe("AoBing fox form weaponwaiting 74 min · 75 min · PIE · after lane-cccccccc's turn (~16:46)") // A133 (rev 44)
+  expect(text(find(tree, 'hai-queue-eeeeeeee'))).toBe("Limbshake trong Enemy S2waiting 65 min · 45 min · build · after lane-dddddddd's turn (~18:01)") // A133 (rev 44)
+  expect(text(find(tree, 'hai-queue-ffffffff'))).toBe("Enhance Form materialwaiting 49 min · 15 min · after lane-eeeeeeee's turn (~18:46)") // A133 (rev 44)
   expect(text(find(tree, 'hai-queue-summary'))).toBe('today: 1 turn · usually 38 min wait · 20% of turns spent opening the Editor')
   expect(text(find(tree, 'hai-queue'))).not.toMatch(/wait (held|queue|ram|sync|probe|merge|missing)|no Editor yet|asks \d/)
   // No session in both blocks: the Editor list's five are left out of the other sessions (this one and Walker stay).
@@ -321,7 +321,7 @@ test('A117: a press selects a row and To top places it: queue-order.json is writ
   expect(o.changes.map(c => c.moved)).toEqual([['eeeeeeee', 'cccccccc', 'dddddddd']])
   tree = await pane($, w)
   expect(rowIds(tree, 'hai-queue', /^hai-queue-[0-9a-f]{8}$/)).toEqual(['hai-queue-eeeeeeee', 'hai-queue-cccccccc', 'hai-queue-dddddddd', 'hai-queue-ffffffff', `hai-queue-${ME8}`])
-  expect(text(find(tree, 'hai-queue-eeeeeeee-line'))).toBe('waiting 65 min · 45 min · build · placed by hand · behind sync-main')
+  expect(text(find(tree, 'hai-queue-eeeeeeee-line'))).toBe("waiting 65 min · 45 min · build · placed by hand · behind sync-main · after sync-main's turn (~16:01)") // A133 (rev 44)
   expect(w.read(LOG)).toContain('| rule=manual | lane=tail-vfx |')
   expect(w.read(LOG)).toContain('note=Limbshake trong Enemy S2 moved to the top of the Editor queue: now 1 of 5 (by the person (panel in tail-vfx)); moved eeeeeeee,cccccccc,dddddddd')
   expect(((w.calls['ui.toast'] ?? []) as Rec[]).map(t => String(t.text ?? t.message ?? '')).some(t => t.includes('Limbshake trong Enemy S2 moved to the top'))).toBe(true)
@@ -418,7 +418,7 @@ test('A117: /a5r editor: the person\'s own command moves, sets minutes, resets; 
   expect(await run($, 'editor top Limbshake')).toContain('Limbshake trong Enemy S2 moved to the top of the Editor queue: now 1 of 4 (by the person (command in')
   expect(await run($, 'editor time Enhance +15')).toContain('Enhance Form material gets 30 min when it is granted (it asked 15)')
   expect(orderOf(w).sized.map(s => [s.id8, s.minutes])).toEqual([['ffffffff', 30]])
-  expect(text(find(await pane($, w), 'hai-queue-ffffffff-line'))).toBe('waiting 49 min · 30 min (set by hand)')
+  expect(text(find(await pane($, w), 'hai-queue-ffffffff-line'))).toBe("waiting 49 min · 30 min (set by hand) · after lane-dddddddd's turn (~18:46)") // A133 (rev 44)
   // A model reads the same queue in the editor tool's status (it cannot change it).
   const status = JSON.parse(out(await $.tool.call({ tool: EDITOR, action: 'status' } as never)).split('\n').filter(l => !l.startsWith('A5R ·')).join('\n')) as { queue: string[] }
   expect(status.queue).toEqual([

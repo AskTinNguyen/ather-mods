@@ -76,7 +76,7 @@ test('cutoff: a session with uncommitted changes in the shared checkout gets the
   expect(prompts(w)).toEqual([])
   await advance(w, 20) // 15:00
   expect(prompts(w)).toEqual([
-    'A5R · Sync main — cutoff: sync-lane merges origin/main at 15:30 → commit your own paths now (exact paths, wip: is fine), write your resume note in Saved/LANE_NOTES/<session id>.md, stop PIE and leave the Editor alone by 15:20; keep Source/ and Plugins/ edits out of the shared tree from now; from 15:30 git writes and the Editor wait until the sync is done',
+    'A5R · Sync main — cutoff: sync-lane merges origin/main at 15:30 → commit your own paths now (exact paths, wip: is fine), write your resume note in Saved/LANE_NOTES/<session id>.md, stop PIE and leave the Editor alone by 15:20; keep Source/ and Plugins/ edits out of the shared tree from now; from 15:30 git writes and the Editor wait until the sync is done · Sync main 15:30 · cutoff 15:00 · freeze from 15:30, end time unknown (at the latest 16:15)' // A133 (rev 44): the timeline line,
   ])
   await advance(w, 5)
   expect(prompts(w).length).toBe(1)
@@ -156,7 +156,7 @@ test('freeze: from T until done, a non-holder makes no git write in the shared c
   expect(prompts(w).map(p => p.slice(0, 35))).toEqual(['A5R · Sync main — cutoff: sync-lane']) // 14:40 is inside the cutoff
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit -m "wip: tail"' }))).toBeUndefined() // not yet frozen
   await advance(w, 10) // 14:50
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit -m "wip: tail"' }))).toContain('A5R · Sync main freeze — sync-lane merges origin/main since 14:50: no git commit in the shared checkout until the sync is done')
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit -m "wip: tail"' }))).toContain('A5R · Sync main freeze — sync-lane merges origin/main since 14:50: no git commit in the shared checkout until the merge is committed (now merging) · Sync main 14:50 · ▸ merging (time unknown) → tests (time unknown)') // A131 / A133 (rev 44): the step and the timeline
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 add Source/S2/Foo.cpp && git -C E:/s2 status' }))).toContain('no git add')
   expect(refused(await $.tool.call({ tool: 'PowerShell', command: 'git -C E:/s2 stash' }))).toContain('no git stash')
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 status && git -C E:/s2 log -3' }))).toBeUndefined()

@@ -88,10 +88,12 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     sent.push(e)
     return { isDelivered: true }
   })
+  const runEffects = new Map<string, () => void>() // rev 44 (A130): a process run's effect on the files, keyed by a needle of its argv
   on('process.run', async (_$: unknown, e: { argv: string[]; init?: { env?: Record<string, string>; timeoutMs?: number } }) => {
     const argv = e.argv.join(' ')
     runs.push(argv)
     inits.push({ argv, env: e.init?.env, timeoutMs: e.init?.timeoutMs })
+    for (const [needle, effect] of runEffects) if (argv.includes(needle)) effect() // rev 44 (A130): what a command does to the files (a move)
     const hit = Object.entries(git).find(([needle]) => argv.includes(needle))?.[1]
     if (hit?.hold) await hit.hold // rev 30 (A88 b): a slow git call, settled by the test
     if (hit?.deny) return { deny: hit.deny } // the run rejects, as a timeout does
@@ -169,6 +171,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
     return { result: { stdout: t, stderr: '', interrupted: false }, text: t }
   })
   return {
+    runEffects,
     toolHolds,
     toolEffects,
     failCwd: (n: number) => {

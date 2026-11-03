@@ -26,6 +26,10 @@ import { buildScriptText, buildStartCommand, isScriptAlive, syncBuildScript } fr
 import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG_MS, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, type Miss, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
+import { A5R_HELP, EDITOR_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
+import { git44, type Io44 } from './gitsync.ts'
+import { isLockFailure } from './gitturn.ts'
+import { HELD, editNeed, freezeWhy, type Need } from './syncplan.ts'
 import { BINARY_EXCLUDES, BINARY_EXT, addedLines, diffInBatches, fileDiff, remotesOf, urlIsRepo, type GivenDiff } from './diffs.ts'
 import { COMEBACK_BOX_MIN, comebackLook, overrunLook, type LookPress } from './looks.ts'
 import { ORPHAN_FILE, askLook, closeAnswer, closeArgv, idleArgv, orphanLook, orphanNotice, orphanOf, parseIdle, parseOrphan, sharedEditorPid, type Idle, type OrphanRecord } from './orphan.ts'
@@ -691,7 +695,7 @@ function showStatus($: Engine): void {
     a5rOn ? '★ A5R' : '',
     isS2 && isOver ? `Editor: ${lockView?.who ?? 'held'} over its lease` : '',
     isS2 && vitals && ramBand(vitals.freeGb) !== 'ok' ? `RAM ${vitals.freeGb} GB free` : '',
-    isS2 && syncFile && ['cutoff', 'frozen'].includes(phaseOf(syncFile, nowMs)) ? `Sync ${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)}` : '',
+    isS2 && syncFile && ['cutoff', 'frozen'].includes(phaseOf(syncFile, nowMs)) ? g44.lineNow(syncFile, nowMs) : '', // A133
   ].filter(Boolean)
   $.ui.status(parts.length ? parts.join(' · ') : undefined)
   isStatusShown = parts.length > 0
@@ -998,55 +1002,8 @@ function clearStaleBusy(now: number): void {
 async function ensureTools($: Engine): Promise<void> {
   if (hasTools) return
   hasTools = true
-  await $.tool.register({
-    name: 'editor',
-    description:
-      'a5r A5R Editor holder for the shared S2 checkout: the only way to take or give the Unreal Editor while A5R is on. ' +
-      '"request" asks for a slot (minutes, pie, build, what): sessions are served in the order they asked, a slot must end before the next sync cutoff, and launching needs the RAM launch gate; ' +
-      'you are granted at once when you are at the head and the lock is free, else you get your place and are told when it is yours. ' +
-      '"release" gives it back (stop PIE and every background process of yours that could call MCP first; list packages to discard in dont_save). ' +
-      '"extend" adds minutes before your lease ends, if it still fits. "status" reads the holder, the queue, RAM and the next sync. "focus_done" (note: what was reached): only when the person gave this session a Focus, once its milestone is reached: it ends the Focus and gives the Editor back (during a Focus, release and extend keep the lock to the box end). Never write Saved/EDITOR_OWNER.txt yourself.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['request', 'release', 'extend', 'status', 'focus_done'] },
-        minutes: { type: 'number', description: 'request: how long you need the Editor (5–180, default 30; ≤ 20 without a build may ask the holder to yield). extend: how many more minutes.' },
-        pie: { type: 'boolean', description: 'request: the slot starts PIE (the launch gate is higher).' },
-        launch: { type: 'boolean', description: 'request: false when the slot never launches the Editor (it holds the lock to keep the Editor down, as the sync worker does, or for a build): the RAM launch gate is skipped, and such a request may go before a head that waits only for memory, for at most 30 min, launching no Editor in that slot.' },
-        build: { type: 'boolean', description: 'request: the Editor must be closed for a build (one window ≤ 45 min while anyone is queued; longer when nobody is and no sync cutoff falls inside it).' },
-        what: { type: 'string', description: 'request: what the slot is for, one line.' },
-        lane: { type: 'string', description: 'request: the lane name written into the lock (default: this session\'s title).' },
-        mode: { type: 'string', enum: ['interactive', 'unattended'] },
-        pausable: { type: 'boolean', description: 'request: whether you can yield at a safe point (default true; false for a PIE request unless given).' },
-        next_safe: { type: 'string', description: 'request: your next safe point, HH:MM or "after save".' },
-        freeGb: { type: 'number', description: 'any action: free RAM in GB you read yourself, only when A5R said the RAM probe failed twice (used for 2 min, through the normal gates, logged).' },
-        note: { type: 'string', description: 'release: one line for the lock note. focus_done: what was reached.' },
-        dont_save: { type: 'array', items: { type: 'string' }, description: 'release: dirty packages to discard (Don\'t-Save), each confirmed by its owning lane.' },
-        pie_stopped: { type: 'boolean', description: 'release: PIE this session started has ended (needed only when no stop was seen).' },
-      },
-      required: ['action'],
-    },
-  }).catch(err => $.ui.log(`a5r: editor tool not registered: ${String(err)}`, { to: 'debug' }))
-  await $.tool.register({
-    name: 'sync',
-    description:
-      'a5r A5R Sync main holder for the shared S2 checkout: plans a merge of origin/main and its timeline. At the cutoff (sync − 30 min) every session is told to commit its own paths, write its resume note and release the Editor by sync − 10; ' +
-      'from the sync time until done or abort, other sessions are refused git writes and Editor use in the shared checkout; the freeze is a lease with a hard end (T + 45 min, T + 90 min with a build), after which the sync expires and every session is told. At the sync time the holder\'s a5r starts the sync worker, which runs the merge and ends with done or abort. ' +
-      '"plan" (at HH:MM, build, holder: a session id8 or lane, default this session; rules; a sync this session holds is moved), "move", "build" (build: true/false, before the freeze), "cancel" (before the freeze), "conflicts" (paths: the conflicted paths when the automatic dry-run could not run), "rules" (rules: the conflict rules the worker applies, until it starts), "done" (note, with the post-merge test result line), "abort" (note: why), "takeover" (a sync, or a merge, revert or cherry-pick left half done in the shared checkout, whose holder is gone), "status". Only the holder changes a planned sync. A worker that aborts hands the sync back to its holder, still frozen: finish it by hand and call done, or abort.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['plan', 'move', 'build', 'cancel', 'conflicts', 'rules', 'done', 'abort', 'takeover', 'status'] },
-        build: { type: 'boolean', description: 'plan, move, build: the sync includes a build (a longer freeze).' },
-        at: { type: 'string', description: 'plan, move: the sync time, HH:MM (the next time it comes round).' },
-        holder: { type: 'string', description: 'plan: the session that will run the merge (its first 8 hex or its lane); default this session.' },
-        paths: { type: 'array', items: { type: 'string' }, description: 'conflicts: repo-relative conflicted paths.' },
-        rules: { anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }], description: `plan, rules: the holder's conflict rules for the worker, ${RULE_FORM}; the worker resolves a conflicted path a rule matches with that side, .uasset/.umap included (git checkout --<side> -- <path>), and a path no rule matches as before.` },
-        note: { type: 'string', description: 'done, abort: one line (what merged, or why it was aborted).' },
-      },
-      required: ['action'],
-    },
-  }).catch(err => $.ui.log(`a5r: sync tool not registered: ${String(err)}`, { to: 'debug' }))
+  await $.tool.register(EDITOR_TOOL_DEF).catch(err => $.ui.log(`a5r: editor tool not registered: ${String(err)}`, { to: 'debug' }))
+  await $.tool.register(SYNC_TOOL_DEF).catch(err => $.ui.log(`a5r: sync tool not registered: ${String(err)}`, { to: 'debug' }))
   // D7: the sync worker's agent type, spawned by this mod at the sync time and hidden from the model (agent.offer).
   await $.agent.register({ name: 'sync', description: 'a5r sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by a5r only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`a5r: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
   // A65: the advisory judge, read-only (Read and Grep only), a small model, a few turns, no CLAUDE.md; started by a5r only.
@@ -1301,6 +1258,7 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
  * syncstage.ts `entryTell`'s (the build runs only once its log of this run is seen). */
 async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: StageEntry, now: number): Promise<void> {
   const next = enterStage(s, to, s.build ? syncBuildLog(s2Root(), s.id) : '', now)
+  if (to.stage !== 'manual' && s.stage === null) await g44.noteTime(io44($, opts), s.id, 'merge', now - (s.workerAt ?? s.at), now) // A133
   if (!(await writeSync($, opts, next, s))) return
   await syncLockUntil($, opts, next, now)
   const read = await readSyncLog($, next)
@@ -1458,6 +1416,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   const window = freeWindowOf(lock, claimNow(now)) // A91: the free window, if the Editor is free
   await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
   await nudgeStep($, opts, now, window).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
+  await g44.tick(io44($, opts), now).catch(err => $.ui.log(`a5r: rev 44 steps: ${String(err)}`, { to: 'debug' })) // A128-A134
   await syncStep($, opts, now)
   await orphanStep($, opts, now).catch(err => $.ui.log(`a5r: orphan: ${String(err)}`, { to: 'debug' })) // A123
   await autoSyncStep($, opts, now).catch(err => $.ui.log(`a5r: auto sync: ${String(err)}`, { to: 'debug' })) // A124
@@ -2040,6 +1999,7 @@ async function writeSync($: Engine, opts: Opts, next: SyncFile, prior: SyncFile 
  * from the manual stage frees the Editor with the freeze). Runs whatever the A5R flag says (review 5). */
 async function endSync($: Engine, opts: Opts, s: SyncFile, state: 'done' | 'aborted', note: string, now: number, prior: SyncFile = s): Promise<boolean> {
   const ended = endedSync(s, state, note, now)
+  if (state === 'done' && s.stage === 'testing') await g44.noteTime(io44($, opts), s.id, 'tests', now - s.stageAt, now) // A133
   if (!(await writeSync($, opts, ended, prior))) return false
   delivered.add(noticeIds.lifted(ended))
   await releaseSyncSlot($, opts, ended, now)
@@ -2163,10 +2123,11 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   // Review 4: a shell command run inside the shared checkout since the last commit there counts too (err on telling). The
   // dry-run's conflicts and untracked files reach their owners through the same touch set (ownerConflicts below).
   const isConcerned = isSyncConcerned({ isHolder, touched: touched.size, sharedShellAt, holds: holdsLock(), wants: Boolean(me.want) })
-  if (phase === 'cutoff' && isConcerned) push({ id: noticeIds.cutoff(s), text: NOTICES.cutoff(s, isHolder, holdsLock()), isActionable: true })
+  if (phase === 'cutoff' && isConcerned) push({ id: noticeIds.cutoff(s), text: `${NOTICES.cutoff(s, isHolder, holdsLock())} · ${g44.lineNow(s, now)}`, isActionable: true })
   if (!isHolder && holdsLock() && ((phase === 'cutoff' && now >= s.at - RELEASE_BEFORE_MS) || phase === 'frozen')) push({ id: noticeIds.releaseBy(s), text: NOTICES.releaseBy(s), isActionable: true })
-  if (phase === 'frozen' && isConcerned) push({ id: noticeIds.frozen(s), text: isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s), isActionable: false })
+  if (phase === 'frozen' && isConcerned) push({ id: noticeIds.frozen(s), text: `${isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s)} · ${g44.lineNow(s, now)}`, isActionable: false })
   else if (phase === 'frozen') delivered.add(`${noticeIds.frozen(s)}:seen`) // A125: not told the freeze, it hears the lift
+  if (phase === 'frozen' && !isHolder) await g44.stepTell(io44($, opts), s, isConcerned, now) // A131 / A132
   // A107: the holder fetches and dry-runs at the cutoff and again at T (off the tick chain); the worker starts after T's.
   const dry = isHolder ? dryStep(s, phase, dryJob, now) : null
   if (dry?.start) startDryRun($, opts, s, dry.start)
@@ -2188,7 +2149,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
       // The lift supersedes what this session was still to be told about the same sync.
       for (const id of stale) if (pending.some(n => n.id === id)) delivered.add(id)
       pending = pending.filter(n => !stale.includes(n.id))
-      push({ id: noticeIds.lifted(s), text: s.state === 'expired' ? NOTICES.expired(s) : NOTICES.lifted(s), isActionable: wasAsked })
+      push({ id: noticeIds.lifted(s), text: s.state === 'expired' ? NOTICES.expired(s) : NOTICES.lifted(s), isActionable: wasAsked || g44.wasRefused(s) })
     }
     return
   }
@@ -2840,23 +2801,6 @@ async function shipScore($: Engine, opts: Opts, slug: string): Promise<string | 
   return shipText(scores, slug, x.branch, x.diffProblem)
 }
 
-/** A57: `/a5r help`. */
-const A5R_HELP = [
-  'A5R commands:',
-  '/a5r · opens the A5R pane',
-  '/a5r on | off · the five rules and the Editor, RAM and Sync main coordination, for every session',
-  '/a5r status · the state as text',
-  '/a5r accept · A5R acceptance now, for this session\'s repository (the full list)',
-  '/a5r pass <intent slug | PR number> · lets the next PR call or close of that intent (or that PR\'s after-the-fact score) through once, even if acceptance fails; acceptance never asks',
-  'At the tool call A5R never asks and never waits: git that can discard work in the shared checkout runs on exact paths when no other session\'s uncommitted change is in its way (else it names the path and owner); with no paths, `.` or a top folder it is refused with the same command on exact paths; shared config, recursive deletes and removed test assertions run and are recorded for acceptance; a plain force push, push to main, git add . in the shared checkout, --no-verify, GIT_LFS_SKIP_SMUDGE, reset --hard, clean -x and moving the shared tree are refused with what to do instead; git push --force-with-lease to a branch of your own and git add . in a worktree of your own run.',
-  'Editor: a build window is at most 45 min while anyone else is queued, longer when nobody is and no sync cutoff falls inside it. Sync main: at the sync time this session\'s a5r takes the Editor lock for the sync, starts the sync worker (it calls no a5r tool), records its SYNC DONE / SYNC ABORT line and releases the lock. Each notice reaches a session once; the cutoff notice only sessions with uncommitted changes in the shared checkout or on the Editor queue.',
-  '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
-  `${EDITOR_USAGE}: the person's own order of the Editor queue and time of a turn (the panel's row controls do the same; no tool can)`,
-  `${FOCUS_USAGE}: the person gives one session the Editor for a milestone (the panel's Focus… and the EDITOR line's End / +30 / +60 do the same; no tool can); the focus session ends it with the editor tool's focus_done`,
-  '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
-  'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
-].join('\n')
-
 /** A15: this session holds the sync and the sync is in its freeze (sync.json read fresh). */
 async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
   const s = parseSyncFile(await readJson($, syncPath()))
@@ -2911,30 +2855,55 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
     ? `leave the ${opOf(h.head)} state alone (no commit, reset, abort or stash of yours): its holder ${owner.lane} (session ${owner.id8}) finishes it or runs git ${opOf(h.head)} --abort; work without git or in your own worktree meanwhile`
     : `its holder is gone${owner ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} ${opOf(h.head)} --abort; until then no commit, reset or stash there`
 
-/** A5R's freeze, a lease (D8): from the sync time until done, abort or expiry, a session that does not hold the sync
- * makes no git write in the shared checkout and does not use the Editor (sync.json read fresh for each such call).
+// Rev 44 (A128-A134): git one writer at a time, a stale index.lock, the freeze in steps and what everyone waits for
+// (gitsync.ts: this session's state once, the engine's reads and writes per call).
+const g44 = git44({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, grantInput, dir: hfDir, root: s2Root })
+/** gitsync.ts's reads and writes for one call, through this call's engine. */
+const io44 = ($: Engine, opts: Opts): Io44 => ({
+  now: () => $.clock.now(),
+  read: path => readJson($, path),
+  write: (path, text) => $.fs.write(path, text).catch(() => undefined),
+  stat: path => $.fs.stat(path).catch(() => null),
+  list: dir => $.fs.list(dir).catch(() => []),
+  run: (argv, timeoutMs) => $.process.run(argv, { timeoutMs }).catch(() => null),
+  toast: text => $.ui.toast(text),
+  log: (note, now) => orchestrateLog($, opts, actedEvent('stale-index-lock', note, now)).catch(() => undefined),
+  claimAlert: key => claimAlert($, opts, key),
+  gitBusy: () => gitBusy($, opts),
+  isSharedWrite: async writes => (await sharedGitWrite($, opts, await load($), writes)) !== null,
+  isFrozenHolder: () => isFrozenHolder($, opts),
+  cwd: () => $.session.cwd(),
+})
+
+/** A5R's freeze, a lease (D8), in steps (A131, syncplan.ts HELD): from the sync time until done, abort or expiry, a session
+ * that does not hold the sync is refused what the step holds: git writes in the shared checkout, edits there (under
+ * Source/ and Plugins/ and of the files the merge changed while it builds), the Editor, builds of the shared project.
  * A14, the merge guard (A115: a revert or cherry-pick alike): while one of CONFLICT_HEADS exists in the shared checkout,
  * git writes there are refused to every session but its owner (opguard.ts ownerOf), whatever sync.json says. */
 async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, input: Input): Promise<string | null> {
   const command = SHELL_TOOLS.has(tool) ? str(input.command) : ''
   const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command, launchersOf(opts.editorLaunchers)))
+  const use = command && !isEditorUse ? editorUseOf(editorKindOf(opts, tool, input), command, await $.session.cwd()) : null
+  const isBuild = (use?.kind === 'build' || use?.kind === 'headless') && (use.projects.length === 0 || use.projects.some(p => under(p, s2Root())))
   const writes = command ? gitWrites(command) : []
-  if (!isEditorUse && writes.length === 0) return null
+  const rels = EDIT_TOOLS.has(tool) && isS2 ? await sharedRels($, await Promise.all((await editParts($, tool, input)).map(([p]) => locate($, a5r, p)))) : []
+  if (!isEditorUse && !isBuild && writes.length === 0 && rels.length === 0) return null
   const s = parseSyncFile(await readJson($, syncPath()))
   const now = await $.clock.now()
   const my8 = (await $.session.id()).slice(0, 8).toLowerCase()
-  const isHolder = s?.holder.id8 === my8
   const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5r, writes) : null
   const left = shared ? await headState($, s, now) : null
   if (shared && left && left.owner?.id8 !== my8) {
     const op = opOf(left.h.head)
     return blocked('Merge guard', `a ${op} is in progress in the shared checkout (.git/${left.h.head}; ${left.owner?.why ?? `no sync is open (a ${op} left behind)`}): no git ${shared.verb} there until it is finished or aborted`, mergeGuardAlt(left.h, left.owner, now))
   }
-  if (!s || phaseOf(s, now) !== 'frozen' || isHolder) return null
-  const why = `${s.holder.lane} merges origin/main since ${clockOf(s.at)}`
-  if (isEditorUse) return blocked('Sync main freeze', `${why}: the Editor waits until the sync is done (at the latest ${clockOf(s.hardEnd)})`, 'do work that needs no Editor; you will be told when it lifts')
-  if (shared) return blocked('Sync main freeze', `${why}: no git ${shared.verb} in the shared checkout until the sync is done (at the latest ${clockOf(s.hardEnd)})`, 'leave your changes as they are (never stash or reset them); commit after the lift, or work in your own worktree')
-  return null
+  const step = s && s.holder.id8 !== my8 ? await g44.stepNow(io44($, opts), s, now) : null
+  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, g44.changed()))]
+  const need = step ? needs.find(n => HELD[step].has(n)) : undefined
+  if (!s || !step || !need) return null
+  g44.refused(s, need) // A132: woken at the step that frees it
+  const w = freezeWhy(s, step, need, shared?.verb ?? '', g44.lineNow(s, now))
+  return blocked('Sync main freeze', w.why, w.next)
 }
 
 /** A14 (A115: a revert or cherry-pick alike): one of CONFLICT_HEADS left in the shared checkout outside a freeze (Fable
@@ -3308,7 +3277,7 @@ type ButtonEl = { Button: (p: Record<string, unknown>) => unknown }
 /** A31 / A116: what matches the sessions to the app's own list (their titles name the Editor list's rows). */
 const appNow = (now: number, id8 = me8): AppFacts => ({ me8: id8, meTitle: me?.title ?? '', files: filesNow(), clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, names: sessionNames, now })
 /** A116: the Editor list and the other sessions (panel.ts), from the queue every session computes and the app's titles. */
-const editorNow = (now: number, id8 = me8) => editorPanel({ grant: { ...grantInput(now), me8: id8 }, app: appNow(now, id8), phase: phaseOf(syncFile, now), summary: leaseSummary(leaseLog, now) })
+const editorNow = (now: number, id8 = me8) => editorPanel({ waits: g44.waitsNow(now).texts, grant: { ...grantInput(now), me8: id8 }, app: appNow(now, id8), phase: phaseOf(syncFile, now), summary: leaseSummary(leaseLog, now) })
 
 /** A117 / A118: one change of the person's (a press on the panel, or his own /a5r editor or /a5r focus command; A118: or a
  * focus session's own focus_done), made by this session's A5R wherever he pressed: the world read fresh in the Editor's own
@@ -3623,7 +3592,7 @@ function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolea
   const phase = phaseOf(syncFile, now)
   const open = syncFile && isOpenPhase(phase) ? syncFile : null
   // A30: main's behind count as −N (0 when level), or the planned sync's time (❄ in its freeze, ⚠ at its cutoff).
-  const syncText = open ? `${clockOf(open.at)}${phase === 'frozen' ? ' ❄' : phase === 'cutoff' ? ' ⚠' : ''}` : sync ? (sync.behind === null ? '?' : sync.behind > 0 ? `−${sync.behind}` : '0') : '…'
+  const syncText = open ? `${clockOf(open.at)}${phase === 'frozen' ? ' ❄' : phase === 'cutoff' ? ' ⚠' : ''}${phase === 'planned' ? '' : ` ${g44.shortNow(open, now)}`}` : sync ? (sync.behind === null ? '?' : sync.behind > 0 ? `−${sync.behind}` : '0') : '…'
   const syncWarn = Boolean(open && (phase === 'cutoff' || phase === 'frozen'))
   const tint = (warn: boolean, base: string) => (warn ? STATUS.warn : base)
   const still: Motion = { kind: 'still' }
@@ -3740,6 +3709,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
     const waiting = queueNow(filesNow(), now).length
     const plan = syncData(now)
+    if (syncFile && isOpenPhase(phaseOf(syncFile, now))) kids.push(el.Box({ key: 'hai-a5r-sync-line', children: [el.Text({ color: phaseOf(syncFile, now) === 'planned' ? A5R_LOOK.quiet : STATUS.warn, wrap: 'wrap', children: g44.lineNow(syncFile, now) })] })) // A133
     const tiles = [
       editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
       memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root().slice(0, 2) }, { fill: A5R_LOOK.meter, track: A5R_LOOK.meterTrack }),
@@ -3824,7 +3794,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
   // A65: the Orchestrate card, the judges' latest verdicts, last before the rules (the rules stay the foot, A27).
   const titleOf = appTitleOf(appNow(now))
-  const look = isS2 ? [...overrunLook({ ...grantInput(now), titleOf }), ...comebackLook({ records: leaseLog, files: filesNow(), lanes, now, isFocusRunning: focusNow(now)?.isRunning === true, titleOf }), ...orphanLook(orphanRec, probe, now), ...askLook(orphanNow(opts, now, probe)), ...focusLook(focusFile, filesNow(), lanes, now, titleOf), ...needsLook(currentVerdicts(now), now)] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look; A121-A124
+  const look = isS2 ? [...overrunLook({ ...grantInput(now), titleOf }), ...comebackLook({ records: leaseLog, files: filesNow(), lanes, now, isFocusRunning: focusNow(now)?.isRunning === true, titleOf }), ...orphanLook(orphanRec, probe, now), ...askLook(orphanNow(opts, now, probe)), ...focusLook(focusFile, filesNow(), lanes, now, titleOf), ...needsLook(currentVerdicts(now), now), ...g44.looks()] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look; A121-A124
   if (look.length > 0) kids.push(lookBox(el, look, PANE_INK(), p => void lookPress($, opts, p)))
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
@@ -3941,7 +3911,7 @@ export const register: Register = (on, options) => {
     const focused = isOn ? await focusUseProblem($, opts, tool, input) : null // A120
     if (focused) return { deny: focused }
     const editor = isOn ? await editorProblem($, opts, tool, input) : null
-    if (editor) return { deny: blocked('Editor lock', editor.split(' → ')[0] ?? editor, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
+    if (editor) return { deny: blocked('Editor lock', `${editor.split(' → ')[0] ?? editor}${g44.myWait(await $.clock.now())}`, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
     const coord = isOn ? await coordProblem($, opts, tool, input) : null
     if (coord) return { deny: coord }
     // A18: nghiệm thu A5R on the PR-opening call and on an intent close (D10: at acceptance, never per turn).
@@ -4011,7 +3981,10 @@ export const register: Register = (on, options) => {
     }
 
     const op = isOn && isS2 && SHELL_TOOLS.has(tool) ? await opStartOf($, opts, a5r, what) : null // A115: a coordinating session's
-    const ran = isMain ? await asMainCall($, () => next(e)) : await next(e)
+    const turn = isOn && isS2 && SHELL_TOOLS.has(tool) ? await g44.turnStart(io44($, opts), what, input) : null // A128 / A129
+    if (turn?.deny) return { deny: turn.deny }
+    const call = (turn?.timeout ? { ...e, timeout: turn.timeout } : e) as typeof e
+    const ran = await (isMain ? asMainCall($, () => next(call)) : next(call)).finally(() => (turn?.isTaken ? g44.turnEnd(io44($, opts), input.run_in_background === true) : undefined))
     if (chain === null) {
       // Where this plugin sits: Ather beneath means its pane can be wrapped. Kept outside the plugin
       // folder (a write inside it would reload the mod), for /a5r status and for checking by hand.
@@ -4020,6 +3993,7 @@ export const register: Register = (on, options) => {
       await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5r/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
+    if (turn && isLockFailure(JSON.stringify(ran).slice(0, 20_000))) g44.lockFailed(await $.clock.now()) // A130
     // A115: the head file its own operation left is this session's; a backgrounded one is claimed at the minute (D4).
     if (op && !(await claimHead($, op).catch(() => false)) && input.run_in_background === true) opRunning = { op: withOp(opRunning?.op ?? null, op), isSeen: opRunning?.isSeen ?? false }
     // A19: a file changed (an edit, a git write): the card scores again at its next draw.
@@ -4112,6 +4086,7 @@ export const register: Register = (on, options) => {
     // A63 clean-up (kept by A83): Hai typed in a session whose title still carries an old decision mark (from before
     // 0.17.0): the title goes back without it, read now (never a value kept in memory, which a reload loses).
     const typed = (e.origin as { kind?: string } | undefined)?.kind
+    const freeze = (typed === 'composer' || typed === 'bridge') && (await readA5R($)) ? await g44.prompt(io44($, opts)) : null // A134
     if (typed === 'composer' || typed === 'bridge') {
       const title = await sessionTitle($)
       if (hasMark(title) && bareTitle(title)) await retitle($, bareTitle(title)).catch(() => '')
@@ -4123,8 +4098,8 @@ export const register: Register = (on, options) => {
     const added = shipFor && (await readA5R($)) ? await shipScore($, opts, shipFor).catch(() => null) : null
     const text = added ? `${e.text}\n\n${added}` : e.text
     // Notices waiting for the next turn ride this prompt as context the model reads (D6).
-    if (pending.length > 0 && (await readA5R($))) {
-      const texts = drain()
+    if ((pending.length > 0 || freeze) && (await readA5R($))) {
+      const texts = [...drain(), ...(freeze ? [freeze] : [])]
       await saveMe($, opts)
       return next({ ...e, text, context: [...(e.context ?? []), ...texts] })
     }
@@ -4157,6 +4132,12 @@ export const register: Register = (on, options) => {
     return res
   })
   // A29: the A5R pane is this plugin's own: drawn here, never by anything beneath.
+  // A134: in a sync's cutoff and freeze one warning line sits above Ather's band, in every S2 session; gone at the lift.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const below = await next(e)
+    const line = e.props.hasSurvey || !a5rOn || !isS2 ? '' : g44.band(await $.clock.now())
+    return line ? ($.ui.resolve(e).Box({ key: 'hai-a5r-band', flexDirection: 'column', children: [$.ui.resolve(e).Text({ color: STATUS.warn, wrap: 'truncate', children: line }), below] }) as RenderElement) : below
+  })
   on('ui.render', { component: 'Pane', requestId: A5R_PANE }, async ($, e) => {
     await ensureCheckout($, opts)
     return drawA5Pane($, opts, e)
