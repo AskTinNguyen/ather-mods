@@ -95,7 +95,7 @@ test('A116: unit: the reasons in plain words: memory, granted next, a pass, a sy
   const build = file('dddddddd', { want: want({ build: true, launch: false, requestedAt: NOW - 20 * MIN }) })
   const later = file('eeeeeeee', { want: want({ requestedAt: NOW - 10 * MIN }) })
   const panel = (files: SessionFile[], o: Partial<GrantInput> = {}, phase: 'none' | 'planned' | 'cutoff' | 'frozen' = 'none') =>
-    editorPanel({ grant: input(ME8, files, o), app: { me8: ME8, meTitle: 'me', files, clients: null, isS2Cwd: () => true, names: new Map(), now: NOW }, phase, summary: leaseSummary([], NOW) }).list
+    editorPanel({ grant: input(ME8, files, o), app: { me8: ME8, meTitle: 'me', files, clients: null, isS2Cwd: () => true, names: new Map(), now: NOW }, phase, summary: leaseSummary([], NOW), waits: new Map() }).list
   const words = (files: SessionFile[], o: Partial<GrantInput> = {}, phase: 'none' | 'planned' | 'cutoff' | 'frozen' = 'none') => panel(files, o, phase).rows.map(r => r.line)
   expect(words([head, build, later], { probe: probe(27) })).toEqual(['waiting 50 min · 40 min · PIE · needs 38 GB, 27 free', 'waiting 20 min · 30 min · build · goes before 1 for ≤ 30 min', 'waiting 10 min · 30 min · needs 28 GB, 27 free'])
   expect(words([head])).toEqual(['waiting 50 min · 40 min · PIE · granted next'])

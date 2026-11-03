@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, newSync, type SyncFile } from '../hooks/coord.ts'
 import { walkDeep } from '../hooks/gitshared.ts'
-import { LOCK_UNREAD_LOOK, cutProblem, goneAfter, parseGitTurn, raisedTimeout, readTurn, staleLockAct, staleLockName, type GitTurn } from '../hooks/gitturn.ts'
-import { HELD, NO_TIMES, aheadOf, bandLine, buildMsOf, editNeed, editorWaits, freezeStepOf, parseSyncTimes, timelineLine, type SyncTimes } from '../hooks/syncplan.ts'
+import { LOCK_UNREAD_LOOK, cutProblem, goneAfter, heldBy, parseGitTurn, raisedTimeout, staleLockAct, staleLockName, turnKey, turnVerb, type GitTurn } from '../hooks/gitturn.ts'
+import { NO_TIMES, STEPS, aheadOf, bandLine, buildMsOf, editNeed, editorWaits, freezeStepOf, parseSyncTimes, timelineLine, type SyncTimes } from '../hooks/syncplan.ts'
 import { LOCK, ME, NOW, PROJ, k, opts, refused, text, world } from './world.ts'
 
 // Rev 44 (L-48): A128 one git writer at a time, A129 a git write never killed halfway, A130 a stale index.lock moved
@@ -12,7 +12,8 @@ const HF = 'E:/s2/Saved/A5R'
 const S2 = 'E:/s2'
 const ME8 = ME.slice(0, 8)
 const MIN = 60_000
-const TURN = `${HF}/git-turn.json`
+const TURN = `${HF}/git-turn/cccccccc.json` // another session's claim
+const MY_TURN = `${HF}/git-turn/${ME8}.json`
 const START = { cwd: PROJ, surface: 'terminal', isInteractive: true } as never
 const SID = (id8: string) => `${id8}-1111-4000-8000-000000000000`
 const peer = (id8: string, at = NOW + 600 * MIN, lane = `lane-${id8}`): string => JSON.stringify({ ...blankSession(SID(id8), lane, '', NOW), heartbeatAt: at })
@@ -31,22 +32,25 @@ const settle = async (until: () => boolean) => {
 }
 
 // ---------- A128: one git writer at a time ----------
-test('A128: unit: the turn is free, mine, held, or lapsed (its session gone, or no git of the checkout for 2 min)', () => {
+test('A128: unit: the turn is held by the earliest live claim of another session that has not lapsed (its session gone, or no git of the checkout for 2 min)', () => {
   const t = parseGitTurn(turnOfPeer('cccccccc')) as GitTurn
+  const u = parseGitTurn(turnOfPeer('dddddddd', NOW - MIN)) as GitTurn
   expect(t.command).toBe('git commit')
+  expect(parseGitTurn('null')).toBeNull()
   const live = () => true
-  expect(readTurn(null, { me8: ME8, now: NOW, isLive: live, gone: null }).kind).toBe('free')
-  expect(readTurn(parseGitTurn('null'), { me8: ME8, now: NOW, isLive: live, gone: null }).kind).toBe('free')
-  expect(readTurn(t, { me8: 'cccccccc', now: NOW, isLive: live, gone: null }).kind).toBe('mine')
-  expect(readTurn(t, { me8: ME8, now: NOW, isLive: live, gone: null }).kind).toBe('held')
-  expect(readTurn(t, { me8: ME8, now: NOW, isLive: () => false, gone: null })).toMatchObject({ kind: 'lapsed', why: 'its session is gone' })
-  const gone = goneAfter(null, t, false, NOW)
-  expect(goneAfter(gone, t, false, NOW + MIN)).toBe(gone) // the first sighting counts
-  expect(readTurn(t, { me8: ME8, now: NOW + MIN, isLive: live, gone }).kind).toBe('held')
-  expect(readTurn(t, { me8: ME8, now: NOW + 2 * MIN, isLive: live, gone }).kind).toBe('lapsed')
-  expect(goneAfter(gone, t, true, NOW + MIN)).toBeNull() // git seen running again
-  expect(goneAfter(gone, t, null, NOW + MIN)).toBeNull() // an unread process list never counts as gone
-  expect(readTurn(t, { me8: ME8, now: NOW + 9 * MIN, isLive: live, gone: goneAfter(null, { ...t, startedAt: 1 }, false, NOW) }).kind).toBe('held') // another turn's sighting
+  const none = new Map<string, number>()
+  expect(heldBy([], { me8: ME8, now: NOW, isLive: live, gone: none })).toBeNull()
+  expect(heldBy([t], { me8: 'cccccccc', now: NOW, isLive: live, gone: none })).toBeNull() // its own
+  expect(heldBy([t], { me8: ME8, now: NOW, isLive: live, gone: none })).toBe(t)
+  expect(heldBy([t, u], { me8: ME8, now: NOW, isLive: live, gone: none })).toBe(u) // the earlier claim
+  expect(heldBy([t], { me8: ME8, now: NOW, isLive: () => false, gone: none })).toBeNull() // its session gone
+  const gone = goneAfter(none, [t], false, NOW)
+  expect(goneAfter(gone, [t], false, NOW + MIN).get(turnKey(t))).toBe(NOW) // the first sighting counts
+  expect(heldBy([t], { me8: ME8, now: NOW + MIN, isLive: live, gone })).toBe(t)
+  expect(heldBy([t], { me8: ME8, now: NOW + 2 * MIN, isLive: live, gone })).toBeNull()
+  expect(goneAfter(gone, [t], true, NOW + MIN).size).toBe(0) // git seen running again
+  expect(goneAfter(gone, [t], null, NOW + MIN).size).toBe(0) // an unread process list never counts as gone
+  expect(heldBy([t], { me8: ME8, now: NOW + 9 * MIN, isLive: live, gone: goneAfter(none, [{ ...t, startedAt: 1 }], false, NOW) })).toBe(t) // another claim's sighting
 })
 
 test('A128: a second writer is refused at once naming the holder, and is woken when the turn frees', opts(), async ($, on) => {
@@ -78,13 +82,26 @@ test('A128: this session holds the turn while its git write runs (its own parall
   let release = () => {}
   w.toolHolds.set(ADD, new Promise<void>(r => (release = r)))
   const first = $.tool.call({ tool: 'Bash', command: ADD } as never)
-  await settle(() => w.read(TURN).includes(ME8))
-  expect(JSON.parse(w.read(TURN))).toMatchObject({ v: 1, id8: ME8, command: 'git add' })
+  await settle(() => w.read(MY_TURN).includes(ME8))
+  expect(JSON.parse(w.read(MY_TURN))).toMatchObject({ v: 1, id8: ME8, command: 'git add' })
   expect(refused(await $.tool.call({ tool: 'Bash', command: `git -C ${S2} add -- tools/other.py` }))).toBeUndefined()
-  expect(w.read(TURN)).toContain(ME8) // the first still runs
+  expect(w.read(MY_TURN)).toContain(ME8) // the first still runs
   release()
   await first
-  expect(w.read(TURN)).toBe('null')
+  expect(w.read(MY_TURN)).toBe('null')
+})
+
+test('A128: two sessions claiming at once both step back (each writes only its own claim, none is lost)', opts(), async ($, on) => {
+  const w = world(on)
+  shared(w)
+  w.put(`${HF}/editor/cccccccc.json`, peer('cccccccc'))
+  await $.session.start(START)
+  // The other session's claim lands right after this session wrote its own, before its second read.
+  w.writeEffects.set(`git-turn/${ME8}`, () => w.put(TURN, turnOfPeer('cccccccc', NOW + 1)))
+  expect(refused(await $.tool.call({ tool: 'Bash', command: ADD }))).toContain('git busy: lane-cccccccc')
+  expect(bashRan(w)).toBe(0)
+  expect(w.read(MY_TURN)).toBe('null') // stepped back
+  expect(w.read(TURN)).toBe(turnOfPeer('cccccccc', NOW + 1)) // the other's claim stands untouched
 })
 
 test('A128: a lapsed turn: its session gone, or no git of the checkout and no index.lock for 2 min', opts(), async ($, on) => {
@@ -97,7 +114,7 @@ test('A128: a lapsed turn: its session gone, or no git of the checkout and no in
   expect(bashRan(w)).toBe(1)
   // A live holder whose git has been gone 2 min: the turn lapses, not before.
   w.put(`${HF}/editor/dddddddd.json`, peer('dddddddd'))
-  w.put(TURN, turnOfPeer('dddddddd', NOW))
+  w.put(`${HF}/git-turn/dddddddd.json`, turnOfPeer('dddddddd', NOW))
   await w.clock.advance(MIN) // seen gone from here
   expect(refused(await $.tool.call({ tool: 'Bash', command: ADD }))).toContain('git busy: lane-dddddddd')
   await w.clock.advance(MIN)
@@ -121,8 +138,10 @@ test('A128: git reads and a worktree take no turn and pass while another session
 // ---------- A129: a git write is never killed halfway ----------
 test('A129: unit: a git write piped into head/tail, or under timeout/kill, is cut short; reads and other segments are not', () => {
   const seg = (c: string) => walkDeep(c, PROJ).segs
-  const isWrite = (s: { verb: string; args: string[] }) => s.verb === 'git' && ['commit', 'add'].includes(s.args.find(a => !a.startsWith('-') && !a.includes(':')) ?? '')
-  const cut = (c: string) => cutProblem(c, seg(c), isWrite)
+  const cut = (c: string) => {
+    const segs = seg(c)
+    return cutProblem(c, segs, segs.filter(s => turnVerb(s) !== ''))
+  }
   expect(cut('git -C E:/s2 commit -m x -- a.md | tail -3')?.why).toContain('pipes a git write in the shared checkout into tail')
   expect(cut('git -C E:/s2 commit -m x -- a.md | head')?.alt).toBe('run the git command alone, in the foreground and unwrapped: git -C E:/s2 commit -m x -- a.md (A5R gives the call a 10-min timeout; a slow commit is fine)')
   expect(cut('timeout 60 git -C E:/s2 add -- a.md')?.why).toContain('puts a time limit on a git write')
@@ -130,6 +149,8 @@ test('A129: unit: a git write piped into head/tail, or under timeout/kill, is cu
   expect(cut('git -C E:/s2 log -3 | tail -1')).toBeNull()
   expect(cut('git -C E:/s2 commit -m x -- a.md || tail -1 log.txt')).toBeNull() // || is no pipe
   expect(cut('git -C E:/s2 commit -m x -- a.md 2>&1')).toBeNull()
+  expect(cut('git -C E:/s2 log -1 | tail -1; git -C E:/s2 commit -m x -- a.md')).toBeNull() // the pipe is the read's
+  expect(cut('git -C E:/s2 add -- a.md; git -C E:/s2 add -- a.md | tail -1')?.why).toContain('into tail') // the second of two same segments
   expect(raisedTimeout(undefined, false)).toBe(600_000)
   expect(raisedTimeout(120_000, false)).toBe(600_000)
   expect(raisedTimeout(600_000, false)).toBeNull()
@@ -229,10 +250,11 @@ const edit = (file: string) => ({ tool: 'Edit', file_path: `${S2}/${file}`, old_
 const SHARED_BUILD = `"D:/E/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development -project=${S2}/S2.uproject -WaitMutex`
 
 test('A131: unit: what each step holds, the step from the stage and the build log, and the edits a build step holds', () => {
-  expect([...HELD.merging].sort()).toEqual(['build', 'edit', 'editor', 'git', 'source'])
-  expect([...HELD.building].sort()).toEqual(['build', 'editor', 'git', 'source'])
-  expect([...HELD.testing].sort()).toEqual(['build', 'editor'])
-  expect([...HELD['build-failed']].length).toBe(5)
+  expect([...STEPS.merging.held].sort()).toEqual(['build', 'edit', 'editor', 'git', 'source'])
+  expect([...STEPS.building.held].sort()).toEqual(['build', 'editor', 'git', 'source'])
+  expect([...STEPS.testing.held].sort()).toEqual(['build', 'editor'])
+  expect([...STEPS['build-failed'].held].length).toBe(5)
+  expect(STEPS.cutoff.held.size).toBe(0)
   expect(freezeStepOf('frozen', 'building', 'Failed')).toBe('build-failed')
   expect(freezeStepOf('frozen', 'building', 'running')).toBe('building')
   expect(freezeStepOf('frozen', null, null)).toBe('merging')
@@ -335,7 +357,7 @@ test('A133: unit: the timeline line per stage: only the steps ahead, the current
   expect(timelineLine(S(), 'cutoff', 'cutoff', NO_TIMES, at(11, 20))).toBe('Sync main 11:45 · cutoff 11:15 · freeze from 11:45, end time unknown (at the latest 13:15)')
   expect(timelineLine(S({ stage: 'building', stageAt: at(11, 56) }), 'frozen', 'build-failed', T, at(12, 30))).toBe('Sync main 11:45 · ▸ build failed: the holder reverts or fixes it → you can build again when the sync is done (time unknown, at the latest 13:15)')
   expect(timelineLine(S({ build: false }), 'frozen', 'merging', T, at(11, 50))).toBe('Sync main 11:45 · ▸ merging ~11:55 → tests ~12:10 → you can build again ~12:10')
-  expect(aheadOf(S(), 'testing', T, at(12, 0)).steps.map(a => a.key)).toEqual(['tests'])
+  expect(aheadOf(S(), 'testing', T, at(12, 0)).steps.map(a => a.run)).toEqual(['tests'])
 })
 
 test('A133: unit: the measured times: UnrealBuildTool\'s own total from a build log, the holders\' merge and tests lines, medians of the last five', () => {

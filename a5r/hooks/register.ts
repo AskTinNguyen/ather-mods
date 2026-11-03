@@ -27,9 +27,10 @@ import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
 import { A5R_HELP, EDITOR_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
-import { git44, type Io44 } from './gitsync.ts'
+import { freezeSteps } from './freezehost.ts'
+import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
-import { HELD, editNeed, freezeWhy, type Need } from './syncplan.ts'
+import { editNeed, freezeWhy, heldIn, stepNotice, type Need } from './syncplan.ts'
 import { BINARY_EXCLUDES, BINARY_EXT, addedLines, diffInBatches, fileDiff, remotesOf, urlIsRepo, type GivenDiff } from './diffs.ts'
 import { COMEBACK_BOX_MIN, comebackLook, overrunLook, type LookPress } from './looks.ts'
 import { ORPHAN_FILE, askLook, closeAnswer, closeArgv, idleArgv, orphanLook, orphanNotice, orphanOf, parseIdle, parseOrphan, sharedEditorPid, type Idle, type OrphanRecord } from './orphan.ts'
@@ -695,7 +696,7 @@ function showStatus($: Engine): void {
     a5rOn ? '★ A5R' : '',
     isS2 && isOver ? `Editor: ${lockView?.who ?? 'held'} over its lease` : '',
     isS2 && vitals && ramBand(vitals.freeGb) !== 'ok' ? `RAM ${vitals.freeGb} GB free` : '',
-    isS2 && syncFile && ['cutoff', 'frozen'].includes(phaseOf(syncFile, nowMs)) ? g44.lineNow(syncFile, nowMs) : '', // A133
+    isS2 && syncFile && ['cutoff', 'frozen'].includes(phaseOf(syncFile, nowMs)) ? freeze.lineNow(syncFile, nowMs) : '', // A133
   ].filter(Boolean)
   $.ui.status(parts.length ? parts.join(' · ') : undefined)
   isStatusShown = parts.length > 0
@@ -1258,7 +1259,7 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
  * syncstage.ts `entryTell`'s (the build runs only once its log of this run is seen). */
 async function enterSyncStage($: Engine, opts: Opts, s: SyncFile, to: StageEntry, now: number): Promise<void> {
   const next = enterStage(s, to, s.build ? syncBuildLog(s2Root(), s.id) : '', now)
-  if (to.stage !== 'manual' && s.stage === null) await g44.noteTime(io44($, opts), s.id, 'merge', now - (s.workerAt ?? s.at), now) // A133
+  if (to.stage !== 'manual' && s.stage === null) await freeze.noteTime(hostIo($, opts), s.id, 'merge', now - (s.workerAt ?? s.at), now) // A133
   if (!(await writeSync($, opts, next, s))) return
   await syncLockUntil($, opts, next, now)
   const read = await readSyncLog($, next)
@@ -1416,7 +1417,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   const window = freeWindowOf(lock, claimNow(now)) // A91: the free window, if the Editor is free
   await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
   await nudgeStep($, opts, now, window).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
-  await g44.tick(io44($, opts), now).catch(err => $.ui.log(`a5r: rev 44 steps: ${String(err)}`, { to: 'debug' })) // A128-A134
+  await turns.tick(hostIo($, opts), now).then(() => freeze.tick(hostIo($, opts), now)).catch(err => $.ui.log(`a5r: git turn, freeze steps: ${String(err)}`, { to: 'debug' })) // A128-A134
   await syncStep($, opts, now)
   await orphanStep($, opts, now).catch(err => $.ui.log(`a5r: orphan: ${String(err)}`, { to: 'debug' })) // A123
   await autoSyncStep($, opts, now).catch(err => $.ui.log(`a5r: auto sync: ${String(err)}`, { to: 'debug' })) // A124
@@ -1999,7 +2000,7 @@ async function writeSync($: Engine, opts: Opts, next: SyncFile, prior: SyncFile 
  * from the manual stage frees the Editor with the freeze). Runs whatever the A5R flag says (review 5). */
 async function endSync($: Engine, opts: Opts, s: SyncFile, state: 'done' | 'aborted', note: string, now: number, prior: SyncFile = s): Promise<boolean> {
   const ended = endedSync(s, state, note, now)
-  if (state === 'done' && s.stage === 'testing') await g44.noteTime(io44($, opts), s.id, 'tests', now - s.stageAt, now) // A133
+  if (state === 'done' && s.stage === 'testing') await freeze.noteTime(hostIo($, opts), s.id, 'tests', now - s.stageAt, now) // A133
   if (!(await writeSync($, opts, ended, prior))) return false
   delivered.add(noticeIds.lifted(ended))
   await releaseSyncSlot($, opts, ended, now)
@@ -2123,11 +2124,11 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   // Review 4: a shell command run inside the shared checkout since the last commit there counts too (err on telling). The
   // dry-run's conflicts and untracked files reach their owners through the same touch set (ownerConflicts below).
   const isConcerned = isSyncConcerned({ isHolder, touched: touched.size, sharedShellAt, holds: holdsLock(), wants: Boolean(me.want) })
-  if (phase === 'cutoff' && isConcerned) push({ id: noticeIds.cutoff(s), text: `${NOTICES.cutoff(s, isHolder, holdsLock())} · ${g44.lineNow(s, now)}`, isActionable: true })
+  if (phase === 'cutoff' && isConcerned) push({ id: noticeIds.cutoff(s), text: `${NOTICES.cutoff(s, isHolder, holdsLock())} · ${freeze.lineNow(s, now)}`, isActionable: true })
   if (!isHolder && holdsLock() && ((phase === 'cutoff' && now >= s.at - RELEASE_BEFORE_MS) || phase === 'frozen')) push({ id: noticeIds.releaseBy(s), text: NOTICES.releaseBy(s), isActionable: true })
-  if (phase === 'frozen' && isConcerned) push({ id: noticeIds.frozen(s), text: `${isHolder ? NOTICES.frozenHolder(s) : NOTICES.frozen(s)} · ${g44.lineNow(s, now)}`, isActionable: false })
+  if (phase === 'frozen' && isConcerned) push({ id: noticeIds.frozen(s), text: isHolder ? `${NOTICES.frozenHolder(s)} · ${freeze.lineNow(s, now)}` : stepNotice('merging', null, freeze.lineNow(s, now)), isActionable: false })
   else if (phase === 'frozen') delivered.add(`${noticeIds.frozen(s)}:seen`) // A125: not told the freeze, it hears the lift
-  if (phase === 'frozen' && !isHolder) await g44.stepTell(io44($, opts), s, isConcerned, now) // A131 / A132
+  if (phase === 'frozen' && !isHolder) await freeze.stepTell(hostIo($, opts), s, isConcerned, now) // A131 / A132
   // A107: the holder fetches and dry-runs at the cutoff and again at T (off the tick chain); the worker starts after T's.
   const dry = isHolder ? dryStep(s, phase, dryJob, now) : null
   if (dry?.start) startDryRun($, opts, s, dry.start)
@@ -2149,7 +2150,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
       // The lift supersedes what this session was still to be told about the same sync.
       for (const id of stale) if (pending.some(n => n.id === id)) delivered.add(id)
       pending = pending.filter(n => !stale.includes(n.id))
-      push({ id: noticeIds.lifted(s), text: s.state === 'expired' ? NOTICES.expired(s) : NOTICES.lifted(s), isActionable: wasAsked || g44.wasRefused(s) })
+      push({ id: noticeIds.lifted(s), text: s.state === 'expired' ? NOTICES.expired(s) : NOTICES.lifted(s), isActionable: wasAsked || freeze.wasRefused(s) })
     }
     return
   }
@@ -2811,12 +2812,13 @@ async function isFrozenHolder($: Engine, opts: Opts): Promise<boolean> {
 /** The first git write of a command that lands in the shared S2 checkout (its main working tree), if any. */
 async function sharedGitWrite($: Engine, opts: Opts, a5r: A5R, writes: { verb: string; dir: string }[]): Promise<{ verb: string; dir: string } | null> {
   const cwd = await $.session.cwd()
-  for (const w of writes) {
-    const dir = norm(w.dir || cwd, cwd)
-    const root = (await locate($, a5r, `${dir}/_`)).root
-    if (root && sameRoot(root, s2Root()) && (await isSharedRoot($, root))) return w
-  }
+  for (const w of writes) if (await isSharedDir($, a5r, norm(w.dir || cwd, cwd))) return w
   return null
+}
+/** Whether a folder lies in the shared S2 checkout's own tree (never a worktree of its own). */
+async function isSharedDir($: Engine, a5r: A5R, dir: string): Promise<boolean> {
+  const root = (await locate($, a5r, `${dir}/_`)).root
+  return Boolean(root && sameRoot(root, s2Root()) && (await isSharedRoot($, root)))
 }
 
 // ---------- A14 / A115, the merge guard: a merge, revert or cherry-pick half done in the shared checkout ----------
@@ -2855,22 +2857,22 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
     ? `leave the ${opOf(h.head)} state alone (no commit, reset, abort or stash of yours): its holder ${owner.lane} (session ${owner.id8}) finishes it or runs git ${opOf(h.head)} --abort; work without git or in your own worktree meanwhile`
     : `its holder is gone${owner ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} ${opOf(h.head)} --abort; until then no commit, reset or stash there`
 
-// Rev 44 (A128-A134): git one writer at a time, a stale index.lock, the freeze in steps and what everyone waits for
-// (gitsync.ts: this session's state once, the engine's reads and writes per call).
-const g44 = git44({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, grantInput, dir: hfDir, root: s2Root })
-/** gitsync.ts's reads and writes for one call, through this call's engine. */
-const io44 = ($: Engine, opts: Opts): Io44 => ({
+// Rev 44 (A128-A134): git one writer at a time and a stale index.lock (gitturnhost.ts), the freeze in steps and what
+// everyone waits for (freezehost.ts): this session's state handed over once, the engine's reads and writes per call.
+const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, dir: hfDir, root: s2Root })
+const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root })
+/** The hosts' reads and writes for one call, through this call's engine. */
+const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   now: () => $.clock.now(),
   read: path => readJson($, path),
   write: (path, text) => $.fs.write(path, text).catch(() => undefined),
   stat: path => $.fs.stat(path).catch(() => null),
   list: dir => $.fs.list(dir).catch(() => []),
   run: (argv, timeoutMs) => $.process.run(argv, { timeoutMs }).catch(() => null),
-  toast: text => $.ui.toast(text),
   log: (note, now) => orchestrateLog($, opts, actedEvent('stale-index-lock', note, now)).catch(() => undefined),
   claimAlert: key => claimAlert($, opts, key),
   gitBusy: () => gitBusy($, opts),
-  isSharedWrite: async writes => (await sharedGitWrite($, opts, await load($), writes)) !== null,
+  isShared: async dir => isSharedDir($, await load($), dir),
   isFrozenHolder: () => isFrozenHolder($, opts),
   cwd: () => $.session.cwd(),
 })
@@ -2882,27 +2884,28 @@ const io44 = ($: Engine, opts: Opts): Io44 => ({
  * git writes there are refused to every session but its owner (opguard.ts ownerOf), whatever sync.json says. */
 async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, input: Input): Promise<string | null> {
   const command = SHELL_TOOLS.has(tool) ? str(input.command) : ''
-  const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command, launchersOf(opts.editorLaunchers)))
-  const use = command && !isEditorUse ? editorUseOf(editorKindOf(opts, tool, input), command, await $.session.cwd()) : null
-  const isBuild = (use?.kind === 'build' || use?.kind === 'headless') && (use.projects.length === 0 || use.projects.some(p => under(p, s2Root())))
+  if (!command && !EDIT_TOOLS.has(tool) && !isUnrealMcp(tool)) return null
   const writes = command ? gitWrites(command) : []
-  const rels = EDIT_TOOLS.has(tool) && isS2 ? await sharedRels($, await Promise.all((await editParts($, tool, input)).map(([p]) => locate($, a5r, p)))) : []
-  if (!isEditorUse && !isBuild && writes.length === 0 && rels.length === 0) return null
+  const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5r, writes) : null
   const s = parseSyncFile(await readJson($, syncPath()))
   const now = await $.clock.now()
   const my8 = (await $.session.id()).slice(0, 8).toLowerCase()
-  const shared = writes.length > 0 ? await sharedGitWrite($, opts, a5r, writes) : null
   const left = shared ? await headState($, s, now) : null
   if (shared && left && left.owner?.id8 !== my8) {
     const op = opOf(left.h.head)
     return blocked('Merge guard', `a ${op} is in progress in the shared checkout (.git/${left.h.head}; ${left.owner?.why ?? `no sync is open (a ${op} left behind)`}): no git ${shared.verb} there until it is finished or aborted`, mergeGuardAlt(left.h, left.owner, now))
   }
-  const step = s && s.holder.id8 !== my8 ? await g44.stepNow(io44($, opts), s, now) : null
-  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, g44.changed()))]
-  const need = step ? needs.find(n => HELD[step].has(n)) : undefined
-  if (!s || !step || !need) return null
-  g44.refused(s, need) // A132: woken at the step that frees it
-  const w = freezeWhy(s, step, need, shared?.verb ?? '', g44.lineNow(s, now))
+  const step = s && s.holder.id8 !== my8 ? await freeze.stepNow(hostIo($, opts), s, now) : null
+  if (!s || !step || heldIn(step).size === 0) return null
+  const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command, launchersOf(opts.editorLaunchers)))
+  const use = command && !isEditorUse ? editorUseOf(editorKindOf(opts, tool, input), command, await $.session.cwd()) : null
+  const isBuild = (use?.kind === 'build' || use?.kind === 'headless') && (use.projects.length === 0 || use.projects.some(p => under(p, s2Root())))
+  const rels = EDIT_TOOLS.has(tool) && isS2 ? await sharedRels($, await Promise.all((await editParts($, tool, input)).map(([p]) => locate($, a5r, p)))) : []
+  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, freeze.changed()))]
+  const need = needs.find(n => heldIn(step).has(n))
+  if (!need) return null
+  freeze.refused(s, need) // A132: woken at the step that frees it
+  const w = freezeWhy(s, step, need, shared?.verb ?? '', freeze.lineNow(s, now))
   return blocked('Sync main freeze', w.why, w.next)
 }
 
@@ -3277,7 +3280,7 @@ type ButtonEl = { Button: (p: Record<string, unknown>) => unknown }
 /** A31 / A116: what matches the sessions to the app's own list (their titles name the Editor list's rows). */
 const appNow = (now: number, id8 = me8): AppFacts => ({ me8: id8, meTitle: me?.title ?? '', files: filesNow(), clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, names: sessionNames, now })
 /** A116: the Editor list and the other sessions (panel.ts), from the queue every session computes and the app's titles. */
-const editorNow = (now: number, id8 = me8) => editorPanel({ waits: g44.waitsNow(now).texts, grant: { ...grantInput(now), me8: id8 }, app: appNow(now, id8), phase: phaseOf(syncFile, now), summary: leaseSummary(leaseLog, now) })
+const editorNow = (now: number, id8 = me8) => editorPanel({ waits: freeze.waitsNow(now).texts, grant: { ...grantInput(now), me8: id8 }, app: appNow(now, id8), phase: phaseOf(syncFile, now), summary: leaseSummary(leaseLog, now) })
 
 /** A117 / A118: one change of the person's (a press on the panel, or his own /a5r editor or /a5r focus command; A118: or a
  * focus session's own focus_done), made by this session's A5R wherever he pressed: the world read fresh in the Editor's own
@@ -3592,7 +3595,7 @@ function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolea
   const phase = phaseOf(syncFile, now)
   const open = syncFile && isOpenPhase(phase) ? syncFile : null
   // A30: main's behind count as −N (0 when level), or the planned sync's time (❄ in its freeze, ⚠ at its cutoff).
-  const syncText = open ? `${clockOf(open.at)}${phase === 'frozen' ? ' ❄' : phase === 'cutoff' ? ' ⚠' : ''}${phase === 'planned' ? '' : ` ${g44.shortNow(open, now)}`}` : sync ? (sync.behind === null ? '?' : sync.behind > 0 ? `−${sync.behind}` : '0') : '…'
+  const syncText = open ? `${clockOf(open.at)}${phase === 'frozen' ? ' ❄' : phase === 'cutoff' ? ' ⚠' : ''}${phase === 'planned' ? '' : ` ${freeze.shortNow(open, now)}`}` : sync ? (sync.behind === null ? '?' : sync.behind > 0 ? `−${sync.behind}` : '0') : '…'
   const syncWarn = Boolean(open && (phase === 'cutoff' || phase === 'frozen'))
   const tint = (warn: boolean, base: string) => (warn ? STATUS.warn : base)
   const still: Motion = { kind: 'still' }
@@ -3709,7 +3712,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
     const waiting = queueNow(filesNow(), now).length
     const plan = syncData(now)
-    if (syncFile && isOpenPhase(phaseOf(syncFile, now))) kids.push(el.Box({ key: 'hai-a5r-sync-line', children: [el.Text({ color: phaseOf(syncFile, now) === 'planned' ? A5R_LOOK.quiet : STATUS.warn, wrap: 'wrap', children: g44.lineNow(syncFile, now) })] })) // A133
+    if (syncFile && isOpenPhase(phaseOf(syncFile, now))) kids.push(el.Box({ key: 'hai-a5r-sync-line', children: [el.Text({ color: phaseOf(syncFile, now) === 'planned' ? A5R_LOOK.quiet : STATUS.warn, wrap: 'wrap', children: freeze.lineNow(syncFile, now) })] })) // A133
     const tiles = [
       editorTile({ lock: lockView, me8: id8, nowMin, place: placeShort(decision), waiting }),
       memoryTile(el, vitals, { pieGb: gates.pieGb, nopieGb: gates.nopieGb, isFromPanel: gates.source === 'panel', cleanup: cleanupNote, diskGb: probe?.diskGb ?? null, drive: s2Root().slice(0, 2) }, { fill: A5R_LOOK.meter, track: A5R_LOOK.meterTrack }),
@@ -3794,7 +3797,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
   if (fxPlaced) $.clock.after(fxMs + 10, () => $.ui.invalidate('ui.render')) // then still
   // A65: the Orchestrate card, the judges' latest verdicts, last before the rules (the rules stay the foot, A27).
   const titleOf = appTitleOf(appNow(now))
-  const look = isS2 ? [...overrunLook({ ...grantInput(now), titleOf }), ...comebackLook({ records: leaseLog, files: filesNow(), lanes, now, isFocusRunning: focusNow(now)?.isRunning === true, titleOf }), ...orphanLook(orphanRec, probe, now), ...askLook(orphanNow(opts, now, probe)), ...focusLook(focusFile, filesNow(), lanes, now, titleOf), ...needsLook(currentVerdicts(now), now), ...g44.looks()] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look; A121-A124
+  const look = isS2 ? [...overrunLook({ ...grantInput(now), titleOf }), ...comebackLook({ records: leaseLog, files: filesNow(), lanes, now, isFocusRunning: focusNow(now)?.isRunning === true, titleOf }), ...orphanLook(orphanRec, probe, now), ...askLook(orphanNow(opts, now, probe)), ...focusLook(focusFile, filesNow(), lanes, now, titleOf), ...needsLook(currentVerdicts(now), now), ...turns.looks()] : [] // A116: only a current verdict that needs the person; A118: a Focus that needs a look; A121-A124
   if (look.length > 0) kids.push(lookBox(el, look, PANE_INK(), p => void lookPress($, opts, p)))
   kids.push(rules)
   // A37: the entrance, on the desktop, with motion on, for a moment after the pane opened (or first drew).
@@ -3911,7 +3914,7 @@ export const register: Register = (on, options) => {
     const focused = isOn ? await focusUseProblem($, opts, tool, input) : null // A120
     if (focused) return { deny: focused }
     const editor = isOn ? await editorProblem($, opts, tool, input) : null
-    if (editor) return { deny: blocked('Editor lock', `${editor.split(' → ')[0] ?? editor}${g44.myWait(await $.clock.now())}`, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
+    if (editor) return { deny: blocked('Editor lock', `${editor.split(' → ')[0] ?? editor}${freeze.myWait(await $.clock.now())}`, editor.split(' → ').slice(1).join(' → ') || 'wait for the Editor') }
     const coord = isOn ? await coordProblem($, opts, tool, input) : null
     if (coord) return { deny: coord }
     // A18: nghiệm thu A5R on the PR-opening call and on an intent close (D10: at acceptance, never per turn).
@@ -3981,10 +3984,10 @@ export const register: Register = (on, options) => {
     }
 
     const op = isOn && isS2 && SHELL_TOOLS.has(tool) ? await opStartOf($, opts, a5r, what) : null // A115: a coordinating session's
-    const turn = isOn && isS2 && SHELL_TOOLS.has(tool) ? await g44.turnStart(io44($, opts), what, input) : null // A128 / A129
+    const turn = isOn && isS2 && SHELL_TOOLS.has(tool) ? await turns.start(hostIo($, opts), what, input) : null // A128 / A129
     if (turn?.deny) return { deny: turn.deny }
     const call = (turn?.timeout ? { ...e, timeout: turn.timeout } : e) as typeof e
-    const ran = await (isMain ? asMainCall($, () => next(call)) : next(call)).finally(() => (turn?.isTaken ? g44.turnEnd(io44($, opts), input.run_in_background === true) : undefined))
+    const ran = await (isMain ? asMainCall($, () => next(call)) : next(call)).finally(() => (turn?.isTaken ? turns.end(hostIo($, opts)) : undefined))
     if (chain === null) {
       // Where this plugin sits: Ather beneath means its pane can be wrapped. Kept outside the plugin
       // folder (a write inside it would reload the mod), for /a5r status and for checking by hand.
@@ -3993,7 +3996,7 @@ export const register: Register = (on, options) => {
       await $.fs.write(`${(places.TEMP ?? '').replace(/\\/g, '/')}/a5r/chain-${id8}.json`, JSON.stringify({ beneath: chain })).catch(() => undefined)
     }
     if (ran.deny !== undefined) return ran
-    if (turn && isLockFailure(JSON.stringify(ran).slice(0, 20_000))) g44.lockFailed(await $.clock.now()) // A130
+    if (turn && isLockFailure(JSON.stringify(ran).slice(0, 20_000))) turns.lockFailed(await $.clock.now()) // A130
     // A115: the head file its own operation left is this session's; a backgrounded one is claimed at the minute (D4).
     if (op && !(await claimHead($, op).catch(() => false)) && input.run_in_background === true) opRunning = { op: withOp(opRunning?.op ?? null, op), isSeen: opRunning?.isSeen ?? false }
     // A19: a file changed (an edit, a git write): the card scores again at its next draw.
@@ -4086,7 +4089,9 @@ export const register: Register = (on, options) => {
     // A63 clean-up (kept by A83): Hai typed in a session whose title still carries an old decision mark (from before
     // 0.17.0): the title goes back without it, read now (never a value kept in memory, which a reload loses).
     const typed = (e.origin as { kind?: string } | undefined)?.kind
-    const freeze = (typed === 'composer' || typed === 'bridge') && (await readA5R($)) ? await g44.prompt(io44($, opts)) : null // A134
+    const isOn = await readA5R($)
+    const frozen = isOn && isS2 && (typed === 'composer' || typed === 'bridge') ? await freeze.prompt(hostIo($, opts)) : null // A134
+    if (frozen?.toast) $.ui.toast(frozen.toast)
     if (typed === 'composer' || typed === 'bridge') {
       const title = await sessionTitle($)
       if (hasMark(title) && bareTitle(title)) await retitle($, bareTitle(title)).catch(() => '')
@@ -4095,11 +4100,11 @@ export const register: Register = (on, options) => {
     // the gate). The origin is what the sender says: it only adds context here, it never opens a gate.
     const origin = e.origin as typeof e.origin | undefined
     const shipFor = origin?.kind === 'plugin' && origin.name === 'ather-automata' ? shipSlugOf(e.text) : null
-    const added = shipFor && (await readA5R($)) ? await shipScore($, opts, shipFor).catch(() => null) : null
+    const added = shipFor && isOn ? await shipScore($, opts, shipFor).catch(() => null) : null
     const text = added ? `${e.text}\n\n${added}` : e.text
     // Notices waiting for the next turn ride this prompt as context the model reads (D6).
-    if ((pending.length > 0 || freeze) && (await readA5R($))) {
-      const texts = [...drain(), ...(freeze ? [freeze] : [])]
+    if (isOn && (pending.length > 0 || frozen)) {
+      const texts = [...drain(), ...(frozen ? [frozen.line] : [])]
       await saveMe($, opts)
       return next({ ...e, text, context: [...(e.context ?? []), ...texts] })
     }
@@ -4135,7 +4140,7 @@ export const register: Register = (on, options) => {
   // A134: in a sync's cutoff and freeze one warning line sits above Ather's band, in every S2 session; gone at the lift.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
-    const line = e.props.hasSurvey || !a5rOn || !isS2 ? '' : g44.band(await $.clock.now())
+    const line = e.props.hasSurvey || !a5rOn || !isS2 ? '' : freeze.band(await $.clock.now())
     return line ? ($.ui.resolve(e).Box({ key: 'hai-a5r-band', flexDirection: 'column', children: [$.ui.resolve(e).Text({ color: STATUS.warn, wrap: 'truncate', children: line }), below] }) as RenderElement) : below
   })
   on('ui.render', { component: 'Pane', requestId: A5R_PANE }, async ($, e) => {

@@ -49,6 +49,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   const value = (v: unknown) => ({ value: v })
   mock.env(on, ENV)
   mock.store(on, { a5r: { on: a5r }, ...store })
+  const writeEffects = new Map<string, () => void>() // rev 44 (A128): another writer's file landing right after a write, keyed by a needle of its path
   const clock = mock.clock(on, { now }) // rev 30: a test may start at another moment (A84's lock line is dated 2026-10-16)
   const agents: Rec[] = [] // rev 30 (A86): further running agents the session lists
   on('fs.read', async (_$: unknown, e: { path: string }) => {
@@ -60,6 +61,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   on('fs.write', async (_$: unknown, e: { path: string; text: string }) => {
     files.set(k(e.path), e.text)
     mtimes.set(k(e.path), clock.now())
+    for (const [needle, effect] of writeEffects) if (k(e.path).includes(k(needle))) effect() // rev 44 (A128): what another session writes right after this one
     return value(undefined)
   })
   on('fs.exists', async (_$: unknown, e: { path: string }) => value([...files.keys()].some(p => p === k(e.path) || p.startsWith(`${k(e.path)}/`))))
@@ -172,6 +174,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   })
   return {
     runEffects,
+    writeEffects,
     toolHolds,
     toolEffects,
     failCwd: (n: number) => {

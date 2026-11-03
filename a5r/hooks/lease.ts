@@ -310,7 +310,9 @@ export const queueView = (x: GrantInput): QueueView => {
 /** A119: when each queued session's turn is expected to start: the Editor comes back to the queue at `base` (now at the
  * earliest), then each turn takes its minutes (the person's, A117, else its own) in the order every session computes; a
  * Focus's session is left out (its time is the box). */
-export const expectedStarts = (x: Pick<GrantInput, 'files' | 'lanes' | 'now' | 'sync' | 'focus' | 'manual'>, base: number): Map<string, number> => {
+export const expectedStarts = (x: Pick<GrantInput, 'files' | 'lanes' | 'now' | 'sync' | 'focus' | 'manual'>, base: number): Map<string, number> => queueTimes(x, base).starts
+/** A119 / A133: each queued session's expected start, and when the last queued turn ends (a session asking now starts then). */
+export const queueTimes = (x: Pick<GrantInput, 'files' | 'lanes' | 'now' | 'sync' | 'focus' | 'manual'>, base: number): { starts: Map<string, number>; end: number } => {
   const out = new Map<string, number>()
   const claim = claimIn(x)
   const focus8 = claim?.kind === 'focus' ? claim.id8 : undefined
@@ -320,7 +322,7 @@ export const expectedStarts = (x: Pick<GrantInput, 'files' | 'lanes' | 'now' | '
     out.set(f.id8, at)
     at += (x.manual.minutes[f.id8] ?? f.want.minutes) * 60_000
   }
-  return out
+  return { starts: out, end: at }
 }
 
 /** A105 / A116: the holder's facts in plain words, one line (the panel's row): granted at (`sync` for the sync's own slot),

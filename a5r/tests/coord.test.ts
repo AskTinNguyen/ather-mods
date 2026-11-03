@@ -253,7 +253,6 @@ test('notices read the one shape: A5R · <gate> — <what> → <what to do>', ()
     NOTICES.granted(T(15, 0), true, null, ''),
     NOTICES.cutoff(s, false, true),
     NOTICES.cutoff(s, true, false),
-    NOTICES.frozen(s),
     NOTICES.lifted(endedSync(s, 'done', 'merged', T(16, 20))),
     NOTICES.ownerConflicts(s, [{ path: 'Source/S2/Foo.cpp', kind: 'foreign' }, { path: 'Content/X.uasset', kind: 'self', match: 'abc' }]),
     NOTICES.yield('loco', 15),

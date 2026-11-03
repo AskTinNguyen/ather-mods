@@ -13,18 +13,23 @@ export type FreezeStep = 'cutoff' | 'merging' | 'building' | 'build-failed' | 't
 export type Need = 'git' | 'edit' | 'source' | 'editor' | 'build'
 export const NEEDS: readonly Need[] = ['git', 'edit', 'source', 'editor', 'build']
 const ALL: ReadonlySet<Need> = new Set(NEEDS)
-/** A131: what each step holds. The merge writes the tree (everything waits); after the merge commit the build reads
- * Source/ and Plugins/ (other edits are allowed again); once the build's own `Result: Succeeded` is read git and every
- * edit are free, and only the Editor and builds wait for the tests and done; a failed build, or a sync handed back to its
- * holder, keeps everything. The cutoff holds nothing (it asks). */
-export const HELD: Readonly<Record<FreezeStep, ReadonlySet<Need>>> = {
-  cutoff: new Set(),
-  merging: ALL,
-  building: new Set<Need>(['git', 'source', 'editor', 'build']),
-  'build-failed': ALL,
-  testing: new Set<Need>(['editor', 'build']),
-  manual: ALL,
+/** The sync's timed runs, in order (a sync without a build has no build run), and their words, current and ahead. */
+export type Run = 'merge' | 'build' | 'tests'
+const RUNS: Record<Run, { now: string; ahead: string }> = { merge: { now: 'merging', ahead: 'merge' }, build: { now: 'building', ahead: 'build' }, tests: { now: 'testing', ahead: 'tests' } }
+/** A131: each step: what it holds, its word, the run it times (null: none), and whether it stays stuck until the holder
+ * ends the sync. The merge writes the tree (everything waits); after the merge commit the build reads Source/ and Plugins/
+ * (other edits are allowed again); once the build's own `Result: Succeeded` is read git and every edit are free, and only
+ * the Editor and builds wait for the tests and done; a failed build, or a sync handed back to its holder, keeps
+ * everything. The cutoff holds nothing (it asks). */
+export const STEPS: Readonly<Record<FreezeStep, { held: ReadonlySet<Need>; word: string; run: Run | null; isStuck: boolean }>> = {
+  cutoff: { held: new Set(), word: 'cutoff', run: null, isStuck: false },
+  merging: { held: ALL, word: 'merging', run: 'merge', isStuck: false },
+  building: { held: new Set<Need>(['git', 'source', 'editor', 'build']), word: 'building', run: 'build', isStuck: false },
+  'build-failed': { held: ALL, word: 'build failed', run: null, isStuck: true },
+  testing: { held: new Set<Need>(['editor', 'build']), word: 'testing', run: 'tests', isStuck: false },
+  manual: { held: ALL, word: 'finishing by hand', run: null, isStuck: true },
 }
+export const heldIn = (step: FreezeStep): ReadonlySet<Need> => STEPS[step].held
 /** The step of a sync now (null: none open, or only planned). `build`: what the sync's build log of this run says. */
 export const freezeStepOf = (phase: Phase, stage: SyncStage | null, build: BuildLogRead | null): FreezeStep | null => {
   if (phase === 'cutoff') return 'cutoff'
@@ -35,10 +40,17 @@ export const freezeStepOf = (phase: Phase, stage: SyncStage | null, build: Build
 }
 /** A131: an edit of `rel` (repo-relative) needs `source` under Source/ or Plugins/ or on a path the merge changed, else `edit`. */
 export const editNeed = (rel: string, mergeChanged: ReadonlySet<string>): Need => (/^(source|plugins)\//i.test(rel) || mergeChanged.has(rel.toLowerCase()) ? 'source' : 'edit')
-const NEED_WORDS: Record<Need, string> = { git: 'git writes', edit: 'edits in the shared checkout', source: 'edits under Source/ and Plugins/ (and of the files the merge changed)', editor: 'the Editor (launch, PIE, MCP)', build: 'builds of the shared project' }
-export const needWords = (needs: Iterable<Need>): string => [...needs].map(n => NEED_WORDS[n]).join(', ')
-const STEP_WORDS: Record<FreezeStep, string> = { cutoff: 'cutoff', merging: 'merging', building: 'building', 'build-failed': 'build failed', testing: 'testing', manual: 'finishing by hand' }
-export const stepWord = (step: FreezeStep): string => STEP_WORDS[step]
+const WAIT_NEXT = 'do work that needs no Editor and no build of the shared project; A5R tells you (and wakes you) when it is allowed again'
+/** Each need: its words, its word in the band's "new … work" (null: an edit, said apart), why a refusal of it waits
+ * (`merged`: when git and Source/ edits are free again) and what to do meanwhile. */
+const NEED: Record<Need, { words: string; band: string | null; waits: (verb: string, merged: string, isStuck: boolean) => string; next: (step: FreezeStep) => string }> = {
+  git: { words: 'git writes', band: 'git', waits: (verb, merged) => `no git ${verb} in the shared checkout until ${merged}`, next: () => 'leave your changes as they are (never stash or reset them); commit after this step, or work in your own worktree; A5R wakes you when git is free' },
+  edit: { words: 'edits in the shared checkout', band: null, waits: (_, merged, isStuck) => `no edits in the shared checkout until ${isStuck ? merged : 'the merge is committed'}`, next: () => 'edit what is allowed now, or plan and read; A5R wakes you when these edits are allowed again' },
+  source: { words: 'edits under Source/ and Plugins/ (and of the files the merge changed)', band: null, waits: (_, merged) => `no edits under Source/ and Plugins/ (or of the files the merge changed) until ${merged}`, next: step => `edit what is allowed now${step === 'building' ? ' (outside Source/ and Plugins/)' : ''}, or plan and read; A5R wakes you when these edits are allowed again` },
+  editor: { words: 'the Editor (launch, PIE, MCP)', band: 'Editor', waits: () => 'the Editor waits until the sync is done', next: () => WAIT_NEXT },
+  build: { words: 'builds of the shared project', band: 'build', waits: () => 'builds of the shared project wait until the sync is done', next: () => WAIT_NEXT },
+}
+export const needWords = (needs: Iterable<Need>): string => [...needs].map(n => NEED[n].words).join(', ')
 
 // ---------- A133: measured durations ----------
 /** The step durations measured on the last syncs (ms), each list newest last. */
@@ -74,34 +86,30 @@ export const median = (xs: readonly number[]): number | null => {
 }
 
 // ---------- A133: the timeline ----------
-/** A step still ahead: its words, its estimated end (null: unknown), its estimated length (null: unknown), whether it is
- * the current one, and `late` (15 min or more past its estimate). */
-export type Ahead = { key: 'merge' | 'build' | 'tests' | 'hand'; word: string; end: number | null; ms: number | null; isNow: boolean; isLate: boolean }
+/** A step still ahead: its run (null: a stuck step, no estimate), its words, its estimated end and length (null:
+ * unknown), whether it is the current one, and `late` (15 min or more past its estimate). */
+export type Ahead = { run: Run | null; word: string; end: number | null; ms: number | null; isNow: boolean; isLate: boolean }
 export const LATE_MS = 15 * 60_000
-const KEYS = (s: SyncFile): Ahead['key'][] => (s.build ? ['merge', 'build', 'tests'] : ['merge', 'tests'])
-const WORD: Record<Ahead['key'], [string, string]> = { merge: ['merging', 'merge'], build: ['building', 'build'], tests: ['testing', 'tests'], hand: ['finishing by hand', 'finishing by hand'] }
 /** The steps still ahead of a sync in its freeze (or all of them before it), with their estimates, and the lift (null:
- * unknown). A failed build or a sync handed back has no estimate: only its hard end. */
+ * unknown). A stuck step (a failed build, a sync handed back) has no estimate: only its hard end. */
 export const aheadOf = (s: SyncFile, step: FreezeStep | null, times: SyncTimes, now: number): { steps: Ahead[]; lift: number | null } => {
-  if (step === 'build-failed' || step === 'manual') return { steps: [{ key: 'hand', word: step === 'manual' ? 'finishing by hand' : 'build failed: the holder reverts or fixes it', end: null, ms: null, isNow: true, isLate: false }], lift: null }
-  const keys = KEYS(s)
-  const from = step === 'building' ? keys.indexOf('build') : step === 'testing' ? keys.indexOf('tests') : 0
-  const isRunning = step === 'merging' || step === 'building' || step === 'testing'
-  const start = step === 'merging' ? (s.workerAt ?? s.at) : isRunning ? s.stageAt : s.at
-  const msOf = (k: Ahead['key']): number | null => median(k === 'merge' ? times.merge : k === 'build' ? times.build : k === 'tests' ? times.tests : [])
-  let at: number | null = start
-  const steps = keys.slice(from).map((key, i): Ahead => {
-    const ms = msOf(key)
-    const isNow = isRunning && i === 0
-    const end = at === null || ms === null ? null : at + ms
+  const at = step ? STEPS[step] : null
+  if (at?.isStuck) return { steps: [{ run: null, word: step === 'manual' ? at.word : 'build failed: the holder reverts or fixes it', end: null, ms: null, isNow: true, isLate: false }], lift: null }
+  const order: Run[] = s.build ? ['merge', 'build', 'tests'] : ['merge', 'tests']
+  const current = at?.run ?? null
+  let t: number | null = current === null ? s.at : current === 'merge' ? (s.workerAt ?? s.at) : s.stageAt
+  const steps = order.slice(current ? order.indexOf(current) : 0).map((run): Ahead => {
+    const ms = median(times[run])
+    const isNow = run === current
+    const end = t === null || ms === null ? null : t + ms
     const isLate = isNow && end !== null && now - end >= LATE_MS
-    at = end === null ? null : isNow ? Math.max(end, now) : end
-    return { key, word: WORD[key][isNow ? 0 : 1], end, ms, isNow, isLate }
+    t = end === null ? null : isNow ? Math.max(end, now) : end
+    return { run, word: isNow ? RUNS[run].now : RUNS[run].ahead, end, ms, isNow, isLate }
   })
-  return { steps, lift: at }
+  return { steps, lift: t }
 }
-const est = (a: Ahead): string => (a.end !== null ? ` ~${hhmm(a.end)}` : a.ms !== null ? ` ~${Math.round(a.ms / 60_000)} min` : ' (time unknown)')
-const stepText = (a: Ahead): string => `${a.isNow ? '▸ ' : ''}${a.word}${a.key === 'hand' ? '' : est(a)}${a.isLate ? ' late' : ''}`
+const est = (a: Ahead): string => (a.run === null ? '' : a.end !== null ? ` ~${hhmm(a.end)}` : a.ms !== null ? ` ~${Math.round(a.ms / 60_000)} min` : ' (time unknown)')
+const stepText = (a: Ahead): string => `${a.isNow ? '▸ ' : ''}${a.word}${est(a)}${a.isLate ? ' late' : ''}`
 /** When the sync's last step ends: `~HH:MM`, or that it is unknown and the freeze's hard end. */
 const liftText = (lift: number | null, s: SyncFile): string => (lift === null ? `the sync is done (time unknown, at the latest ${hhmm(s.hardEnd)})` : `~${hhmm(lift)}`)
 const until = (lift: number | null, s: SyncFile): string => `until ${liftText(lift, s)}`
@@ -126,30 +134,23 @@ export const shortLine = (s: SyncFile, phase: Phase, step: FreezeStep | null, ti
 }
 
 // ---------- A131 / A132: refusals and step notices ----------
-const whatWaits = (s: SyncFile, step: FreezeStep, need: Need, verb: string): string => {
-  const isStuck = step === 'build-failed' || step === 'manual'
-  const merged = isStuck ? 'the holder ends the sync' : s.build ? 'its build succeeds' : 'the merge is committed'
-  if (need === 'git') return `no git ${verb} in the shared checkout until ${merged}`
-  if (need === 'edit') return `no edits in the shared checkout until ${isStuck ? merged : 'the merge is committed'}`
-  if (need === 'source') return `no edits under Source/ and Plugins/ (or of the files the merge changed) until ${merged}`
-  return need === 'editor' ? 'the Editor waits until the sync is done' : 'builds of the shared project wait until the sync is done'
-}
 /** A131: the freeze's refusal of one need: why, with the timeline, and what to do meanwhile. */
-export const freezeWhy = (s: SyncFile, step: FreezeStep, need: Need, verb: string, line: string): { why: string; next: string } => ({
-  why: `${s.holder.lane} merges origin/main since ${hhmm(s.at)}: ${whatWaits(s, step, need, verb)} (now ${stepWord(step)}) · ${line}`,
-  next: need === 'editor' || need === 'build' ? 'do work that needs no Editor and no build of the shared project; A5R tells you (and wakes you) when it is allowed again' : need === 'git' ? 'leave your changes as they are (never stash or reset them); commit after this step, or work in your own worktree; A5R wakes you when git is free' : `edit what is allowed now${step === 'building' ? ' (outside Source/ and Plugins/)' : ''}, or plan and read; A5R wakes you when these edits are allowed again`,
-})
-/** A131 / A132: one step's notice: what is allowed again now, what still waits, the timeline. `freed`: what this step frees
- * that this session was refused (it is woken for those). */
-export const stepNotice = (s: SyncFile, step: FreezeStep, prev: FreezeStep | null, line: string): string => {
-  const was = prev ? HELD[prev] : ALL
-  const allowed = NEEDS.filter(n => was.has(n) && !HELD[step].has(n))
-  const still = NEEDS.filter(n => HELD[step].has(n))
-  const what = step === 'build-failed' ? 'the build failed: everything stays frozen until the holder reverts or fixes it and calls done' : `${stepWord(step)}${allowed.length > 0 ? `: allowed again: ${needWords(allowed)}` : ''}`
+export const freezeWhy = (s: SyncFile, step: FreezeStep, need: Need, verb: string, line: string): { why: string; next: string } => {
+  const { isStuck, word } = STEPS[step]
+  const merged = isStuck ? 'the holder ends the sync' : s.build ? 'its build succeeds' : 'the merge is committed'
+  return { why: `${s.holder.lane} merges origin/main since ${hhmm(s.at)}: ${NEED[need].waits(verb, merged, isStuck)} (now ${word}) · ${line}`, next: NEED[need].next(step) }
+}
+/** A131 / A132: one step's notice: what is allowed again since `prev` (null: the freeze's start), what still waits, and
+ * the timeline. */
+export const stepNotice = (step: FreezeStep, prev: FreezeStep | null, line: string): string => {
+  const was = prev ? heldIn(prev) : ALL
+  const allowed = NEEDS.filter(n => was.has(n) && !heldIn(step).has(n))
+  const still = NEEDS.filter(n => heldIn(step).has(n))
+  const what = step === 'build-failed' ? 'the build failed: everything stays frozen until the holder reverts or fixes it and calls done' : `${STEPS[step].word}${allowed.length > 0 ? `: allowed again: ${needWords(allowed)}` : ''}`
   return `A5R · Sync main — ${what}${still.length > 0 ? `; still waiting: ${needWords(still)}` : ''} · ${line} → ${allowed.length > 0 ? 'go on with what is allowed again now' : 'keep working without what waits; you are told at the next step'}`
 }
 /** A132: whether this step frees anything the session was refused (then an idle session is woken). */
-export const freesAny = (step: FreezeStep, refused: ReadonlySet<Need>): boolean => [...refused].some(n => !HELD[step].has(n))
+export const freesAny = (step: FreezeStep, refused: ReadonlySet<Need>): boolean => [...refused].some(n => !heldIn(step).has(n))
 /** A132: the lift estimate moved by 15 min or more since the session was told it. */
 export const isMoved = (told: number | null, lift: number | null): boolean => told !== null && lift !== null && Math.abs(lift - told) >= LATE_MS
 
@@ -172,22 +173,22 @@ export const editorWaits = (x: { holder: { lane: string; isSyncSlot: boolean } |
 }
 
 // ---------- A134: the band, the prompt's line, the toast ----------
-const waitWords = (held: ReadonlySet<Need>): string => ['git', 'editor', 'build'].filter(n => held.has(n as Need)).map(n => (n === 'git' ? 'git' : n === 'editor' ? 'Editor' : 'build')).join('/')
+const waitWords = (held: ReadonlySet<Need>): string => NEEDS.flatMap(n => (held.has(n) ? (NEED[n].band ?? []) : [])).join('/')
 const editWords = (held: ReadonlySet<Need>): string => (held.has('edit') ? 'edits wait too' : held.has('source') ? 'edits OK outside Source/ and Plugins/' : 'edits OK')
 /** A134: the one line above the prompt during the cutoff and the freeze. */
 export const bandLine = (s: SyncFile, step: FreezeStep, times: SyncTimes, now: number): string => {
   const { steps, lift } = aheadOf(s, step, times, now)
   if (step === 'cutoff') return `⏸ Sync main ${hhmm(s.at)} · cutoff: commit your own paths, the Editor is released by ${hhmm(s.at - RELEASE_BEFORE_MS)} · ${windowText(s, lift)}`
-  const held = HELD[step]
+  const held = heldIn(step)
   return `⏸ Sync main · ${steps.map(stepText).join(' → ').replace(/^▸ /, '')} · new ${waitWords(held)} work waits ${until(lift, s)} · ${editWords(held)}`
 }
 /** A134: the context line a person's prompt carries for the model during the cutoff and the freeze. */
 export const promptLine = (s: SyncFile, step: FreezeStep, times: SyncTimes, now: number): string => {
   const { lift } = aheadOf(s, step, times, now)
-  const held = HELD[step]
+  const held = heldIn(step)
   return step === 'cutoff'
     ? `A5R · Sync main at ${hhmm(s.at)} is in its cutoff: commit your own paths now (git commit -m "…" -- <your paths>), and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; from ${hhmm(s.at)} git writes, the Editor and builds wait ${until(lift, s)}. Plan, edit and read meanwhile.`
-    : `A5R · Sync main is ${stepWord(step)}: ${needWords(held)} wait ${until(lift, s)}; nothing is blocked for plans, reads${held.has('edit') ? '' : held.has('source') ? ' and edits outside Source/ and Plugins/' : ', edits and git'}. Plan, edit what is allowed and read meanwhile; do not start work that needs what waits.`
+    : `A5R · Sync main is ${STEPS[step].word}: ${needWords(held)} wait ${until(lift, s)}; nothing is blocked for plans, reads${held.has('edit') ? '' : held.has('source') ? ' and edits outside Source/ and Plugins/' : ', edits and git'}. Plan, edit what is allowed and read meanwhile; do not start work that needs what waits.`
 }
 /** A134: the person's toast, once per session per sync. */
 export const toastText = (s: SyncFile, step: FreezeStep, times: SyncTimes, now: number): string => `Sync main in progress ${until(aheadOf(s, step, times, now).lift, s)}: this session can plan and edit; git, Editor and builds wait`
@@ -204,15 +205,24 @@ export const statusAtOf = (text: string | null): number => {
   }
 }
 export type StatusQueueRow = { place: number; lane: string; id8: string; startsAt: number | null; waitsFor: string }
-/** A134: the machine-readable state outside viewers read (README "status.json"): written by the minute tick. */
-export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null }) => {
+/** A134: Saved/A5R/status.json as outside viewers read it (README "status.json"). */
+export type StatusFile = {
+  v: 1
+  at: number
+  sync: { id: string; at: number; holder: string; holderId8: string; phase: Phase; stage: SyncStage | null; step: FreezeStep | null; held: Need[]; steps: { step: Run | null; word: string; endsAt: number | null; isNow: boolean; isLate: boolean }[]; liftAt: number | null; hardEnd: number; line: string; band: string | null } | null
+  editor: { holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[] }
+  focus: { lane: string; id8: string; end: number } | null
+}
+/** A134: the state the minute tick writes for outside viewers. */
+export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null }): StatusFile => {
   const s = x.sync && (x.phase === 'planned' || x.phase === 'cutoff' || x.phase === 'frozen') ? x.sync : null
   const a = s ? aheadOf(s, x.step, x.times, x.now) : null
+  const step = x.step
   return {
     v: 1,
     at: x.now,
     sync: s && a
-      ? { id: s.id, at: s.at, holder: s.holder.lane, holderId8: s.holder.id8, phase: x.phase, stage: s.stage, step: x.step, held: x.step ? NEEDS.filter(n => HELD[x.step as FreezeStep].has(n)) : [], steps: a.steps.map(t => ({ step: t.key, word: t.word, endsAt: t.end, isNow: t.isNow, isLate: t.isLate })), liftAt: a.lift, hardEnd: s.hardEnd, line: timelineLine(s, x.phase, x.step, x.times, x.now), band: x.step ? bandLine(s, x.step, x.times, x.now) : null }
+      ? { id: s.id, at: s.at, holder: s.holder.lane, holderId8: s.holder.id8, phase: x.phase, stage: s.stage, step, held: step ? NEEDS.filter(n => heldIn(step).has(n)) : [], steps: a.steps.map(t => ({ step: t.run, word: t.word, endsAt: t.end, isNow: t.isNow, isLate: t.isLate })), liftAt: a.lift, hardEnd: s.hardEnd, line: timelineLine(s, x.phase, step, x.times, x.now), band: step ? bandLine(s, step, x.times, x.now) : null }
       : null,
     editor: { holder: x.holder, queue: x.queue },
     focus: x.focus,
