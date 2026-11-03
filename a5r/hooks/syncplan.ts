@@ -209,7 +209,7 @@ export type StatusQueueRow = { place: number; lane: string; id8: string; startsA
 export type StatusFile = {
   v: 1
   at: number
-  sync: { id: string; at: number; holder: string; holderId8: string; phase: Phase; stage: SyncStage | null; step: FreezeStep | null; held: Need[]; steps: { step: Run | null; word: string; endsAt: number | null; isNow: boolean; isLate: boolean }[]; liftAt: number | null; hardEnd: number; line: string; band: string | null } | null
+  sync: { id: string; at: number; holder: string; holderId8: string; phase: Phase; stage: SyncStage | null; step: FreezeStep | null; held: Need[]; steps: { run: Run | null; word: string; endsAt: number | null; isNow: boolean; isLate: boolean }[]; liftAt: number | null; hardEnd: number; line: string; band: string | null } | null
   editor: { holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[] }
   focus: { lane: string; id8: string; end: number } | null
 }
@@ -222,7 +222,7 @@ export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; 
     v: 1,
     at: x.now,
     sync: s && a
-      ? { id: s.id, at: s.at, holder: s.holder.lane, holderId8: s.holder.id8, phase: x.phase, stage: s.stage, step, held: step ? NEEDS.filter(n => heldIn(step).has(n)) : [], steps: a.steps.map(t => ({ step: t.run, word: t.word, endsAt: t.end, isNow: t.isNow, isLate: t.isLate })), liftAt: a.lift, hardEnd: s.hardEnd, line: timelineLine(s, x.phase, step, x.times, x.now), band: step ? bandLine(s, step, x.times, x.now) : null }
+      ? { id: s.id, at: s.at, holder: s.holder.lane, holderId8: s.holder.id8, phase: x.phase, stage: s.stage, step, held: step ? NEEDS.filter(n => heldIn(step).has(n)) : [], steps: a.steps.map(t => ({ run: t.run, word: t.word, endsAt: t.end, isNow: t.isNow, isLate: t.isLate })), liftAt: a.lift, hardEnd: s.hardEnd, line: timelineLine(s, x.phase, step, x.times, x.now), band: step ? bandLine(s, step, x.times, x.now) : null }
       : null,
     editor: { holder: x.holder, queue: x.queue },
     focus: x.focus,

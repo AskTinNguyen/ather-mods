@@ -7,16 +7,8 @@ import { claimIn, type GrantInput, type Notice, type Phase, type SessionFile, ty
 import { appendCapped, queueTimes, queueView } from './lease.ts'
 import { STATUS_FILE, SYNC_TIMES_FILE, NO_TIMES, aheadOf, bandLine, buildMsOf, editorWaits, freesAny, freezeStepOf, isMoved, parseSyncTimes, promptLine, shortLine, statusAtOf, statusOf, stepNotice, timelineLine, timesLine, toastText, type FreezeStep, type Need } from './syncplan.ts'
 import { readBuildLog, type BuildLogRead } from './syncstage.ts'
+import type { FileIo } from './hostio.ts'
 
-/** The engine's file reads and writes for one call (register.ts builds them over that call's engine). */
-export type FileIo = {
-  now: () => Promise<number>
-  read: (path: string) => Promise<string | null>
-  write: (path: string, text: string) => Promise<void>
-  stat: (path: string) => Promise<{ mtimeMs: number } | null>
-  list: (dir: string) => Promise<{ name: string; mtimeMs: number }[]>
-  run: (argv: string[], timeoutMs: number) => Promise<{ exitCode: number; stdout: string } | null>
-}
 /** This session's state as register.ts last read it. */
 export type FreezeState = {
   push: (n: Notice) => void

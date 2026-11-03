@@ -445,7 +445,7 @@ test('A134: Saved/A5R/status.json says the sync\'s phase, stage, steps and estim
   const st = JSON.parse(w.read(`${HF}/status.json`))
   expect(st.v).toBe(1)
   expect(st.sync).toMatchObject({ id: s.id, holder: 'sync-main', holderId8: 'bbbbbbbb', phase: 'frozen', stage: 'building', step: 'building', held: ['git', 'source', 'editor', 'build'], hardEnd: s.hardEnd })
-  expect(st.sync.steps).toEqual([{ step: 'build', word: 'building', endsAt: s.stageAt + 1_560_000, isNow: true, isLate: false }, { step: 'tests', word: 'tests', endsAt: s.stageAt + 1_560_000 + 15 * MIN, isNow: false, isLate: false }])
+  expect(st.sync.steps).toEqual([{ run: 'build', word: 'building', endsAt: s.stageAt + 1_560_000, isNow: true, isLate: false }, { run: 'tests', word: 'tests', endsAt: s.stageAt + 1_560_000 + 15 * MIN, isNow: false, isLate: false }])
   expect(st.sync.liftAt).toBe(s.stageAt + 1_560_000 + 15 * MIN)
   expect(st.sync.line).toBe('Sync main 14:20 · ▸ building ~15:01 → tests ~15:16 → you can build again ~15:16')
   expect(st.sync.band).toContain('⏸ Sync main · building ~15:01')

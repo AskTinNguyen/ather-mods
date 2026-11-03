@@ -2872,7 +2872,7 @@ const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   log: (note, now) => orchestrateLog($, opts, actedEvent('stale-index-lock', note, now)).catch(() => undefined),
   claimAlert: key => claimAlert($, opts, key),
   gitBusy: () => gitBusy($, opts),
-  isShared: async dir => isSharedDir($, await load($), dir),
+  isShared: dir => load($).then(a5r => isSharedDir($, a5r, dir)), // load caches the rules after the first call
   isFrozenHolder: () => isFrozenHolder($, opts),
   cwd: () => $.session.cwd(),
 })

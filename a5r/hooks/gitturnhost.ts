@@ -4,9 +4,9 @@
 // long timeout and the refusal of a write that could be cut short. A130: a stale index.lock moved aside. The rules are
 // gitturn.ts's.
 import { DIR, checkoutGitPids, isOpenPhase, type GitBusy, type LookRow, type Notice, type Phase, type Probe, type SessionFile, type SyncFile } from './coord.ts'
-import type { FileIo } from './freezehost.ts'
+import type { FileIo } from './hostio.ts'
 import { gitPlace, walkDeep, type Seg } from './gitshared.ts'
-import { GIT_TURN_DIR, LOCK_UNREAD_LOOK, STALE_LOCK_MOVED_FILE, TURN_GATE, TURN_NEXT, busyText, cutProblem, goneAfter, heldBy, lockMovedText, moveLockArgv, parseGitTurn, parseLockMoved, raisedTimeout, staleLockAct, staleLockName, turnFreeText, turnKey, turnOf, turnVerb, type GitTurn } from './gitturn.ts'
+import { GIT_TURN_DIR, LOCK_UNREAD_LOOK, TURN_LAPSE_MS, STALE_LOCK_MOVED_FILE, TURN_GATE, TURN_NEXT, busyText, cutProblem, goneAfter, heldBy, lockMovedText, moveLockArgv, parseGitTurn, parseLockMoved, raisedTimeout, staleLockAct, staleLockName, turnFreeText, turnKey, turnOf, turnVerb, type GitTurn } from './gitturn.ts'
 
 /** The engine's reads and writes for one call, and the host's own checks this needs. */
 export type TurnIo = FileIo & {
@@ -112,7 +112,7 @@ export const gitTurns = (h: TurnState) => {
       const all = await claims(io)
       gone = goneAfter(gone, all, pids === null ? null : pids.length > 0 || lockSt !== null, now)
       const own = all.find(c => c.id8 === h.me8())
-      if (own && calls === 0 && isBackground && now - (gone.get(turnKey(own)) ?? now) >= 2 * 60_000) {
+      if (own && calls === 0 && isBackground && now - (gone.get(turnKey(own)) ?? now) >= TURN_LAPSE_MS) {
         isBackground = false
         await release(io)
       }

@@ -8,7 +8,8 @@ import { program, tokenize } from './a5r.ts'
 import { FREEZE_VERBS, hhmm, ymd } from './coord.ts'
 import { gitPlace, type Seg } from './gitshared.ts'
 
-/** A128: the folder of the sessions' claims, one file each (`null` when it holds none). */
+/** A128: the folder of the sessions' claims, one small file each (`null` when it holds none), written only by its session
+ * and kept (the engine's file API has no delete; one file per session id8 that ever wrote git in the checkout). */
 export const GIT_TURN_DIR = 'git-turn'
 /** A128: a claim whose command has been gone this long (no git of the checkout runs, no index.lock) lapses. */
 export const TURN_LAPSE_MS = 2 * 60_000
