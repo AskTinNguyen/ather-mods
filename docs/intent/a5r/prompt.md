@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 43
+- Rev: 44
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -244,6 +244,23 @@ The three share one clock and one message channel: hai-flow notices, delivered b
   - `add` of another session's path is refused;
   - a worktree is untouched.
 - A127 (rev 43): Every live A5R session is seen at the sync cutoff. MEASURED 2026-10-29 11:00 (cutoff of the 11:30 sync): A5R listed 8 live S2 sessions "without a5r 0.4", including the active avian lane fda91548 and mc-ik-hitstop eea4eb20, and sent each the standard message. Yet their session files were fresh by 11:21, so they did run A5R. `withoutModOf` (coord.ts:1394) calls a session mod-less when its session file's heartbeat is more than 3 min old while its Ather lane is fresh. Find why heartbeats went stale around 11:00 (a minute tick held up by the new probes of rev 42 under load? a reload?), fix it, and call a session mod-less only when its file is missing or stale beyond a longer margin (e.g. 10 min, matching the lane) and its lane says it has no a5r. Proof: engine test with a heartbeat 4 min old: not mod-less. Write the cause into progress as MEASURED or INFERRED.
+- A128 (rev 44): One git writer at a time in the shared checkout. Before a git command that writes the shared checkout's index or refs runs (add, rm, commit, merge, revert, cherry-pick, checkout/restore of paths, stash, reset, update-index, mv), the session's A5R takes a short git turn in `Saved/A5R/git-turn.json` (session, lane, command, pid once known, started), written read-compare-write. If another live session holds the turn, the command is refused at once: "git busy: <lane> runs `git commit` since HH:MM → A5R tells you when it is free". That session is woken when the turn frees, and the turn frees when its command returns. A turn whose holder is gone, or whose command has been gone for 2 min, lapses. Git reads never take a turn, and neither do the sync holder's merge stages (their own freeze already covers them) or worktrees. Proof: engine tests covering:
+  - a second writer is refused while the first runs, and is woken after;
+  - a lapsed turn;
+  - reads pass;
+  - a worktree passes.
+- A129 (rev 44): A git write is never killed halfway. A Bash or PowerShell call that runs a git write in the shared checkout gets a tool timeout of at least 10 min (A5R raises the call's `timeout` when it is lower or missing), and it may not pipe into `head`/`tail` or put `timeout`/`kill` around the git command (refused, with the plain form as the alternative), because a killed `git commit` leaves `.git/index.lock` behind and blocks every session. Proof: engine tests (timeout raised; piped and timeout-wrapped forms refused; a worktree is untouched).
+- A130 (rev 44): A stale index.lock is cleared safely. When `.git/index.lock` in the shared checkout is 2 min or older, no git process of the checkout runs (command lines read as in rev 35; fsmonitor excluded) and no session holds a git turn, A5R moves the lock file aside to `Saved/A5R/index.lock.stale-<time>`, never deleting it. It logs `rule=stale-index-lock` and tells the sessions refused for it, plus the sync holder. With an unreadable process list, it does nothing and NEEDS A LOOK says so. MEASURED 2026-11-03 (sync conductor's transcript): a wip commit (pid 47320) of lane mc-armed-stop-block-clip held `.git/index.lock` from 11:16. Every lane's git write failed until the conductor moved the lock aside by hand at 11:24, then backed up and reset that lane's progress.md to unblock the 11:45 merge. The lane's commit never landed. Hai: "This kind of shit bugging me the most!" Proof: engine tests (each condition fails the move by itself; the moved file keeps its content).
+- A131 (rev 44): A sync freezes no longer than it must. The freeze lifts in steps instead of all at once at done:
+  - **After the merge commit:** git writes stay refused, and edits under `Source/` and `Plugins/` stay refused while the build runs (an edit then broke a sync build on 2026-10-19). Other edits are allowed again, outside the paths the merge changed.
+  - **When the build's own `Result: Succeeded` is read:** git writes and `Source/`/`Plugins/` edits are allowed again for everyone. Only builds of the shared project, Editor launches, PIE and MCP writes stay refused until the post-merge tests end and the holder calls done.
+  - **On `Result: Failed` or a revert:** the full freeze stays until done or abort, as today.
+
+  Each step is told once, only to the sessions it concerns: those refused during the freeze, those queued, and those with dirty paths. Each step says exactly what is allowed again. Proof: engine tests covering:
+  - edits allowed after the merge and refused under Source/ while building;
+  - git and Source allowed after Succeeded, while builds and the Editor are still refused in testing;
+  - a failed build keeps everything frozen.
+- A132 (rev 44): A frozen session is woken when it can go on. A session that was refused or told to wait by the freeze, and is idle, is woken (deliverIdle) at the step that frees what it needed, with the expected next step and its time. No session needs its own watcher. Each frozen session's notice gives the expected lift times (build end estimated from the last sync builds, test end), updated once if they move by 15 min or more. MEASURED 2026-11-03: a lane replied "I'm waiting for the sync to finish. A background watcher will wake me, then I'll apply the C++, build in my A5R slot and run the MC scenario", and Hai called it "the second frustrated thing". Proof: engine tests (an idle refused session is woken at the step that frees it; a busy one is told and not woken twice).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -257,6 +274,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 44 (2026-11-03): L-48 (Hai: commits lost to index.lock fights before the sync): A128 one git writer at a time, A129 git writes never killed halfway, A130 a stale index.lock moved aside safely, A131 the sync freeze lifts in steps, A132 frozen sessions woken when they can go on.
 - rev 43 (2026-10-29): L-47 (Hai: lanes commit each other's work; A5R's lane management is not good): A126 no commit of another lane's staged work, A127 live A5R sessions seen at the cutoff.
 - rev 42 (2026-10-28): L-46 (the week's audit; Hai: close an orphan Editor safely; sync at least twice a day, timed to the sessions): A121 offer Focus to a lane that keeps coming back, A122 overruns with waiters shown, A123 graceful orphan close, A124 auto-planned syncs, A125 true numbers and fewer alerts.
 - rev 41 (2026-10-23): L-45 (Hai: Editor orchestration should serve delivery; Focus for 2–3 h milestones): A118 Focus, A119 the others re-planned around it, A120 others keep working without touching the focus Editor.

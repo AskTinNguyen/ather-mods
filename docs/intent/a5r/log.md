@@ -364,3 +364,17 @@ With a screenshot of the A5R panel: EDITOR QUEUE · 4 WAITING (▶ sync-main gra
 > Đọc mấy ý của @[♾️S2 sync main] thì thấy dạo này có nhiều lane commit nhầm đồ của nhau quá. Vai trò quản lý lane của A5R đang không tốt
 
 (Read in the sync conductor's transcript, 2026-10-29: the Walker lane's docs/intent/walker-unification F-5 files were committed inside the Markerless lane's commit 282bff1f, because both were staged in the shared index; and at the 11:00 cutoff A5R listed 8 live sessions, the active avian lane among them, as running "without a5r 0.4".)
+
+## L-48 (2026-11-03) | class: intent | -> rev 44
+
+Hai quoted a lane's report:
+
+> > I'm ready for the sync. The wip commit of progress.md did not land: other sessions' commits held .git/index.lock from 11:17. The sync-main session then saved a copy of the file and reset it to HEAD, so I stopped my retry. A commit then would have had nothing to commit.
+>
+> This kind of shit bugging me the most!
+
+> > I'm waiting for the sync to finish. A background watcher will wake me, then I'll apply the C++, build in my A5R slot and run the MC scenario.
+>
+> This is the second frustrated thing.
+
+(Read in the sync conductor's transcript, 2026-11-03: `.git/index.lock` held from 11:16 by a wip commit, pid 47320, of lane mc-armed-stop-block-clip; the conductor moved it aside at 11:24 and backed up and reset that lane's progress.md before the 11:45 merge.)
