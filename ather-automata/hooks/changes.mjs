@@ -5,6 +5,7 @@
 // are not listed. Pure: no `$`.
 
 import { acceptanceItems, parseFindings, section, shortTitle } from './model.mjs'
+import { isAbsolute, normalFolder } from './workspace.mjs'
 
 /** @typedef {{ kind: 'done' | 'yours' | 'changed', id: string, text: string }} Change */
 /** @typedef {'prompt.md' | 'findings.md' | 'progress.md'} IntentFile */
@@ -74,6 +75,14 @@ export const intentChanges = (file, before, after, intent = {}) => {
 export const intentFolderOf = path => {
   const match = typeof path === 'string' ? /^(?:(.*)[\\/])?docs[\\/]intent[\\/]([^\\/]+)[\\/](.+)$/i.exec(path) : null
   return match?.[2] && match[3] ? { slug: match[2], file: match[3].replace(/\\/g, '/').toLowerCase(), root: match[1] ?? '' } : null
+}
+
+// The checkout an intent file lands in: the folder before its docs/intent, taken from `base` (the session's folder)
+// when the path is relative; null for a path in no intent folder.
+/** @param {unknown} path @param {string} base */
+export const intentRootIn = (path, base) => {
+  const found = intentFolderOf(path)
+  return found && normalFolder(isAbsolute(String(path)) ? found.root : found.root ? `${base}/${found.root}` : base)
 }
 
 // The intent file an edit touches whose changes are read (prompt, findings, progress): its folder name and which file.

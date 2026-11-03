@@ -1919,7 +1919,7 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
     fs.mkdirSync(join(root, `docs/intent/${slug}`), { recursive: true })
     fs.writeFileSync(join(root, `docs/intent/${slug}/prompt.md`), LOGIN.replace('- Status: active', `- Status: ${status}`))
   }
-  for (const slug of ['alpha', 'beta', 'gamma', 'shared']) put(s2, slug)
+  for (const slug of ['alpha', 'beta', 'gamma', 'shared', 'delta']) put(s2, slug)
   put(web, 'login')
   const { engine, sessionId: sid } = await boot({ root: s2, sessionId: 'harness-session-0040', writable: [s2, web] })
   const pinned = () => engine.store.get(`pinned:${sid}`)
@@ -1974,6 +1974,28 @@ const buttonOf = (tree, key) => nodesOf(tree).find(node => node.type === 'Button
   expect('auto-track A7: after /ather untrack, neither a worker\'s write nor a commit tracks alpha again in this session', pinned() === undefined, pinned())
   await write('docs/intent/beta/log.md')
   expect('… and work on another intent still does', pinned() === 'beta', pinned())
+
+  // The adversary review's cases (progress.md S4).
+  idle()
+  await engine.type("Decide F-1 on delta: A — keep the pool. Record it as the intent skill's decision step says; do not ask me again.")
+  await write('docs/intent/delta/findings.md')
+  await write('docs/intent/delta/prompt.md')
+  await bash(engine, 'git commit -m "intent(delta): decide F-1"')
+  await engine.flush()
+  expect('auto-track A8: answering a Needs you decision (findings.md, prompt.md, its commit) does not take its intent, though beta is idle', pinned() === 'beta', pinned())
+  await engine.type('Carry on with delta')
+  await write('docs/intent/delta/log.md')
+  expect('… the next prompt is work again: a write into delta takes it', pinned() === 'delta', pinned())
+
+  idle()
+  const draft = fs.mkdtempSync(join(BASE, 'draft-'))
+  put(draft, 'epsilon')
+  await write(join(draft, 'docs/intent/epsilon/progress.md'))
+  expect('auto-track A2: a draft in a folder that is no checkout never takes the pin', pinned() === 'delta', pinned())
+
+  idle()
+  await write(`${s2.replace(/\//g, '\\')}\\docs\\intent\\beta\\notes\\w.md`)
+  expect('auto-track A2: a path written with backslashes lands in its checkout and takes the intent there', pinned() === 'beta', pinned())
   expect('no hook threw', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   await engine.end('other')
 }

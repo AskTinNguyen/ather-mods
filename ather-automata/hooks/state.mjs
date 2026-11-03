@@ -14,9 +14,10 @@ import { mayTake } from './autotrack.mjs'
 import { forgetPack, packFor } from './packs/index.mjs'
 import { unreal } from './packs/unreal.mjs'
 import { baseOf } from './team.mjs'
-import { checkoutId, checkoutOf, normalFolder, readWorkspace, repoId } from './workspace.mjs'
+import { checkoutId, checkoutOf, isSameFolder, normalFolder, readWorkspace, repoId } from './workspace.mjs'
 import { groupByOf } from './worklist.mjs'
 import { paneViewOf } from './home.mjs'
+import { isLaneLive, readLane, readPeers } from './heartbeats.mjs'
 
 /**
  * @typedef {{
@@ -263,7 +264,7 @@ export const workspace = (io, folder, log = () => undefined) => readWorkspaceOnc
 const repoOf = io => (io.repo ? io.repo().catch(() => '') : Promise.resolve(''))
 
 /** @param {Io} io @param {string} root */
-const isSessionRoot = async (io, root) => normalFolder(root) === normalFolder(await io.root().catch(() => ''))
+const isSessionRoot = async (io, root) => isSameFolder(root, await io.root().catch(() => ''))
 
 // The checkout a folder holding docs/intent is, by its id: the session's own for its root, else that folder's.
 /** @param {Io} io @param {string} [root] */
@@ -547,7 +548,7 @@ export const hasIntentFolder = (io, root, slug) => io.exists(`${root}/docs/inten
 // so the same slug in two checkouts is stopped on its own.
 /** @typedef {string | { slug: string, root: string }} Stop */
 /** @param {Stop} stop @param {string} slug @param {string | null} root null: the session's own checkout */
-const isStopOf = (stop, slug, root) => (typeof stop === 'string' ? root === null && stop === slug : root !== null && stop?.slug === slug && stop.root === root)
+const isStopOf = (stop, slug, root) => (typeof stop === 'string' ? root === null && stop === slug : root !== null && stop?.slug === slug && isSameFolder(stop.root, root))
 /** @param {Io} io @param {string} sid @returns {Promise<Stop[]>} */
 const readStops = async (io, sid) => /** @type {Stop[]} */ ((await io.get(KEY.untracked(sid))) ?? [])
 
@@ -562,26 +563,29 @@ const targetOf = async (io, root, slug) => {
 /** @param {Stop} stop @param {Target} target */
 const stopsTarget = (stop, { slug, at, isOwn }) => isStopOf(stop, slug, isOwn ? null : at)
 
-// The pin (null: none) with its PinMeta, now (this session's work on it starts now); the heartbeat at once.
-/** @param {Io} io @param {string} sid @param {Target | null} target @param {boolean} [isAuto] */
-const setPin = async (io, sid, target, isAuto = false) => {
+/** @typedef {import('./autotrack.mjs').PinMeta} PinMeta */
+// The pin (null: none) with its PinMeta, its time now (this session's work on it starts now); the heartbeat at once.
+/** @param {Io} io @param {string} sid @param {Target | null} target @param {Omit<PinMeta, 'at'>} [meta] */
+const setPin = async (io, sid, target, meta = { isAuto: false }) => {
   if (target === null) for (const key of [KEY.pinned(sid), KEY.pinMeta(sid)]) await io.remove(key)
   else {
     await io.set(KEY.pinned(sid), target.isOwn ? target.slug : { slug: target.slug, root: target.at })
-    await io.set(KEY.pinMeta(sid), { at: Date.now(), isAuto })
+    await io.set(KEY.pinMeta(sid), { ...meta, at: Date.now() })
   }
   await beat(io)
   changed(io)
 }
-/** @param {Io} io @param {string} sid @returns {Promise<import('./autotrack.mjs').PinMeta | null>} */
-const readPinMeta = async (io, sid) => /** @type {import('./autotrack.mjs').PinMeta | undefined} */ (await io.get(KEY.pinMeta(sid))) ?? null
+/** @param {Io} io @param {string} sid @returns {Promise<PinMeta | null>} */
+const readPinMeta = async (io, sid) => /** @type {PinMeta | undefined} */ (await io.get(KEY.pinMeta(sid))) ?? null
 
 // Whether an intent's status closes it (completed or parked): auto-track neither takes nor keeps one.
 /** @param {Io} io @param {string} root @param {string} slug */
 const isClosedAt = async (io, root, slug) => isClosedStatus(statusOf((await io.read(`${root}/docs/intent/${slug}/prompt.md`)) ?? ''))
-// Another live session on the intent's checkout tracks it (by slug: one tracking that slug elsewhere counts too).
+// What keeps auto-track off an intent: its folder is in no checkout of its own (a scratch or temp draft), its status
+// closes it, or another live session on its checkout tracks it (by slug: one tracking it elsewhere counts too).
 /** @param {Io} io @param {Target} target */
-const isTakenElsewhere = async (io, { slug, at }) => (await readPeers(io, at, (await laneAt(io, at)).pack.localDir)).some(one => one.intent === slug)
+const isBlockedAt = async (io, { slug, at }) =>
+  !isSameFolder((await checkoutOf(io, at)) ?? '', at) || (await isClosedAt(io, at, slug)) || (await readPeers(io, at, (await laneAt(io, at)).pack.localDir)).some(one => one.intent === slug)
 
 // Tracks an intent on purpose, if it exists: /ather, the profile tool, the Intent view. `root`: the folder holding
 // its docs/intent, the session's own or another checkout's. It lifts a stop on that intent. `me`: the person's
@@ -606,21 +610,22 @@ export const track = (io, root, slug, options = {}) =>
   })
 
 // Auto-track: this session worked on an intent (`isNew`: it just started it), never one it stopped tracking. Work on
-// the tracked one notes its time (a deliberate pin stays so); another is taken if mayTake says so. Resolves if taken.
-/** @param {Io} io @param {string} root @param {string} slug @param {boolean} [isNew] */
-export const autoTrack = (io, root, slug, isNew = false) =>
+// the tracked one notes its time (a deliberate pin stays so); another is taken if mayTake says so and nothing blocks
+// it, with its checkout's branch (`branchOf`) and the deliberate pin it replaces (`back`). Resolves if taken.
+/** @param {Io} io @param {string} root @param {string} slug @param {{ isNew?: boolean, branchOf: (root: string) => Promise<string> }} at */
+export const autoTrack = (io, root, slug, { isNew = false, branchOf }) =>
   serial(async () => {
     const target = await targetOf(io, root, slug)
     const sid = await io.sessionId()
     if (target === null || (await readStops(io, sid)).some(one => stopsTarget(one, target))) return false
-    const [now, tracked, meta] = [Date.now(), await readPin(io), await readPinMeta(io, sid)]
-    if (tracked !== null && tracked.slug === slug && (tracked.isOwn ? target.isOwn : tracked.root === target.at)) {
-      await io.set(KEY.pinMeta(sid), { isAuto: meta?.isAuto ?? false, at: now })
+    const [tracked, meta] = [await readPin(io), await readPinMeta(io, sid)]
+    if (tracked !== null && tracked.slug === slug && (tracked.isOwn ? target.isOwn : isSameFolder(tracked.root, target.at))) {
+      await io.set(KEY.pinMeta(sid), { ...(meta ?? { isAuto: false }), at: Date.now() })
       return false
     }
-    const isBlocked = (await isClosedAt(io, target.at, slug)) || (await isTakenElsewhere(io, target))
-    if (!mayTake({ hasPin: tracked !== null, meta, isBlocked, isAway: (await awayOf(io, sid)).phase === 'running', isNew, now })) return false
-    await setPin(io, sid, target, true)
+    if (!mayTake({ hasPin: tracked !== null, meta, isAway: (await awayOf(io, sid)).phase === 'running', isNew, now: Date.now() }) || (await isBlockedAt(io, target))) return false
+    const back = meta?.isAuto ? meta.back : tracked === null ? undefined : { slug: tracked.slug, root: tracked.root }
+    await setPin(io, sid, target, { isAuto: true, branch: await branchOf(target.at).catch(() => ''), ...(back ? { back } : {}) })
     return true
   })
 
@@ -644,18 +649,20 @@ export const untrack = (io, me) =>
     return { result: /** @type {const} */ ('untracked'), slug }
   })
 
-// Auto-untrack: a pin auto-track set goes once its intent's status says completed or parked, with no stop (work on
-// it after it reopens takes it again). A deliberate track stays, and so does any pin while an away window runs.
-// Resolves the slug it let go, or ''.
-/** @param {Io} io @returns {Promise<string>} */
-export const untrackClosed = io =>
+// Auto-untrack: a pin auto-track set goes once its intent's status says completed or parked, read on the branch it
+// was taken on (`branchOf` its checkout: on another branch it waits), with no stop (work on it after it reopens takes
+// it again); the deliberate pin it replaced comes back. A deliberate track stays, and any pin while an away window
+// runs. Resolves the slug let go and the one back ('' for none), or null.
+/** @param {Io} io @param {(root: string) => Promise<string>} branchOf @returns {Promise<{ slug: string, back: string } | null>} */
+export const untrackClosed = (io, branchOf) =>
   serial(async () => {
     const sid = await io.sessionId()
-    const tracked = await readPin(io)
-    if (tracked === null || (await readPinMeta(io, sid))?.isAuto !== true || (await awayOf(io, sid)).phase === 'running') return ''
-    if (!(await isClosedAt(io, tracked.root, tracked.slug))) return ''
-    await setPin(io, sid, null)
-    return tracked.slug
+    const [tracked, meta] = [await readPin(io), await readPinMeta(io, sid)]
+    if (tracked === null || meta?.isAuto !== true || (await awayOf(io, sid)).phase === 'running') return null
+    if ((meta.branch && meta.branch !== (await branchOf(tracked.root).catch(() => ''))) || !(await isClosedAt(io, tracked.root, tracked.slug))) return null
+    const back = meta.back ? await targetOf(io, meta.back.root, meta.back.slug) : null
+    await setPin(io, sid, back)
+    return { slug: tracked.slug, back: back?.slug ?? '' }
   })
 
 /** @param {Io} io @param {string} key @param {Stop[]} list */
@@ -667,18 +674,9 @@ const setList = async (io, key, list) => {
 
 // ---------------------------------------------------------------- lanes: the heartbeats of the sessions on this checkout
 
-// A heartbeat older than this, or one that says it ended, is no longer a live session.
-const LANE_STALE_MS = 10 * 60 * 1000
-
-/**
- * One session's heartbeat, a file under the pack's local folder: what it tracks, on which branch,
- * when it was written and when the session last took a prompt or ran a tool; `app`: its id and title in
- * the desktop app, when it runs there (absent elsewhere, and in heartbeats written before 0.6.5); `root`: the
- * session's own checkout ('' for a parent folder; absent before 0.6.6), which a heartbeat in another checkout
- * (one whose intent it tracks) does not share.
- * @typedef {{ sessionId: string, intent: string | null, branch: string, updatedAt: number, lastActiveAt?: number, away: string, hasEnded: boolean, app?: AppSession, root?: string }} Lane
- * @typedef {import('./handoff.mjs').AppSession} AppSession
- */
+// The heartbeats (heartbeats.mjs) as this module has always exported them.
+/** @typedef {import('./heartbeats.mjs').Lane} Lane @typedef {import('./heartbeats.mjs').AppSession} AppSession */
+export { isLaneLive, readLane, readPeers }
 
 // When this session last took a prompt or ran a tool; a hot reload starts it again.
 let activeAt = Date.now()
@@ -740,39 +738,6 @@ const beat = async io => {
     await io.write(old.path, JSON.stringify(lane)).catch(() => undefined)
     return { ...old, lane }
   }))
-}
-
-// One session's heartbeat on this checkout, or null when it has none here (it may live in another checkout).
-/** @param {Io} io @param {string} root @param {string} localDir @param {string} sid @returns {Promise<Lane | null>} */
-export const readLane = async (io, root, localDir, sid) => {
-  try {
-    return JSON.parse((await io.read(`${root}/${localDir}/lanes/${sid}.json`)) ?? '')
-  } catch {
-    return null
-  }
-}
-
-/** @param {Lane} lane */
-export const isLaneLive = lane => !lane.hasEnded && Date.now() - Number(lane.updatedAt) < LANE_STALE_MS
-
-// The other sessions alive on this checkout: a fresh heartbeat that has not said it ended.
-/** @param {Io} io @param {string} root @param {string} localDir @returns {Promise<Lane[]>} */
-export const readPeers = async (io, root, localDir) => {
-  const dir = `${root}/${localDir}/lanes`
-  const sid = await io.sessionId()
-  const list = io.list ?? (async () => [])
-  /** @type {Lane[]} */
-  const out = []
-  for (const entry of await list(dir).catch(() => [])) {
-    if (entry.kind !== 'file' || entry.name === `${sid}.json` || Date.now() - Number(entry.mtimeMs) > LANE_STALE_MS) continue
-    try {
-      const lane = JSON.parse((await io.read(`${dir}/${entry.name}`)) ?? '')
-      if (!lane.hasEnded) out.push(lane)
-    } catch {
-      // a half-written heartbeat; the next tick reads it
-    }
-  }
-  return out
 }
 
 // `gates`: on a rung that gates declare, the run replaces the result of each gate it ran and no other; a

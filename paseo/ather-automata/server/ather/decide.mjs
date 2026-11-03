@@ -29,6 +29,9 @@ const RECORD = "Record it as the intent skill's decision step says (mark the fin
 
 /** @param {string} slug @param {string} id @param {string} choice */
 export const decidePrompt = (slug, id, choice) => `Decide ${id} on ${slug}: ${choice.replace(/[\s.]+$/, '')}. ${RECORD}`
+// The intent a prompt answers a decision of (decidePrompt), or null: recording an answer is no work on it (auto-track).
+/** @param {string} text */
+export const answeredIntentOf = text => /^Decide \S+ on ([^\s:]+): /.exec(text)?.[1] ?? null
 
 /** @param {string} slug @param {string} id */
 export const explainPrompt = (slug, id) => `Explain decision ${id} on ${slug}: what it is about, each option and what it means, and why the recommendation; do not decide or change anything.`

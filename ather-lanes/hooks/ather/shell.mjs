@@ -58,14 +58,16 @@ export const withFolders = command => {
 export const gitFolders = command => [...new Set(withFolders(command).filter(one => /^git\b/i.test(one.segment)).map(one => one.folder))]
 
 // A commit whose message starts with `intent(<slug>)`: the intent it names (auto-track counts it as work on that
-// intent) and the folder the commit runs in (null: the session's). Read from the commit's own segment, its first
+// intent) and the folder the commit runs in (null: the session's). Read from the last commit's own segment, its first
 // message only: a heredoc message (`-m "$(cat <<'EOF'`) stands as its first line, a PowerShell here-string (`-m @'`)
-// is one quoted word; `-F <file>` is not read.
+// is one quoted word; `-F <file>` is not read. Not a `--dry-run`, and not when an `||` anywhere in the command makes
+// its outcome unknown (`… || true` exits 0 whether the commit was made or not).
 /** @param {string} command @returns {{ slug: string, folder: string | null } | null} */
 export const commitIntentOf = command => {
   const inline = command.replace(HEREDOC, (_, _tag, /** @type {string} */ body) => ` ${body.split('\n')[1] ?? ''}`)
-  const commit = withFolders(inline).find(one => GIT_COMMIT.test(one.segment))
-  const options = commit?.segment.replace(GIT_COMMIT, '') ?? ''
+  if (/\|\|/.test(inline.replace(/"[^"]*"|'[^']*'/g, ''))) return null
+  const commit = withFolders(inline).filter(one => GIT_COMMIT.test(one.segment)).at(-1)
+  const options = commit && !/\s--dry-run\b/.test(commit.segment) ? commit.segment.replace(GIT_COMMIT, '') : ''
   const flag = /\s(?:-[a-zA-Z]*m|--message)(?:=|\s*)/.exec(options)
   const slug = flag ? /^(?:\$\(\s*cat\s+)?@?\s*intent\(([\w.-]+)\)/.exec(options.slice(flag.index + flag[0].length))?.[1] : undefined
   return commit && slug ? { slug, folder: commit.folder } : null

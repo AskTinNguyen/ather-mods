@@ -9,14 +9,15 @@ type AgentTimelineItem = PluginLifecycleEvents["agent.turn_ended"]["timeline"][n
 import { awayReason, isHolding } from "./ather/away.mjs";
 import { briefIssues, explainGuard, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from "./ather/guards.mjs";
 import { andList } from "./ather/model.mjs";
-import { intentChanges, intentFileOf, intentFolderOf } from "./ather/changes.mjs";
+import { intentChanges, intentFileOf, intentFolderOf, intentRootIn } from "./ather/changes.mjs";
+import { answeredIntentOf } from "./ather/decide.mjs";
 import { autoTrackText, autoUntrackText } from "./ather/autotrack.mjs";
 import { commitIntentOf } from "./ather/shell.mjs";
 import * as state from "./ather/state.mjs";
 import { currentMode, forgetAgent, isNonAsking, knownAgents, lastPersonAt, markAgentActive, note, noteAgent, onTurnStarted as markTurn, paseo, remember } from "./agents";
 import { governedRoot } from "./agentConfig";
 import { readText, run } from "./io";
-import { branchesFor, ctxOf, heartbeat, isLaneAlive, isLaneGone, laneOf, type Ctx, type Pack } from "./lane";
+import { branchesFor, ctxOf, heartbeat, isLaneAlive, isLaneGone, laneOf, readBranch, type Ctx, type Pack } from "./lane";
 import { heldPrefixes, isOurs } from "./rules";
 import { settings } from "./settingsState";
 import { hold, isMergeProven, sessionStartedAt } from "./tools";
@@ -180,6 +181,9 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   const { root, pack } = await laneOf(ctx);
   const scope = await state.evidenceScope(io);
   const touched = new Set<string>();
+  // The intent whose decision this turn's prompt answers (a Needs you answer): recording it is no work on it.
+  const asked = event.timeline.findLast((item) => item.type === "user_message");
+  const answered = asked?.type === "user_message" ? answeredIntentOf(asked.text) : null;
 
   for (const item of thisTurn(event.timeline)) {
     if (item.type !== "tool_call" || (item.status !== "completed" && item.status !== "failed")) continue;
@@ -191,12 +195,13 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
       if (detail.type === "shell") {
         const text = String(detail.output ?? "") || errorText;
         const isError = item.status === "failed" || (typeof detail.exitCode === "number" && detail.exitCode !== 0);
-        await afterShell(ctx, pack, detail.command, text, isError);
+        await afterShell(ctx, pack, detail.command, text, isError, answered);
       } else if (detail.type === "write" || detail.type === "edit") {
-        // Auto-track: the agent's write into an intent's folder is work on that intent (its workers' writes are in
-        // their own transcripts, not this timeline: README Limits). Writing a prompt.md starts that intent.
+        // Auto-track: the agent's write into an intent's folder is work on that intent, in the checkout the file is in
+        // (its workers' writes are in their own transcripts, not this timeline: README Limits). Writing a prompt.md
+        // starts that intent.
         const worked = intentFolderOf(detail.filePath);
-        if (worked && item.status === "completed") await workedOn(ctx, root, worked.slug, detail.type === "write" && worked.file === "prompt.md");
+        if (worked && worked.slug !== answered && item.status === "completed") await workedOn(ctx, intentRootIn(detail.filePath, root) ?? root, worked.slug, detail.type === "write" && worked.file === "prompt.md");
         const file = intentFileOf(detail.filePath);
         if (file) touched.add(`${file.slug}/${file.file}`);
       } else if (item.name.startsWith("mcp__") && !item.name.startsWith("mcp__ather-automata__")) {
@@ -226,7 +231,7 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   await heartbeat(ctx, false).catch(() => undefined);
 }
 
-async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, isError: boolean) {
+async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, isError: boolean, answered: string | null) {
   const io = ctx.io as never;
   const agentId = ctx.agent.id;
   if (!isSearchCommand(command)) await noteTraps(ctx, pack, text);
@@ -234,7 +239,7 @@ async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, i
   if (guard !== null && isError) void note(agentId, "warn", `Guard: ${guard}`);
   // An `intent(<slug>)` commit is work on that intent, in the checkout the commit runs in (auto-track).
   const commit = commitIntentOf(command);
-  if (commit && !isError)
+  if (commit && commit.slug !== answered && !isError)
     await state
       .lane(io, ctx.agent.cwd)
       .then((own) => state.folderLane(io, own, commit.folder))
@@ -257,7 +262,7 @@ async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, i
 
 // Work on an intent (auto-track): it is tracked when state.mjs autoTrack takes it; the agent's timeline says so.
 async function workedOn(ctx: Ctx, root: string, slug: string, isNew: boolean) {
-  if (await state.autoTrack(ctx.io as never, root, slug, isNew).catch(() => false)) void note(ctx.agent.id, "info", autoTrackText(slug));
+  if (await state.autoTrack(ctx.io as never, root, slug, { isNew, branchOf: (folder: string) => readBranch(ctx, folder) }).catch(() => false)) void note(ctx.agent.id, "info", autoTrackText(slug));
 }
 
 async function noteTraps(ctx: Ctx, pack: Pack, text: string) {
@@ -354,7 +359,7 @@ export async function tick() {
       const ctx = ctxOf(agent);
       if (!(await laneOf(ctx)).isS2) continue;
       // Auto-untrack before the heartbeat, so peers see it at once.
-      const closed = await state.untrackClosed(ctx.io as never).catch(() => "");
+      const closed = await state.untrackClosed(ctx.io as never, (folder: string) => readBranch(ctx, folder)).catch(() => null);
       if (closed) void note(agent.id, "info", autoUntrackText(closed));
       await heartbeat(ctx, false);
       const away = await state.readAway(ctx.io as never);

@@ -94,6 +94,15 @@ expect("auto-track: an intent(feat-y) commit tracks feat-y for the agent, and it
 fs.writeFileSync(join(tree, "docs/intent/feat-y/prompt.md"), FEAT_Y.replace("- Status: active", "- Status: completed"));
 await tick();
 expect("auto-track: once feat-y is completed, the next tick lets it go", (await pinnedOf()) === null && notes.includes("Stopped tracking feat-y: it is completed or parked."), [await pinnedOf(), notes]);
+// A write into another checkout's intent is tracked in that checkout, not the agent's.
+const web2 = join(BASE, "web2");
+git(BASE, "init", "-q", web2);
+fs.mkdirSync(join(web2, "docs/intent/login"), { recursive: true });
+fs.writeFileSync(join(web2, "docs/intent/login/prompt.md"), FEAT_Y);
+const write = { type: "tool_call", status: "completed", name: "Write", detail: { type: "write", filePath: join(web2, "docs/intent/login/notes.md") } };
+await turn([write]);
+const trackedNow = await state.readTracked(ctxOf(AUTO as never).io as never);
+expect("auto-track: a write into another checkout's intent tracks it in that checkout", trackedNow?.slug === "login" && trackedNow.root.toLowerCase() === web2.replace(/\\/g, "/").toLowerCase(), trackedNow);
 
 removeDir(BASE);
 finish({ title: "Ather Automata for Paseo: the server over a real checkout", report: REPORT });

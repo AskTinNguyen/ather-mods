@@ -14,7 +14,8 @@ import { STAGE_LABELS, andList, currentStage, directorCalls, isPersonOrigin, loc
 import * as state from './state.mjs'
 import { recordHeard, recordSpawn, recordTool, resetWorkers, workerOf } from './workers.mjs'
 import { askingIn, during, isInFlight, isSilent, linkChild, markAsking, resetCalls } from './inflight.mjs'
-import { intentChanges, intentFileOf, intentFolderOf } from './changes.mjs'
+import { intentChanges, intentFileOf, intentFolderOf, intentRootIn } from './changes.mjs'
+import { answeredIntentOf } from './decide.mjs'
 import { autoTrackText, autoUntrackText } from './autotrack.mjs'
 import { trackedByLine, untrackText } from './home.mjs'
 import { GIT_ENV } from './team.mjs'
@@ -38,6 +39,9 @@ const seenTraps = new Set()
 const idleWarned = new Set()
 // When the person last typed a prompt: after an away window has ended, it means they are back.
 let lastPersonAt = 0
+// The intent whose decision the last prompt answers (a Needs you answer): recording it is no work on that intent.
+/** @type {string | null} */
+let answered = null
 // When this session started: a with-proof merge counts only proof seen since (D2: "passed in tool output this session").
 // A hot reload starts it again, which only makes the rule stricter.
 let sessionStartedAt = Date.now()
@@ -145,6 +149,7 @@ export function register(on, options) {
   on('prompt.submit', async ($, e, next) => {
     // The person is back (isPersonOrigin says who that is).
     if (isPersonOrigin(e.origin)) lastPersonAt = Date.now()
+    answered = answeredIntentOf(e.text)
     // Any prompt, or any tool call below, is the lane's last activity (its heartbeat says when).
     state.markActive()
     // Delivered into a running turn, it starts none.
@@ -255,7 +260,7 @@ export function register(on, options) {
     const settled = () => (e.agentId ? recordHeard(e.agentId, Date.now()) : undefined)
     const ran = await during({ loop: e.agentId ?? '', toolUseId: String(e.tool_use_id ?? ''), tool, input: /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), at: Date.now() }, () => next(e), settled, next.signal)
     const hasRun = ran.deny === undefined && ran.isError !== true
-    if (worked && hasRun) void intentRootOf($, String(path)).then(root => workedOn($, root, worked.slug, isNewIntent)).catch(() => undefined)
+    if (worked && hasRun && worked.slug !== answered) void intentRootOf($, String(path)).then(root => workedOn($, root, worked.slug, isNewIntent)).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
     if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
     return ran
@@ -273,13 +278,13 @@ async function fullPath($, path) {
 // The folder holding the docs/intent an intent file is in: the checkout it lands in.
 /** @param {Engine} $ @param {string} path */
 async function intentRootOf($, path) {
-  return normalFolder(intentFolderOf(await fullPath($, path))?.root ?? '')
+  return intentRootIn(path, cwd || (await laneOf($)).root) ?? ''
 }
 
 // Work on an intent (auto-track): it is tracked when state.mjs autoTrack takes it; the person is told, with the way back.
 /** @param {Engine} $ @param {string} root @param {string} slug @param {boolean} isNew */
 async function workedOn($, root, slug, isNew) {
-  if (await state.autoTrack(io($), root, slug, isNew)) $.ui.toast(`Ather: ${autoTrackText(slug)}`, { timeoutMs: 12000 })
+  if (await state.autoTrack(io($), root, slug, { isNew, branchOf: folder => readBranch($, folder) })) $.ui.toast(`Ather: ${autoTrackText(slug)}`, { timeoutMs: 12000 })
 }
 
 /** @param {Engine} $ @param {string} path */
@@ -458,7 +463,7 @@ async function stillTracking($) {
 /** @param {Engine} $ */
 async function tick($) {
   // Auto-untrack before the heartbeat, so peers see it at once.
-  const closed = await state.untrackClosed(io($)).catch(() => '')
+  const closed = await state.untrackClosed(io($), folder => readBranch($, folder)).catch(() => null)
   if (closed) $.ui.toast(`Ather: ${autoUntrackText(closed)}`, { timeoutMs: 12000 })
   await heartbeat($, false)
   const now = Date.now()
@@ -684,7 +689,7 @@ async function afterShell($, command, ran) {
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
   // An `intent(<slug>)` commit is work on that intent, in the checkout the commit runs in (auto-track).
   const commit = commitIntentOf(command)
-  if (commit && ran.deny === undefined && ran.isError !== true) void checkoutLane($, commit.folder).then(({ lane: at }) => workedOn($, at.root, commit.slug, false)).catch(() => undefined)
+  if (commit && commit.slug !== answered && ran.deny === undefined && ran.isError !== true) void checkoutLane($, commit.folder).then(({ lane: at }) => workedOn($, at.root, commit.slug, false)).catch(() => undefined)
   const reading = pack.readShell(command, text, ran)
   for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value, one.gates)
   context.push(...reading.context)

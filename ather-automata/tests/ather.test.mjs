@@ -24,6 +24,8 @@ import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canF
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
 const NOON = Date.UTC(2026, 9, 3, 5, 0) // 12:00 at UTC+7
+// Auto-track's branch reader (state.mjs autoTrack) for a store-only test.
+const AUTO = { branchOf: async () => 'main' }
 const EVENING = Date.UTC(2026, 9, 3, 14, 0) // 21:00 at UTC+7
 
 const prompt = (fields, acceptance = '- [x] one\n- [ ] two') =>
@@ -1085,12 +1087,13 @@ describe('track guard', () => {
     const { io, files, store } = memoryIo()
     files.set('R/docs/intent/spawner/prompt.md', '# S')
     files.set('R/docs/intent/pause-ai/prompt.md', '# P')
+    files.set('R/.git/HEAD', 'ref: refs/heads/main\n')
     await state.track(io, 'R', 'spawner')
     await state.untrack(io, 'Tin Nguyen')
-    expect(await state.autoTrack(io, 'R', 'spawner')).toBe(false)
+    expect(await state.autoTrack(io, 'R', 'spawner', AUTO)).toBe(false)
     expect(await state.readPinned(io)).toBe(null)
     // Another intent still tracks from a write.
-    expect(await state.autoTrack(io, 'R', 'pause-ai')).toBe(true)
+    expect(await state.autoTrack(io, 'R', 'pause-ai', AUTO)).toBe(true)
     expect(await state.track(io, 'R', 'spawner')).toBe(true)
     expect(store.has('untracked:s1')).toBe(false)
     // The stop follows the lane after /clear.
@@ -1660,11 +1663,12 @@ describe('several repositories on one machine', () => {
     const io = { ...memory.io, repo: async () => 'sipher/s2', origin: async (/** @type {string} */ root) => origins[root] ?? '' }
     memory.files.set('/s3stop/web/docs/intent/login/prompt.md', '# Login\n')
     memory.files.set('R/docs/intent/login/prompt.md', '# Login\n')
+    memory.files.set('R/.git/HEAD', 'ref: refs/heads/main\n')
     await state.track(io, '/s3stop/web', 'login')
     await state.untrack(io, 'Tin Nguyen')
     expect(memory.store.get('untracked:s1')).toEqual([{ slug: 'login', root: '/s3stop/web' }])
-    expect(await state.autoTrack(io, '/s3stop/web', 'login')).toBe(false)
-    expect(await state.autoTrack(io, 'R', 'login')).toBe(true)
+    expect(await state.autoTrack(io, '/s3stop/web', 'login', AUTO)).toBe(false)
+    expect(await state.autoTrack(io, 'R', 'login', AUTO)).toBe(true)
     expect(memory.store.get('pinned:s1')).toBe('login')
     // Stopping the own one keeps its plain slug; tracking web's on purpose lifts only web's stop.
     await state.untrack(io, 'Tin Nguyen')
