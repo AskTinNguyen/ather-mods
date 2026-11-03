@@ -1,6 +1,6 @@
 # Ather Automata auto-track
 
-- Rev: 1
+- Rev: 2
 - Status: active
 - Area: ather-automata
 - Owner: HaiHuynh
@@ -35,7 +35,15 @@ A session tracks the intent it is working on by itself, so its lane text, its pr
 - D6 (rev 1): Auto-untrack applies to auto pins only. When the tracked intent's Status becomes completed or parked, a pin auto-track set is removed at the session's next 30-second tick, with no stop (work on it after it reopens takes it again) and with one toast. A deliberate track is left alone: the person chose it, and it goes the way it came (`/ather untrack`, Stop tracking). Nothing is removed while an away window runs. Auto-track also never takes a completed or parked intent, so the closing commit or a last log line cannot pin it again. Source: L-1 item 6 ("decide, and write the decision down"); engineering.
 - D7 (rev 1): `/ather untrack` stops stay respected: an auto-track never pins an intent this session untracked, the new-intent exception included. Source: L-1 item 7.
 - D8 (rev 1): Taking an intent says so in one toast with the way back ("Now tracking X: this session works on it. /ather untrack stops that."); auto-untrack says so in one toast. No dialog. Source: engineering (track-guard: tracking can be undone, no new dialogs).
-- D9 (rev 1): Paseo: ported. The agent's own writes and `intent(<slug>)` commits go through the same `state.track` at turn end, and the tick runs auto-untrack. A worker's writes are not seen there (they are in the worker's own transcript, not the agent's timeline): a line under `## Limits` in `paseo/ather-automata/README.md`. Source: AGENTS.md (decide the Paseo side).
+- D9 (rev 1, rev 2): Paseo: ported. The agent's own writes (in the checkout the file is in) and `intent(<slug>)` commits go through the same `state.autoTrack` at turn end, and the tick runs auto-untrack. A worker's writes are not seen there (they are in the worker's own transcript, not the agent's timeline): a line under `## Limits` in `paseo/ather-automata/README.md`. Source: AGENTS.md (decide the Paseo side).
+- D10 (rev 2): Answering a Needs you decision is no work on its intent: a prompt that answers one (decide.mjs `decidePrompt`, read back by `answeredIntentOf`) makes the writes and commits into that intent until the next prompt not count. Chosen over leaving findings.md out: the answer also writes prompt.md (a Rev bump and a Decisions entry) and log.md, so no list of files tells an answer from work, while the prompt Ather hands out names the intent exactly, in this session and in the one it is sent to. Keeps track-guard A2 ("looking never tracks"). Source: adversary review 2026-11-03, finding 2.
+- D11 (rev 2): Auto-track takes only an intent whose folder's `docs/intent` sits at the top of a git checkout: a draft in a temp or scratch folder, or a copy inside another checkout's subfolder, never takes the pin. Tracking on purpose is unchanged. Source: review finding 3.
+- D12 (rev 2): Nothing is taken while an away window runs, even with no pin (D4 kept a pin from moving; an empty one was still filled, which untrack then refused). Source: review finding 1.
+- D13 (rev 2): Folders are compared as their ids compare them (normalised, any case, `\` or `/`): the session's root, the tracked intent's checkout and the stops. Source: review finding 5.
+- D14 (rev 2): Auto-untrack reads the status on the branch the auto pin was taken on (kept in its PinMeta): on another branch the pin waits, and goes once the person is back on that branch and the intent is still closed there. Chosen over "closed on two ticks in a row", which only delays the drop by 30 s after a `git checkout`. Source: review finding 6.
+- D15 (rev 2): The commit read is the command's last `git commit`; a `--dry-run`, or any `||` outside quotes (`… || true` exits 0 whether the commit was made), counts as no commit. Source: review findings 7, 8.
+- D16 (rev 2): When auto-track replaces a deliberate pin, it keeps it (`back`, carried through further auto pins); when the auto pin is let go (completed or parked), the deliberate one comes back and the toast says "Back to X". `/ather untrack` brings nothing back: it is a stop. Source: review finding 10.
+- D17 (rev 2): Two sessions may both take the same intent if they work on it within one heartbeat (30 s) of each other: each reads the other's heartbeat, which can be that old. Accepted, as the spec allows: both show "Also tracked in 1 other session", and the next tick's heartbeats keep any third session off it. What blocks an intent (its checkout, status and peers) is read only after the 30-minute and away rules let it through. Source: review findings 9, 11.
 
 ## Acceptance
 
@@ -49,6 +57,7 @@ A session tracks the intent it is working on by itself, so its lane text, its pr
 - A8: The track guard holds: looking never tracks, untrack undoes, a second session is shown; every existing check passes or is changed only where A3 of track-guard is replaced (named in progress.md). Proof: gate: `node dev/test-all.mjs` (unit, repos, board, lanes, Paseo, S2 e2e) against a base run on origin/main.
 - A9: Paseo side per D9: ported in `paseo/ather-automata/server/watch.ts`, the Limits line written. Proof: gate: the Paseo type-check and e2e in `node dev/test-all.mjs`.
 - A10: Released as ather-automata 0.7.0: `ather-automata/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `npm run sync` in `paseo/ather-automata`, one Changes line; 0.7.0 is not on origin/main or claimed by open PRs #62, #67, #84. Proof: gate: `node dev/check-release.mjs`, `claude plugin validate --strict .` and `--strict ather-automata`, `claude plugin test ather-automata`.
+- A12 (rev 2): The review's cases: an answer to a decision does not take its intent, and the next prompt's work does (D10); a draft outside a checkout is never taken, a path written with backslashes lands in its checkout (D11); nothing is taken during an away window (D12); one folder written two ways is one intent and one stop (D13); a branch switch does not drop an auto pin (D14); `--dry-run`, `|| true` and an earlier commit do not count (D15); the replaced deliberate pin comes back (D16); a Paseo write lands in the file's own checkout (D9). Proof: gate: unit (`ather-automata/tests/autotrack.test.mjs`), e2e (`dev/e2e/repos.mjs`, `dev/e2e/paseo.mts`), and a mutation check.
 - A11: Thermo-nuclear review of the branch's diff against origin/main until `Verdict: pass`, and a mutation check: each piece removed once makes a test fail. Proof: review (progress.md step, with the findings and the commits that fixed them).
 
 ## Constraints
@@ -60,3 +69,4 @@ A session tracks the intent it is working on by itself, so its lane text, its pr
 ## Changelog
 
 - rev 1 (2026-11-03): created from L-1.
+- rev 2 (2026-11-03): L-2, the adversary review's 12 findings: D10-D17, D9 amended, A12.
