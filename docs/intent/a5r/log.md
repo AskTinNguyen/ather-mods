@@ -382,3 +382,7 @@ Hai quoted a lane's report:
 > But I think mostly because it's not intuitively clear for me what should I expected to wait!
 
 (-> A133.)
+
+> Look at this. The syncmain is the Big task that stop every other session (due to my rule). But not clear for me on any other session that I should stop spawning new task, or it is in the middle of some blocking thing/
+
+With a screenshot of the "S2 Lanes" viewer (28 sessions on a timeline, sync main running since 11:27, 6 waiting for a turn). (-> A134.)
