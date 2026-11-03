@@ -109,6 +109,7 @@ describe('auto-track A3: an intent(<slug>) commit counts', () => {
     expect(commitIntentOf('cd ../web && git commit -am "intent(login): x"')).toEqual({ slug: 'login', folder: '../web' })
     expect(commitIntentOf('git -C ../web commit --message="intent(login): x"')).toEqual({ slug: 'login', folder: '../web' })
     expect(commitIntentOf('git commit -m "feat: x"; git commit --amend -m "intent(login): y"')).toEqual({ slug: 'login', folder: null })
+    expect(commitIntentOf('git add -A || true; git commit -m "intent(login): y" && git push')).toEqual({ slug: 'login', folder: null })
   })
   test('anything else is no intent commit, nor one whose outcome the command hides', () => {
     const others = [
@@ -124,6 +125,9 @@ describe('auto-track A3: an intent(<slug>) commit counts', () => {
       'git commit --dry-run -m "intent(login): x"',
       'git commit -m "intent(login): x" || true',
       'git commit -m "intent(login): a" && git commit -m "feat: b"',
+      'git commit -m "intent(login): x" 2>&1 | tail -3',
+      'git commit -m "intent(login): x"; echo done',
+      'git commit -m "intent(login): x" && git push || echo failed',
     ]
     for (const command of others) expect(commitIntentOf(command)).toBe(null)
     // An || inside the message is text, not an outcome hidden.
@@ -245,6 +249,25 @@ describe('auto-track A6: auto-untrack when the intent is completed or parked', (
     expect(memory.store.get('pinned:s1')).toBe('a')
     expect(/** @type {{ isAuto: boolean }} */ (memory.store.get('pinMeta:s1')).isAuto).toBe(false)
     expect(autoUntrackText({ slug: 'c', back: 'a' })).toBe('Stopped tracking c: it is completed or parked. Back to a.')
+  })
+  test('work on the replaced deliberate pin gives it back deliberate, so it is never left on once it closes', async () => {
+    const memory = withIntents()
+    await state.track(memory.io, 'R', 'a')
+    lastWorkedAgo(memory, 31)
+    await work(memory, 'b')
+    lastWorkedAgo(memory, 31)
+    expect(await work(memory, 'a')).toBe(true)
+    expect(memory.store.get('pinMeta:s1')).toEqual({ isAuto: false, at: /** @type {{ at: number }} */ (memory.store.get('pinMeta:s1')).at })
+    memory.files.set('R/docs/intent/a/prompt.md', promptWith('completed'))
+    expect(await tick(memory)).toBe(null)
+  })
+  test("work on an auto pin notes the branch it is worked on now: a new branch made for it is where its status is read", async () => {
+    const memory = withIntents()
+    await work(memory, 'a')
+    memory.branch = 'intent/a'
+    await work(memory, 'a')
+    memory.files.set('R/docs/intent/a/prompt.md', promptWith('completed'))
+    expect(await tick(memory)).toEqual({ slug: 'a', back: '' })
   })
   test('a deliberate track stays when its intent closes, and so does any pin while an away window runs', async () => {
     const memory = withIntents()

@@ -153,16 +153,13 @@ export async function onTurnStarted(event: PluginLifecycleEvents["agent.turn_sta
   before.set(event.agent.id, files);
 }
 
-// The items of the turn that just ended: everything after the last message that started it.
+// The turn that just ended: the prompt that started it ('' when none is in the timeline) and everything after it.
 function thisTurn(timeline: readonly AgentTimelineItem[]) {
-  let start = 0;
   for (let i = timeline.length - 1; i >= 0; i -= 1) {
-    if (timeline[i]?.type === "user_message") {
-      start = i + 1;
-      break;
-    }
+    const item = timeline[i];
+    if (item?.type === "user_message") return { prompt: item.text, items: timeline.slice(i + 1) };
   }
-  return timeline.slice(start);
+  return { prompt: "", items: timeline };
 }
 
 const outputOf = (item: { detail: unknown; error: unknown }) => {
@@ -181,11 +178,11 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   const { root, pack } = await laneOf(ctx);
   const scope = await state.evidenceScope(io);
   const touched = new Set<string>();
-  // The intent whose decision this turn's prompt answers (a Needs you answer): recording it is no work on it.
-  const asked = event.timeline.findLast((item) => item.type === "user_message");
-  const answered = asked?.type === "user_message" ? answeredIntentOf(asked.text) : null;
+  const { prompt, items } = thisTurn(event.timeline);
+  // Auto-track: the intents this turn worked on (its writes, its `intent(<slug>)` commits), in the checkout of each.
+  const worked: { root: string; slug: string; isNew: boolean }[] = [];
 
-  for (const item of thisTurn(event.timeline)) {
+  for (const item of items) {
     if (item.type !== "tool_call" || (item.status !== "completed" && item.status !== "failed")) continue;
     const errorText = item.error ? String(typeof item.error === "string" ? item.error : JSON.stringify(item.error)) : "";
     // Ather refused it on purpose: nothing ran.
@@ -195,13 +192,16 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
       if (detail.type === "shell") {
         const text = String(detail.output ?? "") || errorText;
         const isError = item.status === "failed" || (typeof detail.exitCode === "number" && detail.exitCode !== 0);
-        await afterShell(ctx, pack, detail.command, text, isError, answered);
+        await afterShell(ctx, pack, detail.command, text, isError);
+        const commit = isError ? null : commitIntentOf(detail.command);
+        const lane = commit && (await state.lane(io, ctx.agent.cwd).then((own) => state.folderLane(io, own, commit.folder)));
+        if (commit && lane) worked.push({ root: lane.lane.root, slug: commit.slug, isNew: false });
       } else if (detail.type === "write" || detail.type === "edit") {
-        // Auto-track: the agent's write into an intent's folder is work on that intent, in the checkout the file is in
-        // (its workers' writes are in their own transcripts, not this timeline: README Limits). Writing a prompt.md
-        // starts that intent.
-        const worked = intentFolderOf(detail.filePath);
-        if (worked && worked.slug !== answered && item.status === "completed") await workedOn(ctx, intentRootIn(detail.filePath, root) ?? root, worked.slug, detail.type === "write" && worked.file === "prompt.md");
+        // The agent's write into an intent's folder (its workers' writes are in their own transcripts, not this
+        // timeline: README Limits). Writing a prompt.md starts that intent.
+        const found = intentFolderOf(detail.filePath);
+        const at = intentRootIn(detail.filePath, root);
+        if (found && at && item.status === "completed") worked.push({ root: at, slug: found.slug, isNew: detail.type === "write" && found.file === "prompt.md" });
         const file = intentFileOf(detail.filePath);
         if (file) touched.add(`${file.slug}/${file.file}`);
       } else if (item.name.startsWith("mcp__") && !item.name.startsWith("mcp__ather-automata__")) {
@@ -228,23 +228,19 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   }
   before.delete(agentId);
 
+  // Recording an answer to a Needs you decision is no work on its intent.
+  const answered = answeredIntentOf(prompt);
+  for (const one of worked) if (one.slug !== answered) await workedOn(ctx, one.root, one.slug, one.isNew);
+
   await heartbeat(ctx, false).catch(() => undefined);
 }
 
-async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, isError: boolean, answered: string | null) {
+async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, isError: boolean) {
   const io = ctx.io as never;
   const agentId = ctx.agent.id;
   if (!isSearchCommand(command)) await noteTraps(ctx, pack, text);
   const guard = explainGuard(command);
   if (guard !== null && isError) void note(agentId, "warn", `Guard: ${guard}`);
-  // An `intent(<slug>)` commit is work on that intent, in the checkout the commit runs in (auto-track).
-  const commit = commitIntentOf(command);
-  if (commit && commit.slug !== answered && !isError)
-    await state
-      .lane(io, ctx.agent.cwd)
-      .then((own) => state.folderLane(io, own, commit.folder))
-      .then(({ lane }) => workedOn(ctx, lane.root, commit.slug, false))
-      .catch(() => undefined);
   const reading = pack.readShell(command, text, { isError });
   const scope = await state.evidenceScope(io);
   for (const one of reading.rungs) await state.setRung(io, scope, one.rung, one.value, one.gates);

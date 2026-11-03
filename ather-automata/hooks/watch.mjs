@@ -149,7 +149,9 @@ export function register(on, options) {
   on('prompt.submit', async ($, e, next) => {
     // The person is back (isPersonOrigin says who that is).
     if (isPersonOrigin(e.origin)) lastPersonAt = Date.now()
-    answered = answeredIntentOf(e.text)
+    // Set by an answer delivered into a running turn too; cleared only by a prompt that starts a turn of its own.
+    const asked = answeredIntentOf(e.text)
+    if (asked !== null || e.turnId === undefined) answered = asked
     // Any prompt, or any tool call below, is the lane's last activity (its heartbeat says when).
     state.markActive()
     // Delivered into a running turn, it starts none.
@@ -260,7 +262,7 @@ export function register(on, options) {
     const settled = () => (e.agentId ? recordHeard(e.agentId, Date.now()) : undefined)
     const ran = await during({ loop: e.agentId ?? '', toolUseId: String(e.tool_use_id ?? ''), tool, input: /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (e)), at: Date.now() }, () => next(e), settled, next.signal)
     const hasRun = ran.deny === undefined && ran.isError !== true
-    if (worked && hasRun && worked.slug !== answered) void intentRootOf($, String(path)).then(root => workedOn($, root, worked.slug, isNewIntent)).catch(() => undefined)
+    if (worked && hasRun) void intentRootOf($, String(path)).then(root => workedOn($, root, worked.slug, isNewIntent)).catch(() => undefined)
     if (isMcp && ran.deny === undefined) void noteMcp($, tool, input, ran).catch(() => undefined)
     if (intentFile && ran.deny === undefined) void noteIntentEdit($, intentFile, String(path), before).catch(() => undefined)
     return ran
@@ -282,8 +284,10 @@ async function intentRootOf($, path) {
 }
 
 // Work on an intent (auto-track): it is tracked when state.mjs autoTrack takes it; the person is told, with the way back.
+// Recording an answer to one of its decisions is no work on it.
 /** @param {Engine} $ @param {string} root @param {string} slug @param {boolean} isNew */
 async function workedOn($, root, slug, isNew) {
+  if (slug === answered) return
   if (await state.autoTrack(io($), root, slug, { isNew, branchOf: folder => readBranch($, folder) })) $.ui.toast(`Ather: ${autoTrackText(slug)}`, { timeoutMs: 12000 })
 }
 
@@ -689,7 +693,7 @@ async function afterShell($, command, ran) {
   if (guard !== null && (ran.deny !== undefined || ran.isError === true)) $.ui.toast(`Ather guard: ${guard}`, { timeoutMs: 12000 })
   // An `intent(<slug>)` commit is work on that intent, in the checkout the commit runs in (auto-track).
   const commit = commitIntentOf(command)
-  if (commit && commit.slug !== answered && ran.deny === undefined && ran.isError !== true) void checkoutLane($, commit.folder).then(({ lane: at }) => workedOn($, at.root, commit.slug, false)).catch(() => undefined)
+  if (commit && ran.deny === undefined && ran.isError !== true) void checkoutLane($, commit.folder).then(({ lane: at }) => workedOn($, at.root, commit.slug, false)).catch(() => undefined)
   const reading = pack.readShell(command, text, ran)
   for (const one of reading.rungs) await state.setRung(io($), scope, one.rung, one.value, one.gates)
   context.push(...reading.context)

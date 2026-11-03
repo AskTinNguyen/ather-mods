@@ -609,8 +609,8 @@ export const track = (io, root, slug, options = {}) =>
   })
 
 // Auto-track: this session worked on an intent (`isNew`: it just started it), never one it stopped tracking. Work on
-// the tracked one notes its time (a deliberate pin stays so); another is taken if mayTake says so and nothing blocks
-// it, with its checkout's branch (`branchOf`) and the deliberate pin it replaces (`back`). Resolves if taken.
+// the tracked one notes its time (and an auto pin its branch now); another is taken if mayTake says so and nothing
+// blocks it, with its checkout's branch (`branchOf`) and the deliberate pin it replaces (`back`). Resolves if taken.
 /** @param {Io} io @param {string} root @param {string} slug @param {{ isNew?: boolean, branchOf: (root: string) => Promise<string> }} at */
 export const autoTrack = (io, root, slug, { isNew = false, branchOf }) =>
   serial(async () => {
@@ -618,13 +618,16 @@ export const autoTrack = (io, root, slug, { isNew = false, branchOf }) =>
     const sid = await io.sessionId()
     if (target === null || (await readStops(io, sid)).some(one => stopsTarget(one, target))) return false
     const [tracked, meta] = [await readPin(io), await readPinMeta(io, sid)]
+    const branch = async () => ({ branch: await branchOf(target.at).catch(() => '') })
     if (tracked !== null && tracked.slug === slug && (tracked.isOwn ? target.isOwn : isSameFolder(tracked.root, target.at))) {
-      await io.set(KEY.pinMeta(sid), { ...(meta ?? { isAuto: false }), at: Date.now() })
+      await io.set(KEY.pinMeta(sid), { ...(meta ?? { isAuto: false }), ...(meta?.isAuto ? await branch() : {}), at: Date.now() })
       return false
     }
     if (!mayTake({ hasPin: tracked !== null, meta, isAway: (await awayOf(io, sid)).phase === 'running', isNew, now: Date.now() }) || (await isBlockedAt(io, target))) return false
     const back = meta?.isAuto ? meta.back : tracked === null ? undefined : { slug: tracked.slug, root: tracked.root }
-    await setPin(io, sid, target, { isAuto: true, branch: await branchOf(target.at).catch(() => ''), ...(back ? { back } : {}) })
+    // Work on the deliberate pin an auto pin replaced gives it back as it was: deliberate.
+    const isBack = back !== undefined && back.slug === slug && isSameFolder(back.root, target.at)
+    await setPin(io, sid, target, isBack ? undefined : { isAuto: true, ...(await branch()), ...(back ? { back } : {}) })
     return true
   })
 
