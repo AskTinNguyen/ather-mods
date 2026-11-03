@@ -261,6 +261,12 @@ The three share one clock and one message channel: hai-flow notices, delivered b
   - git and Source allowed after Succeeded, while builds and the Editor are still refused in testing;
   - a failed build keeps everything frozen.
 - A132 (rev 44): A frozen session is woken when it can go on. A session that was refused or told to wait by the freeze, and is idle, is woken (deliverIdle) at the step that frees what it needed, with the expected next step and its time. No session needs its own watcher. Each frozen session's notice gives the expected lift times (build end estimated from the last sync builds, test end), updated once if they move by 15 min or more. MEASURED 2026-11-03: a lane replied "I'm waiting for the sync to finish. A background watcher will wake me, then I'll apply the C++, build in my A5R slot and run the MC scenario", and Hai called it "the second frustrated thing". Proof: engine tests (an idle refused session is woken at the step that frees it; a busy one is told and not woken twice).
+- A133 (rev 44): Hai always sees what he is waiting for, and until when. Hai: "mostly because it's not intuitively clear for me what should I expected to wait!".
+  - **Sync timeline.** One line appears wherever A5R speaks: the top of the A5R panel, A5R's compact line in Ather's band, and every freeze refusal and notice. It lists only the steps still ahead, with the current one marked, e.g. `Sync main 11:45 · merging → build ~12:05 → tests ~12:20 → you can build again ~12:25`. Before the cutoff it reads `Sync main 11:45 · cutoff 11:15 · freeze ~11:45–12:25`.
+  - **Editor waits.** Each Editor-waiting row and each Editor refusal says what it waits for, with an estimated start, e.g. `after sync-main's build (~12:05) and avian's turn (~12:35)`.
+  - **Estimates.** They come from the measured durations of the last syncs and turns, are marked `~`, and are recomputed every minute. A step 15 min or more past its estimate is marked `late`. With no data, the line says "time unknown" rather than guessing.
+
+  Proof: engine tests on the line per stage and on the waiting row.
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -274,7 +280,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
-- rev 44 (2026-11-03): L-48 (Hai: commits lost to index.lock fights before the sync): A128 one git writer at a time, A129 git writes never killed halfway, A130 a stale index.lock moved aside safely, A131 the sync freeze lifts in steps, A132 frozen sessions woken when they can go on.
+- rev 44 (2026-11-03): L-48 (Hai: commits lost to index.lock fights before the sync): A128 one git writer at a time, A129 git writes never killed halfway, A130 a stale index.lock moved aside safely, A131 the sync freeze lifts in steps, A132 frozen sessions woken when they can go on, A133 what you wait for and until when, everywhere A5R speaks.
 - rev 43 (2026-10-29): L-47 (Hai: lanes commit each other's work; A5R's lane management is not good): A126 no commit of another lane's staged work, A127 live A5R sessions seen at the cutoff.
 - rev 42 (2026-10-28): L-46 (the week's audit; Hai: close an orphan Editor safely; sync at least twice a day, timed to the sessions): A121 offer Focus to a lane that keeps coming back, A122 overruns with waiters shown, A123 graceful orphan close, A124 auto-planned syncs, A125 true numbers and fewer alerts.
 - rev 41 (2026-10-23): L-45 (Hai: Editor orchestration should serve delivery; Focus for 2–3 h milestones): A118 Focus, A119 the others re-planned around it, A120 others keep working without touching the focus Editor.

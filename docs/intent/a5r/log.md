@@ -378,3 +378,7 @@ Hai quoted a lane's report:
 > This is the second frustrated thing.
 
 (Read in the sync conductor's transcript, 2026-11-03: `.git/index.lock` held from 11:16 by a wip commit, pid 47320, of lane mc-armed-stop-block-clip; the conductor moved it aside at 11:24 and backed up and reset that lane's progress.md before the 11:45 merge.)
+
+> But I think mostly because it's not intuitively clear for me what should I expected to wait!
+
+(-> A133.)
