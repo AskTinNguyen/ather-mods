@@ -124,6 +124,13 @@ export const fullTitle = (text, max = 400) => {
 /** @param {string} text @param {string} name */
 const field = (text, name) => new RegExp(`^\\s*-\\s*${name}:\\s*(.+)$`, 'mi').exec(text)?.[1]?.trim() ?? ''
 
+// An intent's status word: "parked: weather presets merged…" is parked too; 'unknown' without a Status line.
+/** @param {string} prompt */
+export const statusOf = prompt => /^[a-z]+/.exec(field(prompt, 'Status').toLowerCase())?.[0] ?? 'unknown'
+// A status that closes an intent: finished, or set aside.
+/** @param {string} status */
+export const isClosedStatus = status => status === 'completed' || status === 'parked'
+
 /** @param {string} text @param {string} heading */
 export const section = (text, heading) => {
   const start = new RegExp(`^##\\s+${heading}\\b.*$`, 'mi').exec(text)
@@ -431,8 +438,7 @@ const stepNote = text => (/^(<|none\b|n\/a\b|[-–—]\s*$)/i.test(text) ? '' : 
 /** @param {IntentFiles} input @param {Pack} [pack] */
 export const parseIntent = (input, pack = unreal) => {
   const { prompt, progress } = input
-  // "parked: weather presets merged…" is a status too: take the leading word.
-  const status = /^[a-z]+/.exec(field(prompt, 'Status').toLowerCase())?.[0] ?? 'unknown'
+  const status = statusOf(prompt)
   const items = acceptanceItems(prompt, progress)
   const findings = readFindings(input.findings, prompt)
   return {
@@ -608,6 +614,37 @@ export const sessionTitle = lines => {
 
 /** @param {Pack} [pack] @returns {Evidence} */
 export const emptyEvidence = (pack = unreal) => pack.emptyEvidence()
+
+// Proof older than this no longer counts: the code has likely moved on since.
+export const EVIDENCE_TTL_MS = 24 * 60 * 60 * 1000
+
+// What is kept for a command that is no gate, on a rung that gates declare. No gate has this key.
+export const NO_GATE = ''
+
+/**
+ * A rung that gates declare, from the result kept for each: passed when every gate passed, failed when one
+ * failed (or a command that is no gate did, since the rung's gates last ran), else not proven. A passed
+ * rung is as old as its oldest result, so proof from before a session is never taken for that session's.
+ * @param {Record<string, Rung> | undefined} kept @param {readonly string[]} all the gates that declare the rung
+ * @returns {Rung}
+ */
+export const rungOfGates = (kept, all) => {
+  const fresh = [...all, NO_GATE].flatMap(key => {
+    const one = kept?.[key]
+    return one && Date.now() - (one.at ?? 0) < EVIDENCE_TTL_MS ? [{ key, ...one }] : []
+  })
+  const byAge = [...fresh].sort((a, b) => (a.at ?? 0) - (b.at ?? 0))
+  const stamp = (/** @type {typeof fresh[number] | undefined} */ one) => (one ? { at: one.at, by: one.by } : {})
+  const failed = byAge.filter(one => one.state === 'fail').at(-1)
+  if (failed) return { state: 'fail', detail: all.length > 1 && failed.key !== NO_GATE ? `${failed.key}: ${failed.detail}`.slice(0, 120) : failed.detail, ...stamp(failed) }
+  const passed = byAge.filter(one => one.state === 'pass' && one.key !== NO_GATE)
+  if (all.length === 1) {
+    const only = fresh.find(one => one.key !== NO_GATE)
+    return only ? { state: only.state, detail: only.detail, ...stamp(only) } : { state: 'none', detail: '' }
+  }
+  if (passed.length === all.length) return { state: 'pass', detail: `${all.length} gates passed`, ...stamp(passed[0]) }
+  return { state: 'none', detail: `${passed.length} of ${all.length} gates passed`, ...stamp(byAge.at(-1)) }
+}
 
 // A Status of completed wins; then every item met with every PR merged is ready to close, whatever proof this session saw.
 /** @param {Intent | undefined} intent @param {Evidence} evidence @param {string} role @param {PrStates} [prs] @param {Pack} [pack] @returns {keyof typeof STAGE_LABELS} */

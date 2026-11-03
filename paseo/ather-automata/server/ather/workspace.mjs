@@ -88,6 +88,10 @@ export const normalFolder = folder => {
   return joined.length > 1 ? joined.replace(/\/$/, '') : joined
 }
 
+// Two ways of writing one folder (`d:/W/s2/`, `D:\w\s2`): the same once normalised and lowercased, as its id holds it.
+/** @param {string} a @param {string} b */
+export const isSameFolder = (a, b) => normalFolder(a).toLowerCase() === normalFolder(b).toLowerCase()
+
 /** @param {string} folder */
 export const isAbsolute = folder => /^([A-Za-z]:)?[\\/]/.test(folder)
 

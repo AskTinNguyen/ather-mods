@@ -47,6 +47,7 @@ Settings → Plugins → Ather Automata: the worker brief gate (warn, enforce, o
 - If the plugin stops, Claude agents created with its ask rules still prompt for those commands, and the prompts wait for you.
 - "Also tracked in … · active Nm ago" can be a little off: `state.mjs` keeps one "last active" time per process, and one plugin process serves every agent.
 - A worker's calls in flight are not seen (Paseo has no hook around a worker's tool calls), so the workers list has no "⏳ asking permission", "⏳ waiting on …" or "one call running N min" lines (0.1.9); a worker silent for three minutes reads quiet, as before.
+- Auto-track (0.7.0) sees the agent's own writes into an intent's folder and its `intent(<name>)` commits, read at the end of each turn, but not its workers' writes: those are in each worker's own transcript, not the agent's timeline. A full write of a `prompt.md` counts as starting that intent (the timeline does not say whether the file was there before), so it takes over without the 30-minute wait.
 - Not here yet: the newcomer tour toast (the tour is the Next row and `/ather tour`).
 - Not here yet: Send where? (0.2.8). A press about an intent another live agent tracks goes to this agent.
 - A press that hands the agent a prompt while a turn runs interrupts that turn (Paseo's default for a send); the Claude Code mod queues it until the turn ends (0.2.8).

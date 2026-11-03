@@ -3,18 +3,21 @@
 // (split outside quotes, heredoc bodies dropped), the folder each runs in, and
 // where a push sends. Pure: no `$`.
 
+// A heredoc: its tag, then the rest of the tag's line and its body, up to the line that ends it.
+const HEREDOC = /<<-?\s*['"]?(\w+)['"]?([\s\S]*?)\n\1\b/g
+
 // A heredoc's body is text being written, not a command being run.
 /** @param {string} command */
-export const withoutHeredocs = command => command.replace(/<<-?\s*['"]?(\w+)['"]?[\s\S]*?\n\1\b/g, '')
+export const withoutHeredocs = command => command.replace(HEREDOC, '')
 
 // A filter after a pipe makes the exit the filter's, unless `pipefail` hands the build's back.
 /** @param {string} command */
 export const isPiped = command => /\|\s*(tail|head|grep|Select-String|Select-Object|findstr|tee|sls)\b/i.test(command) && !/\bpipefail\b/.test(command)
 
-// The commands of a chain: split only outside quotes, heredoc bodies dropped, quotes removed.
-// `git commit -m "fix; git push origin main"` is one commit command, not a push.
-/** @param {string} command */
-export const segments = command => {
+// The commands of a chain, each with the operator after it ('' after the last): split only outside quotes,
+// heredoc bodies dropped, quotes removed. `git commit -m "fix; git push origin main"` is one commit command, not a push.
+/** @param {string} command @returns {{ segment: string, then: string }[]} */
+const chain = command => {
   const text = withoutHeredocs(command)
   const out = []
   let current = ''
@@ -26,17 +29,20 @@ export const segments = command => {
       else current += char
     } else if (char === '"' || char === "'") quote = char
     else if (text.startsWith('&&', at) || text.startsWith('||', at)) {
-      out.push(current)
+      out.push({ segment: current, then: text.slice(at, at + 2) })
       current = ''
       at += 1
     } else if (char === ';' || char === '|' || char === '\n') {
-      out.push(current)
+      out.push({ segment: current, then: char })
       current = ''
     } else current += char
   }
-  out.push(current)
-  return out.map(part => part.trim()).filter(Boolean)
+  out.push({ segment: current, then: '' })
+  return out.map(one => ({ ...one, segment: one.segment.trim() })).filter(one => one.segment !== '')
 }
+
+/** @param {string} command */
+export const segments = command => chain(command).map(one => one.segment)
 
 // Each segment with the folder it runs in: its own `git -C`, else the last `cd` before it, else null (the session's folder).
 /** @param {string} command */
@@ -53,6 +59,25 @@ export const withFolders = command => {
 // The folders a command's git segments run in, for the caller to look up their branches.
 /** @param {string} command */
 export const gitFolders = command => [...new Set(withFolders(command).filter(one => /^git\b/i.test(one.segment)).map(one => one.folder))]
+
+// A commit whose message starts with `intent(<slug>)`: the intent it names (auto-track counts it as work on that
+// intent) and the folder the commit runs in (null: the session's). Read from the last commit's own segment, its first
+// message only: a heredoc message (`-m "$(cat <<'EOF'`) stands as its first line, a PowerShell here-string (`-m @'`)
+// is one quoted word; `-F <file>` is not read. Not a `--dry-run`, and only when the command's exit is the commit's:
+// nothing but `&&` after it (`… || true`, `… | tail`, `…; echo` exit 0 whether the commit was made or not).
+/** @param {string} command @returns {{ slug: string, folder: string | null } | null} */
+export const commitIntentOf = command => {
+  const inline = command.replace(HEREDOC, (_, _tag, /** @type {string} */ body) => ` ${body.split('\n')[1] ?? ''}`)
+  const links = chain(inline)
+  const at = links.findLastIndex(one => GIT_COMMIT.test(one.segment))
+  const commit = at >= 0 && links.slice(at, -1).every(one => one.then === '&&') ? withFolders(inline)[at] : undefined
+  const options = commit && !/\s--dry-run\b/.test(commit.segment) ? commit.segment.replace(GIT_COMMIT, '') : ''
+  const flag = /\s(?:-[a-zA-Z]*m|--message)(?:=|\s*)/.exec(options)
+  const slug = flag ? /^(?:\$\(\s*cat\s+)?@?\s*intent\(([\w.-]+)\)/.exec(options.slice(flag.index + flag[0].length))?.[1] : undefined
+  return commit && slug ? { slug, folder: commit.folder } : null
+}
+// `git commit`, with any `-C <folder>` or `-c <setting>` before it; not `git commit-tree`.
+const GIT_COMMIT = /^git(?:\s+-[Cc]\s+\S+)*\s+commit(?=\s|$)/i
 
 export const MAIN = /^(?:refs\/heads\/)?(main|master)$/
 
