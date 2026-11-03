@@ -439,7 +439,8 @@ test('A134: Saved/A5R/status.json says the sync\'s phase, stage, steps and estim
   const s = syncIn(w, 'building')
   w.put(`${HF}/sync-times.jsonl`, `${JSON.stringify({ id: 'x', step: 'tests', ms: 15 * MIN, at: 1 })}\n`)
   w.put(`${HF}/sync-20261005-1145-f41dc683-build.log`, 'Result: Succeeded\nTotal execution time: 1560.00 seconds\n')
-  w.put(`${HF}/editor/cccccccc.json`, JSON.stringify({ ...JSON.parse(peer('cccccccc')), want: { what: 'PIE retest', minutes: 30, pie: true, build: false, launch: true, mode: 'interactive', pausable: true, nextSafe: '', requestedAt: NOW - 10 * MIN, since: NOW - 10 * MIN } }))
+  // This session is first in the queue: the one writer of status.json (Fable 11).
+  w.put(`${HF}/editor/${ME8}.json`, JSON.stringify({ ...blankSession(ME, 'lane-me', '', NOW), heartbeatAt: NOW + 600 * MIN, want: { what: 'PIE retest', minutes: 30, pie: true, build: false, launch: true, mode: 'interactive', pausable: true, nextSafe: '', requestedAt: NOW - 10 * MIN, since: NOW - 10 * MIN } }))
   await $.session.start(START)
   await w.clock.advance(MIN)
   const st = JSON.parse(w.read(`${HF}/status.json`))
@@ -450,6 +451,6 @@ test('A134: Saved/A5R/status.json says the sync\'s phase, stage, steps and estim
   expect(st.sync.line).toBe('Sync main 14:20 · ▸ building ~15:01 → tests ~15:16 → you can build again ~15:16')
   expect(st.sync.band).toContain('⏸ Sync main · building ~15:01')
   expect(st.focus).toBeNull()
-  expect(st.editor.queue.map((r: { id8: string }) => r.id8)).toContain('cccccccc')
-  expect(st.editor.queue.find((r: { id8: string }) => r.id8 === 'cccccccc').waitsFor).toContain("after sync-main's build and tests (~15:16)")
+  expect(st.editor.queue.map((r: { id8: string }) => r.id8)).toContain(ME8)
+  expect(st.editor.queue.find((r: { id8: string }) => r.id8 === ME8).waitsFor).toContain("after sync-main's build and tests (~15:16)")
 })

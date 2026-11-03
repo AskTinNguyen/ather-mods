@@ -19,6 +19,8 @@ export type FreezeState = {
   grantInput: (now: number) => GrantInput
   dir: () => string
   root: () => string
+  /** Fable 11: whether this session writes status.json (one session: the first live one in the queue order, else by id) */
+  isStatusWriter: (now: number) => boolean
 }
 
 export const freezeSteps = (h: FreezeState) => {
@@ -30,12 +32,18 @@ export const freezeSteps = (h: FreezeState) => {
   const told = new Map<string, { step: FreezeStep; lift: number | null; moved: boolean }>()
   let times = NO_TIMES
   let timesAt = -Infinity
-  const builds = new Map<string, number | null>()
+  const builds = new Map<string, { ms: number | null; mtime: number }>()
   let toasted = ''
 
+  /** A131: the files the merge changed (`git diff --name-only <pre-merge HEAD> <merge>`), read once per merge. */
+  const readChanged = async (io: FileIo, s: SyncFile): Promise<void> => {
+    const r = await io.run(['git', '-C', h.root(), 'diff', '--name-only', '-z', s.preHead, s.mergeSha], 30_000)
+    if (r?.exitCode === 0) changed = { sha: s.mergeSha, paths: new Set(r.stdout.split('\0').filter(Boolean).map(p => p.toLowerCase())) }
+  }
   /** A131: the sync's step as last read, or read fresh with its build log of this run when that changed. */
   const stepCached = (s: SyncFile | null, now: number): FreezeStep | null => (s ? freezeStepOf(h.phaseOf(s, now), s.stage, log.path === s.buildLog ? log.read : null) : null)
   const stepNow = async (io: FileIo, s: SyncFile | null, now: number): Promise<FreezeStep | null> => {
+    if (s?.mergeSha && s.preHead && changed.sha !== s.mergeSha) await readChanged(io, s) // Fable 10: no lag of a minute
     const st = s?.stage === 'building' && s.buildLog ? await io.stat(s.buildLog) : null
     if (s && st && st.mtimeMs >= (s.workerAt ?? s.stageAt) && (log.path !== s.buildLog || log.mtime !== st.mtimeMs)) log = { path: s.buildLog, mtime: st.mtimeMs, read: readBuildLog((await io.read(s.buildLog)) ?? '', st.mtimeMs).log }
     return stepCached(s, now)
@@ -62,22 +70,18 @@ export const freezeSteps = (h: FreezeState) => {
   }
 
   /** A133: the measured durations, read again every 5 min (UnrealBuildTool's own total time in each sync build log, each
-   * read until it has one; the merge and tests times the holders recorded); A131: the files the merge changed. */
+   * read again only when it changed; the merge and tests times the holders recorded). */
   const timesStep = async (io: FileIo, now: number): Promise<void> => {
-    const s = h.sync()
-    if (s?.mergeSha && s.preHead && changed.sha !== s.mergeSha) {
-      const r = await io.run(['git', '-C', h.root(), 'diff', '--name-only', '-z', s.preHead, s.mergeSha], 30_000)
-      if (r?.exitCode === 0) changed = { sha: s.mergeSha, paths: new Set(r.stdout.split('\0').filter(Boolean).map(p => p.toLowerCase())) }
-    }
     if (now - timesAt < 5 * 60_000) return
     timesAt = now
     const logs = (await io.list(h.dir())).filter(f => /^sync-.*-build\.log$/.test(f.name)).sort((a, b) => a.mtimeMs - b.mtimeMs)
-    for (const f of logs) if ((builds.get(f.name) ?? null) === null) builds.set(f.name, buildMsOf((await io.read(`${h.dir()}/${f.name}`)) ?? ''))
-    times = parseSyncTimes(await io.read(`${h.dir()}/${SYNC_TIMES_FILE}`), logs.flatMap(f => builds.get(f.name) ?? []))
+    for (const f of logs) if (builds.get(f.name)?.mtime !== f.mtimeMs) builds.set(f.name, { ms: buildMsOf((await io.read(`${h.dir()}/${f.name}`)) ?? ''), mtime: f.mtimeMs }) // Fable 11: a log is read again only when it changed
+    times = parseSyncTimes(await io.read(`${h.dir()}/${SYNC_TIMES_FILE}`), logs.flatMap(f => builds.get(f.name)?.ms ?? []))
   }
 
   /** A134: Saved/A5R/status.json for outside viewers, written when what it says changed. */
   const statusStep = async (io: FileIo, now: number): Promise<void> => {
+    if (!h.isStatusWriter(now)) return
     const x = h.grantInput(now)
     const view = queueView(x)
     const w = waitsNow(now)

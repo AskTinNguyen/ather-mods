@@ -30,7 +30,7 @@ import { A5R_HELP, EDITOR_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
 import { freezeSteps } from './freezehost.ts'
 import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
-import { editNeed, freezeWhy, heldIn, stepNotice, type Need } from './syncplan.ts'
+import { editNeed, freezeWhy, heldIn, shellNeeds, stepNotice, type Need } from './syncplan.ts'
 import { BINARY_EXCLUDES, BINARY_EXT, addedLines, diffInBatches, fileDiff, remotesOf, urlIsRepo, type GivenDiff } from './diffs.ts'
 import { COMEBACK_BOX_MIN, comebackLook, overrunLook, type LookPress } from './looks.ts'
 import { ORPHAN_FILE, askLook, closeAnswer, closeArgv, idleArgv, orphanLook, orphanNotice, orphanOf, parseIdle, parseOrphan, sharedEditorPid, type Idle, type OrphanRecord } from './orphan.ts'
@@ -2132,7 +2132,7 @@ async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   // A107: the holder fetches and dry-runs at the cutoff and again at T (off the tick chain); the worker starts after T's.
   const dry = isHolder ? dryStep(s, phase, dryJob, now) : null
   if (dry?.start) startDryRun($, opts, s, dry.start)
-  if (dry?.mayStartWorker) {
+  if (dry?.mayStartWorker && !(await turns.blocksMerge(hostIo($, opts), now))) { // Fable 2: never over another session's git
     await spawnWorker($, opts, s, now)
     s = syncFile ?? s
   }
@@ -2857,10 +2857,9 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
     ? `leave the ${opOf(h.head)} state alone (no commit, reset, abort or stash of yours): its holder ${owner.lane} (session ${owner.id8}) finishes it or runs git ${opOf(h.head)} --abort; work without git or in your own worktree meanwhile`
     : `its holder is gone${owner ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} ${opOf(h.head)} --abort; until then no commit, reset or stash there`
 
-// Rev 44 (A128-A134): git one writer at a time and a stale index.lock (gitturnhost.ts), the freeze in steps and what
-// everyone waits for (freezehost.ts): this session's state handed over once, the engine's reads and writes per call.
+// Rev 44: gitturnhost.ts (A128-A130) and freezehost.ts (A131-A134): this session's state once, the engine per call.
 const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, dir: hfDir, root: s2Root })
-const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root })
+const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8 })
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   now: () => $.clock.now(),
@@ -2875,6 +2874,7 @@ const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   isShared: dir => load($).then(a5r => isSharedDir($, a5r, dir)), // load caches the rules after the first call
   isFrozenHolder: () => isFrozenHolder($, opts),
   cwd: () => $.session.cwd(),
+  sessionId: () => $.session.id(),
 })
 
 /** A5R's freeze, a lease (D8), in steps (A131, syncplan.ts HELD): from the sync time until done, abort or expiry, a session
@@ -2901,7 +2901,7 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   const use = command && !isEditorUse ? editorUseOf(editorKindOf(opts, tool, input), command, await $.session.cwd()) : null
   const isBuild = (use?.kind === 'build' || use?.kind === 'headless') && (use.projects.length === 0 || use.projects.some(p => under(p, s2Root())))
   const rels = EDIT_TOOLS.has(tool) && isS2 ? await sharedRels($, await Promise.all((await editParts($, tool, input)).map(([p]) => locate($, a5r, p)))) : []
-  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, freeze.changed()))]
+  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, freeze.changed())), ...(command ? shellNeeds(command, await $.session.cwd(), s2Root()) : [])]
   const need = needs.find(n => heldIn(step).has(n))
   if (!need) return null
   freeze.refused(s, need) // A132: woken at the step that frees it
@@ -3984,7 +3984,7 @@ export const register: Register = (on, options) => {
     }
 
     const op = isOn && isS2 && SHELL_TOOLS.has(tool) ? await opStartOf($, opts, a5r, what) : null // A115: a coordinating session's
-    const turn = isOn && isS2 && SHELL_TOOLS.has(tool) ? await turns.start(hostIo($, opts), what, input) : null // A128 / A129
+    const turn = isOn && SHELL_TOOLS.has(tool) ? await turns.start(hostIo($, opts), what, input) : null // A128 / A129
     if (turn?.deny) return { deny: turn.deny }
     const call = (turn?.timeout ? { ...e, timeout: turn.timeout } : e) as typeof e
     const ran = await (isMain ? asMainCall($, () => next(call)) : next(call)).finally(() => (turn?.isTaken ? turns.end(hostIo($, opts)) : undefined))
@@ -4141,7 +4141,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
     const line = e.props.hasSurvey || !a5rOn || !isS2 ? '' : freeze.band(await $.clock.now())
-    return line ? ($.ui.resolve(e).Box({ key: 'hai-a5r-band', flexDirection: 'column', children: [$.ui.resolve(e).Text({ color: STATUS.warn, wrap: 'truncate', children: line }), below] }) as RenderElement) : below
+    return line ? ($.ui.resolve(e).Box({ key: 'hai-a5r-band', flexDirection: 'column', children: [$.ui.resolve(e).Text({ color: STATUS.warn, wrap: 'truncate', children: line }), ...(below ? [below] : [])] }) as RenderElement) : below
   })
   on('ui.render', { component: 'Pane', requestId: A5R_PANE }, async ($, e) => {
     await ensureCheckout($, opts)

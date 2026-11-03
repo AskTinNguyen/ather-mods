@@ -4,8 +4,8 @@
 // a second writer is refused at once and told when the turn frees. A129: such a call is never cut short (a long tool
 // timeout; no pipe into head/tail, no timeout/kill around it). A130: an index.lock that git left behind is moved aside,
 // never deleted. Pure: no `$`; gitturnhost.ts reads the files and the processes, writes the claim and moves the lock.
-import { program, tokenize } from './a5r.ts'
-import { FREEZE_VERBS, hhmm, ymd } from './coord.ts'
+import { gitTarget, program, tokenize } from './a5r.ts'
+import { gitWrites, hhmm, ymd, type Probe } from './coord.ts'
 import { gitPlace, type Seg } from './gitshared.ts'
 
 /** A128: the folder of the sessions' claims, one small file each (`null` when it holds none), written only by its session
@@ -24,13 +24,9 @@ export const parseGitTurn = (text: string | null): GitTurn | null => {
     return null
   }
 }
-/** A128: the git verbs that take a turn: those that write the index or refs (a push writes neither here). */
-export const TURN_VERBS: ReadonlySet<string> = new Set([...FREEZE_VERBS].filter(v => v !== 'push'))
-/** A128: a segment's git subcommand when it takes a turn ('' otherwise). */
-export const turnVerb = (seg: Seg): string => {
-  const sub = (gitPlace(seg).args[0] ?? '').toLowerCase()
-  return seg.verb === 'git' && TURN_VERBS.has(sub) ? sub : ''
-}
+/** A128: a segment's git write when it takes a turn ('' otherwise): coord.ts gitWrites, the one list of git writes (a
+ * push writes neither the index nor a ref here; `stash list|show` only read). */
+export const turnVerb = (seg: Seg): string => (seg.verb === 'git' ? (gitWrites(seg.raw).find(w => w.verb !== 'push')?.verb ?? '') : '')
 export const turnOf = (me: { session: string; id8: string; lane: string }, verbs: readonly string[], now: number): GitTurn => ({ v: 1, session: me.session, id8: me.id8, lane: me.lane, command: `git ${verbs.join(', git ')}`, startedAt: now })
 export const turnKey = (t: GitTurn): string => `${t.id8}:${t.startedAt}`
 
@@ -72,12 +68,17 @@ export const cutProblem = (command: string, segs: readonly Seg[], writes: readon
     const next = segs[i + 1]
     if (at >= 0 && /^\s*\|(?!\|)/.test(command.slice(from)) && next && CUTTERS.has(next.verb)) return { why: `\`${seg.raw.trim()} | ${next.verb}\` pipes a git write in the shared checkout into ${next.verb}, which can end it halfway and leave .git/index.lock behind`, alt: plainAlt(seg) }
   }
-  const killer = segs.find(s => KILLERS.has(s.verb))
+  // Fable 7: a kill beside the write counts only when it can reach it: it names git, or a background job ($!, %n).
+  const killer = segs.find(s => KILLERS.has(s.verb) && /\bgit(-lfs)?\b|\$!|%\d/i.test(s.args.join(' ')))
   return killer ? { why: `\`${killer.raw.trim()}\` runs beside a git write in the shared checkout and can kill it halfway, leaving .git/index.lock behind`, alt: plainAlt(writes[0] as Seg) } : null
 }
 const plainAlt = (seg: Seg): string => `run the git command alone, in the foreground and unwrapped: git -C ${gitPlace(seg).dir} ${gitPlace(seg).args.join(' ')} (A5R gives the call a 10-min timeout; a slow commit is fine)`
 
 // ---------- A130: a stale index.lock moved aside ----------
+/** Fable 4: the git and git-lfs processes whose command line names no folder (`cd <checkout> && git commit`) or cannot be
+ * read: they may work in the checkout, so no lock is moved while one runs (git's fsmonitor daemon excluded). */
+export const untargetedGitPids = (probe: Probe | null): number[] =>
+  (probe?.procs ?? []).filter(p => /^git(-lfs)?(\.exe)?$/i.test(p.name) && !/fsmonitor--daemon/i.test(p.cmd ?? '') && (!p.cmd || gitTarget(p.cmd, '') === '')).map(p => p.pid)
 export const STALE_LOCK_MS = 2 * 60_000
 /** A130: what to do with .git/index.lock: `lockAgeMs` null (none), `gitPids` null (the process list unread), `isTurnHeld`
  * (a live claim holds the git turn). Every condition must hold for a move; an unread process list asks for a look. */

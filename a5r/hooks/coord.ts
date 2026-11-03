@@ -1105,7 +1105,7 @@ export const gitWrites = (command: string): { verb: string; dir: string }[] => {
       else if (a.startsWith('-')) continue
       else {
         const next = (args[i + 1] ?? '').toLowerCase()
-        if (FREEZE_VERBS.has(a.toLowerCase()) && !(a.toLowerCase() === 'stash' && (next === 'list' || next === 'show'))) out.push({ verb: a.toLowerCase(), dir })
+        if ((FREEZE_VERBS.has(a.toLowerCase()) && !(a.toLowerCase() === 'stash' && (next === 'list' || next === 'show'))) || (a.toLowerCase() === 'lfs' && (next === 'pull' || next === 'checkout'))) out.push({ verb: a.toLowerCase(), dir }) // Fable 6 (rev 44): lfs pull/checkout rewrite tracked files
         break
       }
     }
