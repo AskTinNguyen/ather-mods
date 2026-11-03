@@ -5,6 +5,7 @@
 // are not listed. Pure: no `$`.
 
 import { acceptanceItems, parseFindings, section, shortTitle } from './model.mjs'
+import { isAbsolute, normalFolder } from './workspace.mjs'
 
 /** @typedef {{ kind: 'done' | 'yours' | 'changed', id: string, text: string }} Change */
 /** @typedef {'prompt.md' | 'findings.md' | 'progress.md'} IntentFile */
@@ -67,19 +68,28 @@ export const intentChanges = (file, before, after, intent = {}) => {
   return findingChanges(before, after, intent.prompt ?? '')
 }
 
-// The intent file an edit touches: its folder name and which file, or null for anything else.
-/** @param {unknown} path @returns {{ slug: string, file: IntentFile } | null} */
-export const intentFileOf = path => {
-  const match = typeof path === 'string' ? /docs[\\/]intent[\\/]([^\\/]+)[\\/](prompt|findings|progress)\.md$/i.exec(path) : null
-  return match ? { slug: match[1], file: /** @type {IntentFile} */ (`${match[2].toLowerCase()}.md`) } : null
+// The intent a file is in: any file under docs/intent/<slug>/ (auto-track counts a write to it as work on that
+// intent). Its folder name, its path inside the folder lowercased with / ('prompt.md', 'proof/a.png'), and `root`,
+// the path before docs/intent as written ('' for a path that starts there); null for anything else.
+/** @param {unknown} path @returns {{ slug: string, file: string, root: string } | null} */
+export const intentFolderOf = path => {
+  const match = typeof path === 'string' ? /^(?:(.*)[\\/])?docs[\\/]intent[\\/]([^\\/]+)[\\/](.+)$/i.exec(path) : null
+  return match?.[2] && match[3] ? { slug: match[2], file: match[3].replace(/\\/g, '/').toLowerCase(), root: match[1] ?? '' } : null
 }
 
-// The intent a session's own orchestration writes: its prompt.md or log.md (the orchestrator's files,
-// .agents/skills/intent/SKILL.md), as its folder name and which file; null for anything else.
-/** @param {unknown} path @returns {{ slug: string, file: 'prompt.md' | 'log.md' } | null} */
-export const orchestrationFileOf = path => {
-  const match = typeof path === 'string' ? /docs[\\/]intent[\\/]([^\\/]+)[\\/](prompt|log)\.md$/i.exec(path) : null
-  return match ? { slug: match[1], file: match[2].toLowerCase() === 'prompt' ? 'prompt.md' : 'log.md' } : null
+// The checkout an intent file lands in: the folder before its docs/intent, taken from `base` (the session's folder)
+// when the path is relative; null for a path in no intent folder.
+/** @param {unknown} path @param {string} base */
+export const intentRootIn = (path, base) => {
+  const found = intentFolderOf(path)
+  return found && normalFolder(isAbsolute(String(path)) ? found.root : found.root ? `${base}/${found.root}` : base)
+}
+
+// The intent file an edit touches whose changes are read (prompt, findings, progress): its folder name and which file.
+/** @param {unknown} path @returns {{ slug: string, file: IntentFile } | null} */
+export const intentFileOf = path => {
+  const found = intentFolderOf(path)
+  return found && /^(prompt|findings|progress)\.md$/.test(found.file) ? { slug: found.slug, file: /** @type {IntentFile} */ (found.file) } : null
 }
 
 /** @param {Change['kind']} kind */

@@ -9,12 +9,15 @@ type AgentTimelineItem = PluginLifecycleEvents["agent.turn_ended"]["timeline"][n
 import { awayReason, isHolding } from "./ather/away.mjs";
 import { briefIssues, explainGuard, heldShell, isMergeCommand, isSearchCommand, matchGotchas, mcpServer } from "./ather/guards.mjs";
 import { andList } from "./ather/model.mjs";
-import { intentChanges, intentFileOf, orchestrationFileOf } from "./ather/changes.mjs";
+import { intentChanges, intentFileOf, intentFolderOf, intentRootIn } from "./ather/changes.mjs";
+import { answeredIntentOf } from "./ather/decide.mjs";
+import { autoTrackText, autoUntrackText } from "./ather/autotrack.mjs";
+import { commitIntentOf } from "./ather/shell.mjs";
 import * as state from "./ather/state.mjs";
 import { currentMode, forgetAgent, isNonAsking, knownAgents, lastPersonAt, markAgentActive, note, noteAgent, onTurnStarted as markTurn, paseo, remember } from "./agents";
 import { governedRoot } from "./agentConfig";
 import { readText, run } from "./io";
-import { branchesFor, ctxOf, heartbeat, isLaneAlive, isLaneGone, laneOf, type Ctx, type Pack } from "./lane";
+import { branchesFor, ctxOf, heartbeat, isLaneAlive, isLaneGone, laneOf, readBranch, type Ctx, type Pack } from "./lane";
 import { heldPrefixes, isOurs } from "./rules";
 import { settings } from "./settingsState";
 import { hold, isMergeProven, sessionStartedAt } from "./tools";
@@ -150,16 +153,13 @@ export async function onTurnStarted(event: PluginLifecycleEvents["agent.turn_sta
   before.set(event.agent.id, files);
 }
 
-// The items of the turn that just ended: everything after the last message that started it.
+// The turn that just ended: the prompt that started it ('' when none is in the timeline) and everything after it.
 function thisTurn(timeline: readonly AgentTimelineItem[]) {
-  let start = 0;
   for (let i = timeline.length - 1; i >= 0; i -= 1) {
-    if (timeline[i]?.type === "user_message") {
-      start = i + 1;
-      break;
-    }
+    const item = timeline[i];
+    if (item?.type === "user_message") return { prompt: item.text, items: timeline.slice(i + 1) };
   }
-  return timeline.slice(start);
+  return { prompt: "", items: timeline };
 }
 
 const outputOf = (item: { detail: unknown; error: unknown }) => {
@@ -178,8 +178,11 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   const { root, pack } = await laneOf(ctx);
   const scope = await state.evidenceScope(io);
   const touched = new Set<string>();
+  const { prompt, items } = thisTurn(event.timeline);
+  // Auto-track: the intents this turn worked on (its writes, its `intent(<slug>)` commits), in the checkout of each.
+  const worked: { root: string; slug: string; isNew: boolean }[] = [];
 
-  for (const item of thisTurn(event.timeline)) {
+  for (const item of items) {
     if (item.type !== "tool_call" || (item.status !== "completed" && item.status !== "failed")) continue;
     const errorText = item.error ? String(typeof item.error === "string" ? item.error : JSON.stringify(item.error)) : "";
     // Ather refused it on purpose: nothing ran.
@@ -190,15 +193,15 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
         const text = String(detail.output ?? "") || errorText;
         const isError = item.status === "failed" || (typeof detail.exitCode === "number" && detail.exitCode !== 0);
         await afterShell(ctx, pack, detail.command, text, isError);
+        const commit = isError ? null : commitIntentOf(detail.command);
+        const lane = commit && (await state.lane(io, ctx.agent.cwd).then((own) => state.folderLane(io, own, commit.folder)));
+        if (commit && lane) worked.push({ root: lane.lane.root, slug: commit.slug, isNew: false });
       } else if (detail.type === "write" || detail.type === "edit") {
-        // The agent's own orchestration writing an intent's prompt.md or log.md tracks it (never its
-        // workers': their writes are in their own transcripts, not this timeline). Writing a new
-        // prompt.md switches to that intent; an intent this agent stopped tracking stays untracked.
-        const orchestrated = orchestrationFileOf(detail.filePath);
-        if (orchestrated && item.status === "completed") {
-          const isNewIntent = detail.type === "write" && orchestrated.file === "prompt.md";
-          await state.track(io, root, orchestrated.slug, { isAuto: true, onlyIfNone: !isNewIntent }).catch(() => undefined);
-        }
+        // The agent's write into an intent's folder (its workers' writes are in their own transcripts, not this
+        // timeline: README Limits). Writing a prompt.md starts that intent.
+        const found = intentFolderOf(detail.filePath);
+        const at = intentRootIn(detail.filePath, root);
+        if (found && at && item.status === "completed") worked.push({ root: at, slug: found.slug, isNew: detail.type === "write" && found.file === "prompt.md" });
         const file = intentFileOf(detail.filePath);
         if (file) touched.add(`${file.slug}/${file.file}`);
       } else if (item.name.startsWith("mcp__") && !item.name.startsWith("mcp__ather-automata__")) {
@@ -225,6 +228,10 @@ export async function onTurnEnded(event: TurnEndedEvent, context: PluginHookCont
   }
   before.delete(agentId);
 
+  // Recording an answer to a Needs you decision is no work on its intent.
+  const answered = answeredIntentOf(prompt);
+  for (const one of worked) if (one.slug !== answered) await workedOn(ctx, one.root, one.slug, one.isNew);
+
   await heartbeat(ctx, false).catch(() => undefined);
 }
 
@@ -247,6 +254,11 @@ async function afterShell(ctx: Ctx, pack: Pack, command: string, text: string, i
       void note(agentId, "bad", `The merge kept the other side of ${lost.length} binary asset(s); this branch's edits to them are gone: ${lost.join(", ")}`);
     }
   }
+}
+
+// Work on an intent (auto-track): it is tracked when state.mjs autoTrack takes it; the agent's timeline says so.
+async function workedOn(ctx: Ctx, root: string, slug: string, isNew: boolean) {
+  if (await state.autoTrack(ctx.io as never, root, slug, { isNew, branchOf: (folder: string) => readBranch(ctx, folder) }).catch(() => false)) void note(ctx.agent.id, "info", autoTrackText(slug));
 }
 
 async function noteTraps(ctx: Ctx, pack: Pack, text: string) {
@@ -342,6 +354,9 @@ export async function tick() {
       }
       const ctx = ctxOf(agent);
       if (!(await laneOf(ctx)).isS2) continue;
+      // Auto-untrack before the heartbeat, so peers see it at once.
+      const closed = await state.untrackClosed(ctx.io as never, (folder: string) => readBranch(ctx, folder)).catch(() => null);
+      if (closed) void note(agent.id, "info", autoUntrackText(closed));
       await heartbeat(ctx, false);
       const away = await state.readAway(ctx.io as never);
       if (away.phase === "running" && Date.now() >= away.wakeAt && (await state.endAway(ctx.io as never)))
