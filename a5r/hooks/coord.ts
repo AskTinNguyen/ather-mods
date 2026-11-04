@@ -677,15 +677,14 @@ export const claimIn = (x: Pick<GrantInput, 'sync' | 'files' | 'lanes' | 'now' |
 
 export const STOPPED_KEEP_MS = 48 * 3_600_000 // A135: a request whose process has stopped keeps its place this long
 export const keepsPlace = (w: Want, now: number): boolean => !isSyncSlot(w) && w.focus === undefined && now - w.requestedAt < STOPPED_KEEP_MS // a sync's or a Focus's slot ends with them (truth.ts)
-/** The order every session computes alike: waiting requests, live or (A135) stopped, the claim's session first (a sync's holder in its cutoff or
- * freeze, A118 a running Focus's session), then (A117) the sessions the person placed, in his order, then first requested
- * first served. */
+/** The order every session computes alike: waiting requests, live or (A135) stopped, a stopped one that missed its start last (A136), the claim's session
+ * first (a sync's holder, A118 a Focus's session), then (A117) the sessions the person placed, in his order, then first asked first served. */
 export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, claim: Claim | null, manual: ManualOrder): SessionFile[] => {
   const pinned = (f: SessionFile) => manual.pins.indexOf(f.id8)
-  const rank = (f: SessionFile) => (f.id8 === claim?.id8 ? -1 : pinned(f) >= 0 ? pinned(f) : manual.pins.length)
+  const rank = (f: SessionFile) => (f.id8 === claim?.id8 ? -1 : pinned(f) >= 0 ? pinned(f) : manual.pins.length); const back = (f: SessionFile) => Number(f.want?.movedBack === true && livenessOf(f.id8, files, lanes, now) !== 'alive')
   return files
     .filter(f => f.want && !f.holding && (livenessOf(f.id8, files, lanes, now) === 'alive' || keepsPlace(f.want, now)))
-    .sort((a, b) => rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
+    .sort((a, b) => back(a) - back(b) || rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
 }
 /** The queue of a decision's input. */
 export const queueIn = (x: Pick<GrantInput, 'files' | 'lanes' | 'now' | 'sync' | 'focus' | 'manual'>): SessionFile[] => queueOf(x.files, x.lanes, x.now, claimIn(x), x.manual)
@@ -728,6 +727,7 @@ export const decide = (x: GrantInput): Decision => {
   const { me8, lock, now, sync } = x
   const queue = queueIn(x)
   const firstLive = queue.find(q => q.id8 === me8 || livenessOf(q.id8, x.files, x.lanes, now) === 'alive')?.id8 // A136: a stopped head recovers nothing
+  const first = queue.find(q => q.id8 === firstLive || slotOf(x, q, 1).kind === 'grant') // A136: and blocks nobody unless its own slot would be granted now: then it is started
   const mine = x.files.find(f => f.id8 === me8)
   if (lock.id8 === me8 && (lock.kind === 'held' || lock.kind === 'handed')) return { kind: 'mine' }
   if (!mine?.want) return { kind: 'none' }
@@ -748,12 +748,12 @@ export const decide = (x: GrantInput): Decision => {
     if (live === 'gone' && pid !== null) return wait('gone-editor', 'its holder is gone, its Editor still open', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (its lease is freed once no UnrealEditor runs); an Editor left hung is a finding for Ather\'s Needs you')
     return wait('held', place === 1 ? `behind ${who}` : '', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}${isUnresolvedHand(lock) && lock.isReadable ? ' (a hand-written line naming no single live session)' : ''}`, `${place > 1 ? `you are ${ordinal(place)} in the queue` : 'you are next'}; do work that needs no Editor meanwhile${isUnresolvedHand(lock) && lock.isReadable ? '; a request turns it into a standard line for you once no other A5R session holds a lease and no Editor of another lane (the PID it names) runs, and it lapses 30 min past its end with nothing running' : ''}`)
   }
-  if (queue[0]?.id8 !== me8) {
-    const head = queue[0]?.lane ?? 'another session'
+  if (first?.id8 !== me8) {
+    const head = first?.lane ?? 'another session'
     const behind = `you are ${ordinal(place)} in the queue; do work that needs no Editor meanwhile`
     // A113: a head held back only by memory does not block a later request that fits now (one, the first in queue order).
-    const h = headStateOf(x, queue)
-    if (!h.isMemory) return wait('queue', '', `the Editor is free but ${head} ${isPlaced(x.manual, queue[0]?.id8 ?? '') ? 'was placed first by the person' : 'asked first'}`, behind)
+    const h = headStateOf(x, first ? queue.slice(queue.indexOf(first)) : queue)
+    if (!h.isMemory) return wait('queue', '', `the Editor is free but ${head} ${isPlaced(x.manual, first?.id8 ?? '') ? 'was placed first by the person' : 'asked first'}`, behind)
     if (h.passer?.id8 === me8) return h.passer.grant
     // A112: this request's own reason when its slot would not fit either (`ram`: its own launch gate is not met, as for
     // the head; its place says it is not first); capped at 30 min only while a pass is possible.
@@ -822,7 +822,7 @@ const headStateOf = (x: GrantInput, queue: readonly SessionFile[]): HeadState =>
   const [head, ...later] = queue
   const d = head && !isPlaced(x.manual, head.id8) ? slotOf(x, head, 1) : null
   if (!head?.want || d?.kind !== 'wait' || d.code !== 'ram') return { isMemory: false }
-  const isAged = livenessOf(head.id8, x.files, x.lanes, x.now) === 'alive' && x.now - head.want.requestedAt >= PASS_AGING_MIN * 60_000 // A136: a stopped head frees no memory by waiting
+  const isAged = x.now - head.want.requestedAt >= PASS_AGING_MIN * 60_000
   for (const [i, f] of (isAged ? [] : later).entries()) {
     if (f.canPass !== true || livenessOf(f.id8, x.files, x.lanes, x.now) !== 'alive') continue // D3: a 0.22.0 session never takes a pass; A136: nor a stopped one
     const g = slotOf(x, f, i + 2, PASS_MAX_MIN)

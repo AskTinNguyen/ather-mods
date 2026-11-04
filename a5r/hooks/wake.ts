@@ -1,7 +1,7 @@
 // Rev 45 (L-49, L-50): A135-A141. The desktop app ends an idle session's process and a message starts it again, so a request
 // outlives its process: it keeps its place (coord.ts queueOf, keepsPlace), its session is started when its turn comes, and
 // one live A5R, the conductor, answers for a free Editor while work waits. Pure: no `$`; wakehost.ts reads, writes and sends.
-import { decide, hhmm, keepsPlace, livenessOf, queueIn, ymd, type GrantInput, type LaneBeat, type SessionFile, type Want } from './coord.ts'
+import { HEARTBEAT_STALE_MS, decide, hhmm, keepsPlace, livenessOf, queueIn, ymd, type GrantInput, type LaneBeat, type SessionFile, type Want } from './coord.ts'
 import { asksPerson, saysFinished, type TranscriptEvent } from './judge.ts'
 import type { LeaseRecord } from './lease.ts'
 import { isIdle, idleMsOf, saysWaitingForEditor } from './nudge.ts'
@@ -17,6 +17,8 @@ export const REFUSED_DIR = 'refused'
 export const WAKE_ANSWER_MS = 5 * MIN
 /** A136: a turn's start is claimed once per window, so a process that answered and stopped again can be started again. */
 export const START_WINDOW_MS = 10 * MIN
+/** A138: after a miss of the route (a refused send, the engine's guard) it is tried this seldom, to keep sends low. */
+export const ROUTE_WINDOW_MS = HOUR
 /** A140: a session started for work holds the one slot this long after it answers, unless it asks or holds first. */
 export const WORK_SETTLE_MS = 10 * MIN
 /** A140: what "still has Editor work" measures: asked or held within this long, not started for it within that long. */
@@ -41,23 +43,22 @@ const jsonOf = <T>(text: string | null): Partial<T> | null => {
 // ---------- A135: the stopped request ----------
 /** A135: the session's process is gone and its request still stands: it will be started when its turn comes. */
 export const isStopped = (f: SessionFile, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): boolean => Boolean(f.want && keepsPlace(f.want, now)) && !f.holding && livenessOf(f.id8, files, lanes, now) !== 'alive'
-/** A136: a request after a miss: back behind the next one, at most once. `isReal` (nobody answered a send that went, or the app
- * has no such session) counts, and a second such miss withdraws it (null); a miss of the route (a refused send, the engine's
- * loop guard) only moves it back: nobody was asked. */
-export const afterMiss = (w: Want, nextAskedAt: number | null, isReal: boolean): Want | null => {
+/** A136: a request after a miss goes behind every other request (coord.ts queueOf). `isReal` (nobody answered a send that went,
+ * or the app has no such session) counts, and a second such miss withdraws it (null); a miss of the route (a refused send, the
+ * engine's loop guard) only moves it: nobody was asked. */
+export const afterMiss = (w: Want, isReal: boolean): Want | null => {
   const misses = w.misses ?? 0
   if (isReal && misses >= 1) return null
   if (!isReal && w.movedBack) return w
-  const moved = w.movedBack || nextAskedAt === null ? {} : { requestedAt: Math.max(w.requestedAt, nextAskedAt + 1) }
-  return { ...w, ...moved, movedBack: true, ...(isReal ? { misses: misses + 1 } : {}) }
+  return { ...w, movedBack: true, ...(isReal ? { misses: misses + 1 } : {}) }
 }
 
 // ---------- A138: how a session is reached ----------
 /** One record of the desktop app's own session list (`local_*.json`). */
-export type DeskRow = { local: string; cli: string; title: string; isArchived: boolean }
+export type DeskRow = { local: string; cli: string; isArchived: boolean }
 export const parseDeskRow = (text: string | null): DeskRow | null => {
-  const v = jsonOf<{ sessionId: unknown; cliSessionId: unknown; title: unknown; isArchived: unknown }>(text)
-  return typeof v?.sessionId === 'string' && typeof v.cliSessionId === 'string' ? { local: v.sessionId, cli: v.cliSessionId.toLowerCase(), title: String(v.title ?? ''), isArchived: v.isArchived === true } : null
+  const v = jsonOf<{ sessionId: unknown; cliSessionId: unknown; isArchived: unknown }>(text)
+  return typeof v?.sessionId === 'string' && typeof v.cliSessionId === 'string' ? { local: v.sessionId, cli: v.cliSessionId.toLowerCase(), isArchived: v.isArchived === true } : null
 }
 /** The folder of those records on this machine, from the engine's own environment; null outside the desktop app. */
 export const deskDir = (appData: string | undefined, account: string | undefined, org: string | undefined): string | null => (appData && account && org ? `${appData.replace(/\\/g, '/')}/Claude/claude-code-sessions/${account}/${org}` : null)
@@ -73,7 +74,7 @@ export const readSend = (ran: { deny?: string; text?: string } | null): SendResu
   const v = jsonOf<{ success: unknown; message: unknown }>(ran?.text ?? null)
   if (v?.success === true && ran?.deny === undefined) return { kind: 'sent' }
   const reason = ran === null ? 'the tool call failed' : (ran.deny ?? (v ? String(v.message ?? 'no reason given') : ran.text || 'no answer from the tool'))
-  return LOOP_PAUSED.test(reason) ? { kind: 'loop-paused', reason } : { kind: 'refused', reason } // the guard's words on any channel
+  return LOOP_PAUSED.test(`${ran?.deny ?? ''} ${ran?.text ?? ''}`) ? { kind: 'loop-paused', reason } : { kind: 'refused', reason } // the guard's words on any channel
 }
 /** A141's cause while the guard holds. Exact words: the person's next message there is what lifts it. */
 export const pausedCause = (session: string): string => `paused until you type in ${session}`
@@ -87,16 +88,15 @@ export const workMessage = (freeGb: number | null): string =>
   `A5R · Editor — the Editor is free, nobody is queued (free memory ${freeGb === null ? '?' : freeGb} GB) and your last words leave Editor work open → if you still have it, request it with the editor tool; if not, do nothing.`
 
 // ---------- A136: whose turn it is ----------
-/** The stopped session at the head of the queue whose turn it is: every check decide makes for it (the lock, a sync, a Focus,
- * a merge in progress, the launch gate) says it would be granted now. Only memory holding it back means it is not started. */
+/** The stopped session whose turn it is: the first in the queue that every check decide makes for it (the lock, a sync, a Focus,
+ * a merge in progress, the launch gate) would grant now, with no live request ahead of it; waiting only for memory it is not
+ * started, and it blocks nobody meanwhile. */
 export const turnToStart = (x: GrantInput, archived: ReadonlySet<string>): SessionFile | null => {
-  const head = queueIn(x)[0]
-  return head && !archived.has(head.id8) && isStopped(head, x.files, x.lanes, x.now) && decide({ ...x, me8: head.id8 }).kind === 'grant' ? head : null
-}
-/** The request behind `id8` in the queue (A136: a miss goes back behind it). */
-export const nextAskedAt = (x: GrantInput, id8: string): number | null => {
-  const q = queueIn(x)
-  return q[q.findIndex(f => f.id8 === id8) + 1]?.want?.requestedAt ?? null
+  for (const f of queueIn(x)) {
+    if (!isStopped(f, x.files, x.lanes, x.now)) return null
+    if (!archived.has(f.id8) && decide({ ...x, me8: f.id8 }).kind === 'grant') return f
+  }
+  return null
 }
 
 // ---------- A137: what else a stopped session waits on ----------
@@ -146,7 +146,7 @@ export const workFits = (x: GrantInput, f: SessionFile): boolean => {
 export type WakeWhy = 'turn' | 'git' | 'freeze' | 'work'
 export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused'
 /** `refused`: what the send reported (the heartbeat still decides); `answeredAt`: a session started for work that came up. */
-export type Start = { id8: string; lane: string; why: WakeWhy; at: number; by: string; requestedAt: number | null; refused?: string; answeredAt?: number }
+export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string; answeredAt?: number }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
 export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; workAt: Record<string, number>; pausedUntil: number; pausedSince: number; lastFailure?: string }
 export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], workAt: {}, pausedUntil: 0, pausedSince: 0 }
@@ -159,15 +159,15 @@ export const parseWake = (text: string | null): WakeFile => {
 }
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })
 /** The next conductor: the first live A5R that conducts, those that can start a session (in the desktop app) first, then by id. */
-export const conductorOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): string | null =>
-  files.filter(f => f.conducts === true && livenessOf(f.id8, files, lanes, now) === 'alive').sort((a, b) => Number(b.sends === true) - Number(a.sends === true) || a.id8.localeCompare(b.id8))[0]?.id8 ?? null
+export const conductorOf = (files: readonly SessionFile[], now: number): string | null =>
+  files.filter(f => f.conducts === true && now - f.heartbeatAt <= HEARTBEAT_STALE_MS).sort((a, b) => Number(b.sends === true) - Number(a.sends === true) || a.id8.localeCompare(b.id8))[0]?.id8 ?? null
 export const parseConductor = (text: string | null): { id8: string; at: number } | null => {
   const v = jsonOf<{ id8: unknown; at: unknown }>(text)
   return v && typeof v.id8 === 'string' && typeof v.at === 'number' ? { id8: v.id8, at: v.at } : null
 }
-/** The claim is sticky: a fresh one's holder conducts on, so a session waking up never takes over (nor resets the engine's loop
- * count); with none, or one gone stale, the next conductor takes it. */
-export const mayConduct = (me8: string, next: string | null, claim: { id8: string; at: number } | null, now: number): boolean => (claim && now - claim.at < CONDUCTOR_STALE_MS ? claim.id8 === me8 : next === me8)
+/** The claim is sticky: a fresh one's holder conducts on, so a session waking up never takes over (nor starts a new loop count);
+ * with none, one gone stale, or a holder that cannot start a session while the next one can, the next one takes it. */
+export const mayConduct = (me8: string, next: string | null, claim: { id8: string; at: number } | null, now: number, yields = false): boolean => (claim && now - claim.at < CONDUCTOR_STALE_MS && !yields ? claim.id8 === me8 : next === me8)
 
 // ---------- A141: the count and the alarm (Saved/A5R/idle-with-work.json) ----------
 export type IdleFile = { v: 1; days: Record<string, number>; nights: Record<string, number>; run: number; lastAt: number; freeSince: number; alarmed: boolean }
@@ -219,7 +219,7 @@ export const idleLine = (i: IdleFile, x: { now: number; queued: number; isFree: 
   return [...(freeMin >= IDLE_ALARM_MIN && x.queued === 0 ? [`free ${freeMin} min, nobody queued`] : []), ...(today + night > 0 ? [`idle with work: ${today} min today, ${night} min last night`] : [])].join(' · ')
 }
 const WHY_WORDS: Record<WakeWhy, string> = { turn: 'its turn', git: 'git free', freeze: 'freeze lifted', work: 'Editor work' }
-/** A139: what ran and what was started last night (the night that ended, or is running, at `now`); '' when nothing did. */
+/** A139: what ran and what was started last night (the night running at `now` before 08:00, else the one that ended that morning); '' when nothing did. */
 export const nightLine = (w: WakeFile, leases: readonly LeaseRecord[], now: number): string => {
   const end = new Date(now)
   if (end.getHours() >= 8) end.setHours(8, 0, 0, 0)

@@ -1413,7 +1413,6 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   watchedSince ||= now
   await editorSerial(() => editorPass($, opts, now))
   await readLeaseLog($, opts, now)
-  await wakes.tick(wakeIo($, opts), now).catch(err => $.ui.log(`a5r: conductor: ${String(err)}`, { to: 'debug' })) // A135-A141: outside the Editor's own pass, so a slow send never holds it
   await refreshClients($, opts, now)
   await judgeStep($, opts, now).catch(err => $.ui.log(`a5r: judge: ${String(err)}`, { to: 'debug' }))
   const window = freeWindowOf(lock, claimNow(now)) // A91: the free window, if the Editor is free
@@ -1427,6 +1426,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await mergeGuardStep($, opts, now)
   currentVerdicts(now) // A89: note which verdicts' incidents are current, so an ended one stays 30 min
   ramStep(opts, now)
+  await wakes.tick(wakeIo($, opts), now).catch(err => $.ui.log(`a5r: conductor: ${String(err)}`, { to: 'debug' })) // A135-A141: last of the steps and outside the Editor's own pass: a send may be slow
   const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running') // A62, A67
   agentsNow = running.length
   agentKindsNow = running.map(a => a.type || 'agent')
@@ -1446,6 +1446,8 @@ const focusNow = (now: number): FocusLease | null => focusLease(focusFile, now)
 const manualNow = (now: number) => manualOf(order, filesNow(), now)
 /** The queue every session computes (A117: in the person's order; the claim's session first), over the given session files. */
 const queueNow = (files: readonly SessionFile[], now: number): SessionFile[] => queueOf(files, lanes, now, claimIn({ sync: syncFile, files, lanes, now, focus: focusNow(now) }), manualNow(now))
+/** A136: the queue without its stopped requests: they cap no live session's build window or extension, and hold no sync back. */
+const liveQueueNow = (now: number): SessionFile[] => queueNow(filesNow(), now).filter(f => isLive(f.id8, now))
 const grantInput = (now: number): GrantInput => ({ me8, lock, files: filesNow(), lanes, now, sync: syncFile, probe, gates, conflictHead: conflictHead?.head, manual: manualNow(now), focus: focusNow(now) })
 /** The claim every session reads now (a sync in its cutoff or freeze, A118 a running Focus), or null. */
 const claimNow = (now: number) => claimIn(grantInput(now))
@@ -2830,7 +2832,7 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
 const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, dir: hfDir, root: s2Root })
 const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now) })
 // Rev 45: wakehost.ts (A135-A141), the same way.
-const wakes = conductor({ me8: () => me8, me: () => me, files: filesNow, lanes: () => lanes, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8) })
+const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8) })
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   now: () => $.clock.now(),
@@ -3040,7 +3042,7 @@ const BUILD_WINDOW_MIN = 45 // the S2 standard's build window while anyone waits
 function buildWindowProblem(want: Want, now: number): string | null {
   if (!want.build || want.minutes <= BUILD_WINDOW_MIN) return null
   if (isHolderInSync(syncFile, me8, phaseOf(syncFile, now))) return null // A94: the holder's build for its sync is not capped
-  const others = queueNow(filesNow(), now).filter(f => f.id8 !== me8)
+  const others = liveQueueNow(now).filter(f => f.id8 !== me8)
   if (others.length > 0)
     return blocked('Editor', `${others.length} session${others.length === 1 ? ' is' : 's are'} queued for the Editor (${others.map(f => f.lane).join(', ')}), so a build window is at most ${BUILD_WINDOW_MIN} min (S2 standard); ${want.minutes} asked`, `batch the code changes into one window of ≤ ${BUILD_WINDOW_MIN} min and ask again`)
   const phase = phaseOf(syncFile, now)
@@ -3151,7 +3153,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     if (refusal) return refusal
     const h = heldNow(now)
     // A68: past its end a lease may still be extended while nobody waits; with someone waiting it may not.
-    const queue = queueNow(filesNow(), now)
+    const queue = liveQueueNow(now)
     const queued = queue.length
     if (now >= h.end && queued > 0) return blocked('Editor', `the lease ended at ${clockOf(h.end)} and ${queued} session${queued === 1 ? '' : 's'} wait${queued === 1 ? 's' : ''}`, 'release now and ask again for the rest')
     const add = Math.max(5, Math.min(120, Math.round(Number(e.minutes) || 15)))
@@ -3357,7 +3359,7 @@ async function orphanStep($: Engine, opts: Opts, now: number): Promise<void> {
  * time; with no live holder any one session cancels a lost holder's sync at T − 10 min, and the person is told (once a day
  * when no holder is live at all). */
 async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: queueNow(filesNow(), now).filter(f => isLive(f.id8, now)).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
+  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: liveQueueNow(now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
   const log = (note: string) => orchestrateLog($, opts, actedEvent('auto-sync', note, now)).catch(() => undefined)
   const s = syncFile
   if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: opts.autoSyncBuild !== false })}`)

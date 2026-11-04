@@ -148,7 +148,7 @@ test('A136: no answer in 5 min moves it behind the next, once; a second miss wit
   expect(sends(w).map(s => s.to)).toEqual(['local_cccccccc'])
   await w.clock.advance(WAKE_ANSWER_MS)
   expect(fileOf(w, 'cccccccc').want?.misses).toBe(1)
-  expect(fileOf(w, 'cccccccc').want?.requestedAt).toBe(NOW - 3 * H + 1)
+  expect(fileOf(w, 'cccccccc').want?.requestedAt).toBe(NOW - 4 * H) // its clock and the person's entries stand
   expect(w.read(LOG)).toMatch(/lane=lane-cccccccc .*turn: no-answer/)
   await w.clock.advance(MIN)
   expect(sends(w).map(s => s.to)).toEqual(['local_cccccccc', 'local_dddddddd']) // one at a time, the next one now
@@ -162,12 +162,11 @@ test('A136: no answer in 5 min moves it behind the next, once; a second miss wit
 
 test('A136: unit: a miss goes back behind the next once; a second withdraws; a loop pause never withdraws', () => {
   const w = want({ requestedAt: 5 })
-  expect(afterMiss(w, 9, true)).toEqual({ ...w, misses: 1, movedBack: true, requestedAt: 10 })
-  expect(afterMiss(w, null, true)).toEqual({ ...w, misses: 1, movedBack: true })
-  expect(afterMiss({ ...w, misses: 1 }, 9, true)).toBeNull()
-  expect(afterMiss(w, 9, false)).toEqual({ ...w, movedBack: true, requestedAt: 10 })
+  expect(afterMiss(w, true)).toEqual({ ...w, misses: 1, movedBack: true })
+  expect(afterMiss({ ...w, misses: 1 }, true)).toBeNull()
+  expect(afterMiss(w, false)).toEqual({ ...w, movedBack: true })
   const once = { ...w, movedBack: true as const }
-  expect(afterMiss(once, 9, false)).toBe(once)
+  expect(afterMiss(once, false)).toBe(once)
 })
 
 test('A136: two stopped requests start one at a time, in queue order', opts(), async ($, on) => {
@@ -191,14 +190,14 @@ test('A136: a request waiting only for memory is not started; a Focus and a free
   expect(turnToStart(grant([head, live]), NONE)).toBeNull() // a live head takes it itself
 })
 
-test('A136: a live session behind a stopped head waits for its start; it never takes a pass over it', () => {
+test('A136: a live session behind a stopped head waits for its start; a stopped head memory holds back lets the next fit go first', () => {
   const head = stoppedFile('cccccccc', { want: want() })
   const me = file(ME8, { want: want({ requestedAt: NOW - H }) })
   expect(decide(grant([head, me]))).toMatchObject({ kind: 'wait', code: 'queue' })
   const passer = stoppedFile('dddddddd', { want: want({ requestedAt: NOW - 2 * H, pie: false, launch: false }) })
   const pie = stoppedFile('cccccccc', { want: want({ pie: true }) })
-  expect(decide(grant([pie, passer], { me8: 'dddddddd', probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).not.toBe('grant') // a stopped session takes no pass
-  expect(decide(grant([pie, passer, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).toBe('grant') // the live one behind it does
+  expect(turnToStart(grant([pie, passer], { probe: { freeGb: 30, diskGb: 100, procs: [] } }), NONE)?.id8).toBe('dddddddd') // its slot fits
+  expect(decide(grant([pie, passer, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } }))).toMatchObject({ kind: 'wait', code: 'queue' }) // and the live one behind it waits for that start
 })
 
 test('A136: a refused send never touches the lease: it is logged, and the heartbeat decides', opts(), async ($, on) => {
@@ -325,7 +324,7 @@ test('A138: unit: the route: SendMessage with the desktop id; its three answers;
   expect(readSend({ deny: 'no' })).toEqual({ kind: 'refused', reason: 'no' })
   expect(readSend(null).kind).toBe('refused')
   expect(readSend({ text: 'not json' })).toEqual({ kind: 'refused', reason: 'not json' })
-  expect(parseDeskRow(JSON.stringify({ sessionId: 'local_0784d41e', cliSessionId: 'C22562CA-x', title: 't' }))).toEqual({ local: 'local_0784d41e', cli: 'c22562ca-x', title: 't', isArchived: false })
+  expect(parseDeskRow(JSON.stringify({ sessionId: 'local_0784d41e', cliSessionId: 'C22562CA-x', title: 't' }))).toEqual({ local: 'local_0784d41e', cli: 'c22562ca-x', isArchived: false })
   expect(parseDeskRow('{}')).toBeNull()
   expect(deskDir('C:\\Users\\x\\AppData\\Roaming', 'a', 'o')).toBe('C:/Users/x/AppData/Roaming/Claude/claude-code-sessions/a/o')
   expect(deskDir(undefined, 'a', 'o')).toBeNull()
@@ -441,7 +440,7 @@ test('A140: two A5Rs start it once: a fresh conductor claim keeps this one out, 
   expect(mayConduct(ME8, 'aaaaaaaa', null, NOW)).toBe(false)
   // The first live A5R that conducts, by id; one before 0.28.0, or a stopped one, is passed over.
   const f = (id8: string, o: Partial<SessionFile> = {}) => file(id8, o)
-  expect(conductorOf([f('cccccccc'), f('bbbbbbbb'), f('aaaaaaaa', { conducts: undefined }), f('a0a0a0a0', { heartbeatAt: NOW - H })], [], NOW)).toBe('bbbbbbbb')
+  expect(conductorOf([f('cccccccc'), f('bbbbbbbb'), f('aaaaaaaa', { conducts: undefined }), f('a0a0a0a0', { heartbeatAt: NOW - H })], NOW)).toBe('bbbbbbbb')
 })
 
 test('A140: this session, not first in the order, does not conduct', opts(), async ($, on) => {
@@ -531,7 +530,7 @@ test('A141: unit: the alarm is a native notification when the engine can raise o
     const notes: string[] = []
     const disk = new Map<string, string>()
     const me = file(ME8, { heartbeatAt: NOW })
-    const c = conductor({ me8: () => ME8, me: () => me, files: () => [me], lanes: () => [], grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now, probe: { freeGb: 5, diskGb: 100, procs: [] } }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 5, titleOf: () => '' })
+    const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now, probe: { freeGb: 5, diskGb: 100, procs: [] } }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 5, titleOf: () => '' })
     disk.set('d/idle-with-work.json', JSON.stringify({ ...NO_IDLE, run: 29, lastAt: NOW - MIN }))
     await c.tick(fakeIo(disk, { notify: async (t: string) => (notes.push(t), isSent), toast: (t: string) => void toasts.push(t) }), NOW)
     expect(notes.length).toBe(1)
@@ -610,10 +609,10 @@ test('Review 3: a refused send that nobody answers moves the request back and ne
   expect(f.want?.movedBack).toBe(true)
   expect(f.want?.misses).toBeUndefined()
   expect(w.read(LOG)).not.toContain('rule=withdrawn')
-  const paused = afterMiss(want(), null, false)
-  const real = paused && afterMiss(paused, null, true)
+  const paused = afterMiss(want(), false)
+  const real = paused && afterMiss(paused, true)
   expect(real?.misses).toBe(1)
-  expect(real && afterMiss(real, null, true)).toBeNull()
+  expect(real && afterMiss(real, true)).toBeNull()
   expect(readSend({ deny: 'Not delivered: this session has already messaged Claude Desktop sessions 8 times' }).kind).toBe('loop-paused')
 })
 
@@ -621,24 +620,62 @@ test('Review 3: a conductor outside the app never withdraws a stopped request go
   const me = file(ME8, { heartbeatAt: NOW })
   const c1 = stoppedFile('cccccccc', { want: want(), heartbeatAt: NOW - 30 * MIN, misses: 1 } as never)
   const disk = new Map<string, string>([['d/editor/cccccccc.json', JSON.stringify({ ...c1, want: want({ misses: 1, movedBack: true }) })]])
-  const c = conductor({ me8: () => ME8, me: () => me, files: () => [me], lanes: () => [], grantInput: now => grant([me, { ...c1, want: want({ misses: 1, movedBack: true }) }], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, { ...c1, want: want({ misses: 1, movedBack: true }) }], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
   await c.tick(fakeIo(disk), NOW)
   expect((JSON.parse(disk.get('d/editor/cccccccc.json') ?? '') as SessionFile).want).not.toBeNull()
   expect(c.canSend()).toBe(false)
   const f = (id8: string, o: Partial<SessionFile> = {}) => file(id8, o)
-  expect(conductorOf([f('aaaaaaaa'), f('bbbbbbbb', { sends: true })], [], NOW)).toBe('bbbbbbbb')
+  expect(conductorOf([f('aaaaaaaa'), f('bbbbbbbb', { sends: true })], NOW)).toBe('bbbbbbbb')
 })
 
 test('Review 4: the claim is sticky: a session waking with a lower id does not take over while the holder lives', () => {
   expect(mayConduct(ME8, 'aaaaaaaa', { id8: ME8, at: NOW - MIN }, NOW)).toBe(true)
   expect(mayConduct('aaaaaaaa', 'aaaaaaaa', { id8: ME8, at: NOW - MIN }, NOW)).toBe(false)
   expect(mayConduct('aaaaaaaa', 'aaaaaaaa', { id8: ME8, at: NOW - 3 * MIN }, NOW)).toBe(true)
+  expect(mayConduct('aaaaaaaa', 'aaaaaaaa', { id8: ME8, at: NOW - MIN }, NOW, true)).toBe(true) // the holder cannot start a session, the next one can
 })
 
-test('Review 5: a stopped head waiting for memory never ages: a live session behind it still passes', () => {
+test('Review 5: a stopped head that its own slot holds back (memory, a cutoff) blocks no live session, however old; a live one takes the whole slot', () => {
   const head = stoppedFile('cccccccc', { want: want({ pie: true, requestedAt: NOW - 9 * H }) })
-  const me = file(ME8, { want: want({ requestedAt: NOW - H, launch: false, build: true }) })
-  expect(decide(grant([head, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).toBe('grant')
+  const me = file(ME8, { want: want({ requestedAt: NOW - H, minutes: 60 }) })
+  const d = decide(grant([head, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } }))
+  expect(d).toMatchObject({ kind: 'grant', end: NOW + 60 * MIN })
+  const long = stoppedFile('cccccccc', { want: want({ minutes: 170 }) })
+  const sync = newSync(NOW + 2 * H, { session: 'x', id8: 'eeeeeeee', lane: 'e' }, 'e', NOW - H)
+  expect(decide(grant([long, file(ME8, { want: want({ minutes: 20, requestedAt: NOW - H }) })], { sync })).kind).toBe('grant')
+  expect(turnToStart(grant([long], { sync }), NONE)).toBeNull()
+})
+
+test('Review 2.1: a request that missed its start is behind every other request, and its place comes back if nobody else waits', () => {
+  const a = stoppedFile('aaaaaaaa', { want: want({ requestedAt: NOW - 9 * H, movedBack: true }) })
+  const b = stoppedFile('bbbbbbbb', { want: want({ requestedAt: NOW - 8 * H }) })
+  const c = file('cccccccc', { want: want({ requestedAt: NOW - 7 * H }) })
+  expect(queueOf([a, b, c], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['bbbbbbbb', 'cccccccc', 'aaaaaaaa'])
+  expect(queueOf([a], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['aaaaaaaa'])
+  expect(queueOf([{ ...a, heartbeatAt: NOW }, c], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['aaaaaaaa', 'cccccccc']) // it came back: its place too
+  expect(turnToStart(grant([a, c]), NONE)).toBeNull() // a live request ahead of it
+})
+
+test('A137: a retried refusal keeps its time; a stopped session\'s miss of the route is tried again only after an hour', async () => {
+  const disk = new Map<string, string>()
+  const me = file(ME8, { heartbeatAt: NOW })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  await c.refused(fakeIo(disk), { kind: 'git', what: 'x' }, NOW)
+  await c.refused(fakeIo(disk), { kind: 'git', what: 'x' }, NOW + MIN)
+  expect((JSON.parse(disk.get(`d/refused/${ME8}.json`) ?? '') as { at: number }).at).toBe(NOW)
+})
+
+test('Review 4: this session counts as in the app only with its own record there; a listing without a session drops its address', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc')
+  desk(w, ME8, `local_${ME8}`, { cliSessionId: ME })
+  w.files.delete(`${DESK}/local_cccccccc.json`.toLowerCase())
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(sends(w)).toEqual([])
+  expect(w.read(LOG)).toContain('no desktop record')
+  expect(fileOf(w, ME8).sends).toBe(true)
 })
 
 test('Review 6: last words that wait for the Editor are not finished, whatever came before', () => {
