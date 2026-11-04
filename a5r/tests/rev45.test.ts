@@ -1,10 +1,10 @@
 import { expect, test } from 'claude-code/testing'
-import { DEFAULT_GATES, NO_MANUAL, blankSession, decide, heldLine, newSync, parseLockLine, queueOf, type GrantInput, type SessionFile, type Want } from '../hooks/coord.ts'
+import { DEFAULT_GATES, NO_MANUAL, blankSession, decide, heldLine, mayAskYield, newSync, parseLockLine, queueOf, type GrantInput, type SessionFile, type Want } from '../hooks/coord.ts'
 import { applyOrder, parseEditorCommand, NO_ORDER } from '../hooks/order.ts'
 import { editorPanel } from '../hooks/panel.ts'
 import { staleWants } from '../hooks/truth.ts'
 import { conductor, type WakeIo } from '../hooks/wakehost.ts'
-import { WAKE_ANSWER_MS, afterMiss, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
+import { WAKE_ANSWER_MS, afterMiss, answered, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
 import { parseTail } from '../hooks/judge.ts'
 import { A5RPANE, ENV, LOCK, ME, NOW, PANE, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
 
@@ -41,6 +41,7 @@ const said = (text: string) => JSON.stringify({ type: 'assistant', timestamp: ne
 const QUEUED_WORDS = 'I am queued at #2 for the Editor: the next step is the jump test in PIE.'
 const grant = (files: SessionFile[], o: Partial<GrantInput> = {}): GrantInput => ({ me8: ME8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: { freeGb: 40, diskGb: 100, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null, ...o })
 const NONE: ReadonlySet<string> = new Set()
+const KEEP = (): boolean => false
 /** The engine beneath the host itself, for what the test engine cannot show. */
 const fakeIo = (disk: Map<string, string>, o: Record<string, unknown> = {}): WakeIo => ({ now: async () => NOW, read: async (p: string) => disk.get(p) ?? null, write: async (p: string, t: string) => void disk.set(p, t), stat: async () => null, list: async () => [], run: async () => null, call: async () => null, deskPlace: async () => ({}), writeChecked: async (p: string, _e: string | null, t: string) => (disk.set(p, t), true), claimAlert: async () => true, log: async () => undefined, notify: async () => false, toast: () => undefined, events: async () => [], nudgedAt: async () => 0, nudge: async () => undefined, isGitFree: async () => true, heldNeeds: async () => new Set(), ...o }) as never
 const beat = (w: ReturnType<typeof world>, id8: string) => put(w, { ...fileOf(w, id8), heartbeatAt: w.clock.now() + 1 })
@@ -181,13 +182,13 @@ test('A136: two stopped requests start one at a time, in queue order', opts(), a
 
 test('A136: a request waiting only for memory is not started; a Focus and a freeze hold it too', () => {
   const head = stoppedFile('cccccccc', { want: want() })
-  expect(turnToStart(grant([head]), NONE)?.id8).toBe('cccccccc')
-  expect(turnToStart(grant([head], { probe: { freeGb: 5, diskGb: 100, procs: [] } }), NONE)).toBeNull()
-  expect(turnToStart(grant([head], { focus: { id8: 'dddddddd', lane: 'd', end: NOW + H, isRunning: true } as never }), NONE)).toBeNull()
-  expect(turnToStart(grant([head], { sync: newSync(NOW + 5 * MIN, { session: 'x', id8: 'eeeeeeee', lane: 'e' }, 'e', NOW - H) }), NONE)).toBeNull()
-  expect(turnToStart(grant([head], { lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }), NONE)).toBeNull()
+  expect(turnToStart(grant([head]), KEEP)?.id8).toBe('cccccccc')
+  expect(turnToStart(grant([head], { probe: { freeGb: 5, diskGb: 100, procs: [] } }), KEEP)).toBeNull()
+  expect(turnToStart(grant([head], { focus: { id8: 'dddddddd', lane: 'd', end: NOW + H, isRunning: true } as never }), KEEP)).toBeNull()
+  expect(turnToStart(grant([head], { sync: newSync(NOW + 5 * MIN, { session: 'x', id8: 'eeeeeeee', lane: 'e' }, 'e', NOW - H) }), KEEP)).toBeNull()
+  expect(turnToStart(grant([head], { lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }), KEEP)).toBeNull()
   const live = file('bbbbbbbb', { want: want({ requestedAt: NOW - 9 * H }) })
-  expect(turnToStart(grant([head, live]), NONE)).toBeNull() // a live head takes it itself
+  expect(turnToStart(grant([head, live]), KEEP)).toBeNull() // a live head takes it itself
 })
 
 test('A136: a live session behind a stopped head waits for its start; a stopped head memory holds back lets the next fit go first', () => {
@@ -196,7 +197,7 @@ test('A136: a live session behind a stopped head waits for its start; a stopped 
   expect(decide(grant([head, me]))).toMatchObject({ kind: 'wait', code: 'queue' })
   const passer = stoppedFile('dddddddd', { want: want({ requestedAt: NOW - 2 * H, pie: false, launch: false }) })
   const pie = stoppedFile('cccccccc', { want: want({ pie: true }) })
-  expect(turnToStart(grant([pie, passer], { probe: { freeGb: 30, diskGb: 100, procs: [] } }), NONE)?.id8).toBe('dddddddd') // its slot fits
+  expect(turnToStart(grant([pie, passer], { probe: { freeGb: 30, diskGb: 100, procs: [] } }), KEEP)?.id8).toBe('dddddddd') // its slot fits
   expect(decide(grant([pie, passer, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } }))).toMatchObject({ kind: 'wait', code: 'queue' }) // and the live one behind it waits for that start
 })
 
@@ -246,8 +247,8 @@ test('A136: the engine\'s loop guard: logged as loop-paused, a miss, no retry un
   expect(toasts().some(t => t.includes(pausedCause('3️⃣ Loco fix')))).toBe(true) // the person reads the exact words
   await w.clock.advance(3 * MIN)
   expect(sends(w).length).toBe(1) // inside the window: no retry
-  await w.clock.advance(12 * MIN)
-  expect(sends(w).length).toBeGreaterThan(1) // tried again at the next windows, each once
+  await w.clock.advance(17 * MIN)
+  expect(sends(w).length).toBeGreaterThan(1) // tried again at the next window, once
   expect(sends(w).length).toBeLessThan(5)
   expect(fileOf(w, 'cccccccc').want).not.toBeNull()
   expect(alarms().length).toBe(1)
@@ -595,7 +596,7 @@ test('Review 2: a removed, archived or twice-missed session is not started by th
   await $.session.start(START)
   await w.clock.advance(4 * MIN)
   expect(sends(w)).toEqual([])
-  expect(turnToStart(grant([stoppedFile('cccccccc', { want: want() })]), new Set(['cccccccc']))).toBeNull()
+  expect(turnToStart(grant([stoppedFile('cccccccc', { want: want() })]), f => f.id8 === 'cccccccc')).toBeNull()
 })
 
 test('Review 3: a refused send that nobody answers moves the request back and never withdraws it; a pause then a real miss does not either', opts(), async ($, on) => {
@@ -643,7 +644,7 @@ test('Review 5: a stopped head that its own slot holds back (memory, a cutoff) b
   const long = stoppedFile('cccccccc', { want: want({ minutes: 170 }) })
   const sync = newSync(NOW + 2 * H, { session: 'x', id8: 'eeeeeeee', lane: 'e' }, 'e', NOW - H)
   expect(decide(grant([long, file(ME8, { want: want({ minutes: 20, requestedAt: NOW - H }) })], { sync })).kind).toBe('grant')
-  expect(turnToStart(grant([long], { sync }), NONE)).toBeNull()
+  expect(turnToStart(grant([long], { sync }), KEEP)).toBeNull()
 })
 
 test('Review 2.1: a request that missed its start is behind every other request, and its place comes back if nobody else waits', () => {
@@ -653,7 +654,7 @@ test('Review 2.1: a request that missed its start is behind every other request,
   expect(queueOf([a, b, c], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['bbbbbbbb', 'cccccccc', 'aaaaaaaa'])
   expect(queueOf([a], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['aaaaaaaa'])
   expect(queueOf([{ ...a, heartbeatAt: NOW }, c], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['aaaaaaaa', 'cccccccc']) // it came back: its place too
-  expect(turnToStart(grant([a, c]), NONE)).toBeNull() // a live request ahead of it
+  expect(turnToStart(grant([a, c]), KEEP)).toBeNull() // a live request ahead of it
 })
 
 test('A137: a retried refusal keeps its time; a stopped session\'s miss of the route is tried again only after an hour', async () => {
@@ -696,4 +697,46 @@ test('A140: one at a time: the next session with work waits until the first asks
   expect(sends(w).length).toBe(1)
   await w.clock.advance(7 * MIN)
   expect(sends(w).map(s => s.to)).toEqual(['local_c1c1c1c1', 'local_c2c2c2c2'])
+})
+
+test('Review 3.1: a live session may ask a holder to yield with a stopped request at the head', () => {
+  const stoppedHead = stoppedFile('cccccccc', { want: want() })
+  const holder = file('dddddddd', { holding: { since: NOW - 100 * MIN, end: NOW + 100 * MIN, extended: 0 } })
+  const me = file(ME8, { want: want({ minutes: 15, requestedAt: NOW - MIN }) })
+  expect(mayAskYield(grant([stoppedHead, holder, me], { lock: parseLockLine(held('dddddddd', NOW - 100 * MIN, NOW + 100 * MIN)) }))).toEqual({ holder: 'dddddddd' })
+})
+
+test('Review 3.2: a session that answered drops its misses at its own save: a later miss does not withdraw it', opts(), async ($, on) => {
+  const w = world(on, { ram: '40' })
+  w.put(LOCK, held('dddddddd', NOW, NOW + 10 * H))
+  put(w, file('dddddddd', { heartbeatAt: NOW + 10 * H, holding: { since: NOW, end: NOW + 10 * H, extended: 0 } }))
+  put(w, { ...file(ME8, { session: ME, want: want({ misses: 1, movedBack: true }) }), heartbeatAt: NOW - H })
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  const f = fileOf(w, ME8)
+  expect([f.want?.misses, f.want?.movedBack]).toEqual([undefined, undefined])
+  expect(f.want).not.toBeNull()
+  expect(answered(null)).toBeNull()
+})
+
+test('Review 3.3: while the guard holds, each stopped head moves back at once, so a live session behind them is not held', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: PAUSED } })
+  w.put(LOCK, FREE)
+  stopped(w, 'c1c1c1c1', { want: want({ requestedAt: NOW - 6 * H }) })
+  stopped(w, 'c2c2c2c2', { want: want({ requestedAt: NOW - 5 * H }) })
+  stopped(w, 'c3c3c3c3', { want: want({ requestedAt: NOW - 4 * H }) })
+  await $.session.start(START)
+  await w.clock.advance(5 * MIN)
+  expect(['c1c1c1c1', 'c2c2c2c2', 'c3c3c3c3'].map(id8 => fileOf(w, id8).want?.movedBack)).toEqual([true, true, true])
+  expect(sends(w).length).toBe(1)
+})
+
+test('Review 3.4: one whose start was tried this window leaves room for the next', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: REFUSED } })
+  w.put(LOCK, FREE)
+  stopped(w, 'c1c1c1c1', { want: want({ requestedAt: NOW - 6 * H }) })
+  stopped(w, 'c2c2c2c2', { want: want({ requestedAt: NOW - 5 * H }) })
+  await $.session.start(START)
+  await w.clock.advance(14 * MIN)
+  expect(sends(w).map(s => s.to).slice(0, 2)).toEqual(['local_c1c1c1c1', 'local_c2c2c2c2'])
 })

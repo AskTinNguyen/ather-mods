@@ -17,8 +17,10 @@ export const REFUSED_DIR = 'refused'
 export const WAKE_ANSWER_MS = 5 * MIN
 /** A136: a turn's start is claimed once per window, so a process that answered and stopped again can be started again. */
 export const START_WINDOW_MS = 10 * MIN
-/** A138: after a miss of the route (a refused send, the engine's guard) it is tried this seldom, to keep sends low. */
+/** A138: after a miss of the route (a refused send) a request is tried this seldom, to keep sends low. */
 export const ROUTE_WINDOW_MS = HOUR
+/** A138: while the engine's loop guard holds, the next send goes this much later. */
+export const PAUSE_MS = 15 * MIN
 /** A140: a session started for work holds the one slot this long after it answers, unless it asks or holds first. */
 export const WORK_SETTLE_MS = 10 * MIN
 /** A140: what "still has Editor work" measures: asked or held within this long, not started for it within that long. */
@@ -46,6 +48,12 @@ export const isStopped = (f: SessionFile, files: readonly SessionFile[], lanes: 
 /** A136: a request after a miss goes behind every other request (coord.ts queueOf). `isReal` (nobody answered a send that went,
  * or the app has no such session) counts, and a second such miss withdraws it (null); a miss of the route (a refused send, the
  * engine's loop guard) only moves it: nobody was asked. */
+/** A136: its own A5R, running again: an answer ends what its misses said. */
+export const answered = (w: Want | null): Want | null => {
+  if (!w || (w.misses === undefined && !w.movedBack)) return w
+  const { misses: _m, movedBack: _b, ...rest } = w
+  return rest
+}
 export const afterMiss = (w: Want, isReal: boolean): Want | null => {
   const misses = w.misses ?? 0
   if (isReal && misses >= 1) return null
@@ -90,11 +98,11 @@ export const workMessage = (freeGb: number | null): string =>
 // ---------- A136: whose turn it is ----------
 /** The stopped session whose turn it is: the first in the queue that every check decide makes for it (the lock, a sync, a Focus,
  * a merge in progress, the launch gate) would grant now, with no live request ahead of it; waiting only for memory it is not
- * started, and it blocks nobody meanwhile. */
-export const turnToStart = (x: GrantInput, archived: ReadonlySet<string>): SessionFile | null => {
+ * started, and it blocks nobody meanwhile. `skip`: archived, or tried in this window. */
+export const turnToStart = (x: GrantInput, skip: (f: SessionFile) => boolean): SessionFile | null => {
   for (const f of queueIn(x)) {
     if (!isStopped(f, x.files, x.lanes, x.now)) return null
-    if (!archived.has(f.id8) && decide({ ...x, me8: f.id8 }).kind === 'grant') return f
+    if (!skip(f) && decide({ ...x, me8: f.id8 }).kind === 'grant') return f
   }
   return null
 }
@@ -113,13 +121,14 @@ export const stoppedRefusals = <R extends Refusal>(rs: readonly R[], files: read
 // ---------- A140: who still has Editor work ----------
 /** Last words that close a session's Editor work: done, nothing pending, or it needs the person (and A69's, judge.ts). */
 const FINISHED_WORDS = /\b(done|finished|completed?|shipped|merged|nothing (is )?(pending|left|more)|no (more |further )?(editor )?work|needs? (the person|hai|you|your)|waiting (for|on) (hai|you|the person)|over to you)\b|\bxong\b|hoàn thành/i
+const lastWords = (events: readonly TranscriptEvent[]): string | undefined => events.filter(e => e.role === 'assistant' && e.text).pop()?.text
 /** A140: whether its own last words finish it, by the A65 judge's own readings (a question open to the person, its work said
  * over) and the words above; words that wait for the Editor do not, whatever came before them; no words at all are unknown, and
  * unknown is finished (nothing is started on a guess). */
 export const isFinished = (events: readonly TranscriptEvent[]): boolean => {
-  const last = events.filter(e => e.role === 'assistant' && e.text).pop()
+  const last = lastWords(events)
   if (!last || asksPerson(events)) return true
-  return !saysWaitingForEditor(last.text) && (saysFinished(last.text) || FINISHED_WORDS.test(last.text))
+  return !saysWaitingForEditor(last) && (saysFinished(last) || FINISHED_WORDS.test(last))
 }
 /** A140: when this session last asked for or held the Editor (0: never on record). */
 export const editorSignAt = (f: SessionFile, leases: readonly LeaseRecord[]): number => Math.max(f.askedAt ?? 0, f.editorUseAt ?? 0, f.holding?.since ?? 0, f.want?.requestedAt ?? 0, ...leases.filter(l => l.id8 === f.id8).map(l => l.endAt))
@@ -128,13 +137,17 @@ export const editorSignAt = (f: SessionFile, leases: readonly LeaseRecord[]): nu
  * or by two misses), and not started for this within 2 h unless `again`. */
 export const workPool = (x: { files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; workAt: Readonly<Record<string, number>>; again?: boolean; archived: ReadonlySet<string> }): SessionFile[] =>
   x.files
-    .filter(f => !f.want && !f.holding && !x.archived.has(f.id8) && (f.withdrawnAt ?? 0) < (f.lastTurnAt ?? 0) && (f.agents ?? 0) === 0 && typeof f.lastTurnAt === 'number' && x.now - f.lastTurnAt <= WORK_RECENT_MS && isIdle(idleMsOf({ now: x.now, lastTurnAt: f.lastTurnAt, turnSignalAt: 0, mainCalls: 0, agents: f.agents ?? 0 })) && (x.again || x.now - (x.workAt[f.id8] ?? 0) >= WORK_AGAIN_MS))
+    .filter(f => {
+      const turn = f.lastTurnAt
+      if (f.want || f.holding || x.archived.has(f.id8) || turn === undefined || (f.agents ?? 0) > 0) return false
+      const isRecent = x.now - turn <= WORK_RECENT_MS && isIdle(idleMsOf({ now: x.now, lastTurnAt: turn, turnSignalAt: 0, mainCalls: 0, agents: 0 }))
+      return isRecent && (f.withdrawnAt ?? 0) < turn && (x.again || x.now - (x.workAt[f.id8] ?? 0) >= WORK_AGAIN_MS)
+    })
     .sort((a, b) => (b.lastTurnAt ?? 0) - (a.lastTurnAt ?? 0))
 /** A140: whether a session in that pool has work: asked or held within a day (or, A91, its last words wait for the Editor), and
  * its last words do not finish it. */
 export const hasWork = (f: SessionFile, leases: readonly LeaseRecord[], events: readonly TranscriptEvent[], now: number): boolean => {
-  const last = events.filter(e => e.role === 'assistant' && e.text).pop()
-  return !isFinished(events) && (now - editorSignAt(f, leases) <= WORK_RECENT_MS || saysWaitingForEditor(last?.text ?? ''))
+  return !isFinished(events) && (now - editorSignAt(f, leases) <= WORK_RECENT_MS || saysWaitingForEditor(lastWords(events) ?? ''))
 }
 /** A140: the Editor's gates for a session with no request: a stand-in slot of 30 min without PIE meets what decide checks. */
 export const workFits = (x: GrantInput, f: SessionFile): boolean => {
@@ -213,7 +226,8 @@ export const alarmText = (minutes: number, cause: string): string => `A5R: ${min
 /** The panel's line: the Editor free 30 min or more with nobody queued, and the idle-with-work minutes of today and last night. */
 export const idleLine = (i: IdleFile, x: { now: number; queued: number; isFree: boolean }): string => {
   const today = i.days[ymd(x.now)] ?? 0
-  const lastNight = nightOf(x.now - 12 * HOUR) ?? nightOf(x.now)
+  const hour = new Date(x.now).getHours()
+  const lastNight = nightOf(hour >= 20 ? x.now - 24 * HOUR : hour < 8 ? x.now : x.now - 12 * HOUR)
   const night = lastNight ? (i.nights[lastNight] ?? 0) : 0
   const freeMin = x.isFree && i.freeSince ? Math.floor((x.now - i.freeSince) / MIN) : 0
   return [...(freeMin >= IDLE_ALARM_MIN && x.queued === 0 ? [`free ${freeMin} min, nobody queued`] : []), ...(today + night > 0 ? [`idle with work: ${today} min today, ${night} min last night`] : [])].join(' · ')

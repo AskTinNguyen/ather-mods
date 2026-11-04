@@ -10,6 +10,7 @@ import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
 import { buildStep, runLabel, SCRIPT_SUFFIX } from './buildscript.ts'
 import { endOf, opOf, type ConflictHead, type HeadFile } from './gitshared.ts'
+import type { NoMod } from './overview.ts'
 import { engineLabel, type EngineFind } from './machine.ts'
 import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type EntryTell, type StageTell, type SyncStage } from './syncstage.ts'
 
@@ -140,7 +141,12 @@ export type SessionFile = {
   /** A118: written by A5R 0.25.0 and later, which take and keep a Focus; a file without it is never given one (it would
    * never take the lock, and the queue would wait behind it for the whole box). */
   knowsFocus?: true
-  askedAt?: number; withdrawnAt?: number; conducts?: true; sends?: true // A140 (wake.ts): when it last asked, when its request was withdrawn; 0.28.0 and later conduct, those in the desktop app can start another
+  /** A140 (wake.ts): when it last asked for the Editor, and when its request was withdrawn. */
+  askedAt?: number
+  withdrawnAt?: number
+  /** A140: written by 0.28.0 and later, which conduct; `sends`: those whose own record is in the desktop app's list can start another. */
+  conducts?: true
+  sends?: true
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
@@ -154,8 +160,13 @@ export const blankSession = (session: string, lane: string, title: string, now: 
   lane,
   title,
   heartbeatAt: now,
-  want: null, holding: null, yieldAsks: [], delivered: [],
-  canPass: true, knowsFocus: true, conducts: true,
+  want: null,
+  holding: null,
+  yieldAsks: [],
+  delivered: [],
+  canPass: true,
+  knowsFocus: true,
+  conducts: true,
 })
 
 export const parseSessionFile = (text: string | null): SessionFile | null => {
@@ -681,7 +692,8 @@ export const keepsPlace = (w: Want, now: number): boolean => !isSyncSlot(w) && w
  * first (a sync's holder, A118 a Focus's session), then (A117) the sessions the person placed, in his order, then first asked first served. */
 export const queueOf = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, claim: Claim | null, manual: ManualOrder): SessionFile[] => {
   const pinned = (f: SessionFile) => manual.pins.indexOf(f.id8)
-  const rank = (f: SessionFile) => (f.id8 === claim?.id8 ? -1 : pinned(f) >= 0 ? pinned(f) : manual.pins.length); const back = (f: SessionFile) => Number(f.want?.movedBack === true && livenessOf(f.id8, files, lanes, now) !== 'alive')
+  const rank = (f: SessionFile) => (f.id8 === claim?.id8 ? -1 : pinned(f) >= 0 ? pinned(f) : manual.pins.length)
+  const back = (f: SessionFile) => Number(f.want?.movedBack === true && livenessOf(f.id8, files, lanes, now) !== 'alive')
   return files
     .filter(f => f.want && !f.holding && (livenessOf(f.id8, files, lanes, now) === 'alive' || keepsPlace(f.want, now)))
     .sort((a, b) => back(a) - back(b) || rank(a) - rank(b) || (a.want?.requestedAt ?? 0) - (b.want?.requestedAt ?? 0) || a.id8.localeCompare(b.id8))
@@ -720,14 +732,21 @@ export type GrantInput = {
   focus: FocusLease | null
 }
 
+/** A136: who goes first for this session: `firstLive`, the first request that is alive (or its own): a stopped head recovers
+ * nothing; `first`, the same or a stopped one ahead of it whose own slot would be granted now, which is then started: a stopped
+ * head held back by memory or a cutoff blocks nobody. */
+export const headsOf = (x: GrantInput, queue: readonly SessionFile[]): { firstLive: string | undefined; first: SessionFile | undefined } => {
+  const firstLive = queue.find(q => q.id8 === x.me8 || livenessOf(q.id8, x.files, x.lanes, x.now) === 'alive')?.id8
+  return { firstLive, first: queue.find(q => q.id8 === firstLive || slotOf(x, q, 1).kind === 'grant') }
+}
+
 /** Whether this session may take the Editor now, and if not why and what next. Only the head of the queue takes
  * a free lock (A113: or the one later request that passes a head held back only by memory); the slot's own checks are
  * slotOf's. */
 export const decide = (x: GrantInput): Decision => {
   const { me8, lock, now, sync } = x
   const queue = queueIn(x)
-  const firstLive = queue.find(q => q.id8 === me8 || livenessOf(q.id8, x.files, x.lanes, now) === 'alive')?.id8 // A136: a stopped head recovers nothing
-  const first = queue.find(q => q.id8 === firstLive || slotOf(x, q, 1).kind === 'grant') // A136: and blocks nobody unless its own slot would be granted now: then it is started
+  const { firstLive, first } = headsOf(x, queue)
   const mine = x.files.find(f => f.id8 === me8)
   if (lock.id8 === me8 && (lock.kind === 'held' || lock.kind === 'handed')) return { kind: 'mine' }
   if (!mine?.want) return { kind: 'none' }
@@ -864,7 +883,7 @@ export const mayAskYield = (x: GrantInput): { holder: string } | null => {
   const lease = x.files.find(f => f.id8 === x.lock.id8)
   if (lease?.holding?.pass === x.me8) return null // A113: a slot that passed this head (waiting for memory) is not asked to yield
   if (lease?.holding && !isYieldMoment({ now: x.now, since: lease.holding.since, end: lease.holding.end, editorUseAt: lease.editorUseAt })) return null
-  if (queueIn(x)[0]?.id8 !== x.me8) return null
+  if (headsOf(x, queueIn(x)).firstLive !== x.me8) return null // A136: a stopped head asks nobody to yield
   const asked = x.files.some(f => f.yieldAsks.some(a => a.holder === x.lock.id8 && x.now - a.at < YIELD_EVERY_MS))
   return asked ? null : { holder: x.lock.id8 }
 }
@@ -1385,55 +1404,6 @@ export const parseClients = (text: string): ClientRow[] | null => {
     return null
   }
 }
-
-export type NoMod = { sessionId: string; id8: string; intent: string; branch: string }
-export type Overview = { active: number | null; s2: number; elsewhere: number | null; intents: [string, number][]; editor: string; waiting: string[]; sync: string; withoutMod: NoMod[] }
-
-/** Live S2 sessions that run without a5r 0.4: a fresh Ather lane whose a5r session file is missing or as stale as a gone lane (A127: 10 min, not 3). */
-export const withoutModOf = (me8: string, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): NoMod[] => {
-  const fresh = new Set(files.filter(f => now - f.heartbeatAt <= LANE_STALE_MS).map(f => f.id8))
-  return lanes
-    .filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
-    .map(l => ({ sessionId: l.sessionId, id8: l.sessionId.slice(0, 8).toLowerCase(), intent: l.intent || 'no intent', branch: l.branch ?? '' }))
-    .filter(l => l.id8 !== me8 && !fresh.has(l.id8))
-}
-
-/** What the panel says about the sessions on this machine: how many run (the client's list), how many in S2 (Ather's
- * lanes and a5r's files), by intent, who holds or waits for the Editor, who holds the sync, and the live S2
- * sessions without a5r 0.4. */
-export const overviewOf = (x: { me8: string; files: readonly SessionFile[]; lanes: readonly LaneBeat[]; clients: readonly ClientRow[] | null; isS2Cwd: (cwd: string) => boolean; lock: LockLine; sync: SyncFile | null; now: number; phase: Phase; manual: ManualOrder; focus: FocusLease | null }): Overview => {
-  const { now } = x
-  const liveLanes = x.lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS)
-  const ids = new Set<string>([x.me8, ...liveLanes.map(l => l.sessionId.slice(0, 8).toLowerCase()), ...x.files.filter(f => now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.id8)].filter(Boolean))
-  const intentOf = (id8: string) => liveLanes.find(l => l.sessionId.toLowerCase().startsWith(id8))?.intent || 'no intent'
-  const counts = new Map<string, number>()
-  for (const id8 of ids) counts.set(intentOf(id8), (counts.get(intentOf(id8)) ?? 0) + 1)
-  const active = x.clients?.filter(r => !r.isArchived && (r.isRunning || now - r.lastActivityAt <= CLIENT_ACTIVE_MS)) ?? null
-  const laneOf = (id8: string) => x.files.find(f => f.id8 === id8)?.lane ?? id8
-  const editor = x.lock.kind === 'free' ? 'free' : x.lock.kind === 'missing' ? 'lock missing' : `${x.lock.lane || 'held'}${x.lock.id8 === x.me8 ? ' (this session)' : ''}`
-  return {
-    active: active ? active.length + 1 : null, // the list leaves out the session reading it
-    s2: ids.size,
-    elsewhere: active ? active.filter(r => !x.isS2Cwd(r.cwd)).length : null,
-    intents: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
-    editor,
-    waiting: queueIn(x).map(f => laneOf(f.id8)),
-    sync: x.sync && isOpenPhase(x.phase) ? `${x.sync.holder.id8 === x.me8 ? 'this session' : x.sync.holder.lane} ${hhmm(x.sync.at)} ${x.phase}` : 'none',
-    withoutMod: withoutModOf(x.me8, x.files, x.lanes, now),
-  }
-}
-
-/** The overview in one line (the terminal) or the same words wrapped (the desktop). */
-export const overviewLine = (o: Overview): string =>
-  [
-    o.active === null ? `Sessions: S2 ${o.s2} live (client list unavailable)` : `Sessions: ${o.active} active · S2 ${o.s2} · elsewhere ${o.elsewhere ?? 0}`,
-    o.intents.length ? `by intent: ${o.intents.map(([i, n]) => `${i} ${n}`).join(', ')}` : '',
-    `Editor: ${o.editor}${o.waiting.length ? ` (waiting: ${o.waiting.join(', ')})` : ''}`,
-    `Sync: ${o.sync}`,
-    o.withoutMod.length ? `without a5r 0.4: ${o.withoutMod.map(n => `${n.intent} (session ${n.id8})`).join(', ')}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
 
 /** A16: the one standard message a live S2 session without a5r 0.4 gets at the cutoff (it cannot be frozen). */
 export const noModMessage = (s: SyncFile, checkout: string): string =>

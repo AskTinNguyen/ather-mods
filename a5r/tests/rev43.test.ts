@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { blankSession, parseSessionFile, withoutModOf, type LaneBeat, type SessionFile, type Touch } from '../hooks/coord.ts'
+import { blankSession, parseSessionFile, type LaneBeat, type SessionFile, type Touch } from '../hooks/coord.ts'
+import { withoutModOf } from '../hooks/overview.ts'
 import { classifyGit, indexProblem } from '../hooks/gitshared.ts'
 import { headOwner } from '../hooks/opguard.ts'
 import { ME, NOW, PROJ, opts, refused, world } from './world.ts'

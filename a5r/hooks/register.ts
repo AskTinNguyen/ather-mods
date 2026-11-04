@@ -9,7 +9,7 @@ import {
   movedSync, newSync, noticeIds, noticeText, ownersOf, samePath, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, passNoLaunch, PASS_NO_LAUNCH_NEXT, PASS_MAX_MIN, type Grant,
   DEFAULT_GATES, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, overviewOf, overviewLine, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, withoutModOf, noModMessage, type ClientRow, type NoMod, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, noModMessage, type ClientRow, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   BUILD_MARK, withoutBuildMark, type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want, type FocusLease, claimIn,
 } from './coord.ts'
 import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, afterFocusWant, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
@@ -18,6 +18,8 @@ import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, str, wantOf, appendCapped, endL
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { freeWindowOf, idleMsOf, isIdle } from './nudge.ts'
 import { conductor, type WakeIo } from './wakehost.ts'
+import { answered } from './wake.ts'
+import { overviewLine, overviewOf, withoutModOf, type NoMod } from './overview.ts'
 import { actOf, recordTarget, type Recorded } from './acts.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
@@ -797,7 +799,7 @@ async function writeMe($: Engine): Promise<void> {
   if (!me) return
   const now = await $.clock.now()
   const { sharedShellAt: _was, ...rest } = me
-  me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), ...(rest.want ? { askedAt: rest.want.requestedAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, ...(wakes.canSend() ? { sends: true as const } : {}), delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...rest, want: answered(rest.want), ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), ...(rest.want ? { askedAt: rest.want.requestedAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, ...(wakes.canSend() ? { sends: true as const } : {}), delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir()}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -1446,8 +1448,7 @@ const focusNow = (now: number): FocusLease | null => focusLease(focusFile, now)
 const manualNow = (now: number) => manualOf(order, filesNow(), now)
 /** The queue every session computes (A117: in the person's order; the claim's session first), over the given session files. */
 const queueNow = (files: readonly SessionFile[], now: number): SessionFile[] => queueOf(files, lanes, now, claimIn({ sync: syncFile, files, lanes, now, focus: focusNow(now) }), manualNow(now))
-/** A136: the queue without its stopped requests: they cap no live session's build window or extension, and hold no sync back. */
-const liveQueueNow = (now: number): SessionFile[] => queueNow(filesNow(), now).filter(f => isLive(f.id8, now))
+const liveQueueNow = (now: number): SessionFile[] => queueNow(filesNow(), now).filter(f => isLive(f.id8, now)) // A136: stopped requests cap no live session's build window or extension, and hold no sync back
 const grantInput = (now: number): GrantInput => ({ me8, lock, files: filesNow(), lanes, now, sync: syncFile, probe, gates, conflictHead: conflictHead?.head, manual: manualNow(now), focus: focusNow(now) })
 /** The claim every session reads now (a sync in its cutoff or freeze, A118 a running Focus), or null. */
 const claimNow = (now: number) => claimIn(grantInput(now))
@@ -2831,7 +2832,6 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
 // Rev 44: gitturnhost.ts (A128-A130) and freezehost.ts (A131-A134): this session's state once, the engine per call.
 const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, dir: hfDir, root: s2Root })
 const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now) })
-// Rev 45: wakehost.ts (A135-A141), the same way.
 const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8) })
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
