@@ -251,7 +251,7 @@ test('A136: the engine\'s loop guard: logged as loop-paused, a miss, no retry un
   expect(sends(w).length).toBeGreaterThan(1) // a sole request that the guard moved is tried again after an hour
   expect(sends(w).length).toBeLessThan(5)
   expect(fileOf(w, 'cccccccc').want).not.toBeNull()
-  expect(alarms().length).toBe(1)
+  expect(alarms().length).toBe(2) // the pause, and the Editor's 30 min with work waiting, once each
 })
 
 // ---------- A137 ----------
