@@ -969,3 +969,15 @@ test('Mutation gaps: a refusal of a live session is its own; words that say both
   expect(stoppedRefusals([r('aaaaaaaa'), r('cccccccc')], [file('aaaaaaaa', { heartbeatAt: NOW }), stoppedFile('cccccccc')], [], NOW).map(x => x.id8)).toEqual(['cccccccc'])
   expect(isFinished(parseTail(said('I released the Editor and am queued for it again, waiting.')))).toBe(false)
 })
+
+test('Review 10: a guard pause stops sends, not a live session being told', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: PAUSED } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc')
+  put(w, file('dddddddd', { heartbeatAt: NOW + 10 * H, lastTurnAt: NOW - H, agents: 0, askedAt: NOW - 2 * H }))
+  w.put(`${RECORDS}/${SID('dddddddd')}.jsonl`, said(QUEUED_WORDS))
+  await $.session.start(START)
+  await w.clock.advance(3 * MIN)
+  expect(sends(w).length).toBe(1)
+  expect(w.read(`${HF}/nudges/dddddddd.json`)).toContain('nudges')
+})

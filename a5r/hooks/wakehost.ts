@@ -80,7 +80,8 @@ export const conductor = (h: WakeState) => {
       const row = parseDeskRow(await io.read(`${dir}/${e.name}`))
       if (row) desk.set(row.cli, { row, mtime: e.mtimeMs, name: e.name })
     }
-    if (listed.length > 0) for (const [cli, d] of desk) if (!listed.some(e => e.name === d.name)) desk.delete(cli) // a deleted session
+    const names = new Set(listed.map(e => e.name))
+    if (names.size > 0) for (const [cli, d] of desk) if (!names.has(d.name)) desk.delete(cli) // a deleted session
     isDeskKnown = desk.has((h.me()?.session ?? '').toLowerCase()) // the folder counts only with this session's own record in it
   }
   const archived = (): ReadonlySet<string> => new Set([...desk.values()].filter(d => d.row.isArchived).map(d => d.row.cli.slice(0, 8)))
@@ -138,7 +139,7 @@ export const conductor = (h: WakeState) => {
       return held(pausedCause(wake.pausedBy ?? myName()))
     }
     await io.log(event(s.f, 'woke', `${s.why}: ${result.kind === 'sent' ? `sent to ${address}, waiting for its heartbeat` : `the send reported "${result.reason}", waiting for its heartbeat anyway`}`, now))
-    await save(io, { ...wake, current: { id8: s.f.id8, lane: s.f.lane, why: s.why, at: now, requestedAt: s.requestedAt, ...(result.kind === 'refused' ? { refused: result.reason.slice(0, 200) } : {}) }, pausedSince: 0, pausedBy: undefined, ...(result.kind === 'sent' ? { lastFailure: undefined } : {}), triedAt }, now)
+    await save(io, { ...wake, current: { id8: s.f.id8, lane: s.f.lane, why: s.why, at: now, requestedAt: s.requestedAt, ...(result.kind === 'refused' ? { refused: result.reason.slice(0, 200) } : {}) }, ...(result.kind === 'sent' ? { pausedSince: 0, pausedBy: undefined, lastFailure: undefined } : {}), triedAt }, now)
     return STARTED
   }
 
@@ -235,7 +236,9 @@ export const conductor = (h: WakeState) => {
     const turn = turnToStart(x, f => off.has(f.id8) || (f.want !== null && now - (wake.triedAt[f.id8] ?? 0) < retryAfter(f.want))) // one tried just now leaves room for the next
     if (turn?.want) {
       const minutes = x.manual.minutes[turn.id8] ?? turn.want.minutes
-      return start(io, { f: turn, why: 'turn', text: turnMessage(turn.want, minutes, now), requestedAt: turn.want.requestedAt }, now)
+      const step = await start(io, { f: turn, why: 'turn', text: turnMessage(turn.want, minutes, now), requestedAt: turn.want.requestedAt }, now)
+      if (wake.pausedUntil > now) await workStep(io, x, now, again) // the guard stops sends, not a live session's inbox
+      return step
     }
     const refused = await refusalStep(io, x, now)
     if (refused.kind !== 'nothing') return refused
