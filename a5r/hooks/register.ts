@@ -9,7 +9,7 @@ import {
   movedSync, newSync, noticeIds, noticeText, ownersOf, samePath, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, passNoLaunch, PASS_NO_LAUNCH_NEXT, PASS_MAX_MIN, type Grant,
   DEFAULT_GATES, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, noModMessage, type ClientRow, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, noModMessage, type NoMod, type ClientRow, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   BUILD_MARK, withoutBuildMark, type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want, type FocusLease, claimIn,
 } from './coord.ts'
 import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, afterFocusWant, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
@@ -19,7 +19,7 @@ import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, 
 import { freeWindowOf, idleMsOf, isIdle } from './nudge.ts'
 import { conductor, type WakeIo } from './wakehost.ts'
 import { answered } from './wake.ts'
-import { overviewLine, overviewOf, withoutModOf, type NoMod } from './overview.ts'
+import { overviewLine, overviewOf, withoutModOf } from './overview.ts'
 import { actOf, recordTarget, type Recorded } from './acts.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
@@ -3368,8 +3368,8 @@ async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
   if ((a.kind === 'cancel' || a.kind === 'no-holder') && (await claimAlert($, opts, `auto-sync-told-${a.kind}-${a.kind === 'cancel' ? (s?.id ?? '') : ymd(now)}`))) $.ui.toast(holderMissingText(a, now), { timeoutMs: 15_000 })
 }
 
-/** A125: a request whose session has been gone 2 h is withdrawn from its file (the one write to another session's file:
- * read-compare-write, so one writer) and logged; alert files older than 7 days are removed once a day. */
+/** A125 / A135: a stopped request past its limit (truth.ts staleWants) is withdrawn from its file (read-compare-write, so one
+ * writer) and logged; alert files older than 7 days are removed once a day. */
 async function tidyStep($: Engine, opts: Opts, now: number): Promise<void> {
   for (const { f, why } of staleWants(filesNow(), lanes, now, wakes.archived())) {
     if (!f.want || !(await wakes.withdraw(wakeIo($, opts), f.id8, f.want.requestedAt, now))) continue // one writer: the read-compare-write

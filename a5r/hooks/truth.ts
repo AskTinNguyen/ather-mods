@@ -24,7 +24,7 @@ export const liveWaitMin = (w: Want, now: number): number => Math.round((liveWai
 // ---------- the last sign of life ----------
 /** When a session last showed it is alive: its A5R heartbeat, its last turn and its Ather lane (beat or activity), the
  * latest of them; null when there is nothing to read (no file and no lane). `needsTurn`: with no turn on record the answer is
- * null too (A123: unknown is never quiet). The 2-h withdrawal (A125), the 30-min orphan (A123) and the lost sync holder (A124)
+ * null too (A123: unknown is never quiet). The withdrawal of a slot (A125, A135), the 30-min orphan (A123) and the lost sync holder (A124)
  * all count from it. */
 export const lastSignOf = (id8: string, files: readonly SessionFile[], lanes: readonly LaneBeat[], needsTurn = false): number | null => {
   const f = files.find(s => s.id8 === id8)

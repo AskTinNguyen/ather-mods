@@ -1,6 +1,5 @@
 // The panel's overview of the sessions on this machine (A16, A127), moved out of coord.ts in rev 45. Pure: no `$`.
-import { CLIENT_ACTIVE_MS, HEARTBEAT_STALE_MS, LANE_STALE_MS, claimIn, hhmm, isOpenPhase, livenessOf, queueIn, ymd, type ClientRow, type GrantInput, type LaneBeat, type LockLine, type ManualOrder, type Phase, type SessionFile, type SyncFile, type FocusLease, type NoMod } from './coord.ts'
-export type { NoMod } from './coord.ts'
+import { CLIENT_ACTIVE_MS, HEARTBEAT_STALE_MS, LANE_STALE_MS, hhmm, isOpenPhase, queueIn, type ClientRow, type LaneBeat, type LockLine, type ManualOrder, type Phase, type SessionFile, type SyncFile, type FocusLease, type NoMod } from './coord.ts'
 
 export type Overview = { active: number | null; s2: number; elsewhere: number | null; intents: [string, number][]; editor: string; waiting: string[]; sync: string; withoutMod: NoMod[] }
 

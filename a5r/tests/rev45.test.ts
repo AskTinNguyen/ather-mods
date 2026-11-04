@@ -117,7 +117,7 @@ test('A136: the Editor free and a stopped head: one message with the slot and it
   expect(sends(w).map(s => s.to)).toEqual(['local_cccccccc'])
   expect(sends(w)[0]?.message).toContain('your turn has come: mc jump test (30 min)')
   expect(sends(w)[0]?.message).toContain('Your lease starts when this session answers and ends about 15:1')
-  expect(sends(w)[0]?.message).toContain('request again if you no longer need it')
+  expect(sends(w)[0]?.message).toContain('if you no longer need it, release it with the editor tool and request again when you do')
   expect(w.read(LOCK)).toBe(FREE) // A stopped session's lease does not count down before it answers: there is none
   expect(fileOf(w, 'cccccccc').holding).toBeNull()
   await w.clock.advance(3 * MIN)
@@ -249,7 +249,7 @@ test('A136: the engine\'s loop guard: logged as loop-paused, a miss, no retry un
   expect(sends(w).length).toBe(1) // inside the window: no retry
   await w.clock.advance(60 * MIN)
   expect(sends(w).length).toBeGreaterThan(1) // a sole request that the guard moved is tried again after an hour
-  expect(sends(w).length).toBeLessThan(5)
+  expect(sends(w).length).toBeLessThan(6) // at most one each 15 min
   expect(fileOf(w, 'cccccccc').want).not.toBeNull()
   expect(alarms().length).toBe(2) // the pause, and the Editor's 30 min with work waiting, once each
 })
@@ -866,9 +866,9 @@ test('Review 7.1: a session that answered a start for work and did not ask has s
 
 test('Review 7.2: unit: workPlan: told and silent stays counted; the gates hold; started one ends the plan', () => {
   const words = { isFinished: false, waits: true }
-  const fact = (id8: string, o: Partial<WorkFact> = {}): WorkFact => ({ f: { ...file(id8), id8 }, words, told: false, triedAt: 0, answeredAt: 0, isAlive: false, hasRecord: true, fits: true, ...o })
+  const fact = (id8: string, o: Partial<WorkFact> = {}): WorkFact => ({ f: { ...file(id8), id8 }, words, toldAt: 0, triedAt: 0, answeredAt: 0, isAlive: false, hasRecord: true, fits: true, ...o })
   const plan = (facts: WorkFact[], again = false) => workPlan(facts, { now: NOW, leases: [], again, nameOf: f => f.id8 })
-  expect(plan([fact('a', { isAlive: true, told: true })])).toEqual({ tell: [], start: null, held: 'a was told and has not asked yet' })
+  expect(plan([fact('a', { isAlive: true, toldAt: NOW - H, f: { ...file('a', { lastTurnAt: NOW - 2 * H }), id8: 'a' } })])).toEqual({ tell: [], start: null, held: 'a was told and has not asked yet' })
   expect(plan([fact('a', { isAlive: true })]).tell.map(f => f.id8)).toEqual(['a'])
   expect(plan([fact('a', { fits: false })]).held).toBe('a has work, but the Editor\'s gates hold it')
   expect(plan([fact('a'), fact('b')]).start?.id8).toBe('a')
@@ -880,4 +880,11 @@ test('Review 7.2: unit: workPlan: told and silent stays counted; the gates hold;
   expect(plan([fact('a', { words: { isFinished: true, waits: true } })]).start).toBeNull()
   expect(plan([fact('a', { triedAt: NOW - 3 * H, answeredAt: NOW - 2 * H })]).start).toBeNull()
   expect(plan([{ ...fact('a', { triedAt: NOW - 5 * H, answeredAt: NOW - 3 * H }), f: { ...file('a', { askedAt: NOW - H }), id8: 'a' } }]).start?.id8).toBe('a') // it asked since
+})
+
+test('Review 8: a live session told that took a turn and did not ask has said no; a pause spends no attempt and the alarm names it', () => {
+  const words = { isFinished: false, waits: true }
+  const fact = (o: Partial<WorkFact> = {}): WorkFact => ({ f: { ...file('a'), id8: 'a', lastTurnAt: NOW - H }, words, toldAt: NOW - 2 * H, triedAt: 0, answeredAt: 0, isAlive: true, hasRecord: true, fits: true, ...o })
+  expect(workPlan([fact()], { now: NOW, leases: [], again: false, nameOf: f => f.id8 })).toEqual({ tell: [], start: null, held: null })
+  expect(workPool({ files: [file('cccccccc', { lastTurnAt: NOW - H, heartbeatAt: 0 })], now: NOW, archived: NONE })).toEqual([])
 })

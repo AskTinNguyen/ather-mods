@@ -132,7 +132,7 @@ export const conductor = (h: WakeState) => {
     if (result.kind === 'loop-paused') {
       await io.log(event(s.f, 'woke', `${s.why}: loop-paused: ${result.reason}`, now, false))
       const isFirst = wake.pausedSince === 0
-      await save(io, { ...(isFirst ? withRow(wake, row('loop-paused')) : wake), triedAt, pausedUntil: now + PAUSE_MS, pausedSince: wake.pausedSince || now, pausedBy: wake.pausedBy ?? myName() }, now)
+      await save(io, { ...(isFirst ? withRow(wake, row('loop-paused')) : wake), pausedUntil: now + PAUSE_MS, pausedSince: wake.pausedSince || now, pausedBy: myName(), lastFailure: pausedCause(myName()) }, now) // nothing went: no attempt on record
       if (turn) await miss(io, turn, now, false, 'loop-paused', now)
       if (isFirst) await alarm(io, pausedCause(myName()), now)
       return held(pausedCause(wake.pausedBy ?? myName()))
@@ -202,7 +202,7 @@ export const conductor = (h: WakeState) => {
         wordsAt.set(f.id8, { turn, words: wordsOf(events) })
       }
       const words = wordsAt.get(f.id8)?.words
-      if (words) facts.push({ f, words, told: now - (await io.nudgedAt(f.id8)) < WORK_AGAIN_MS, triedAt: wake.triedAt[f.id8] ?? 0, answeredAt: wake.answeredAt[f.id8] ?? 0, isAlive: livenessOf(f.id8, x.files, x.lanes, now) === 'alive', hasRecord: desk.has(f.session.toLowerCase()), fits: workFits(x, f) })
+      if (words) facts.push({ f, words, toldAt: await io.nudgedAt(f.id8), triedAt: wake.triedAt[f.id8] ?? 0, answeredAt: wake.answeredAt[f.id8] ?? 0, isAlive: livenessOf(f.id8, x.files, x.lanes, now) === 'alive', hasRecord: desk.has(f.session.toLowerCase()), fits: workFits(x, f) })
     }
     const plan = workPlan(facts, { now, leases: h.leases(), again, nameOf })
     for (const f of plan.tell) {

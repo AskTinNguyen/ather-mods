@@ -89,7 +89,7 @@ export const pausedCause = (session: string): string => `paused until you type i
 
 // ---------- the messages ----------
 export const turnMessage = (w: Want, minutes: number, now: number): string =>
-  `A5R · Editor — your turn has come: ${w.what} (${minutes} min). Your lease starts when this session answers and ends about ${hhmm(now + minutes * MIN)} → go on with that work; request again if you no longer need it now (the editor tool's release gives your place up).`
+  `A5R · Editor — your turn has come: ${w.what} (${minutes} min). Your lease starts when this session answers and ends about ${hhmm(now + minutes * MIN)} → go on with that work; if you no longer need it, release it with the editor tool and request again when you do.`
 export const refusalMessage = (r: Refusal): string =>
   `A5R · ${r.kind === 'git' ? 'Git' : 'Sync main'} — what refused you is free now (${r.what}) → run that again and go on; if you no longer need it, do nothing.`
 export const workMessage = (freeGb: number | null): string =>
@@ -120,7 +120,7 @@ export const parseRefusal = (text: string | null): Refusal | null => {
 }
 /** The refusals to act on in order: oldest first, not too old, of a session whose process has since stopped. */
 export const stoppedRefusals = <R extends Refusal>(rs: readonly R[], files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): R[] =>
-  rs.filter(r => now - r.at < REFUSAL_KEEP_MS && files.some(f => f.id8 === r.id8) && livenessOf(r.id8, files, lanes, now) !== 'alive').sort((a, b) => a.at - b.at || a.id8.localeCompare(b.id8))
+  rs.filter(r => now - r.at < REFUSAL_KEEP_MS && files.some(f => f.id8 === r.id8 && f.heartbeatAt > 0) && livenessOf(r.id8, files, lanes, now) !== 'alive').sort((a, b) => a.at - b.at || a.id8.localeCompare(b.id8))
 
 // ---------- A140: who still has Editor work ----------
 /** Last words that close a session's Editor work: done, nothing pending, or it needs the person (and A69's, judge.ts). */
@@ -143,7 +143,7 @@ export const workPool = (x: { files: readonly SessionFile[]; now: number; archiv
   x.files
     .filter(f => {
       const turn = f.lastTurnAt
-      if (f.want || f.holding || x.archived.has(f.id8) || turn === undefined || (f.agents ?? 0) > 0) return false
+      if (f.heartbeatAt === 0 || f.want || f.holding || x.archived.has(f.id8) || turn === undefined || (f.agents ?? 0) > 0) return false
       const idleFor = x.now - turn
       return idleFor <= WORK_RECENT_MS && idleFor >= NUDGE_IDLE_MS && (f.withdrawnAt ?? 0) < turn
     })
@@ -154,24 +154,26 @@ export const wordsOf = (events: readonly TranscriptEvent[]): Words => ({ isFinis
 /** A140: whether a session in that pool has work: asked or held within a day (or, A91, its last words wait for the Editor), and
  * its last words do not finish it. */
 export const hasWork = (f: SessionFile, leases: readonly LeaseRecord[], words: Words, now: number): boolean => !words.isFinished && (now - editorSignAt(f, leases) <= WORK_RECENT_MS || words.waits)
-/** A140: what the conductor knows of one session in the pool. `told`: its inbox has a nudge within 2 h; `triedAt`, `answeredAt`:
+/** A140: what the conductor knows of one session in the pool. `toldAt`: the last nudge in its inbox; `triedAt`, `answeredAt`:
  * its last start, and its last answer to a start for work; `hasRecord`: the desktop app lists it. */
-export type WorkFact = { f: SessionFile; words: Words; told: boolean; triedAt: number; answeredAt: number; isAlive: boolean; hasRecord: boolean; fits: boolean }
+export type WorkFact = { f: SessionFile; words: Words; toldAt: number; triedAt: number; answeredAt: number; isAlive: boolean; hasRecord: boolean; fits: boolean }
 /** A140 / A91 / A141, the whole rule of who is told, who is started and what the free minute counts as. A session with work and:
  * the gates against it: held, nobody is started; started for work and it answered with no request since: it said no, and stays out
- * until it asks or holds again; stopped, tried within 2 h: it waits, and counts while nobody answered; stopped otherwise: started,
- * and the plan ends there (one at a time); live and told within 2 h: counts while it has not asked; live otherwise: told. `again`:
+ * until it asks or holds again, and so does a live one told that took a turn and did not ask; stopped, tried within 2 h: it waits,
+ * and counts while nobody answered; stopped otherwise: started, and the plan ends there (one at a time); live and told within 2 h:
+ * counts while it has not asked; live otherwise: told. `again`:
  * A141's one more try, the 2 h aside. */
 export const workPlan = (facts: readonly WorkFact[], x: { now: number; leases: readonly LeaseRecord[]; again: boolean; nameOf: (f: SessionFile) => string }): { tell: SessionFile[]; start: SessionFile | null; held: string | null } => {
   const tell: SessionFile[] = []
   let held: string | null = null
   for (const w of facts) {
-    if (!hasWork(w.f, x.leases, w.words, x.now) || (w.answeredAt > 0 && editorSignAt(w.f, x.leases) < w.answeredAt)) continue
+    const said = Math.max(w.answeredAt, (w.f.lastTurnAt ?? 0) > w.toldAt ? w.toldAt : 0)
+    if (!hasWork(w.f, x.leases, w.words, x.now) || (said > 0 && editorSignAt(w.f, x.leases) < said)) continue
     const name = x.nameOf(w.f)
     if (!w.fits) return { tell, start: null, held: `${name} has work, but the Editor's gates hold it` }
     const isTried = x.now - w.triedAt < WORK_AGAIN_MS && !x.again
     if (w.isAlive) {
-      if (w.told && !x.again) held ??= `${name} was told and has not asked yet`
+      if (x.now - w.toldAt < WORK_AGAIN_MS && !x.again) held ??= `${name} was told and has not asked yet`
       else tell.push(w.f)
     } else if (w.hasRecord) {
       if (!isTried) return { tell, start: w.f, held }
