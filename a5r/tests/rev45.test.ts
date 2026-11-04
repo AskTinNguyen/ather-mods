@@ -4,7 +4,7 @@ import { applyOrder, parseEditorCommand, NO_ORDER } from '../hooks/order.ts'
 import { editorPanel } from '../hooks/panel.ts'
 import { staleWants } from '../hooks/truth.ts'
 import { conductor, type WakeIo } from '../hooks/wakehost.ts'
-import { WAKE_ANSWER_MS, workPlan, type WorkFact, afterMiss, answered, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
+import { WAKE_ANSWER_MS, stoppedRefusals, workPlan, type WorkFact, afterMiss, answered, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
 import { parseTail } from '../hooks/judge.ts'
 import { A5RPANE, ENV, LOCK, ME, NOW, PANE, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
 
@@ -962,4 +962,10 @@ test('Mutation gaps: a session refused and archived since is not messaged', asyn
   const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: 1 }] : a.o.list())
   await hostOf(() => [me, stoppedFile('cccccccc')], me).tick(fakeIo(a.disk, { ...a.o, list, call: async () => ((calls += 1), { text: SENT }) }))
   expect(calls).toBe(0)
+})
+
+test('Mutation gaps: a refusal of a live session is its own; words that say both wait', () => {
+  const r = (id8: string) => ({ v: 1 as const, id8, kind: 'git' as const, at: NOW - MIN, what: 'x' })
+  expect(stoppedRefusals([r('aaaaaaaa'), r('cccccccc')], [file('aaaaaaaa', { heartbeatAt: NOW }), stoppedFile('cccccccc')], [], NOW).map(x => x.id8)).toEqual(['cccccccc'])
+  expect(isFinished(parseTail(said('I released the Editor and am queued for it again, waiting.')))).toBe(false)
 })
