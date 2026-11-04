@@ -150,7 +150,7 @@ export const conductor = (h: WakeState) => {
     if (result.kind === 'loop-paused') {
       await io.log(event(s.f, 'woke', `${s.why}: loop-paused: ${result.reason}; ${wakes}`, now, false))
       const isFirst = wake.pausedSince === 0
-      await save(io, { ...(isFirst ? withRow(wake, row('loop-paused')) : wake), pausedUntil: now + PAUSE_MS, pausedSince: wake.pausedSince || now, pausedBy: myName(), pausedId: h.me8(), lastFailure: pausedCause(myName()) }, now) // nothing went: no attempt on record
+      await save(io, { ...(isFirst ? withRow(wake, row('loop-paused')) : wake), pausedUntil: now + PAUSE_MS, pausedSince: wake.pausedSince || now, pausedBy: myName(), pausedId: h.me8() }, now) // nothing went: no attempt on record
       if (turn) await miss(io, turn, now, 'moved', 'loop-paused', now)
       if (isFirst) await alarm(io, pausedCause(myName()), now)
       return held(pausedCause(myName()))
@@ -173,7 +173,7 @@ export const conductor = (h: WakeState) => {
     if (!isAnswered && now - cur.at < WAKE_ANSWER_MS) return true
     const outcome: WakeOutcome = isAnswered ? 'answered' : 'no-answer'
     await io.log(event(cur, 'woke', `${cur.why}: ${outcome} ${Math.round((now - cur.at) / 60_000)} min after the start at ${hhmm(cur.at)}`, now))
-    const answers = isAnswered ? { spent: wake.spent.map(s => ({ at: s.at })) } : {} // an answer: the route works
+    const answers = isAnswered ? { spent: wake.spent.map(s => ({ at: s.at })), lastFailure: undefined } : {} // an answer: the route works
     await save(io, { ...withRow(wake, { at: now, id8: cur.id8, lane: cur.lane, why: cur.why, outcome }), ...answers, current: null, ...(!isAnswered && cur.refused ? { lastFailure: `the send was refused: ${cur.refused}` } : {}) }, now)
     if (!isAnswered && cur.requestedAt !== null) await miss(io, { id8: cur.id8, lane: cur.lane, requestedAt: cur.requestedAt }, cur.at, cur.refused === undefined ? 'real' : 'refused', 'no-answer', now)
     return true
@@ -256,6 +256,7 @@ export const conductor = (h: WakeState) => {
     const refused = await refusalStep(io, x, now)
     if (refused.kind !== 'nothing') return refused
     const queued = queueIn(x)
+    if (queued.length > 0 && wake.pausedUntil > now) return held(pausedCause(wake.pausedBy ?? myName()))
     return queued.length > 0 ? held(wake.lastFailure ?? `${queued.length} queued, held back by the Editor's gates (memory ${h.freeGb() ?? '?'} GB)`) : NOTHING
   }
 

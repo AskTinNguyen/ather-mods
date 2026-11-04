@@ -257,3 +257,14 @@ test('Review 10: an open refusal the app does not list counts nothing, from a co
   await hostOf(() => [me, stoppedFile('cccccccc')], me).tick(fakeIo(a.disk, { ...a.o, list: list as never }))
   expect((JSON.parse(a.disk.get('d/idle-with-work.json') ?? '') as { run: number }).run).toBe(0)
 })
+
+test('A141: at 30 min in a row it tries once more, past the hour\'s wait', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: REFUSED } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc')
+  await $.session.start(START)
+  await w.clock.advance(25 * MIN)
+  expect(sends(w).length).toBe(1)
+  await w.clock.advance(10 * MIN)
+  expect(sends(w).length).toBe(2)
+})
