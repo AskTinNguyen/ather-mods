@@ -213,7 +213,7 @@ export const statusAtOf = (text: string | null): number => {
     return 0
   }
 }
-export type StatusQueueRow = { place: number; lane: string; id8: string; startsAt: number | null; waitsFor: string }
+export type StatusQueueRow = { place: number; lane: string; id8: string; startsAt: number | null; waitsFor: string; stopped?: true } // stopped: A139
 /** A134: Saved/A5R/status.json as outside viewers read it (README "status.json"). */
 export type StatusFile = {
   v: 1
@@ -221,9 +221,11 @@ export type StatusFile = {
   sync: { id: string; at: number; holder: string; holderId8: string; phase: Phase; stage: SyncStage | null; step: FreezeStep | null; held: Need[]; steps: { run: Run | null; word: string; endsAt: number | null; isNow: boolean; isLate: boolean }[]; liftAt: number | null; hardEnd: number; line: string; band: string | null } | null
   editor: { holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[] }
   focus: { lane: string; id8: string; end: number } | null
+  /** A139 / A141: how many queued sessions have stopped, the start in flight, and the idle-with-work minutes. */
+  wake?: Record<string, unknown>
 }
 /** A134: the state the minute tick writes for outside viewers. */
-export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null }): StatusFile => {
+export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null; wake?: Record<string, unknown> }): StatusFile => {
   const s = x.sync && (x.phase === 'planned' || x.phase === 'cutoff' || x.phase === 'frozen') ? x.sync : null
   const a = s ? aheadOf(s, x.step, x.times, x.now) : null
   const step = x.step
@@ -235,5 +237,6 @@ export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; 
       : null,
     editor: { holder: x.holder, queue: x.queue },
     focus: x.focus,
+    ...(x.wake ? { wake: x.wake } : {}),
   }
 }

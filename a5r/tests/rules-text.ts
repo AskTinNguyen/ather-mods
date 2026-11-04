@@ -12,6 +12,7 @@ export const REQUIRED_RULES_TEXT: { file: string; row: string; text: string }[] 
     row: 'A102/A121',
     text: 'A fix that needs no C++ rebuild is retested in the same slot (extend for the retest); release when the task\'s Editor work is done or the slot ends, not between a test and its fix; a lane that keeps coming back is offered a Focus.',
   },
+  { file: 'rules/rules-a5r.md', row: 'A135/A136', text: 'You can stop while queued: A5R starts you when your turn comes, with a message from another session that names your slot; your lease starts when you answer, so go on with that work.' },
   { file: 'rules/rules-a5r.md', row: 'A118', text: 'When the person gives this session a Focus (an `A5R · Focus` notice), the Editor stays yours to the box end through closes, rebuilds and reopens; call the editor tool with `focus_done` when the milestone is reached (a release keeps the lock).' },
   { file: 'rules/rules-a5r.md', row: 'A126', text: 'In the shared checkout the index is shared by every session: commit with `-- <your paths>` (`git commit -m "…" -- <your paths>`); a commit without paths runs only when every staged path is your own, and `commit -a`, `commit --amend` and adding a path another live session is editing are refused.' },
   { file: 'rules/rules-a5r.md', row: 'A128/A129', text: 'In the shared checkout run git writes in the foreground with a long timeout, one at a time (A5R holds the git turn), never piped into head/tail or wrapped in timeout.' },

@@ -73,12 +73,12 @@ test('liveness from files only: Ather\'s lane ended or 10 min old, or a 3 min ol
   expect(livenessOf('ffffffff', files, lanes, NOW)).toBe('unknown')
 })
 
-test('the queue: live requests, first requested first served, the sync holder first inside a cutoff or freeze', () => {
+test('the queue: requests first requested first served (A135: a stopped one keeps its place), the sync holder first inside a cutoff or freeze', () => {
   const a = sess('aaaaaaaa', { want: want({ requestedAt: NOW - 5 * 60_000 }) })
   const b = sess('bbbbbbbb', { want: want({ requestedAt: NOW - 9 * 60_000 }) })
   const gone = sess('cccccccc', { want: want({ requestedAt: NOW - 20 * 60_000 }), heartbeatAt: NOW - 5 * 60_000 })
   const holding = sess('dddddddd', { want: want(), holding: { since: NOW, end: NOW, extended: 0 } })
-  expect(queueOf([a, b, gone, holding], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['bbbbbbbb', 'aaaaaaaa'])
+  expect(queueOf([a, b, gone, holding], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['cccccccc', 'bbbbbbbb', 'aaaaaaaa'])
   const sync = newSync(T(15, 0), { session: 'aaaaaaaa-0000', id8: 'aaaaaaaa', lane: 'lane-a' }, 'lane-a', NOW)
   expect(queueOf([a, b], [], NOW, claimIn({ sync, files: [a, b], lanes: [], now: NOW, focus: null }), NO_MANUAL).map(f => f.id8)).toEqual(['aaaaaaaa', 'bbbbbbbb']) // 14:40 is inside 15:00's cutoff
   expect(queueOf([a, b], [], T(13, 0), claimIn({ sync, files: [a, b], lanes: [], now: T(13, 0), focus: null }), NO_MANUAL).map(f => f.id8)).toEqual(['bbbbbbbb', 'aaaaaaaa'])

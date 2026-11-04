@@ -4,7 +4,7 @@
 // sessions stayed on file and about 30 sessions were told of each sync's freeze. Pure: no `$`; register.ts reads, writes
 // and delivers.
 import { psQuote } from './a5r.ts'
-import { buildProcs, isUnrealProc, livenessOf, lockTimes, unrealPids, type LaneBeat, type LockLine, type Probe, type SessionFile, type Want } from './coord.ts'
+import { buildProcs, isUnrealProc, keepsPlace, livenessOf, lockTimes, unrealPids, type LaneBeat, type LockLine, type Probe, type SessionFile, type Want } from './coord.ts'
 
 const MIN = 60_000
 
@@ -39,12 +39,20 @@ export const isQuietFor = (id8: string, x: { files: readonly SessionFile[]; lane
 }
 
 // ---------- stale requests ----------
-/** A request whose session has been gone this long is withdrawn. */
+/** A sync's or a Focus's slot of a session gone this long is withdrawn: it ends with them. */
 export const STALE_WANT_MS = 2 * 3_600_000
-/** The requests to withdraw: a session gone and quiet for 2 h or more, asking and holding nothing (a gone holder's lease is
- * the lapse rules'). The one write A5R makes to another session's file (register.ts tidyStep, read-compare-write): its
- * session is gone, and if it comes back it asks again. */
-export const staleWants = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): SessionFile[] => files.filter(f => f.want && !f.holding && isQuietFor(f.id8, { files, lanes, now }, STALE_WANT_MS))
+/** A135: the requests to withdraw, and why: a session gone (never a live one, and no lease: those are the lapse rules') whose
+ * request was asked 48 h ago, whose session the app has archived (`archived`: first 8 hex), or whose sync's or Focus's slot has
+ * stood 2 h. Any other stopped request keeps its place (A136 starts it). The write is read-compare-write (wakehost.ts withdraw). */
+export const staleWants = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, archived: ReadonlySet<string> = new Set()): { f: SessionFile; why: string }[] =>
+  files.flatMap(f => {
+    const x = { files, lanes, now }
+    if (!f.want || f.holding || !isQuietFor(f.id8, x, 0)) return []
+    if (archived.has(f.id8)) return [{ f, why: 'its session is archived' }]
+    if (keepsPlace(f.want, now)) return []
+    const isOld = now - f.want.requestedAt >= 48 * 3_600_000
+    return isOld ? [{ f, why: 'asked 48 h ago or more' }] : isQuietFor(f.id8, x, STALE_WANT_MS) ? [{ f, why: 'its session gone 2 h, a sync\'s or Focus\'s slot' }] : []
+  })
 
 // ---------- PIE from the probe ----------
 /** An Unreal Editor window whose title says a Play-In-Editor session runs (a PIE in its own window). Best effort: a PIE in

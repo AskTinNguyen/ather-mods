@@ -350,9 +350,9 @@ test('A125: unit: a wait counts only while its own session runs; a new request s
   expect(leaseSummary([r], NOW).medianWaitMin).toBe(540) // a record without it: as before
 })
 
-test('A125: unit: requests of sessions gone 2 h are withdrawn; PIE is seen from a PIE window or the person\'s drivers (none by default); no-editor needs 30 min with no Editor or build at any point; old alert files go; the freeze concerns only some', () => {
-  const stale = { ...file('cccccccc', { want: want(), lastTurnAt: NOW - 3 * H }), heartbeatAt: NOW - 2 * H }
-  expect(staleWants([stale, { ...stale, id8: 'dddddddd', heartbeatAt: NOW - 100 * MIN }, { ...stale, id8: 'eeeeeeee', holding: { since: 0, end: 0, extended: 0 } }], [], NOW).map(f => f.id8)).toEqual(['cccccccc'])
+test('A125 (A135: only a sync\'s or Focus\'s slot now): unit: slots of sessions gone 2 h are withdrawn; PIE is seen from a PIE window or the person\'s drivers (none by default); no-editor needs 30 min with no Editor or build at any point; old alert files go; the freeze concerns only some', () => {
+  const stale = { ...file('cccccccc', { want: want({ focus: 1 }), lastTurnAt: NOW - 3 * H }), heartbeatAt: NOW - 2 * H }
+  expect(staleWants([stale, { ...stale, id8: 'dddddddd', heartbeatAt: NOW - 100 * MIN }, { ...stale, id8: 'eeeeeeee', holding: { since: 0, end: 0, extended: 0 } }], [], NOW).map(s => s.f.id8)).toEqual(['cccccccc'])
   expect(staleWants([stale], [{ sessionId: SID('cccccccc'), hasEnded: true, mtimeMs: NOW - 30 * MIN }], NOW)).toEqual([]) // its lane beat 30 min ago
   const py: Proc = { name: 'python', pid: 9, gb: 0.1, parentAlive: true, cmd: '"C:\\Python\\python.exe" E:\\s2\\docs\\handoff\\pie-perf-tools\\lab.py --pie' }
   const win = (title: string, cmd = S2_EDITOR.cmd): Proc => ({ name: 'UnrealEditor', pid: 1, gb: 1, parentAlive: true, title, cmd })
@@ -380,11 +380,11 @@ test('A125: unit: the kit guard lets read-only `sed -n` print lines from the kit
   for (const c of [`sed -i s/a/b/ ${KIT}/x`, `sed s/a/b/w${KIT}/y ${KIT}/x`, `sed -n 1p ${KIT}/x > ${KIT}/y`, `sed -n '1w ${KIT}/y' ${KIT}/x`, `sed -n 1e ${KIT}/x`, `sed -n -i 1p ${KIT}/x`, `sed -n --in-place=.bak 1p ${KIT}/x`, `sed -n -e 1p -e 'w ${KIT}/y' ${KIT}/x`, `sed -n -f C:/tmp/s.sed ${KIT}/x`]) expect([c, pre(c)]).toEqual([c, 'kit']) // review C1: every script and every option is read
 })
 
-test('A125: a request whose session is gone 2 h is withdrawn (logged) and shown nowhere; the no-editor line waits for 30 min with no Editor at any point', opts(), async ($, on) => {
+test('A125 (A135: asked 48 h ago now): a request whose session is gone is withdrawn (logged) and shown nowhere; the no-editor line waits for 30 min with no Editor at any point', opts(), async ($, on) => {
   const w = world(on, { ram: '40' })
   w.put(LOCK, held('dddddddd', 'lane-dddddddd', NOW - 10 * MIN, NOW + 40 * MIN))
   w.put(`${HF}/editor/dddddddd.json`, peer('dddddddd', { holding: { since: NOW - 10 * MIN, end: NOW + 40 * MIN, extended: 0 } }))
-  w.put(`${HF}/editor/cccccccc.json`, JSON.stringify({ ...file('cccccccc', { want: want({ requestedAt: NOW - 5 * H }), lastTurnAt: NOW - 4 * H }), heartbeatAt: NOW - 3 * H }))
+  w.put(`${HF}/editor/cccccccc.json`, JSON.stringify({ ...file('cccccccc', { want: want({ requestedAt: NOW - 49 * H }), lastTurnAt: NOW - 4 * H }), heartbeatAt: NOW - 3 * H }))
   w.put(`${HF}/editor/${ME8}.json`, meFile())
   await $.session.start(START)
   await w.clock.advance(MIN)

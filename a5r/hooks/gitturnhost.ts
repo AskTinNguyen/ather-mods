@@ -71,7 +71,7 @@ export const gitTurns = (h: TurnState) => {
   const lockPids = (pids: number[] | null): number[] | null => (pids === null ? null : [...pids, ...untargetedGitPids(h.probe())])
   const refuse = (w: Wait, isTicking: boolean) => {
     if (isTicking) wait = w // Fable 3: a session that runs no tick is never told free: it is told to retry
-    return { deny: `A5R · ${TURN_GATE} — ${busyText(w)} → ${isTicking ? TURN_NEXT : 'run it again in a minute (this session does not coordinate the checkout, so A5R cannot tell it when git is free)'}`, isTaken: false }
+    return { deny: `A5R · ${TURN_GATE} — ${busyText(w)} → ${isTicking ? TURN_NEXT : 'run it again in a minute (this session does not coordinate the checkout, so A5R cannot tell it when git is free)'}`, isTaken: false, isWait: isTicking }
   }
 
   /** A130: every condition read again, fresh (the processes, the lock, the claims), by one session (the alert claim): the
@@ -92,7 +92,7 @@ export const gitTurns = (h: TurnState) => {
      * gets a long timeout; this session claims the turn, or is refused at once naming what holds it. Null: no such write.
      * The sync holder's own merge commands in its freeze take no claim (its freeze covers them; its worker is this
      * session) but wait for another session's git (Fable 2). */
-    start: async (io: TurnIo, command: string, input: { timeout?: unknown; run_in_background?: unknown }): Promise<{ deny?: string; timeout?: number; isTaken: boolean } | null> => {
+    start: async (io: TurnIo, command: string, input: { timeout?: unknown; run_in_background?: unknown }): Promise<{ deny?: string; timeout?: number; isTaken: boolean; isWait?: boolean } | null> => {
       const id = (await io.sessionId()).slice(0, 8).toLowerCase()
       const me = h.me() ?? { session: id, id8: id, lane: `session-${id}` } // Fable 3: a session outside the checkout writes it too
       self = me.id8
@@ -164,6 +164,8 @@ export const gitTurns = (h: TurnState) => {
       h.push({ id: `git-turn:merge-waits:${Math.floor(now / 60_000)}`, text: `A5R · ${TURN_GATE} — the sync's merge waits: ${busyText(busy)} → A5R starts the sync worker once git is free (you are told)`, isActionable: false })
       return true
     },
+    /** A137: whether no other session's git holds the turn or the index now. */
+    isFree: async (io: FileIo, now: number): Promise<boolean> => (await busyWith(io, now)) === null,
     /** A130: the NEEDS A LOOK rows while a stale-looking lock cannot be judged (none otherwise). */
     looks: (): LookRow[] => (look ? [look] : []),
     /** A130: this session's git failed on .git/index.lock. */

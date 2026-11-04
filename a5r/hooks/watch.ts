@@ -5,7 +5,7 @@
 // and the meter (dataviz: status is never the text color). Pure: no `$`; register.ts reads and probes.
 import { parseLockLine, sessionStatus, type SessionRow, type SessionsView } from './coord.ts'
 import { HEAD_CONTROLS, ROW_CONTROL, type FocusAction } from './focus.ts'
-import { HOLDER_CONTROLS, QUEUED_CONTROLS, type Control } from './order.ts'
+import { HOLDER_CONTROLS, QUEUED_CONTROLS, REMOVE_CONTROL, type Control } from './order.ts'
 import type { EditorList, EditorRow } from './panel.ts'
 import type { LookRow } from './coord.ts'
 import type { LookPress } from './looks.ts'
@@ -363,7 +363,7 @@ export const editorBox = (el: El, list: EditorList, ui: { picked: string | null;
   const buttons = (key: string, items: readonly { id: string; label: string; hotkey: string; onPress: () => void }[]) =>
     Box({ key, flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, paddingLeft: 2, width: '100%', children: items.map(c => Button({ key: `${key}-${c.id}`, label: c.label, hotkey: c.hotkey, plain: true, onPress: c.onPress })) })
   const controls = (r: EditorRow, key: string) => {
-    const own = list.isFocus && r.isHolder ? [] : r.isHolder ? HOLDER_CONTROLS : QUEUED_CONTROLS
+    const own = list.isFocus && r.isHolder ? [] : r.isHolder ? HOLDER_CONTROLS : r.isStopped ? [...QUEUED_CONTROLS, REMOVE_CONTROL] : QUEUED_CONTROLS
     const focus = list.isFocus ? [] : [{ ...ROW_CONTROL, onPress: () => ui.onFocus(r.id8) }]
     return buttons(`${key}-ctl`, [...own.map(c => ({ ...c, onPress: () => ui.onControl(r.id8, c) })), ...focus])
   }

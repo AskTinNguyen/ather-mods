@@ -68,7 +68,7 @@ test('Fable review D2: a move keeps the pin of a placed session that is not in t
   const C = file('c3c3c3c3', { want: want({ requestedAt: NOW - 30 * MIN }) })
   const top = apply([A, B, C], { kind: 'move', how: 'top', who: { id8: C.id8 } })
   if (!('kind' in top) || top.kind !== 'order') throw new Error(JSON.stringify(top))
-  const stale = { ...C, heartbeatAt: NOW - 20 * MIN } // C's session misses its heartbeat this minute: out of the queue
+  const stale = { ...C, heartbeatAt: NOW - 20 * MIN, want: { ...C.want, focus: 1 } as never } // a slot of a gone session (A135: only such a request leaves the queue): out of it
   const next = apply([A, B, stale], { kind: 'move', how: 'top', who: { id8: B.id8 } }, top.order)
   if (!('kind' in next) || next.kind !== 'order') throw new Error(JSON.stringify(next))
   expect(next.order.placed.map(p => [p.id8, p.at])).toEqual([[B.id8, NOW], [A.id8, NOW], [C.id8, NOW]])

@@ -3,7 +3,8 @@
 // A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it
 // (A116: in plain words; A117: in the person's order, a holder's resized end).
 import { liveWaitMin, waitStart } from './truth.ts'
-import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, lockTimes, noticeIds, noticeText, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
+import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, livenessOf, lockTimes, noticeIds, noticeText, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
+import { STOPPED_WORDS } from './wake.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
 export const LEASES_FILE = 'leases.jsonl'
@@ -282,7 +283,7 @@ export type HolderRow = { lane: string; id8: string; isMe: boolean; grantedAt: n
  * Editor at its next minute; 'pass': it goes before a head waiting for memory, A113). A116: `reason`, why in plain words.
  * A117: `minutes` the slot it will be granted (the person's, else its own `asked`); `isPlaced`, placed by the person. A119:
  * `startsAt`, when its turn is expected while a Focus runs (null otherwise, and for the focus session itself). */
-export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; asked: number; isPlaced: boolean; pie: boolean; build: boolean; wait: WaitCode | 'grant' | 'pass' | null; reason: string; startsAt: number | null }
+export type QueueRow = { place: number; lane: string; id8: string; isMe: boolean; waitedMin: number; minutes: number; asked: number; isPlaced: boolean; pie: boolean; build: boolean; wait: WaitCode | 'grant' | 'pass' | null; reason: string; startsAt: number | null; isStopped: boolean } // isStopped: A139
 export type QueueView = { holder: HolderRow | null; rows: QueueRow[] }
 
 /** A105: the holder (its file's lease, else the lock line's times) and each queued session in the order every session
@@ -302,7 +303,7 @@ export const queueView = (x: GrantInput): QueueView => {
   const rows = queueIn(x).map((s, i): QueueRow => {
     const asked = s.want?.minutes ?? 0
     const d = decide({ ...x, me8: s.id8 })
-    return { place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: s.want ? liveWaitMin(s.want, x.now) : 0, minutes: x.manual.minutes[s.id8] ?? asked, asked, isPlaced: isPlaced(x.manual, s.id8), pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(d), reason: reasonOf(d), startsAt: starts.get(s.id8) ?? null }
+    return { place: i + 1, lane: s.lane, id8: s.id8, isMe: s.id8 === x.me8, waitedMin: s.want ? liveWaitMin(s.want, x.now) : 0, minutes: x.manual.minutes[s.id8] ?? asked, asked, isPlaced: isPlaced(x.manual, s.id8), pie: s.want?.pie === true, build: s.want?.build === true, wait: waitOf(d), reason: reasonOf(d), startsAt: starts.get(s.id8) ?? null, isStopped: livenessOf(s.id8, x.files, x.lanes, x.now) !== 'alive' }
   })
   return { holder, rows }
 }
@@ -348,6 +349,6 @@ const reasonOf = (d: Decision): string => (d.kind === 'wait' ? d.reason : d.kind
 /** A105 / A116: a queued session's facts in plain words, one line (the panel's row): waited for, its minutes (A117: set by
  * hand), PIE / build, placed by hand, why it waits, A119 when its turn is expected after a Focus. */
 export const queuedLine = (r: QueueRow): string =>
-  [`waiting ${r.waitedMin} min`, r.minutes === r.asked ? `${r.minutes} min` : `${r.minutes} min (set by hand)`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : []), ...(r.isPlaced ? ['placed by hand'] : []), ...(r.reason ? [r.reason] : []), ...(r.startsAt === null ? [] : [`starts ~${hhmm(r.startsAt)}`])].join(' · ')
+  [`waiting ${r.waitedMin} min`, r.minutes === r.asked ? `${r.minutes} min` : `${r.minutes} min (set by hand)`, ...(r.pie ? ['PIE'] : []), ...(r.build ? ['build'] : []), ...(r.isPlaced ? ['placed by hand'] : []), ...(r.isStopped ? [STOPPED_WORDS] : []), ...(r.reason ? [r.reason] : []), ...(r.startsAt === null ? [] : [`starts ~${hhmm(r.startsAt)}`])].join(' · ')
 /** A105 / A112: a queued session in the editor tool's status: the panel's line and its wait code (for the logs and models). */
 export const queueRowText = (r: QueueRow): string => [queuedLine(r), ...(r.wait && r.wait !== 'grant' && r.wait !== 'pass' ? [`wait ${r.wait}`] : [])].join(' · ')

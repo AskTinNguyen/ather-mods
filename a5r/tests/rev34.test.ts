@@ -366,8 +366,8 @@ test('A105: unit: the queue view: the holder from its file (granted, Editor seen
   // reason in plain words (A116).
   expect(v.holder).toEqual({ lane: 'lane-bbbbbbbb', id8: 'bbbbbbbb', isMe: false, grantedAt: T(14, 0), editorAt: T(14, 4), pieAt: T(14, 20), extensions: 1, end: T(14, 52), leftMin: 12, isSyncSlot: false })
   expect(v.rows).toEqual([
-    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, asked: 30, isPlaced: false, pie: true, build: false, wait: 'held', reason: 'behind lane-bbbbbbbb', startsAt: null },
-    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, asked: 20, isPlaced: false, pie: false, build: true, wait: 'held', reason: '', startsAt: null },
+    { place: 1, lane: 'lane-cccccccc', id8: 'cccccccc', isMe: false, waitedMin: 18, minutes: 30, asked: 30, isPlaced: false, pie: true, build: false, wait: 'held', reason: 'behind lane-bbbbbbbb', startsAt: null, isStopped: false },
+    { place: 2, lane: `lane-${ME8}`, id8: ME8, isMe: true, waitedMin: 4, minutes: 20, asked: 20, isPlaced: false, pie: false, build: true, wait: 'held', reason: '', startsAt: null, isStopped: false },
   ])
 })
 

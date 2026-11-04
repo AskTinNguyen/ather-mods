@@ -8,6 +8,7 @@ import { appendCapped, queueTimes, queueView } from './lease.ts'
 import { STATUS_FILE, SYNC_TIMES_FILE, NO_TIMES, aheadOf, bandLine, buildMsOf, editorWaits, freesAny, freezeStepOf, isMoved, parseSyncTimes, promptLine, shortLine, statusAtOf, statusOf, stepNotice, timelineLine, timesLine, toastText, type FreezeStep, type Need } from './syncplan.ts'
 import { readBuildLog, type BuildLogRead } from './syncstage.ts'
 import type { FileIo } from './hostio.ts'
+import { STOPPED_WORDS } from './wake.ts'
 
 /** This session's state as register.ts last read it. */
 export type FreezeState = {
@@ -21,6 +22,8 @@ export type FreezeState = {
   root: () => string
   /** Fable 11: whether this session writes status.json (one session: the first live one in the queue order, else by id) */
   isStatusWriter: (now: number) => boolean
+  /** A139 / A141: what status.json says of stopped requests and the idle-with-work minutes */
+  wakeStatus: (now: number) => Record<string, unknown>
 }
 
 export const freezeSteps = (h: FreezeState) => {
@@ -87,7 +90,7 @@ export const freezeSteps = (h: FreezeState) => {
     const w = waitsNow(now)
     const claim = claimIn(x)
     const s = h.sync()
-    const body = statusOf({ now, sync: s, phase: h.phaseOf(s, now), step: await stepNow(io, s, now), times, holder: view.holder && { lane: view.holder.lane, id8: view.holder.id8, end: view.holder.end }, queue: view.rows.map(r => ({ place: r.place, lane: r.lane, id8: r.id8, startsAt: w.starts.get(r.id8) ?? null, waitsFor: w.texts.get(r.id8) ?? '' })), focus: claim?.kind === 'focus' ? { lane: claim.lane, id8: claim.id8, end: claim.end } : null })
+    const body = statusOf({ now, sync: s, phase: h.phaseOf(s, now), step: await stepNow(io, s, now), times, holder: view.holder && { lane: view.holder.lane, id8: view.holder.id8, end: view.holder.end }, queue: view.rows.map(r => ({ place: r.place, lane: r.lane, id8: r.id8, startsAt: w.starts.get(r.id8) ?? null, waitsFor: (r.isStopped ? STOPPED_WORDS : w.texts.get(r.id8)) ?? '', ...(r.isStopped ? { stopped: true as const } : {}) })), focus: claim?.kind === 'focus' ? { lane: claim.lane, id8: claim.id8, end: claim.end } : null, wake: h.wakeStatus(now) })
     const path = `${h.dir()}/${STATUS_FILE}`
     const cur = await io.read(path)
     if (cur !== JSON.stringify({ ...body, at: statusAtOf(cur) })) await io.write(path, JSON.stringify(body))

@@ -9,23 +9,23 @@ import { holderLine, leftText, queuedLine, queueView, todayLine, type LeaseSumma
 
 /** One row of the Editor list: its mark (▶ the holder, the place, ★ with the place for this session), its name, one
  * quiet line. */
-export type EditorRow = { id8: string; mark: string; name: string; isMe: boolean; isHolder: boolean; line: string }
+export type EditorRow = { id8: string; mark: string; name: string; isMe: boolean; isHolder: boolean; line: string; isStopped?: boolean } // isStopped: A139, its process has stopped
 /** `isFocus`: a Focus runs (A118: its head, the person's controls on the head line, no row controls for its holder). */
 export type EditorList = { head: string; rows: EditorRow[]; today: string; isFocus: boolean }
 
 /** The panel's two lists from what every session reads: the Editor list (the holder and the queue in the order every
  * session computes, A117's order included) and the other sessions (sessionsView without the Editor list's rows); the
  * Editor list's rows are named by the app's titles (appTitleOf), else their lanes. */
-export const editorPanel = (x: { grant: GrantInput; app: AppFacts; phase: Phase; summary: LeaseSummary; waits: ReadonlyMap<string, string> }): { list: EditorList; others: SessionsView } => {
+export const editorPanel = (x: { grant: GrantInput; app: AppFacts; phase: Phase; summary: LeaseSummary; waits: ReadonlyMap<string, string>; wakeLine?: string }): { list: EditorList; others: SessionsView } => {
   const view = queueView(x.grant)
   const inEditor = new Set([...(view.holder ? [view.holder.id8] : []), ...view.rows.map(r => r.id8)])
   const titleOf = appTitleOf(x.app)
   const h = view.holder
   const focus = claimIn(x.grant)?.kind === 'focus' ? x.grant.focus : null // A118: the EDITOR line's head names the Focus while it runs
   const holder: EditorRow[] = h ? [{ id8: h.id8, mark: '▶', name: `${titleOf(h.id8) || h.lane}${h.isMe ? ' ★' : ''}`, isMe: h.isMe, isHolder: true, line: holderLine(h) }] : []
-  const queued = view.rows.map((r): EditorRow => ({ id8: r.id8, mark: r.isMe ? `★${r.place}` : String(r.place), name: titleOf(r.id8) || r.lane, isMe: r.isMe, isHolder: false, line: [queuedLine(r), x.waits.get(r.id8) ?? ''].filter(Boolean).join(' · ') }))
+  const queued = view.rows.map((r): EditorRow => ({ id8: r.id8, mark: r.isMe ? `★${r.place}` : String(r.place), name: titleOf(r.id8) || r.lane, isMe: r.isMe, isHolder: false, isStopped: r.isStopped, line: [queuedLine(r), x.waits.get(r.id8) ?? ''].filter(Boolean).join(' · ') }))
   return {
-    list: { head: focus ? focusHead(focus, titleOf) : h ? [`${h.lane} has it`, leftText(h)].filter(Boolean).join(' · ') : 'free', rows: [...holder, ...queued], today: todayLine(x.summary), isFocus: focus !== null },
+    list: { head: focus ? focusHead(focus, titleOf) : h ? [`${h.lane} has it`, leftText(h)].filter(Boolean).join(' · ') : 'free', rows: [...holder, ...queued], today: [todayLine(x.summary), x.wakeLine ?? ''].filter(Boolean).join(' · '), isFocus: focus !== null },
     others: sessionsView({ ...x.app, lanes: x.grant.lanes, sync: x.grant.sync, phase: x.phase, inEditor }),
   }
 }
