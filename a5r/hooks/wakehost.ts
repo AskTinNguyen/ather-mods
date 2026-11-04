@@ -5,7 +5,7 @@
 import { claimIn, hhmm, parseSessionFile, queueIn, type GrantInput, type OrchestrateEvent, type SessionFile, type Want } from './coord.ts'
 import type { FileIo } from './hostio.ts'
 import type { LeaseRecord } from './lease.ts'
-import { PRUNE_MAX, pruneArgv } from './truth.ts'
+import { prunable, pruneArgv } from './truth.ts'
 import type { Need } from './syncplan.ts'
 import { CONDUCTOR_FILE, IDLE_FILE, NO_IDLE, NO_WAKE, PARK_MS, PAUSE_MS, REFUSAL_KEEP_MS, REFUSED_RETRIES, REFUSED_DIR, SEND_WINDOW_MS, WAKE_ANSWER_MS, WAKE_FILE, TRIED_KEEP_MS, TURN_KEEP_MS, afterMiss, alarmText, budgetHold, conductorOf, deskDir, idleLine, isAlarmDue, isResting, isStopped, leaseSince, mayConduct, nextIdle, nightLine, oldLine, parseConductor, parseDeskRow, parseIdle, parseRefusal, parseWake, pausedCause, readSend, refusalMessage, sendInput, stoppedRefusals, turnMessage, turnToStart, withRow, type DeskRow, type IdleFile, type MissKind, type Refusal, type WakeFile, type WakeOutcome, type WakeStatus, type WakeWhy } from './wake.ts'
 
@@ -128,24 +128,25 @@ export const conductor = (h: WakeState) => {
     if (parseConductor(await io.read(conductorPath()))?.id8 !== h.me8() || latest.current) return held('another conductor went on meanwhile')
     wake = latest
     await io.write(conductorPath(), JSON.stringify({ id8: h.me8(), at: await io.now() }))
-    if (!(await io.claimAlert(`wake-${s.f.id8}-${Math.floor(now / 60_000)}`))) return held(`another A5R started ${nameOf(s.f)} just now`) // two conductors in one handover
     const record = desk.get(s.f.session.toLowerCase())?.row
-    const address = record?.local
+    if (record?.isHeldForPerson) {
+      if (now - (wake.triedAt[s.f.id8] ?? 0) >= PAUSE_MS) {
+        await io.log(event(s.f, 'woke', `${s.why}: the app holds this session for its person (${record.wakes} wakes since its person typed): nothing sent`, now, false))
+        await save(io, { ...wake, triedAt: { ...wake.triedAt, [s.f.id8]: now } }, now)
+      }
+      return hold(`the app holds ${nameOf(s.f)} for its person`)
+    }
+    if (!(await io.claimAlert(`wake-${s.f.id8}-${Math.floor(now / 60_000)}`))) return held(`another A5R started ${nameOf(s.f)} just now`) // two conductors in one handover
     const row = (outcome: WakeOutcome) => ({ at: now, id8: s.f.id8, lane: s.f.lane, why: s.why, outcome })
     const triedAt = { ...wake.triedAt, [s.f.id8]: now }
-    if (!record || !address) {
+    if (!record) {
       await io.log(event(s.f, 'woke', `${s.why}: no desktop record for this session, so nothing can start it`, now, false))
       await save(io, { ...withRow(wake, row('no-address')), triedAt }, now)
       if (turn) await miss(io, turn, now, 'real', 'no desktop record', now)
       return STARTED
     }
-    if (record.isHeldForPerson) {
-      if (s.requestedAt === null || now - (wake.triedAt[s.f.id8] ?? 0) >= PAUSE_MS) await io.log(event(s.f, 'woke', `${s.why}: the app holds this session for its person (${record.wakes} wakes since its person typed): nothing sent`, now, false))
-      await save(io, { ...wake, triedAt }, now)
-      return hold(`the app holds ${nameOf(s.f)} for its person`)
-    }
     const wakes = `${record.wakes} wakes since its person typed`
-    const result = readSend(await io.call(sendInput(address, s.text)))
+    const result = readSend(await io.call(sendInput(record.local, s.text)))
     if (result.kind === 'loop-paused') {
       await io.log(event(s.f, 'woke', `${s.why}: loop-paused: ${result.reason}; ${wakes}`, now, false))
       const isFirst = wake.pausedSince === 0
@@ -154,9 +155,10 @@ export const conductor = (h: WakeState) => {
       if (isFirst) await alarm(io, pausedCause(myName()), now)
       return held(pausedCause(myName()))
     }
-    await io.log(event(s.f, 'woke', `${s.why}: ${result.kind === 'sent' ? `sent to ${address}, waiting for its heartbeat` : `the send reported "${result.reason}", waiting for its heartbeat anyway`}; ${wakes}`, now))
+    await io.log(event(s.f, 'woke', `${s.why}: ${result.kind === 'sent' ? `sent to ${record.local}, waiting for its heartbeat` : `the send reported "${result.reason}", waiting for its heartbeat anyway`}; ${wakes}`, now))
     const spent = [...wake.spent, { at: now, ...(result.kind === 'refused' ? { refused: true as const } : {}) }]
     await save(io, { ...wake, spent, current: { id8: s.f.id8, lane: s.f.lane, why: s.why, at: now, requestedAt: s.requestedAt, ...(result.kind === 'refused' ? { refused: result.reason.slice(0, 200) } : {}) }, ...(result.kind === 'sent' ? { pausedSince: 0, pausedBy: undefined, pausedId: undefined, lastFailure: undefined } : {}), ...(s.why === 'turn' ? { turnAt: { ...wake.turnAt, [s.f.id8]: now } } : {}), triedAt }, now)
+    if (turn && result.kind === 'refused') await miss(io, turn, now, 'moved', 'refused', now) // it blocks nobody while the heartbeat decides; an answer undoes this
     return STARTED
   }
 
@@ -192,13 +194,17 @@ export const conductor = (h: WakeState) => {
       return r ? [{ ...r, ...o }] : []
     })
     const off = archived()
-    const open = stoppedRefusals(rs, x.files, x.lanes, now).filter(r => !off.has(r.id8))
+    const fileOf = (r: Refusal) => x.files.find(o => o.id8 === r.id8)
+    const open = stoppedRefusals(rs, x.files, x.lanes, now).filter(r => !off.has(r.id8) && (!isDeskKnown || desk.has((fileOf(r)?.session ?? '').toLowerCase()))) // from here, one the app does not list has no way on
     for (const r of open) {
-      const f = x.files.find(o => o.id8 === r.id8)
+      const f = fileOf(r)
       if (!f || !desk.has(f.session.toLowerCase()) || !(await isFreed(io, r, x, now))) continue // no record: an app conductor can still act on it
       const step = await start(io, { f, why: r.kind, text: refusalMessage(r), requestedAt: null }, now)
-      if (step.kind === 'started') await io.writeChecked(r.path, r.raw, 'null') // a pause or a handover spends no refusal
-      return step // one at a time
+      if (step.kind === 'started') {
+        await io.writeChecked(r.path, r.raw, 'null')
+        return step // one at a time
+      }
+      if (wake.pausedUntil > now) return step // a pause or a held target spends no refusal; a target the app holds lets the next go
     }
     return open.length > 0 ? held(`${open.length} stopped session${open.length === 1 ? ' waits' : 's wait'} for what refused them`) : NOTHING
   }
@@ -226,8 +232,7 @@ export const conductor = (h: WakeState) => {
     await save(io, { ...wake, turnAt, idleStarts: { ...wake.idleStarts, [f.id8]: count } }, now)
     const s = { id8: f.id8, lane: f.lane, requestedAt: f.want.requestedAt }
     if (count >= 2) {
-      await rewrite(io, s, now, () => null)
-      await io.log(event(f, 'withdrawn', `its request withdrawn by ${myName()}: two leases in a row idle with no Editor use after a start`, now))
+      if ((await rewrite(io, s, now, () => null)).isWritten) await io.log(event(f, 'withdrawn', `its request withdrawn by ${myName()}: two leases in a row idle with no Editor use after a start`, now))
     } else await miss(io, s, now, 'real', 'its lease went idle with no Editor use', now)
     return true
   }
@@ -238,6 +243,10 @@ export const conductor = (h: WakeState) => {
     if (await settle(io, x, now)) return held(`${inFlight?.lane} was started at ${hhmm(inFlight?.at ?? now)} and has not asked yet`)
     const off = archived()
     const resting = (f: SessionFile): boolean => off.has(f.id8) || (f.want !== null && isStopped(f, x.files, x.lanes, now) && isResting(f.want, wake.triedAt[f.id8] ?? 0, now, again))
+    for (const f of queueIn(x)) {
+      if (!isStopped(f, x.files, x.lanes, now)) break
+      if (f.want && !f.want.movedBack && resting(f)) await miss(io, { id8: f.id8, lane: f.lane, requestedAt: f.want.requestedAt }, now, 'moved', 'resting', now) // it answered and stopped again: it blocks nobody while it rests
+    }
     const turn = turnToStart(x, resting)
     if (turn?.want) {
       if (await idleLoop(io, turn, now)) return held(`${turn.lane} let its last lease go idle`)
@@ -308,7 +317,7 @@ export const conductor = (h: WakeState) => {
     /** A137 / Fable 6: the daily prune: refusals past their keep. */
     prune: async (io: FileIo, now: number): Promise<void> => {
       const dir = `${h.dir()}/${REFUSED_DIR}`
-      const old = (await io.list(dir)).filter(f => /^[\w.-]+\.json$/.test(f.name) && now - f.mtimeMs >= REFUSAL_KEEP_MS).map(f => f.name).slice(0, PRUNE_MAX)
+      const old = prunable(await io.list(dir), now, REFUSAL_KEEP_MS)
       if (old.length > 0) await io.run(pruneArgv(dir, old), 60_000)
     },
     /** A135: its request withdrawn, by the person or by age. */

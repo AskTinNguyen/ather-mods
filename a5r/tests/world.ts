@@ -216,6 +216,11 @@ export const atherTree = (home: boolean): never => ({
   ],
 }) as never
 export const PANE = { surface: 'terminal', component: 'Pane', requestId: 'ather', props: { title: 'ATHER AUTOMATA', isFocused: true, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 22 }, view: {} } }
+/** An element as drawn, without the stamp a newer engine puts on it (`part`: 2.1.309). */
+export const unstamped = <T>(t: T): T => {
+  const { part: _part, ...rest } = t as T & { part?: unknown }
+  return rest as T
+}
 /** A29: the A5R pane, drawn by a5r itself (no Ather beneath). */
 export const A5RPANE = { ...PANE, requestId: 'a5r' }
 

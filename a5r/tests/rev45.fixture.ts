@@ -39,7 +39,7 @@ export const grant = (files: SessionFile[], o: Partial<GrantInput> = {}): GrantI
 export const NONE: ReadonlySet<string> = new Set()
 export const KEEP = (): boolean => false
 /** The engine beneath the host itself, for what the test engine cannot show. */
-export const fakeIo = (disk: Map<string, string>, o: Record<string, unknown> = {}): WakeIo => ({ now: async () => NOW, read: async (p: string) => disk.get(p) ?? null, write: async (p: string, t: string) => void disk.set(p, t), stat: async () => null, list: async () => [], run: async () => null, call: async () => null, deskPlace: async () => ({}), writeChecked: async (p: string, _e: string | null, t: string) => (disk.set(p, t), true), claimAlert: async () => true, log: async () => undefined, notify: async () => false, toast: () => undefined, events: async () => [], nudgedAt: async () => 0, nudge: async () => undefined, isGitFree: async () => true, heldNeeds: async () => new Set(), ...o }) as never
+export const fakeIo = (disk: Map<string, string>, o: Partial<WakeIo> = {}): WakeIo => ({ now: async () => NOW, read: async (p: string) => disk.get(p) ?? null, write: async (p: string, t: string) => void disk.set(p, t), stat: async () => null, list: async () => [], run: async () => null, call: async () => null, deskPlace: async () => ({}), writeChecked: async (p: string, _e: string | null, t: string) => (disk.set(p, t), true), claimAlert: async () => true, log: async () => undefined, notify: async () => false, toast: () => undefined, isGitFree: async () => true, heldNeeds: async () => new Set(), ...o })
 export const beat = (w: ReturnType<typeof world>, id8: string) => put(w, { ...fileOf(w, id8), heartbeatAt: w.clock.now() + 1 })
 
 

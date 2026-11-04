@@ -175,7 +175,7 @@ test('A136: a refused send never touches the lease: it is logged, and the heartb
   await w.clock.advance(MIN)
   expect(w.read(LOG)).toContain('the send reported "Not delivered to Claude Desktop session", waiting for its heartbeat anyway')
   expect(w.read(LOCK)).toBe(FREE)
-  expect(fileOf(w, 'cccccccc')).toEqual(before)
+  expect([fileOf(w, 'cccccccc').holding, fileOf(w, 'cccccccc').want?.misses]).toEqual([before.holding, undefined])
   beat(w, 'cccccccc') // MEASURED: a send that reported no start did start the session
   await w.clock.advance(MIN)
   expect(w.read(LOG)).toMatch(/turn: answered/)
@@ -471,7 +471,7 @@ test('A141: the night of 2026-11-03: four queued sessions, processes gone, 2 h p
 })
 
 // ---------- the review's findings (S147): each fails without its fix ----------
-test('Review 1: a session that answered and stopped again with no lease is started again at the next window; a claim spent with nothing sent too', opts(), async ($, on) => {
+test('Review 1: a session that answered and stopped again with no lease rests behind the others, and is started again within the hour', opts(), async ($, on) => {
   const w = world(on, { ram: '40', out: { SendMessage: SENT } })
   w.put(LOCK, FREE)
   stopped(w, 'cccccccc')
@@ -480,6 +480,9 @@ test('Review 1: a session that answered and stopped again with no lease is start
   expect(sends(w).length).toBe(1)
   beat(w, 'cccccccc') // it answered, and its process stops again before it took the lock
   await w.clock.advance(11 * MIN)
+  expect(sends(w).length).toBe(1)
+  expect(fileOf(w, 'cccccccc').want?.movedBack).toBe(true)
+  await w.clock.advance(50 * MIN)
   expect(sends(w).length).toBe(2)
   expect(fileOf(w, 'cccccccc').want).not.toBeNull()
 })
@@ -820,4 +823,16 @@ test('status.json carries what a night session reads: the queue with stopped mar
   expect(st.sync).toBeNull()
   expect(st.focus).toBeNull()
   expect(w.read(`${HF}/night/run.json`)).toBe('{"x":1}')
+})
+
+test('Review 10: a refused send moves its head at once: a live session behind it does not wait out the 5 min', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: REFUSED } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc')
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(fileOf(w, 'cccccccc').want?.movedBack).toBe(true)
+  const c = fileOf(w, 'cccccccc')
+  const me = file(ME8, { want: want({ requestedAt: NOW }) })
+  expect(decide(grant([c, me], { now: NOW + 2 * MIN })).kind).toBe('grant')
 })

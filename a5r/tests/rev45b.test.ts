@@ -236,3 +236,24 @@ test('Fable 5: the panel line carries the older sessions', async () => {
   const c = hostOf(() => [me, file('aaaaaaaa', { heartbeatAt: NOW, conducts: undefined })], me)
   expect(c.line(NOW)).toContain('older A5R in lane-aaaaaaaa')
 })
+
+test('Review 10: a target the app holds lets the next refusal go, logged at most hourly, and spends nothing', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const a = app([{ name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }, { name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc'), stoppedUntilPersonSends: true } }, { name: 'local_d.json', row: { sessionId: 'local_d', cliSessionId: SID('dddddddd') } }])
+  a.disk.set('d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - 2 * MIN, what: 'x' }))
+  a.disk.set('d/refused/dddddddd.json', JSON.stringify({ v: 1, id8: 'dddddddd', kind: 'git', at: NOW - MIN, what: 'x' }))
+  const to: unknown[] = []
+  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: NOW }, { name: 'dddddddd.json', mtimeMs: NOW }] : a.o.list())
+  await hostOf(() => [me, stoppedFile('cccccccc'), stoppedFile('dddddddd')], me).tick(fakeIo(a.disk, { ...a.o, list: list as never, call: async i => (to.push(i.to), { text: SENT }) }))
+  expect(to).toEqual(['local_d'])
+  expect(a.disk.get('d/refused/cccccccc.json')).not.toBe('null')
+})
+
+test('Review 10: an open refusal the app does not list counts nothing, from a conductor in the app; a refused send moves its head at once', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const a = app([{ name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }])
+  a.disk.set('d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - MIN, what: 'x' }))
+  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: NOW }] : a.o.list())
+  await hostOf(() => [me, stoppedFile('cccccccc')], me).tick(fakeIo(a.disk, { ...a.o, list: list as never }))
+  expect((JSON.parse(a.disk.get('d/idle-with-work.json') ?? '') as { run: number }).run).toBe(0)
+})

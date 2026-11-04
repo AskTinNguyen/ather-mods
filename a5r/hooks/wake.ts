@@ -151,8 +151,8 @@ export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused
 /** `refused`: what the send reported (the heartbeat still decides). */
 export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
-/** `triedAt`: when each session was last tried, whatever for: the one record of attempts. */
-/** `spent`: the night's attempts (A138's budget). `turnAt`, `idleStarts`: when each was last started for its turn, and how many of
+/** `triedAt`: when each session was last tried, whatever for: the one record of attempts. `spent`: the night's attempts (A138's
+ * budget). `turnAt`, `idleStarts`: when each was last started for its turn, and how many of
  * those leases in a row ended idle (A136). `pausedBy`, `pausedId`: the name to type in, and its session. */
 export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; turnAt: Record<string, number>; idleStarts: Record<string, number>; spent: { at: number; refused?: true }[]; pausedUntil: number; pausedSince: number; pausedBy?: string; pausedId?: string; lastFailure?: string }
 export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, turnAt: {}, idleStarts: {}, spent: [], pausedUntil: 0, pausedSince: 0 }

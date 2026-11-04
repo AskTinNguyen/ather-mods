@@ -3,7 +3,7 @@ import { blankSession, newSync, type SyncFile } from '../hooks/coord.ts'
 import { walkDeep } from '../hooks/gitshared.ts'
 import { LOCK_UNREAD_LOOK, cutProblem, goneAfter, heldBy, parseGitTurn, raisedTimeout, staleLockAct, staleLockName, turnKey, turnVerb, type GitTurn } from '../hooks/gitturn.ts'
 import { NO_TIMES, STEPS, aheadOf, bandLine, buildMsOf, editNeed, editorWaits, freezeStepOf, parseSyncTimes, timelineLine, type SyncTimes } from '../hooks/syncplan.ts'
-import { LOCK, ME, NOW, PROJ, k, opts, refused, text, world } from './world.ts'
+import { LOCK, ME, NOW, PROJ, k, opts, refused, text, world, unstamped } from './world.ts'
 
 // Rev 44 (L-48): A128 one git writer at a time, A129 a git write never killed halfway, A130 a stale index.lock moved
 // aside, A131 the freeze lifts in steps, A132 frozen sessions woken when they can go on, A133 what you wait for and until
@@ -411,7 +411,7 @@ test('A134: every S2 session draws the band above Ather\'s during the freeze, pe
   expect(text(await $.ui.render(BAND as never))).toContain('⏸ Sync main · testing (time unknown) · new Editor/build work waits')
   w.put(`${HF}/sync.json`, JSON.stringify({ ...JSON.parse(w.read(`${HF}/sync.json`)), state: 'done', endedAt: w.clock.now(), note: 'merged; 291 passed' }))
   await w.clock.advance(MIN)
-  expect(await $.ui.render(BAND as never)).toMatchObject(atherBand) // an engine may stamp its own `part` on the element
+  expect(unstamped(await $.ui.render(BAND as never))).toEqual(atherBand)
 })
 
 test('A134: a person\'s prompt in the freeze carries one context line and shows one toast per sync; outside it neither', opts(), async ($, on) => {

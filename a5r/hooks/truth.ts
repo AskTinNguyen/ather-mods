@@ -102,9 +102,9 @@ export const isNoEditorLease = (x: { lock: LockLine; holder: SessionFile | undef
 export const ALERT_KEEP_MS = 7 * 24 * 3_600_000
 /** At most this many are removed in one pass (the next day's pass takes the rest). */
 export const PRUNE_MAX = 200
-/** The alert files to remove: claim files (a plain name ending .json) older than 7 days. */
-export const prunable = (entries: readonly { name: string; kind: string; mtimeMs: number }[], now: number): string[] =>
-  entries.filter(e => e.kind === 'file' && /^[\w.-]+\.json$/.test(e.name) && now - e.mtimeMs >= ALERT_KEEP_MS).map(e => e.name).slice(0, PRUNE_MAX)
+/** The files to remove from a claim folder: a plain name ending .json, older than `keepMs` (the alert files: 7 days). */
+export const prunable = (entries: readonly { name: string; kind?: string; mtimeMs: number }[], now: number, keepMs = ALERT_KEEP_MS): string[] =>
+  entries.filter(e => (e.kind ?? 'file') === 'file' && /^[\w.-]+\.json$/.test(e.name) && now - e.mtimeMs >= keepMs).map(e => e.name).slice(0, PRUNE_MAX)
 /** The removal of those files (their own names in that folder only, never a wildcard). */
 export const pruneArgv = (dir: string, names: readonly string[]): string[] => ['powershell', '-NoProfile', '-NonInteractive', '-Command', `Remove-Item -LiteralPath ${names.map(n => psQuote(`${dir}/${n}`)).join(',')} -ErrorAction SilentlyContinue`]
 
