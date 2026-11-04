@@ -247,8 +247,8 @@ test('A136: the engine\'s loop guard: logged as loop-paused, a miss, no retry un
   expect(toasts().some(t => t.includes(pausedCause('3️⃣ Loco fix')))).toBe(true) // the person reads the exact words
   await w.clock.advance(3 * MIN)
   expect(sends(w).length).toBe(1) // inside the window: no retry
-  await w.clock.advance(17 * MIN)
-  expect(sends(w).length).toBeGreaterThan(1) // tried again at the next window, once
+  await w.clock.advance(60 * MIN)
+  expect(sends(w).length).toBeGreaterThan(1) // a sole request that the guard moved is tried again after an hour
   expect(sends(w).length).toBeLessThan(5)
   expect(fileOf(w, 'cccccccc').want).not.toBeNull()
   expect(alarms().length).toBe(1)
@@ -350,7 +350,7 @@ test('A138: with no desktop record (outside the desktop app) nothing is sent: lo
   await w.clock.advance(MIN)
   expect(sends(w)).toEqual([])
   expect(w.read(LOG)).toContain('no desktop record for this session')
-  await w.clock.advance(2 * MIN)
+  await w.clock.advance(11 * MIN)
   expect(fileOf(w, 'cccccccc').want).toBeNull() // moved back once, then withdrawn: logged
   expect(w.read(LOG)).toContain('| rule=withdrawn | lane=lane-cccccccc |')
 })
@@ -431,10 +431,10 @@ test('A140: two A5Rs start it once: a fresh conductor claim keeps this one out, 
   const w = world(on, { ram: '40', out: { SendMessage: SENT } })
   w.put(LOCK, FREE)
   worker(w, 'cccccccc', QUEUED_WORDS)
-  w.put(`${HF}/alerts/wake-work-cccccccc-${NOW - 3 * H}-0.json`, '{"by":"other"}')
+  w.put(`${HF}/wake.json`, JSON.stringify({ ...NO_WAKE, triedAt: { cccccccc: NOW - MIN } })) // the other A5R's start, on file
   await $.session.start(START)
   await w.clock.advance(MIN)
-  expect(sends(w)).toEqual([]) // the other A5R's claim stands
+  expect(sends(w)).toEqual([]) // it stands; a same-minute one is the alert claim's (the test below)
   expect(mayConduct(ME8, ME8, { id8: 'bbbbbbbb', at: NOW }, NOW + MIN)).toBe(false)
   expect(mayConduct(ME8, ME8, { id8: 'bbbbbbbb', at: NOW }, NOW + 3 * MIN)).toBe(true)
   expect(mayConduct(ME8, ME8, null, NOW)).toBe(true)
@@ -473,7 +473,7 @@ test('A140: with memory short nothing is started, in the engine', opts(), async 
 
 test('A140: unit: the pool: asking, holding, running agents, active over a day ago or started within 2 h leave; last words read by the judge', () => {
   const base = { lastTurnAt: NOW - H, agents: 0 }
-  const pool = (o: Partial<SessionFile>, workAt = {}, again = false) => workPool({ files: [file('cccccccc', { ...base, ...o })], lanes: [], now: NOW, workAt, again, archived: NONE }).length
+  const pool = (o: Partial<SessionFile>, workAt = {}, again = false) => workPool({ files: [file('cccccccc', { ...base, ...o })], lanes: [], now: NOW, triedAt: workAt, again, archived: NONE }).length
   expect(pool({})).toBe(1)
   expect(pool({ want: want() })).toBe(0)
   expect(pool({ holding: { since: 0, end: 0, extended: 0 } })).toBe(0)
@@ -533,7 +533,7 @@ test('A141: unit: the alarm is a native notification when the engine can raise o
     const me = file(ME8, { heartbeatAt: NOW })
     const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now, probe: { freeGb: 5, diskGb: 100, procs: [] } }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 5, titleOf: () => '' })
     disk.set('d/idle-with-work.json', JSON.stringify({ ...NO_IDLE, run: 29, lastAt: NOW - MIN }))
-    await c.tick(fakeIo(disk, { notify: async (t: string) => (notes.push(t), isSent), toast: (t: string) => void toasts.push(t) }), NOW)
+    await c.tick(fakeIo(disk, { notify: async (t: string) => (notes.push(t), isSent), toast: (t: string) => void toasts.push(t) }))
     expect(notes.length).toBe(1)
     expect(toasts.length).toBe(isSent ? 0 : 1)
   }
@@ -605,7 +605,9 @@ test('Review 3: a refused send that nobody answers moves the request back and ne
   stopped(w, 'cccccccc')
   await $.session.start(START)
   await w.clock.advance(25 * MIN)
-  expect(sends(w).length).toBeGreaterThan(1)
+  expect(sends(w).length).toBe(1) // a route miss is tried again only after an hour
+  await w.clock.advance(45 * MIN)
+  expect(sends(w).length).toBe(2)
   const f = fileOf(w, 'cccccccc')
   expect(f.want?.movedBack).toBe(true)
   expect(f.want?.misses).toBeUndefined()
@@ -622,7 +624,7 @@ test('Review 3: a conductor outside the app never withdraws a stopped request go
   const c1 = stoppedFile('cccccccc', { want: want(), heartbeatAt: NOW - 30 * MIN, misses: 1 } as never)
   const disk = new Map<string, string>([['d/editor/cccccccc.json', JSON.stringify({ ...c1, want: want({ misses: 1, movedBack: true }) })]])
   const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, { ...c1, want: want({ misses: 1, movedBack: true }) }], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
-  await c.tick(fakeIo(disk), NOW)
+  await c.tick(fakeIo(disk))
   expect((JSON.parse(disk.get('d/editor/cccccccc.json') ?? '') as SessionFile).want).not.toBeNull()
   expect(c.canSend()).toBe(false)
   const f = (id8: string, o: Partial<SessionFile> = {}) => file(id8, o)
@@ -657,7 +659,7 @@ test('Review 2.1: a request that missed its start is behind every other request,
   expect(turnToStart(grant([a, c]), KEEP)).toBeNull() // a live request ahead of it
 })
 
-test('A137: a retried refusal keeps its time; a stopped session\'s miss of the route is tried again only after an hour', async () => {
+test('A137: a retried refusal keeps its time', async () => {
   const disk = new Map<string, string>()
   const me = file(ME8, { heartbeatAt: NOW })
   const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
@@ -739,4 +741,46 @@ test('Review 3.4: one whose start was tried this window leaves room for the next
   await $.session.start(START)
   await w.clock.advance(14 * MIN)
   expect(sends(w).map(s => s.to).slice(0, 2)).toEqual(['local_c1c1c1c1', 'local_c2c2c2c2'])
+})
+
+test('Review 4.1: settling a start ends the minute: a miss late in any window is not sent again at once, and goes behind the next', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  await w.clock.advance(6 * MIN) // nothing depends on where in a window it falls
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc')
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(sends(w).length).toBe(1)
+  await w.clock.advance(WAKE_ANSWER_MS)
+  expect(fileOf(w, 'cccccccc').want?.misses).toBe(1)
+  expect(sends(w).length).toBe(1)
+})
+
+test('Review 4.2: a work start with no answer gives the slot back after 2 h: the session is tried again, and blocks nobody before that', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  worker(w, 'c1c1c1c1', QUEUED_WORDS, { lastTurnAt: NOW - 2 * H })
+  worker(w, 'c2c2c2c2', QUEUED_WORDS, { lastTurnAt: NOW - 3 * H })
+  await $.session.start(START)
+  await w.clock.advance(7 * MIN)
+  expect(sends(w).map(s => s.to)).toEqual(['local_c1c1c1c1', 'local_c2c2c2c2'])
+  await w.clock.advance(2 * H)
+  expect(sends(w).map(s => s.to).slice(2, 3)).toEqual(['local_c1c1c1c1'])
+})
+
+test('Review 4.3: a refused session archived since is not messaged; two moved-back heads take turns in the hour', () => {
+  const a = stoppedFile('aaaaaaaa', { want: want({ movedBack: true, requestedAt: NOW - 9 * H }) })
+  const b = stoppedFile('bbbbbbbb', { want: want({ movedBack: true, requestedAt: NOW - 8 * H }) })
+  expect(turnToStart(grant([a, b]), f => f.id8 === 'aaaaaaaa')?.id8).toBe('bbbbbbbb')
+})
+
+test('A136: a claim another A5R spent in the same minute sends nothing', async () => {
+  const disk = new Map<string, string>()
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  let calls = 0
+  const row = JSON.stringify({ sessionId: 'local_c', cliSessionId: SID('cccccccc') })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  disk.set('app/Claude/claude-code-sessions/a/o/local_c.json', row)
+  await c.tick(fakeIo(disk, { deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }), list: async () => [{ name: 'local_c.json', mtimeMs: 1 }], claimAlert: async () => false, call: async () => ((calls += 1), { text: SENT }) }))
+  expect(calls).toBe(0)
 })

@@ -799,7 +799,7 @@ async function writeMe($: Engine): Promise<void> {
   if (!me) return
   const now = await $.clock.now()
   const { sharedShellAt: _was, ...rest } = me
-  me = { ...rest, want: answered(rest.want), ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), ...(rest.want ? { askedAt: rest.want.requestedAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, ...(wakes.canSend() ? { sends: true as const } : {}), delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...rest, want: answered(rest.want), ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), ...(rest.want ? { askedAt: rest.want.requestedAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, sends: wakes.canSend() ? (true as const) : undefined, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir()}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -1428,7 +1428,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await mergeGuardStep($, opts, now)
   currentVerdicts(now) // A89: note which verdicts' incidents are current, so an ended one stays 30 min
   ramStep(opts, now)
-  await wakes.tick(wakeIo($, opts), now).catch(err => $.ui.log(`a5r: conductor: ${String(err)}`, { to: 'debug' })) // A135-A141: last of the steps and outside the Editor's own pass: a send may be slow
+  await wakes.tick(wakeIo($, opts)).catch(err => $.ui.log(`a5r: conductor: ${String(err)}`, { to: 'debug' })) // A135-A141: last of the steps and outside the Editor's own pass: a send may be slow
   const running = (await $.agent.list().catch(() => [])).filter(a => a.status === 'running') // A62, A67
   agentsNow = running.length
   agentKindsNow = running.map(a => a.type || 'agent')

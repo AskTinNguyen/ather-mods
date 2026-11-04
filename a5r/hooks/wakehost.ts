@@ -8,7 +8,7 @@ import type { TranscriptEvent } from './judge.ts'
 import type { LeaseRecord } from './lease.ts'
 import { NUDGE_MAX } from './nudge.ts'
 import type { Need } from './syncplan.ts'
-import { CONDUCTOR_FILE, IDLE_FILE, NO_IDLE, NO_WAKE, PAUSE_MS, REFUSED_DIR, ROUTE_WINDOW_MS, START_WINDOW_MS, WAKE_ANSWER_MS, WAKE_FILE, WORK_AGAIN_MS, WORK_SETTLE_MS, afterMiss, alarmText, conductorOf, deskDir, hasWork, idleLine, isAlarmDue, isStopped, mayConduct, nextIdle, nightLine, parseConductor, parseDeskRow, parseIdle, parseRefusal, parseWake, pausedCause, readSend, refusalMessage, sendInput, stoppedRefusals, turnMessage, turnToStart, withRow, workFits, workMessage, workPool, type DeskRow, type IdleFile, type Refusal, type WakeFile, type WakeOutcome, type WakeStatus, type WakeWhy } from './wake.ts'
+import { CONDUCTOR_FILE, IDLE_FILE, NO_IDLE, NO_WAKE, PAUSE_MS, REFUSED_DIR, WAKE_ANSWER_MS, WAKE_FILE, WORK_AGAIN_MS, WORK_SETTLE_MS, afterMiss, alarmText, conductorOf, deskDir, hasWork, idleLine, isAlarmDue, isStopped, mayConduct, nextIdle, nightLine, parseConductor, parseDeskRow, parseIdle, parseRefusal, parseWake, pausedCause, readSend, refusalMessage, retryAfter, sendInput, stoppedRefusals, turnMessage, turnToStart, withRow, wordsOf, workFits, workMessage, workPool, type DeskRow, type IdleFile, type Refusal, type WakeFile, type WakeOutcome, type WakeStatus, type WakeWhy, type Words } from './wake.ts'
 
 /** The engine's calls for one minute. */
 export type WakeIo = FileIo & {
@@ -55,17 +55,16 @@ export const conductor = (h: WakeState) => {
   let idle: IdleFile = NO_IDLE
   let isDeskKnown = false
   const desk = new Map<string, { row: DeskRow; mtime: number; name: string }>()
-  const wordsAt = new Map<string, { turn: number; has: boolean }>() // id8 -> what its last words said, read once per turn
+  const wordsAt = new Map<string, { turn: number; words: Words }>() // id8 -> what its last words said, read once per turn
   let nudgeWindow = ''
   let nudgeRead = new Set<string>()
-  const tried = new Set<string>() // the turn starts this conductor tried, by claim key
   const wakePath = (): string => `${h.dir()}/${WAKE_FILE}`
   const idlePath = (): string => `${h.dir()}/${IDLE_FILE}`
   const myName = (): string => h.titleOf(h.me8()) || (h.me()?.lane ?? h.me8())
   const nameOf = (f: { id8: string; lane: string }): string => h.titleOf(f.id8) || f.lane
   const event = (f: { lane: string; id8: string; lastTurnAt?: number }, rule: OrchestrateEvent['rule'], note: string, now: number, acted = true): OrchestrateEvent => ({ at: now, rule, lane: f.lane, id8: f.id8, procs: [], liveness: 'gone', lastTurnAt: f.lastTurnAt ?? null, agents: null, build: false, acted, note })
   const save = async (io: WakeIo, w: WakeFile, now: number): Promise<void> => {
-    wake = { ...w, workAt: Object.fromEntries(Object.entries(w.workAt).filter(([, at]) => now - at < WORK_AGAIN_MS)) } // its only deleter
+    wake = { ...w, triedAt: Object.fromEntries(Object.entries(w.triedAt).filter(([, at]) => now - at < WORK_AGAIN_MS)) } // its only deleter
     await io.write(wakePath(), JSON.stringify(wake))
   }
 
@@ -106,18 +105,19 @@ export const conductor = (h: WakeState) => {
 
   /** A137 / A136 / A140: one start, sent by one A5R (the alert claim). A refused send stands until the heartbeat says (a send can
    * report undelivered and still work). No address, or the engine's loop guard: nothing went, a miss now. */
-  const start = async (io: WakeIo, s: { f: SessionFile; why: WakeWhy; key: string; text: string; requestedAt: number | null }, now: number): Promise<Step> => {
+  const start = async (io: WakeIo, s: { f: SessionFile; why: WakeWhy; text: string; requestedAt: number | null }, now: number): Promise<Step> => {
     const turn = s.requestedAt === null ? null : { id8: s.f.id8, lane: s.f.lane, requestedAt: s.requestedAt }
     if (wake.pausedUntil > now) {
       if (turn) await miss(io, turn, now, false, 'loop-paused', now) // it blocks nobody while nothing can be sent
       return held(pausedCause(myName()))
     }
-    if (!(await io.claimAlert(`wake-${s.why}-${s.f.id8}-${s.key}-${wake.pausedUntil}`))) return held(`${nameOf(s.f)} was started in this window`)
+    if (!(await io.claimAlert(`wake-${s.f.id8}-${Math.floor(now / 60_000)}`))) return held(`another A5R started ${nameOf(s.f)} just now`) // two conductors in one handover
     const address = desk.get(s.f.session.toLowerCase())?.row.local
     const row = (outcome: WakeOutcome) => ({ at: now, id8: s.f.id8, lane: s.f.lane, why: s.why, outcome })
+    const triedAt = { ...wake.triedAt, [s.f.id8]: now }
     if (!address) {
       await io.log(event(s.f, 'woke', `${s.why}: no desktop record for this session, so nothing can start it`, now, false))
-      await save(io, withRow(wake, row('no-address')), now)
+      await save(io, { ...withRow(wake, row('no-address')), triedAt }, now)
       // From a conductor outside the app, whose sessions it cannot read, only once it has been gone 2 h (A125's old rule).
       if (turn) await miss(io, turn, now, isDeskKnown || now - s.f.heartbeatAt >= 2 * 3_600_000, 'no desktop record', now)
       return STARTED
@@ -126,31 +126,32 @@ export const conductor = (h: WakeState) => {
     if (result.kind === 'loop-paused') {
       await io.log(event(s.f, 'woke', `${s.why}: loop-paused: ${result.reason}`, now, false))
       const isFirst = wake.pausedSince === 0
-      await save(io, { ...(isFirst ? withRow(wake, row('loop-paused')) : wake), pausedUntil: now + PAUSE_MS, pausedSince: wake.pausedSince || now }, now)
+      await save(io, { ...(isFirst ? withRow(wake, row('loop-paused')) : wake), triedAt, pausedUntil: now + PAUSE_MS, pausedSince: wake.pausedSince || now }, now)
       if (turn) await miss(io, turn, now, false, 'loop-paused', now)
       if (isFirst) await alarm(io, pausedCause(myName()), now)
       return held(pausedCause(myName()))
     }
     await io.log(event(s.f, 'woke', `${s.why}: ${result.kind === 'sent' ? `sent to ${address}, waiting for its heartbeat` : `the send reported "${result.reason}", waiting for its heartbeat anyway`}`, now))
-    await save(io, { ...wake, current: { id8: s.f.id8, lane: s.f.lane, why: s.why, at: now, requestedAt: s.requestedAt, ...(result.kind === 'refused' ? { refused: result.reason.slice(0, 200) } : {}) }, pausedSince: 0, ...(result.kind === 'sent' ? { lastFailure: undefined } : {}), ...(s.why === 'work' ? { workAt: { ...wake.workAt, [s.f.id8]: now } } : {}) }, now)
+    await save(io, { ...wake, current: { id8: s.f.id8, lane: s.f.lane, why: s.why, at: now, requestedAt: s.requestedAt, ...(result.kind === 'refused' ? { refused: result.reason.slice(0, 200) } : {}) }, pausedSince: 0, ...(result.kind === 'sent' ? { lastFailure: undefined } : {}), triedAt }, now)
     return STARTED
   }
 
   /** The start in flight: answered (a heartbeat newer than it), missed after 5 min, or still waited for (one at a time). A
    * session started for work holds the slot until it asks, holds or has had WORK_SETTLE_MS, so the next one starts on what it
-   * does, not on its process coming up. */
+   * does, not on its process coming up. True while it holds this minute; settling one ends the minute too: what this pass read
+   * of its files is old now. */
   const settle = async (io: WakeIo, x: GrantInput, now: number): Promise<boolean> => {
     const cur = wake.current
-    if (!cur) return true
+    if (!cur) return false
     const f = x.files.find(o => o.id8 === cur.id8)
     const isAnswered = Boolean(f && f.heartbeatAt > cur.at)
-    if (!isAnswered && now - cur.at < WAKE_ANSWER_MS) return false
+    if (!isAnswered && now - cur.at < WAKE_ANSWER_MS) return true
     const outcome: WakeOutcome = isAnswered ? 'answered' : 'no-answer'
     const row = { at: now, id8: cur.id8, lane: cur.lane, why: cur.why, outcome }
     if (cur.answeredAt === undefined) await io.log(event(cur, 'woke', `${cur.why}: ${outcome} ${Math.round((now - cur.at) / 60_000)} min after the start at ${hhmm(cur.at)}`, now))
     if (isAnswered && cur.why === 'work' && !f?.want && !f?.holding && now - (cur.answeredAt ?? now) < WORK_SETTLE_MS) {
       if (cur.answeredAt === undefined) await save(io, { ...withRow(wake, row), current: { ...cur, answeredAt: now } }, now)
-      return false
+      return true
     }
     await save(io, { ...(cur.answeredAt === undefined ? withRow(wake, row) : wake), current: null, ...(!isAnswered && cur.refused ? { lastFailure: `${cur.lane}: the send was refused: ${cur.refused}` } : {}) }, now)
     if (!isAnswered && cur.requestedAt !== null) await miss(io, { id8: cur.id8, lane: cur.lane, requestedAt: cur.requestedAt }, cur.at, cur.refused === undefined, 'no-answer', now)
@@ -171,10 +172,11 @@ export const conductor = (h: WakeState) => {
       const r = parseRefusal(o.raw)
       return r ? [{ ...r, ...o }] : []
     })
+    const off = archived()
     for (const r of stoppedRefusals(rs, x.files, x.lanes, now)) {
       const f = x.files.find(o => o.id8 === r.id8)
-      if (!f || !(await isFreed(io, r, x, now))) continue
-      const step = await start(io, { f, why: r.kind, key: String(r.at), text: refusalMessage(r), requestedAt: null }, now)
+      if (!f || off.has(f.id8) || !(await isFreed(io, r, x, now))) continue
+      const step = await start(io, { f, why: r.kind, text: refusalMessage(r), requestedAt: null }, now)
       if (wake.pausedUntil <= now) await io.writeChecked(r.path, r.raw, 'null') // a loop pause spends no refusal
       return step // one at a time, whoever won its claim
     }
@@ -191,26 +193,27 @@ export const conductor = (h: WakeState) => {
       nudgeRead = new Set()
     }
     let step: Step = NOTHING
-    for (const f of workPool({ files: x.files, lanes: x.lanes, now, workAt: wake.workAt, again, archived: archived() })) {
+    for (const f of workPool({ files: x.files, lanes: x.lanes, now, triedAt: wake.triedAt, again, archived: archived() })) {
       if (nudgeRead.has(f.id8) || (now - (await io.nudgedAt(f.id8)) < WORK_AGAIN_MS && !again)) continue
       const seen = wordsAt.get(f.id8)
       const turn = f.lastTurnAt ?? 0
       if (seen?.turn !== turn) {
         const events = await io.events(f.session)
         if (events.length === 0) continue // unread is not finished for the whole turn: read again next minute
-        wordsAt.set(f.id8, { turn, has: hasWork(f, h.leases(), events, now) })
+        wordsAt.set(f.id8, { turn, words: wordsOf(events) })
       }
-      if (!wordsAt.get(f.id8)?.has) continue
+      const words = wordsAt.get(f.id8)?.words
+      if (!words || !hasWork(f, h.leases(), words, now)) continue
       if (!workFits(x, f)) return held(`${nameOf(f)} has work, but the Editor's gates hold it (memory ${h.freeGb() ?? '?'} GB)`)
       if (livenessOf(f.id8, x.files, x.lanes, now) !== 'alive') {
         if (!desk.has(f.session.toLowerCase())) continue // nothing can start it
-        return start(io, { f, why: 'work', key: `${turn}${again ? '-again' : ''}`, text: workMessage(h.freeGb()), requestedAt: null }, now) // one at a time, whoever won its claim
+        return start(io, { f, why: 'work', text: workMessage(h.freeGb()), requestedAt: null }, now) // one at a time
       }
       nudgeRead.add(f.id8)
       step = held(`${nameOf(f)} was told and has not asked yet`)
       if (!(await claimNudge(io, window, f.id8))) continue
       await io.nudge(f.id8, window, now, h.freeGb())
-      await save(io, { ...wake, workAt: { ...wake.workAt, [f.id8]: now } }, now)
+      await save(io, { ...wake, triedAt: { ...wake.triedAt, [f.id8]: now } }, now)
       await io.log({ ...event(f, 'A91-nudge', `the Editor is free (window ${window}), nobody queued; told through its inbox`, now), liveness: 'alive', agents: f.agents ?? null })
     }
     return step
@@ -225,21 +228,19 @@ export const conductor = (h: WakeState) => {
   /** A141: logged, then a native notification when the engine can, else a toast. */
   const alarm = async (io: WakeIo, cause: string, now: number): Promise<void> => {
     const text = alarmText(idle.run, cause)
-    await io.log({ at: now, rule: 'idle-with-work', lane: h.me()?.lane ?? '', id8: h.me8(), procs: [], liveness: 'alive', lastTurnAt: null, agents: null, build: false, acted: true, note: text })
+    await io.log({ ...event({ lane: h.me()?.lane ?? '', id8: h.me8() }, 'idle-with-work', text, now), liveness: 'alive' })
     if (!(await io.notify(text))) io.toast(text)
   }
 
   /** What the conductor does in its minute: one start at a time. `again`: A141's one more try, the 2 h rule aside. */
   const act = async (io: WakeIo, x: GrantInput, now: number, again = false): Promise<Step> => {
-    if (!(await settle(io, x, now))) return held(`${wake.current?.lane} was started at ${hhmm(wake.current?.at ?? now)} and has not asked yet`)
-    const keyOf = (w: Want): string => `${w.requestedAt}-${w.misses ?? 0}-${Math.floor(now / (w.movedBack && !w.misses ? ROUTE_WINDOW_MS : START_WINDOW_MS))}`
+    const inFlight = wake.current
+    if (await settle(io, x, now)) return held(`${inFlight?.lane} was started at ${hhmm(inFlight?.at ?? now)} and has not asked yet`)
     const off = archived()
-    const turn = turnToStart(x, f => off.has(f.id8) || (f.want !== null && tried.has(`${f.id8}-${keyOf(f.want)}`))) // one tried in this window leaves room for the next
+    const turn = turnToStart(x, f => off.has(f.id8) || (f.want !== null && now - (wake.triedAt[f.id8] ?? 0) < retryAfter(f.want))) // one tried just now leaves room for the next
     if (turn?.want) {
       const minutes = x.manual.minutes[turn.id8] ?? turn.want.minutes
-      const key = keyOf(turn.want)
-      tried.add(`${turn.id8}-${key}`)
-      return start(io, { f: turn, why: 'turn', key, text: turnMessage(turn.want, minutes, now), requestedAt: turn.want.requestedAt }, now)
+      return start(io, { f: turn, why: 'turn', text: turnMessage(turn.want, minutes, now), requestedAt: turn.want.requestedAt }, now)
     }
     const refused = await refusalStep(io, x, now)
     if (refused.kind !== 'nothing') return refused
@@ -262,7 +263,8 @@ export const conductor = (h: WakeState) => {
 
   return {
     /** The minute: every session reads what the panel shows and clears its own refusal; one conducts. */
-    tick: async (io: WakeIo, now: number): Promise<void> => {
+    tick: async (io: WakeIo): Promise<void> => {
+      const now = await io.now() // the tick's earlier steps may have been slow
       wake = parseWake(await io.read(wakePath()))
       idle = parseIdle(await io.read(idlePath()))
       await clearOwn(io, now)

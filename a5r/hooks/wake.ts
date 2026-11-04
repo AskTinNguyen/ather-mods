@@ -15,10 +15,10 @@ export const CONDUCTOR_FILE = 'conductor.json'
 export const REFUSED_DIR = 'refused'
 /** A136: how long a started session has to answer (a heartbeat newer than the start). */
 export const WAKE_ANSWER_MS = 5 * MIN
-/** A136: a turn's start is claimed once per window, so a process that answered and stopped again can be started again. */
-export const START_WINDOW_MS = 10 * MIN
-/** A138: after a miss of the route (a refused send) a request is tried this seldom, to keep sends low. */
-export const ROUTE_WINDOW_MS = HOUR
+/** A136: a request's start is tried again after this (a process that answered and stopped again can be started again). */
+export const START_AGAIN_MS = 10 * MIN
+/** A138: after a miss of the route (a refused send) it is tried this seldom, to keep sends low. */
+export const ROUTE_AGAIN_MS = HOUR
 /** A138: while the engine's loop guard holds, the next send goes this much later. */
 export const PAUSE_MS = 15 * MIN
 /** A140: a session started for work holds the one slot this long after it answers, unless it asks or holds first. */
@@ -45,15 +45,15 @@ const jsonOf = <T>(text: string | null): Partial<T> | null => {
 // ---------- A135: the stopped request ----------
 /** A135: the session's process is gone and its request still stands: it will be started when its turn comes. */
 export const isStopped = (f: SessionFile, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): boolean => Boolean(f.want && keepsPlace(f.want, now)) && !f.holding && livenessOf(f.id8, files, lanes, now) !== 'alive'
-/** A136: a request after a miss goes behind every other request (coord.ts queueOf). `isReal` (nobody answered a send that went,
- * or the app has no such session) counts, and a second such miss withdraws it (null); a miss of the route (a refused send, the
- * engine's loop guard) only moves it: nobody was asked. */
 /** A136: its own A5R, running again: an answer ends what its misses said. */
 export const answered = (w: Want | null): Want | null => {
   if (!w || (w.misses === undefined && !w.movedBack)) return w
   const { misses: _m, movedBack: _b, ...rest } = w
   return rest
 }
+/** A136: a request after a miss goes behind every other request (coord.ts queueOf). `isReal` (nobody answered a send that went,
+ * or the app has no such session) counts, and a second such miss withdraws it (null); a miss of the route (a refused send, the
+ * engine's loop guard) only moves it: nobody was asked. */
 export const afterMiss = (w: Want, isReal: boolean): Want | null => {
   const misses = w.misses ?? 0
   if (isReal && misses >= 1) return null
@@ -100,12 +100,16 @@ export const workMessage = (freeGb: number | null): string =>
  * a merge in progress, the launch gate) would grant now, with no live request ahead of it; waiting only for memory it is not
  * started, and it blocks nobody meanwhile. `skip`: archived, or tried in this window. */
 export const turnToStart = (x: GrantInput, skip: (f: SessionFile) => boolean): SessionFile | null => {
+  const skipped = new Set<string>()
   for (const f of queueIn(x)) {
     if (!isStopped(f, x.files, x.lanes, x.now)) return null
-    if (!skip(f) && decide({ ...x, me8: f.id8 }).kind === 'grant') return f
+    if (skip(f)) skipped.add(f.id8)
+    else if (decide({ ...x, me8: f.id8, files: x.files.filter(o => !skipped.has(o.id8)) }).kind === 'grant') return f
   }
   return null
 }
+/** A136 / A138: how long after an attempt a stopped request is tried again. */
+export const retryAfter = (w: Want): number => (w.movedBack && !w.misses ? ROUTE_AGAIN_MS : START_AGAIN_MS)
 
 // ---------- A137: what else a stopped session waits on ----------
 /** Saved/A5R/refused/<id8>.json, written by the refused session itself. */
@@ -135,20 +139,21 @@ export const editorSignAt = (f: SessionFile, leases: readonly LeaseRecord[]): nu
 /** A140: the sessions that may still have Editor work, the most recently active first: not asking, not holding, nothing
  * running, idle (or stopped), active within a day, not archived, no turn since its request was withdrawn (by the person, by age
  * or by two misses), and not started for this within 2 h unless `again`. */
-export const workPool = (x: { files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; workAt: Readonly<Record<string, number>>; again?: boolean; archived: ReadonlySet<string> }): SessionFile[] =>
+export const workPool = (x: { files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; triedAt: Readonly<Record<string, number>>; again?: boolean; archived: ReadonlySet<string> }): SessionFile[] =>
   x.files
     .filter(f => {
       const turn = f.lastTurnAt
       if (f.want || f.holding || x.archived.has(f.id8) || turn === undefined || (f.agents ?? 0) > 0) return false
       const isRecent = x.now - turn <= WORK_RECENT_MS && isIdle(idleMsOf({ now: x.now, lastTurnAt: turn, turnSignalAt: 0, mainCalls: 0, agents: 0 }))
-      return isRecent && (f.withdrawnAt ?? 0) < turn && (x.again || x.now - (x.workAt[f.id8] ?? 0) >= WORK_AGAIN_MS)
+      return isRecent && (f.withdrawnAt ?? 0) < turn && (x.again || x.now - (x.triedAt[f.id8] ?? 0) >= WORK_AGAIN_MS)
     })
     .sort((a, b) => (b.lastTurnAt ?? 0) - (a.lastTurnAt ?? 0))
+/** A140: what its last words say, read once per turn. */
+export type Words = { isFinished: boolean; waits: boolean }
+export const wordsOf = (events: readonly TranscriptEvent[]): Words => ({ isFinished: isFinished(events), waits: saysWaitingForEditor(lastWords(events) ?? '') })
 /** A140: whether a session in that pool has work: asked or held within a day (or, A91, its last words wait for the Editor), and
  * its last words do not finish it. */
-export const hasWork = (f: SessionFile, leases: readonly LeaseRecord[], events: readonly TranscriptEvent[], now: number): boolean => {
-  return !isFinished(events) && (now - editorSignAt(f, leases) <= WORK_RECENT_MS || saysWaitingForEditor(lastWords(events) ?? ''))
-}
+export const hasWork = (f: SessionFile, leases: readonly LeaseRecord[], words: Words, now: number): boolean => !words.isFinished && (now - editorSignAt(f, leases) <= WORK_RECENT_MS || words.waits)
 /** A140: the Editor's gates for a session with no request: a stand-in slot of 30 min without PIE meets what decide checks. */
 export const workFits = (x: GrantInput, f: SessionFile): boolean => {
   const want: Want = { minutes: 30, pie: false, build: false, what: 'Editor work', mode: 'unattended', pausable: true, nextSafe: '', requestedAt: x.now }
@@ -161,14 +166,15 @@ export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused
 /** `refused`: what the send reported (the heartbeat still decides); `answeredAt`: a session started for work that came up. */
 export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string; answeredAt?: number }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
-export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; workAt: Record<string, number>; pausedUntil: number; pausedSince: number; lastFailure?: string }
-export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], workAt: {}, pausedUntil: 0, pausedSince: 0 }
+/** `triedAt`: when each session was last tried, whatever for: the one record of attempts. */
+export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; pausedUntil: number; pausedSince: number; lastFailure?: string }
+export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, pausedUntil: 0, pausedSince: 0 }
 /** A139 / A141: what status.json says of them. */
 export type WakeStatus = { stopped: number; idleWithWork: { run: number; days: Record<string, number>; nights: Record<string, number> }; starting: { lane: string; id8: string; why: WakeWhy; at: number } | null; pausedUntil: number | null }
 export const RECENT_KEEP = 40
 export const parseWake = (text: string | null): WakeFile => {
   const v = jsonOf<WakeFile>(text)
-  return v ? { v: 1, current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null, recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [], workAt: v.workAt && typeof v.workAt === 'object' ? v.workAt : {}, pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0, pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0, ...(typeof v.lastFailure === 'string' ? { lastFailure: v.lastFailure } : {}) } : NO_WAKE
+  return v ? { v: 1, current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null, recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [], triedAt: v.triedAt && typeof v.triedAt === 'object' ? v.triedAt : {}, pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0, pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0, ...(typeof v.lastFailure === 'string' ? { lastFailure: v.lastFailure } : {}) } : NO_WAKE
 }
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })
 /** The next conductor: the first live A5R that conducts, those that can start a session (in the desktop app) first, then by id. */
