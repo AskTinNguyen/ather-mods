@@ -4,48 +4,16 @@ import { applyOrder, parseEditorCommand, NO_ORDER } from '../hooks/order.ts'
 import { editorPanel } from '../hooks/panel.ts'
 import { staleWants } from '../hooks/truth.ts'
 import { conductor, type WakeIo } from '../hooks/wakehost.ts'
-import { WAKE_ANSWER_MS, stoppedRefusals, workPlan, type WorkFact, afterMiss, answered, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
+import type { LeaseRecord } from '../hooks/lease.ts'
+import { WAKE_ANSWER_MS, isResting, budgetHold, editorSignAt, leaseSince, oldLine, stoppedRefusals, workPlan, type WorkFact, afterMiss, answered, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
 import { parseTail } from '../hooks/judge.ts'
 import { A5RPANE, ENV, LOCK, ME, NOW, PANE, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
+
+import { HF, RECORDS, ME8, MIN, H, START, SID, DESK, FREE, held, want, file, stoppedFile, put, inApp, desk, stopped, fileOf, sends, LOG, SENT, REFUSED, PAUSED, said, QUEUED_WORDS, grant, NONE, KEEP, fakeIo, beat, worker, app, hostOf, long, logged } from './rev45.fixture.ts'
 
 // Rev 45 (L-49, L-50): A135 a stopped session keeps its place, A136 started when its turn comes, A137 what else it waits on,
 // A138 how a session is reached, A139 Hai can see it, A140 the conductor, A141 the alarm. MEASURED 2026-11-03: the Editor free
 // from 23:34 to 09:30, the queue empty because A125 withdrew requests whose last words were "I'm queued".
-const HF = 'E:/s2/Saved/A5R'
-const RECORDS = 'C:/Users/hai.huynh/.claude/projects/E--s2'
-const ME8 = ME.slice(0, 8)
-const MIN = 60_000
-const H = 60 * MIN
-const START = { cwd: PROJ, surface: 'terminal', isInteractive: true } as never
-const SID = (id8: string) => `${id8}-1111-4000-8000-000000000000`
-const DESK = `${ENV.APPDATA}/Claude/claude-code-sessions/${ENV.CLAUDE_CODE_ACCOUNT_UUID}/${ENV.CLAUDE_CODE_ORGANIZATION_UUID}`
-const FREE = 'FREE since=14:30 2026-10-06 by=lane-bbbbbbbb note=done background=none · free since 14:30\n'
-const held = (id8: string, since: number, end: number) => `${heldLine({ lane: `lane-${id8}`, sessionName: `title-${id8}`, id8, since, pid: null, end, mode: 'interactive', pausable: true, nextSafe: 'after save', note: 'their slot' })}\n`
-const want = (o: Partial<Want> = {}): Want => ({ minutes: 30, pie: false, build: false, what: 'mc jump test', mode: 'unattended', pausable: true, nextSafe: 'after save', requestedAt: NOW - 3 * H, ...o })
-const file = (id8: string, o: Partial<SessionFile> = {}): SessionFile => ({ ...blankSession(SID(id8), `lane-${id8}`, `title ${id8}`, NOW), ...o })
-/** A session whose process is gone: its last heartbeat long ago. */
-const stoppedFile = (id8: string, o: Partial<SessionFile> = {}): SessionFile => file(id8, { heartbeatAt: NOW - 3 * H, lastTurnAt: NOW - 3 * H, canPass: undefined, conducts: undefined, ...o })
-const put = (w: ReturnType<typeof world>, f: SessionFile) => w.put(`${HF}/editor/${f.id8}.json`, JSON.stringify(f))
-const desk = (w: ReturnType<typeof world>, id8: string, local = `local_${id8}`, o: Record<string, unknown> = {}) => w.put(`${DESK}/${local}.json`, JSON.stringify({ sessionId: local, cliSessionId: SID(id8), title: `title ${id8}`, isArchived: false, ...o }))
-const stopped = (w: ReturnType<typeof world>, id8: string, o: Partial<SessionFile> = {}) => {
-  put(w, stoppedFile(id8, { want: want(), ...o }))
-  desk(w, id8)
-}
-const fileOf = (w: ReturnType<typeof world>, id8: string) => JSON.parse(w.read(`${HF}/editor/${id8}.json`)) as SessionFile
-const sends = (w: ReturnType<typeof world>) => w.seen.filter(e => e.tool === 'SendMessage') as { to: string; message: string }[]
-const LOG = `${HF}/orchestrate.log`
-const SENT = JSON.stringify({ success: true, message: 'Forwarded to Claude Desktop\'s session messaging' })
-const REFUSED = JSON.stringify({ success: false, message: 'Not delivered to Claude Desktop session' })
-const PAUSED = JSON.stringify({ success: false, message: 'Not delivered: this session has already messaged Claude Desktop sessions 8 times since your user last typed here, which looks like sessions messaging each other automatically. Paused until your user\'s next message in this session.' })
-const said = (text: string) => JSON.stringify({ type: 'assistant', timestamp: new Date(NOW - 60 * MIN).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text }] } })
-const QUEUED_WORDS = 'I am queued at #2 for the Editor: the next step is the jump test in PIE.'
-const grant = (files: SessionFile[], o: Partial<GrantInput> = {}): GrantInput => ({ me8: ME8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: { freeGb: 40, diskGb: 100, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null, ...o })
-const NONE: ReadonlySet<string> = new Set()
-const KEEP = (): boolean => false
-/** The engine beneath the host itself, for what the test engine cannot show. */
-const fakeIo = (disk: Map<string, string>, o: Record<string, unknown> = {}): WakeIo => ({ now: async () => NOW, read: async (p: string) => disk.get(p) ?? null, write: async (p: string, t: string) => void disk.set(p, t), stat: async () => null, list: async () => [], run: async () => null, call: async () => null, deskPlace: async () => ({}), writeChecked: async (p: string, _e: string | null, t: string) => (disk.set(p, t), true), claimAlert: async () => true, log: async () => undefined, notify: async () => false, toast: () => undefined, events: async () => [], nudgedAt: async () => 0, nudge: async () => undefined, isGitFree: async () => true, heldNeeds: async () => new Set(), ...o }) as never
-const beat = (w: ReturnType<typeof world>, id8: string) => put(w, { ...fileOf(w, id8), heartbeatAt: w.clock.now() + 1 })
-
 // ---------- A135 ----------
 test('A135: unit: a stopped request stays in the queue past 2 h, in its place; 48 h, an archived session or a sync slot leave', () => {
   const a = stoppedFile('aaaaaaaa', { want: want({ requestedAt: NOW - 5 * H }) })
@@ -163,11 +131,11 @@ test('A136: no answer in 5 min moves it behind the next, once; a second miss wit
 
 test('A136: unit: a miss goes back behind the next once; a second withdraws; a loop pause never withdraws', () => {
   const w = want({ requestedAt: 5 })
-  expect(afterMiss(w, true)).toEqual({ ...w, misses: 1, movedBack: true })
-  expect(afterMiss({ ...w, misses: 1 }, true)).toBeNull()
-  expect(afterMiss(w, false)).toEqual({ ...w, movedBack: true })
+  expect(afterMiss(w, 'real', NOW)).toEqual({ ...w, misses: 1, movedBack: true })
+  expect(afterMiss({ ...w, misses: 1 }, 'real', NOW)).toBeNull()
+  expect(afterMiss(w, 'moved', NOW)).toEqual({ ...w, movedBack: true })
   const once = { ...w, movedBack: true as const }
-  expect(afterMiss(once, false)).toBe(once)
+  expect(afterMiss(once, 'moved', NOW)).toBe(once)
 })
 
 test('A136: two stopped requests start one at a time, in queue order', opts(), async ($, on) => {
@@ -248,10 +216,9 @@ test('A136: the engine\'s loop guard: logged as loop-paused, a miss, no retry un
   await w.clock.advance(3 * MIN)
   expect(sends(w).length).toBe(1) // inside the window: no retry
   await w.clock.advance(60 * MIN)
-  expect(sends(w).length).toBeGreaterThan(1) // a sole request that the guard moved is tried again after an hour
-  expect(sends(w).length).toBeLessThan(6) // at most one each 15 min
+  expect(sends(w).length).toBe(2) // one probe an hour
   expect(fileOf(w, 'cccccccc').want).not.toBeNull()
-  expect(alarms().length).toBe(2) // the pause, and the Editor's 30 min with work waiting, once each
+  expect(alarms().length).toBe(2) // the pause, once for its episode, and the Editor's 30 min with work waiting, once
 })
 
 // ---------- A137 ----------
@@ -325,7 +292,7 @@ test('A138: unit: the route: SendMessage with the desktop id; its three answers;
   expect(readSend({ deny: 'no' })).toEqual({ kind: 'refused', reason: 'no' })
   expect(readSend(null).kind).toBe('refused')
   expect(readSend({ text: 'not json' })).toEqual({ kind: 'refused', reason: 'not json' })
-  expect(parseDeskRow(JSON.stringify({ sessionId: 'local_0784d41e', cliSessionId: 'C22562CA-x', title: 't' }))).toEqual({ local: 'local_0784d41e', cli: 'c22562ca-x', isArchived: false })
+  expect(parseDeskRow(JSON.stringify({ sessionId: 'local_0784d41e', cliSessionId: 'C22562CA-x', title: 't' }))).toEqual({ local: 'local_0784d41e', cli: 'c22562ca-x', isArchived: false, wakes: 0, isHeldForPerson: false })
   expect(parseDeskRow('{}')).toBeNull()
   expect(deskDir('C:\\Users\\x\\AppData\\Roaming', 'a', 'o')).toBe('C:/Users/x/AppData/Roaming/Claude/claude-code-sessions/a/o')
   expect(deskDir(undefined, 'a', 'o')).toBeNull()
@@ -342,9 +309,10 @@ test('A138: the id comes from the desktop\'s records, which may differ from the 
   expect(sends(w).map(s => s.to)).toEqual(['local_0784d41e'])
 })
 
-test('A138: with no desktop record (outside the desktop app) nothing is sent: logged, and it takes the miss path', opts(), async ($, on) => {
+test('A138: with no desktop record, from a conductor in the app, nothing is sent: logged, and it takes the miss path', opts(), async ($, on) => {
   const w = world(on, { ram: '40', out: { SendMessage: SENT } })
   w.put(LOCK, FREE)
+  inApp(w)
   put(w, stoppedFile('cccccccc', { want: want() }))
   await $.session.start(START)
   await w.clock.advance(MIN)
@@ -397,12 +365,6 @@ test('A139: unit: the panel\'s list carries the stopped mark and the wake line',
 })
 
 // ---------- A140 ----------
-const worker = (w: ReturnType<typeof world>, id8: string, words: string, o: Partial<SessionFile> = {}) => {
-  put(w, stoppedFile(id8, { askedAt: NOW - 5 * H, ...o }))
-  desk(w, id8)
-  w.put(`${RECORDS}/${SID(id8)}.jsonl`, said(words))
-}
-
 test('A140: a free Editor and a stopped session with work: it is started; it is not started again within 2 h', opts(), async ($, on) => {
   const w = world(on, { ram: '40', out: { SendMessage: SENT } })
   w.put(LOCK, FREE)
@@ -609,10 +571,10 @@ test('Review 3: a refused send that nobody answers moves the request back and ne
   expect(f.want?.movedBack).toBe(true)
   expect(f.want?.misses).toBeUndefined()
   expect(w.read(LOG)).not.toContain('rule=withdrawn')
-  const paused = afterMiss(want(), false)
-  const real = paused && afterMiss(paused, true)
+  const paused = afterMiss(want(), 'moved', NOW)
+  const real = paused && afterMiss(paused, 'real', NOW)
   expect(real?.misses).toBe(1)
-  expect(real && afterMiss(real, true)).toBeNull()
+  expect(real && afterMiss(real, 'real', NOW)).toBeNull()
   expect(readSend({ deny: 'Not delivered: this session has already messaged Claude Desktop sessions 8 times' }).kind).toBe('loop-paused')
 })
 
@@ -786,13 +748,13 @@ test('Review 5.1: a conductor that lost its claim during a slow pass sends nothi
   const me = file(ME8, { heartbeatAt: NOW, session: ME })
   const row = JSON.stringify({ sessionId: 'local_c', cliSessionId: SID('cccccccc') })
   const run = async (o: { other?: boolean; flight?: boolean }) => {
-    const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row]])
+    const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row], ['app/Claude/claude-code-sessions/a/o/local_me.json', JSON.stringify({ sessionId: 'local_me', cliSessionId: ME })]])
     let calls = 0
     const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
     let reads = 0
     await c.tick(fakeIo(disk, {
       deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }),
-      list: async () => [{ name: 'local_c.json', mtimeMs: 1 }],
+      list: async () => [{ name: 'local_c.json', mtimeMs: 1 }, { name: 'local_me.json', mtimeMs: 1 }],
       call: async () => ((calls += 1), { text: SENT }),
       read: async (p: string) => {
         if (p === 'd/conductor.json' && o.other && (reads += 1) > 1) return JSON.stringify({ id8: 'bbbbbbbb', at: NOW })
@@ -840,9 +802,9 @@ test('Review 6.1: the live session behind a stopped head held by memory is the h
 test('Review 6.2: a refusal is spent only by a start', async () => {
   const me = file(ME8, { heartbeatAt: NOW, session: ME })
   const row = JSON.stringify({ sessionId: 'local_c', cliSessionId: SID('cccccccc') })
-  const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row], ['d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - MIN, what: 'x' })]])
+  const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row], ['app/Claude/claude-code-sessions/a/o/local_me.json', JSON.stringify({ sessionId: 'local_me', cliSessionId: ME })], ['d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - MIN, what: 'x' })]])
   const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc')], { now, lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }), leases: () => [], dir: () => 'd', freeWindow: () => null, freeGb: () => 40, titleOf: () => '' })
-  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: 1 }] : [{ name: 'local_c.json', mtimeMs: 1 }])
+  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: NOW }] : [{ name: 'local_c.json', mtimeMs: 1 }, { name: 'local_me.json', mtimeMs: 1 }])
   const place = async () => ({ appData: 'app', account: 'a', org: 'o' })
   await c.tick(fakeIo(disk, { deskPlace: place, list, claimAlert: async () => false }))
   expect(disk.get('d/refused/cccccccc.json')).not.toBe('null')
@@ -919,12 +881,6 @@ test('Mutation gaps: the minute a start is settled starts nobody else', opts(), 
   expect(sends(w).length).toBe(2)
 })
 
-const app = (extra: { name: string; row: Record<string, unknown> }[]) => {
-  const disk = new Map(extra.map(e => [`app/Claude/claude-code-sessions/a/o/${e.name}`, JSON.stringify(e.row)]))
-  return { disk, o: { deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }), list: async () => extra.map(e => ({ name: e.name, mtimeMs: 1 })) } }
-}
-const hostOf = (files: () => SessionFile[], me: SessionFile) => conductor({ me8: () => ME8, me: () => me, grantInput: now => grant(files(), { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
-
 test('Mutation gaps: a session in the app takes over from a conductor that cannot send; the env alone is not being in the app', async () => {
   const me = file(ME8, { heartbeatAt: NOW, session: ME, sends: true })
   const holder = file('bbbbbbbb', { heartbeatAt: NOW })
@@ -959,7 +915,7 @@ test('Mutation gaps: a session refused and archived since is not messaged', asyn
   const a = app([{ name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }, { name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc'), isArchived: true } }])
   a.disk.set('d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - MIN, what: 'x' }))
   let calls = 0
-  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: 1 }] : a.o.list())
+  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: NOW }] : a.o.list())
   await hostOf(() => [me, stoppedFile('cccccccc')], me).tick(fakeIo(a.disk, { ...a.o, list, call: async () => ((calls += 1), { text: SENT }) }))
   expect(calls).toBe(0)
 })

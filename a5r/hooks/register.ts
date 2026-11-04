@@ -3373,11 +3373,12 @@ async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
 async function tidyStep($: Engine, opts: Opts, now: number): Promise<void> {
   for (const { f, why } of staleWants(filesNow(), lanes, now, wakes.archived())) {
     if (!f.want || !(await wakes.withdraw(wakeIo($, opts), f.id8, f.want.requestedAt, now))) continue // one writer: the read-compare-write
-    await orchestrateLog($, opts, actedEvent('withdrawn', `its request (asked ${clockOf(f.want.requestedAt)}, ${f.want.minutes} min) withdrawn: ${why}; its session gone since ${clockOf(f.heartbeatAt)}`, now, f, 'gone')).catch(() => undefined)
+    await orchestrateLog($, opts, actedEvent('withdrawn', `its request (asked ${clockOf(f.want.requestedAt)}, ${f.want.minutes} min) withdrawn by ${me?.lane ?? me8} (A5R 0.28.0): ${why}; its session gone since ${clockOf(f.heartbeatAt)}`, now, f, 'gone')).catch(() => undefined)
   }
   if (!(await claimAlert($, opts, `prune-alerts-${ymd(now)}`))) return
   const old = prunable(await $.fs.list(`${hfDir()}/alerts`).catch(() => []), now)
   if (old.length > 0) await $.process.run(pruneArgv(`${hfDir()}/alerts`, old), { timeoutMs: 60_000 }).catch(() => null)
+  await wakes.prune(hostIo($, opts), now)
 }
 
 /** A118: editor-focus.json, written by read-compare-write against the copy this press read. */
@@ -4082,17 +4083,16 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     isBusy = true
     await ensureCheckout($, opts)
-    // A59: a prompt Hai sends starts a turn; a plugin's queued prompt (this mod's wake included) only counts once its turn
-    // runs a tool or ends, so a wake that never runs cannot pass for a turn.
+    // A59: a prompt Hai sends starts a turn; a plugin's queued prompt (this mod's wake too) counts once its turn runs a tool or ends.
     // A55: a turn starts (a prompt a plugin queued, this mod's notice prompt included, counts once the turn runs a tool or ends)
     if ((e.origin as { kind?: string } | undefined)?.kind !== 'plugin') await signalTurn($)
-    // A63 clean-up (kept by A83): Hai typed in a session whose title still carries an old decision mark (from before
-    // 0.17.0): the title goes back without it, read now (never a value kept in memory, which a reload loses).
+    // A63 clean-up (kept by A83): Hai typed in a session whose title still carries a mark from before 0.17.0: it goes back without it.
     const typed = (e.origin as { kind?: string } | undefined)?.kind
     const isOn = await readA5R($)
     const frozen = isOn && isS2 && (typed === 'composer' || typed === 'bridge') ? await freeze.prompt(hostIo($, opts)) : null // A134
     if (frozen?.toast) $.ui.toast(frozen.toast)
     if (typed === 'composer' || typed === 'bridge') {
+      if (isOn && me) await wakes.typed(wakeIo($, opts)).catch(() => undefined) // A138: a pause lifts when the person types here
       const title = await sessionTitle($)
       if (hasMark(title) && bareTitle(title)) await retitle($, bareTitle(title)).catch(() => '')
     }

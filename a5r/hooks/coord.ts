@@ -80,7 +80,7 @@ export const presetTimes = (now: number): number[] => {
 // ---------- session files (Saved/A5R/editor/<id8>.json, one writer each) ----------
 export type Mode = 'interactive' | 'unattended'
 /** What a session asked the Editor for. */
-export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean; focus?: number; waited?: number; waitAt?: number; misses?: number; movedBack?: true } // misses, movedBack: A136 (wake.ts afterMiss); focus: A118, made for the Focus that started then; waited / waitAt: A125, the ms its own live session waited (truth.ts liveWait) and when it last counted
+export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean; focus?: number; waited?: number; waitAt?: number; misses?: number; movedBack?: true; routeMisses?: number; parkedUntil?: number } // misses, movedBack, routeMisses, parkedUntil: A136 (wake.ts afterMiss); focus: A118, made for the Focus that started then; waited / waitAt: A125, the ms its own live session waited (truth.ts liveWait) and when it last counted
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }

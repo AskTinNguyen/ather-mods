@@ -19,8 +19,19 @@ export const WAKE_ANSWER_MS = 5 * MIN
 export const START_AGAIN_MS = 10 * MIN
 /** A138: after a miss of the route (a refused send) it is tried this seldom, to keep sends low. */
 export const ROUTE_AGAIN_MS = HOUR
-/** A138: while the engine's loop guard holds, the next send goes this much later. */
-export const PAUSE_MS = 15 * MIN
+/** A138: a loop pause lasts until the conductor's person types in it, or this long; one probe per this, no sooner. */
+export const PAUSE_MS = HOUR
+/** A136: refused sends after the first that a request may spend; then it rests for PARK_MS. */
+export const REFUSED_RETRIES = 2
+export const PARK_MS = 24 * HOUR
+/** A138, the night's budget, over 12 h: refused sends with no answer between them that stop every send (the route looks broken),
+ * and attempts after which what is left is kept for Editor turns. MEASURED in the engine (2.1.309, maxSelfHops): 10 forwards per
+ * prompt of the sending session, then `loop-paused`. */
+export const SEND_WINDOW_MS = 12 * HOUR
+export const REFUSED_MAX = 8
+export const SPARE_FROM = 6
+/** MEASURED in the app (4.4212, wakeWaitsForPerson): at this many wakes since its person typed the app holds a session for its person. */
+export const APP_WAKE_CAP = 10
 /** A140: a session started for work holds the one slot this long after it answers, unless it asks or holds first. */
 export const WORK_SETTLE_MS = 10 * MIN
 /** A140: what "still has Editor work" measures: asked or held within this long, not started for it within that long. */
@@ -47,26 +58,34 @@ const jsonOf = <T>(text: string | null): Partial<T> | null => {
 export const isStopped = (f: SessionFile, files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number): boolean => Boolean(f.want && keepsPlace(f.want, now)) && !f.holding && livenessOf(f.id8, files, lanes, now) !== 'alive'
 /** A136: its own A5R, running again: an answer ends what its misses said. */
 export const answered = (w: Want | null): Want | null => {
-  if (!w || (w.misses === undefined && !w.movedBack)) return w
-  const { misses: _m, movedBack: _b, ...rest } = w
+  if (!w || (w.misses === undefined && !w.movedBack && w.routeMisses === undefined && w.parkedUntil === undefined)) return w
+  const { misses: _m, movedBack: _b, routeMisses: _r, parkedUntil: _p, ...rest } = w
   return rest
 }
-/** A136: a request after a miss goes behind every other request (coord.ts queueOf). `isReal` (nobody answered a send that went,
- * or the app has no such session) counts, and a second such miss withdraws it (null); a miss of the route (a refused send, the
- * engine's loop guard) only moves it: nobody was asked. */
-export const afterMiss = (w: Want, isReal: boolean): Want | null => {
+/** What one start came to, for its request. `real`: nobody answered a send that went, or the app has no such session. `refused`:
+ * the send was refused and nobody answered. `moved`: nothing went (the engine's guard, the budget, a conductor that cannot send, a
+ * session the app holds for its person). */
+export type MissKind = 'real' | 'refused' | 'moved'
+/** A136: a request after a miss goes behind every other request (coord.ts queueOf). A real miss counts, and a second one withdraws it
+ * (null); a refused send after a real miss is a real miss. A refused send alone moves it, tried again hourly (retryAfter), and past
+ * REFUSED_RETRIES it rests for PARK_MS. A `moved` one spends nothing: nobody was asked. */
+export const afterMiss = (w: Want, kind: MissKind, now: number): Want | null => {
   const misses = w.misses ?? 0
-  if (isReal && misses >= 1) return null
-  if (!isReal && w.movedBack) return w
-  return { ...w, movedBack: true, ...(isReal ? { misses: misses + 1 } : {}) }
+  if (kind === 'moved') return w.movedBack ? w : { ...w, movedBack: true }
+  if (misses >= 1) return null
+  if (kind === 'real') return { ...w, movedBack: true, misses: 1 }
+  const routeMisses = (w.routeMisses ?? 0) + 1
+  return { ...w, movedBack: true, routeMisses, ...(routeMisses > REFUSED_RETRIES ? { parkedUntil: now + PARK_MS } : {}) }
 }
 
 // ---------- A138: how a session is reached ----------
 /** One record of the desktop app's own session list (`local_*.json`). */
-export type DeskRow = { local: string; cli: string; isArchived: boolean }
+export type DeskRow = { local: string; cli: string; isArchived: boolean; wakes: number; isHeldForPerson: boolean }
 export const parseDeskRow = (text: string | null): DeskRow | null => {
-  const v = jsonOf<{ sessionId: unknown; cliSessionId: unknown; isArchived: unknown }>(text)
-  return typeof v?.sessionId === 'string' && typeof v.cliSessionId === 'string' ? { local: v.sessionId, cli: v.cliSessionId.toLowerCase(), isArchived: v.isArchived === true } : null
+  const v = jsonOf<{ sessionId: unknown; cliSessionId: unknown; isArchived: unknown; sideSessionWakesSinceUserMessage: unknown; stoppedUntilPersonSends: unknown }>(text)
+  if (typeof v?.sessionId !== 'string' || typeof v.cliSessionId !== 'string') return null
+  const wakes = typeof v.sideSessionWakesSinceUserMessage === 'number' ? v.sideSessionWakesSinceUserMessage : 0
+  return { local: v.sessionId, cli: v.cliSessionId.toLowerCase(), isArchived: v.isArchived === true, wakes, isHeldForPerson: wakes >= APP_WAKE_CAP || Boolean(v.stoppedUntilPersonSends) }
 }
 /** The folder of those records on this machine, from the engine's own environment; null outside the desktop app. */
 export const deskDir = (appData: string | undefined, account: string | undefined, org: string | undefined): string | null => (appData && account && org ? `${appData.replace(/\\/g, '/')}/Claude/claude-code-sessions/${account}/${org}` : null)
@@ -108,8 +127,10 @@ export const turnToStart = (x: GrantInput, skip: (f: SessionFile) => boolean): S
   }
   return null
 }
-/** A136 / A138: how long after an attempt a stopped request is tried again. */
+/** A136 / A138: how long after an attempt a stopped request is tried again: never faster than hourly after a miss of the route. */
 export const retryAfter = (w: Want): number => (w.movedBack && !w.misses ? ROUTE_AGAIN_MS : START_AGAIN_MS)
+/** A136: whether a stopped request rests now: parked, or tried too lately. */
+export const isResting = (w: Want, triedAt: number, now: number): boolean => (w.parkedUntil ?? 0) > now || now - triedAt < retryAfter(w)
 
 // ---------- A137: what else a stopped session waits on ----------
 /** Saved/A5R/refused/<id8>.json, written by the refused session itself. */
@@ -123,19 +144,29 @@ export const stoppedRefusals = <R extends Refusal>(rs: readonly R[], files: read
   rs.filter(r => now - r.at < REFUSAL_KEEP_MS && files.some(f => f.id8 === r.id8 && f.heartbeatAt > 0) && livenessOf(r.id8, files, lanes, now) !== 'alive').sort((a, b) => a.at - b.at || a.id8.localeCompare(b.id8))
 
 // ---------- A140: who still has Editor work ----------
-/** Last words that close a session's Editor work: done, nothing pending, or it needs the person (and A69's, judge.ts). */
-const FINISHED_WORDS = /\b(done|finished|completed?|shipped|merged|nothing (is )?(pending|left|more)|no (more |further )?(editor )?work|needs? (the person|hai|you|your)|waiting (for|on) (hai|you|the person)|over to you)\b|\bxong\b|hoàn thành/i
+/** Read without Vietnamese diacritics: a session's sign-off may carry them or not. */
+const plain = (text: string): string => text.normalize('NFD').replace(/\p{M}/gu, '').replace(/đ/gi, 'd')
+/** Last words that close a session's Editor work: done or nothing pending (and A69's, judge.ts). */
+const FINISHED_WORDS = /\b(done|finished|completed?|shipped|merged|nothing (is )?(pending|left|more)|no (more |further )?(editor )?work|over to you|xong|hoan thanh|hoan tat|khong con)\b/i
+/** Last words that hand over to the person: they finish it even when they name the Editor. */
+const NEEDS_PERSON = /\b(needs? (the person|hai|you|your)|waiting (for|on) (hai|you|the person)|cho (anh|em|hai|ban)|can (anh|hai))\b/i
 const lastWords = (events: readonly TranscriptEvent[]): string | undefined => events.filter(e => e.role === 'assistant' && e.text).pop()?.text
 /** A140: whether its own last words finish it, by the A65 judge's own readings (a question open to the person, its work said
  * over) and the words above; words that wait for the Editor do not, whatever came before them; no words at all are unknown, and
  * unknown is finished (nothing is started on a guess). */
 export const isFinished = (events: readonly TranscriptEvent[]): boolean => {
   const last = lastWords(events)
-  if (!last || openQuestion(events)) return true
-  return !saysWaitingForEditor(last) && (saysFinished(last) || FINISHED_WORDS.test(last))
+  if (!last || openQuestion(events) || NEEDS_PERSON.test(plain(last))) return true
+  return !saysWaitingForEditor(last) && (saysFinished(last) || FINISHED_WORDS.test(plain(last)))
 }
-/** A140: when this session last asked for or held the Editor (0: never on record). */
-export const editorSignAt = (f: SessionFile, leases: readonly LeaseRecord[]): number => Math.max(f.askedAt ?? 0, f.editorUseAt ?? 0, f.holding?.since ?? 0, f.want?.requestedAt ?? 0, ...leases.filter(l => l.id8 === f.id8).map(l => l.endAt))
+/** A140: when this session last asked for or held the Editor (0: never on record). A lease it released itself counts from its
+ * grant: ending its work normally renews nothing. */
+export const editorSignAt = (f: SessionFile, leases: readonly LeaseRecord[]): number => Math.max(f.askedAt ?? 0, f.editorUseAt ?? 0, f.holding?.since ?? 0, f.want?.requestedAt ?? 0, ...leases.filter(l => l.id8 === f.id8).map(l => (l.endReason === 'released' ? l.grantedAt : l.endAt)))
+/** A136: the lease a session started for its turn took since: `idle` when it ended released as idle with no Editor use. */
+export const leaseSince = (leases: readonly LeaseRecord[], id8: string, at: number): 'idle' | 'used' | null => {
+  const l = leases.filter(r => r.id8 === id8 && r.grantedAt >= at).pop()
+  return !l ? null : l.endReason === 'idle' && l.firstEditorSeenAt === null ? 'idle' : 'used'
+}
 /** A140: the sessions that may still have Editor work, the most recently active first: not asking, not holding, nothing
  * running, idle (or stopped), active within a day, not archived, and no turn since its request was withdrawn (by the person, by
  * age or by two misses). Whether it was tried within 2 h is the conductor's (wakehost.ts workStep: A141 still counts those). */
@@ -196,14 +227,40 @@ export type Start = { id8: string; lane: string; why: WakeWhy; at: number; reque
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
 /** `triedAt`: when each session was last tried, whatever for: the one record of attempts; `answeredAt`: when it last answered a
  * start for work (A140: it said no until it asks). */
-export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; answeredAt: Record<string, number>; pausedUntil: number; pausedSince: number; pausedBy?: string; lastFailure?: string }
-export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, answeredAt: {}, pausedUntil: 0, pausedSince: 0 }
+/** `spent`: the night's attempts (A138's budget). `turnAt`, `idleStarts`: when each was last started for its turn, and how many of
+ * those leases in a row ended idle (A136). `pausedBy`, `pausedId`: the name to type in, and its session. */
+export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; answeredAt: Record<string, number>; turnAt: Record<string, number>; idleStarts: Record<string, number>; spent: { at: number; refused?: true }[]; pausedUntil: number; pausedSince: number; pausedBy?: string; pausedId?: string; lastFailure?: string }
+export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, answeredAt: {}, turnAt: {}, idleStarts: {}, spent: [], pausedUntil: 0, pausedSince: 0 }
+/** A138: why the night's budget holds this send (null: it does not). */
+export const budgetHold = (w: WakeFile, why: WakeWhy, now: number): string | null => {
+  const spent = w.spent.filter(s => now - s.at < SEND_WINDOW_MS)
+  const refused = spent.filter(s => s.refused).length
+  if (refused >= REFUSED_MAX) return `${refused} sends refused with no answer: the route looks broken, nothing more goes until a session answers`
+  return why !== 'turn' && spent.length >= SPARE_FROM ? `${spent.length} sends tonight: what is left is kept for Editor turns` : null
+}
 /** A139 / A141: what status.json says of them. */
 export type WakeStatus = { stopped: number; idleWithWork: { run: number; days: Record<string, number>; nights: Record<string, number> }; starting: { lane: string; id8: string; why: WakeWhy; at: number } | null; pausedUntil: number | null }
 export const RECENT_KEEP = 40
 export const parseWake = (text: string | null): WakeFile => {
   const v = jsonOf<WakeFile>(text)
-  return v ? { v: 1, current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null, recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [], triedAt: v.triedAt && typeof v.triedAt === 'object' ? v.triedAt : {}, answeredAt: v.answeredAt && typeof v.answeredAt === 'object' ? v.answeredAt : {}, pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0, pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0, ...(typeof v.pausedBy === 'string' ? { pausedBy: v.pausedBy } : {}), ...(typeof v.lastFailure === 'string' ? { lastFailure: v.lastFailure } : {}) } : NO_WAKE
+  if (!v) return NO_WAKE
+  const map = (m: unknown): Record<string, number> => (m && typeof m === 'object' ? (m as Record<string, number>) : {})
+  const word = (k: 'pausedBy' | 'pausedId' | 'lastFailure') => (typeof v[k] === 'string' ? { [k]: v[k] } : {})
+  return {
+    v: 1,
+    current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null,
+    recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [],
+    triedAt: map(v.triedAt),
+    answeredAt: map(v.answeredAt),
+    turnAt: map(v.turnAt),
+    idleStarts: map(v.idleStarts),
+    spent: Array.isArray(v.spent) ? v.spent.filter(s => s && typeof s.at === 'number') : [],
+    pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0,
+    pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0,
+    ...word('pausedBy'),
+    ...word('pausedId'),
+    ...word('lastFailure'),
+  }
 }
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })
 /** The next conductor: the first live A5R that conducts, those that can start a session (in the desktop app) first, then by id. */
@@ -263,6 +320,11 @@ export const idleLine = (i: IdleFile, x: { now: number; queued: number; isFree: 
   const night = lastNight ? (i.nights[lastNight] ?? 0) : 0
   const freeMin = x.isFree && i.freeSince ? Math.floor((x.now - i.freeSince) / MIN) : 0
   return [...(freeMin >= IDLE_ALARM_MIN && x.queued === 0 ? [`free ${freeMin} min, nobody queued`] : []), ...(today + night > 0 ? [`idle with work: ${today} min today, ${night} min last night`] : [])].join(' · ')
+}
+/** A135 / Fable 5: live sessions on an A5R before 0.28.0: they still withdraw stopped requests at 2 h, and do not conduct. */
+export const oldLine = (files: readonly SessionFile[], now: number): string => {
+  const old = files.filter(f => f.conducts !== true && now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.lane)
+  return old.length > 0 ? `older A5R in ${old.join(', ')}: reload them (they withdraw stopped requests at 2 h)` : ''
 }
 const WHY_WORDS: Record<WakeWhy, string> = { turn: 'its turn', git: 'git free', freeze: 'freeze lifted', work: 'Editor work' }
 /** A139: what ran and what was started last night (the night running at `now` before 08:00, else the one that ended that morning); '' when nothing did. */

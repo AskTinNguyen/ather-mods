@@ -411,7 +411,7 @@ test('A134: every S2 session draws the band above Ather\'s during the freeze, pe
   expect(text(await $.ui.render(BAND as never))).toContain('⏸ Sync main · testing (time unknown) · new Editor/build work waits')
   w.put(`${HF}/sync.json`, JSON.stringify({ ...JSON.parse(w.read(`${HF}/sync.json`)), state: 'done', endedAt: w.clock.now(), note: 'merged; 291 passed' }))
   await w.clock.advance(MIN)
-  expect(await $.ui.render(BAND as never)).toEqual(atherBand)
+  expect(await $.ui.render(BAND as never)).toMatchObject(atherBand) // an engine may stamp its own `part` on the element
 })
 
 test('A134: a person\'s prompt in the freeze carries one context line and shows one toast per sync; outside it neither', opts(), async ($, on) => {
