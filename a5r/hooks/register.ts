@@ -17,7 +17,8 @@ import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, dis
 import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, str, wantOf, appendCapped, endLease, holderNotices, holderText, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { freeWindowOf, idleMsOf, isIdle } from './nudge.ts'
-import { conductor, type WakeIo } from './wakehost.ts'
+import { nudges as nudgeSteps, type NudgeIo } from './nudgehost.ts'
+import { conductor, isSentBy, type WakeIo } from './wakehost.ts'
 import { answered } from './wake.ts'
 import { overviewLine, overviewOf, withoutModOf } from './overview.ts'
 import { actOf, recordTarget, type Recorded } from './acts.ts'
@@ -799,7 +800,7 @@ async function writeMe($: Engine): Promise<void> {
   if (!me) return
   const now = await $.clock.now()
   const { sharedShellAt: _was, ...rest } = me
-  me = { ...rest, want: answered(rest.want), ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), ...(rest.want ? { askedAt: rest.want.requestedAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, sends: wakes.canSend() ? (true as const) : undefined, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...rest, want: answered(rest.want), ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, sends: wakes.canSend() ? (true as const) : undefined, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir()}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -1419,6 +1420,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   await judgeStep($, opts, now).catch(err => $.ui.log(`a5r: judge: ${String(err)}`, { to: 'debug' }))
   const window = freeWindowOf(lock, claimNow(now)) // A91: the free window, if the Editor is free
   await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
+  if (me) await nudgeStep(wakeIo($, opts), { all: [{ ...me, agents: agentsNow ?? me.agents }, ...peers], lanes, now, window, queued: liveQueueNow(now).length, freeGb: probe?.freeGb ?? null }).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
   await turns.tick(hostIo($, opts), now).then(() => freeze.tick(hostIo($, opts), now)).catch(err => $.ui.log(`a5r: git turn, freeze steps: ${String(err)}`, { to: 'debug' })) // A128-A134
   await syncStep($, opts, now)
   await orphanStep($, opts, now).catch(err => $.ui.log(`a5r: orphan: ${String(err)}`, { to: 'debug' })) // A123
@@ -1705,7 +1707,7 @@ async function tellReleased($: Engine, opts: Opts, held: LockLine, r: Released):
   if (held.id8 === me8 && after) me = after
 }
 
-// ---------- A91: a nudge when the Editor comes free: the conductor sends it (wakehost.ts), its target's own A5R delivers it ----------
+// ---------- A91: a nudge to waiting idle sessions when the Editor comes free (nudgehost.ts) ----------
 /** A65 / A91 (review): the last 64 KB of a session's record, never the whole file (a record runs to tens of MB): read whole
  * only when that small, else its last bytes by PowerShell (the first, partial line is dropped by parseTail). */
 const RECORD_TAIL_BYTES = 64 * 1024
@@ -2849,7 +2851,12 @@ const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   cwd: () => $.session.cwd(),
   sessionId: () => $.session.id(),
 })
-const wakeIo = ($: Engine, opts: Opts): WakeIo => ({
+const nudgeStep = nudgeSteps()
+const wakeIo = ($: Engine, opts: Opts): WakeIo & NudgeIo => ({
+  tail: async session => recordTail($, `${await recordsDir($, opts)}/${session}.jsonl`),
+  nudgedAts: async id8 => (await readInbox($, opts, nudges, id8)).map(n => n.at),
+  nudge: (id8, window, now, freeGb) => appendInbox($, opts, nudges, id8, { window, at: now, by: me8, freeGb }),
+  nudgeLog: (f, note, now) => orchestrateLog($, opts, { at: now, rule: 'A91-nudge', lane: f.lane, id8: f.id8, procs: (probe?.procs ?? []).map(p => p.name), liveness: 'alive', lastTurnAt: f.lastTurnAt ?? null, agents: f.agents ?? null, build: false, acted: true, note }).catch(() => undefined),
   ...hostIo($, opts),
   call: input => new Promise(done => { // the one send (wake.ts sendInput); a call a prompt holds stops at a minute
     $.clock.after(60_000, () => done(null))
@@ -2858,17 +2865,8 @@ const wakeIo = ($: Engine, opts: Opts): WakeIo => ({
   writeChecked: (path, expected, text) => writeChecked($, path, expected, text).then(w => w.isWritten),
   deskPlace: async () => ({ appData: await $.env.get('APPDATA').catch(() => undefined), account: await $.env.get('CLAUDE_CODE_ACCOUNT_UUID').catch(() => undefined), org: await $.env.get('CLAUDE_CODE_ORGANIZATION_UUID').catch(() => undefined) }),
   log: e => orchestrateLog($, opts, e).catch(() => undefined),
-  notify: async text => {
-    try {
-      return (await $.ui.notify(text, { title: 'A5R' })).isSent // an engine without it: the toast
-    } catch {
-      return false
-    }
-  },
+  notify: text => isSentBy(() => $.ui.notify(text, { title: 'A5R' })),
   toast: text => $.ui.toast(text, { timeoutMs: 15_000 }),
-  events: async session => parseTail(await recordTail($, `${await recordsDir($, opts)}/${session}.jsonl`)),
-  nudgedAt: async id8 => Math.max(0, ...(await readInbox($, opts, nudges, id8)).map(n => n.at)),
-  nudge: (id8, window, now, freeGb) => appendInbox($, opts, nudges, id8, { window, at: now, by: me8, freeGb }),
   isGitFree: now => turns.isFree(hostIo($, opts), now),
   heldNeeds: async now => {
     const step = await freeze.stepNow(hostIo($, opts), syncFile, now)

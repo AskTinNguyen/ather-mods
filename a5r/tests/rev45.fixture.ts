@@ -42,11 +42,6 @@ export const KEEP = (): boolean => false
 export const fakeIo = (disk: Map<string, string>, o: Record<string, unknown> = {}): WakeIo => ({ now: async () => NOW, read: async (p: string) => disk.get(p) ?? null, write: async (p: string, t: string) => void disk.set(p, t), stat: async () => null, list: async () => [], run: async () => null, call: async () => null, deskPlace: async () => ({}), writeChecked: async (p: string, _e: string | null, t: string) => (disk.set(p, t), true), claimAlert: async () => true, log: async () => undefined, notify: async () => false, toast: () => undefined, events: async () => [], nudgedAt: async () => 0, nudge: async () => undefined, isGitFree: async () => true, heldNeeds: async () => new Set(), ...o }) as never
 export const beat = (w: ReturnType<typeof world>, id8: string) => put(w, { ...fileOf(w, id8), heartbeatAt: w.clock.now() + 1 })
 
-export const worker = (w: ReturnType<typeof world>, id8: string, words: string, o: Partial<SessionFile> = {}) => {
-  put(w, stoppedFile(id8, { askedAt: NOW - 5 * H, ...o }))
-  desk(w, id8)
-  w.put(`${RECORDS}/${SID(id8)}.jsonl`, said(words))
-}
 
 export const app = (extra: { name: string; row: Record<string, unknown> }[]) => {
   const disk = new Map(extra.map(e => [`app/Claude/claude-code-sessions/a/o/${e.name}`, JSON.stringify(e.row)]))

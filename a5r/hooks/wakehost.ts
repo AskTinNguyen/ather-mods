@@ -2,14 +2,12 @@
 // the engine's calls per call). The conductor's minute: its claim, the start in flight, whose turn or what else is due, the
 // count and the alarm. A lease is never written here: a started session takes the lock itself, through decide, once its own
 // process runs, so its clock starts when it answers and a failed send cannot touch one. The rules are wake.ts's.
-import { claimIn, hhmm, livenessOf, parseSessionFile, queueIn, type GrantInput, type OrchestrateEvent, type SessionFile, type Want } from './coord.ts'
+import { claimIn, hhmm, parseSessionFile, queueIn, type GrantInput, type OrchestrateEvent, type SessionFile, type Want } from './coord.ts'
 import type { FileIo } from './hostio.ts'
-import type { TranscriptEvent } from './judge.ts'
 import type { LeaseRecord } from './lease.ts'
-import { NUDGE_MAX } from './nudge.ts'
 import { PRUNE_MAX, pruneArgv } from './truth.ts'
 import type { Need } from './syncplan.ts'
-import { CONDUCTOR_FILE, IDLE_FILE, NO_IDLE, NO_WAKE, PARK_MS, PAUSE_MS, REFUSAL_KEEP_MS, REFUSED_RETRIES, REFUSED_DIR, SEND_WINDOW_MS, WAKE_ANSWER_MS, WAKE_FILE, WORK_AGAIN_MS, WORK_RECENT_MS, WORK_SETTLE_MS, afterMiss, alarmText, budgetHold, conductorOf, deskDir, idleLine, isAlarmDue, isResting, isStopped, leaseSince, mayConduct, nextIdle, nightLine, oldLine, parseConductor, parseDeskRow, parseIdle, parseRefusal, parseWake, pausedCause, readSend, refusalMessage, sendInput, stoppedRefusals, turnMessage, turnToStart, withRow, wordsOf, workFits, workMessage, workPlan, workPool, type DeskRow, type IdleFile, type MissKind, type Refusal, type WakeFile, type WakeOutcome, type WakeStatus, type WakeWhy, type WorkFact, type Words } from './wake.ts'
+import { CONDUCTOR_FILE, IDLE_FILE, NO_IDLE, NO_WAKE, PARK_MS, PAUSE_MS, REFUSAL_KEEP_MS, REFUSED_RETRIES, REFUSED_DIR, SEND_WINDOW_MS, WAKE_ANSWER_MS, WAKE_FILE, TRIED_KEEP_MS, TURN_KEEP_MS, afterMiss, alarmText, budgetHold, conductorOf, deskDir, idleLine, isAlarmDue, isResting, isStopped, leaseSince, mayConduct, nextIdle, nightLine, oldLine, parseConductor, parseDeskRow, parseIdle, parseRefusal, parseWake, pausedCause, readSend, refusalMessage, sendInput, stoppedRefusals, turnMessage, turnToStart, withRow, type DeskRow, type IdleFile, type MissKind, type Refusal, type WakeFile, type WakeOutcome, type WakeStatus, type WakeWhy } from './wake.ts'
 
 /** The engine's calls for one minute. */
 export type WakeIo = FileIo & {
@@ -24,11 +22,6 @@ export type WakeIo = FileIo & {
   /** A native notification; false when the engine could not raise one. */
   notify: (text: string) => Promise<boolean>
   toast: (text: string) => void
-  /** The tail of a session's own transcript. */
-  events: (session: string) => Promise<TranscriptEvent[]>
-  /** A91: the last nudge in a session's inbox, and one more written there. */
-  nudgedAt: (id8: string) => Promise<number>
-  nudge: (id8: string, window: string, now: number, freeGb: number | null) => Promise<void>
   /** Whether what a refusal waited for is free now. */
   isGitFree: (now: number) => Promise<boolean>
   heldNeeds: (now: number) => Promise<ReadonlySet<Need>>
@@ -44,19 +37,27 @@ export type WakeState = {
   titleOf: (id8: string) => string
 }
 
-/** What one minute's step came to: a session was started (or told), the work is held back and why, or nothing waits. */
+/** Whether the engine raised a native notification; an engine without one: no, and the alarm is a toast. */
+export const isSentBy = async (notify: () => Promise<{ isSent: boolean }>): Promise<boolean> => {
+  try {
+    return (await notify()).isSent
+  } catch {
+    return false
+  }
+}
+
+/** What one minute's step came to: a session was started, the work is held back and why, or nothing waits: A141's whole measure of work is a request or an open refusal. */
 type Step = { kind: 'started' } | { kind: 'held'; cause: string } | { kind: 'nothing' }
 const NOTHING: Step = { kind: 'nothing' }
 const STARTED: Step = { kind: 'started' }
 const held = (cause: string): Step => ({ kind: 'held', cause })
 
 export const conductor = (h: WakeState) => {
-  /** In this process: the last files read for every session's panel, the desktop's records by CLI id, and the tails read. */
+  /** In this process: the last files read for every session's panel, and the desktop's records by CLI id. */
   let wake: WakeFile = NO_WAKE
   let idle: IdleFile = NO_IDLE
   let isDeskKnown = false
   const desk = new Map<string, { row: DeskRow; mtime: number; name: string }>()
-  const wordsAt = new Map<string, { turn: number; words: Words }>() // id8 -> what its last words said, read once per turn
   const wakePath = (): string => `${h.dir()}/${WAKE_FILE}`
   const idlePath = (): string => `${h.dir()}/${IDLE_FILE}`
   const myName = (): string => h.titleOf(h.me8()) || (h.me()?.lane ?? h.me8())
@@ -65,7 +66,7 @@ export const conductor = (h: WakeState) => {
   const event = (f: { lane: string; id8: string; lastTurnAt?: number }, rule: OrchestrateEvent['rule'], note: string, now: number, acted = true): OrchestrateEvent => ({ at: now, rule, lane: f.lane, id8: f.id8, procs: [], liveness: 'gone', lastTurnAt: f.lastTurnAt ?? null, agents: null, build: false, acted, note })
   const save = async (io: WakeIo, w: WakeFile, now: number): Promise<void> => {
     const recent = (m: Record<string, number>, keepMs: number) => Object.fromEntries(Object.entries(m).filter(([, at]) => now - at < keepMs)) // their only deleter
-    wake = { ...w, triedAt: recent(w.triedAt, WORK_AGAIN_MS), answeredAt: recent(w.answeredAt, 2 * WORK_RECENT_MS), turnAt: recent(w.turnAt, 2 * WORK_RECENT_MS), spent: w.spent.filter(s => now - s.at < SEND_WINDOW_MS) }
+    wake = { ...w, triedAt: recent(w.triedAt, TRIED_KEEP_MS), turnAt: recent(w.turnAt, TURN_KEEP_MS), spent: w.spent.filter(s => now - s.at < SEND_WINDOW_MS) }
     await io.write(wakePath(), JSON.stringify(wake))
   }
 
@@ -87,26 +88,26 @@ export const conductor = (h: WakeState) => {
   const archived = (): ReadonlySet<string> => new Set([...desk.values()].filter(d => d.row.isArchived).map(d => d.row.cli.slice(0, 8)))
 
   /** Another session's request by read-compare-write: `change` of what it reads now; nothing when it asks anew or has answered
-   * since `since`. A withdrawal is noted for A140: a session with its request gone is not started for work on the same words. */
-  const rewrite = async (io: WakeIo, s: { id8: string; requestedAt: number }, since: number, change: (want: Want) => Want | null, now: number): Promise<{ isWritten: boolean; to: Want | null }> => {
+   * since `since`. */
+  const rewrite = async (io: WakeIo, s: { id8: string; requestedAt: number }, since: number, change: (want: Want) => Want | null): Promise<{ isWritten: boolean; to: Want | null }> => {
     const path = `${h.dir()}/editor/${s.id8}.json`
     const raw = await io.read(path)
     const cur = parseSessionFile(raw)
     if (!cur?.want || cur.want.requestedAt !== s.requestedAt || cur.heartbeatAt > since) return { isWritten: false, to: null }
     const to = change(cur.want)
     if (to === cur.want) return { isWritten: false, to }
-    return { isWritten: await io.writeChecked(path, raw, JSON.stringify({ ...cur, want: to, askedAt: s.requestedAt, ...(to === null ? { withdrawnAt: now } : {}) })), to }
+    return { isWritten: await io.writeChecked(path, raw, JSON.stringify({ ...cur, want: to })), to }
   }
 
   /** A136: its request after a miss (wake.ts afterMiss); a withdrawal and a rest are logged, with the writer. */
   const miss = async (io: WakeIo, s: { id8: string; lane: string; requestedAt: number }, since: number, kind: MissKind, why: string, now: number): Promise<void> => {
-    const r = await rewrite(io, s, since, w => afterMiss(w, kind, now), now)
+    const r = await rewrite(io, s, since, w => afterMiss(w, kind, now))
     if (!r.isWritten) return
     if (r.to === null) await io.log(event(s, 'withdrawn', `its request withdrawn by ${myName()}: started twice with no answer (${why})`, now))
     else if (r.to.parkedUntil === now + PARK_MS) await io.log(event(s, 'woke', `turn: parked until ${hhmm(r.to.parkedUntil)} tomorrow: ${REFUSED_RETRIES + 1} sends refused with no answer`, now, false))
   }
 
-  /** A137 / A136 / A140: one start, sent by one A5R (the alert claim). A refused send stands until the heartbeat says (a send can
+  /** A137 / A136: one start, sent by one A5R (the alert claim). A refused send stands until the heartbeat says (a send can
    * report undelivered and still work). No address, or the engine's loop guard: nothing went, a miss now. */
   const start = async (io: WakeIo, s: { f: SessionFile; why: WakeWhy; text: string; requestedAt: number | null }, now: number): Promise<Step> => {
     const turn = s.requestedAt === null ? null : { id8: s.f.id8, lane: s.f.lane, requestedAt: s.requestedAt }
@@ -159,10 +160,8 @@ export const conductor = (h: WakeState) => {
     return STARTED
   }
 
-  /** The start in flight: answered (a heartbeat newer than it), missed after 5 min, or still waited for (one at a time). A
-   * session started for work holds the slot until it asks, holds or has had WORK_SETTLE_MS, so the next one starts on what it
-   * does, not on its process coming up. True while it holds this minute; settling one ends the minute too: what this pass read
-   * of its files is old now. */
+  /** The start in flight: answered (a heartbeat newer than it), missed after 5 min, or still waited for (one at a time). True while
+   * it holds this minute; settling one ends the minute too: what this pass read of its files is old now. */
   const settle = async (io: WakeIo, x: GrantInput, now: number): Promise<boolean> => {
     const cur = wake.current
     if (!cur) return false
@@ -171,14 +170,9 @@ export const conductor = (h: WakeState) => {
     const isAnswered = Boolean(f && f.heartbeatAt > cur.at)
     if (!isAnswered && now - cur.at < WAKE_ANSWER_MS) return true
     const outcome: WakeOutcome = isAnswered ? 'answered' : 'no-answer'
-    const row = { at: now, id8: cur.id8, lane: cur.lane, why: cur.why, outcome }
-    if (cur.answeredAt === undefined) await io.log(event(cur, 'woke', `${cur.why}: ${outcome} ${Math.round((now - cur.at) / 60_000)} min after the start at ${hhmm(cur.at)}`, now))
-    if (isAnswered && cur.why === 'work' && !f?.want && !f?.holding && now - (cur.answeredAt ?? now) < WORK_SETTLE_MS) {
-      if (cur.answeredAt === undefined) await save(io, { ...withRow(wake, row), current: { ...cur, answeredAt: now }, answeredAt: { ...wake.answeredAt, [cur.id8]: now } }, now)
-      return true
-    }
+    await io.log(event(cur, 'woke', `${cur.why}: ${outcome} ${Math.round((now - cur.at) / 60_000)} min after the start at ${hhmm(cur.at)}`, now))
     const answers = isAnswered ? { spent: wake.spent.map(s => ({ at: s.at })) } : {} // an answer: the route works
-    await save(io, { ...(cur.answeredAt === undefined ? withRow(wake, row) : wake), ...answers, current: null, ...(isAnswered && cur.why === 'work' && cur.answeredAt === undefined ? { answeredAt: { ...wake.answeredAt, [cur.id8]: now } } : {}), ...(!isAnswered && cur.refused ? { lastFailure: `the send was refused: ${cur.refused}` } : {}) }, now)
+    await save(io, { ...withRow(wake, { at: now, id8: cur.id8, lane: cur.lane, why: cur.why, outcome }), ...answers, current: null, ...(!isAnswered && cur.refused ? { lastFailure: `the send was refused: ${cur.refused}` } : {}) }, now)
     if (!isAnswered && cur.requestedAt !== null) await miss(io, { id8: cur.id8, lane: cur.lane, requestedAt: cur.requestedAt }, cur.at, cur.refused === undefined ? 'real' : 'refused', 'no-answer', now)
     return true
   }
@@ -198,45 +192,15 @@ export const conductor = (h: WakeState) => {
       return r ? [{ ...r, ...o }] : []
     })
     const off = archived()
-    for (const r of stoppedRefusals(rs, x.files, x.lanes, now)) {
+    const open = stoppedRefusals(rs, x.files, x.lanes, now).filter(r => !off.has(r.id8))
+    for (const r of open) {
       const f = x.files.find(o => o.id8 === r.id8)
-      if (!f || off.has(f.id8) || !desk.has(f.session.toLowerCase()) || !(await isFreed(io, r, x, now))) continue // no record: an app conductor can still act on it
+      if (!f || !desk.has(f.session.toLowerCase()) || !(await isFreed(io, r, x, now))) continue // no record: an app conductor can still act on it
       const step = await start(io, { f, why: r.kind, text: refusalMessage(r), requestedAt: null }, now)
       if (step.kind === 'started') await io.writeChecked(r.path, r.raw, 'null') // a pause or a handover spends no refusal
       return step // one at a time
     }
-    return NOTHING
-  }
-
-  /** A140 / A91: the facts of the pool (its last words read once per turn), then what wake.ts workPlan says: tell, start, or hold. */
-  const workStep = async (io: WakeIo, x: GrantInput, now: number, again: boolean): Promise<Step> => {
-    const window = h.freeWindow(now)
-    if (!window) return NOTHING
-    const facts: WorkFact[] = []
-    for (const f of workPool({ files: x.files, now, archived: archived() })) {
-      const turn = f.lastTurnAt ?? 0
-      if (wordsAt.get(f.id8)?.turn !== turn) {
-        const events = await io.events(f.session)
-        if (events.length === 0) continue // unread is not finished for the whole turn: read again next minute
-        wordsAt.set(f.id8, { turn, words: wordsOf(events) })
-      }
-      const words = wordsAt.get(f.id8)?.words
-      if (words) facts.push({ f, words, toldAt: await io.nudgedAt(f.id8), triedAt: wake.triedAt[f.id8] ?? 0, answeredAt: wake.answeredAt[f.id8] ?? 0, isAlive: livenessOf(f.id8, x.files, x.lanes, now) === 'alive', hasRecord: desk.has(f.session.toLowerCase()), fits: workFits(x, f) })
-    }
-    const plan = workPlan(facts, { now, leases: h.leases(), again, nameOf })
-    for (const f of plan.tell) {
-      if (!(await claimNudge(io, window, f.id8))) continue
-      await io.nudge(f.id8, window, now, h.freeGb())
-      await io.log({ ...event(f, 'A91-nudge', `the Editor is free (window ${window}), nobody queued; told through its inbox`, now), liveness: 'alive', agents: f.agents ?? null })
-    }
-    if (plan.start) return start(io, { f: plan.start, why: 'work', text: workMessage(h.freeGb()), requestedAt: null }, now)
-    return plan.held ? held(plan.held) : NOTHING
-  }
-  /** A91: one nudge target per window and one of the window's 3 slots, each claimed. */
-  const claimNudge = async (io: WakeIo, window: string, id8: string): Promise<boolean> => {
-    if (!(await io.claimAlert(`nudge-${window}-${id8}`))) return false
-    for (let k = 0; k < NUDGE_MAX; k += 1) if (await io.claimAlert(`nudge-${window}-slot-${k}`)) return true
-    return false
+    return open.length > 0 ? held(`${open.length} stopped session${open.length === 1 ? ' waits' : 's wait'} for what refused them`) : NOTHING
   }
 
   /** A141: logged, then a native notification when the engine can, else a toast. */
@@ -262,34 +226,28 @@ export const conductor = (h: WakeState) => {
     await save(io, { ...wake, turnAt, idleStarts: { ...wake.idleStarts, [f.id8]: count } }, now)
     const s = { id8: f.id8, lane: f.lane, requestedAt: f.want.requestedAt }
     if (count >= 2) {
-      await rewrite(io, s, now, () => null, now)
+      await rewrite(io, s, now, () => null)
       await io.log(event(f, 'withdrawn', `its request withdrawn by ${myName()}: two leases in a row idle with no Editor use after a start`, now))
     } else await miss(io, s, now, 'real', 'its lease went idle with no Editor use', now)
     return true
   }
 
-  /** What the conductor does in its minute: one start at a time. `again`: A141's one more try, the 2 h rule aside. */
+  /** What the conductor does in its minute: one start at a time. `again`: A141's one more try, the wait before a retry aside. */
   const act = async (io: WakeIo, x: GrantInput, now: number, again = false): Promise<Step> => {
     const inFlight = wake.current
     if (await settle(io, x, now)) return held(`${inFlight?.lane} was started at ${hhmm(inFlight?.at ?? now)} and has not asked yet`)
     const off = archived()
-    const resting = (f: SessionFile): boolean => off.has(f.id8) || (f.want !== null && isStopped(f, x.files, x.lanes, now) && isResting(f.want, wake.triedAt[f.id8] ?? 0, now))
-    const open = { ...x, files: x.files.filter(f => !resting(f)) } // what rests blocks nobody, and no start for work
+    const resting = (f: SessionFile): boolean => off.has(f.id8) || (f.want !== null && isStopped(f, x.files, x.lanes, now) && isResting(f.want, wake.triedAt[f.id8] ?? 0, now, again))
     const turn = turnToStart(x, resting)
     if (turn?.want) {
       if (await idleLoop(io, turn, now)) return held(`${turn.lane} let its last lease go idle`)
       const minutes = x.manual.minutes[turn.id8] ?? turn.want.minutes
-      const step = await start(io, { f: turn, why: 'turn', text: turnMessage(turn.want, minutes, now), requestedAt: turn.want.requestedAt }, now)
-      if (wake.pausedUntil > now) await workStep(io, open, now, again) // the guard stops sends, not a live session's inbox
-      return step
+      return start(io, { f: turn, why: 'turn', text: turnMessage(turn.want, minutes, now), requestedAt: turn.want.requestedAt }, now)
     }
     const refused = await refusalStep(io, x, now)
     if (refused.kind !== 'nothing') return refused
     const queued = queueIn(x)
-    const heldBack = held(wake.lastFailure ?? `${queued.length} queued, held back by the Editor's gates (memory ${h.freeGb() ?? '?'} GB)`)
-    if (queued.some(f => !isStopped(f, x.files, x.lanes, now))) return heldBack
-    const step = await workStep(io, open, now, again) // stopped requests its gates hold back use no turn: a session whose work fits goes on
-    return step.kind === 'nothing' && queued.length > 0 ? heldBack : step
+    return queued.length > 0 ? held(wake.lastFailure ?? `${queued.length} queued, held back by the Editor's gates (memory ${h.freeGb() ?? '?'} GB)`) : NOTHING
   }
 
   const stoppedNow = (now: number): number => {
@@ -354,7 +312,7 @@ export const conductor = (h: WakeState) => {
       if (old.length > 0) await io.run(pruneArgv(dir, old), 60_000)
     },
     /** A135: its request withdrawn, by the person or by age. */
-    withdraw: async (io: WakeIo, id8: string, requestedAt: number, now: number): Promise<boolean> => (await rewrite(io, { id8, requestedAt }, now, () => null, now)).isWritten,
+    withdraw: async (io: WakeIo, id8: string, requestedAt: number, now: number): Promise<boolean> => (await rewrite(io, { id8, requestedAt }, now, () => null)).isWritten,
     /** A135: the sessions the app has archived. */
     archived,
     /** A140: whether this session can start another (it runs inside the desktop app). */

@@ -141,10 +141,7 @@ export type SessionFile = {
   /** A118: written by A5R 0.25.0 and later, which take and keep a Focus; a file without it is never given one (it would
    * never take the lock, and the queue would wait behind it for the whole box). */
   knowsFocus?: true
-  /** A140 (wake.ts): when it last asked for the Editor, and when its request was withdrawn. */
-  askedAt?: number
-  withdrawnAt?: number
-  /** A140: written by 0.28.0 and later, which conduct; `sends`: those whose own record is in the desktop app's list can start another. */
+  /** Rev 45: written by 0.28.0 and later, which conduct; `sends`: those whose own record is in the desktop app's list can start another. */
   conducts?: true
   sends?: true
 }
@@ -173,7 +170,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}), ...(v.canPass === true ? { canPass: true as const } : {}), ...(v.knowsFocus === true ? { knowsFocus: true as const } : {}), ...(typeof v.askedAt === 'number' ? { askedAt: v.askedAt } : {}), ...(typeof v.withdrawnAt === 'number' ? { withdrawnAt: v.withdrawnAt } : {}), ...(v.conducts === true ? { conducts: true as const } : {}), ...(v.sends === true ? { sends: true as const } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}), ...(v.canPass === true ? { canPass: true as const } : {}), ...(v.knowsFocus === true ? { knowsFocus: true as const } : {}), ...(v.conducts === true ? { conducts: true as const } : {}), ...(v.sends === true ? { sends: true as const } : {}) }
   } catch {
     return null
   }

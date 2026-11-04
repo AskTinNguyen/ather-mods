@@ -1,11 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionFile } from '../hooks/coord.ts'
-import { parseTail } from '../hooks/judge.ts'
 import type { LeaseRecord } from '../hooks/lease.ts'
 import { conductor } from '../hooks/wakehost.ts'
-import { NO_WAKE, afterMiss, answered, budgetHold, editorSignAt, isFinished, isResting, leaseSince, oldLine, parseDeskRow } from '../hooks/wake.ts'
+import { NO_WAKE, afterMiss, answered, budgetHold, isResting, leaseSince, oldLine, parseDeskRow } from '../hooks/wake.ts'
 import { LOCK, ME, NOW, opts, world } from './world.ts'
-import { HF, ME8, MIN, H, START, SID, FREE, held, want, file, stoppedFile, put, desk, stopped, fileOf, sends, LOG, SENT, REFUSED, PAUSED, said, QUEUED_WORDS, grant, fakeIo, worker, app, hostOf, long, logged } from './rev45.fixture.ts'
+import { HF, ME8, MIN, H, START, SID, FREE, held, want, file, stoppedFile, put, desk, stopped, fileOf, sends, LOG, SENT, REFUSED, PAUSED, grant, fakeIo, app, hostOf, long, logged } from './rev45.fixture.ts'
 
 // Rev 45, Fable's adversary review (S148, findings 1-10): each test fails without its fix.
 test('Fable 1: unit: a refused send after a real miss is a real miss; two refused retries, then a rest of 24 h; never faster than hourly', () => {
@@ -146,15 +145,6 @@ test('Fable 6: old refusals are pruned once a day and never read', opts(), async
   expect(read.some(p => p.endsWith('refused/old.json'))).toBe(false)
 })
 
-test('Fable 7: Vietnamese sign-offs, with or without marks, read as finished; a lease released normally renews nothing', () => {
-  for (const words of ['Em đã hoàn tất phần này.', 'Xong rồi anh.', 'Không còn việc gì với Editor.', 'Em chờ anh duyệt clip này.', 'Cần anh quyết định trước khi chạy Editor.', 'cho hai xem lai', 'hoan tat', 'Đã hoàn thành.']) expect([words, isFinished(parseTail(said(words)))]).toEqual([words, true])
-  for (const words of ['Em đang chờ Editor rảnh để chạy PIE.', 'Bước tiếp theo là chạy PIE trên Editor.']) expect([words, isFinished(parseTail(said(words)))]).toEqual([words, false])
-  const f = file('cccccccc', { askedAt: NOW - 30 * H })
-  const lease = (o: Partial<LeaseRecord>) => ({ id8: 'cccccccc', grantedAt: NOW - 29 * H, endAt: NOW - H, endReason: 'released', firstEditorSeenAt: 1, ...o }) as LeaseRecord
-  expect(editorSignAt(f, [lease({})])).toBe(NOW - 29 * H)
-  expect(editorSignAt(f, [lease({ endReason: 'yielded' })])).toBe(NOW - H)
-})
-
 test('Fable 8: a conductor that lost its claim leaves the start in flight alone', async () => {
   const me = file(ME8, { heartbeatAt: NOW, session: ME })
   const start = { id8: 'cccccccc', lane: 'c', why: 'turn', at: NOW - 6 * MIN, requestedAt: 1 }
@@ -217,7 +207,6 @@ test('Fable 10: a whole night with every send refused: no more than 8 sends for 
   const w = world(on, { ram: '40', out: { SendMessage: REFUSED } })
   w.put(LOCK, FREE)
   for (const [i, id8] of ['c1c1c1c1', 'c2c2c2c2', 'c3c3c3c3', 'c4c4c4c4', 'c5c5c5c5'].entries()) stopped(w, id8, { want: want({ requestedAt: NOW - (9 - i) * H }) })
-  for (const id8 of ['d1d1d1d1', 'd2d2d2d2']) worker(w, id8, QUEUED_WORDS)
   await $.session.start(START)
   await w.clock.advance(12 * H - 5 * MIN) // the budget is a rolling 12 h
   expect(sends(w).length).toBeLessThanOrEqual(8)
@@ -229,8 +218,8 @@ test('A138: unit: the budget: refused sends stop all; attempts leave the rest to
   expect(budgetHold({ ...NO_WAKE, spent: at(7, true) }, 'turn', NOW)).toBeNull()
   expect(budgetHold({ ...NO_WAKE, spent: at(8, true) }, 'turn', NOW)).toContain('8 sends refused')
   expect(budgetHold({ ...NO_WAKE, spent: at(6) }, 'turn', NOW)).toBeNull()
-  expect(budgetHold({ ...NO_WAKE, spent: at(6) }, 'work', NOW)).toContain('kept for Editor turns')
-  expect(budgetHold({ ...NO_WAKE, spent: [{ at: NOW - 13 * H, refused: true }, ...at(5)] }, 'work', NOW)).toBeNull()
+  expect(budgetHold({ ...NO_WAKE, spent: at(6) }, 'git', NOW)).toContain('kept for Editor turns')
+  expect(budgetHold({ ...NO_WAKE, spent: [{ at: NOW - 13 * H, refused: true }, ...at(5)] }, 'git', NOW)).toBeNull()
 })
 
 test('A138: an answer clears the count of refused sends: the route works', async () => {

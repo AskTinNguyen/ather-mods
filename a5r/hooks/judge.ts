@@ -100,29 +100,20 @@ const isPastEnd = (f: JudgeFacts): boolean => f.kind === 'editor' && f.end !== n
 
 const minAgo = (now: number, at: number | null): string => (at === null ? 'unknown' : `${Math.max(0, Math.round((now - at) / 60_000))} min ago`)
 
-/** A65 / A140: the question a tail ends on, to the person: an AskUserQuestion left open, or a last message that asks. */
-export const openQuestion = (events: readonly TranscriptEvent[]): { kind: 'tool' } | { kind: 'words'; text: string } | null => {
-  const last = [...events].reverse().find(e => e.role !== 'other' && (e.text || e.tools.length || e.results.length))
-  const answered = new Set(events.flatMap(e => e.results))
-  if (events.flatMap(e => e.tools).some(t => t.id && t.name === 'AskUserQuestion' && !answered.has(t.id))) return { kind: 'tool' }
-  return last && last.role === 'assistant' && !last.tools.length && /\?\s*$/.test(last.text) ? { kind: 'words', text: last.text } : null
-}
-/** A69 / A140: whether words say its Editor work is over. */
-export const saysFinished = (text: string): boolean => FINISHED.test(text)
-
 /** A first reading of the facts and the transcript, by rule: the judge confirms or corrects it, and it stands in when
  * no judge could run. Gone with nothing running → stuck or crashed; an open question → waiting on Hai; a running
  * Editor, build or tool, or recent activity → working; A69: it said or wrote that its Editor work is over (a FREE
  * line, a release, "closed the Editor") and nothing runs → done (the lease is stale); long silent → stuck; else unsure. */
 export const hintOf = (f: JudgeFacts, events: readonly TranscriptEvent[]): { verdict: Verdict; evidence: string[] } => {
+  const last = [...events].reverse().find(e => e.role !== 'other' && (e.text || e.tools.length || e.results.length))
   const lastAt = [...events].reverse().find(e => e.at !== null)?.at ?? null
   const answered = new Set(events.flatMap(e => e.results))
   const open = events.flatMap(e => e.tools).filter(t => t.id && !answered.has(t.id))
   if (f.liveness === 'gone' && !f.hasEditor && !f.hasBuild) return { verdict: 'stuck-or-crashed', evidence: [`the session is gone (no a5r heartbeat, no live Ather lane); last transcript event ${minAgo(f.now, lastAt)}`, 'no Unreal Editor or build process runs'] }
   const died = typeof f.lockPid === 'number' && f.lockPidRunning === false ? [`the holder's Editor (pid ${f.lockPid}) is no longer running`] : []
-  const ask = openQuestion(events)
-  if (ask?.kind === 'tool') return { verdict: 'waiting-on-Hai', evidence: ['an AskUserQuestion is open (no answer in the transcript)', `last transcript event ${minAgo(f.now, lastAt)}`] }
-  if (ask) return { verdict: 'waiting-on-Hai', evidence: [`its last message asks: "${ask.text.slice(-140)}"`, `${minAgo(f.now, lastAt)}`] }
+  const ask = open.find(t => t.name === 'AskUserQuestion')
+  if (ask) return { verdict: 'waiting-on-Hai', evidence: ['an AskUserQuestion is open (no answer in the transcript)', `last transcript event ${minAgo(f.now, lastAt)}`] }
+  if (last && last.role === 'assistant' && !last.tools.length && /\?\s*$/.test(last.text)) return { verdict: 'waiting-on-Hai', evidence: [`its last message asks: "${last.text.slice(-140)}"`, `${minAgo(f.now, lastAt)}`] }
   const running = open.filter(t => t.name !== 'AskUserQuestion')
   // A69: a tool call left open counts as work only while the transcript moved in the last 30 min (a call open for hours
   // with nothing running is a stopped turn, not a long one).
