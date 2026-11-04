@@ -159,7 +159,7 @@ export const conductor = (h: WakeState) => {
       if (cur.answeredAt === undefined) await save(io, { ...withRow(wake, row), current: { ...cur, answeredAt: now }, answeredAt: { ...wake.answeredAt, [cur.id8]: now } }, now)
       return true
     }
-    await save(io, { ...(cur.answeredAt === undefined ? withRow(wake, row) : wake), current: null, ...(!isAnswered && cur.refused ? { lastFailure: `the send was refused: ${cur.refused}` } : {}) }, now)
+    await save(io, { ...(cur.answeredAt === undefined ? withRow(wake, row) : wake), current: null, ...(isAnswered && cur.why === 'work' && cur.answeredAt === undefined ? { answeredAt: { ...wake.answeredAt, [cur.id8]: now } } : {}), ...(!isAnswered && cur.refused ? { lastFailure: `the send was refused: ${cur.refused}` } : {}) }, now)
     if (!isAnswered && cur.requestedAt !== null) await miss(io, { id8: cur.id8, lane: cur.lane, requestedAt: cur.requestedAt }, cur.at, cur.refused === undefined, 'no-answer', now)
     return true
   }
@@ -240,8 +240,10 @@ export const conductor = (h: WakeState) => {
     const refused = await refusalStep(io, x, now)
     if (refused.kind !== 'nothing') return refused
     const queued = queueIn(x)
-    if (queued.length > 0) return held(wake.lastFailure ?? `${queued.length} queued, held back by the Editor's gates (memory ${h.freeGb() ?? '?'} GB)`)
-    return workStep(io, x, now, again)
+    const heldBack = held(wake.lastFailure ?? `${queued.length} queued, held back by the Editor's gates (memory ${h.freeGb() ?? '?'} GB)`)
+    if (queued.some(f => !isStopped(f, x.files, x.lanes, now))) return heldBack
+    const step = await workStep(io, x, now, again) // stopped requests its gates hold back use no turn: a session whose work fits goes on
+    return step.kind === 'nothing' && queued.length > 0 ? heldBack : step
   }
 
   const stoppedNow = (now: number): number => {

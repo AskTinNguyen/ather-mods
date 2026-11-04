@@ -888,3 +888,13 @@ test('Review 8: a live session told that took a turn and did not ask has said no
   expect(workPlan([fact()], { now: NOW, leases: [], again: false, nameOf: f => f.id8 })).toEqual({ tell: [], start: null, held: null })
   expect(workPool({ files: [file('cccccccc', { lastTurnAt: NOW - H, heartbeatAt: 0 })], now: NOW, archived: NONE })).toEqual([])
 })
+
+test('Review 9: stopped requests that memory holds back do not stop a session whose work fits', opts(), async ($, on) => {
+  const w = world(on, { ram: '30', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc', { want: want({ pie: true }) })
+  worker(w, 'dddddddd', QUEUED_WORDS)
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(sends(w).map(s => s.to)).toEqual(['local_dddddddd'])
+})

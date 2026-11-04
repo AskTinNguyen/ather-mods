@@ -143,7 +143,7 @@ export const workPool = (x: { files: readonly SessionFile[]; now: number; archiv
   x.files
     .filter(f => {
       const turn = f.lastTurnAt
-      if (f.heartbeatAt === 0 || f.want || f.holding || x.archived.has(f.id8) || turn === undefined || (f.agents ?? 0) > 0) return false
+      if (f.heartbeatAt === 0 || f.want || f.holding || x.archived.has(f.id8) || turn === undefined || (x.now - f.heartbeatAt <= HEARTBEAT_STALE_MS && (f.agents ?? 0) > 0)) return false // a stopped one's count of agents is old
       const idleFor = x.now - turn
       return idleFor <= WORK_RECENT_MS && idleFor >= NUDGE_IDLE_MS && (f.withdrawnAt ?? 0) < turn
     })
