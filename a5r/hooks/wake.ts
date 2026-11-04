@@ -2,7 +2,7 @@
 // outlives its process: it keeps its place (coord.ts queueOf, keepsPlace), its session is started when its turn comes, and
 // one live A5R, the conductor, answers for a free Editor while work waits. Pure: no `$`; wakehost.ts reads, writes and sends.
 import { HEARTBEAT_STALE_MS, decide, hhmm, keepsPlace, livenessOf, queueIn, ymd, type GrantInput, type LaneBeat, type SessionFile, type Want } from './coord.ts'
-import { asksPerson, saysFinished, type TranscriptEvent } from './judge.ts'
+import { openQuestion, saysFinished, type TranscriptEvent } from './judge.ts'
 import type { LeaseRecord } from './lease.ts'
 import { isIdle, idleMsOf, saysWaitingForEditor } from './nudge.ts'
 import type { Need } from './syncplan.ts'
@@ -131,7 +131,7 @@ const lastWords = (events: readonly TranscriptEvent[]): string | undefined => ev
  * unknown is finished (nothing is started on a guess). */
 export const isFinished = (events: readonly TranscriptEvent[]): boolean => {
   const last = lastWords(events)
-  if (!last || asksPerson(events)) return true
+  if (!last || openQuestion(events)) return true
   return !saysWaitingForEditor(last) && (saysFinished(last) || FINISHED_WORDS.test(last))
 }
 /** A140: when this session last asked for or held the Editor (0: never on record). */
@@ -167,14 +167,14 @@ export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused
 export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string; answeredAt?: number }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
 /** `triedAt`: when each session was last tried, whatever for: the one record of attempts. */
-export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; pausedUntil: number; pausedSince: number; lastFailure?: string }
+export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; pausedUntil: number; pausedSince: number; pausedBy?: string; lastFailure?: string }
 export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, pausedUntil: 0, pausedSince: 0 }
 /** A139 / A141: what status.json says of them. */
 export type WakeStatus = { stopped: number; idleWithWork: { run: number; days: Record<string, number>; nights: Record<string, number> }; starting: { lane: string; id8: string; why: WakeWhy; at: number } | null; pausedUntil: number | null }
 export const RECENT_KEEP = 40
 export const parseWake = (text: string | null): WakeFile => {
   const v = jsonOf<WakeFile>(text)
-  return v ? { v: 1, current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null, recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [], triedAt: v.triedAt && typeof v.triedAt === 'object' ? v.triedAt : {}, pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0, pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0, ...(typeof v.lastFailure === 'string' ? { lastFailure: v.lastFailure } : {}) } : NO_WAKE
+  return v ? { v: 1, current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null, recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [], triedAt: v.triedAt && typeof v.triedAt === 'object' ? v.triedAt : {}, pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0, pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0, ...(typeof v.pausedBy === 'string' ? { pausedBy: v.pausedBy } : {}), ...(typeof v.lastFailure === 'string' ? { lastFailure: v.lastFailure } : {}) } : NO_WAKE
 }
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })
 /** The next conductor: the first live A5R that conducts, those that can start a session (in the desktop app) first, then by id. */
@@ -205,26 +205,25 @@ export const nightOf = (at: number): string | null => {
 const trimmed = (m: Record<string, number>): Record<string, number> => Object.fromEntries(Object.entries(m).sort().slice(-KEEP_DAYS))
 /** One conductor's minute: free (and nothing claims the Editor), and whether work waits. Minutes count once each; a run counts
  * minutes in a row (with no conductor for over 2 min there is nobody to count: the run starts over). */
-export const nextIdle = (i: IdleFile, x: { isFree: boolean; hasWork: boolean; now: number }): { idle: IdleFile; isCounted: boolean } => {
-  if (Math.floor(i.lastAt / MIN) === Math.floor(x.now / MIN)) return { idle: i, isCounted: false }
+export const nextIdle = (i: IdleFile, x: { isFree: boolean; hasWork: boolean; now: number }): IdleFile => {
+  if (Math.floor(i.lastAt / MIN) === Math.floor(x.now / MIN)) return i
   const isIdleMin = x.isFree && x.hasWork
   const isRow = x.now - i.lastAt <= 2 * MIN
   const night = nightOf(x.now)
   const day = ymd(x.now)
   const run = isIdleMin ? (isRow ? i.run : 0) + 1 : 0
   return {
-    idle: {
-      v: 1,
-      days: isIdleMin ? trimmed({ ...i.days, [day]: (i.days[day] ?? 0) + 1 }) : i.days,
-      nights: isIdleMin && night ? trimmed({ ...i.nights, [night]: (i.nights[night] ?? 0) + 1 }) : i.nights,
-      run,
-      lastAt: x.now,
-      freeSince: x.isFree ? (i.freeSince && isRow ? i.freeSince : x.now) : 0,
-      alarmed: run > 0 && i.alarmed,
-    },
-    isCounted: isIdleMin,
+    v: 1,
+    days: isIdleMin ? trimmed({ ...i.days, [day]: (i.days[day] ?? 0) + 1 }) : i.days,
+    nights: isIdleMin && night ? trimmed({ ...i.nights, [night]: (i.nights[night] ?? 0) + 1 }) : i.nights,
+    run,
+    lastAt: x.now,
+    freeSince: x.isFree ? (i.freeSince && isRow ? i.freeSince : x.now) : 0,
+    alarmed: run > 0 && i.alarmed,
   }
 }
+/** A141: a start that nobody answered is still work waiting, for the count: `recent` says how its last start came out. */
+export const lastOutcome = (w: WakeFile, id8: string): WakeOutcome | undefined => w.recent.filter(r => r.id8 === id8).pop()?.outcome
 export const isAlarmDue = (i: IdleFile): boolean => i.run >= IDLE_ALARM_MIN && !i.alarmed
 export const alarmText = (minutes: number, cause: string): string => `A5R: ${minutes > 0 ? `the Editor has stood free ${minutes} min with work waiting` : 'work is waiting for the Editor'}: ${cause}`
 

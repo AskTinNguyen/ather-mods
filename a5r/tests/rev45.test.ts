@@ -411,7 +411,7 @@ test('A140: a free Editor and a stopped session with work: it is started; it is 
   await w.clock.advance(MIN)
   expect(sends(w).map(s => s.to)).toEqual(['local_cccccccc'])
   expect(sends(w)[0]?.message).toContain('the Editor is free')
-  await w.clock.advance(H)
+  await w.clock.advance(25 * MIN)
   expect(sends(w).length).toBe(1)
 })
 
@@ -493,14 +493,14 @@ test('A140: unit: the pool: asking, holding, running agents, active over a day a
 // ---------- A141 ----------
 test('A141: unit: minutes count per day and per night, once each; a run needs minutes in a row', () => {
   const at = new Date(2026, 9, 6, 23, 0).getTime()
-  let i = nextIdle(NO_IDLE, { isFree: true, hasWork: true, now: at }).idle
+  let i = nextIdle(NO_IDLE, { isFree: true, hasWork: true, now: at })
   expect([i.run, i.days['2026-10-06'], i.nights['2026-10-06']]).toEqual([1, 1, 1])
-  expect(nextIdle(i, { isFree: true, hasWork: true, now: at + 1000 }).isCounted).toBe(false)
-  i = nextIdle(i, { isFree: true, hasWork: true, now: at + MIN }).idle
+  expect(nextIdle(i, { isFree: true, hasWork: true, now: at + 1000 })).toBe(i)
+  i = nextIdle(i, { isFree: true, hasWork: true, now: at + MIN })
   expect(i.run).toBe(2)
-  expect(nextIdle(i, { isFree: true, hasWork: true, now: at + 5 * MIN }).idle.run).toBe(1) // no conductor for 4 min
-  expect(nextIdle(i, { isFree: true, hasWork: false, now: at + 2 * MIN }).idle.run).toBe(0)
-  expect(nextIdle(i, { isFree: false, hasWork: true, now: at + 2 * MIN }).idle.freeSince).toBe(0)
+  expect(nextIdle(i, { isFree: true, hasWork: true, now: at + 5 * MIN }).run).toBe(1) // no conductor for 4 min
+  expect(nextIdle(i, { isFree: true, hasWork: false, now: at + 2 * MIN }).run).toBe(0)
+  expect(nextIdle(i, { isFree: false, hasWork: true, now: at + 2 * MIN }).freeSince).toBe(0)
   expect(nightOf(new Date(2026, 9, 7, 7, 59).getTime())).toBe('2026-10-06')
   expect(nightOf(new Date(2026, 9, 7, 8, 0).getTime())).toBeNull()
 })
@@ -783,4 +783,46 @@ test('A136: a claim another A5R spent in the same minute sends nothing', async (
   disk.set('app/Claude/claude-code-sessions/a/o/local_c.json', row)
   await c.tick(fakeIo(disk, { deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }), list: async () => [{ name: 'local_c.json', mtimeMs: 1 }], claimAlert: async () => false, call: async () => ((calls += 1), { text: SENT }) }))
   expect(calls).toBe(0)
+})
+
+test('Review 5.1: a conductor that lost its claim during a slow pass sends nothing, and one that sees a start in flight neither', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const row = JSON.stringify({ sessionId: 'local_c', cliSessionId: SID('cccccccc') })
+  const run = async (o: { other?: boolean; flight?: boolean }) => {
+    const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row]])
+    let calls = 0
+    const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+    let reads = 0
+    await c.tick(fakeIo(disk, {
+      deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }),
+      list: async () => [{ name: 'local_c.json', mtimeMs: 1 }],
+      call: async () => ((calls += 1), { text: SENT }),
+      read: async (p: string) => {
+        if (p === 'd/conductor.json' && o.other && (reads += 1) > 1) return JSON.stringify({ id8: 'bbbbbbbb', at: NOW })
+        if (p === 'd/wake.json' && o.flight && (reads += 1) > 1) return JSON.stringify({ ...NO_WAKE, current: { id8: 'dddddddd', lane: 'd', why: 'turn', at: NOW, requestedAt: 1 } })
+        return disk.get(p) ?? null
+      },
+    }))
+    return calls
+  }
+  expect(await run({})).toBe(1)
+  expect(await run({ other: true })).toBe(0)
+  expect(await run({ flight: true })).toBe(0)
+})
+
+test('Review 5.2: a work start nobody answered keeps the count going: the Editor free and the session silent raises the alarm', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: REFUSED } })
+  w.put(LOCK, FREE)
+  worker(w, 'cccccccc', QUEUED_WORDS)
+  await $.session.start(START)
+  await w.clock.advance(35 * MIN)
+  expect(sends(w).length).toBeLessThan(3)
+  expect(w.read(LOG).match(/rule=idle-with-work/g)?.length).toBe(1)
+  expect(w.read(LOG)).toContain('did not answer')
+})
+
+test('A136 over A117: a stopped head the person placed first, held back by memory, blocks nobody', () => {
+  const head = stoppedFile('cccccccc', { want: want({ pie: true, requestedAt: NOW - 9 * H }) })
+  const me = file(ME8, { want: want({ requestedAt: NOW - H }) })
+  expect(decide(grant([head, me], { manual: { pins: ['cccccccc'], minutes: {} }, probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).toBe('grant')
 })
