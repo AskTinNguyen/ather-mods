@@ -3,7 +3,7 @@ import { DEFAULT_GATES, NO_MANUAL, blankSession, decide, heldLine, newSync, pars
 import { applyOrder, parseEditorCommand, NO_ORDER } from '../hooks/order.ts'
 import { editorPanel } from '../hooks/panel.ts'
 import { staleWants } from '../hooks/truth.ts'
-import { conductor } from '../hooks/wakehost.ts'
+import { conductor, type WakeIo } from '../hooks/wakehost.ts'
 import { WAKE_ANSWER_MS, afterMiss, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
 import { parseTail } from '../hooks/judge.ts'
 import { A5RPANE, ENV, LOCK, ME, NOW, PANE, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
@@ -40,6 +40,9 @@ const PAUSED = JSON.stringify({ success: false, message: 'Not delivered: this se
 const said = (text: string) => JSON.stringify({ type: 'assistant', timestamp: new Date(NOW - 60 * MIN).toISOString(), message: { role: 'assistant', content: [{ type: 'text', text }] } })
 const QUEUED_WORDS = 'I am queued at #2 for the Editor: the next step is the jump test in PIE.'
 const grant = (files: SessionFile[], o: Partial<GrantInput> = {}): GrantInput => ({ me8: ME8, lock: parseLockLine(FREE), files, lanes: [], now: NOW, sync: null, probe: { freeGb: 40, diskGb: 100, procs: [] }, gates: DEFAULT_GATES, manual: NO_MANUAL, focus: null, ...o })
+const NONE: ReadonlySet<string> = new Set()
+/** The engine beneath the host itself, for what the test engine cannot show. */
+const fakeIo = (disk: Map<string, string>, o: Record<string, unknown> = {}): WakeIo => ({ now: async () => NOW, read: async (p: string) => disk.get(p) ?? null, write: async (p: string, t: string) => void disk.set(p, t), stat: async () => null, list: async () => [], run: async () => null, call: async () => null, deskPlace: async () => ({}), writeChecked: async (p: string, _e: string | null, t: string) => (disk.set(p, t), true), claimAlert: async () => true, log: async () => undefined, notify: async () => false, toast: () => undefined, events: async () => [], nudgedAt: async () => 0, nudge: async () => undefined, isGitFree: async () => true, heldNeeds: async () => new Set(), ...o }) as never
 const beat = (w: ReturnType<typeof world>, id8: string) => put(w, { ...fileOf(w, id8), heartbeatAt: w.clock.now() + 1 })
 
 // ---------- A135 ----------
@@ -49,13 +52,13 @@ test('A135: unit: a stopped request stays in the queue past 2 h, in its place; 4
   expect(queueOf([b, a], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['aaaaaaaa', 'bbbbbbbb'])
   const old = stoppedFile('cccccccc', { want: want({ requestedAt: NOW - 48 * H }) })
   expect(queueOf([b, old], [], NOW, null, NO_MANUAL).map(f => f.id8)).toEqual(['bbbbbbbb'])
-  expect(staleWants([a], [], NOW)).toEqual([])
-  expect(staleWants([old], [], NOW).map(s => [s.f.id8, s.why])).toEqual([['cccccccc', 'asked 48 h ago or more']])
+  expect(staleWants([a], [], NOW, new Set())).toEqual([])
+  expect(staleWants([old], [], NOW, new Set()).map(s => [s.f.id8, s.why])).toEqual([['cccccccc', 'asked 48 h ago or more']])
   expect(staleWants([a], [], NOW, new Set(['aaaaaaaa'])).map(s => s.why)).toEqual(['its session is archived'])
   const slot = stoppedFile('dddddddd', { want: want({ sync: { at: NOW, role: 'worker' } }) })
-  expect(staleWants([slot], [], NOW).map(s => s.f.id8)).toEqual(['dddddddd'])
-  expect(staleWants([{ ...slot, heartbeatAt: NOW - 90 * MIN, lastTurnAt: NOW - 90 * MIN }], [], NOW)).toEqual([])
-  expect(staleWants([file('eeeeeeee', { want: want({ requestedAt: NOW - 49 * H }) })], [], NOW)).toEqual([]) // alive: never
+  expect(staleWants([slot], [], NOW, new Set()).map(s => s.f.id8)).toEqual(['dddddddd'])
+  expect(staleWants([{ ...slot, heartbeatAt: NOW - 90 * MIN, lastTurnAt: NOW - 90 * MIN }], [], NOW, new Set())).toEqual([])
+  expect(staleWants([file('eeeeeeee', { want: want({ requestedAt: NOW - 49 * H }) })], [], NOW, new Set())).toEqual([]) // alive: never
 })
 
 test('A135: a stopped request stays through 2 h with the Editor held; the 48 h limit drops it, logged', opts(), async ($, on) => {
@@ -159,10 +162,11 @@ test('A136: no answer in 5 min moves it behind the next, once; a second miss wit
 
 test('A136: unit: a miss goes back behind the next once; a second withdraws; a loop pause never withdraws', () => {
   const w = want({ requestedAt: 5 })
-  expect(afterMiss(w, 9, true)).toEqual({ ...w, misses: 1, requestedAt: 10 })
-  expect(afterMiss(w, null, true)).toEqual({ ...w, misses: 1 })
+  expect(afterMiss(w, 9, true)).toEqual({ ...w, misses: 1, movedBack: true, requestedAt: 10 })
+  expect(afterMiss(w, null, true)).toEqual({ ...w, misses: 1, movedBack: true })
   expect(afterMiss({ ...w, misses: 1 }, 9, true)).toBeNull()
-  const once = { ...w, misses: 1 }
+  expect(afterMiss(w, 9, false)).toEqual({ ...w, movedBack: true, requestedAt: 10 })
+  const once = { ...w, movedBack: true as const }
   expect(afterMiss(once, 9, false)).toBe(once)
 })
 
@@ -178,13 +182,13 @@ test('A136: two stopped requests start one at a time, in queue order', opts(), a
 
 test('A136: a request waiting only for memory is not started; a Focus and a freeze hold it too', () => {
   const head = stoppedFile('cccccccc', { want: want() })
-  expect(turnToStart(grant([head]))?.id8).toBe('cccccccc')
-  expect(turnToStart(grant([head], { probe: { freeGb: 5, diskGb: 100, procs: [] } }))).toBeNull()
-  expect(turnToStart(grant([head], { focus: { id8: 'dddddddd', lane: 'd', end: NOW + H, isRunning: true } as never }))).toBeNull()
-  expect(turnToStart(grant([head], { sync: newSync(NOW + 5 * MIN, { session: 'x', id8: 'eeeeeeee', lane: 'e' }, 'e', NOW - H) }))).toBeNull()
-  expect(turnToStart(grant([head], { lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }))).toBeNull()
+  expect(turnToStart(grant([head]), NONE)?.id8).toBe('cccccccc')
+  expect(turnToStart(grant([head], { probe: { freeGb: 5, diskGb: 100, procs: [] } }), NONE)).toBeNull()
+  expect(turnToStart(grant([head], { focus: { id8: 'dddddddd', lane: 'd', end: NOW + H, isRunning: true } as never }), NONE)).toBeNull()
+  expect(turnToStart(grant([head], { sync: newSync(NOW + 5 * MIN, { session: 'x', id8: 'eeeeeeee', lane: 'e' }, 'e', NOW - H) }), NONE)).toBeNull()
+  expect(turnToStart(grant([head], { lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }), NONE)).toBeNull()
   const live = file('bbbbbbbb', { want: want({ requestedAt: NOW - 9 * H }) })
-  expect(turnToStart(grant([head, live]))).toBeNull() // a live head takes it itself
+  expect(turnToStart(grant([head, live]), NONE)).toBeNull() // a live head takes it itself
 })
 
 test('A136: a live session behind a stopped head waits for its start; it never takes a pass over it', () => {
@@ -193,7 +197,8 @@ test('A136: a live session behind a stopped head waits for its start; it never t
   expect(decide(grant([head, me]))).toMatchObject({ kind: 'wait', code: 'queue' })
   const passer = stoppedFile('dddddddd', { want: want({ requestedAt: NOW - 2 * H, pie: false, launch: false }) })
   const pie = stoppedFile('cccccccc', { want: want({ pie: true }) })
-  expect(decide(grant([pie, passer, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).not.toBe('grant') // nobody passes as a stopped session
+  expect(decide(grant([pie, passer], { me8: 'dddddddd', probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).not.toBe('grant') // a stopped session takes no pass
+  expect(decide(grant([pie, passer, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).toBe('grant') // the live one behind it does
 })
 
 test('A136: a refused send never touches the lease: it is logged, and the heartbeat decides', opts(), async ($, on) => {
@@ -234,7 +239,7 @@ test('A136: the engine\'s loop guard: logged as loop-paused, a miss, no retry un
   await w.clock.advance(MIN)
   expect(sends(w).length).toBe(1)
   expect(w.read(LOG)).toMatch(/rule=woke \| lane=lane-cccccccc .*loop-paused/)
-  expect(fileOf(w, 'cccccccc').want?.misses).toBe(1)
+  expect(fileOf(w, 'cccccccc').want?.movedBack).toBe(true)
   const toasts = () => ((w.calls['ui.toast'] ?? []) as { text?: string }[]).map(t => String(t.text ?? t))
   const alarms = () => w.read(LOG).split('\n').filter(l => l.includes('rule=idle-with-work'))
   expect(alarms().length).toBe(1)
@@ -442,7 +447,7 @@ test('A140: two A5Rs start it once: a fresh conductor claim keeps this one out, 
 test('A140: this session, not first in the order, does not conduct', opts(), async ($, on) => {
   const w = world(on, { ram: '40', out: { SendMessage: SENT } })
   w.put(LOCK, FREE)
-  put(w, file('aaaaaaaa', { heartbeatAt: NOW + 10 * H }))
+  put(w, file('aaaaaaaa', { heartbeatAt: NOW + 10 * H, sends: true }))
   stopped(w, 'cccccccc')
   await $.session.start(START)
   await w.clock.advance(2 * MIN)
@@ -468,7 +473,7 @@ test('A140: with memory short nothing is started, in the engine', opts(), async 
 
 test('A140: unit: the pool: asking, holding, running agents, active over a day ago or started within 2 h leave; last words read by the judge', () => {
   const base = { lastTurnAt: NOW - H, agents: 0 }
-  const pool = (o: Partial<SessionFile>, workAt = {}, again = false) => workPool({ files: [file('cccccccc', { ...base, ...o })], lanes: [], now: NOW, workAt, again }).length
+  const pool = (o: Partial<SessionFile>, workAt = {}, again = false) => workPool({ files: [file('cccccccc', { ...base, ...o })], lanes: [], now: NOW, workAt, again, archived: NONE }).length
   expect(pool({})).toBe(1)
   expect(pool({ want: want() })).toBe(0)
   expect(pool({ holding: { since: 0, end: 0, extended: 0 } })).toBe(0)
@@ -478,11 +483,11 @@ test('A140: unit: the pool: asking, holding, running agents, active over a day a
   expect(pool({}, { cccccccc: NOW - H })).toBe(0)
   expect(pool({}, { cccccccc: NOW - H }, true)).toBe(1)
   expect(pool({}, { cccccccc: NOW - 2 * H })).toBe(1)
-  const words = (t: string) => isFinished(parseTail(said(t)), NOW)
+  const words = (t: string) => isFinished(parseTail(said(t)))
   expect(words(QUEUED_WORDS)).toBe(false)
   expect(words('Should I go on with the jump clip?')).toBe(true)
   expect(words('Needs the person now.')).toBe(true)
-  expect(isFinished([], NOW)).toBe(true)
+  expect(isFinished([])).toBe(true)
 })
 
 // ---------- A141 ----------
@@ -528,8 +533,7 @@ test('A141: unit: the alarm is a native notification when the engine can raise o
     const me = file(ME8, { heartbeatAt: NOW })
     const c = conductor({ me8: () => ME8, me: () => me, files: () => [me], lanes: () => [], grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now, probe: { freeGb: 5, diskGb: 100, procs: [] } }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 5, titleOf: () => '' })
     disk.set('d/idle-with-work.json', JSON.stringify({ ...NO_IDLE, run: 29, lastAt: NOW - MIN }))
-    const io = { now: async () => NOW, read: async (p: string) => disk.get(p) ?? null, write: async (p: string, t: string) => void disk.set(p, t), stat: async () => null, list: async () => [], run: async () => null, call: async () => null, deskPlace: async () => ({}), claimAlert: async () => true, log: async () => undefined, notify: async (t: string) => (notes.push(t), isSent), toast: (t: string) => void toasts.push(t), events: async () => [], nudgedAt: async () => 0, nudge: async () => undefined, isGitFree: async () => true, heldNeeds: async () => new Set() } as never
-    await c.tick(io, NOW)
+    await c.tick(fakeIo(disk, { notify: async (t: string) => (notes.push(t), isSent), toast: (t: string) => void toasts.push(t) }), NOW)
     expect(notes.length).toBe(1)
     expect(toasts.length).toBe(isSent ? 0 : 1)
   }
@@ -565,4 +569,94 @@ test('A141: the night of 2026-11-03: four queued sessions, processes gone, 2 h p
   }
   expect(got).toEqual(names)
   expect(w.read(LOG)).not.toContain('rule=withdrawn')
+})
+
+// ---------- the review's findings (S147): each fails without its fix ----------
+test('Review 1: a session that answered and stopped again with no lease is started again at the next window; a claim spent with nothing sent too', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc')
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(sends(w).length).toBe(1)
+  beat(w, 'cccccccc') // it answered, and its process stops again before it took the lock
+  await w.clock.advance(11 * MIN)
+  expect(sends(w).length).toBe(2)
+  expect(fileOf(w, 'cccccccc').want).not.toBeNull()
+})
+
+test('Review 2: a removed, archived or twice-missed session is not started by the work step; an archived head gets no message', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  worker(w, 'c1c1c1c1', QUEUED_WORDS, { withdrawnAt: NOW - 2 * H }) // asked, then withdrawn after its last turn
+  worker(w, 'c2c2c2c2', QUEUED_WORDS)
+  desk(w, 'c2c2c2c2', 'local_c2c2c2c2', { isArchived: true })
+  stopped(w, 'c3c3c3c3')
+  desk(w, 'c3c3c3c3', 'local_c3c3c3c3', { isArchived: true })
+  await $.session.start(START)
+  await w.clock.advance(4 * MIN)
+  expect(sends(w)).toEqual([])
+  expect(turnToStart(grant([stoppedFile('cccccccc', { want: want() })]), new Set(['cccccccc']))).toBeNull()
+})
+
+test('Review 3: a refused send that nobody answers moves the request back and never withdraws it; a pause then a real miss does not either', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: REFUSED } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc')
+  await $.session.start(START)
+  await w.clock.advance(25 * MIN)
+  expect(sends(w).length).toBeGreaterThan(1)
+  const f = fileOf(w, 'cccccccc')
+  expect(f.want?.movedBack).toBe(true)
+  expect(f.want?.misses).toBeUndefined()
+  expect(w.read(LOG)).not.toContain('rule=withdrawn')
+  const paused = afterMiss(want(), null, false)
+  const real = paused && afterMiss(paused, null, true)
+  expect(real?.misses).toBe(1)
+  expect(real && afterMiss(real, null, true)).toBeNull()
+  expect(readSend({ deny: 'Not delivered: this session has already messaged Claude Desktop sessions 8 times' }).kind).toBe('loop-paused')
+})
+
+test('Review 3: a conductor outside the app never withdraws a stopped request gone under 2 h; one in the app goes first', async () => {
+  const me = file(ME8, { heartbeatAt: NOW })
+  const c1 = stoppedFile('cccccccc', { want: want(), heartbeatAt: NOW - 30 * MIN, misses: 1 } as never)
+  const disk = new Map<string, string>([['d/editor/cccccccc.json', JSON.stringify({ ...c1, want: want({ misses: 1, movedBack: true }) })]])
+  const c = conductor({ me8: () => ME8, me: () => me, files: () => [me], lanes: () => [], grantInput: now => grant([me, { ...c1, want: want({ misses: 1, movedBack: true }) }], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  await c.tick(fakeIo(disk), NOW)
+  expect((JSON.parse(disk.get('d/editor/cccccccc.json') ?? '') as SessionFile).want).not.toBeNull()
+  expect(c.canSend()).toBe(false)
+  const f = (id8: string, o: Partial<SessionFile> = {}) => file(id8, o)
+  expect(conductorOf([f('aaaaaaaa'), f('bbbbbbbb', { sends: true })], [], NOW)).toBe('bbbbbbbb')
+})
+
+test('Review 4: the claim is sticky: a session waking with a lower id does not take over while the holder lives', () => {
+  expect(mayConduct(ME8, 'aaaaaaaa', { id8: ME8, at: NOW - MIN }, NOW)).toBe(true)
+  expect(mayConduct('aaaaaaaa', 'aaaaaaaa', { id8: ME8, at: NOW - MIN }, NOW)).toBe(false)
+  expect(mayConduct('aaaaaaaa', 'aaaaaaaa', { id8: ME8, at: NOW - 3 * MIN }, NOW)).toBe(true)
+})
+
+test('Review 5: a stopped head waiting for memory never ages: a live session behind it still passes', () => {
+  const head = stoppedFile('cccccccc', { want: want({ pie: true, requestedAt: NOW - 9 * H }) })
+  const me = file(ME8, { want: want({ requestedAt: NOW - H, launch: false, build: true }) })
+  expect(decide(grant([head, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).toBe('grant')
+})
+
+test('Review 6: last words that wait for the Editor are not finished, whatever came before', () => {
+  const tail = [JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'I released the Editor.' }] } }), said(QUEUED_WORDS)].join('\n')
+  expect(isFinished(parseTail(tail))).toBe(false)
+})
+
+test('A140: one at a time: the next session with work waits until the first asks, or has had its time', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  worker(w, 'c1c1c1c1', QUEUED_WORDS, { lastTurnAt: NOW - 2 * H })
+  worker(w, 'c2c2c2c2', QUEUED_WORDS, { lastTurnAt: NOW - 3 * H })
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(sends(w).map(s => s.to)).toEqual(['local_c1c1c1c1'])
+  put(w, { ...fileOf(w, 'c1c1c1c1'), heartbeatAt: w.clock.now() + 60 * H }) // it came up and stays up
+  await w.clock.advance(5 * MIN)
+  expect(sends(w).length).toBe(1)
+  await w.clock.advance(7 * MIN)
+  expect(sends(w).map(s => s.to)).toEqual(['local_c1c1c1c1', 'local_c2c2c2c2'])
 })

@@ -4,7 +4,6 @@
 // (A116: in plain words; A117: in the person's order, a holder's resized end).
 import { liveWaitMin, waitStart } from './truth.ts'
 import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, livenessOf, lockTimes, noticeIds, noticeText, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
-import { STOPPED_WORDS } from './wake.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
 export const LEASES_FILE = 'leases.jsonl'
@@ -277,6 +276,8 @@ export const adoptLockEnd = (h: Holding, lock: LockLine, now: number): Holding =
   return t && Math.abs(t.since - h.since) < 60_000 && Math.floor(t.end / 60_000) !== Math.floor(h.end / 60_000) ? { ...h, end: t.end } : h
 }
 
+/** A139: a queued row whose process has stopped. */
+export const STOPPED_WORDS = 'stopped: will be started when its turn comes'
 /** A105: the holder; `end` its lease's end (A117: as its HELD line says once resized); `isSyncSlot` the sync's own slot. */
 export type HolderRow = { lane: string; id8: string; isMe: boolean; grantedAt: number | null; editorAt: number | null; pieAt: number | null; extensions: number; end: number | null; leftMin: number | null; isSyncSlot: boolean }
 /** A112: `wait`: the row's current wait code by decide, read from the files every session reads ('grant': it takes the

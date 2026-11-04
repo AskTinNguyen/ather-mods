@@ -352,8 +352,8 @@ test('A125: unit: a wait counts only while its own session runs; a new request s
 
 test('A125 (A135: only a sync\'s or Focus\'s slot now): unit: slots of sessions gone 2 h are withdrawn; PIE is seen from a PIE window or the person\'s drivers (none by default); no-editor needs 30 min with no Editor or build at any point; old alert files go; the freeze concerns only some', () => {
   const stale = { ...file('cccccccc', { want: want({ focus: 1 }), lastTurnAt: NOW - 3 * H }), heartbeatAt: NOW - 2 * H }
-  expect(staleWants([stale, { ...stale, id8: 'dddddddd', heartbeatAt: NOW - 100 * MIN }, { ...stale, id8: 'eeeeeeee', holding: { since: 0, end: 0, extended: 0 } }], [], NOW).map(s => s.f.id8)).toEqual(['cccccccc'])
-  expect(staleWants([stale], [{ sessionId: SID('cccccccc'), hasEnded: true, mtimeMs: NOW - 30 * MIN }], NOW)).toEqual([]) // its lane beat 30 min ago
+  expect(staleWants([stale, { ...stale, id8: 'dddddddd', heartbeatAt: NOW - 100 * MIN }, { ...stale, id8: 'eeeeeeee', holding: { since: 0, end: 0, extended: 0 } }], [], NOW, new Set()).map(s => s.f.id8)).toEqual(['cccccccc'])
+  expect(staleWants([stale], [{ sessionId: SID('cccccccc'), hasEnded: true, mtimeMs: NOW - 30 * MIN }], NOW, new Set())).toEqual([]) // its lane beat 30 min ago
   const py: Proc = { name: 'python', pid: 9, gb: 0.1, parentAlive: true, cmd: '"C:\\Python\\python.exe" E:\\s2\\docs\\handoff\\pie-perf-tools\\lab.py --pie' }
   const win = (title: string, cmd = S2_EDITOR.cmd): Proc => ({ name: 'UnrealEditor', pid: 1, gb: 1, parentAlive: true, title, cmd })
   expect([pieSeen(probe([py]), [], SHARED), pieSeen(probe([py]), ['lab.py'], SHARED), pieSeen(probe([py]), ['ab.py'], SHARED), pieSeen(probe([win('S2 Preview [NetMode: Standalone 0]')]), [], SHARED), pieSeen(probe([win('S2 - Unreal Editor')]), [], SHARED)]).toEqual([false, true, false, true, false])

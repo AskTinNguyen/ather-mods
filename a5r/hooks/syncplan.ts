@@ -3,6 +3,7 @@
 // one timeline line with estimates (`~`, from the measured durations of the last syncs; "time unknown" without data; `late`
 // 15 min past one) and what each Editor wait waits for. A134: the band above the prompt, the prompt's context line, the
 // toast, and Saved/A5R/status.json. Pure: no `$`; register.ts reads the files and logs, decides with these, and writes.
+import type { WakeStatus } from './wake.ts'
 import { CUTOFF_MS, RELEASE_BEFORE_MS, hhmm, type Phase, type SyncFile } from './coord.ts'
 import { writtenIn, type Seg } from './gitshared.ts'
 import type { BuildLogRead, SyncStage } from './syncstage.ts'
@@ -222,10 +223,10 @@ export type StatusFile = {
   editor: { holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[] }
   focus: { lane: string; id8: string; end: number } | null
   /** A139 / A141: how many queued sessions have stopped, the start in flight, and the idle-with-work minutes. */
-  wake?: Record<string, unknown>
+  wake?: WakeStatus
 }
 /** A134: the state the minute tick writes for outside viewers. */
-export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null; wake?: Record<string, unknown> }): StatusFile => {
+export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null; wake?: WakeStatus }): StatusFile => {
   const s = x.sync && (x.phase === 'planned' || x.phase === 'cutoff' || x.phase === 'frozen') ? x.sync : null
   const a = s ? aheadOf(s, x.step, x.times, x.now) : null
   const step = x.step

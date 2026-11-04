@@ -80,7 +80,7 @@ export const presetTimes = (now: number): number[] => {
 // ---------- session files (Saved/A5R/editor/<id8>.json, one writer each) ----------
 export type Mode = 'interactive' | 'unattended'
 /** What a session asked the Editor for. */
-export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean; focus?: number; waited?: number; waitAt?: number; misses?: number } // misses: A136, a start nobody answered (wake.ts afterMiss); focus: A118, made for the Focus that started then; waited / waitAt: A125, the ms its own live session waited (truth.ts liveWait) and when it last counted
+export type Want = { minutes: number; pie: boolean; build: boolean; what: string; mode: Mode; pausable: boolean; nextSafe: string; requestedAt: number; launch?: boolean; sync?: SyncSlot; isKept?: boolean; focus?: number; waited?: number; waitAt?: number; misses?: number; movedBack?: true } // misses, movedBack: A136 (wake.ts afterMiss); focus: A118, made for the Focus that started then; waited / waitAt: A125, the ms its own live session waited (truth.ts liveWait) and when it last counted
 /** A79 / A94: a slot that belongs to the sync at `at`: its worker's (silent, released when the worker's sync ends) or its
  * holder's own request for that sync (granted with a notice); both are released with the sync. */
 export type SyncSlot = { at: number; role: 'worker' | 'holder' }
@@ -140,7 +140,7 @@ export type SessionFile = {
   /** A118: written by A5R 0.25.0 and later, which take and keep a Focus; a file without it is never given one (it would
    * never take the lock, and the queue would wait behind it for the whole box). */
   knowsFocus?: true
-  askedAt?: number; conducts?: true // A140: when it last asked for the Editor; written by 0.28.0 and later, which conduct (wake.ts)
+  askedAt?: number; withdrawnAt?: number; conducts?: true; sends?: true // A140 (wake.ts): when it last asked, when its request was withdrawn; 0.28.0 and later conduct, those in the desktop app can start another
 }
 
 /** A54/A55: a lease another session's A5R released: lapsed (10 min past its end, its session gone, no Editor or build
@@ -162,7 +162,7 @@ export const parseSessionFile = (text: string | null): SessionFile | null => {
   try {
     const v = JSON.parse(text ?? '') as Partial<SessionFile>
     if (typeof v?.id8 !== 'string' || typeof v.heartbeatAt !== 'number') return null
-    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}), ...(v.canPass === true ? { canPass: true as const } : {}), ...(v.knowsFocus === true ? { knowsFocus: true as const } : {}), ...(typeof v.askedAt === 'number' ? { askedAt: v.askedAt } : {}), ...(v.conducts === true ? { conducts: true as const } : {}) }
+    return { v: 1, session: String(v.session ?? v.id8), id8: v.id8.toLowerCase(), lane: String(v.lane ?? v.id8), title: String(v.title ?? ''), heartbeatAt: v.heartbeatAt, want: v.want ?? null, holding: v.holding ?? null, yieldAsks: Array.isArray(v.yieldAsks) ? v.yieldAsks : [], delivered: Array.isArray(v.delivered) ? v.delivered : [], prsKnown: Array.isArray(v.prsKnown) ? v.prsKnown.filter(n => Number.isInteger(n)) : [], prBaseline: Array.isArray(v.prBaseline) ? v.prBaseline.map(String) : [], ...(typeof v.prScorer === 'number' ? { prScorer: v.prScorer } : {}), ...(typeof v.lastTurnAt === 'number' ? { lastTurnAt: v.lastTurnAt } : {}), ...(Array.isArray(v.passes) ? { passes: v.passes.map(String) } : {}), ...(typeof v.agents === 'number' ? { agents: v.agents } : {}), ...(Array.isArray(v.agentKinds) ? { agentKinds: v.agentKinds.map(String) } : {}), ...(typeof v.sharedShellAt === 'number' ? { sharedShellAt: v.sharedShellAt } : {}), ...(typeof v.editorUseAt === 'number' ? { editorUseAt: v.editorUseAt } : {}), ...(typeof v.return?.requestedAt === 'number' && typeof v.return.until === 'number' ? { return: { requestedAt: v.return.requestedAt, until: v.return.until } } : {}), ...(v.canPass === true ? { canPass: true as const } : {}), ...(v.knowsFocus === true ? { knowsFocus: true as const } : {}), ...(typeof v.askedAt === 'number' ? { askedAt: v.askedAt } : {}), ...(typeof v.withdrawnAt === 'number' ? { withdrawnAt: v.withdrawnAt } : {}), ...(v.conducts === true ? { conducts: true as const } : {}), ...(v.sends === true ? { sends: true as const } : {}) }
   } catch {
     return null
   }
@@ -675,8 +675,8 @@ export const claimIn = (x: Pick<GrantInput, 'sync' | 'files' | 'lanes' | 'now' |
   return x.sync && (phase === 'cutoff' || phase === 'frozen') ? { kind: 'sync', id8: x.sync.holder.id8, lane: x.sync.holder.lane, end: x.sync.hardEnd } : null
 }
 
-/** A135: a request whose process has stopped keeps its place for 48 h; a sync's or a Focus's slot ends with them (truth.ts). */
-export const keepsPlace = (w: Want, now: number): boolean => !isSyncSlot(w) && w.focus === undefined && now - w.requestedAt < 48 * 3_600_000
+export const STOPPED_KEEP_MS = 48 * 3_600_000 // A135: a request whose process has stopped keeps its place this long
+export const keepsPlace = (w: Want, now: number): boolean => !isSyncSlot(w) && w.focus === undefined && now - w.requestedAt < STOPPED_KEEP_MS // a sync's or a Focus's slot ends with them (truth.ts)
 /** The order every session computes alike: waiting requests, live or (A135) stopped, the claim's session first (a sync's holder in its cutoff or
  * freeze, A118 a running Focus's session), then (A117) the sessions the person placed, in his order, then first requested
  * first served. */
@@ -727,6 +727,7 @@ export type GrantInput = {
 export const decide = (x: GrantInput): Decision => {
   const { me8, lock, now, sync } = x
   const queue = queueIn(x)
+  const firstLive = queue.find(q => q.id8 === me8 || livenessOf(q.id8, x.files, x.lanes, now) === 'alive')?.id8 // A136: a stopped head recovers nothing
   const mine = x.files.find(f => f.id8 === me8)
   if (lock.id8 === me8 && (lock.kind === 'held' || lock.kind === 'handed')) return { kind: 'mine' }
   if (!mine?.want) return { kind: 'none' }
@@ -742,8 +743,8 @@ export const decide = (x: GrantInput): Decision => {
     const until = lock.end ? ` until ${lock.end}` : ''
     const live = livenessOf(lock.id8, x.files, x.lanes, now)
     // Round-2 review: never a FREE line without a process reading: a gone holder's lease waits for one (the next minute).
-    if (live === 'gone' && !x.probe && queue.find(q => q.id8 === me8 || livenessOf(q.id8, x.files, x.lanes, now) === 'alive')?.id8 === me8) return wait('probe', 'no process reading yet', `${who} (session ${lock.id8}) is gone, but there is no process reading to show no Editor or build runs`, 'it is read again at the next minute; do work that needs no Editor meanwhile')
-    if (live === 'gone' && x.probe && unrealPids(x.probe).length === 0 && buildProcs(x.probe).length === 0 && queue.find(q => q.id8 === me8 || livenessOf(q.id8, x.files, x.lanes, now) === 'alive')?.id8 === me8) return { kind: 'recover', holder: lock.id8 }
+    if (live === 'gone' && !x.probe && firstLive === me8) return wait('probe', 'no process reading yet', `${who} (session ${lock.id8}) is gone, but there is no process reading to show no Editor or build runs`, 'it is read again at the next minute; do work that needs no Editor meanwhile')
+    if (live === 'gone' && x.probe && unrealPids(x.probe).length === 0 && buildProcs(x.probe).length === 0 && firstLive === me8) return { kind: 'recover', holder: lock.id8 }
     if (live === 'gone' && pid !== null) return wait('gone-editor', 'its holder is gone, its Editor still open', `${who} (session ${lock.id8}) is gone but UnrealEditor PID ${pid} still runs`, 'never kill it or drive it; do work that needs no Editor meanwhile (its lease is freed once no UnrealEditor runs); an Editor left hung is a finding for Ather\'s Needs you')
     return wait('held', place === 1 ? `behind ${who}` : '', `${who}${lock.id8 ? ` (session ${lock.id8})` : ''} holds the Editor${until}${isUnresolvedHand(lock) && lock.isReadable ? ' (a hand-written line naming no single live session)' : ''}`, `${place > 1 ? `you are ${ordinal(place)} in the queue` : 'you are next'}; do work that needs no Editor meanwhile${isUnresolvedHand(lock) && lock.isReadable ? '; a request turns it into a standard line for you once no other A5R session holds a lease and no Editor of another lane (the PID it names) runs, and it lapses 30 min past its end with nothing running' : ''}`)
   }
@@ -821,7 +822,7 @@ const headStateOf = (x: GrantInput, queue: readonly SessionFile[]): HeadState =>
   const [head, ...later] = queue
   const d = head && !isPlaced(x.manual, head.id8) ? slotOf(x, head, 1) : null
   if (!head?.want || d?.kind !== 'wait' || d.code !== 'ram') return { isMemory: false }
-  const isAged = x.now - head.want.requestedAt >= PASS_AGING_MIN * 60_000
+  const isAged = livenessOf(head.id8, x.files, x.lanes, x.now) === 'alive' && x.now - head.want.requestedAt >= PASS_AGING_MIN * 60_000 // A136: a stopped head frees no memory by waiting
   for (const [i, f] of (isAged ? [] : later).entries()) {
     if (f.canPass !== true || livenessOf(f.id8, x.files, x.lanes, x.now) !== 'alive') continue // D3: a 0.22.0 session never takes a pass; A136: nor a stopped one
     const g = slotOf(x, f, i + 2, PASS_MAX_MIN)

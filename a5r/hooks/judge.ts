@@ -104,6 +104,15 @@ const minAgo = (now: number, at: number | null): string => (at === null ? 'unkno
  * no judge could run. Gone with nothing running → stuck or crashed; an open question → waiting on Hai; a running
  * Editor, build or tool, or recent activity → working; A69: it said or wrote that its Editor work is over (a FREE
  * line, a release, "closed the Editor") and nothing runs → done (the lease is stale); long silent → stuck; else unsure. */
+/** A65 / A140: whether the tail ends on a question to the person: an AskUserQuestion left open, or a last message that asks. */
+export const asksPerson = (events: readonly TranscriptEvent[]): boolean => {
+  const last = [...events].reverse().find(e => e.role !== 'other' && (e.text || e.tools.length || e.results.length))
+  const answered = new Set(events.flatMap(e => e.results))
+  return events.flatMap(e => e.tools).some(t => t.id && t.name === 'AskUserQuestion' && !answered.has(t.id)) || Boolean(last && last.role === 'assistant' && !last.tools.length && /\?\s*$/.test(last.text))
+}
+/** A69 / A140: whether words say its Editor work is over. */
+export const saysFinished = (text: string): boolean => FINISHED.test(text)
+
 export const hintOf = (f: JudgeFacts, events: readonly TranscriptEvent[]): { verdict: Verdict; evidence: string[] } => {
   const last = [...events].reverse().find(e => e.role !== 'other' && (e.text || e.tools.length || e.results.length))
   const lastAt = [...events].reverse().find(e => e.at !== null)?.at ?? null

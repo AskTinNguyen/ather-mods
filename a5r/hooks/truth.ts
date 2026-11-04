@@ -4,7 +4,7 @@
 // sessions stayed on file and about 30 sessions were told of each sync's freeze. Pure: no `$`; register.ts reads, writes
 // and delivers.
 import { psQuote } from './a5r.ts'
-import { buildProcs, isUnrealProc, keepsPlace, livenessOf, lockTimes, unrealPids, type LaneBeat, type LockLine, type Probe, type SessionFile, type Want } from './coord.ts'
+import { STOPPED_KEEP_MS, buildProcs, isUnrealProc, keepsPlace, livenessOf, lockTimes, unrealPids, type LaneBeat, type LockLine, type Probe, type SessionFile, type Want } from './coord.ts'
 
 const MIN = 60_000
 
@@ -44,13 +44,13 @@ export const STALE_WANT_MS = 2 * 3_600_000
 /** A135: the requests to withdraw, and why: a session gone (never a live one, and no lease: those are the lapse rules') whose
  * request was asked 48 h ago, whose session the app has archived (`archived`: first 8 hex), or whose sync's or Focus's slot has
  * stood 2 h. Any other stopped request keeps its place (A136 starts it). The write is read-compare-write (wakehost.ts withdraw). */
-export const staleWants = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, archived: ReadonlySet<string> = new Set()): { f: SessionFile; why: string }[] =>
+export const staleWants = (files: readonly SessionFile[], lanes: readonly LaneBeat[], now: number, archived: ReadonlySet<string>): { f: SessionFile; why: string }[] =>
   files.flatMap(f => {
     const x = { files, lanes, now }
     if (!f.want || f.holding || !isQuietFor(f.id8, x, 0)) return []
     if (archived.has(f.id8)) return [{ f, why: 'its session is archived' }]
     if (keepsPlace(f.want, now)) return []
-    const isOld = now - f.want.requestedAt >= 48 * 3_600_000
+    const isOld = now - f.want.requestedAt >= STOPPED_KEEP_MS
     return isOld ? [{ f, why: 'asked 48 h ago or more' }] : isQuietFor(f.id8, x, STALE_WANT_MS) ? [{ f, why: 'its session gone 2 h, a sync\'s or Focus\'s slot' }] : []
   })
 

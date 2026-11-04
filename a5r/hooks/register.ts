@@ -797,7 +797,7 @@ async function writeMe($: Engine): Promise<void> {
   if (!me) return
   const now = await $.clock.now()
   const { sharedShellAt: _was, ...rest } = me
-  me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), ...(rest.want ? { askedAt: rest.want.requestedAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
+  me = { ...rest, ...(sharedShellAt === null ? {} : { sharedShellAt }), ...(lastEditorUseAt > 0 ? { editorUseAt: lastEditorUseAt } : {}), ...(rest.want ? { askedAt: rest.want.requestedAt } : {}), heartbeatAt: now, canPass: true, knowsFocus: true, conducts: true, ...(wakes.canSend() ? { sends: true as const } : {}), delivered: [...delivered].slice(-200), prsKnown: [...prsKnown].slice(-500), prBaseline: [...prBaseline].slice(-100), prScorer: POSTHOC_SCORER, ...(agentsNow === null ? {} : { agents: agentsNow, agentKinds: agentKindsNow }), yieldAsks: me.yieldAsks.filter(a => now - a.at < YIELD_EVERY_MS) }
   await $.fs.write(`${hfDir()}/editor/${me.id8}.json`, JSON.stringify(me)).catch(err => $.ui.log(`a5r: session file not written: ${String(err)}`, { to: 'debug' }))
 }
 
@@ -1376,7 +1376,6 @@ async function editorPass($: Engine, opts: Opts, now: number): Promise<void> {
   gates = gatesOf(await $.store.get('gates').catch(() => null), opts.launchGatePieGb, opts.launchGateGb)
   await lapseStep($, opts, now)
   await missingLockStep($, opts, now)
-  if (await wakes.tick(wakeIo($, opts), now).catch(err => ($.ui.log(`a5r: conductor: ${String(err)}`, { to: 'debug' }), false))) await readWorld($, opts) // A135-A141
   await editorStep($, opts, now)
 }
 
@@ -1414,6 +1413,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   watchedSince ||= now
   await editorSerial(() => editorPass($, opts, now))
   await readLeaseLog($, opts, now)
+  await wakes.tick(wakeIo($, opts), now).catch(err => $.ui.log(`a5r: conductor: ${String(err)}`, { to: 'debug' })) // A135-A141: outside the Editor's own pass, so a slow send never holds it
   await refreshClients($, opts, now)
   await judgeStep($, opts, now).catch(err => $.ui.log(`a5r: judge: ${String(err)}`, { to: 'debug' }))
   const window = freeWindowOf(lock, claimNow(now)) // A91: the free window, if the Editor is free
@@ -1702,7 +1702,7 @@ async function tellReleased($: Engine, opts: Opts, held: LockLine, r: Released):
   if (held.id8 === me8 && after) me = after
 }
 
-// ---------- A91: a nudge to waiting idle sessions when the Editor comes free (A140: the conductor, wakehost.ts, sends it) ----------
+// ---------- A91: a nudge when the Editor comes free: the conductor sends it (wakehost.ts), its target's own A5R delivers it ----------
 /** A65 / A91 (review): the last 64 KB of a session's record, never the whole file (a record runs to tens of MB): read whole
  * only when that small, else its last bytes by PowerShell (the first, partial line is dropped by parseTail). */
 const RECORD_TAIL_BYTES = 64 * 1024
@@ -2849,7 +2849,11 @@ const hostIo = ($: Engine, opts: Opts): TurnIo => ({
 })
 const wakeIo = ($: Engine, opts: Opts): WakeIo => ({
   ...hostIo($, opts),
-  call: input => $.tool.call(input as never).catch(() => null), // the one send (wake.ts sendInput)
+  call: input => new Promise(done => { // the one send (wake.ts sendInput); a call a prompt holds stops at a minute
+    $.clock.after(60_000, () => done(null))
+    $.tool.call(input as never).then(done, () => done(null))
+  }),
+  writeChecked: (path, expected, text) => writeChecked($, path, expected, text).then(w => w.isWritten),
   deskPlace: async () => ({ appData: await $.env.get('APPDATA').catch(() => undefined), account: await $.env.get('CLAUDE_CODE_ACCOUNT_UUID').catch(() => undefined), org: await $.env.get('CLAUDE_CODE_ORGANIZATION_UUID').catch(() => undefined) }),
   log: e => orchestrateLog($, opts, e).catch(() => undefined),
   notify: async text => {
@@ -3306,7 +3310,7 @@ const orderAction = async ($: Engine, opts: Opts, a: OrderAction, via: string): 
     const r = applyOrder(grantInput(now), order, a, { by: by(via), titleOf: appTitleOf(appNow(now)) })
     if ('refusal' in r) return r
     if (r.kind === 'order') return { write: () => writeOrder($, opts, r.order), what: 'the queue order', rule: 'manual', note: `${r.text}; moved ${r.moved.join(',') || 'none'}`, text: r.text, next: 'every session computes the queue this way from now; the sessions it moved are told' }
-    if (r.kind === 'remove') return { write: () => wakes.withdraw(hostIo($, opts), r.id8, r.requestedAt), what: 'its request', rule: 'manual', note: r.text, text: r.text, next: 'the queue goes on without it' } // A135
+    if (r.kind === 'remove') return { write: () => wakes.withdraw(wakeIo($, opts), r.id8, r.requestedAt, now), what: 'its request', rule: 'manual', note: r.text, text: r.text, next: 'the queue goes on without it' } // A135
     if (r.kind === 'resize') return { write: () => writeLock($, opts, r.line), what: 'the lock', rule: 'manual', note: r.text, text: r.text, next: 'the holder\'s A5R takes the new end at its next minute and is told' }
     // Fable review S3: the person frees a holder past its end; its record and its notice go where a lapse's go.
     const held = lock
@@ -3353,7 +3357,7 @@ async function orphanStep($: Engine, opts: Opts, now: number): Promise<void> {
  * time; with no live holder any one session cancels a lost holder's sync at T − 10 min, and the person is told (once a day
  * when no holder is live at all). */
 async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: queueNow(filesNow(), now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
+  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: queueNow(filesNow(), now).filter(f => isLive(f.id8, now)).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
   const log = (note: string) => orchestrateLog($, opts, actedEvent('auto-sync', note, now)).catch(() => undefined)
   const s = syncFile
   if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: opts.autoSyncBuild !== false })}`)
@@ -3366,7 +3370,7 @@ async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
  * read-compare-write, so one writer) and logged; alert files older than 7 days are removed once a day. */
 async function tidyStep($: Engine, opts: Opts, now: number): Promise<void> {
   for (const { f, why } of staleWants(filesNow(), lanes, now, wakes.archived())) {
-    if (!f.want || !(await wakes.withdraw(hostIo($, opts), f.id8, f.want.requestedAt))) continue // one writer: the read-compare-write
+    if (!f.want || !(await wakes.withdraw(wakeIo($, opts), f.id8, f.want.requestedAt, now))) continue // one writer: the read-compare-write
     await orchestrateLog($, opts, actedEvent('withdrawn', `its request (asked ${clockOf(f.want.requestedAt)}, ${f.want.minutes} min) withdrawn: ${why}; its session gone since ${clockOf(f.heartbeatAt)}`, now, f, 'gone')).catch(() => undefined)
   }
   if (!(await claimAlert($, opts, `prune-alerts-${ymd(now)}`))) return
@@ -3871,7 +3875,7 @@ export const register: Register = (on, options) => {
     const where2 = chain === null ? 'not seen yet (no tool call so far)' : chain.includes('ather-automata') ? 'above ather-automata: its pane gets the tiles' : `beneath ather-automata (${chain.join(' → ') || 'nothing'} below): the pane cannot be wrapped from here; put a5r first in CLAUDE_CODE_PLUGIN_DIRS`
     const coord =
       a5rOn && isS2
-        ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)} (holder ${syncFile.holder.lane}, hard end ${clockOf(syncFile.hardEnd)})` : 'none planned'}. ${overviewLine(overviewOf({ ...appNow(nowMs), lanes, lock, sync: syncFile, phase: phaseOf(syncFile, nowMs), manual: manualNow(nowMs), focus: focusNow(nowMs) }))}.${wakes.night(nowMs) ? ` ${wakes.night(nowMs)}` : ''}`
+        ? ` Editor: ${placeText(decision)}; lock: ${(lockRaw ?? '').trim() || 'missing'}. Memory: ${probe ? `${probe.freeGb} GB free` : 'no reading'}, launch gate ${gates.pieGb}/${gates.nopieGb} GB (${gates.source}). Sync: ${syncFile ? `${clockOf(syncFile.at)} ${phaseOf(syncFile, nowMs)} (holder ${syncFile.holder.lane}, hard end ${clockOf(syncFile.hardEnd)})` : 'none planned'}. ${overviewLine(overviewOf({ ...appNow(nowMs), lanes, lock, sync: syncFile, phase: phaseOf(syncFile, nowMs), manual: manualNow(nowMs), focus: focusNow(nowMs) }))}.${wakes.night(nowMs)}`
         : ''
     return { text: `A5R is ${a5rOn ? 'ON' : 'off'}. Hits this session: ${Object.entries(hits).map(([k, v]) => `${k} ${v}`).join(' · ')}. a5r sits ${where2}.${coord}` }
   })

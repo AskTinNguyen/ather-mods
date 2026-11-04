@@ -4,11 +4,11 @@
 // step told once, an idle session woken for what it frees. A133: the measured times, the timeline line, what each Editor
 // wait waits for. A134: the band, the prompt's line and toast, Saved/A5R/status.json. The rules are syncplan.ts's.
 import { claimIn, type GrantInput, type Notice, type Phase, type SessionFile, type SyncFile } from './coord.ts'
-import { appendCapped, queueTimes, queueView } from './lease.ts'
+import { STOPPED_WORDS, appendCapped, queueTimes, queueView } from './lease.ts'
 import { STATUS_FILE, SYNC_TIMES_FILE, NO_TIMES, aheadOf, bandLine, buildMsOf, editorWaits, freesAny, freezeStepOf, isMoved, parseSyncTimes, promptLine, shortLine, statusAtOf, statusOf, stepNotice, timelineLine, timesLine, toastText, type FreezeStep, type Need } from './syncplan.ts'
 import { readBuildLog, type BuildLogRead } from './syncstage.ts'
 import type { FileIo } from './hostio.ts'
-import { STOPPED_WORDS } from './wake.ts'
+import type { WakeStatus } from './wake.ts'
 
 /** This session's state as register.ts last read it. */
 export type FreezeState = {
@@ -23,7 +23,7 @@ export type FreezeState = {
   /** Fable 11: whether this session writes status.json (one session: the first live one in the queue order, else by id) */
   isStatusWriter: (now: number) => boolean
   /** A139 / A141: what status.json says of stopped requests and the idle-with-work minutes */
-  wakeStatus: (now: number) => Record<string, unknown>
+  wakeStatus: (now: number) => WakeStatus
 }
 
 export const freezeSteps = (h: FreezeState) => {
