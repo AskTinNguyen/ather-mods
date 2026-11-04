@@ -813,7 +813,7 @@ test('Review 5.2: a work start nobody answered keeps the count going: the Editor
   worker(w, 'cccccccc', QUEUED_WORDS)
   await $.session.start(START)
   await w.clock.advance(35 * MIN)
-  expect(sends(w).length).toBeLessThan(3)
+  expect(sends(w).length).toBe(2) // the first, and the alarm's one more try
   expect(w.read(LOG).match(/rule=idle-with-work/g)?.length).toBe(1)
   expect(w.read(LOG)).toContain('did not answer')
 })
@@ -897,4 +897,69 @@ test('Review 9: stopped requests that memory holds back do not stop a session wh
   await $.session.start(START)
   await w.clock.advance(MIN)
   expect(sends(w).map(s => s.to)).toEqual(['local_dddddddd'])
+})
+
+test('Mutation gaps: a stopped session never takes a pass from a live head waiting for memory', () => {
+  const head = file('bbbbbbbb', { want: want({ pie: true, requestedAt: NOW - 30 * MIN }) })
+  const s = stoppedFile('cccccccc', { want: want({ requestedAt: NOW - 20 * MIN }), canPass: true })
+  const me = file(ME8, { want: want({ requestedAt: NOW - 10 * MIN }) })
+  expect(decide(grant([head, s, me], { probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).toBe('grant')
+})
+
+test('Mutation gaps: the minute a start is settled starts nobody else', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc', { want: want({ requestedAt: NOW - 4 * H }) })
+  stopped(w, 'dddddddd', { want: want({ requestedAt: NOW - 3 * H }) })
+  await $.session.start(START)
+  for (let n = 0; n < 8 && fileOf(w, 'cccccccc').want?.misses !== 1; n += 1) await w.clock.advance(MIN)
+  expect(fileOf(w, 'cccccccc').want?.misses).toBe(1) // settled, this minute
+  expect(sends(w).length).toBe(1)
+  await w.clock.advance(MIN)
+  expect(sends(w).length).toBe(2)
+})
+
+const app = (extra: { name: string; row: Record<string, unknown> }[]) => {
+  const disk = new Map(extra.map(e => [`app/Claude/claude-code-sessions/a/o/${e.name}`, JSON.stringify(e.row)]))
+  return { disk, o: { deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }), list: async () => extra.map(e => ({ name: e.name, mtimeMs: 1 })) } }
+}
+const hostOf = (files: () => SessionFile[], me: SessionFile) => conductor({ me8: () => ME8, me: () => me, grantInput: now => grant(files(), { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+
+test('Mutation gaps: a session in the app takes over from a conductor that cannot send; the env alone is not being in the app', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME, sends: true })
+  const holder = file('bbbbbbbb', { heartbeatAt: NOW })
+  const stoppedOne = stoppedFile('cccccccc', { want: want() })
+  const own = { name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }
+  const a = app([own, { name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc') } }])
+  a.disk.set('d/conductor.json', JSON.stringify({ id8: 'bbbbbbbb', at: NOW }))
+  let calls = 0
+  await hostOf(() => [me, holder, stoppedOne], me).tick(fakeIo(a.disk, { ...a.o, call: async () => ((calls += 1), { text: SENT }) }))
+  expect(calls).toBe(1)
+  const without = app([{ name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc') } }])
+  const c = hostOf(() => [me], me)
+  await c.tick(fakeIo(without.disk, without.o))
+  expect(c.canSend()).toBe(false)
+})
+
+test('Mutation gaps: a record gone from a non-empty listing drops its session (A135: deleted)', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const own = { name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }
+  const gone = { name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc'), isArchived: true } }
+  const c = hostOf(() => [me], me)
+  const first = app([own, gone])
+  await c.tick(fakeIo(first.disk, first.o))
+  expect([...c.archived()]).toEqual(['cccccccc'])
+  const later = app([own])
+  await c.tick(fakeIo(later.disk, later.o))
+  expect([...c.archived()]).toEqual([])
+})
+
+test('Mutation gaps: a session refused and archived since is not messaged', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const a = app([{ name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }, { name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc'), isArchived: true } }])
+  a.disk.set('d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - MIN, what: 'x' }))
+  let calls = 0
+  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: 1 }] : a.o.list())
+  await hostOf(() => [me, stoppedFile('cccccccc')], me).tick(fakeIo(a.disk, { ...a.o, list, call: async () => ((calls += 1), { text: SENT }) }))
+  expect(calls).toBe(0)
 })
