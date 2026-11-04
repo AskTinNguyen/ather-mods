@@ -154,6 +154,32 @@ export const wordsOf = (events: readonly TranscriptEvent[]): Words => ({ isFinis
 /** A140: whether a session in that pool has work: asked or held within a day (or, A91, its last words wait for the Editor), and
  * its last words do not finish it. */
 export const hasWork = (f: SessionFile, leases: readonly LeaseRecord[], words: Words, now: number): boolean => !words.isFinished && (now - editorSignAt(f, leases) <= WORK_RECENT_MS || words.waits)
+/** A140: what the conductor knows of one session in the pool. `told`: its inbox has a nudge within 2 h; `triedAt`, `answeredAt`:
+ * its last start, and its last answer to a start for work; `hasRecord`: the desktop app lists it. */
+export type WorkFact = { f: SessionFile; words: Words; told: boolean; triedAt: number; answeredAt: number; isAlive: boolean; hasRecord: boolean; fits: boolean }
+/** A140 / A91 / A141, the whole rule of who is told, who is started and what the free minute counts as. A session with work and:
+ * the gates against it: held, nobody is started; started for work and it answered with no request since: it said no, and stays out
+ * until it asks or holds again; stopped, tried within 2 h: it waits, and counts while nobody answered; stopped otherwise: started,
+ * and the plan ends there (one at a time); live and told within 2 h: counts while it has not asked; live otherwise: told. `again`:
+ * A141's one more try, the 2 h aside. */
+export const workPlan = (facts: readonly WorkFact[], x: { now: number; leases: readonly LeaseRecord[]; again: boolean; nameOf: (f: SessionFile) => string }): { tell: SessionFile[]; start: SessionFile | null; held: string | null } => {
+  const tell: SessionFile[] = []
+  let held: string | null = null
+  for (const w of facts) {
+    if (!hasWork(w.f, x.leases, w.words, x.now) || (w.answeredAt > 0 && editorSignAt(w.f, x.leases) < w.answeredAt)) continue
+    const name = x.nameOf(w.f)
+    if (!w.fits) return { tell, start: null, held: `${name} has work, but the Editor's gates hold it` }
+    const isTried = x.now - w.triedAt < WORK_AGAIN_MS && !x.again
+    if (w.isAlive) {
+      if (w.told && !x.again) held ??= `${name} was told and has not asked yet`
+      else tell.push(w.f)
+    } else if (w.hasRecord) {
+      if (!isTried) return { tell, start: w.f, held }
+      if (w.answeredAt < w.triedAt) held ??= `${name} has work and did not answer at ${hhmm(w.triedAt)}`
+    }
+  }
+  return { tell, start: null, held: held ?? (tell[0] ? `${x.nameOf(tell[0])} was told and has not asked yet` : null) }
+}
 /** A140: the Editor's gates for a session with no request: a stand-in slot of 30 min without PIE meets what decide checks. */
 export const workFits = (x: GrantInput, f: SessionFile): boolean => {
   const want: Want = { minutes: 30, pie: false, build: false, what: 'Editor work', mode: 'unattended', pausable: true, nextSafe: '', requestedAt: x.now }
@@ -166,15 +192,16 @@ export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused
 /** `refused`: what the send reported (the heartbeat still decides); `answeredAt`: a session started for work that came up. */
 export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string; answeredAt?: number }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
-/** `triedAt`: when each session was last tried, whatever for: the one record of attempts. */
-export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; pausedUntil: number; pausedSince: number; pausedBy?: string; lastFailure?: string }
-export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, pausedUntil: 0, pausedSince: 0 }
+/** `triedAt`: when each session was last tried, whatever for: the one record of attempts; `answeredAt`: when it last answered a
+ * start for work (A140: it said no until it asks). */
+export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; answeredAt: Record<string, number>; pausedUntil: number; pausedSince: number; pausedBy?: string; lastFailure?: string }
+export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, answeredAt: {}, pausedUntil: 0, pausedSince: 0 }
 /** A139 / A141: what status.json says of them. */
 export type WakeStatus = { stopped: number; idleWithWork: { run: number; days: Record<string, number>; nights: Record<string, number> }; starting: { lane: string; id8: string; why: WakeWhy; at: number } | null; pausedUntil: number | null }
 export const RECENT_KEEP = 40
 export const parseWake = (text: string | null): WakeFile => {
   const v = jsonOf<WakeFile>(text)
-  return v ? { v: 1, current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null, recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [], triedAt: v.triedAt && typeof v.triedAt === 'object' ? v.triedAt : {}, pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0, pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0, ...(typeof v.pausedBy === 'string' ? { pausedBy: v.pausedBy } : {}), ...(typeof v.lastFailure === 'string' ? { lastFailure: v.lastFailure } : {}) } : NO_WAKE
+  return v ? { v: 1, current: v.current && typeof v.current.id8 === 'string' && typeof v.current.at === 'number' ? v.current : null, recent: Array.isArray(v.recent) ? v.recent.filter(r => r && typeof r.at === 'number') : [], triedAt: v.triedAt && typeof v.triedAt === 'object' ? v.triedAt : {}, answeredAt: v.answeredAt && typeof v.answeredAt === 'object' ? v.answeredAt : {}, pausedUntil: typeof v.pausedUntil === 'number' ? v.pausedUntil : 0, pausedSince: typeof v.pausedSince === 'number' ? v.pausedSince : 0, ...(typeof v.pausedBy === 'string' ? { pausedBy: v.pausedBy } : {}), ...(typeof v.lastFailure === 'string' ? { lastFailure: v.lastFailure } : {}) } : NO_WAKE
 }
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })
 /** The next conductor: the first live A5R that conducts, those that can start a session (in the desktop app) first, then by id. */
@@ -222,8 +249,6 @@ export const nextIdle = (i: IdleFile, x: { isFree: boolean; hasWork: boolean; no
     alarmed: run > 0 && i.alarmed,
   }
 }
-/** A141: a start that nobody answered is still work waiting, for the count: `recent` says how its last start came out. */
-export const lastOutcome = (w: WakeFile, id8: string): WakeOutcome | undefined => w.recent.filter(r => r.id8 === id8).pop()?.outcome
 export const isAlarmDue = (i: IdleFile): boolean => i.run >= IDLE_ALARM_MIN && !i.alarmed
 export const alarmText = (minutes: number, cause: string): string => `A5R: ${minutes > 0 ? `the Editor has stood free ${minutes} min with work waiting` : 'work is waiting for the Editor'}: ${cause}`
 

@@ -111,7 +111,7 @@ export const applyOrder = (g: GrantInput, order: QueueOrder, a: OrderAction, p: 
   if ('refusal' in picked) return picked
   const { id8 } = picked
   const name = p.titleOf(id8) || laneOf(id8)
-  if (a.kind === 'remove') return removal(g, id8, name, p)
+  if (a.kind === 'remove') return holder?.id8 === id8 ? refuse(`${name} holds the Editor, so it has no request to remove`, 'release it once its lease has ended') : removal(g, id8, name, p)
   if (holder?.id8 === id8) {
     if (a.kind === 'move') return refuse(`${name} holds the Editor, so it has no place in the queue`, 'move a queued session, or give the holder more time')
     return a.kind === 'release' ? release(g, holder, name, p) : resize(g, holder, name, a.change, p)

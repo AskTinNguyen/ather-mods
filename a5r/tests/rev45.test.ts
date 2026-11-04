@@ -4,7 +4,7 @@ import { applyOrder, parseEditorCommand, NO_ORDER } from '../hooks/order.ts'
 import { editorPanel } from '../hooks/panel.ts'
 import { staleWants } from '../hooks/truth.ts'
 import { conductor, type WakeIo } from '../hooks/wakehost.ts'
-import { WAKE_ANSWER_MS, afterMiss, answered, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
+import { WAKE_ANSWER_MS, workPlan, type WorkFact, afterMiss, answered, conductorOf, deskDir, idleLine, isFinished, mayConduct, nextIdle, NO_IDLE, NO_WAKE, nightLine, nightOf, parseDeskRow, pausedCause, readSend, sendInput, turnToStart, workFits, workPool } from '../hooks/wake.ts'
 import { parseTail } from '../hooks/judge.ts'
 import { A5RPANE, ENV, LOCK, ME, NOW, PANE, PROJ, atherTree, find, opts, refused, text, world } from './world.ts'
 
@@ -848,4 +848,36 @@ test('Review 6.2: a refusal is spent only by a start', async () => {
   expect(disk.get('d/refused/cccccccc.json')).not.toBe('null')
   await c.tick(fakeIo(disk, { deskPlace: place, list, call: async () => ({ text: SENT }) }))
   expect(disk.get('d/refused/cccccccc.json')).toBe('null')
+})
+
+test('Review 7.1: a session that answered a start for work and did not ask has said no: it is not started again, even past 2 h', opts(), async ($, on) => {
+  const w = world(on, { ram: '40', out: { SendMessage: SENT } })
+  w.put(LOCK, FREE)
+  worker(w, 'cccccccc', QUEUED_WORDS)
+  await $.session.start(START)
+  await w.clock.advance(MIN)
+  expect(sends(w).length).toBe(1)
+  put(w, { ...fileOf(w, 'cccccccc'), heartbeatAt: w.clock.now() + 1, lastTurnAt: w.clock.now() }) // it came up and answered
+  await w.clock.advance(MIN)
+  put(w, { ...fileOf(w, 'cccccccc'), heartbeatAt: NOW - H }) // and stopped again
+  await w.clock.advance(3 * H)
+  expect(sends(w).length).toBe(1)
+})
+
+test('Review 7.2: unit: workPlan: told and silent stays counted; the gates hold; started one ends the plan', () => {
+  const words = { isFinished: false, waits: true }
+  const fact = (id8: string, o: Partial<WorkFact> = {}): WorkFact => ({ f: { ...file(id8), id8 }, words, told: false, triedAt: 0, answeredAt: 0, isAlive: false, hasRecord: true, fits: true, ...o })
+  const plan = (facts: WorkFact[], again = false) => workPlan(facts, { now: NOW, leases: [], again, nameOf: f => f.id8 })
+  expect(plan([fact('a', { isAlive: true, told: true })])).toEqual({ tell: [], start: null, held: 'a was told and has not asked yet' })
+  expect(plan([fact('a', { isAlive: true })]).tell.map(f => f.id8)).toEqual(['a'])
+  expect(plan([fact('a', { fits: false })]).held).toBe('a has work, but the Editor\'s gates hold it')
+  expect(plan([fact('a'), fact('b')]).start?.id8).toBe('a')
+  expect(plan([fact('a', { triedAt: NOW - H }), fact('b')]).start?.id8).toBe('b')
+  expect(plan([fact('a', { triedAt: NOW - H })]).held).toContain('did not answer')
+  expect(plan([fact('a', { triedAt: NOW - 2 * H })]).start?.id8).toBe('a')
+  expect(plan([fact('a', { triedAt: NOW - H })], true).start?.id8).toBe('a')
+  expect(plan([fact('a', { hasRecord: false })])).toEqual({ tell: [], start: null, held: null })
+  expect(plan([fact('a', { words: { isFinished: true, waits: true } })]).start).toBeNull()
+  expect(plan([fact('a', { triedAt: NOW - 3 * H, answeredAt: NOW - 2 * H })]).start).toBeNull()
+  expect(plan([{ ...fact('a', { triedAt: NOW - 5 * H, answeredAt: NOW - 3 * H }), f: { ...file('a', { askedAt: NOW - H }), id8: 'a' } }]).start?.id8).toBe('a') // it asked since
 })

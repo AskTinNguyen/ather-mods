@@ -9,7 +9,7 @@ import type { LeaseRecord } from './lease.ts'
 import { NUDGE_MAX } from './nudge.ts'
 import { STALE_WANT_MS } from './truth.ts'
 import type { Need } from './syncplan.ts'
-import { CONDUCTOR_FILE, IDLE_FILE, NO_IDLE, NO_WAKE, PAUSE_MS, REFUSED_DIR, WAKE_ANSWER_MS, WAKE_FILE, WORK_AGAIN_MS, WORK_SETTLE_MS, afterMiss, alarmText, conductorOf, deskDir, hasWork, idleLine, isAlarmDue, isStopped, lastOutcome, mayConduct, nextIdle, nightLine, parseConductor, parseDeskRow, parseIdle, parseRefusal, parseWake, pausedCause, readSend, refusalMessage, retryAfter, sendInput, stoppedRefusals, turnMessage, turnToStart, withRow, wordsOf, workFits, workMessage, workPool, type DeskRow, type IdleFile, type Refusal, type WakeFile, type WakeOutcome, type WakeStatus, type WakeWhy, type Words } from './wake.ts'
+import { CONDUCTOR_FILE, IDLE_FILE, NO_IDLE, NO_WAKE, PAUSE_MS, REFUSED_DIR, WAKE_ANSWER_MS, WAKE_FILE, WORK_AGAIN_MS, WORK_RECENT_MS, WORK_SETTLE_MS, afterMiss, alarmText, conductorOf, deskDir, idleLine, isAlarmDue, isStopped, mayConduct, nextIdle, nightLine, parseConductor, parseDeskRow, parseIdle, parseRefusal, parseWake, pausedCause, readSend, refusalMessage, retryAfter, sendInput, stoppedRefusals, turnMessage, turnToStart, withRow, wordsOf, workFits, workMessage, workPlan, workPool, type DeskRow, type IdleFile, type Refusal, type WakeFile, type WakeOutcome, type WakeStatus, type WakeWhy, type WorkFact, type Words } from './wake.ts'
 
 /** The engine's calls for one minute. */
 export type WakeIo = FileIo & {
@@ -57,8 +57,6 @@ export const conductor = (h: WakeState) => {
   let isDeskKnown = false
   const desk = new Map<string, { row: DeskRow; mtime: number; name: string }>()
   const wordsAt = new Map<string, { turn: number; words: Words }>() // id8 -> what its last words said, read once per turn
-  let nudgeWindow = ''
-  let nudgeRead = new Set<string>()
   const wakePath = (): string => `${h.dir()}/${WAKE_FILE}`
   const idlePath = (): string => `${h.dir()}/${IDLE_FILE}`
   const myName = (): string => h.titleOf(h.me8()) || (h.me()?.lane ?? h.me8())
@@ -66,7 +64,8 @@ export const conductor = (h: WakeState) => {
   const nameOf = (f: { id8: string; lane: string }): string => h.titleOf(f.id8) || f.lane
   const event = (f: { lane: string; id8: string; lastTurnAt?: number }, rule: OrchestrateEvent['rule'], note: string, now: number, acted = true): OrchestrateEvent => ({ at: now, rule, lane: f.lane, id8: f.id8, procs: [], liveness: 'gone', lastTurnAt: f.lastTurnAt ?? null, agents: null, build: false, acted, note })
   const save = async (io: WakeIo, w: WakeFile, now: number): Promise<void> => {
-    wake = { ...w, triedAt: Object.fromEntries(Object.entries(w.triedAt).filter(([, at]) => now - at < WORK_AGAIN_MS)) } // its only deleter
+    const recent = (m: Record<string, number>, keepMs: number) => Object.fromEntries(Object.entries(m).filter(([, at]) => now - at < keepMs)) // their only deleter
+    wake = { ...w, triedAt: recent(w.triedAt, WORK_AGAIN_MS), answeredAt: recent(w.answeredAt, 2 * WORK_RECENT_MS) }
     await io.write(wakePath(), JSON.stringify(wake))
   }
 
@@ -157,7 +156,7 @@ export const conductor = (h: WakeState) => {
     const row = { at: now, id8: cur.id8, lane: cur.lane, why: cur.why, outcome }
     if (cur.answeredAt === undefined) await io.log(event(cur, 'woke', `${cur.why}: ${outcome} ${Math.round((now - cur.at) / 60_000)} min after the start at ${hhmm(cur.at)}`, now))
     if (isAnswered && cur.why === 'work' && !f?.want && !f?.holding && now - (cur.answeredAt ?? now) < WORK_SETTLE_MS) {
-      if (cur.answeredAt === undefined) await save(io, { ...withRow(wake, row), current: { ...cur, answeredAt: now } }, now)
+      if (cur.answeredAt === undefined) await save(io, { ...withRow(wake, row), current: { ...cur, answeredAt: now }, answeredAt: { ...wake.answeredAt, [cur.id8]: now } }, now)
       return true
     }
     await save(io, { ...(cur.answeredAt === undefined ? withRow(wake, row) : wake), current: null, ...(!isAnswered && cur.refused ? { lastFailure: `the send was refused: ${cur.refused}` } : {}) }, now)
@@ -190,46 +189,29 @@ export const conductor = (h: WakeState) => {
     return NOTHING
   }
 
-  /** A140 / A91: the sessions with Editor work when the Editor is free and nobody is queued: a live one is told through its own
-   * inbox (at most 3 in a free window), a stopped one is started, and the pass ends there (one at a time). */
+  /** A140 / A91: the facts of the pool (its last words read once per turn), then what wake.ts workPlan says: tell, start, or hold. */
   const workStep = async (io: WakeIo, x: GrantInput, now: number, again: boolean): Promise<Step> => {
     const window = h.freeWindow(now)
     if (!window) return NOTHING
-    if (nudgeWindow !== window) {
-      nudgeWindow = window
-      nudgeRead = new Set()
-    }
-    let step: Step = NOTHING
+    const facts: WorkFact[] = []
     for (const f of workPool({ files: x.files, now, archived: archived() })) {
-      const triedAt = wake.triedAt[f.id8] ?? 0
-      if (nudgeRead.has(f.id8) || (now - (await io.nudgedAt(f.id8)) < WORK_AGAIN_MS && !again)) continue
-      const seen = wordsAt.get(f.id8)
       const turn = f.lastTurnAt ?? 0
-      if (seen?.turn !== turn) {
+      if (wordsAt.get(f.id8)?.turn !== turn) {
         const events = await io.events(f.session)
         if (events.length === 0) continue // unread is not finished for the whole turn: read again next minute
         wordsAt.set(f.id8, { turn, words: wordsOf(events) })
       }
       const words = wordsAt.get(f.id8)?.words
-      if (!words || !hasWork(f, h.leases(), words, now)) continue
-      if (now - triedAt < WORK_AGAIN_MS && !again) {
-        // A140 starts it no sooner; A141 still counts a start nobody answered: the work waits.
-        if (lastOutcome(wake, f.id8) === 'no-answer') step = held(`${nameOf(f)} has work and did not answer at ${hhmm(triedAt)}${wake.lastFailure ? ` (${wake.lastFailure})` : ''}`)
-        continue
-      }
-      if (!workFits(x, f)) return held(`${nameOf(f)} has work, but the Editor's gates hold it (memory ${h.freeGb() ?? '?'} GB)`)
-      if (livenessOf(f.id8, x.files, x.lanes, now) !== 'alive') {
-        if (!desk.has(f.session.toLowerCase())) continue // nothing can start it
-        return start(io, { f, why: 'work', text: workMessage(h.freeGb()), requestedAt: null }, now) // one at a time
-      }
-      nudgeRead.add(f.id8)
-      step = held(`${nameOf(f)} was told and has not asked yet`)
+      if (words) facts.push({ f, words, told: now - (await io.nudgedAt(f.id8)) < WORK_AGAIN_MS, triedAt: wake.triedAt[f.id8] ?? 0, answeredAt: wake.answeredAt[f.id8] ?? 0, isAlive: livenessOf(f.id8, x.files, x.lanes, now) === 'alive', hasRecord: desk.has(f.session.toLowerCase()), fits: workFits(x, f) })
+    }
+    const plan = workPlan(facts, { now, leases: h.leases(), again, nameOf })
+    for (const f of plan.tell) {
       if (!(await claimNudge(io, window, f.id8))) continue
       await io.nudge(f.id8, window, now, h.freeGb())
-      await save(io, { ...wake, triedAt: { ...wake.triedAt, [f.id8]: now } }, now)
       await io.log({ ...event(f, 'A91-nudge', `the Editor is free (window ${window}), nobody queued; told through its inbox`, now), liveness: 'alive', agents: f.agents ?? null })
     }
-    return step
+    if (plan.start) return start(io, { f: plan.start, why: 'work', text: workMessage(h.freeGb()), requestedAt: null }, now)
+    return plan.held ? held(plan.held) : NOTHING
   }
   /** A91: one nudge target per window and one of the window's 3 slots, each claimed. */
   const claimNudge = async (io: WakeIo, window: string, id8: string): Promise<boolean> => {

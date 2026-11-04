@@ -10,7 +10,6 @@ import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
 import { buildStep, runLabel, SCRIPT_SUFFIX } from './buildscript.ts'
 import { endOf, opOf, type ConflictHead, type HeadFile } from './gitshared.ts'
-import type { NoMod } from './overview.ts'
 import { engineLabel, type EngineFind } from './machine.ts'
 import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type EntryTell, type StageTell, type SyncStage } from './syncstage.ts'
 
@@ -99,6 +98,7 @@ export const holdsSyncSlot = (lock: LockLine, holder: SessionFile | null | undef
  * id8 of the head it went before (a pass slot). */
 export type Holding = { since: number; end: number; extended: number; notes?: LeaseNotes; pass?: string }
 /** A request to a holder to yield (or a standard `UE request:` line sent to a holder without a5r). */
+export type NoMod = { sessionId: string; id8: string; intent: string; branch: string }
 export type YieldAsk = { holder: string; at: number; via: 'file' | 'send'; minutes: number; lane: string }
 export type SessionFile = {
   v: 1
