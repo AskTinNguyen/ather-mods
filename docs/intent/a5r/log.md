@@ -392,3 +392,11 @@ With a screenshot of the "S2 Lanes" viewer (28 sessions on a timeline, sync main
 > Tối qua vì lí do ngu ngốc nào đó không có session nào làm việc!
 
 With a screenshot of the "S2 Lanes" viewer: Editor free from about 23:30 to 09:30, 5 sessions shown waiting for a turn. Measured: no transcript entry in any session from 23:35 to 09:00, no reboot, no API error. The waiting sessions' processes had ended while idle and A125 had withdrawn their requests after 2 h, so the queue was empty from 23:25. A message starts a stopped session again (measured on "Side chat", 10:25). (-> A135-A139.)
+
+## L-50 (2026-11-04)
+
+> Làm sao để đảm bảo không lặp lại lỗi này nữa?
+
+> Vấn đề không phải là chức năng của S2 Lanes, nó chỉ đọc thông tin tĩnh là đúng rồi. Nhưng A5R là công cụ chủ động điều phối lịch hoạt động và Editor của các session mà?
+
+(-> A140, A141. No change asked of S2 Lanes.)
