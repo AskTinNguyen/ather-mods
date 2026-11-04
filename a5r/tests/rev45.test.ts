@@ -471,18 +471,15 @@ test('A140: with memory short nothing is started, in the engine', opts(), async 
   expect(sends(w)).toEqual([])
 })
 
-test('A140: unit: the pool: asking, holding, running agents, active over a day ago or started within 2 h leave; last words read by the judge', () => {
+test('A140: unit: the pool: asking, holding, running agents, active over a day ago leave; last words read by the judge', () => {
   const base = { lastTurnAt: NOW - H, agents: 0 }
-  const pool = (o: Partial<SessionFile>, workAt = {}, again = false) => workPool({ files: [file('cccccccc', { ...base, ...o })], lanes: [], now: NOW, triedAt: workAt, again, archived: NONE }).length
+  const pool = (o: Partial<SessionFile>) => workPool({ files: [file('cccccccc', { ...base, ...o })], now: NOW, archived: NONE }).length
   expect(pool({})).toBe(1)
   expect(pool({ want: want() })).toBe(0)
   expect(pool({ holding: { since: 0, end: 0, extended: 0 } })).toBe(0)
   expect(pool({ agents: 1 })).toBe(0)
   expect(pool({ lastTurnAt: NOW - 25 * H })).toBe(0)
   expect(pool({ lastTurnAt: NOW - MIN })).toBe(0) // not idle
-  expect(pool({}, { cccccccc: NOW - H })).toBe(0)
-  expect(pool({}, { cccccccc: NOW - H }, true)).toBe(1)
-  expect(pool({}, { cccccccc: NOW - 2 * H })).toBe(1)
   const words = (t: string) => isFinished(parseTail(said(t)))
   expect(words(QUEUED_WORDS)).toBe(false)
   expect(words('Should I go on with the jump clip?')).toBe(true)
@@ -825,4 +822,30 @@ test('A136 over A117: a stopped head the person placed first, held back by memor
   const head = stoppedFile('cccccccc', { want: want({ pie: true, requestedAt: NOW - 9 * H }) })
   const me = file(ME8, { want: want({ requestedAt: NOW - H }) })
   expect(decide(grant([head, me], { manual: { pins: ['cccccccc'], minutes: {} }, probe: { freeGb: 30, diskGb: 100, procs: [] } })).kind).toBe('grant')
+})
+
+test('Review 6.1: the live session behind a stopped head held by memory is the head for the cleanup: place 1, and the cleanup runs', opts(), async ($, on) => {
+  const head = stoppedFile('cccccccc', { want: want({ pie: true }) })
+  const me = file(ME8, { want: want({ requestedAt: NOW - H }) })
+  expect(decide(grant([head, me], { probe: { freeGb: 5, diskGb: 100, procs: [] } }))).toMatchObject({ kind: 'wait', code: 'ram', place: 1 })
+  const w = world(on, { ram: '5', procs: [{ name: 'LiveCodingConsole', pid: 77, gb: 1, parentAlive: true }] })
+  w.put(LOCK, FREE)
+  stopped(w, 'cccccccc', { want: want({ pie: true }) })
+  await $.session.start(START)
+  await $.tool.call({ tool: 'mcp__a5r__editor', action: 'request', minutes: 20, what: 'x' } as never)
+  await w.clock.advance(2 * MIN)
+  expect(w.runs.some(r => r.includes('Stop-Process') && r.includes('77'))).toBe(true)
+})
+
+test('Review 6.2: a refusal is spent only by a start', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const row = JSON.stringify({ sessionId: 'local_c', cliSessionId: SID('cccccccc') })
+  const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row], ['d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - MIN, what: 'x' })]])
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc')], { now, lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }), leases: () => [], dir: () => 'd', freeWindow: () => null, freeGb: () => 40, titleOf: () => '' })
+  const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: 1 }] : [{ name: 'local_c.json', mtimeMs: 1 }])
+  const place = async () => ({ appData: 'app', account: 'a', org: 'o' })
+  await c.tick(fakeIo(disk, { deskPlace: place, list, claimAlert: async () => false }))
+  expect(disk.get('d/refused/cccccccc.json')).not.toBe('null')
+  await c.tick(fakeIo(disk, { deskPlace: place, list, call: async () => ({ text: SENT }) }))
+  expect(disk.get('d/refused/cccccccc.json')).toBe('null')
 })

@@ -783,7 +783,7 @@ export const decide = (x: GrantInput): Decision => {
     return wait('queue', '', `the Editor is free but ${head} asked first (it has waited ${PASS_AGING_MIN / 60} h or more for memory: nobody goes before it now)`, behind)
   }
   // A117: a head the person placed is never passed (headStateOf); waiting for memory, it says so.
-  const own = slotOf(x, mine, place)
+  const own = slotOf(x, mine, 1) // it goes first, whatever stopped requests stand ahead of it: place 1 runs the memory cleanup (register.ts)
   return own.kind === 'wait' && own.code === 'ram' && isPlaced(x.manual, me8) ? { ...own, reason: `${own.reason}; placed by hand: nobody passes it` } : own
 }
 

@@ -4,7 +4,7 @@
 import { HEARTBEAT_STALE_MS, decide, hhmm, keepsPlace, livenessOf, queueIn, ymd, type GrantInput, type LaneBeat, type SessionFile, type Want } from './coord.ts'
 import { openQuestion, saysFinished, type TranscriptEvent } from './judge.ts'
 import type { LeaseRecord } from './lease.ts'
-import { isIdle, idleMsOf, saysWaitingForEditor } from './nudge.ts'
+import { NUDGE_IDLE_MS, saysWaitingForEditor } from './nudge.ts'
 import type { Need } from './syncplan.ts'
 
 const MIN = 60_000
@@ -137,15 +137,15 @@ export const isFinished = (events: readonly TranscriptEvent[]): boolean => {
 /** A140: when this session last asked for or held the Editor (0: never on record). */
 export const editorSignAt = (f: SessionFile, leases: readonly LeaseRecord[]): number => Math.max(f.askedAt ?? 0, f.editorUseAt ?? 0, f.holding?.since ?? 0, f.want?.requestedAt ?? 0, ...leases.filter(l => l.id8 === f.id8).map(l => l.endAt))
 /** A140: the sessions that may still have Editor work, the most recently active first: not asking, not holding, nothing
- * running, idle (or stopped), active within a day, not archived, no turn since its request was withdrawn (by the person, by age
- * or by two misses), and not started for this within 2 h unless `again`. */
-export const workPool = (x: { files: readonly SessionFile[]; lanes: readonly LaneBeat[]; now: number; triedAt: Readonly<Record<string, number>>; again?: boolean; archived: ReadonlySet<string> }): SessionFile[] =>
+ * running, idle (or stopped), active within a day, not archived, and no turn since its request was withdrawn (by the person, by
+ * age or by two misses). Whether it was tried within 2 h is the conductor's (wakehost.ts workStep: A141 still counts those). */
+export const workPool = (x: { files: readonly SessionFile[]; now: number; archived: ReadonlySet<string> }): SessionFile[] =>
   x.files
     .filter(f => {
       const turn = f.lastTurnAt
       if (f.want || f.holding || x.archived.has(f.id8) || turn === undefined || (f.agents ?? 0) > 0) return false
-      const isRecent = x.now - turn <= WORK_RECENT_MS && isIdle(idleMsOf({ now: x.now, lastTurnAt: turn, turnSignalAt: 0, mainCalls: 0, agents: 0 }))
-      return isRecent && (f.withdrawnAt ?? 0) < turn && (x.again || x.now - (x.triedAt[f.id8] ?? 0) >= WORK_AGAIN_MS)
+      const idleFor = x.now - turn
+      return idleFor <= WORK_RECENT_MS && idleFor >= NUDGE_IDLE_MS && (f.withdrawnAt ?? 0) < turn
     })
     .sort((a, b) => (b.lastTurnAt ?? 0) - (a.lastTurnAt ?? 0))
 /** A140: what its last words say, read once per turn. */

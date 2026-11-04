@@ -184,8 +184,8 @@ export const conductor = (h: WakeState) => {
       const f = x.files.find(o => o.id8 === r.id8)
       if (!f || off.has(f.id8) || !desk.has(f.session.toLowerCase()) || !(await isFreed(io, r, x, now))) continue // no record: an app conductor can still act on it
       const step = await start(io, { f, why: r.kind, text: refusalMessage(r), requestedAt: null }, now)
-      if (wake.pausedUntil <= now) await io.writeChecked(r.path, r.raw, 'null') // a loop pause spends no refusal
-      return step // one at a time, whoever won its claim
+      if (step.kind === 'started') await io.writeChecked(r.path, r.raw, 'null') // a pause or a handover spends no refusal
+      return step // one at a time
     }
     return NOTHING
   }
@@ -200,7 +200,7 @@ export const conductor = (h: WakeState) => {
       nudgeRead = new Set()
     }
     let step: Step = NOTHING
-    for (const f of workPool({ files: x.files, lanes: x.lanes, now, triedAt: wake.triedAt, again: true, archived: archived() })) {
+    for (const f of workPool({ files: x.files, now, archived: archived() })) {
       const triedAt = wake.triedAt[f.id8] ?? 0
       if (nudgeRead.has(f.id8) || (now - (await io.nudgedAt(f.id8)) < WORK_AGAIN_MS && !again)) continue
       const seen = wordsAt.get(f.id8)
