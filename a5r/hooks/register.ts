@@ -2,7 +2,7 @@ import type { EngineInterface as Engine, Register, RenderElement } from 'claude-
 import { A5R, commandVerb, gitTargets, newLines, norm, psQuote, tokenize, under, type A5RConfig, type Decision, type Located, type Places, type Proof } from './a5r.ts'
 import { acceptText, cappedItems, checklistComplete, checklistFull, closesIntent, failed, passKey, inScope, isPrCommand, isPrTool, namedPaths, prCommandRefs, openedPrs, prLinksOf, prNumbersOf, ruleName, score, shipSlugOf, shipText, unreadLine, unreadText, unscored, worstOf, type AcceptInput, type PrLink, type RuleScore } from './accept.ts'
 import { bareTitle, hasMark } from './decision.ts'
-import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, launchersOf, lockProblem, mcpCallKind, parseEditorLock, type EditorKind } from './editor.ts'
+import { FREE_RAM_PROBE, PIE_MIN_FREE_GB, editorShellAct, isEditorStartStop, launchersOf, lockProblem, mcpCallKind, parseEditorLock, runsEditorDriver, type EditorKind } from './editor.ts'
 import {
   CUTOFF_MS, DIR, HARD_END_WARN_MS, isHolderInSync, SYNC_BUILD_MIN, SYNC_MERGE_MIN, withBuild, HEARTBEAT_STALE_MS, LANE_STALE_MS, NOTICES, PIE_ABORT_GB, DISK_MIN_GB, RELEASE_BEFORE_MS, YIELD_EVERY_MS, atNearest, atNext, blankSession, clampGate, classify,
   cleanupPlan, decide, ordinal, presetTimes, editorPid, endedSync, freeLine, gatesOf, gitWrites, hash, heldLine, historyBlobs, hhmm as clockOf, isIntentFile, isLockPath, isOpenPhase, livenessOf, mayAskYield,
@@ -66,7 +66,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, editorBox, lookBox, session
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string; pieDrivers?: string; autoSyncBuild?: boolean }
+type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string; editorDrivers?: string; pieDrivers?: string; autoSyncBuild?: boolean }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -409,7 +409,8 @@ async function editParts($: Engine, tool: string, e: Input): Promise<[string, st
 const isUnrealMcp = (tool: string): boolean => tool.startsWith('mcp__') && /unreal/i.test(tool)
 
 /** What a tool call does to an Unreal Editor: an Unreal MCP call's kind, a shell command's act (editor.ts). */
-const editorKindOf = (opts: Opts, tool: string, e: Input): EditorKind => (isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) ? editorShellAct(str(e.command), launchersOf(opts.editorLaunchers)) : null)
+// 0.28.1: a run of one of the person's Editor driver scripts drives the Editor as an Unreal MCP write does (it needs the lock).
+const editorKindOf = (opts: Opts, tool: string, e: Input): EditorKind => (isUnrealMcp(tool) ? mcpCallKind(tool, e as Record<string, unknown>) : SHELL_TOOLS.has(tool) ? (editorShellAct(str(e.command), launchersOf(opts.editorLaunchers)) ?? (runsEditorDriver(str(e.command), launchersOf(opts.editorDrivers)) ? 'write' : null)) : null)
 
 /** The Editor gate: null when the call may touch the Editor, else why not and what to do. */
 async function editorProblem($: Engine, opts: Opts, tool: string, e: Input): Promise<string | null> {
@@ -2894,7 +2895,7 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   }
   const step = s && s.holder.id8 !== my8 ? await freeze.stepNow(hostIo($, opts), s, now) : null
   if (!s || !step || heldIn(step).size === 0) return null
-  const isEditorUse = isUnrealMcp(tool) || (command !== '' && isEditorStartStop(command, launchersOf(opts.editorLaunchers)))
+  const isEditorUse = isUnrealMcp(tool) || (command !== '' && (isEditorStartStop(command, launchersOf(opts.editorLaunchers)) || runsEditorDriver(command, launchersOf(opts.editorDrivers))))
   const use = command && !isEditorUse ? editorUseOf(editorKindOf(opts, tool, input), command, await $.session.cwd()) : null
   const isBuild = (use?.kind === 'build' || use?.kind === 'headless') && (use.projects.length === 0 || use.projects.some(p => under(p, s2Root())))
   const rels = EDIT_TOOLS.has(tool) && isS2 ? await sharedRels($, await Promise.all((await editParts($, tool, input)).map(([p]) => locate($, a5r, p)))) : []
@@ -4009,7 +4010,7 @@ export const register: Register = (on, options) => {
     if (isOn && ran.isError !== true) {
       // What the coordination needs from the call: Editor use (the idle lease), PIE running, the paths edited.
       const text = isUnrealMcp(tool) ? JSON.stringify(input).slice(0, 4000) : ''
-      if (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && EDITOR_WORK.test(what))) lastEditorUseAt = await $.clock.now()
+      if (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && (EDITOR_WORK.test(what) || runsEditorDriver(what, launchersOf(opts.editorDrivers))))) lastEditorUseAt = await $.clock.now()
       // A66: the holder launched the Editor or reached it over MCP: name its pid in the lock line if it does not yet.
       if (isS2 && (isUnrealMcp(tool) || (SHELL_TOOLS.has(tool) && isEditorStartStop(what, launchersOf(opts.editorLaunchers)))) && holdsLock() && lock.pid === null) await notePid($, opts, true).catch(() => undefined)
       if (text && mcpCallKind(tool, input as Record<string, unknown>) === 'pie') {

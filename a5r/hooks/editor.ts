@@ -84,6 +84,13 @@ export type EditorKind = ReturnType<typeof mcpCallKind> | EditorAct | null
 /** `launchers`: the person's own Editor launcher scripts (Fable review D3: the `editorLaunchers` option, script names in lower
  * case; none by default, so no project's script is named in the plugin, A111). */
 export const editorShellAct = (command: string, launchers: readonly string[] = []): EditorAct | null => programs(command).map(p => actOf(p, launchers)).find(act => act !== null) ?? null
+/** 0.28.1: whether a shell command runs one of the person's Editor driver scripts (the `editorDrivers` option: scripts that
+ * drive the shared Editor over Unreal MCP from outside the agent's own MCP tools, such as a shot runner), by its own name or
+ * under an interpreter. None by default, so no project's script is named in the plugin (A111). A read of one is no run. */
+// A wrapper script runs its argument too (S2's `scripts/py.sh tools/x.py`): any .sh/.cmd/.bat/.ps1 verb is read as a host.
+const isScriptHost = (verb: string): boolean => SCRIPT_HOSTS.has(verb) || /\.(sh|cmd|bat|ps1)$/.test(verb)
+export const runsEditorDriver = (command: string, drivers: readonly string[]): boolean =>
+  drivers.length > 0 && programs(command).some(({ verb, args }) => drivers.includes(verb) || (isScriptHost(verb) && args.some(a => drivers.includes(program(a)))))
 /** The `editorLaunchers` option read: comma- or space-separated script names, in lower case. */
 export const launchersOf = (option: unknown): string[] => (typeof option === 'string' ? option.split(/[\s,;]+/).map(program).filter(Boolean) : [])
 
