@@ -34,6 +34,8 @@ export type TurnState = {
   phaseOf: (s: SyncFile | null, now: number) => Phase
   /** the sync holder's own merge commands (coord.ts isSyncCommandOnly), which its freeze covers */
   isSyncCommand: (command: string) => boolean
+  /** A143: a sync's merge step (syncplan.ts holdsReads): its script holds index.lock on purpose, never moved */
+  isMerging: (now: number) => boolean
   dir: () => string
   root: () => string
 }
@@ -67,6 +69,13 @@ export const gitTurns = (h: TurnState) => {
     return t ? { kind: 'claim', turn: t } : (await io.stat(lockPath())) ? { kind: 'lock', since: now } : null
   }
   const release = (io: FileIo): Promise<void> => io.write(mine(), 'null')
+  /** A144: a claim lapsed because its session is gone is written null, read-compare-write (only while the file still
+   * holds that same claim), so nobody reading git-turn/ takes it for a held turn. */
+  const clearGone = async (io: FileIo, t: GitTurn): Promise<void> => {
+    const path = `${claimDir()}/${t.id8}.json`
+    const cur = parseGitTurn(await io.read(path))
+    if (cur && turnKey(cur) === turnKey(t)) await io.write(path, 'null')
+  }
   /** Fable 4: the git processes that may hold the lock: those of the checkout and those whose folder cannot be read. */
   const lockPids = (pids: number[] | null): number[] | null => (pids === null ? null : [...pids, ...untargetedGitPids(h.probe())])
   const refuse = (w: Wait, isTicking: boolean) => {
@@ -78,7 +87,7 @@ export const gitTurns = (h: TurnState) => {
    * lock file is moved, never deleted; the move is logged and written for the others to read. */
   const moveStaleLock = async (io: TurnIo, now: number, isClaimed: boolean): Promise<void> => {
     const fresh = await io.gitBusy()
-    if (staleLockAct({ lockAgeMs: fresh.lockAgeMs, gitPids: lockPids(fresh.gitPids), isTurnHeld: isClaimed || (await holder(io, now)) !== null }) !== 'move' || !(await io.claimAlert(`stale-index-lock-${now - (fresh.lockAgeMs ?? 0)}`))) return
+    if (staleLockAct({ lockAgeMs: fresh.lockAgeMs, gitPids: lockPids(fresh.gitPids), isTurnHeld: isClaimed || (await holder(io, now)) !== null, isMerging: h.isMerging(now) }) !== 'move' || !(await io.claimAlert(`stale-index-lock-${now - (fresh.lockAgeMs ?? 0)}`))) return
     const to = `${h.dir()}/${staleLockName(now)}`
     const ran = await io.run(moveLockArgv(lockPath(), to), 30_000)
     if (ran?.exitCode !== 0 || !(await io.stat(to))) return
@@ -135,6 +144,7 @@ export const gitTurns = (h: TurnState) => {
       const lockSt = await io.stat(lockPath())
       const pids = checkoutGitPids(h.probe(), h.root())
       const at = await claimsAt(io)
+      await Promise.all(at.filter(c => c.turn.id8 !== me8() && !h.isLive(c.turn.id8, now)).map(c => clearGone(io, c.turn))) // A144 (they lapse anyway)
       gone = goneAfter(gone, at.map(c => c.turn), pids === null ? null : pids.length > 0 || (lockSt !== null && now - lockSt.mtimeMs < STALE_LOCK_MS), now)
       const own = at.find(c => c.turn.id8 === me8())?.turn
       if (own && calls > 0) await io.write(mine(), JSON.stringify(own)) // its call runs: the claim stays fresh
@@ -147,7 +157,7 @@ export const gitTurns = (h: TurnState) => {
       if (wait && isFree) h.push({ id: `git-turn:free:${wait.kind === 'claim' ? turnKey(wait.turn) : `lock:${wait.since}`}`, text: `A5R · ${TURN_GATE} — ${turnFreeText(wait)}`, isActionable: true })
       if (isFree) wait = null
       const isClaimed = held !== null || calls > 0 || isBackground
-      const act = staleLockAct({ lockAgeMs: lockSt ? now - lockSt.mtimeMs : null, gitPids: lockPids(pids), isTurnHeld: isClaimed })
+      const act = staleLockAct({ lockAgeMs: lockSt ? now - lockSt.mtimeMs : null, gitPids: lockPids(pids), isTurnHeld: isClaimed, isMerging: h.isMerging(now) })
       look = act === 'unread' ? LOCK_UNREAD_LOOK : null
       if (act === 'move') await moveStaleLock(io, now, isClaimed)
       const moved = parseLockMoved(await io.read(`${h.dir()}/${STALE_LOCK_MOVED_FILE}`))

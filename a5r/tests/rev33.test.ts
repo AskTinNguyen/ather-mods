@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { blankSession, gitWrites, heldLine, isSyncCommandOnly, lapseOf, newSync, parseLockLine, parseSyncFile, syncPhase, SYNC_WORKER_PROMPT, syncWorkerTask, type SessionFile, type SyncFile } from '../hooks/coord.ts'
+import { blankSession, gitWrites, heldLine, isSyncCommandOnly, lapseOf, newSync, parseLockLine, parseSyncFile, syncPhase, type SessionFile, type SyncFile } from '../hooks/coord.ts'
+import { SYNC_WORKER_PROMPT, syncWorkerTask } from '../hooks/syncworker.ts'
 import { classifyGit, discardedPaths } from '../hooks/gitshared.ts'
 import { parseRules, ruleFor } from '../hooks/syncrules.ts'
 import { enterStage, MANUAL_MIN_MS, stageNext } from '../hooks/syncstage.ts'
@@ -200,8 +201,8 @@ test('A97: during a merge, checkout --theirs runs on the unmerged paths; a modif
 
 // ---------- A98 ----------
 test('A98: unit: the worker refreshes the index before it judges dirt, and update-index -q --refresh is the sync\'s own command', () => {
-  expect(SYNC_WORKER_PROMPT).toContain('Your git writes are exactly: `git update-index -q --refresh`')
-  expect(SYNC_WORKER_PROMPT).toContain('Before you judge any path dirty or untracked in the way, run `git -C <checkout> update-index -q --refresh` and read `git status` again: a path git no longer lists after it is clean (a stat-only change), never a reason to abort.')
+  // A142 (rev 46): the merge script refreshes a copy of the index itself; the holder finishing by hand keeps the command.
+  expect(SYNC_WORKER_PROMPT).toContain('the script refreshes a copy of the index (a stat-only change is no dirt)')
   for (const c of ['git -C E:/s2 update-index -q --refresh', 'GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C E:/s2 update-index --really-refresh', 'git update-index --refresh && git status --porcelain'])
     expect([c, isSyncCommandOnly(c)]).toEqual([c, true])
   for (const c of ['git update-index -q', 'git update-index --refresh -- Source/S2/Foo.cpp', 'git update-index --assume-unchanged Source/S2/Foo.cpp', 'git update-index --skip-worktree x'])
@@ -237,11 +238,11 @@ test('A99: unit: rule lines, matching (* within a folder, ** any depth, a traili
   expect(side('Config/DefaultEngine.ini.bak')).toBe(null) // a plain path matches itself only
   expect(ruleFor('Content/S2/Maps/L_X.uasset', rules)?.side).toBe('theirs') // the first match wins over **/*.uasset
   const s: SyncFile = { ...newSync(T(14, 45), B, 'x', NOW), rules, conflicts: [{ path: 'Content/S2/Maps/L_X.umap', kind: 'foreign' }, { path: 'Source/S2/Sub/Bar.cpp', kind: 'foreign' }] }
-  const task = syncWorkerTask(s, 'E:/s2', 'FREE', null)
+  const task = syncWorkerTask(s, 'E:/s2', 'FREE', null, 'RUN')
   expect(task).toContain("Holder's conflict rules (rule 5, the first match wins): theirs `Content/S2/Maps/`; ours `Source/S2/*.cpp`; theirs `**/*.uasset`; ours `Config/DefaultEngine.ini`.")
   expect(task).toContain('Dry-run at the cutoff: Content/S2/Maps/L_X.umap (foreign; rule: theirs `Content/S2/Maps/`); Source/S2/Sub/Bar.cpp (foreign).')
-  expect(syncWorkerTask({ ...s, rules: [] }, 'E:/s2', 'FREE', null)).toContain("Holder's conflict rules (rule 5, the first match wins): none.")
-  expect(SYNC_WORKER_PROMPT).toContain('a path a rule matches is resolved with that rule\'s side whatever its kind, .uasset and .umap included: `git checkout --<side> -- <path>` then `git add -- <path>`, and your report names each such path with its rule. A path no rule matches: rule 11')
+  expect(syncWorkerTask({ ...s, rules: [] }, 'E:/s2', 'FREE', null, 'RUN')).toContain("Holder's conflict rules (rule 5, the first match wins): none.")
+  expect(SYNC_WORKER_PROMPT).toContain('by the holder\'s conflict rules in your task (the first rule whose pattern matches the path wins, whatever its kind, .uasset and .umap included), then rule 11') // A142 (rev 46): applied by the merge script
   expect(parseSyncFile(JSON.stringify({ ...s, rules: [{ side: 'theirs', pattern: 'a/' }, { side: 'main', pattern: 'b' }, { side: 'ours' }] }))?.rules).toEqual([{ side: 'theirs', pattern: 'a/' }])
   expect(parseSyncFile(JSON.stringify({ ...s, rules: undefined }))?.rules).toEqual([])
 })

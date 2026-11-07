@@ -85,7 +85,7 @@ test('A12: at T the holder\'s a5r spawns the sync worker once, with the non-inte
   const spec = (w.calls['agent.register'] ?? [])[0] as Rec
   expect([spec?.name, spec?.background]).toEqual(['sync', true])
   // A79 (rev 28): the worker calls no a5r tool; A93 (rev 32, by design): it ends with one SYNC MERGED / SYNC ABORT line.
-  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'never rebase', 'git checkout --ours -- <path>', 'git merge --abort', 'git revert -m 1 <merge sha> --no-edit', 'SYNC MERGED <merge sha> build-log=', 'never wait for the build', 'SYNC ABORT <why, one line> state='])
+  for (const must of ['GIT_TERMINAL_PROMPT=0', 'GCM_INTERACTIVE=never', 'never close, kill or drive that Editor', 'list its dirty packages first', 'Never rebase', 'You make no git write yourself', 'A5R merge merged <sha>', 'A5R merge refused <kind>', 'SYNC MERGED <merge sha> build-log=', 'never wait for the build', 'SYNC ABORT <why, one line> state='])
     expect([must, String(spec?.prompt).includes(must)]).toEqual([must, true])
   expect(String(spec?.prompt).includes('mcp__a5r__')).toBe(false)
   expect(await $.agent.offer({ agent: 'a5r:sync', description: 'x', source: 'plugin', provider: { plugin: 'a5r', tier: 'user' } } as never)).toEqual({ isOffered: false })

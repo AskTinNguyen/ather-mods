@@ -5,13 +5,13 @@
 // sync holder alone writes Saved/A5R/sync.json, and the head of the queue alone takes a free lock.
 // Files are the truth; a notice is only a doorbell.
 import { commandVerb, gitTarget, isDotNetWrite, norm, programs, psQuote, segments, stripHeredocs, tokenize, under, writesFiles } from './a5r.ts'
-import { conflictLabel, ruleNote, rulesLabel, storedRules, type SyncRule } from './syncrules.ts'
+import { ruleNote, storedRules, type SyncRule } from './syncrules.ts'
 import type { LeaseNotes } from './lease.ts'
 import type { DryRound } from './dryrun.ts'
-import { buildStep, runLabel, SCRIPT_SUFFIX } from './buildscript.ts'
+import { buildStep, SCRIPT_SUFFIX } from './buildscript.ts'
+import { MERGE_SUFFIX } from './mergescript.ts'
 import { endOf, opOf, type ConflictHead, type HeadFile } from './gitshared.ts'
-import { engineLabel, type EngineFind } from './machine.ts'
-import { POST_MERGE_TESTS, isMergedStage, mergeLabel, syncBuildLog, testsLabel, type EntryTell, type StageTell, type SyncStage } from './syncstage.ts'
+import { POST_MERGE_TESTS, isMergedStage, mergeLabel, testsLabel, type EntryTell, type StageTell, type SyncStage } from './syncstage.ts'
 
 export const DIR = 'Saved/A5R'
 export const HEARTBEAT_STALE_MS = 3 * 60_000 // a session file not refreshed for 3 min: gone, unless its lane lives (A127: mod-less only past LANE_STALE_MS)
@@ -511,7 +511,7 @@ export type OrchestrateEvent = {
   /** A54 / A55 (they act), a candidate rule that only logs: no-editor (a lease held with no Editor or build
    * running), holder-gone; or A65-judge (a verdict, advisory); A112: wait (a session's own wait decision, logged only).
    * A64: no rule reads a session's title or a list file. */
-  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' | 'orphan-close' | 'auto-sync' | 'withdrawn' | 'shared-git' | 'stale-index-lock' | 'woke' | 'idle-with-work' // woke, idle-with-work: A136-A141; manual: A117, the person's change of the queue; focus: A118; A123 orphan-close, A124 auto-sync, A125 withdrawn, A126 shared-git (a refused git write in the shared checkout)
+  rule: 'A54-lapsed' | 'A55-unseen' | 'no-editor' | 'holder-gone' | 'A65-judge' | 'ram-supplied' | 'A91-nudge' | 'wait' | 'manual' | 'focus' | 'orphan-close' | 'auto-sync' | 'withdrawn' | 'shared-git' | 'stale-index-lock' | 'woke' | 'idle-with-work' | 'sync-merge' // sync-merge: A142, the merge script's own failure line; woke, idle-with-work: A136-A141; manual: A117, the person's change of the queue; focus: A118; A123 orphan-close, A124 auto-sync, A125 withdrawn, A126 shared-git (a refused git write in the shared checkout)
   lane: string
   id8: string
   procs: readonly string[]
@@ -602,7 +602,8 @@ export const parseSharedProbe = (text: string | null): SharedProbe | null => {
 }
 
 /** One PowerShell probe: free RAM, the checkout drive's free space, and the heavy processes (pid, working set,
- * whether the parent is alive; the command line of git and of a cmd.exe running a `-build.cmd`), as one JSON line. */
+ * whether the parent is alive; the command line of git, of a cmd.exe running a `-build.cmd` and of the PowerShell running
+ * a `-merge.ps1`, A143), as one JSON line. */
 export const ramProbe = (drive: string): string[] => [
   'powershell',
   '-NoProfile',
@@ -618,7 +619,7 @@ export const ramProbe = (drive: string): string[] => [
     // A112 / A114: the heaviest names among all processes (claude, Chrome, …), which the named list below never shows
     '$top = @($all | Group-Object ProcessName | ForEach-Object { [pscustomobject]@{ name = $_.Name; n = $_.Count; gb = [math]::Round((($_.Group | Measure-Object WorkingSet64 -Sum).Sum) / 1GB, 2) } } | Sort-Object gb -Descending | Select-Object -First 6)',
     "$names = @('git.exe','LiveCodingConsole.exe','UnrealEditor.exe','UnrealEditor-Cmd.exe','ShaderCompileWorker.exe','python.exe','dotnet.exe','UnrealBuildTool.exe','cl.exe','link.exe','MSBuild.exe','UnrealGame.exe','S2.exe')",
-    `$procs = @(Get-CimInstance Win32_Process | Where-Object { ($names -contains $_.Name) -or ($_.Name -like 'UnrealEditor*.exe') -or ($_.Name -eq 'cmd.exe' -and ([string]$_.CommandLine) -like '*${SCRIPT_SUFFIX}*') } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId); cmd = $(if ($_.Name -eq 'git.exe' -or $_.Name -eq 'cmd.exe' -or $_.Name -eq 'python.exe' -or $_.Name -like 'UnrealEditor*') { [string]$_.CommandLine } else { '' }); startedAt = $(if ($_.Name -like 'UnrealEditor*' -and $_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }); title = $(if ($_.Name -like 'UnrealEditor*') { $titles[[int]$_.ProcessId] } else { '' }) } })`,
+    `$procs = @(Get-CimInstance Win32_Process | Where-Object { ($names -contains $_.Name) -or ($_.Name -like 'UnrealEditor*.exe') -or ($_.Name -eq 'cmd.exe' -and ([string]$_.CommandLine) -like '*${SCRIPT_SUFFIX}*') -or ($_.Name -eq 'powershell.exe' -and ([string]$_.CommandLine) -like '*${MERGE_SUFFIX}*') } | ForEach-Object { [pscustomobject]@{ name = $_.Name -replace '\\.exe$',''; pid = [int]$_.ProcessId; gb = [math]::Round($_.WorkingSetSize / 1GB, 2); parentAlive = $alive.ContainsKey([int]$_.ParentProcessId); cmd = $(if ($_.Name -eq 'git.exe' -or $_.Name -eq 'cmd.exe' -or $_.Name -eq 'powershell.exe' -or $_.Name -eq 'python.exe' -or $_.Name -like 'UnrealEditor*') { [string]$_.CommandLine } else { '' }); startedAt = $(if ($_.Name -like 'UnrealEditor*' -and $_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }); title = $(if ($_.Name -like 'UnrealEditor*') { $titles[[int]$_.ProcessId] } else { '' }) } })`,
     '[pscustomobject]@{ freeGb = $free; diskGb = $disk; procs = $procs; top = $top } | ConvertTo-Json -Compress -Depth 3',
   ].join('; '),
 ]
@@ -1406,22 +1407,6 @@ export const parseClients = (text: string): ClientRow[] | null => {
 export const noModMessage = (s: SyncFile, checkout: string): string =>
   `Sync main (a5r): ${s.holder.lane} merges origin/main into ${checkout} at ${hhmm(s.at)}. This session runs without a5r 0.4, so nothing freezes it: before ${hhmm(s.at)} commit your own paths (exact paths), write your resume note, stop PIE and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; from ${hhmm(s.at)} until the holder is done (at the latest ${hhmm(s.hardEnd)}) make no git writes in that checkout and do not use the Editor.`
 
-/** D7: the sync worker's system prompt, the procedure of runbook-sync-lane and s2-sync-main as A12 fixes it. */
-export const SYNC_WORKER_PROMPT = [
-  'You are the a5r sync worker for the shared S2 checkout. The sync holder\'s a5r started you at the planned sync time T, in the holder\'s session. Every other session is frozen (no git writes, no Editor) until you end, or until the hard end, when the sync expires and every session is told. You call no a5r tool: the holder\'s a5r took the Editor lock for this sync before it started you, releases it when you end, and reads your final answer to record the sync as done or aborted.',
-  'Rules (the checkout\'s AGENTS.md and the user\'s machine profile win over this list):',
-  '1. Git never prompts. Run every git command with GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never in its environment (Bash: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> …`; PowerShell: set $env:GIT_TERMINAL_PROMPT=\'0\' and $env:GCM_INTERACTIVE=\'never\' first) and a timeout on the tool call: fetch and merge 10 min at most, everything else 2 min. A credential, network or LFS failure is an abort, never a retry loop. Never set GIT_LFS_SKIP_SMUDGE. Run every git command in the foreground, to its end, in one tool call: never with `&`, never as a background tool run, never by Start-Process without -Wait, never from a script you leave running; the build of rule 6 is the only command you start to outlive your turn.',
-  '2. Always `git -C <checkout>`. Never rebase, reset --hard, stash, clean, push or switch branches. Your git writes are exactly: `git update-index -q --refresh`, `git merge --no-edit origin/main`, `git merge --abort`, `git checkout --ours|--theirs -- <paths>`, `git add -- <paths>`, `git commit --no-edit`, `git revert -m 1 <merge sha> --no-edit`. If any command is refused, abort the sync with the refusal as the reason.',
-  '3. The Editor. Never write Saved/EDITOR_OWNER.txt. Read it before any merge: it must name the holder session given in your task (the sync\'s lock). If it names another lane: never close, kill or drive that Editor; never sleep or poll in a loop (a foreground sleep is refused here); read it once more after the fetch of rule 4 (the sync is first in the queue and is granted the moment it comes free), and if it still names another lane, end with SYNC ABORT naming that lane. If an Editor is open while the lock is the sync\'s (or a FREE line says it was left open): list its dirty packages first with an Unreal MCP read; any dirty package → abort (never save it, never discard it); none → close it gracefully as AGENTS.md says and confirm UnrealEditor.exe is gone.',
-  '4. Before the merge: record the pre-merge HEAD (`git -C <checkout> rev-parse HEAD`). Abort if .git/MERGE_HEAD, .git/REVERT_HEAD, .git/CHERRY_PICK_HEAD, .git/REBASE_HEAD or an .git/index.lock older than 10 minutes exists. Fetch: `GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git -C <checkout> fetch origin main`. Before you judge any path dirty or untracked in the way, run `git -C <checkout> update-index -q --refresh` and read `git status` again: a path git no longer lists after it is clean (a stat-only change), never a reason to abort. If a file origin/main adds still exists untracked in the checkout, abort and name it (its owner was told).',
-  '5. Merge: `git merge --no-edit origin/main` (never rebase). The dry-run list in your task may be older than your merge (main can move after it): the merge\'s own unmerged paths (`git diff --name-only --diff-filter=U`) decide, listed or not. For each conflicted path: first the holder\'s conflict rules in your task (the first rule whose pattern matches the path wins): a path a rule matches is resolved with that rule\'s side whatever its kind, .uasset and .umap included: `git checkout --<side> -- <path>` then `git add -- <path>`, and your report names each such path with its rule. A path no rule matches: rule 11 — when origin/main\'s blob for the path (`git rev-parse origin/main:<path>`) equals a blob in this branch\'s history (`git log --format=%H --raw --no-abbrev HEAD -- <path>`), it is a self-conflict: `git checkout --ours -- <path>` then `git add -- <path>`. A text conflict where both sides only add lines: resolve it, check `git diff --check`, `git add -- <path>`. Any other conflict (logic, or any .uasset/.umap): `git merge --abort`, then abort the sync naming each path and its owner from the conflict notice. Then `git commit --no-edit`.',
-  '6. Build, only when the sync builds: the holder\'s a5r wrote a build script (it runs Build.bat with the right arguments and writes the build log your task names, fresh, before anything else). Start the build only with the one PowerShell command your task gives, exactly as given (the script carries the engine root your task names: use no engine root of your own), in a tool call of its own with nothing after it (a tool call stopped while it still runs kills what it started); never your own cmd, Build.bat or redirection line (cmd /c strips the quotes of such a line and exits at once, with no log and no build). Then check in later tool calls, within 60 seconds: the build log\'s existence decides whether the build started. A log whose last line says `waiting for existing script to terminate` means it started and waits behind Build.bat\'s lock for another build on this engine: started too. The log exists → end at once with the SYNC MERGED line naming that log: never wait for the build (a build outlives your tool calls). No log after 60 seconds → start it no other way: end with `SYNC MERGED <merge sha> build-log=none` and say in your report that the build did not start, with what you saw (the processes). The holder\'s a5r watches that log for the build\'s own `Result:` line (Build.bat exits 0 on failure), keeps every other session frozen meanwhile, and has the holder run the post-merge tests or revert, or start the script itself.',
-  '7. End: never end your turn while a command you started (other than the build of rule 6) still runs, and never end with "waiting" or "until … finishes": wait for each such command in the foreground first. Your final answer is a short report whose last line is exactly one of these lines (nothing after it, no other line starting with SYNC):',
-  '   SYNC MERGED <merge sha> build-log=<path of the build log, or none when the sync does not build>',
-  '   SYNC ABORT <why, one line> state=<the state the checkout is in: clean at <sha>, merge aborted, reverted <sha>, …>',
-  '   The holder\'s a5r takes the first as merged (the freeze holds through the build and the post-merge tests, until the holder calls done); the second hands the sync back to the holder, still frozen, to finish by hand or abort. An ending with no SYNC line while a merge commit sits on top of the pre-merge HEAD is taken as merged too; with no merge commit it is handed back like an abort.',
-].join('\n')
-
 /** A79 (rev 28, review 2; 0.16.1): the sync worker's last word, read from the last three non-empty lines of its final
  * answer: a line whose keywords are SYNC DONE or SYNC ABORT in capitals (Markdown marks, backticks, `#` and colons around
  * them dropped), the prompt's own template lines (`<merge sha>`, `<why, one line>`) skipped. A DONE that carries a sha
@@ -1458,32 +1443,6 @@ export const parseSyncEnd = (answer: string): SyncEnd | null => {
   const why = line.rest.replace(/\s*state=.*$/i, '').trim() || 'no reason given'
   return { kind: 'abort', why, note: (line.rest || why).slice(0, 300) }
 }
-
-/** A107: when and against which main the conflict list was made, whether it is stale, and that it may be older than the
- * merge, whose own unmerged paths decide. */
-const listLabel = (s: SyncFile): string => {
-  const made = s.conflictsAt === null ? 'none made' : `made at ${hhmm(s.conflictsAt)}${s.conflictsSource === 'holder' ? ' by the holder' : ` against origin/main ${s.dry?.main.slice(0, 12) || '(sha unread)'}`}`
-  return `That list: ${made}${s.dry?.stale ? `, STALE: ${s.dry.stale}` : ''}. It may be older than your merge: the merge's own unmerged paths (git diff --name-only --diff-filter=U) decide.`
-}
-
-/** A109: the task's build line: the log, and the one command that starts the script A5R wrote (rule 6); A110: the engine
- * root the script carries and where A5R found it, or that it found none (then no script). */
-const buildLine = (s: SyncFile, checkout: string, engine: EngineFind | null): string =>
-  !s.build ? 'no'
-    : s.buildRun ? `yes; build log: ${syncBuildLog(checkout, s.id)}; start the build (after the merge commit) only with ${runLabel(s.buildRun)}${engine?.root ? ` (the script builds with the engine root ${engineLabel(engine)}: pass no engine root of your own)` : ''}`
-      : `yes, but A5R wrote no build script (${engine?.root === null ? engineLabel(engine) : 'the write failed'}): start no build, and end with SYNC MERGED <merge sha> build-log=none`
-
-/** The task the holder's a5r hands the sync worker: this sync's facts; `engine`: what A5R found for a build sync (A110),
- * null for a sync without a build. */
-export const syncWorkerTask = (s: SyncFile, checkout: string, lock: string, engine: EngineFind | null): string =>
-  [
-    `Run the sync of origin/main planned for ${hhmm(s.at)} in ${checkout} (holder ${s.holder.lane}, session ${s.holder.id8}). Hard end ${hhmm(s.hardEnd)}: end before it with the SYNC MERGED or SYNC ABORT line. Build: ${buildLine(s, checkout, engine)}.`,
-    `Holder's conflict rules (rule 5, the first match wins): ${rulesLabel(s.rules)}.`,
-    `Dry-run at ${isListAtT(s) ? 'T' : 'the cutoff'}: ${s.conflicts === null ? 'not run' : s.conflicts.length === 0 ? 'no conflicts' : s.conflicts.map(c => conflictLabel(c, s.rules)).join('; ')}.`,
-    `Untracked files origin/main adds: ${s.untracked === null ? 'not listed' : s.untracked.length === 0 ? 'none' : s.untracked.join('; ')}.`,
-    listLabel(s),
-    `Editor lock now: ${lock || 'missing'} (the sync's lock names session ${s.holder.id8}).`,
-  ].join('\n')
 
 /** A short stable hash (FNV-1a) for notice ids built from long lists. */
 export const hash = (text: string): string => {

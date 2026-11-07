@@ -5,7 +5,7 @@
 // wait waits for. A134: the band, the prompt's line and toast, Saved/A5R/status.json. The rules are syncplan.ts's.
 import { claimIn, type GrantInput, type Notice, type Phase, type SessionFile, type SyncFile } from './coord.ts'
 import { STOPPED_WORDS, appendCapped, queueTimes, queueView } from './lease.ts'
-import { STATUS_FILE, SYNC_TIMES_FILE, NO_TIMES, aheadOf, bandLine, buildMsOf, editorWaits, freesAny, freezeStepOf, isMoved, parseSyncTimes, promptLine, shortLine, statusAtOf, statusOf, stepNotice, timelineLine, timesLine, toastText, type FreezeStep, type Need } from './syncplan.ts'
+import { STATUS_FILE, SYNC_TIMES_FILE, NO_TIMES, aheadOf, holdsReads, bandLine, buildMsOf, editorWaits, freesAny, freezeStepOf, isMoved, parseSyncTimes, promptLine, shortLine, statusAtOf, statusOf, stepNotice, timelineLine, timesLine, toastText, type FreezeStep, type Need } from './syncplan.ts'
 import { readBuildLog, type BuildLogRead } from './syncstage.ts'
 import type { FileIo } from './hostio.ts'
 import type { WakeStatus } from './wake.ts'
@@ -24,6 +24,8 @@ export type FreezeState = {
   isStatusWriter: (now: number) => boolean
   /** A139 / A141: what status.json says of stopped requests and the idle-with-work minutes */
   wakeStatus: (now: number) => WakeStatus
+  /** A143: a merge script runs now (mergescript.ts isMergeScriptAlive; null: unread) */
+  isMergeScript: () => boolean | null
 }
 
 export const freezeSteps = (h: FreezeState) => {
@@ -44,7 +46,7 @@ export const freezeSteps = (h: FreezeState) => {
     if (r?.exitCode === 0) changed = { sha: s.mergeSha, paths: new Set(r.stdout.split('\0').filter(Boolean).map(p => p.toLowerCase())) }
   }
   /** A131: the sync's step as last read, or read fresh with its build log of this run when that changed. */
-  const stepCached = (s: SyncFile | null, now: number): FreezeStep | null => (s ? freezeStepOf(h.phaseOf(s, now), s.stage, log.path === s.buildLog ? log.read : null) : null)
+  const stepCached = (s: SyncFile | null, now: number): FreezeStep | null => (s ? freezeStepOf(h.phaseOf(s, now), s.stage, log.path === s.buildLog ? log.read : null, h.isMergeScript()) : null)
   const stepNow = async (io: FileIo, s: SyncFile | null, now: number): Promise<FreezeStep | null> => {
     if (s?.mergeSha && s.preHead && changed.sha !== s.mergeSha) await readChanged(io, s) // Fable 10: no lag of a minute
     const st = s?.stage === 'building' && s.buildLog ? await io.stat(s.buildLog) : null
@@ -99,6 +101,9 @@ export const freezeSteps = (h: FreezeState) => {
   return {
     stepNow,
     lineNow,
+    /** A143: whether the sync's step keeps git reads of the shared checkout out now (the merge step; the build log has no
+     * say in it): A5R's own git and the stale-lock mover follow it, as the freeze's refusals do. */
+    isMerging: (s: SyncFile | null, now: number): boolean => holdsReads(stepCached(s, now)),
     waitsNow,
     /** A133: the compact line's few words for the sync. */
     shortNow: (s: SyncFile, now: number): string => shortLine(s, h.phaseOf(s, now), stepCached(s, now), times, now),

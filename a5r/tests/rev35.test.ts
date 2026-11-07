@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { blankSession, checkoutGitPids, gitBusyNote, isListAtT, newSync, NO_GIT_BUSY, NOTICES, parseProbe, parseSyncFile, SYNC_WORKER_PROMPT, syncWorkerTask, type SessionFile, type SyncFile } from '../hooks/coord.ts'
+import { blankSession, checkoutGitPids, gitBusyNote, isListAtT, newSync, NO_GIT_BUSY, NOTICES, parseProbe, parseSyncFile, type SessionFile, type SyncFile } from '../hooks/coord.ts'
+import { SYNC_WORKER_PROMPT, syncWorkerTask } from '../hooks/syncworker.ts'
 import { dryKey, dryStep, FETCH_MS, fetchArgv, fetchWhy, shaOf, staleOf, START_WAIT_MS, withDryRun, withDryRunFailed } from '../hooks/dryrun.ts'
 import { LOCK, ME, NOW, PROJ, opts, refused, world, type Proc, type Rec } from './world.ts'
 
@@ -114,7 +115,7 @@ test('A107: the holder fetches before the cutoff dry-run and again at T before t
   expect(spawns(w).length).toBe(1)
   const task = String(spawns(w)[0]?.prompt)
   expect(task).toContain('Dry-run at T: Source/S2/Foo.cpp (foreign); Source/S2/Avian.cpp (foreign).')
-  expect(task).toContain(`That list: made at 14:45 against origin/main ${MAIN2.slice(0, 12)}. It may be older than your merge: the merge's own unmerged paths (git diff --name-only --diff-filter=U) decide.`)
+  expect(task).toContain(`That list: made at 14:45 against origin/main ${MAIN2.slice(0, 12)}. It may be older than your merge: the merge script's own list decides.`)
   expect(told(w)).toContain('A5R · Sync main — the dry-run at T: 1 conflict (0 self, 1 foreign): Source/S2/Avian.cpp → owner unknown')
   expect(count(told(w), 'Source/S2/Foo.cpp → owner unknown')).toBe(1) // the cutoff's conflict is not told again
   await minutes($, w, 3)
@@ -288,9 +289,9 @@ test('A107: the fetch runs off the tick chain: a tool that waits on a tick answe
 
 // ---------- A108 ----------
 test('A108: unit: the worker prompt keeps every command in the foreground and never ends while one runs; the hand-back waits only on index.lock and names the checkout\'s own git', () => {
-  expect(SYNC_WORKER_PROMPT).toContain('Run every git command in the foreground, to its end, in one tool call: never with `&`, never as a background tool run, never by Start-Process without -Wait, never from a script you leave running; the build of rule 6 is the only command you start to outlive your turn.')
+  expect(SYNC_WORKER_PROMPT).toContain('Run every git command in the foreground, to its end, in one tool call: never with `&`, never as a background tool run, never by Start-Process without -Wait, never from a script you leave running; the merge script of rule 5 and the build of rule 6 are the only commands you start detached, each only with the command your task gives.') // A142 / A144 (rev 46)
   expect(SYNC_WORKER_PROMPT).toContain('7. End: never end your turn while a command you started (other than the build of rule 6) still runs, and never end with "waiting" or "until … finishes": wait for each such command in the foreground first.')
-  expect(SYNC_WORKER_PROMPT).toContain("The dry-run list in your task may be older than your merge (main can move after it): the merge's own unmerged paths (`git diff --name-only --diff-filter=U`) decide, listed or not.")
+  expect(SYNC_WORKER_PROMPT).toContain("The dry-run list in your task may be older than the merge (main can move after it): the script's own list decides.")
   // Review 1: only git whose command line names the checkout; never the fsmonitor daemon (core.fsmonitor=true on S2).
   const git = (pid: number, cmd?: string): Proc => ({ name: 'git', pid, gb: 0.1, parentAlive: true, ...(cmd === undefined ? {} : { cmd }) })
   const probe = { freeGb: 30, diskGb: 100, procs: [git(1, 'git -C E:/Projects/s2 checkout --ours -- a.cpp'), git(2, '"C:\\Program Files\\Git\\cmd\\git.exe" -C "E:\\Projects\\S2" add -- a.cpp'), git(3, 'git fsmonitor--daemon run --detach --ipc-threads=8'), git(4, 'git -C E:/Projects/s2-old status'), git(5, 'git -C D:/Projects/ather-mods status'), git(6), git(7, 'git -C E:/Projects/s2 fsmonitor--daemon run --detach'), git(8, 'git -C D:/other diff --no-index E:/Projects/s2/x'), git(9, 'git -C E:/Projects/s2/Source status')] }
@@ -309,7 +310,7 @@ test('A108: unit: the worker prompt keeps every command in the foreground and ne
   const s: SyncFile = { ...newSync(T(14, 45), B, 'x', NOW), stage: 'manual', note: 'the sync worker ended without a SYNC line' }
   expect(NOTICES.syncManual(s, { gitPids: [4242], lockAgeMs: 0 })).toContain("until done, abort or 15:30; 1 git process of the checkout still runs (PID 4242) and .git/index.lock exists (0 min old) → keep the lock (the sync tool's done or abort gives it back; the editor tool's release does not); wait until .git/index.lock is gone before you touch the index")
   expect(NOTICES.syncManual(s, NO_GIT_BUSY)).toBe(NOTICES.syncManual(s))
-  expect(syncWorkerTask(s, S2, 'FREE', null)).toContain('That list: none made. It may be older than your merge')
+  expect(syncWorkerTask(s, S2, 'FREE', null, 'RUN')).toContain('That list: none made. It may be older than your merge')
 })
 
 /** The holder's sync at 14:45; the worker starts at T; git's HEAD stays the pre-merge HEAD (no merge commit). */

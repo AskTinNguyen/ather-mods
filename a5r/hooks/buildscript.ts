@@ -17,12 +17,16 @@ export const LOCK_WAIT = /waiting for existing script to terminate/i
  * worker start; the probe lists a cmd.exe whose command line holds this suffix (coord.ts `ramProbe`). */
 export const SCRIPT_SUFFIX = '-build.cmd'
 export const syncBuildScript = (checkout: string, syncId: string): string => `${checkout}/Saved/A5R/${syncId}${SCRIPT_SUFFIX}`
-/** The script's own cmd.exe runs (null: no process list was read, never taken for gone). Another lane's dotnet, cl or Live
- * Coding never counts as this sync's build. */
+/** A sync script's own process runs (null: no process list was read, never taken for gone): a process of `exe` whose
+ * command line `isMine` accepts (A109: the build's cmd.exe; A143: the merge's PowerShell). */
+export const scriptAlive = (procs: readonly { name: string; cmd?: string }[] | null, exe: RegExp, isMine: (cmd: string) => boolean): boolean | null =>
+  procs === null ? null : procs.some(p => exe.test(p.name) && isMine(p.cmd ?? ''))
+/** The build script's own cmd.exe runs. Another lane's dotnet, cl or Live Coding never counts as this sync's build. */
 export const isScriptAlive = (procs: readonly { name: string; cmd?: string }[] | null, syncId: string): boolean | null =>
-  procs === null ? null : procs.some(p => /^cmd$/i.test(p.name) && (p.cmd ?? '').toLowerCase().includes(`${syncId}${SCRIPT_SUFFIX}`.toLowerCase()))
+  scriptAlive(procs, /^cmd$/i, cmd => cmd.toLowerCase().includes(`${syncId}${SCRIPT_SUFFIX}`.toLowerCase()))
 
-const win = (p: string): string => p.trim().replace(/\//g, '\\').replace(/\\+$/, '')
+/** A path as Windows writes it (backslashes, no trailing one). */
+export const win = (p: string): string => p.trim().replace(/\//g, '\\').replace(/\\+$/, '')
 /** A literal for `set "NAME=…"`: inside the quotes `&`, `(`, `)` and spaces are plain text; only `%` needs doubling. */
 const lit = (p: string): string => win(p).replace(/%/g, '%%')
 /** `call` expands `%` once more and doubles `^` even inside quotes (MEASURED 2026-10-20: `p%x^y` reached Build.bat as

@@ -149,7 +149,7 @@ test('Fable 7: a kill beside a git write is refused only when it can reach the g
 })
 
 test('Fable 8: the build\'s own Result: Succeeded in the log lifts git and Source/ edits while the stage still says building', opts(), async ($, on) => {
-  expect(freezeStepOf('frozen', 'building', 'Succeeded')).toBe('testing')
+  expect(freezeStepOf('frozen', 'building', 'Succeeded', null)).toBe('testing')
   const w = world(on)
   shared(w)
   const base = newSync(NOW - 20 * MIN, B, 'sync-main', NOW - 60 * MIN, true)

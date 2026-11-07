@@ -9,11 +9,11 @@ import {
   movedSync, newSync, noticeIds, noticeText, ownersOf, samePath, parseLockLine, parseMergeTree, parseProbe, parseSessionFile, parseSharedProbe, parseSyncFile, parseTouch, queueOf, ramProbe, addsNotice, safeWord,
   PROBE_FRESH_MS, heavyList, noLaunchPass, passEndOk, passNoLaunch, PASS_NO_LAUNCH_NEXT, PASS_MAX_MIN, type Grant,
   DEFAULT_GATES, isSyncClaim, lapseOf, HAND_LAPSE_MS, isUnresolvedHand, resolveLock, FREE_RAM_READ, releasedNote, type Released, buildProcs, isBuildLease, lockTimes, unrealPids, orchestrateLine, ORCHESTRATE_MAX_BYTES, type OrchestrateEvent,
-  syncPhase, isSyncCommandOnly, SYNC_TELL, SYNC_WORKER_PROMPT, syncWorkerTask, parseSyncEnd,parseClients, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, noModMessage, type NoMod, type ClientRow, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
+  syncPhase, isSyncCommandOnly, SYNC_TELL, parseSyncEnd,parseClients, sessionsView, projectFolder, titleFromRecord, titleSearchPs, TITLE_PATTERN, noModMessage, type NoMod, type ClientRow, ueRequestLine, withConflicts, parseAdded, checkoutGitPids, NO_GIT_BUSY, type GitBusy, writesLock, writesNoticeToIntent, ymd, SYNC_SLOT, isSyncSlot, isWorkerSlot, holdsSyncSlot, appTitleOf, syncLimit, phaseIn, type AppFacts, type Conflict, type Decision as GrantDecision, type Gates, type GrantInput, type LaneBeat, type LockLine, type Notice, type Probe,
   BUILD_MARK, withoutBuildMark, type Holding, type Phase, type SessionFile, type SyncFile, type SyncHolder, type Touch, type Want, type FocusLease, claimIn,
 } from './coord.ts'
 import { FOCUS_FILE, FOCUS_GATE, FOCUS_USAGE, afterFocusWant, applyFocus, askBox, boxAnswer, editorUseOf, focusHead, focusLease, focusLook, focusNotices, focusRefusal, focusWant, grantMemoryNote, isFocusLeaseOf, parseFocus, parseFocusCommand, syncWhileFocus, touchRefusal, type Focus, type FocusAction } from './focus.ts'
-import { CONFLICT_HEADS, STARTS_OP, classifyGit, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, foreignPaths, gitPlace, HIDDEN_GIT_WRITE, indexProblem, isGit, isIndexSub, walkDeep, leasePushTargets, listed, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
+import { CONFLICT_HEADS, STARTS_OP, classifyGit, isSharedGitArgv, endOf, opOf, type HeadFile, discardedPaths, exactAlternative, foreignPaths, gitPlace, HIDDEN_GIT_WRITE, indexProblem, isGit, isIndexSub, walkDeep, leasePushTargets, listed, PROTECTED_BRANCH, repoPath, walk, writesInside } from './gitshared.ts'
 import { EDITOR_WORK, LEASES_FILE, adoptLockEnd, str, wantOf, appendCapped, endLease, holderNotices, holderText, isRetestExtension, keepableOf, leaseSummary, noteLease, parseLeases, placeOf, queueRowText, queueView, releaseReason, summaryLine, yieldAsksTo, yieldTold, type LeaseEnd, type LeaseRecord } from './lease.ts'
 import { HEAD_OWNER_FILE, headOwner, mayClaim, ownerOf, parseHeadOwner, withOp, type HeadOwner, type OpStart, type Owner } from './opguard.ts'
 import { freeWindowOf, idleMsOf, isIdle } from './nudge.ts'
@@ -26,7 +26,10 @@ import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged }
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
 import { POST_MERGE_TESTS, afterWorker, enterStage, entryTell, isMergedStage, isQuietTell, readBuildLog, readMerge, stageNext, stageWord, syncBuildLog, tellKey, testsOf, type BuildLog, type MergeRead, type StageEntry, type SyncStage } from './syncstage.ts'
-import { buildScriptText, buildStartCommand, isScriptAlive, syncBuildScript } from './buildscript.ts'
+import { isScriptAlive, runLabel } from './buildscript.ts'
+import { isMergeScriptAlive } from './mergescript.ts'
+import { syncScripts } from './synchost.ts'
+import { SYNC_WORKER_PROMPT, syncWorkerTask } from './syncworker.ts'
 import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG_MS, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, type Miss, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
@@ -34,7 +37,7 @@ import { A5R_HELP, EDITOR_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
 import { freezeSteps } from './freezehost.ts'
 import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
-import { editNeed, freezeWhy, heldIn, shellNeeds, stepNotice, type Need } from './syncplan.ts'
+import { commandNeeds, editNeed, freezeWhy, heldIn, stepNotice, type Need } from './syncplan.ts'
 import { BINARY_EXCLUDES, BINARY_EXT, addedLines, diffInBatches, fileDiff, remotesOf, urlIsRepo, type GivenDiff } from './diffs.ts'
 import { COMEBACK_BOX_MIN, comebackLook, overrunLook, type LookPress } from './looks.ts'
 import { ORPHAN_FILE, askLook, closeAnswer, closeArgv, idleArgv, orphanLook, orphanNotice, orphanOf, parseIdle, parseOrphan, sharedEditorPid, type Idle, type OrphanRecord } from './orphan.ts'
@@ -248,7 +251,7 @@ async function mainTreeHere($: Engine): Promise<{ tree: string } | Exclude<Miss,
       if (!(await $.fs.exists(`${d}/.git`))) continue
       const tree = mainTreeOfGitFile(d, await $.fs.read(`${d}/.git`).catch(() => ''))
       if (tree) return { tree }
-      const ran = await $.process.run(commonDirArgv(d), { timeoutMs: FIND_GIT_MS }).catch(() => null)
+      const ran = await $.process.run(commonDirArgv(d), { timeoutMs: FIND_GIT_MS }).catch(() => null) // before s2Root is known: never held
       return ran?.exitCode === 0 ? { tree: mainTreeOf(ran.stdout) } : 'git-silent'
     }
     return 'no-repo'
@@ -490,7 +493,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     if (act.kind === 'checkout-word') {
       const word = act.word
       const isFile = (await $.fs.stat(norm(word, dir)).catch(() => null))?.kind === 'file'
-      const isRef = isFile ? (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${word}^{commit}`], { timeoutMs: 8_000 }).catch(() => null))?.exitCode === 0 : true
+      const isRef = isFile ? (await gitRun($, ['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${word}^{commit}`], 8_000))?.exitCode === 0 : true
       act = isFile && !isRef ? { kind: 'check', sub: 'checkout', paths: [word], untracked: false } : { kind: 'refuse', why: 'git checkout <branch> moves the shared working tree under every session', alt: 'work in a worktree of your own (git worktree add <dir> <branch>)' }
     }
     if (act.kind === 'refuse') return blocked(gate, `${act.why} (the shared S2 checkout ${s2Root()})`, act.alt)
@@ -503,7 +506,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
       continue
     }
     if (act.kind === 'stash-drop') {
-      const list = await $.process.run(['git', '-C', root, 'stash', 'list'], { timeoutMs: 8_000 }).catch(() => null)
+      const list = await gitRun($, ['git', '-C', root, 'stash', 'list'], 8_000)
       const n = list?.exitCode === 0 ? list.stdout.split(/\r?\n/).filter(Boolean).length : null
       if (n === 0) continue
       return blocked(gate, n === null ? 'git stash list could not be read' : `the shared checkout holds ${n} stash entr${n === 1 ? 'y' : 'ies'}, any of them maybe another session's`, 'leave the stash as it is; keep your own work in a commit or a worktree of your own')
@@ -513,7 +516,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
     let untracked: boolean
     if (act.kind === 'stash-apply') {
       // rev 27 follow-up: a stash comes back over the paths it holds; they are checked like a discard's.
-      const shown = await $.process.run(['git', '-C', root, 'stash', 'show', '--name-only', '--include-untracked', act.ref], { timeoutMs: 8_000 }).catch(() => null)
+      const shown = await gitRun($, ['git', '-C', root, 'stash', 'show', '--name-only', '--include-untracked', act.ref], 8_000)
       if (!shown || shown.exitCode !== 0) return blocked(gate, `git stash show could not read ${act.ref}`, 'name a stash that exists (git stash list), or apply it in a worktree of your own')
       rels = shown.stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
       if (rels.length === 0) continue
@@ -531,7 +534,7 @@ async function gitSharedProblem($: Engine, opts: Opts, a5r: A5R, command: string
         rels.push(r.rel)
       }
     }
-    const ran = await $.process.run(['git', '-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${untracked ? 'all' : 'no'}`, '--', ...rels], { timeoutMs: 8_000 }).catch(() => null)
+    const ran = await gitRun($, ['git', '-C', root, 'status', '--porcelain=v1', '-z', `--untracked-files=${untracked ? 'all' : 'no'}`, '--', ...rels], 8_000)
     if (!ran || ran.exitCode !== 0) return blocked(gate, `git status could not be read in the shared checkout${ran ? ` (exit ${ran.exitCode})` : ' within 8 s'}, so what git ${sub} would ${isIndexSub(sub) ? 'take' : 'discard'} is unknown`, 'name fewer, deeper paths, or run it in a worktree of your own')
     // A97: resolving a conflict is not a discard: `checkout --ours|--theirs` passes the unmerged paths while a merge, revert
     // or cherry-pick waits to be resolved.
@@ -580,7 +583,7 @@ async function leasePushProblem($: Engine, opts: Opts, command: string, cwd: str
   const gate = gateOf('D1')
   const home = (places.USERPROFILE ?? '').replace(/\\/g, '/')
   const branchOf = async (dir: string): Promise<string> => {
-    const r = await $.process.run(['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 8_000 }).catch(() => null)
+    const r = await gitRun($, ['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], 8_000)
     return r && r.exitCode === 0 ? r.stdout.trim() : ''
   }
   const LEASE = /--force-(with-lease|if-includes)/
@@ -615,7 +618,7 @@ const liveTouches = (now: number): Touch[] => touches.filter(t => isLive(t.id8, 
 const addsChecked = new Map<string, { root: string; rels: string[] }[]>()
 /** A126: the staged paths of the shared checkout (under `rels` when given): one fast read, 8 s; null when unread. */
 async function stagedIn($: Engine, root: string, rels: readonly string[]): Promise<string[] | null> {
-  const r = await $.process.run(['git', '-C', root, 'diff', '--cached', '--name-only', '-z', ...(rels.length > 0 ? ['--', ...rels] : [])], { timeoutMs: 8_000 }).catch(() => null)
+  const r = await gitRun($, ['git', '-C', root, 'diff', '--cached', '--name-only', '-z', ...(rels.length > 0 ? ['--', ...rels] : [])], 8_000)
   return r?.exitCode === 0 ? r.stdout.split('\0').filter(Boolean) : null
 }
 /** A74 (review 5): after this session commits in the shared checkout, its touch set keeps only the paths still changed
@@ -623,7 +626,7 @@ async function stagedIn($: Engine, root: string, rels: readonly string[]): Promi
 async function pruneTouched($: Engine, opts: Opts): Promise<void> {
   if (!me || touched.size === 0) return
   const paths = [...touched].slice(-200)
-  const ran = await $.process.run(['git', '-C', s2Root(), 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths], { timeoutMs: 8_000 }).catch(() => null)
+  const ran = await gitRun($, ['git', '-C', s2Root(), 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths], 8_000)
   if (!ran || ran.exitCode !== 0) return
   const still = new Set(ran.stdout.split(/\0|\r?\n/).filter(e => /^.. \S/.test(e)).map(e => e.slice(3).trim().toLowerCase()))
   let changed = false
@@ -1020,32 +1023,36 @@ async function ensureTools($: Engine): Promise<void> {
  * so a reload or a second tick never starts another). */
 async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   // A93: the HEAD before the merge, so a worker that ends with no SYNC line can still be read as merged or not.
-  const head = await $.process.run(['git', '-C', s2Root(), 'rev-parse', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
+  const head = await gitRun($, ['git', '-C', s2Root(), 'rev-parse', 'HEAD'], 30_000)
   const preHead = head?.exitCode === 0 ? head.stdout.trim() : ''
   const engine = s.build && checkout ? await findEngine($, opts, checkout) : null
-  const buildRun = checkout && engine?.root ? await writeBuildScript($, checkout, s, engine.root) : ''
+  const buildRun = checkout && engine?.root ? await scriptsOf($).build(checkout, s, engine.root) : ''
+  const mergeRun = checkout ? await scriptsOf($).merge(checkout.root, s) : '' // A142
   if (!(await writeSync($, opts, { ...s, workerAt: now, preHead, buildRun, updatedAt: now }, s))) return
   const claimed = syncFile ?? s
   // A79: the worker calls no a5r tool (a plugin's hooks never see the calls of an agent it spawned), so the holder's a5r
   // takes the Editor lock for the sync here, as the editor tool's request does, and releases it when the worker ends.
   await takeSyncLock($, opts, claimed, now).catch(err => $.ui.log(`a5r: sync lock: ${String(err)}`, { to: 'debug' }))
-  const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(), (lockRaw ?? '').trim(), engine) }).catch(err => ({ deny: String(err) }))
+  const ran = await $.agent.spawn({ subagentType: SYNC_AGENT, description: `Sync main ${clockOf(s.at)}`, prompt: syncWorkerTask(claimed, s2Root(), (lockRaw ?? '').trim(), engine, mergeRun) }).catch(err => ({ deny: String(err) }))
   // A96: a worker that could not start hands the sync back like one that gave up (the manual stage).
   if (ran.deny !== undefined) return enterSyncStage($, opts, claimed, { stage: 'manual', mergeSha: '', note: `the sync worker could not start: ${ran.deny}`, isBuildNone: false }, now)
   // The spawn names its agent; where it does not, the session's agent list does (the newest sync worker this mod started).
   const id = ran.agentId ?? (await $.agent.list().catch(() => [])).filter(a => a.type === SYNC_AGENT && a.spawnedBy === 'a5r').pop()?.id
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
 }
-
-/** A109: the sync's build script written fresh (over any earlier one of this sync) with the engine root found (A110); the
- * one command that starts it, or '' when it could not be written (the worker's task then says to start no build). */
-async function writeBuildScript($: Engine, c: Checkout, s: SyncFile, root: string): Promise<string> {
-  const script = syncBuildScript(c.root, s.id)
-  const isWritten = await $.fs.write(script, buildScriptText(c.root, c.uproject, syncBuildLog(c.root, s.id), root)).then(() => true, err => {
-    $.ui.log(`a5r: build script not written: ${String(err)}`, { to: 'debug' })
-    return false
-  })
-  return isWritten ? buildStartCommand(script) : ''
+/** A109 / A142: the sync's build and merge scripts (synchost.ts), through this call's engine. */
+const scriptsOf = ($: Engine) => syncScripts({ pluginRoot: $.plugin.root, read: path => $.fs.read(path).catch(() => null), write: (path, text) => $.fs.write(path, text), log: note => $.ui.log(`a5r: ${note}`, { to: 'debug' }) })
+/** A143: A5R's own git of the shared checkout, skipped (null: unread) in a sync's merge step (sync.json read fresh), but
+ * in the holder's session, which runs the merge. Every git A5R runs goes through it (the hosts' io.run too; other argv
+ * pass unchanged), but the checkout's discovery (before it is known) and gh (which may run git itself). */
+async function gitRun($: Engine, argv: string[], timeoutMs: number, env?: Record<string, string>) {
+  const s = isSharedGitArgv(argv, s2Root()) && syncFile?.holder.id8 !== me8 ? parseSyncFile(await readJson($, syncPath())) : null
+  return s && freeze.isMerging(s, await $.clock.now()) ? null : $.process.run(argv, { timeoutMs, ...(env ? { env } : {}) }).catch(() => null)
+}
+/** gitRun's output when git exits 0, else '' (unread). */
+async function gitOut($: Engine, dir: string, args: string[], timeoutMs = 30_000): Promise<string> {
+  const r = await gitRun($, ['git', '-C', dir, ...args], timeoutMs)
+  return r && r.exitCode === 0 ? r.stdout : ''
 }
 
 /** A110 (Fable review D2): an Editor log's text; one over 4 MiB, which `$.fs.read` refuses, through findstr (its base
@@ -1224,7 +1231,7 @@ async function syncLockUntil($: Engine, opts: Opts, s: SyncFile, now: number): P
 
 /** A93: the merge commit on top of the pre-merge HEAD the holder's a5r recorded, or null. */
 async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<MergeRead> {
-  const r = await $.process.run(['git', '-C', s2Root(), 'log', '-1', '--format=%H %P', 'HEAD'], { timeoutMs: 30_000 }).catch(() => null)
+  const r = await gitRun($, ['git', '-C', s2Root(), 'log', '-1', '--format=%H %P', 'HEAD'], 30_000)
   return readMerge(r?.exitCode === 0 ? r.stdout : null, s.preHead)
 }
 
@@ -1245,6 +1252,8 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
   const now = await $.clock.now()
   await restoreMe($, opts)
   if (s.state !== 'planned') return releaseSyncSlot($, opts, s, now)
+  const refusal = checkout ? await scriptsOf($).mergeEnd(checkout.root, s) : null // A142: the merge script's refusal, logged
+  if (refusal) await orchestrateLog($, opts, { ...actedEvent('sync-merge', refusal.note, now), procs: refusal.procs })
   const end = parseSyncEnd(answer)
   const first = (answer ?? '').split(/\r?\n/).map(l => l.trim()).find(Boolean) ?? ''
   const after = afterWorker(end, end?.kind === 'abort' ? { state: 'unknown' } : await mergeCommit($, opts, s), s.build, first.slice(0, 140))
@@ -1995,10 +2004,7 @@ function holderFor(spec: string, now: number): SyncHolder | null {
  * `until` (A107: the dry-run at T must not hold the worker back) the paths left count as foreign. */
 async function classifyAll($: Engine, opts: Opts, paths: readonly string[], until = Infinity): Promise<Conflict[]> {
   const repo = s2Root()
-  const git = async (args: string[]): Promise<string> => {
-    const r = await $.process.run(['git', '-C', repo, ...args], { timeoutMs: 30_000 }).catch(() => null)
-    return r && r.exitCode === 0 ? r.stdout : ''
-  }
+  const git = (args: string[]): Promise<string> => gitOut($, repo, args)
   const out: Conflict[] = []
   for (const p of paths.slice(0, MAX_CLASSIFIED)) {
     if ((await $.clock.now()) >= until) break
@@ -2027,14 +2033,14 @@ function startDryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): void 
 async function dryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): Promise<void> {
   const root = s2Root()
   const limitMs = FETCH_MS[round]
-  const fetch = () => $.process.run(fetchArgv(root), { env: FETCH_ENV, timeoutMs: limitMs }).catch(() => null)
+  const fetch = () => gitRun($, fetchArgv(root), limitMs, FETCH_ENV)
   let fetched = await fetch()
   if (fetched && fetched.exitCode !== 0) fetched = await $.clock.sleep(FETCH_RETRY_MS).then(fetch) // once: a ref lock, a blip
   const failed = fetchWhy(fetched, limitMs)
   const now = await $.clock.now()
   if (failed) push({ id: `sync:${s.id}:${s.at}:fetch-failed:${round}`, text: NOTICES.fetchFailed(s, round, failed), isActionable: true })
-  const main = shaOf((await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'origin/main'], { timeoutMs: 30_000 }).catch(() => null))?.stdout)
-  const r = await $.process.run(['git', '-C', root, 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
+  const main = shaOf((await gitRun($, ['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'origin/main'], 30_000))?.stdout)
+  const r = await gitRun($, ['git', '-C', root, 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], 60_000)
   if (!r || (r.exitCode !== 0 && r.exitCode !== 1)) {
     push({ id: `sync:${s.id}:${s.at}:dry-run-failed:${round}`, text: noticeText('Sync main', `the conflict dry-run (git merge-tree) did not finish${r ? ` (exit ${r.exitCode})` : ' within 60 s'}`, `run git -C ${root} merge-tree --write-tree --name-only HEAD origin/main yourself and pass the conflicted paths with the sync tool (action conflicts)`), isActionable: true })
     await updateSync($, opts, s, me8, cur => withDryRunFailed(cur, now))
@@ -2061,7 +2067,7 @@ async function updateSync($: Engine, opts: Opts, s: SyncFile, holder8: string, c
  * untracked scan. Null when git could not list them (the holder is told). */
 async function addedOnDisk($: Engine, opts: Opts, s: SyncFile): Promise<string[] | null> {
   const repo = s2Root()
-  const r = await $.process.run(['git', '-C', repo, 'diff', '--name-only', '-z', '--diff-filter=A', 'HEAD', 'origin/main'], { timeoutMs: 60_000 }).catch(() => null)
+  const r = await gitRun($, ['git', '-C', repo, 'diff', '--name-only', '-z', '--diff-filter=A', 'HEAD', 'origin/main'], 60_000)
   if (!r || r.exitCode !== 0) {
     push({ id: `sync:${s.id}:${s.at}:added-failed`, text: noticeText('Sync main', 'the list of files origin/main adds (git diff --diff-filter=A) did not finish', `run git -C ${repo} diff --name-only --diff-filter=A HEAD origin/main yourself and check which of those paths already exist in the checkout before the merge`), isActionable: true })
     return null
@@ -2256,12 +2262,12 @@ async function syncAction($: Engine, opts: Opts, action: string, a: { at?: strin
     return `recorded ${paths.length} conflicted path${paths.length === 1 ? '' : 's'}: ${(next.conflicts ?? []).map(c => conflictLabel(c, next.rules)).join(', ') || 'none'}; the sessions that edited them are told at their next tick`
   }
   if (action === 'rules') {
-    // A99: the worker reads the rules in its task, so they change only until it starts.
-    if (s.workerAt !== null) return blocked(gate, `the sync worker started at ${clockOf(s.workerAt)} with the rules it had (${rulesLabel(s.rules)})`, 'resolve the remaining conflicts by hand when the sync comes back to you, or abort it')
+    if (s.workerAt !== null && s.stage !== 'manual') return blocked(gate, `the sync worker started at ${clockOf(s.workerAt)} with the rules it had (${rulesLabel(s.rules)})`, 'give rules again when the sync comes back to you (A5R then writes its merge script again), or abort it') // A99 / A142
     if (badRules) return badRules
     if (rules === null) return blocked(gate, 'rules names no rules', `give rules: ${RULE_FORM}; an empty list clears them`)
     const next = await updateSync($, opts, s, s.holder.id8, cur => ({ ...asMine(cur), rules, updatedAt: now }))
-    return next ? `conflict rules for ${when(next)}: ${rulesLabel(rules)}` : blocked(gate, 'sync.json changed', 'read it with status and try again')
+    const run = next && next.stage === 'manual' && checkout ? await scriptsOf($).merge(checkout.root, next) : '' // A142: a rerun runs the new rules
+    return next ? `conflict rules for ${when(next)}: ${rulesLabel(rules)}${run ? `; its merge script was written again with them: rerun it with ${runLabel(run)}` : ''}` : blocked(gate, 'sync.json changed', 'read it with status and try again')
   }
   if (action === 'build') {
     if (phase === 'frozen') return blocked(gate, `${when(s)} is frozen already`, 'its hard end stays as it is')
@@ -2381,7 +2387,7 @@ const kitDirsIn = (root: string): string[] => {
  * `start`'s own current branch (gh opens that one). A folder with no repository, or a head found nowhere, is a problem:
  * the score is "not scored" with it. */
 async function prTarget($: Engine, start: string, refs: PrRefs): Promise<{ root: string; head: string | null; branch: string; problem: string | null }> {
-  const run = (args: string[]) => $.process.run(['git', '-C', start, ...args], { timeoutMs: 15_000 }).catch(() => null)
+  const run = (args: string[]) => gitRun($, ['git', '-C', start, ...args], 15_000)
   if (refs.problem) return { root: start, head: null, branch: '', problem: refs.problem }
   const top = await run(['rev-parse', '--show-toplevel'])
   if (!top || top.exitCode !== 0) return { root: start, head: null, branch: '', problem: `no git repository at ${start}` }
@@ -2419,13 +2425,10 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
   // session's own checkout unless that is where the head is. A52: a PR read from GitHub brings its own diff.
   const target = given ? { root: start, head: null, branch: given.branch, problem: null } : await prTarget($, start, refs)
   const root = target.root
-  const git = async (args: string[]): Promise<string> => {
-    const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
-    return r && r.exitCode === 0 ? r.stdout : ''
-  }
+  const git = (args: string[]): Promise<string> => gitOut($, root, args)
   // The base is origin/main: a local main in the shared checkout can be far behind it, and main...HEAD would then
   // list everything main merged since as this branch's work. Local main only when origin/main is missing.
-  const hasRef = async (ref: string) => (await $.process.run(['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { timeoutMs: 15_000 }).catch(() => null))?.exitCode === 0
+  const hasRef = async (ref: string) => (await gitRun($, ['git', '-C', root, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], 15_000))?.exitCode === 0
   // A22: a PR tool names its base, head and repository; each is checked here, and one that cannot be read is no pass.
   const baseName = refs.base?.trim() || 'main'
   // A47 (b): the PR's repository may be any remote of this repository (a fork PR: `-R upstream/x --head me:branch` from a
@@ -2451,7 +2454,7 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
           : null
   // An unread diff never passes: a failure, a timeout or a cut output is named, and nothing is scored.
   const whole = async (args: string[]): Promise<{ out: string; why: string | null }> => {
-    const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => null)
+    const r = await gitRun($, ['git', '-C', root, ...args], 30_000)
     if (!r) return { out: '', why: `git ${args[0]} ${args[1]} timed out or did not start` }
     if (r.exitCode !== 0) return { out: '', why: `git ${args[0]} ${args[1]} exited ${r.exitCode}` }
     if (r.isStdoutTruncated) return { out: '', why: `git ${args[0]} ${args[1]} output passed 4 MiB` }
@@ -2502,7 +2505,7 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
   const othersTouch = isS2Repo ? touches.filter(t => isLive(t.id8, now)).map(t => ({ lane: t.lane, paths: t.paths })) : []
   const mine = [...touched].slice(0, 100)
   const untrackedLeft = isS2Repo && mine.length
-    ? ((await $.process.run(['git', '-C', s2Root(), 'status', '--porcelain', '--untracked-files=all', '--', ...mine], { timeoutMs: 30_000 }).catch(() => null))?.stdout ?? '').split(/\r?\n/).filter(l => l.startsWith('?? ')).map(l => l.slice(3).trim())
+    ? ((await gitRun($, ['git', '-C', s2Root(), 'status', '--porcelain', '--untracked-files=all', '--', ...mine], 30_000))?.stdout ?? '').split(/\r?\n/).filter(l => l.startsWith('?? ')).map(l => l.slice(3).trim())
     : []
   const strayWorktrees: string[] = []
   let wt = ''
@@ -2833,8 +2836,8 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
     : `its holder is gone${owner ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} ${opOf(h.head)} --abort; until then no commit, reset or stash there`
 
 // Rev 44: gitturnhost.ts (A128-A130) and freezehost.ts (A131-A134): this session's state once, the engine per call.
-const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, dir: hfDir, root: s2Root })
-const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now) })
+const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, isMerging: now => freeze.isMerging(syncFile, now), dir: hfDir, root: s2Root })
+const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now), isMergeScript: () => isMergeScriptAlive(probe?.procs ?? null) })
 const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8) })
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
@@ -2843,7 +2846,7 @@ const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   write: (path, text) => $.fs.write(path, text).catch(() => undefined),
   stat: path => $.fs.stat(path).catch(() => null),
   list: dir => $.fs.list(dir).catch(() => []),
-  run: (argv, timeoutMs) => $.process.run(argv, { timeoutMs }).catch(() => null),
+  run: (argv, timeoutMs) => gitRun($, argv, timeoutMs),
   log: (note, now) => orchestrateLog($, opts, actedEvent('stale-index-lock', note, now)).catch(() => undefined),
   claimAlert: key => claimAlert($, opts, key),
   gitBusy: () => gitBusy($, opts),
@@ -2899,7 +2902,7 @@ async function freezeProblem($: Engine, opts: Opts, a5r: A5R, tool: string, inpu
   const use = command && !isEditorUse ? editorUseOf(editorKindOf(opts, tool, input), command, await $.session.cwd()) : null
   const isBuild = (use?.kind === 'build' || use?.kind === 'headless') && (use.projects.length === 0 || use.projects.some(p => under(p, s2Root())))
   const rels = EDIT_TOOLS.has(tool) && isS2 ? await sharedRels($, await Promise.all((await editParts($, tool, input)).map(([p]) => locate($, a5r, p)))) : []
-  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, freeze.changed())), ...(command ? shellNeeds(walkDeep(command, await $.session.cwd(), (places.USERPROFILE ?? '').replace(/\\/g, '/')).segs, s2Root(), freeze.changed()) : [])]
+  const needs: Need[] = [...(isEditorUse ? ['editor' as const] : []), ...(isBuild ? ['build' as const] : []), ...(shared ? ['git' as const] : []), ...rels.map(r => editNeed(r, freeze.changed())), ...(command ? commandNeeds(walkDeep(command, await $.session.cwd(), (places.USERPROFILE ?? '').replace(/\\/g, '/')).segs, s2Root(), freeze.changed()) : [])]
   const need = needs.find(n => heldIn(step).has(n))
   if (!need) return null
   freeze.refused(s, need) // A132: woken at the step that frees it
@@ -3204,10 +3207,7 @@ async function refreshSync($: Engine, opts: Opts): Promise<void> {
   isReadingGit = true
   try {
     const repo = s2Root()
-    const git = async (args: string[]): Promise<string> => {
-      const r = await $.process.run(['git', '-C', repo, ...args], { timeoutMs: 30_000 }).catch(() => null)
-      return r && r.exitCode === 0 ? r.stdout.trim() : ''
-    }
+    const git = async (args: string[]): Promise<string> => (await gitOut($, repo, args)).trim()
     const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'])
     const counts = (await git(['rev-list', '--left-right', '--count', 'HEAD...origin/main'])).split(/\s+/).map(Number)
     const mainHead = await git(['log', '-1', '--format=%h · %cr', 'origin/main'])

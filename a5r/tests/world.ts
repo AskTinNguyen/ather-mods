@@ -14,6 +14,8 @@ export const opts = (a5rWhenPresent = 'deny') => ({ timeoutMs: 30_000, options: 
 export const BAT = '"D:/GameEditors/5.8/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development'
 export const NOW = new Date(2026, 9, 6, 14, 40).getTime()
 export const LIME = '#DDFF00'
+/** A142: the merge script's body as the plugin holds it (its first line marks it as the script). */
+export const MERGE_BODY_TEXT = "# A5R sync merge (A142, rev 46). The body.\r\n$ErrorActionPreference = 'Stop'"
 
 export type Rec = Record<string, unknown>
 export type Tree = { type?: string; props?: Rec; children?: unknown[] }
@@ -55,6 +57,7 @@ export function world(on: any, { out = {} as Record<string, string>, ram = '20.5
   on('fs.read', async (_$: unknown, e: { path: string }) => {
     if (k(e.path).endsWith('/rules/config.json')) return value(JSON.stringify(CONFIG))
     if (k(e.path).endsWith('/rules/rules-a5r.md')) return value(rules)
+    if (k(e.path).endsWith('/scripts/sync-merge.ps1')) return value(MERGE_BODY_TEXT) // A142: the merge script's body in the plugin
     const t = files.get(k(e.path))
     return t === undefined ? { deny: `ENOENT: ${e.path}` } : value(t)
   })

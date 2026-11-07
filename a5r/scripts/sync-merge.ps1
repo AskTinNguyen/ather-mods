@@ -1,0 +1,311 @@
+# A5R sync merge (A142, rev 46). A5R writes this file, with the param block above it, to Saved/A5R/<sync id>-merge.ps1
+# before the sync worker starts; the worker starts it detached with one command and waits for it. It merges $Target into
+# the shared checkout's branch the way sync-main proved by hand three times, never through `git merge`:
+#   1. git merge-tree --write-tree; conflicts resolved by the holder's rules (and rule 11) in a temporary index; write-tree.
+#   2. git commit-tree <tree> -p HEAD -p <target>.
+#   3. The working tree written only for the paths the merge changes (git read-tree -m -u HEAD <new> on a copy of the
+#      index: git's own checkout, with LFS smudge, that refuses a dirty or untracked-in-the-way path before writing).
+#   4. git update-ref <branch> <new> <old>.
+#   5. The new index installed by renaming .git/index.lock over .git/index, retried while Windows refuses the rename.
+# MEASURED 2026-11-04, 11-06, 11-08: `git merge` wrote ~2k files and then died with "unable to write .git/index" (the
+# rename refused while other processes had .git/index open), leaving HEAD and the index old and the tree half-merged.
+# Here nothing is written before every check passed, and a failure after the first write puts the ref and the tree back.
+# Never: reset --hard, checkout ., clean, GIT_LFS_SKIP_SMUDGE. Every step is logged to $Log; the last line is the result.
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version 2.0
+$enc = New-Object System.Text.UTF8Encoding($false)
+[IO.File]::WriteAllText($Log, '', $enc)
+$env:GIT_TERMINAL_PROMPT = '0'
+$env:GCM_INTERACTIVE = 'never'
+foreach ($name in 'GIT_INDEX_FILE', 'GIT_LFS_SKIP_SMUDGE', 'GIT_DIR', 'GIT_WORK_TREE') { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
+
+function Write-Log([string]$Text) {
+  [IO.File]::AppendAllText($Log, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff') + ' rule=sync-merge ' + $Text + "`r`n", $enc)
+}
+
+# One argument as the Windows C runtime reads it back (quotes and the backslashes before them escaped).
+function ConvertTo-Arg([string]$Arg) {
+  if ($Arg -ne '' -and $Arg -notmatch '[\s"]') { return $Arg }
+  return '"' + (($Arg -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
+}
+
+$gitExe = (Get-Command git.exe -CommandType Application | Select-Object -First 1).Source
+# git in the checkout: UTF-8 in and out, stdin as bytes, GIT_INDEX_FILE only when $Index is given.
+function Invoke-Git([string[]]$GitArgs, [string]$Index = '', [byte[]]$InputBytes = $null) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $gitExe
+  $psi.Arguments = (@('-C', $Checkout) + $GitArgs | ForEach-Object { ConvertTo-Arg $_ }) -join ' '
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardInput = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.StandardOutputEncoding = $enc
+  $psi.StandardErrorEncoding = $enc
+  if ($Index) { $psi.EnvironmentVariables['GIT_INDEX_FILE'] = $Index }
+  $p = [Diagnostics.Process]::Start($psi)
+  $out = $p.StandardOutput.ReadToEndAsync()
+  $err = $p.StandardError.ReadToEndAsync()
+  if ($InputBytes) { $p.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length) }
+  $p.StandardInput.Close()
+  $p.WaitForExit()
+  return [pscustomobject]@{ Code = $p.ExitCode; Out = $out.Result; Err = $err.Result.Trim() }
+}
+function Invoke-GitOk([string[]]$GitArgs, [string]$Index = '', [byte[]]$InputBytes = $null) {
+  $r = Invoke-Git $GitArgs $Index $InputBytes
+  if ($r.Code -ne 0) { throw ('git ' + ($GitArgs -join ' ') + ' exited ' + $r.Code + ': ' + $r.Err) }
+  return $r
+}
+function Split-Nul([string]$Text) { return @($Text.Split([char]0) | Where-Object { $_ -ne '' }) }
+# A repo path (forward slashes) as a full Windows path under the checkout.
+function Get-Full([string]$Path) { return Join-Path $Checkout $Path.Replace('/', [IO.Path]::DirectorySeparatorChar) }
+
+# Tries $Try until it returns true or $Seconds pass, waiting 0.1 s doubling to 2 s between tries.
+function Wait-Until([scriptblock]$Try, [int]$Seconds) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  $delay = 100
+  while ($true) {
+    if (& $Try) { return $true }
+    if ((Get-Date) -ge $deadline) { return $false }
+    Start-Sleep -Milliseconds $delay
+    $delay = [Math]::Min($delay * 2, 2000)
+  }
+}
+
+# The git processes on the machine, with their command lines (a refused rename means one of them had .git/index open).
+# The holder's A5R copies the refusal and these process names into orchestrate.log when the worker ends.
+function Write-GitProcesses {
+  try {
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='git.exe' OR Name='git-lfs.exe' OR Name='git-remote-https.exe'")
+    Write-Log ("git processes: " + $procs.Count)
+    foreach ($p in $procs) { Write-Log ('process pid=' + $p.ProcessId + ' parent=' + $p.ParentProcessId + ' name=' + $p.Name + ' cmd=' + $p.CommandLine) }
+  } catch {
+    Write-Log ('git processes unread: ' + $_)
+  }
+}
+
+$state = @{ Lock = $false; Tree = $false; Ref = $false }
+$refusal = $null
+$tmp = $null
+$changes = @()
+$newDirs = @()
+
+function Stop-Merge([string]$Kind, [string]$Why, [string[]]$Paths = @()) {
+  $script:refusal = @{ Kind = $Kind; Why = $Why; Paths = $Paths }
+  throw "A5R merge refused: $Kind"
+}
+
+# Puts back the paths the merge changed that hold the new content (or are missing), from the pre-merge index copy; removes
+# an added path only when it holds the new content; a path holding neither side's content is someone else's, kept.
+function Restore-Tree {
+  $files = @($changes | Where-Object { $_.NewMode -ne '160000' -and $_.OldMode -ne '160000' })
+  $here = @($files | Where-Object { Test-Path -LiteralPath (Get-Full $_.Path) -PathType Leaf })
+  $now = @{}
+  if ($here.Count -gt 0) {
+    $hashed = Invoke-GitOk @('hash-object', '--stdin-paths') '' ($enc.GetBytes((($here | ForEach-Object { $_.Path }) -join "`n") + "`n"))
+    $oids = @($hashed.Out.Split("`n") | Where-Object { $_ -ne '' })
+    for ($k = 0; $k -lt $here.Count; $k++) { $now[$here[$k].Path] = $oids[$k].Trim() }
+  }
+  $restore = New-Object System.Collections.Generic.List[string]
+  $remove = New-Object System.Collections.Generic.List[string]
+  foreach ($c in $files) {
+    $cur = $now[$c.Path]
+    if ($null -eq $cur) { if ($c.Status -ne 'A') { $restore.Add($c.Path) } }
+    elseif ($cur -eq $c.NewOid -and $c.Status -ne 'D') { if ($c.Status -eq 'A') { $remove.Add($c.Path) } else { $restore.Add($c.Path) } }
+    elseif ($cur -ne $c.OldOid) { Write-Log ('rollback kept ' + $c.Path + ': it holds neither side''s content (someone else''s edit)') }
+  }
+  if ($restore.Count -gt 0) { Invoke-GitOk @('checkout-index', '-f', '-q', '-z', '--stdin') $T0 ($enc.GetBytes(($restore -join [char]0) + [char]0)) | Out-Null }
+  foreach ($p in $remove) { [IO.File]::Delete((Get-Full $p)) }
+  foreach ($d in ($newDirs | Sort-Object Length -Descending)) {
+    if ((Test-Path -LiteralPath $d -PathType Container) -and @(Get-ChildItem -LiteralPath $d -Force).Count -eq 0) { [IO.Directory]::Delete($d) }
+  }
+  Write-Log ('rollback: tree restored (' + $restore.Count + ' put back from the pre-merge index, ' + $remove.Count + ' added files removed)')
+}
+
+# Undoes what was written, newest first; returns what could not be undone ('' when all was).
+function Undo-Merge {
+  $left = @()
+  if ($state.Ref) {
+    $back = Wait-Until { (Invoke-Git @('update-ref', '-m', "A5R sync merge $SyncId rolled back", $branch, $old, $new)).Code -eq 0 } 30
+    if ($back) { $state.Ref = $false; Write-Log "rollback: $branch back to $old" } else { $left += "$branch still at $new (git update-ref $branch $old $new)" }
+  }
+  if ($state.Tree) {
+    try { Restore-Tree; $state.Tree = $false } catch { $left += ('the working tree (' + $_ + ')') }
+  }
+  if ($state.Lock) {
+    try { [IO.File]::Delete($lock); $state.Lock = $false; Write-Log 'rollback: .git/index.lock (ours) removed' } catch { $left += ('.git/index.lock, ours (' + $_ + ')') }
+  }
+  return ($left -join '; ')
+}
+
+function Exit-Merge([string]$Line, [int]$Code) {
+  Write-Log $Line
+  if ($tmp -and (Test-Path -LiteralPath $tmp)) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+  exit $Code
+}
+
+try {
+  Add-Type -Namespace A5RSyncMerge -Name Native -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool MoveFileEx(string from, string to, int flags);'
+  Write-Log ("start: checkout $Checkout, target $Target, sync $SyncId, pid $PID, " + (Invoke-Git @('version')).Out.Trim())
+  $gitDir = (Invoke-GitOk @('rev-parse', '--absolute-git-dir')).Out.Trim()
+  foreach ($h in 'MERGE_HEAD', 'REVERT_HEAD', 'CHERRY_PICK_HEAD', 'REBASE_HEAD', 'rebase-merge', 'rebase-apply') {
+    if (Test-Path -LiteralPath (Join-Path $gitDir $h)) { Stop-Merge 'busy' ".git/$h exists: another git operation is in progress" }
+  }
+  # The script copies .git/index alone: with a split index that copy would point at a shared index it does not carry.
+  if ((Invoke-Git @('config', '--bool', 'core.splitIndex')).Out.Trim() -eq 'true' -or @(Get-ChildItem -LiteralPath $gitDir -Filter 'sharedindex.*' -File -ErrorAction SilentlyContinue).Count -gt 0) {
+    Stop-Merge 'split-index' 'the checkout uses a split index (core.splitIndex is on or .git/sharedindex.* exists); this script copies .git/index alone and could install a wrong index, so it writes nothing: merge by hand, or turn the split index off first (git update-index --no-split-index, with git config core.splitIndex false)'
+  }
+  $branch = (Invoke-Git @('symbolic-ref', '-q', 'HEAD')).Out.Trim()
+  if (-not $branch.StartsWith('refs/heads/')) { Stop-Merge 'busy' 'HEAD is not on a branch' }
+  $old = (Invoke-GitOk @('rev-parse', '--verify', 'HEAD^{commit}')).Out.Trim()
+  $theirs = (Invoke-GitOk @('rev-parse', '--verify', ($Target + '^{commit}'))).Out.Trim()
+  if ((Invoke-Git @('merge-base', '--is-ancestor', $theirs, $old)).Code -eq 0) { Exit-Merge "A5R merge up-to-date $old ($Target $theirs is already in HEAD; nothing written)" 0 }
+  Write-Log "HEAD $old on $branch; $Target $theirs"
+
+  # 1. The merge as a tree, with its conflicts resolved in a temporary index.
+  $mt = Invoke-Git @('merge-tree', '--write-tree', '-z', $old, $theirs)
+  if ($mt.Code -gt 1) { Stop-Merge 'error' ('git merge-tree exited ' + $mt.Code + ': ' + $mt.Err) }
+  $tok = $mt.Out.Split([char]0)
+  $tree = $tok[0]
+  $zero = '0' * $tree.Length
+  $stages = @{}
+  $i = 1
+  while ($i -lt $tok.Length -and $tok[$i] -ne '') {
+    $tab = $tok[$i].IndexOf("`t")
+    $f = $tok[$i].Substring(0, $tab).Split(' ')
+    $p = $tok[$i].Substring($tab + 1)
+    if (-not $stages.ContainsKey($p)) { $stages[$p] = @{} }
+    $stages[$p][$f[2]] = @{ Mode = $f[0]; Oid = $f[1] }
+    $i++
+  }
+  $i++
+  $types = @{}
+  while ($i -lt $tok.Length -and $tok[$i] -match '^\d+$') {
+    $n = [int]$tok[$i]
+    $kind = $tok[$i + $n + 1]
+    for ($j = 1; $j -le $n; $j++) { $types[$tok[$i + $j]] = @($types[$tok[$i + $j]]) + $kind }
+    $i += $n + 3
+  }
+  $merged = $tree
+  $resolved = @()
+  $tmp = Join-Path $gitDir "a5r-merge-$SyncId"
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  if ($stages.Count -gt 0) {
+    $simple = @('Auto-merging', 'CONFLICT (contents)', 'CONFLICT (binary)', 'CONFLICT (modify/delete)')
+    $unresolved = @()
+    $lines = @()
+    foreach ($p in ($stages.Keys | Sort-Object)) {
+      $complex = @($types[$p] | Where-Object { $_ -and $simple -notcontains $_ })
+      if ($complex.Count -gt 0) { $unresolved += "$p ($($complex -join ', '): no rule resolves this kind)"; continue }
+      $side = $null
+      $why = ''
+      foreach ($r in $Rules) { if ([regex]::IsMatch($p, $r.Re, 'IgnoreCase')) { $side = $r.Side; $why = "rule: $($r.Side) $($r.Pattern)"; break } }
+      # Rule 11: main holds a blob of this branch's own history for the path (a self-conflict): ours. Text files only.
+      if (-not $side -and $p -notmatch '\.(uasset|umap)$' -and $stages[$p].ContainsKey('3')) {
+        $hist = (Invoke-Git @('log', '--format=', '--raw', '--no-abbrev', $old, '--', $p)).Out
+        if ($hist.Contains(' ' + $stages[$p]['3'].Oid + ' ')) { $side = 'ours'; $why = 'rule 11: main holds our own blob' }
+      }
+      if (-not $side) { $unresolved += "$p (no rule matches)"; continue }
+      $e = $stages[$p][$(if ($side -eq 'ours') { '2' } else { '3' })]
+      $lines += $(if ($e) { "$($e.Mode) $($e.Oid) 0`t$p" } else { "0 $zero`t$p" })
+      $resolved += "$p ($side, $why)"
+    }
+    if ($unresolved.Count -gt 0) { Stop-Merge 'conflict' "$($unresolved.Count) conflicted path(s) that no rule resolves (nothing written)" $unresolved }
+    $M = Join-Path $tmp 'merge.index'
+    Invoke-GitOk @('read-tree', $tree) $M | Out-Null
+    Invoke-GitOk @('update-index', '--index-info') $M ($enc.GetBytes(($lines -join "`n") + "`n")) | Out-Null
+    $merged = (Invoke-GitOk @('write-tree') $M).Out.Trim()
+    foreach ($x in $resolved) { Write-Log "resolved $x" }
+  }
+  $raw = $(Invoke-GitOk @('diff-tree', '-r', '-z', '--no-renames', '--raw', $old, $merged)).Out.Split([char]0)
+  $list = New-Object System.Collections.ArrayList
+  for ($k = 0; $k + 1 -lt $raw.Length; $k += 2) {
+    if (-not $raw[$k].StartsWith(':')) { break }
+    $f = $raw[$k].Substring(1).Split(' ')
+    [void]$list.Add([pscustomobject]@{ OldMode = $f[0]; NewMode = $f[1]; OldOid = $f[2]; NewOid = $f[3]; Status = $f[4].Substring(0, 1); Path = $raw[$k + 1] })
+  }
+  $changes = @($list)
+  Write-Log "merge tree ${merged}: $($changes.Count) path(s) change, $($stages.Count) conflicted, $($resolved.Count) resolved"
+
+  # The index lock, held from here to the install: no other git writes the index meanwhile.
+  $index = Join-Path $gitDir 'index'
+  $lock = "$index.lock"
+  $marker = "A5R sync merge $SyncId pid $PID"
+  $taken = Wait-Until {
+    try {
+      $fs = [IO.File]::Open($lock, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+      $bytes = $enc.GetBytes($marker)
+      $fs.Write($bytes, 0, $bytes.Length)
+      $fs.Close()
+      return $true
+    } catch [IO.IOException] { return $false }
+  } $LockWaitSec
+  if (-not $taken) { Stop-Merge 'busy' ".git/index.lock stood for $LockWaitSec s: another git works in the checkout (nothing written)" }
+  $state.Lock = $true
+  $T0 = Join-Path $tmp 'before.index'
+  $T = Join-Path $tmp 'after.index'
+  [IO.File]::Copy($index, $T0, $true)
+  [IO.File]::Copy($index, $T, $true)
+  # Stat-only changes are no dirt: the copy is refreshed (the shared index is not written).
+  Invoke-Git @('update-index', '-q', '--refresh') $T | Out-Null
+  $modified = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  foreach ($p in (Split-Nul (Invoke-GitOk @('diff-index', '-z', '--name-only', '--ignore-submodules', $old) $T).Out)) { [void]$modified.Add($p) }
+  $blocked = @()
+  foreach ($c in $changes) {
+    if ($modified.Contains($c.Path)) { $blocked += "$($c.Path) (changed in the shared checkout)" }
+    elseif ($c.Status -eq 'A' -and (Test-Path -LiteralPath (Get-Full $c.Path))) { $blocked += "$($c.Path) (untracked, in the way of the file the merge adds)" }
+  }
+  if ($blocked.Count -gt 0) { Stop-Merge 'dirty' "$($blocked.Count) path(s) the merge changes are dirty or in the way (nothing written)" $blocked }
+
+  # 2. The merge commit (an object only).
+  $name = $branch.Substring('refs/heads/'.Length)
+  $new = (Invoke-GitOk @('commit-tree', $merged, '-p', $old, '-p', $theirs, '-m', "Merge remote-tracking branch '$Target' into $name", '-m', "A5R sync $SyncId")).Out.Trim()
+  Write-Log "merge commit $new"
+
+  # 3. The working tree, only the paths the merge changes (folders it creates are noted for a rollback).
+  foreach ($c in ($changes | Where-Object { $_.Status -eq 'A' })) {
+    $d = Split-Path -Parent (Get-Full $c.Path)
+    while ($d -and $d.Length -gt $Checkout.Length -and -not (Test-Path -LiteralPath $d)) { $newDirs += $d; $d = Split-Path -Parent $d }
+  }
+  $newDirs = @($newDirs | Select-Object -Unique)
+  $state.Tree = $true
+  $rt = Invoke-Git @('read-tree', '-m', '-u', $old, $new) $T
+  if ($rt.Code -ne 0) { Stop-Merge 'tree' ('git read-tree -m -u refused or failed: ' + $rt.Err) }
+  Write-Log "working tree written: $($changes.Count) path(s)"
+
+  # 4. The branch, only from the old value.
+  $moved = Wait-Until { (Invoke-Git @('update-ref', '-m', "A5R sync merge $SyncId", $branch, $new, $old)).Code -eq 0 -or (Invoke-Git @('rev-parse', '--verify', $branch)).Out.Trim() -ne $old } 30
+  $at = (Invoke-Git @('rev-parse', '--verify', $branch)).Out.Trim()
+  if (-not $moved -or $at -ne $new) { Stop-Merge 'ref' "$branch did not move from $old to $new (it reads $at)" }
+  $state.Ref = $true
+  Write-Log "$branch moved $old -> $new"
+
+  # 5. The new index: written into our lock, then the lock renamed over .git/index, retried while Windows refuses it.
+  if ([IO.File]::ReadAllText($lock, $enc) -ne $marker) { Stop-Merge 'index' '.git/index.lock is no longer the one this script took' }
+  [IO.File]::Copy($T, $lock, $true)
+  $tries = 0
+  $lastError = 0
+  $installed = Wait-Until {
+    $script:tries++
+    if ([A5RSyncMerge.Native]::MoveFileEx($lock, $index, 0x1 -bor 0x8)) { return $true }
+    $script:lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    if ($script:tries -eq 1 -or $script:tries % 10 -eq 0) { Write-Log "index rename refused (try $script:tries, Windows error $script:lastError); retrying" }
+    return $false
+  } $RenameWaitSec
+  if (-not $installed) { Stop-Merge 'index' "the rename of .git/index.lock over .git/index was refused for $RenameWaitSec s ($tries tries, last Windows error $lastError)" }
+  $state.Lock = $false
+  $state.Tree = $false
+  $state.Ref = $false
+  Write-Log "index installed after $tries try(s)"
+  Exit-Merge ("A5R merge merged $new ($($changes.Count) path(s) written" + $(if ($resolved.Count) { '; resolved: ' + ($resolved -join '; ') } else { '' }) + ')') 0
+} catch {
+  $r = $refusal
+  if ($null -eq $r) { $r = @{ Kind = 'error'; Why = ([string]$_ + ' (script line ' + $_.InvocationInfo.ScriptLineNumber + ')'); Paths = @() } }
+  foreach ($p in $r.Paths) { Write-Log ($r.Kind + ': ' + $p) }
+  Write-GitProcesses
+  $left = Undo-Merge
+  $tail = $(if ($left) { "; ROLLBACK INCOMPLETE: $left" } else { '; HEAD, index and working tree are as before' })
+  $code = 1 # the result is the log's last line, never the exit code
+  $shown = $(if ($r.Paths.Count) { ' [' + (($r.Paths | Select-Object -First 20) -join '; ') + $(if ($r.Paths.Count -gt 20) { "; +$($r.Paths.Count - 20) more in the log" } else { '' }) + ']' } else { '' })
+  Exit-Merge ("A5R merge refused $($r.Kind): $($r.Why)$shown$tail") $code
+}

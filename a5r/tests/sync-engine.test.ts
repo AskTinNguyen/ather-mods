@@ -159,7 +159,7 @@ test('freeze: from T until done, a non-holder makes no git write in the shared c
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 commit -m "wip: tail"' }))).toContain('A5R · Sync main freeze — sync-lane merges origin/main since 14:50: no git commit in the shared checkout until the merge is committed (now merging) · Sync main 14:50 · ▸ merging (time unknown) → tests (time unknown)') // A131 / A133 (rev 44): the step and the timeline
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 add Source/S2/Foo.cpp && git -C E:/s2 status' }))).toContain('no git add')
   expect(refused(await $.tool.call({ tool: 'PowerShell', command: 'git -C E:/s2 stash' }))).toContain('no git stash')
-  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 status && git -C E:/s2 log -3' }))).toBeUndefined()
+  expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/s2 status && git -C E:/s2 log -3' }))).toContain('not even a read, while the merge writes its index') // A143 (rev 46)
   expect(refused(await $.tool.call({ tool: 'Bash', command: 'git -C E:/wt/x commit -m "own worktree"' }))).toBeUndefined()
   expect(refused(await $.tool.call({ tool: 'mcp__unreal-mcp__call_tool', name: 'get_actor' } as never))).toContain('the Editor waits until the sync is done')
   await $.turn.complete({ answer: 'waiting', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })

@@ -380,14 +380,17 @@ export const globMatch = (text: string, glob: string): boolean => {
 /** A path glob as git writes one (A99, the sync's conflict rules): `*` within one folder, `**` across folders (`**` then a
  * slash also matches no folder at all), a trailing `/` everything under that folder; no case. */
 const pathGlobs = new Map<string, RegExp>()
+/** The glob as a regular expression's source, matched without case (A142: the sync's merge script matches with it in
+ * .NET, whose syntax for these few constructs is the same). */
+export const pathGlobSource = (glob: string): string =>
+  `^${glob
+    .split(/(\*\*\/|\*\*|\*)/)
+    .map(part => (part === '**/' ? '(?:.*/)?' : part === '**' ? '.*' : part === '*' ? '[^/]*' : part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')))
+    .join('')}${glob.endsWith('/') ? '' : '$'}`
 export const pathGlobMatch = (path: string, glob: string): boolean => {
   let hit = pathGlobs.get(glob)
   if (!hit) {
-    const body = glob
-      .split(/(\*\*\/|\*\*|\*)/)
-      .map(part => (part === '**/' ? '(?:.*/)?' : part === '**' ? '.*' : part === '*' ? '[^/]*' : part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')))
-      .join('')
-    hit = new RegExp(`^${body}${glob.endsWith('/') ? '' : '$'}`, 'i')
+    hit = new RegExp(pathGlobSource(glob), 'i')
     pathGlobs.set(glob, hit)
   }
   return hit.test(path.replace(/\\/g, '/').replace(/^\.\//, ''))

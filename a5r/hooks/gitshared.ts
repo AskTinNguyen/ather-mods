@@ -60,19 +60,25 @@ export const walkDeep = (command: string, cwd: string, home = '', depth = 0): { 
 /** Fable review 1 (rev 43): git that writes the index or the tree, named in a segment whose command cannot be read. */
 export const HIDDEN_GIT_WRITE = /\bgit\b[\s\S]*\b(commit|add|rm|checkout|restore|stash|reset|clean|switch)\b/i
 
-/** A git segment's folder: its last `-C <path>` (relative to the segment's folder), else the segment's folder; and its
- * arguments with every `-C <path>` and `-c <key=value>` removed. */
-export const gitPlace = (seg: Seg): { dir: string; args: string[] } => {
+/** A git segment's folder: its last `-C <path>` (relative to the segment's folder), else the segment's folder; its
+ * arguments with every `-C <path>`, `-c <key=value>` and `--no-optional-locks` removed; and `isQuiet` (rev 46): it takes
+ * no optional lock (`--no-optional-locks`, or an empty or false core.fsmonitor, as the desktop app's panels run git). */
+export type GitPlace = { dir: string; args: string[]; isQuiet: boolean }
+export const gitPlace = (seg: Seg): GitPlace => {
   let dir = seg.dir
   let workTree: string | null = null
   let gitDir: string | null = null
+  let isQuiet = false
   const args: string[] = []
   for (let i = 0; i < seg.args.length; i += 1) {
     const a = seg.args[i] ?? ''
     if (a === '-C') {
       dir = norm(seg.args[i + 1] ?? '', dir)
       i += 1
-    } else if (a === '-c') i += 1
+    } else if (a === '-c') {
+      isQuiet ||= /^core\.fsmonitor=(false)?$/i.test(seg.args[i + 1] ?? '')
+      i += 1
+    } else if (a === '--no-optional-locks') isQuiet = true
     // rev 27 follow-up: --work-tree / --git-dir name the tree a command acts on.
     else if (a === '--work-tree' || a === '--git-dir') {
       if (a === '--work-tree') workTree = norm(seg.args[i + 1] ?? '', dir)
@@ -84,7 +90,7 @@ export const gitPlace = (seg: Seg): { dir: string; args: string[] } => {
   }
   if (workTree) dir = workTree
   else if (gitDir) dir = gitDir.replace(/\/\.git\/?$/i, '') || dir
-  return { dir, args }
+  return { dir, args, isQuiet }
 }
 
 /** What a git command in the shared checkout needs: nothing, a refusal with its alternative, a check of the paths it
@@ -382,7 +388,28 @@ export const leasePushTargets = (args: string[]): string[] | null => {
 
 /** 0.16.1: verbs that only read files: a session that ran them inside the shared checkout changed nothing there. */
 const READ_VERBS = new Set(['ls', 'cat', 'rg', 'grep', 'egrep', 'find', 'head', 'tail', 'echo', 'printf', 'wc', 'pwd', 'stat', 'du', 'tree', 'which', 'where', 'type', 'less', 'more', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'dir', 'get-item', 'test-path', 'resolve-path'])
-const GIT_READS = new Set(['log', 'status', 'diff', 'show', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'blame', 'describe', 'cat-file', 'merge-base', 'shortlog', 'grep', 'fetch', 'reflog'])
+/** Rev 46 (A144): git's reads that never write the repository on their own; `status`, `describe` and `fetch` read but
+ * may write (status and describe refresh the index under index.lock when they can; fetch writes refs). */
+const PLAIN_READS = new Set(['log', 'show', 'rev-parse', 'rev-list', 'ls-tree', 'cat-file', 'merge-base', 'shortlog', 'reflog', 'diff', 'ls-files', 'blame', 'grep'])
+/** writtenIn's question (a git that changes no file in the tree), not gitUse's (a git that takes no index.lock). */
+const GIT_READS = new Set([...PLAIN_READS, 'status', 'describe', 'fetch'])
+/** A143: an argv of A5R's own that runs git in the shared checkout (`git -C <dir under root> …`, the shape every A5R git
+ * argv has). */
+export const isSharedGitArgv = (argv: readonly string[], root: string): boolean => argv[0] === 'git' && argv[1] === '-C' && under(argv[2] ?? '', root)
+/** A143: a segment that runs git in the shared checkout (anything but its version or help: the row holds every git read). */
+export const readsShared = (seg: Seg, root: string): boolean => seg.verb === 'git' && under(gitPlace(seg).dir, root) && gitUse(gitPlace(seg)) !== 'none'
+/** A git command's subcommand from its place, past the global flags gitPlace leaves (`--no-pager`, …); '' when none. */
+export const gitSub = (p: GitPlace): string => (p.args.find(a => !a.startsWith('-')) ?? '').toLowerCase()
+/** Rev 46 (A143, A144): what a git command does in a repository, from its place: `none` (no repository: no subcommand,
+ * version, help), `read` (a plain read, or `status` when quiet, as A144 counts the desktop app's short-lived panel
+ * readers: a `diff` or quiet `status` may still refresh the index opportunistically, which the 2-min age of a stale lock
+ * rules out), `locks` (anything else: a write, or a read that may take index.lock). */
+export type GitUse = 'none' | 'read' | 'locks'
+export const gitUse = (p: GitPlace): GitUse => {
+  const sub = gitSub(p)
+  if (sub === '' || sub === 'version' || sub === 'help') return 'none'
+  return PLAIN_READS.has(sub) || (sub === 'status' && p.isQuiet) ? 'read' : 'locks'
+}
 
 /** 0.16.1 (A82): whether a segment may change files inside `root`: a redirection or tee target there (from any folder), or
  * a command that is not a plain read run with its folder (after `cd`, or `git -C`) there. */
@@ -399,7 +426,7 @@ export const writtenIn = (seg: Seg, root: string): string[] => {
   const dir = place?.dir ?? seg.dir
   if (!under(dir, root) || READ_VERBS.has(seg.verb)) return []
   if (place) {
-    const sub = (place.args[0] ?? '').toLowerCase()
+    const sub = gitSub(place)
     if (GIT_READS.has(sub)) return []
     if (sub === 'branch' && place.args.slice(1).every(a => /^(--list|-a|-r|-v|-vv|--all|--remotes|--show-current)$/.test(a))) return []
   }

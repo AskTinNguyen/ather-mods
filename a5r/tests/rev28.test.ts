@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { blankSession, newSync, noticeIds, parseSyncEnd, parseSyncFile, SYNC_WORKER_PROMPT, ymd, type SessionFile, type SyncFile } from '../hooks/coord.ts'
+import { blankSession, newSync, noticeIds, parseSyncEnd, parseSyncFile, ymd, type SessionFile, type SyncFile } from '../hooks/coord.ts'
+import { SYNC_WORKER_PROMPT } from '../hooks/syncworker.ts'
 import { leasePushTargets } from '../hooks/gitshared.ts'
 import { LOCK, ME, NOW, PROJ, opts, refused, world, type Rec } from './world.ts'
 

@@ -1,7 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { under } from '../hooks/a5r.ts'
 import { buildScriptText } from '../hooks/buildscript.ts'
-import { parseSyncFile, ramProbe, syncWorkerTask, newSync, type SyncFile } from '../hooks/coord.ts'
+import { parseSyncFile, ramProbe, newSync, type SyncFile } from '../hooks/coord.ts'
+import { syncWorkerTask } from '../hooks/syncworker.ts'
 import { NO_CHECKOUT_NEXT, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineLabel, engineOfLog, lockIn, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, registryQueries, registryRoot, rootOfLock, uprojectIn } from '../hooks/machine.ts'
 import { machinePathHits } from './machine-paths.ts'
 import { A5RPANE, ME, NOW, find, text, world, type Rec } from './world.ts'
@@ -100,7 +101,7 @@ test('A110: unit: the log line (the last one, any platform folder, a timestamp b
   expect(lyra).toContain('set "PROJECT=D:\\games\\Lyra\\Lyra.uproject"')
   expect(lyra).toContain('call "%BAT%" LyraEditor Win64 Development -Project="%PROJECT%" -WaitMutex > "%LOG%" 2>&1')
   const s: SyncFile = { ...newSync(T(14, 45), { session: ME, id8: ME.slice(0, 8), lane: 'x' }, 'x', NOW, true), buildRun: '' }
-  expect(syncWorkerTask(s, 'E:/s2', '', none)).toContain(`Build: yes, but A5R wrote no build script (${engineLabel(none)}): start no build, and end with SYNC MERGED <merge sha> build-log=none.`)
+  expect(syncWorkerTask(s, 'E:/s2', '', none, 'RUN')).toContain(`Build: yes, but A5R wrote no build script (${engineLabel(none)}): start no build, and end with SYNC MERGED <merge sha> build-log=none.`)
 })
 
 test('A111: unit: the scan rule: a drive-letter path only in a comment labelled as an example (hooks), a labelled line (rules), never an option default', () => {

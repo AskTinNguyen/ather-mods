@@ -5,16 +5,19 @@
 // toast, and Saved/A5R/status.json. Pure: no `$`; register.ts reads the files and logs, decides with these, and writes.
 import type { WakeStatus } from './wake.ts'
 import { CUTOFF_MS, RELEASE_BEFORE_MS, hhmm, type Phase, type SyncFile } from './coord.ts'
-import { writtenIn, type Seg } from './gitshared.ts'
+import { readsShared, writtenIn, type Seg } from './gitshared.ts'
 import type { BuildLogRead, SyncStage } from './syncstage.ts'
 
 // ---------- A131: the steps of a freeze and what each holds ----------
 export type FreezeStep = 'cutoff' | 'merging' | 'building' | 'build-failed' | 'testing' | 'manual'
 /** What a session may need that a freeze can hold: git writes, edits in the shared checkout, edits under Source/ and
- * Plugins/ (and the files the merge changed), the Editor (launch, PIE, MCP), a build of the shared project. */
-export type Need = 'git' | 'edit' | 'source' | 'editor' | 'build'
-export const NEEDS: readonly Need[] = ['git', 'edit', 'source', 'editor', 'build']
-const ALL: ReadonlySet<Need> = new Set(NEEDS)
+ * Plugins/ (and the files the merge changed), the Editor (launch, PIE, MCP), a build of the shared project; A143: git
+ * reads of the shared checkout, held only while the merge writes the index. */
+export type Need = 'git' | 'edit' | 'source' | 'editor' | 'build' | 'read'
+const WRITE_NEEDS: readonly Need[] = ['git', 'edit', 'source', 'editor', 'build']
+export const NEEDS: readonly Need[] = [...WRITE_NEEDS, 'read']
+/** Every need but git reads: what a failed build and a sync handed back hold. */
+const ALL_BUT_READ: ReadonlySet<Need> = new Set(WRITE_NEEDS)
 /** The sync's timed runs, in order (a sync without a build has no build run), and their words, current and ahead. */
 export type Run = 'merge' | 'build' | 'tests'
 const RUNS: Record<Run, { now: string; ahead: string }> = { merge: { now: 'merging', ahead: 'merge' }, build: { now: 'building', ahead: 'build' }, tests: { now: 'testing', ahead: 'tests' } }
@@ -25,18 +28,22 @@ const RUNS: Record<Run, { now: string; ahead: string }> = { merge: { now: 'mergi
  * everything. The cutoff holds nothing (it asks). */
 export const STEPS: Readonly<Record<FreezeStep, { held: ReadonlySet<Need>; word: string; run: Run | null; isStuck: boolean }>> = {
   cutoff: { held: new Set(), word: 'cutoff', run: null, isStuck: false },
-  merging: { held: ALL, word: 'merging', run: 'merge', isStuck: false },
+  merging: { held: new Set(NEEDS), word: 'merging', run: 'merge', isStuck: false },
   building: { held: new Set<Need>(['git', 'source', 'editor', 'build']), word: 'building', run: 'build', isStuck: false },
-  'build-failed': { held: ALL, word: 'build failed', run: null, isStuck: true },
+  'build-failed': { held: ALL_BUT_READ, word: 'build failed', run: null, isStuck: true },
   testing: { held: new Set<Need>(['editor', 'build']), word: 'testing', run: 'tests', isStuck: false },
-  manual: { held: ALL, word: 'finishing by hand', run: null, isStuck: true },
+  manual: { held: ALL_BUT_READ, word: 'finishing by hand', run: null, isStuck: true },
 }
 export const heldIn = (step: FreezeStep): ReadonlySet<Need> => STEPS[step].held
-/** The step of a sync now (null: none open, or only planned). `build`: what the sync's build log of this run says. */
-export const freezeStepOf = (phase: Phase, stage: SyncStage | null, build: BuildLogRead | null): FreezeStep | null => {
+/** A143: whether a step keeps git reads of the shared checkout out (the merge step): A5R's own reads and the lock mover follow it. */
+export const holdsReads = (step: FreezeStep | null): boolean => step !== null && heldIn(step).has('read')
+/** The step of a sync now (null: none open, or only planned). `build`: what the sync's build log of this run says;
+ * `isScript` (A143): a merge script runs (mergescript.ts isMergeScriptAlive), so a holder rerunning it in the manual stage
+ * is merging too (null: the process list was not read, which says nothing). */
+export const freezeStepOf = (phase: Phase, stage: SyncStage | null, build: BuildLogRead | null, isScript: boolean | null): FreezeStep | null => {
   if (phase === 'cutoff') return 'cutoff'
   if (phase !== 'frozen') return null
-  if (stage === null) return 'merging'
+  if (stage === null || (stage === 'manual' && isScript === true)) return 'merging'
   if (stage === 'building') return build === 'Failed' ? 'build-failed' : build === 'Succeeded' ? 'testing' : 'building' // Fable 8: lifted on the log's own line
   return stage
 }
@@ -50,6 +57,12 @@ export const shellNeeds = (segs: readonly Seg[], root: string, mergeChanged: Rea
   const top = root.replace(/\/$/, '').length + 1
   return segs.filter(seg => seg.verb !== 'git').flatMap(seg => writtenIn(seg, root)).map(p => editNeed(p.slice(top), mergeChanged))
 }
+/** A143: a command's needs beyond its git writes: its shell edits (shellNeeds) and, for any git in the shared checkout
+ * (gitshared.ts readsShared), the read the merge step holds. */
+export const commandNeeds = (segs: readonly Seg[], root: string, mergeChanged: ReadonlySet<string>): Need[] => [
+  ...shellNeeds(segs, root, mergeChanged),
+  ...(segs.some(seg => readsShared(seg, root)) ? ['read' as const] : []),
+]
 const WAIT_NEXT = 'do work that needs no Editor and no build of the shared project; A5R tells you (and wakes you) when it is allowed again'
 /** Each need: its words, its word in the band's "new … work" (null: an edit, said apart), why a refusal of it waits
  * (`merged`: when git and Source/ edits are free again) and what to do meanwhile. */
@@ -59,6 +72,7 @@ const NEED: Record<Need, { words: string; band: string | null; waits: (verb: str
   source: { words: 'edits under Source/ and Plugins/ (and of the files the merge changed)', band: null, waits: (_, merged) => `no edits under Source/ and Plugins/ (or of the files the merge changed) until ${merged}`, next: step => `edit what is allowed now${step === 'building' ? ' (outside Source/ and Plugins/)' : ''}, or plan and read; A5R wakes you when these edits are allowed again` },
   editor: { words: 'the Editor (launch, PIE, MCP)', band: 'Editor', waits: () => 'the Editor waits until the sync is done', next: () => WAIT_NEXT },
   build: { words: 'builds of the shared project', band: 'build', waits: () => 'builds of the shared project wait until the sync is done', next: () => WAIT_NEXT },
+  read: { words: 'git reads of the shared checkout', band: null, waits: () => 'no git command in the shared checkout, not even a read, while the merge writes its index, until the merge is committed', next: () => 'read the files themselves (Read, Grep) or use your own worktree; A5R wakes you when git reads are allowed again' },
 }
 export const needWords = (needs: Iterable<Need>): string => [...needs].map(n => NEED[n].words).join(', ')
 
@@ -153,7 +167,7 @@ export const freezeWhy = (s: SyncFile, step: FreezeStep, need: Need, verb: strin
 /** A131 / A132: one step's notice: what is allowed again since `prev` (null: the freeze's start), what still waits, and
  * the timeline. */
 export const stepNotice = (step: FreezeStep, prev: FreezeStep | null, line: string): string => {
-  const was = prev ? heldIn(prev) : ALL
+  const was = prev ? heldIn(prev) : ALL_BUT_READ
   const allowed = NEEDS.filter(n => was.has(n) && !heldIn(step).has(n))
   const still = NEEDS.filter(n => heldIn(step).has(n))
   const what = step === 'build-failed' ? 'the build failed: everything stays frozen until the holder reverts or fixes it and calls done' : `${STEPS[step].word}${allowed.length > 0 ? `: allowed again: ${needWords(allowed)}` : ''}`
@@ -198,7 +212,7 @@ export const promptLine = (s: SyncFile, step: FreezeStep, times: SyncTimes, now:
   const held = heldIn(step)
   return step === 'cutoff'
     ? `A5R · Sync main at ${hhmm(s.at)} is in its cutoff: commit your own paths now (git commit -m "…" -- <your paths>), and release the Editor by ${hhmm(s.at - RELEASE_BEFORE_MS)}; from ${hhmm(s.at)} git writes, the Editor and builds wait ${until(lift, s)}. Plan, edit and read meanwhile.`
-    : `A5R · Sync main is ${STEPS[step].word}: ${needWords(held)} wait ${until(lift, s)}; nothing is blocked for plans, reads${held.has('edit') ? '' : held.has('source') ? ' and edits outside Source/ and Plugins/' : ', edits and git'}. Plan, edit what is allowed and read meanwhile; do not start work that needs what waits.`
+    : `A5R · Sync main is ${STEPS[step].word}: ${needWords(held)} wait ${until(lift, s)}; nothing is blocked for plans, ${held.has('read') ? 'file reads' : 'reads'}${held.has('edit') ? '' : held.has('source') ? ' and edits outside Source/ and Plugins/' : ', edits and git'}. Plan, edit what is allowed and read meanwhile; do not start work that needs what waits.`
 }
 /** A134: the person's toast, once per session per sync. */
 export const toastText = (s: SyncFile, step: FreezeStep, times: SyncTimes, now: number): string => `Sync main in progress ${until(aheadOf(s, step, times, now).lift, s)}: this session can plan and edit; git, Editor and builds wait`

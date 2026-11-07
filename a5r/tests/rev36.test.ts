@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { newSync, parseSyncEnd, parseSyncFile, SYNC_WORKER_PROMPT, syncWorkerTask, type SyncFile } from '../hooks/coord.ts'
+import { newSync, parseSyncEnd, parseSyncFile, type SyncFile } from '../hooks/coord.ts'
+import { SYNC_WORKER_PROMPT, syncWorkerTask } from '../hooks/syncworker.ts'
 import { buildScriptText, buildStartCommand, isScriptAlive, runLabel, syncBuildScript } from '../hooks/buildscript.ts'
 // The real cmd half (the script started through PowerShell with a stand-in Build.bat) runs with node, as the test runner
 // has no file system or processes: node --experimental-strip-types a5r/tests/build-script-smoke.mjs
@@ -113,11 +114,11 @@ test('A109: unit: the one start command, the log as A5R reads it, what the holde
   for (const must of ['Start the build only with the one PowerShell command your task gives, exactly as given', 'in a tool call of its own with nothing after it (a tool call stopped while it still runs kills what it started)', 'never your own cmd, Build.bat or redirection line', 'the build log\'s existence decides whether the build started', '`waiting for existing script to terminate` means it started and waits behind Build.bat\'s lock', 'No log after 60 seconds → start it no other way: end with `SYNC MERGED <merge sha> build-log=none`', 'the script carries the engine root your task names: use no engine root of your own'])
     expect(SYNC_WORKER_PROMPT).toContain(must)
   const s: SyncFile = { ...newSync(T(14, 45), { session: ME, id8: ME.slice(0, 8), lane: 'x' }, 'x', NOW, true), buildRun: RUN }
-  expect(syncWorkerTask(s, 'E:/s2', '', null)).toContain(`Build: yes; build log: ${LOG}; start the build (after the merge commit) only with ${runLabel(RUN)}.`)
-  expect(syncWorkerTask({ ...s, buildRun: '' }, 'E:/s2', '', null)).toContain('Build: yes, but A5R wrote no build script (the write failed): start no build, and end with SYNC MERGED <merge sha> build-log=none.')
-  expect(syncWorkerTask({ ...s, build: false }, 'E:/s2', '', null)).toContain('Build: no.')
+  expect(syncWorkerTask(s, 'E:/s2', '', null, 'RUN')).toContain(`Build: yes; build log: ${LOG}; start the build (after the merge commit) only with ${runLabel(RUN)}.`)
+  expect(syncWorkerTask({ ...s, buildRun: '' }, 'E:/s2', '', null, 'RUN')).toContain('Build: yes, but A5R wrote no build script (the write failed): start no build, and end with SYNC MERGED <merge sha> build-log=none.')
+  expect(syncWorkerTask({ ...s, build: false }, 'E:/s2', '', null, 'RUN')).toContain('Build: no.')
   // Rev 37 (A110): the task names the engine root the script carries and where A5R found it, or that it found none.
-  const set = syncWorkerTask({ ...s, buildRun: buildStartCommand(SCRIPT) }, 'E:/s2', '', { root: ENGINE_FWD, from: 'the a5r option engineRoot', tried: [] })
+  const set = syncWorkerTask({ ...s, buildRun: buildStartCommand(SCRIPT) }, 'E:/s2', '', { root: ENGINE_FWD, from: 'the a5r option engineRoot', tried: [] }, 'RUN')
   expect(set).toContain(`(the script builds with the engine root ${ENGINE_FWD} (from the a5r option engineRoot): pass no engine root of your own)`)
   expect(set).not.toContain('<engine root>')
 })

@@ -1,12 +1,13 @@
 // Rev 44 (L-48): git in the shared checkout one writer at a time. A128: before a git write there runs, a session's A5R
-// claims the git turn in its own file Saved/A5R/git-turn/<id8>.json, and holds it only when no other live claim stands
+// claims the git turn in its own file Saved/A5R/git-turn/<id8>.json (A144: the one write into another's file: a gone
+// session's lapsed claim, cleared read-compare-write), and holds it only when no other live claim stands
 // after its write (each session writes only its own claim, so no write is lost; two claims at once both step back);
 // a second writer is refused at once and told when the turn frees. A129: such a call is never cut short (a long tool
 // timeout; no pipe into head/tail, no timeout/kill around it). A130: an index.lock that git left behind is moved aside,
 // never deleted. Pure: no `$`; gitturnhost.ts reads the files and the processes, writes the claim and moves the lock.
 import { gitTarget, program, tokenize } from './a5r.ts'
 import { gitWrites, hhmm, ymd, type Probe } from './coord.ts'
-import { gitPlace, type Seg } from './gitshared.ts'
+import { gitPlace, gitUse, walk, type Seg } from './gitshared.ts'
 
 /** A128: the folder of the sessions' claims, one small file each (`null` when it holds none), written only by its session
  * and kept (the engine's file API has no delete; one file per session id8 that ever wrote git in the checkout). */
@@ -83,12 +84,21 @@ const plainAlt = (seg: Seg): string => `run the git command alone, in the foregr
  * which reads those that name the checkout) (`cd <checkout> && git commit`) or cannot be
  * read: they may work in the checkout, so no lock is moved while one runs (git's fsmonitor daemon excluded). */
 export const untargetedGitPids = (probe: Probe | null): number[] =>
-  (probe?.procs ?? []).filter(p => /^git(-lfs)?(\.exe)?$/i.test(p.name) && !/fsmonitor--daemon/i.test(p.cmd ?? '') && (!p.cmd || gitTarget(p.cmd, '') === '')).map(p => p.pid)
+  (probe?.procs ?? []).filter(p => /^git(-lfs)?(\.exe)?$/i.test(p.name) && !/fsmonitor--daemon/i.test(p.cmd ?? '') && (!p.cmd || (gitTarget(p.cmd, '') === '' && !isLockFreeRead(p.cmd)))).map(p => p.pid)
+/** A144: a git command line (as the process list reads it) that only reads and never takes index.lock (gitshared.ts
+ * gitUse: read). MEASURED 2026-11-08: the desktop app's panels run `git -c core.fsmonitor= … diff --numstat
+ * -z -M <sha>` and `ls-files --others` with no `-C` in the checkout, nearly always; since Fable 4 they blocked every move
+ * (none since 11-06 16:02). */
+export const isLockFreeRead = (cmd: string): boolean => {
+  const seg = walk(cmd, '')[0]
+  return seg?.verb === 'git' && gitUse(gitPlace(seg)) === 'read'
+}
 export const STALE_LOCK_MS = 2 * 60_000
 /** A130: what to do with .git/index.lock: `lockAgeMs` null (none), `gitPids` null (the process list unread), `isTurnHeld`
- * (a live claim holds the git turn). Every condition must hold for a move; an unread process list asks for a look. */
-export const staleLockAct = (f: { lockAgeMs: number | null; gitPids: readonly number[] | null; isTurnHeld: boolean }): 'none' | 'move' | 'unread' => {
-  if (f.lockAgeMs === null || f.lockAgeMs < STALE_LOCK_MS) return 'none'
+ * (a live claim holds the git turn), `isMerging` (A143: a sync's merge step, whose script holds the lock on purpose).
+ * Every condition must hold for a move; an unread process list asks for a look. */
+export const staleLockAct = (f: { lockAgeMs: number | null; gitPids: readonly number[] | null; isTurnHeld: boolean; isMerging: boolean }): 'none' | 'move' | 'unread' => {
+  if (f.lockAgeMs === null || f.lockAgeMs < STALE_LOCK_MS || f.isMerging) return 'none'
   if (f.gitPids === null) return 'unread'
   return f.gitPids.length > 0 || f.isTurnHeld ? 'none' : 'move'
 }

@@ -179,12 +179,12 @@ test('A129: the call gets a 10-min timeout; piped and timeout-wrapped forms are 
 
 // ---------- A130: a stale index.lock moved aside ----------
 test('A130: unit: every condition must hold for a move; an unread process list asks for a look', () => {
-  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: [], isTurnHeld: false })).toBe('move')
-  expect(staleLockAct({ lockAgeMs: null, gitPids: [], isTurnHeld: false })).toBe('none')
-  expect(staleLockAct({ lockAgeMs: 90_000, gitPids: [], isTurnHeld: false })).toBe('none')
-  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: [47320], isTurnHeld: false })).toBe('none')
-  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: [], isTurnHeld: true })).toBe('none')
-  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: null, isTurnHeld: false })).toBe('unread')
+  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: [], isTurnHeld: false, isMerging: false })).toBe('move')
+  expect(staleLockAct({ lockAgeMs: null, gitPids: [], isTurnHeld: false, isMerging: false })).toBe('none')
+  expect(staleLockAct({ lockAgeMs: 90_000, gitPids: [], isTurnHeld: false, isMerging: false })).toBe('none')
+  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: [47320], isTurnHeld: false, isMerging: false })).toBe('none')
+  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: [], isTurnHeld: true, isMerging: false })).toBe('none')
+  expect(staleLockAct({ lockAgeMs: 3 * MIN, gitPids: null, isTurnHeld: false, isMerging: false })).toBe('unread')
   expect(LOCK_UNREAD_LOOK.next).toContain('never delete it')
   expect(staleLockName(at(11, 24))).toBe('index.lock.stale-20261006-1124')
 })
@@ -251,16 +251,16 @@ const edit = (file: string) => ({ tool: 'Edit', file_path: `${S2}/${file}`, old_
 const SHARED_BUILD = `"D:/E/Engine/Build/BatchFiles/Build.bat" S2Editor Win64 Development -project=${S2}/S2.uproject -WaitMutex`
 
 test('A131: unit: what each step holds, the step from the stage and the build log, and the edits a build step holds', () => {
-  expect([...STEPS.merging.held].sort()).toEqual(['build', 'edit', 'editor', 'git', 'source'])
+  expect([...STEPS.merging.held].sort()).toEqual(['build', 'edit', 'editor', 'git', 'read', 'source']) // A143 (rev 46): git reads too
   expect([...STEPS.building.held].sort()).toEqual(['build', 'editor', 'git', 'source'])
   expect([...STEPS.testing.held].sort()).toEqual(['build', 'editor'])
   expect([...STEPS['build-failed'].held].length).toBe(5)
   expect(STEPS.cutoff.held.size).toBe(0)
-  expect(freezeStepOf('frozen', 'building', 'Failed')).toBe('build-failed')
-  expect(freezeStepOf('frozen', 'building', 'running')).toBe('building')
-  expect(freezeStepOf('frozen', null, null)).toBe('merging')
-  expect(freezeStepOf('cutoff', null, null)).toBe('cutoff')
-  expect(freezeStepOf('done', 'testing', null)).toBeNull()
+  expect(freezeStepOf('frozen', 'building', 'Failed', null)).toBe('build-failed')
+  expect(freezeStepOf('frozen', 'building', 'running', null)).toBe('building')
+  expect(freezeStepOf('frozen', null, null, null)).toBe('merging')
+  expect(freezeStepOf('cutoff', null, null, null)).toBe('cutoff')
+  expect(freezeStepOf('done', 'testing', null, null)).toBeNull()
   const changed = new Set(['config/defaultgame.ini'])
   expect(['Source/S2/A.cpp', 'Plugins/X/x.uplugin', 'Config/DefaultGame.ini', 'docs/notes.md'].map(r => editNeed(r, changed))).toEqual(['source', 'source', 'source', 'edit'])
 })
@@ -318,7 +318,7 @@ test('A132: an idle session refused in the freeze is woken at the step that free
   await w.clock.advance(MIN)
   const woken = prompts(w).filter(p => p.includes('Sync main — building'))
   expect(woken.length).toBe(1)
-  expect(woken[0]).toContain('A5R · Sync main — building: allowed again: edits in the shared checkout; still waiting: git writes, edits under Source/ and Plugins/ (and of the files the merge changed), the Editor (launch, PIE, MCP), builds of the shared project · Sync main 14:20 · ▸ building')
+  expect(woken[0]).toContain('A5R · Sync main — building: allowed again: edits in the shared checkout, git reads of the shared checkout; still waiting: git writes, edits under Source/ and Plugins/ (and of the files the merge changed), the Editor (launch, PIE, MCP), builds of the shared project · Sync main 14:20 · ▸ building')
   await idle($)
   await w.clock.advance(2 * MIN)
   expect(prompts(w).filter(p => p.includes('Sync main — building')).length).toBe(1)
