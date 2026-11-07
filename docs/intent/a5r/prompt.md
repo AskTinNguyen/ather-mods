@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 45
+- Rev: 46
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -281,6 +281,20 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 - A139 (rev 45): Hai can see it. The panel and `Saved/A5R/status.json` mark a stopped request (`stopped`, "will be started when its turn comes"), and the compact line counts them. The panel says when the Editor has stood free with nobody queued for 30 min or more. A `/a5r` line after a night names what ran and what was started. Hai, 2026-11-04, with a screenshot of S2 Lanes (Editor free from about 23:30 to 09:30, 5 sessions shown waiting): "Tối qua vì lí do ngu ngốc nào đó không có session nào làm việc!". Proof: engine tests (panel and status.json rows).
 - A140 (rev 45): The night's judgment is not A5R's. Hai, 2026-11-04: "Đừng phụ thuộc hoàn toàn vào dump message từ logic A5R." Who still has work, and whom to restart for it, belongs to a scheduled session, on this machine `s2-night-conductor` (00:00 and 03:00): each run is a fresh session that reads the situation, judges it and restarts the sessions that can go on. It is local to this machine and not part of the plugin; the README says a machine can add one like it. A5R writes what it reads, as it is: `Saved/A5R/status.json` with the queue and its `stopped` marks, the Editor holder, and the sync and Focus state. A5R treats `Saved/A5R/night/` as nothing special. A5R itself starts a session only on a fact on file (A136, A137), one at a time, by one sender: the first live A5R, kept to one by a claim file. A91 stays as it was: live sessions only. Earlier wording of this row had A5R judge "still has Editor work" and start sessions for it; that was cut before release (S148). Proof: engine tests (a stopped session with no request and no refusal is never started, whatever its last words; two A5Rs send once; status.json's fields).
 - A141 (rev 45): The failure is seen and raised. The sender counts the minutes the Editor stands free while work waits (`idle-with-work`), where work is only a request, live or stopped, or an open refusal, per night and per day, in `Saved/A5R/` and on the panel. If that passes 30 min in a row, it tries once more, logs `rule=idle-with-work`, and sends a push notification when the engine can, else a toast. A replay test builds the night of 2026-11-03 from its facts (four queued sessions, processes gone, 2 h pass, Editor free) and requires each to get its lease. Proof: that test; engine tests for the count and the alarm. Field proof: the number near 0 on the panel over the following nights.
+- A142 (rev 46): The sync merge never leaves a half-merged tree. MEASURED three times (2026-11-04 09:30, 2026-11-06 07:00, 2026-11-08 01:15): the worker's `git merge --no-edit origin/main` wrote 1.5–2k incoming files into the working tree, then died with `fatal: unable to write .git/index`. No MERGE_HEAD was written, so `merge --abort` could not run, and sync-main recovered by hand each time. At those times there was no index.lock, no other git writer and no A5R stale-lock move (orchestrate.log has no `stale-index-lock` line near any of them), and E: had over 130 GB free. INFERRED cause: on Windows the final rename of index.lock over the ~100 MB index fails while another process has `.git/index` open. On 2026-11-08 01:46 there were 11 git readers of the checkout, most started by the desktop app's own panels (`git diff <base> --numstat -z -M`, `ls-files --others`, each with `-c core.fsmonitor=`), and A5R cannot stop them. So the merge runs as a script A5R writes (as the build .cmd is), not as a git command the worker chooses. The script follows the route sync-main proved by hand:
+  1. `git merge-tree --write-tree` HEAD origin/main, with the sync's conflict rules applied in a temporary GIT_INDEX_FILE, then `write-tree`.
+  2. `commit-tree -p HEAD -p origin/main`.
+  3. Write the working tree only for paths the merge changes. A path that is dirty in the shared checkout and changed by the merge stops the script before anything is written, as `git merge` would.
+  4. `update-ref` with the old value as a check.
+  5. Install the new index from the temporary file: take `.git/index.lock` with create-new, copy, rename, and retry for up to 3 min with backoff while the rename is refused.
+  If the index cannot be installed, the ref goes back to its old value, the working tree paths go back to HEAD's blobs, and the script exits non-zero.
+  On any failure the script logs the git processes of the checkout with their command lines (`rule=sync-merge`). It never runs `reset --hard`, `checkout .` or `clean`.
+  Proof: engine and script tests (a clean merge; a conflict resolved by a rule; a dirty path stops it with nothing written; a refused rename retried then installed; a rename refused for good rolls back to the old HEAD and tree); one real sync.
+- A143 (rev 46): During the merge step, A5R keeps out of the index. While a sync is in its merge step (A131 "merging"):
+  - every A5R skips its own git reads of the shared checkout (status, diff, ls-files, the cross-lane guard's reads);
+  - the stale-lock mover (A130) never moves a lock, whatever its age;
+  - other sessions' git reads of the shared checkout are refused with the timeline, as their writes are.
+  The desktop app's panels are not A5R's, so A142's retries cover them. Proof: engine tests (no A5R git run during merging; no lock moved during merging; a session's `git status` refused during merging and allowed after).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -294,6 +308,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 46 (2026-11-08): L-51 (sync-main, at Hai's request: the worker's merge dies writing .git/index): A142 the merge runs as A5R's script and never leaves a half-merged tree, A143 A5R keeps out of the index during the merge step.
 - rev 45 (2026-11-04, A138's route after measuring): the guarded SendMessage route with the `local_` id; `loop-paused` is an outcome.
 - rev 45 (2026-11-04): L-49 (Hai: no session worked last night): A135 a stopped session keeps its place, A136 started when its turn comes, A137 the same for git and freeze waits, A138 how a session is reached, A139 Hai can see it, A140 A5R answers for the machine's schedule, A141 the failure is seen and raised. A125 changes: 2 h no longer withdraws.
 - rev 44 (2026-11-03): L-48 (Hai: commits lost to index.lock fights before the sync): A128 one git writer at a time, A129 git writes never killed halfway, A130 a stale index.lock moved aside safely, A131 the sync freeze lifts in steps, A132 frozen sessions woken when they can go on, A133 what you wait for and until when, everywhere A5R speaks, A134 the freeze visible in every session (band, prompt note, status.json).

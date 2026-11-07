@@ -400,3 +400,7 @@ With a screenshot of the "S2 Lanes" viewer: Editor free from about 23:30 to 09:3
 > Vấn đề không phải là chức năng của S2 Lanes, nó chỉ đọc thông tin tĩnh là đúng rồi. Nhưng A5R là công cụ chủ động điều phối lịch hoạt động và Editor của các session mà?
 
 (-> A140, A141. No change asked of S2 Lanes.)
+
+## L-51 (2026-11-08)
+
+From the sync-main session, at Hai's request: "please fix the sync worker's merge dying on the index write." Three times (04/11 09:30, 06/11 07:00, 08/11 01:15), `git merge --no-edit origin/main` wrote the incoming tree and then died with `fatal: unable to write .git/index` before MERGE_HEAD existed; HEAD and index stayed at the old commit, the working tree was half-merged, and `merge --abort` was impossible. The by-hand route (merge-tree, a temporary index, commit-tree, update-ref, a mixed reset) worked each time. (-> A142, A143.)
