@@ -295,6 +295,11 @@ The three share one clock and one message channel: hai-flow notices, delivered b
   - the stale-lock mover (A130) never moves a lock, whatever its age;
   - other sessions' git reads of the shared checkout are refused with the timeline, as their writes are.
   The desktop app's panels are not A5R's, so A142's retries cover them. Proof: engine tests (no A5R git run during merging; no lock moved during merging; a session's `git status` refused during merging and allowed after).
+- A144 (rev 46): A stale index.lock is moved again. MEASURED 2026-11-08: a 60 MB `.git/index.lock` from 01:55 stood for 8+ min and every commit failed with "File exists" until sync-main moved it by hand. No git writer was alive, only fsmonitor and the desktop app's panel readers. The old claim `git-turn/41c6fc3c.json` (04/11 13:55) was not the cause: its session's lane says `hasEnded`, so it lapses. INFERRED cause: since A130's Fable fix, a git process whose target cannot be read counts as possibly ours and blocks the move, and the desktop app's panel readers (no `-C`, run in the checkout) are nearly always there. The last automatic move was 2026-11-06 16:02. Fixes:
+  - An untargeted git that only reads and never takes index.lock does not block the move: diff, ls-files, log, show, cat-file, rev-parse, ls-tree, merge-base, fsmonitor--daemon, and `status` with `--no-optional-locks` or `-c core.fsmonitor=`. Any other untargeted git still blocks.
+  - A claim that has lapsed because its session is gone is cleared (written null by read-compare-write), so a person or tool reading `git-turn/` is not misled.
+  - Also MEASURED: the stale locks left behind are partial index writes (42–69 MB of a ~104 MB index: 11-03, 11-04, 11-05, 11-06, 11-08). A process died mid-write without git's own cleanup, which looks like a kill. So A142's script also never runs under a tool timeout that could kill it; it runs detached, like the build.
+  Proof: engine tests (the desktop app's `git -c core.fsmonitor= … diff --numstat` without `-C` does not block a move; an untargeted `git commit` still does; a gone session's claim is cleared and a live one is not).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -308,7 +313,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
-- rev 46 (2026-11-08): L-51 (sync-main, at Hai's request: the worker's merge dies writing .git/index): A142 the merge runs as A5R's script and never leaves a half-merged tree, A143 A5R keeps out of the index during the merge step.
+- rev 46 (2026-11-08): L-51 (sync-main, at Hai's request: the worker's merge dies writing .git/index): A142 the merge runs as A5R's script and never leaves a half-merged tree, A143 A5R keeps out of the index during the merge step, A144 a stale index.lock is moved again.
 - rev 45 (2026-11-04, A138's route after measuring): the guarded SendMessage route with the `local_` id; `loop-paused` is an outcome.
 - rev 45 (2026-11-04): L-49 (Hai: no session worked last night): A135 a stopped session keeps its place, A136 started when its turn comes, A137 the same for git and freeze waits, A138 how a session is reached, A139 Hai can see it, A140 A5R answers for the machine's schedule, A141 the failure is seen and raised. A125 changes: 2 h no longer withdraws.
 - rev 44 (2026-11-03): L-48 (Hai: commits lost to index.lock fights before the sync): A128 one git writer at a time, A129 git writes never killed halfway, A130 a stale index.lock moved aside safely, A131 the sync freeze lifts in steps, A132 frozen sessions woken when they can go on, A133 what you wait for and until when, everywhere A5R speaks, A134 the freeze visible in every session (band, prompt note, status.json).
