@@ -38,12 +38,13 @@ export const heldIn = (step: FreezeStep): ReadonlySet<Need> => STEPS[step].held
 /** A143: whether a step keeps git reads of the shared checkout out (the merge step): A5R's own reads and the lock mover follow it. */
 export const holdsReads = (step: FreezeStep | null): boolean => step !== null && heldIn(step).has('read')
 /** The step of a sync now (null: none open, or only planned). `build`: what the sync's build log of this run says;
- * `isScript` (A143): a merge script runs (mergescript.ts isMergeScriptAlive), so a holder rerunning it in the manual stage
- * is merging too (null: the process list was not read, which says nothing). */
+ * `isScript` (A143): a merge script runs (mergescript.ts isMergeScriptAlive): until it ends the step is merging, in any
+ * stage and past the hard end too (Fable 3; null: the process list was not read, which says nothing). */
 export const freezeStepOf = (phase: Phase, stage: SyncStage | null, build: BuildLogRead | null, isScript: boolean | null): FreezeStep | null => {
+  if (isScript === true) return 'merging'
   if (phase === 'cutoff') return 'cutoff'
   if (phase !== 'frozen') return null
-  if (stage === null || (stage === 'manual' && isScript === true)) return 'merging'
+  if (stage === null) return 'merging'
   if (stage === 'building') return build === 'Failed' ? 'build-failed' : build === 'Succeeded' ? 'testing' : 'building' // Fable 8: lifted on the log's own line
   return stage
 }

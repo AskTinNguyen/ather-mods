@@ -140,7 +140,8 @@ test('A15: in its frozen phase the holder\'s worker runs the sync\'s own git com
   const w = world(on, { git: { 'status --porcelain': { stdout: 'UU Source/S2/Foo.cpp\0' } } }) // A74: the merge's conflicted file
   repo(w, 'E:/s2')
   w.put('E:/s2/.git/MERGE_HEAD', '1a2b3c\n')
-  w.put(SYNC, JSON.stringify(newSync(T(14, 30), MINE, 'me', NOW - 30 * MIN)))
+  // Rev 46 (A142, Fable 1): the sync's own git runs by hand after the hand-back (the manual stage); in the merge step A5R reads nothing, its guard's reads included.
+  w.put(SYNC, JSON.stringify({ ...newSync(T(14, 30), MINE, 'me', NOW - 30 * MIN), workerAt: T(14, 30), stage: 'manual', stageAt: T(14, 35) }))
   await $.session.start(START)
   const asWorker = (command: string) => $.tool.call({ tool: 'Bash', command, agentId: 'w-sync' } as never)
   for (const c of [OURS, 'git -C E:/s2 add -- Source/S2/Foo.cpp', 'git -C E:/s2 commit --no-edit', 'git -C E:/s2 merge --abort', 'git -C E:/s2 revert -m 1 1a2b3c4d --no-edit'])

@@ -1,13 +1,13 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession, newSync, parseSyncFile, type SyncFile } from '../hooks/coord.ts'
 import { isSharedGitArgv, walkDeep } from '../hooks/gitshared.ts'
-import { isLockFreeRead, untargetedGitPids } from '../hooks/gitturn.ts'
-import { MERGE_END, isMergeScriptAlive, mergeRefusal, mergeScriptText, mergeStartCommand, mergeWaitCommand, syncMergeLog, syncMergeScript } from '../hooks/mergescript.ts'
+import { cannotOwnLock, untargetedGitPids } from '../hooks/gitturn.ts'
+import { MERGE_END, NO_RESULT, diedNote, isMergeScriptAlive, mergeOutcome, workerEndOf, mergeScriptText, mergeStartCommand, mergeWaitCommand, syncMergeLog, syncMergeScript } from '../hooks/mergescript.ts'
 import { STEPS, commandNeeds, freezeStepOf, freezeWhy, holdsReads } from '../hooks/syncplan.ts'
 import { SYNC_WORKER_PROMPT, syncWorkerTask } from '../hooks/syncworker.ts'
 // The real half (the script on temporary repositories, started by the worker's own command) runs with node, as the test
 // runner has no file system, processes or git: node --experimental-strip-types a5r/tests/merge-script-smoke.mjs
-import { A5RPANE, LOCK, MERGE_BODY_TEXT, NOW, PROJ, k, opts, refused, world, type Rec } from './world.ts'
+import { A5RPANE, LOCK, MERGE_BODY_TEXT, NOW, PROJ, k, opts, refused, world, type Proc, type Rec } from './world.ts'
 
 // Rev 46 (L-51): A142 the sync merge runs as A5R's script and never leaves a half-merged tree; A143 A5R keeps out of the
 // index during the merge step; A144 a stale index.lock is moved again (the desktop app's panel readers no longer block
@@ -62,7 +62,9 @@ test('A142: unit: the script is its param block (the checkout, the sync, the rul
 
 test('A142 / A144: unit: the worker\'s command starts the script detached and waits for it; the wait command finds it by its file; the result line', () => {
   const run = mergeStartCommand('E:/my s2/Saved/A5R/sync-x-merge.ps1', 'E:/my s2/Saved/A5R/sync-x-merge.log')
-  expect(run).toBe("$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','\"E:\\my s2\\Saved\\A5R\\sync-x-merge.ps1\"' -WindowStyle Hidden -PassThru; 'A5R merge script pid ' + $p.Id; Wait-Process -Id $p.Id -Timeout 540 -ErrorAction SilentlyContinue; Get-Content -LiteralPath 'E:\\my s2\\Saved\\A5R\\sync-x-merge.log' -Tail 25")
+  expect(run.startsWith("$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','\"E:\\my s2\\Saved\\A5R\\sync-x-merge.ps1\"' -WindowStyle Hidden -PassThru; 'A5R merge script pid ' + $p.Id; ")).toBe(true)
+  expect(run.endsWith(mergeWaitCommand('E:/my s2/Saved/A5R/sync-x-merge.ps1', 'E:/my s2/Saved/A5R/sync-x-merge.log'))).toBe(true) // then the same wait tail
+  expect(run).toContain("Get-Content -LiteralPath 'E:\\my s2\\Saved\\A5R\\sync-x-merge.log' -Tail 25")
   expect(mergeWaitCommand('E:/s2/Saved/A5R/sync-x-merge.ps1', 'E:/s2/Saved/A5R/sync-x-merge.log')).toContain("$_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*sync-x-merge.ps1*'")
   expect(MERGE_END.exec('x\r\n2026-11-08 02:15:36.234 rule=sync-merge A5R merge refused conflict: 2 conflicted path(s)\r\n')?.[1]).toBe('refused')
   expect(MERGE_END.exec('2026-11-08 rule=sync-merge A5R merge merged 7b68b894 (3 path(s) written)')?.[1]).toBe('merged')
@@ -129,7 +131,6 @@ test('A142: after the worker hands the sync back, the holder\'s new rules write 
   const logged = w.read(`${HF}/orchestrate.log`).split('\n').find(l => l.includes('| rule=sync-merge |')) ?? ''
   expect(logged).toContain('| procs=git |')
   expect(logged).toContain('note=A5R merge refused conflict: 1 conflicted path(s)')
-  expect(mergeRefusal('x rule=sync-merge A5R merge merged 7b68b894 (3 path(s) written)')).toBeNull()
   const said = await sync({ action: 'rules', rules: ['theirs Content/**', 'ours Docs/'] })
   expect(said).toContain(`its merge script was written again with them: rerun it with this one PowerShell command: ${mergeStartCommand(syncMergeScript(S2, id), syncMergeLog(S2, id))}`)
   expect(w.read(syncMergeScript(S2, id))).toContain("@{ Side = 'ours'; Re = '^Docs/'; Pattern = 'Docs/' }")
@@ -217,21 +218,27 @@ test('A143: a stale index.lock is never moved during the merge step (its script 
 })
 
 // ---------- A144: a stale index.lock is moved again ----------
-test('A144: unit: an untargeted git that only reads and never takes index.lock does not block the move; any other does', () => {
-  expect(isLockFreeRead(PANEL)).toBe(true)
-  expect(isLockFreeRead(PANEL_LS)).toBe(true)
-  for (const c of ['git log -1', 'git show HEAD', 'git cat-file -p HEAD', 'git rev-parse HEAD', 'git ls-tree HEAD', 'git merge-base HEAD origin/main', 'git --no-optional-locks status --porcelain', 'git -c core.fsmonitor= status -z', 'git -c core.fsmonitor=false status']) expect([c, isLockFreeRead(c)]).toEqual([c, true])
-  for (const c of ['git status', 'git status --porcelain', 'git commit -m wip', 'git add -A', 'git fetch origin', 'git describe --dirty', 'git -c core.fsmonitor= commit -m x', 'git', 'git --git-dir .git status']) expect([c, isLockFreeRead(c)]).toEqual([c, false])
-  const probe = { freeGb: 1, diskGb: null, procs: [{ name: 'git', pid: 1, gb: 0, parentAlive: true, cmd: PANEL }, { name: 'git', pid: 2, gb: 0, parentAlive: true, cmd: 'git commit -m wip' }, { name: 'git', pid: 3, gb: 0, parentAlive: true, cmd: 'git status' }, { name: 'git-lfs', pid: 4, gb: 0, parentAlive: true }] }
-  expect(untargetedGitPids(probe as never)).toEqual([2, 3, 4])
+test('A144 / Fable 5: unit: as MEASURED, a lock-free read never owns a lock, a refresh only one written before it started, anything else may', () => {
+  const LOCK_AT = NOW - 8 * MIN
+  // MEASURED 2026-11-08 (a temp repo, stat-dirty files): ls-files, log and the object reads never rewrite the index; status,
+  // diff and describe do, with or without -c core.fsmonitor=, unless --no-optional-locks.
+  for (const c of [PANEL_LS, 'git log -1', 'git show HEAD', 'git cat-file -p HEAD', 'git rev-parse HEAD', 'git ls-tree HEAD', 'git merge-base HEAD origin/main', 'git --no-optional-locks status --porcelain', 'git --no-optional-locks diff --numstat HEAD~1']) expect([c, cannotOwnLock(c, 0, LOCK_AT)]).toEqual([c, true])
+  for (const c of [PANEL, 'git status', 'git -c core.fsmonitor= status -z', 'git diff --stat', 'git describe --dirty']) {
+    expect([c, cannotOwnLock(c, LOCK_AT - MIN, LOCK_AT)]).toEqual([c, false]) // it may have taken it
+    expect([c, cannotOwnLock(c, 0, LOCK_AT)]).toEqual([c, false]) // an unknown start never counts as after
+    expect([c, cannotOwnLock(c, LOCK_AT + MIN, LOCK_AT)]).toEqual([c, true]) // started after it was written: it found it taken
+  }
+  for (const c of ['git commit -m wip', 'git add -A', 'git fetch origin', 'git -c core.fsmonitor= commit -m x', 'git', 'git --git-dir .git commit -m x']) expect([c, cannotOwnLock(c, LOCK_AT + MIN, LOCK_AT)]).toEqual([c, false])
+  const probe = { freeGb: 1, diskGb: null, procs: [{ name: 'git', pid: 1, gb: 0, parentAlive: true, cmd: PANEL, startedAt: LOCK_AT + MIN }, { name: 'git', pid: 2, gb: 0, parentAlive: true, cmd: 'git commit -m wip' }, { name: 'git', pid: 3, gb: 0, parentAlive: true, cmd: 'git status', startedAt: LOCK_AT - MIN }, { name: 'git-lfs', pid: 4, gb: 0, parentAlive: true }, { name: 'git', pid: 5, gb: 0, parentAlive: true, cmd: PANEL_LS }] }
+  expect(untargetedGitPids(probe as never, LOCK_AT)).toEqual([2, 3, 4])
 })
 
-test('A144: the desktop app\'s panel readers (no -C) do not block the move of a stale lock; an untargeted git commit still does', opts(), async ($, on) => {
+test('A144: the desktop app\'s panel readers (no -C, started after the lock) do not block the move of a stale lock; an untargeted git commit still does', opts(), async ($, on) => {
   const w = world(on)
   shared(w)
   mover(w)
   w.put(LOCKF, 'a partial index write', NOW - 8 * MIN)
-  w.machine.procs = [{ name: 'git', pid: 15504, gb: 0.1, parentAlive: true, cmd: PANEL }, { name: 'git', pid: 15505, gb: 0.1, parentAlive: true, cmd: PANEL_LS }, { name: 'git', pid: 37412, gb: 0.1, parentAlive: true, cmd: 'git fsmonitor--daemon run --detach --ipc-threads=8' }, { name: 'git', pid: 47320, gb: 0.1, parentAlive: true, cmd: 'git commit -m "slow lfs commit"' }]
+  w.machine.procs = [{ name: 'git', pid: 15504, gb: 0.1, parentAlive: true, cmd: PANEL, startedAt: NOW - MIN }, { name: 'git', pid: 15505, gb: 0.1, parentAlive: true, cmd: PANEL_LS }, { name: 'git', pid: 37412, gb: 0.1, parentAlive: true, cmd: 'git fsmonitor--daemon run --detach --ipc-threads=8' }, { name: 'git', pid: 47320, gb: 0.1, parentAlive: true, cmd: 'git commit -m "slow lfs commit"' }]
   await $.session.start(START)
   await w.clock.advance(2 * MIN)
   expect(moves(w)).toEqual([])
@@ -253,4 +260,107 @@ test('A144: a claim that lapsed because its session is gone is cleared (written 
   await w.clock.advance(MIN)
   expect(w.read(`${HF}/git-turn/41c6fc3c.json`)).toBe('null')
   expect(w.read(`${HF}/git-turn/cccccccc.json`)).toBe(claim('cccccccc'))
+})
+
+// ---------- Fable's review of rev 46 ----------
+const ME8 = 'ab12cd34'
+const SCRIPT_PROC = (id: string): Proc => ({ name: 'powershell', pid: 7001, gb: 0.1, parentAlive: false, cmd: `powershell.exe -NoProfile -File "E:\\s2\\Saved\\A5R\\${id}-merge.ps1"` })
+/** This session's own sync at 14:45 planned, its worker started at T (the merge step). */
+const mineAtT = async ($: any, on: any, cwd = PROJ, head = '9f8e7d6c0000 1111') => {
+  const w = world(on, { ram: '40', cwd, git: { 'rev-parse HEAD': { stdout: '9f8e7d6c0000\n' }, 'log -1 --format=%H %P HEAD': { stdout: `${head}\n` } } })
+  on('turn.complete', async () => ({ text: '' }))
+  shared(w)
+  w.put(LOCK, 'free since 14:20\n')
+  await $.session.start({ cwd, surface: 'terminal', isInteractive: true } as never)
+  await $.tool.call({ tool: 'mcp__a5r__sync', action: 'plan', at: '14:45' } as never)
+  await idle($)
+  for (let n = 0; n < 6; n += 1) await w.clock.advance(MIN)
+  const s = parseSyncFile(w.read(`${HF}/sync.json`) || null) as SyncFile
+  expect(s.workerAt).toBeTruthy()
+  return { w, s, sync: () => parseSyncFile(w.read(`${HF}/sync.json`) || null) as SyncFile }
+}
+const workerEnds = async ($: any, answer: string) => $.turn.complete({ agentId: 'w-sync', answer, durationMs: 1, isAborted: false, turnId: 'tw', reason: 'answer' } as never)
+
+test('Fable 1: in the merge step the holder\'s own A5R reads of the checkout are skipped too (the pane\'s branch reads)', opts(), async ($, on) => {
+  const { w } = await mineAtT($, on, S2)
+  expect(parseSyncFile(w.read(`${HF}/sync.json`) || null)?.holder.id8).toBe(ME8)
+  const before = w.runs.length
+  const pane = { ...A5RPANE, surface: 'terminal' } as never
+  await w.clock.advance(4 * MIN)
+  await $.ui.render(pane)
+  await w.clock.advance(50)
+  expect(w.runs.slice(before).filter(r => /^git -C E:\/s2 (rev-list|status|diff|log -1 --format=%h)/i.test(r))).toEqual([])
+})
+
+test('Fable 2: the worker ends while its merge script still runs: the merge step stays; the script\'s result line ends it, with its sha', opts(), async ($, on) => {
+  const { w, s, sync } = await mineAtT($, on)
+  w.machine.procs = [SCRIPT_PROC(s.id)]
+  w.put(syncMergeLog(S2, s.id), '2026-10-06 14:46:00.000 rule=sync-merge start: checkout E:\\s2\r\n2026-10-06 14:46:30.000 rule=sync-merge index rename refused (try 1, Windows error 5); retrying\r\n')
+  await workerEnds($, 'SYNC ABORT the merge script did not finish in 9 minutes state=unknown')
+  await w.clock.advance(MIN)
+  expect(sync().stage).toBeNull() // not ended: the script runs
+  w.put(syncMergeLog(S2, s.id), `${w.read(syncMergeLog(S2, s.id))}2026-10-06 14:49:00.000 rule=sync-merge A5R merge merged 7b68b8940000aaaa (12 path(s) written)\r\n`)
+  w.machine.procs = []
+  await w.clock.advance(MIN)
+  expect([sync().stage, sync().mergeSha]).toEqual(['testing', '7b68b8940000aaaa']) // the result line's sha, not git's (1111…)
+})
+
+test('Fable 4: a script that died without a result: the worker\'s commands print one ending line; A5R records the checkout it finds and hands the sync back', opts(), async ($, on) => {
+  expect(mergeWaitCommand('E:/s2/Saved/A5R/x-merge.ps1', 'E:/s2/Saved/A5R/x-merge.log')).toContain(`{ '${NO_RESULT}' }`)
+  expect(mergeStartCommand('E:/s2/Saved/A5R/x-merge.ps1', 'E:/s2/Saved/A5R/x-merge.log')).toContain(`{ '${NO_RESULT}' }`)
+  const { w, s, sync } = await mineAtT($, on, PROJ, '7b68b8940000 9f8e7d6c0000 aaaa1111') // killed after update-ref: the branch moved
+  w.put(syncMergeLog(S2, s.id), '2026-10-06 14:46:00.000 rule=sync-merge start: checkout E:\\s2\r\n2026-10-06 14:47:00.000 rule=sync-merge refs/heads/HaiHuynh/20261005 moved 9f8e7d6c0000 -> 7b68b894\r\n')
+  w.put(LOCKF, 'A5R sync merge sync-x pid 7001')
+  w.machine.procs = []
+  await workerEnds($, NO_RESULT)
+  await w.clock.advance(MIN)
+  expect(sync().stage).toBe('manual')
+  const line = w.read(`${HF}/orchestrate.log`).split('\n').find(l => l.includes('| rule=sync-merge |')) ?? ''
+  expect(line).toContain('note=no result from the merge script: HEAD 7b68b8940000, a merge on 9f8e7d6c0000 (the branch moved)')
+  expect(line).toContain("; index.lock left, the script's own")
+})
+
+test('Fable 2 / 4: unit: the outcome from the log and the process; the end it makes; what a death left', () => {
+  const merged = 'x rule=sync-merge A5R merge merged 7B68B894 (3 path(s) written)'
+  expect(mergeOutcome(merged, true)).toEqual({ kind: 'merged', sha: '7b68b894', note: 'A5R merge merged 7B68B894 (3 path(s) written)' })
+  expect(mergeOutcome('x rule=sync-merge start', true).kind).toBe('running')
+  expect(mergeOutcome('x rule=sync-merge start', null).kind).toBe('running') // unread: wait, never taken for dead
+  expect(mergeOutcome('x rule=sync-merge start', false).kind).toBe('died')
+  expect(mergeOutcome(null, null).kind).toBe('none')
+  expect(mergeOutcome(null, true).kind).toBe('running')
+  expect(mergeOutcome('x rule=sync-merge A5R merge up-to-date abc (nothing written)', false).kind).toBe('refused')
+  const G = { state: 'unknown' } as const
+  expect(workerEndOf({ kind: 'merged', sha: 'abc1234', note: '' }, G, '', { kind: 'merged', sha: 'ffff000', buildLog: 'L', note: '' }).end).toEqual({ kind: 'merged', sha: 'abc1234', buildLog: 'L', note: '' })
+  expect(workerEndOf({ kind: 'merged', sha: 'abc1234', note: '' }, G, '', { kind: 'abort', why: 'gave up', note: '' }).end?.kind).toBe('merged')
+  expect(workerEndOf({ kind: 'died', procs: ['git'] }, G, 'gone', null)).toEqual({ end: { kind: 'abort', why: 'gone', note: 'gone' }, git: G, log: { note: 'gone', procs: ['git'] } })
+  expect(workerEndOf({ kind: 'none' }, G, '', null)).toEqual({ end: null, git: G, log: null })
+  expect(mergeOutcome('x rule=sync-merge A5R merge merged (3 path(s) written)', false).kind).toBe('refused') // a merged line without its sha is no merge
+  expect(diedNote({ state: 'none' }, '9f8e7d6c0000', null)).toBe('no result from the merge script: HEAD still 9f8e7d6c0000; index.lock none')
+  expect(diedNote({ state: 'unknown' }, 'a', { text: null, size: 104_000_000 })).toBe('no result from the merge script: HEAD unread; index.lock left, 104000000 bytes')
+})
+
+test('Fable 3: a live merge script keeps the merge step past the hard end, the sync does not expire under it, and its marked lock is never moved', opts(), async ($, on) => {
+  expect(freezeStepOf('expired', null, null, true)).toBe('merging')
+  expect(freezeStepOf('done', 'testing', null, true)).toBe('merging')
+  const { w, s, sync } = await mineAtT($, on)
+  mover(w)
+  w.machine.procs = [SCRIPT_PROC(s.id)]
+  w.put(LOCKF, `A5R sync merge ${s.id} pid 7001`, NOW)
+  for (let n = 0; n < 50; n += 1) await w.clock.advance(MIN) // past the hard end (15:30)
+  expect(sync().state).toBe('planned')
+  expect(moves(w)).toEqual([])
+  w.machine.procs = []
+  await w.clock.advance(2 * MIN)
+  expect(sync().state).toBe('expired')
+})
+
+test('Fable 3: unit: the mover leaves a lock whose marker names a live merge script, outside any sync too', opts(), async ($, on) => {
+  const w = world(on)
+  shared(w)
+  mover(w)
+  w.put(LOCKF, 'A5R sync merge sync-x pid 7001', NOW - 5 * MIN)
+  w.machine.procs = [SCRIPT_PROC('sync-x')]
+  await $.session.start(START)
+  await w.clock.advance(3 * MIN)
+  expect(moves(w)).toEqual([])
 })

@@ -1023,7 +1023,7 @@ async function ensureTools($: Engine): Promise<void> {
  * so a reload or a second tick never starts another). */
 async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Promise<void> {
   // A93: the HEAD before the merge, so a worker that ends with no SYNC line can still be read as merged or not.
-  const head = await gitRun($, ['git', '-C', s2Root(), 'rev-parse', 'HEAD'], 30_000)
+  const head = await gitUnheld($, ['git', '-C', s2Root(), 'rev-parse', 'HEAD'], 30_000)
   const preHead = head?.exitCode === 0 ? head.stdout.trim() : ''
   const engine = s.build && checkout ? await findEngine($, opts, checkout) : null
   const buildRun = checkout && engine?.root ? await scriptsOf($).build(checkout, s, engine.root) : ''
@@ -1041,19 +1041,16 @@ async function spawnWorker($: Engine, opts: Opts, s: SyncFile, now: number): Pro
   if (id) await writeSync($, opts, { ...claimed, workerId: id, updatedAt: now }, claimed)
 }
 /** A109 / A142: the sync's build and merge scripts (synchost.ts), through this call's engine. */
-const scriptsOf = ($: Engine) => syncScripts({ pluginRoot: $.plugin.root, read: path => $.fs.read(path).catch(() => null), write: (path, text) => $.fs.write(path, text), log: note => $.ui.log(`a5r: ${note}`, { to: 'debug' }) })
-/** A143: A5R's own git of the shared checkout, skipped (null: unread) in a sync's merge step (sync.json read fresh), but
- * in the holder's session, which runs the merge. Every git A5R runs goes through it (the hosts' io.run too; other argv
- * pass unchanged), but the checkout's discovery (before it is known) and gh (which may run git itself). */
+const scriptsOf = ($: Engine) => syncScripts({ pluginRoot: $.plugin.root, read: path => $.fs.read(path).catch(() => null), stat: path => $.fs.stat(path).catch(() => null), write: (path, text) => $.fs.write(path, text), log: note => $.ui.log(`a5r: ${note}`, { to: 'debug' }) })
+/** A143 / Fable 1: every A5R's own git of the checkout is skipped (null: unread) in a merge step, the holder's too; but gitUnheld
+ * (unheld: only for the holder's reads of its merge: dry-run, pre-merge HEAD, the checkout after the script), its discovery, and gh. */
 async function gitRun($: Engine, argv: string[], timeoutMs: number, env?: Record<string, string>) {
-  const s = isSharedGitArgv(argv, s2Root()) && syncFile?.holder.id8 !== me8 ? parseSyncFile(await readJson($, syncPath())) : null
-  return s && freeze.isMerging(s, await $.clock.now()) ? null : $.process.run(argv, { timeoutMs, ...(env ? { env } : {}) }).catch(() => null)
+  const s = isSharedGitArgv(argv, s2Root()) ? parseSyncFile(await readJson($, syncPath())) : null
+  return s && freeze.isMerging(s, await $.clock.now()) ? null : gitUnheld($, argv, timeoutMs, env)
 }
-/** gitRun's output when git exits 0, else '' (unread). */
-async function gitOut($: Engine, dir: string, args: string[], timeoutMs = 30_000): Promise<string> {
-  const r = await gitRun($, ['git', '-C', dir, ...args], timeoutMs)
-  return r && r.exitCode === 0 ? r.stdout : ''
-}
+const gitUnheld = ($: Engine, argv: string[], timeoutMs: number, env?: Record<string, string>) => $.process.run(argv, { timeoutMs, ...(env ? { env } : {}) }).catch(() => null)
+/** A git run's output when git exits 0, else '' (unread). */
+const gitOut = async ($: Engine, dir: string, args: string[], timeoutMs = 30_000): Promise<string> => gitRun($, ['git', '-C', dir, ...args], timeoutMs).then(r => (r?.exitCode === 0 ? r.stdout : ''))
 
 /** A110 (Fable review D2): an Editor log's text; one over 4 MiB, which `$.fs.read` refuses, through findstr (its base
  * directory lines only); null when findstr cannot read it. */
@@ -1230,19 +1227,12 @@ async function syncLockUntil($: Engine, opts: Opts, s: SyncFile, now: number): P
 }
 
 /** A93: the merge commit on top of the pre-merge HEAD the holder's a5r recorded, or null. */
-async function mergeCommit($: Engine, opts: Opts, s: SyncFile): Promise<MergeRead> {
-  const r = await gitRun($, ['git', '-C', s2Root(), 'log', '-1', '--format=%H %P', 'HEAD'], 30_000)
-  return readMerge(r?.exitCode === 0 ? r.stdout : null, s.preHead)
-}
+const mergeCommit = async ($: Engine, opts: Opts, s: SyncFile): Promise<MergeRead> => readMerge(await gitUnheld($, ['git', '-C', s2Root(), 'log', '-1', '--format=%H %P', 'HEAD'], 30_000).then(r => (r?.exitCode === 0 ? r.stdout : null)), s.preHead)
 
-/** A12 / A79 / A93 / A96: the worker's turn ended. `SYNC DONE …` with the post-merge test line → done (A95); a merge (a
- * `SYNC MERGED <sha> build-log=<path>` line, a DONE without tests, or no SYNC line with a merge commit on top of the
- * pre-merge HEAD) → the building or testing stage; `SYNC ABORT …`, or positive evidence of no merge commit → the manual
- * stage (A96: the holder finishes by hand or aborts). In every stage the freeze and the sync's Editor lock stay until the
- * holder calls done or abort (or the hard end). */
+/** A12 / A79 / A93 / A96: the worker ended: its answer kept beside the sync (Fable 2), its end finished now or at the holder's sync step. */
 async function workerEnded($: Engine, opts: Opts, agentId: string, answer: string): Promise<void> {
   const s = parseSyncFile(await readJson($, syncPath()))
-  if (!s || s.workerAt === null || s.holder.id8 !== me8) return
+  if (!s || s.workerAt === null || s.holder.id8 !== me8 || s.stage !== null) return
   if (s.workerId !== agentId) {
     // No id was recorded (or another agent ended): it is the worker only if the agent list says it ran as one.
     if (s.workerId !== null) return
@@ -1252,18 +1242,25 @@ async function workerEnded($: Engine, opts: Opts, agentId: string, answer: strin
   const now = await $.clock.now()
   await restoreMe($, opts)
   if (s.state !== 'planned') return releaseSyncSlot($, opts, s, now)
-  const refusal = checkout ? await scriptsOf($).mergeEnd(checkout.root, s) : null // A142: the merge script's refusal, logged
-  if (refusal) await orchestrateLog($, opts, { ...actedEvent('sync-merge', refusal.note, now), procs: refusal.procs })
-  const end = parseSyncEnd(answer)
+  if (!(await finishWorker($, opts, s, answer, now)) && checkout) await scriptsOf($).keepAnswer(checkout.root, s, answer) // finished at the sync step
+}
+
+/** Nothing while the merge script runs; SYNC DONE with tests → done (A95); a merge (the script's result line, Fable 2) →
+ * building or testing; a refusal, a dead script, SYNC ABORT or no merge → the manual stage (A96). */
+async function finishWorker($: Engine, opts: Opts, s: SyncFile, answer: string, now: number): Promise<boolean> {
+  const w = await scriptsOf($).workerEnd(checkout?.root ?? null, s, isMergeScriptAlive((await freshProbe($, opts))?.procs ?? null), parseSyncEnd(answer), () => mergeCommit($, opts, s))
+  if (!w) return false // Fable 2: not ended while its merge script runs; the holder's sync step looks again
+  if (w.log) await orchestrateLog($, opts, { ...actedEvent('sync-merge', w.log.note, now), procs: w.log.procs }) // A142 / Fable 4
   const first = (answer ?? '').split(/\r?\n/).map(l => l.trim()).find(Boolean) ?? ''
-  const after = afterWorker(end, end?.kind === 'abort' ? { state: 'unknown' } : await mergeCommit($, opts, s), s.build, first.slice(0, 140))
+  const after = afterWorker(w.end, w.git, s.build, first.slice(0, 140))
   if (after.kind === 'done') {
     // The sync tool's own write (endSync, which gives the sync's lock back), with or without the A5R flag, before or after
     // the hard end (sync.json still planned).
     if (await endSync($, opts, s, 'done', after.note, now)) push({ id: `sync:${s.id}:${s.at}:worker-done`, text: NOTICES.workerDone(syncFile ?? s), isActionable: true })
-    return
+    return true
   }
   await enterSyncStage($, opts, s, after, now)
+  return true
 }
 
 /** A93 / A96: the sync enters a stage (the worker's end, or a worker that could not start): written, the sync's lock
@@ -2004,7 +2001,7 @@ function holderFor(spec: string, now: number): SyncHolder | null {
  * `until` (A107: the dry-run at T must not hold the worker back) the paths left count as foreign. */
 async function classifyAll($: Engine, opts: Opts, paths: readonly string[], until = Infinity): Promise<Conflict[]> {
   const repo = s2Root()
-  const git = (args: string[]): Promise<string> => gitOut($, repo, args)
+  const git = (args: string[]): Promise<string> => gitUnheld($, ['git', '-C', repo, ...args], 30_000).then(r => (r?.exitCode === 0 ? r.stdout : ''))
   const out: Conflict[] = []
   for (const p of paths.slice(0, MAX_CLASSIFIED)) {
     if ((await $.clock.now()) >= until) break
@@ -2033,14 +2030,14 @@ function startDryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): void 
 async function dryRun($: Engine, opts: Opts, s: SyncFile, round: DryRound): Promise<void> {
   const root = s2Root()
   const limitMs = FETCH_MS[round]
-  const fetch = () => gitRun($, fetchArgv(root), limitMs, FETCH_ENV)
+  const fetch = () => gitUnheld($, fetchArgv(root), limitMs, FETCH_ENV)
   let fetched = await fetch()
   if (fetched && fetched.exitCode !== 0) fetched = await $.clock.sleep(FETCH_RETRY_MS).then(fetch) // once: a ref lock, a blip
   const failed = fetchWhy(fetched, limitMs)
   const now = await $.clock.now()
   if (failed) push({ id: `sync:${s.id}:${s.at}:fetch-failed:${round}`, text: NOTICES.fetchFailed(s, round, failed), isActionable: true })
-  const main = shaOf((await gitRun($, ['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'origin/main'], 30_000))?.stdout)
-  const r = await gitRun($, ['git', '-C', root, 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], 60_000)
+  const main = shaOf((await gitUnheld($, ['git', '-C', root, 'rev-parse', '--verify', '--quiet', 'origin/main'], 30_000))?.stdout)
+  const r = await gitUnheld($, ['git', '-C', root, 'merge-tree', '--write-tree', '--name-only', 'HEAD', 'origin/main'], 60_000)
   if (!r || (r.exitCode !== 0 && r.exitCode !== 1)) {
     push({ id: `sync:${s.id}:${s.at}:dry-run-failed:${round}`, text: noticeText('Sync main', `the conflict dry-run (git merge-tree) did not finish${r ? ` (exit ${r.exitCode})` : ' within 60 s'}`, `run git -C ${root} merge-tree --write-tree --name-only HEAD origin/main yourself and pass the conflicted paths with the sync tool (action conflicts)`), isActionable: true })
     await updateSync($, opts, s, me8, cur => withDryRunFailed(cur, now))
@@ -2067,7 +2064,7 @@ async function updateSync($: Engine, opts: Opts, s: SyncFile, holder8: string, c
  * untracked scan. Null when git could not list them (the holder is told). */
 async function addedOnDisk($: Engine, opts: Opts, s: SyncFile): Promise<string[] | null> {
   const repo = s2Root()
-  const r = await gitRun($, ['git', '-C', repo, 'diff', '--name-only', '-z', '--diff-filter=A', 'HEAD', 'origin/main'], 60_000)
+  const r = await gitUnheld($, ['git', '-C', repo, 'diff', '--name-only', '-z', '--diff-filter=A', 'HEAD', 'origin/main'], 60_000)
   if (!r || r.exitCode !== 0) {
     push({ id: `sync:${s.id}:${s.at}:added-failed`, text: noticeText('Sync main', 'the list of files origin/main adds (git diff --diff-filter=A) did not finish', `run git -C ${repo} diff --name-only --diff-filter=A HEAD origin/main yourself and check which of those paths already exist in the checkout before the merge`), isActionable: true })
     return null
@@ -2087,8 +2084,10 @@ async function addedOnDisk($: Engine, opts: Opts, s: SyncFile): Promise<string[]
 async function syncStep($: Engine, opts: Opts, now: number): Promise<void> {
   let s = syncFile
   if (!s || !me) return
+  const kept = s.holder.id8 === me8 && s.state === 'planned' && s.workerAt !== null && s.stage === null && checkout ? await scriptsOf($).keptAnswer(checkout.root, s) : null
+  if (kept !== null) await finishWorker($, opts, s, kept, now).then(() => { s = syncFile ?? s }) // Fable 2: a worker end kept while its script ran
   let phase = phaseOf(s, now)
-  if (s.state === 'planned' && phase === 'expired') {
+  if (s.state === 'planned' && phase === 'expired' && !freeze.isMerging(s, now)) { // Fable 3: never under a live merge
     s = await expireSync($, opts, s, now)
     phase = phaseOf(s, now)
   }
@@ -2836,7 +2835,7 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
     : `its holder is gone${owner ? '' : ' (no sync on file)'}: take it over with /a5r sync takeover (or the sync tool, action takeover), then run git -C ${s2Root()} ${opOf(h.head)} --abort; until then no commit, reset or stash there`
 
 // Rev 44: gitturnhost.ts (A128-A130) and freezehost.ts (A131-A134): this session's state once, the engine per call.
-const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, isMerging: now => freeze.isMerging(syncFile, now), dir: hfDir, root: s2Root })
+const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, isMerging: now => freeze.isMerging(syncFile, now) || isMergeScriptAlive(probe?.procs ?? null) === true, dir: hfDir, root: s2Root })
 const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now), isMergeScript: () => isMergeScriptAlive(probe?.procs ?? null) })
 const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8) })
 /** The hosts' reads and writes for one call, through this call's engine. */

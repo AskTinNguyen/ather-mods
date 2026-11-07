@@ -122,7 +122,7 @@ test('Fable 3: a session outside the S2 checkout writing its git with -C takes t
 })
 
 test('Fable 4: a git whose folder its command line does not name may hold the lock: no move while one runs', opts(), async ($, on) => {
-  expect(untargetedGitPids({ freeGb: 1, diskGb: null, procs: [{ name: 'git.exe', pid: 1, gb: 0, parentAlive: true, cmd: 'git commit -m wip' }, { name: 'git', pid: 2, gb: 0, parentAlive: true, cmd: 'git -C E:/other status' }, { name: 'git-lfs', pid: 3, gb: 0, parentAlive: true }, { name: 'git', pid: 4, gb: 0, parentAlive: true, cmd: 'git fsmonitor--daemon run' }] } as never)).toEqual([1, 3])
+  expect(untargetedGitPids({ freeGb: 1, diskGb: null, procs: [{ name: 'git.exe', pid: 1, gb: 0, parentAlive: true, cmd: 'git commit -m wip' }, { name: 'git', pid: 2, gb: 0, parentAlive: true, cmd: 'git -C E:/other status' }, { name: 'git-lfs', pid: 3, gb: 0, parentAlive: true }, { name: 'git', pid: 4, gb: 0, parentAlive: true, cmd: 'git fsmonitor--daemon run' }] } as never, null)).toEqual([1, 3])
   const w = world(on)
   shared(w)
   w.put(LOCKF, 'lock', NOW - 5 * MIN)

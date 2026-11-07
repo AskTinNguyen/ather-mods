@@ -5,7 +5,8 @@
 // `refs/remotes/origin/main` that moved on; a `*.up` filter (smudge: upper case) stands for LFS. A5R's script for it is
 // written by mergescript.ts and started by the worker's own command through PowerShell. Cases: a clean merge; conflicts
 // resolved by the holder's rules; an unresolved conflict (text, and a .uasset with no rule); dirty and untracked-in-the-way
-// paths; a split index refused; a refused index rename retried then installed; a rename refused for good, rolled back. A failed case must leave
+// paths; a split index refused; a refused index rename retried then installed; the script killed between update-ref and
+// the install (what it leaves, the wait command's ending line); a rename refused for good, rolled back. A failed case must leave
 // HEAD, the branch, the index (byte for byte) and the working tree exactly as before.
 // Exit 0: every case as expected (or not on Windows: skipped, said); else each failure is printed, exit 1.
 import crypto from 'node:crypto'
@@ -14,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { MERGE_BODY, MERGE_END, mergeRefusal, mergeScriptText, mergeStartCommand, syncMergeLog, syncMergeScript } from '../hooks/mergescript.ts'
+import { LOCK_MARK, MERGE_BODY, MERGE_END, NO_RESULT, mergeOutcome, mergeScriptText, mergeStartCommand, mergeWaitCommand, syncMergeLog, syncMergeScript } from '../hooks/mergescript.ts'
 
 if (process.platform !== 'win32') {
   console.log('skipped: the merge script runs only on Windows')
@@ -25,6 +26,7 @@ const body = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.ur
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'a5r merge smoke '))
 const failures = []
 const times = []
+let killed = '(not run)'
 const expect = (what, ok) => ok || failures.push(what)
 
 const git = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
@@ -135,6 +137,8 @@ const clean = {
 }
 
 try {
+  // The lock marker the script writes is the one A5R reads (mergescript.ts LOCK_MARK: the mover and diedNote).
+  expect('the script writes the marker LOCK_MARK reads', body.includes('$marker = "A5R sync merge $SyncId pid $PID"') && LOCK_MARK.exec('A5R sync merge sync-x pid 4242')?.[1] === '4242')
   // A clean merge: only the paths the merge changes are written (smudged), the lane's dirt and untracked files stay, the
   // index keeps the stat data of unchanged files.
   {
@@ -199,8 +203,8 @@ try {
     const r = merge(dir, 's-conflict', [{ side: 'ours', pattern: 'Docs/**' }])
     expect(`conflict: refused with both paths: ${r.line}`, r.line.includes('A5R merge refused conflict: 2 conflicted path(s)') && r.line.includes('u.txt (no rule matches)') && r.line.includes('Content/y.uasset (no rule matches)'))
     expect('conflict: HEAD, index and tree exactly as before', snapshot(dir) === before)
-    const refusal = mergeRefusal(r.log) // what the holder's A5R copies into orchestrate.log as rule=sync-merge
-    expect(`conflict: the refusal read back with the git processes: ${JSON.stringify(refusal)}`, refusal?.note.startsWith('A5R merge refused conflict:') === true && Array.isArray(refusal.procs) && r.log.includes('rule=sync-merge git processes: '))
+    const refusal = mergeOutcome(r.log, false) // what the holder's A5R copies into orchestrate.log as rule=sync-merge
+    expect(`conflict: the refusal read back with the git processes: ${JSON.stringify(refusal)}`, refusal.kind === 'refused' && refusal.note.startsWith('A5R merge refused conflict:') && Array.isArray(refusal.procs) && r.log.includes('rule=sync-merge git processes: '))
   }
   // Dirty and untracked-in-the-way paths the merge changes: listed, nothing written.
   {
@@ -241,6 +245,33 @@ try {
     expect(`retry: merged after refused renames: ${r.line}`, r.line.includes('A5R merge merged') && r.log.includes('index rename refused (try 1'))
     expect(`retry: index matches HEAD, tree clean: ${git(dir, 'status', '--porcelain')}`, git(dir, 'status', '--porcelain') === '' && git(dir, 'diff', '--cached', '--name-only', 'HEAD') === '')
   }
+  // Fable 4: the script killed between update-ref and the index install (its rename refused, then the process killed). What
+  // it leaves, and what the worker's wait command and A5R read from it.
+  {
+    const dir = repo('killed', clean)
+    const old = git(dir, 'rev-parse', 'HEAD')
+    const indexBefore = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, '.git', 'index'))).digest('hex')
+    const held = holdIndex(dir, 60)
+    await held.ready
+    const script = syncMergeScript(dir, 's-killed')
+    const log = syncMergeLog(dir, 's-killed')
+    fs.writeFileSync(script, mergeScriptText(body, { checkout: dir, syncId: 's-killed', rules: [], renameWaitSec: 120 }))
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], { stdio: 'ignore' })
+    for (let n = 0; n < 300 && !(fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('index rename refused')); n += 1) await sleep(100)
+    execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+    await new Promise(r => child.on('exit', r))
+    const text = fs.readFileSync(log, 'utf8')
+    const said = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(mergeWaitCommand(script, log), 'utf16le').toString('base64')], { encoding: 'utf8', stdio: 'pipe' })
+    const lock = path.join(dir, '.git', 'index.lock')
+    const head = git(dir, 'rev-parse', 'HEAD')
+    expect(`killed: no result line in its log: ${text.slice(-300)}`, !MERGE_END.test(text) && mergeOutcome(text, false).kind === 'died')
+    expect(`killed: the wait command ends the worker with one line: ${said.slice(-200)}`, said.trim().endsWith(NO_RESULT))
+    expect('killed: the branch moved to the merge (HEAD^1 the old HEAD)', head !== old && git(dir, 'rev-parse', 'HEAD^1') === old)
+    expect('killed: the real index is the old one, byte for byte', crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, '.git', 'index'))).digest('hex') === indexBefore)
+    expect('killed: its index.lock is left, holding its copy of the new index', fs.existsSync(lock) && !LOCK_MARK.test(fs.readFileSync(lock, 'latin1').slice(0, 64)))
+    killed = `HEAD ${head.slice(0, 12)} (the merge; HEAD^1 ${old.slice(0, 12)}), .git/index the old one, .git/index.lock left (${fs.statSync(lock).size} bytes, the new index copy), the merged files written in the tree, .git/a5r-merge-s-killed left; the wait command printed "${NO_RESULT}"`
+    await held.done
+  }
   // A rename refused for good: the branch and the tree go back, the index was never replaced.
   {
     const dir = repo('rollback', clean)
@@ -257,6 +288,7 @@ try {
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true })
 }
-console.log(`merge script smoke: ${failures.length ? `${failures.length} failed checks` : 'clean, rules, conflict, dirty, split index, stat-only, rename retry and rollback all as expected'} (paths with a space and &; ${times.join(', ')})`)
+console.log(`merge script smoke: ${failures.length ? `${failures.length} failed checks` : 'clean, rules, conflict, dirty, split index, stat-only, rename retry, killed mid-install and rollback all as expected'} (paths with a space and &; ${times.join(', ')})`)
+console.log(`killed between update-ref and the index install leaves: ${killed}`)
 for (const f of failures) console.log(`FAIL ${f}`)
 process.exit(failures.length ? 1 : 0)

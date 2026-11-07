@@ -81,17 +81,21 @@ const plainAlt = (seg: Seg): string => `run the git command alone, in the foregr
 
 // ---------- A130: a stale index.lock moved aside ----------
 /** Fable 4: the git and git-lfs processes whose command line names no folder (the other half of coord.ts checkoutGitPids,
- * which reads those that name the checkout) (`cd <checkout> && git commit`) or cannot be
- * read: they may work in the checkout, so no lock is moved while one runs (git's fsmonitor daemon excluded). */
-export const untargetedGitPids = (probe: Probe | null): number[] =>
-  (probe?.procs ?? []).filter(p => /^git(-lfs)?(\.exe)?$/i.test(p.name) && !/fsmonitor--daemon/i.test(p.cmd ?? '') && (!p.cmd || (gitTarget(p.cmd, '') === '' && !isLockFreeRead(p.cmd)))).map(p => p.pid)
-/** A144: a git command line (as the process list reads it) that only reads and never takes index.lock (gitshared.ts
- * gitUse: read). MEASURED 2026-11-08: the desktop app's panels run `git -c core.fsmonitor= … diff --numstat
- * -z -M <sha>` and `ls-files --others` with no `-C` in the checkout, nearly always; since Fable 4 they blocked every move
- * (none since 11-06 16:02). */
-export const isLockFreeRead = (cmd: string): boolean => {
+ * which reads those that name the checkout) (`cd <checkout> && git commit`) or cannot be read: they may work in the
+ * checkout, so no lock is moved while one runs (git's fsmonitor daemon excluded), unless it cannot own the lock (A144:
+ * cannotOwnLock). `lockAt`: when the lock was last written (null: none). */
+export const untargetedGitPids = (probe: Probe | null, lockAt: number | null): number[] =>
+  (probe?.procs ?? []).filter(p => /^git(-lfs)?(\.exe)?$/i.test(p.name) && !/fsmonitor--daemon/i.test(p.cmd ?? '') && (!p.cmd || (gitTarget(p.cmd, '') === '' && !cannotOwnLock(p.cmd, p.startedAt ?? 0, lockAt)))).map(p => p.pid)
+/** A144 (Fable 5, MEASURED: gitshared.ts gitUse): a git (its command line as the process list reads it) that cannot own a
+ * lock written at `lockAt`: a read that never takes index.lock, or one that takes it only when free (a refresh) and started
+ * after the lock was written, so it found it taken. MEASURED 2026-11-08: the desktop app's panels run `git -c
+ * core.fsmonitor= … diff --numstat -z -M <sha>` (a refresh) and `ls-files --others` (lock-free) with no `-C` in the
+ * checkout, nearly always, short-lived; since Fable 4 they blocked every move (none since 11-06 16:02). An unknown start
+ * (0) never counts as after. */
+export const cannotOwnLock = (cmd: string, startedAt: number, lockAt: number | null): boolean => {
   const seg = walk(cmd, '')[0]
-  return seg?.verb === 'git' && gitUse(gitPlace(seg)) === 'read'
+  const use = seg?.verb === 'git' ? gitUse(gitPlace(seg)) : 'locks'
+  return use === 'read' || (use === 'refresh' && lockAt !== null && startedAt > lockAt)
 }
 export const STALE_LOCK_MS = 2 * 60_000
 /** A130: what to do with .git/index.lock: `lockAgeMs` null (none), `gitPids` null (the process list unread), `isTurnHeld`

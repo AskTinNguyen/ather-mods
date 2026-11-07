@@ -14,7 +14,6 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $enc = New-Object System.Text.UTF8Encoding($false)
-[IO.File]::WriteAllText($Log, '', $enc)
 $env:GIT_TERMINAL_PROMPT = '0'
 $env:GCM_INTERACTIVE = 'never'
 foreach ($name in 'GIT_INDEX_FILE', 'GIT_LFS_SKIP_SMUDGE', 'GIT_DIR', 'GIT_WORK_TREE') { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
@@ -60,15 +59,16 @@ function Split-Nul([string]$Text) { return @($Text.Split([char]0) | Where-Object
 # A repo path (forward slashes) as a full Windows path under the checkout.
 function Get-Full([string]$Path) { return Join-Path $Checkout $Path.Replace('/', [IO.Path]::DirectorySeparatorChar) }
 
-# Tries $Try until it returns true or $Seconds pass, waiting 0.1 s doubling to 2 s between tries.
-function Wait-Until([scriptblock]$Try, [int]$Seconds) {
+# Tries $Try until it returns true or $Seconds pass, waiting 50 ms doubling to $CapMs (2 s unless given) between tries,
+# with up to half again of jitter (Fable 7: the rename's 500 ms cap keeps many panel readers from meeting every try).
+function Wait-Until([scriptblock]$Try, [int]$Seconds, [int]$CapMs = 2000) {
   $deadline = (Get-Date).AddSeconds($Seconds)
-  $delay = 100
+  $delay = 50
   while ($true) {
     if (& $Try) { return $true }
     if ((Get-Date) -ge $deadline) { return $false }
-    Start-Sleep -Milliseconds $delay
-    $delay = [Math]::Min($delay * 2, 2000)
+    Start-Sleep -Milliseconds ($delay + (Get-Random -Maximum ([Math]::Max(1, [int]($delay / 2)))))
+    $delay = [Math]::Min($delay * 2, $CapMs)
   }
 }
 
@@ -84,7 +84,8 @@ function Write-GitProcesses {
   }
 }
 
-$state = @{ Lock = $false; Tree = $false; Ref = $false }
+$state = @{ Lock = $false; Copied = $false; Tree = $false; Ref = $false }
+$markerHash = ''
 $refusal = $null
 $tmp = $null
 $changes = @()
@@ -133,7 +134,13 @@ function Undo-Merge {
     try { Restore-Tree; $state.Tree = $false } catch { $left += ('the working tree (' + $_ + ')') }
   }
   if ($state.Lock) {
-    try { [IO.File]::Delete($lock); $state.Lock = $false; Write-Log 'rollback: .git/index.lock (ours) removed' } catch { $left += ('.git/index.lock, ours (' + $_ + ')') }
+    try {
+      $now = $(if (Test-Path -LiteralPath $lock) { (Get-FileHash -LiteralPath $lock -Algorithm SHA256).Hash } else { '' })
+      if ($now -eq '') { Write-Log 'rollback: .git/index.lock is gone already' }
+      elseif ($now -eq $markerHash -or ($state.Copied -and $now -eq (Get-FileHash -LiteralPath $T -Algorithm SHA256).Hash)) { [IO.File]::Delete($lock); Write-Log 'rollback: .git/index.lock (ours) removed' }
+      else { $left += '.git/index.lock is no longer the one this script took: left as it is' }
+      $state.Lock = $false
+    } catch { $left += ('.git/index.lock, ours (' + $_ + ')') }
   }
   return ($left -join '; ')
 }
@@ -145,6 +152,7 @@ function Exit-Merge([string]$Line, [int]$Code) {
 }
 
 try {
+  [IO.File]::WriteAllText($Log, '', $enc)
   Add-Type -Namespace A5RSyncMerge -Name Native -MemberDefinition '[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern bool MoveFileEx(string from, string to, int flags);'
   Write-Log ("start: checkout $Checkout, target $Target, sync $SyncId, pid $PID, " + (Invoke-Git @('version')).Out.Trim())
   $gitDir = (Invoke-GitOk @('rev-parse', '--absolute-git-dir')).Out.Trim()
@@ -242,6 +250,7 @@ try {
   } $LockWaitSec
   if (-not $taken) { Stop-Merge 'busy' ".git/index.lock stood for $LockWaitSec s: another git works in the checkout (nothing written)" }
   $state.Lock = $true
+  $markerHash = (Get-FileHash -LiteralPath $lock -Algorithm SHA256).Hash
   $T0 = Join-Path $tmp 'before.index'
   $T = Join-Path $tmp 'after.index'
   [IO.File]::Copy($index, $T0, $true)
@@ -283,6 +292,7 @@ try {
   # 5. The new index: written into our lock, then the lock renamed over .git/index, retried while Windows refuses it.
   if ([IO.File]::ReadAllText($lock, $enc) -ne $marker) { Stop-Merge 'index' '.git/index.lock is no longer the one this script took' }
   [IO.File]::Copy($T, $lock, $true)
+  $state.Copied = $true
   $tries = 0
   $lastError = 0
   $installed = Wait-Until {
@@ -291,7 +301,7 @@ try {
     $script:lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
     if ($script:tries -eq 1 -or $script:tries % 10 -eq 0) { Write-Log "index rename refused (try $script:tries, Windows error $script:lastError); retrying" }
     return $false
-  } $RenameWaitSec
+  } $RenameWaitSec 500
   if (-not $installed) { Stop-Merge 'index' "the rename of .git/index.lock over .git/index was refused for $RenameWaitSec s ($tries tries, last Windows error $lastError)" }
   $state.Lock = $false
   $state.Tree = $false

@@ -62,7 +62,7 @@ export const HIDDEN_GIT_WRITE = /\bgit\b[\s\S]*\b(commit|add|rm|checkout|restore
 
 /** A git segment's folder: its last `-C <path>` (relative to the segment's folder), else the segment's folder; its
  * arguments with every `-C <path>`, `-c <key=value>` and `--no-optional-locks` removed; and `isQuiet` (rev 46): it takes
- * no optional lock (`--no-optional-locks`, or an empty or false core.fsmonitor, as the desktop app's panels run git). */
+ * no optional lock (`--no-optional-locks`; MEASURED: an empty core.fsmonitor does not stop a refresh's write). */
 export type GitPlace = { dir: string; args: string[]; isQuiet: boolean }
 export const gitPlace = (seg: Seg): GitPlace => {
   let dir = seg.dir
@@ -75,10 +75,8 @@ export const gitPlace = (seg: Seg): GitPlace => {
     if (a === '-C') {
       dir = norm(seg.args[i + 1] ?? '', dir)
       i += 1
-    } else if (a === '-c') {
-      isQuiet ||= /^core\.fsmonitor=(false)?$/i.test(seg.args[i + 1] ?? '')
-      i += 1
-    } else if (a === '--no-optional-locks') isQuiet = true
+    } else if (a === '-c') i += 1
+    else if (a === '--no-optional-locks') isQuiet = true
     // rev 27 follow-up: --work-tree / --git-dir name the tree a command acts on.
     else if (a === '--work-tree' || a === '--git-dir') {
       if (a === '--work-tree') workTree = norm(seg.args[i + 1] ?? '', dir)
@@ -388,11 +386,13 @@ export const leasePushTargets = (args: string[]): string[] | null => {
 
 /** 0.16.1: verbs that only read files: a session that ran them inside the shared checkout changed nothing there. */
 const READ_VERBS = new Set(['ls', 'cat', 'rg', 'grep', 'egrep', 'find', 'head', 'tail', 'echo', 'printf', 'wc', 'pwd', 'stat', 'du', 'tree', 'which', 'where', 'type', 'less', 'more', 'get-content', 'gc', 'select-string', 'sls', 'get-childitem', 'gci', 'dir', 'get-item', 'test-path', 'resolve-path'])
-/** Rev 46 (A144): git's reads that never write the repository on their own; `status`, `describe` and `fetch` read but
- * may write (status and describe refresh the index under index.lock when they can; fetch writes refs). */
-const PLAIN_READS = new Set(['log', 'show', 'rev-parse', 'rev-list', 'ls-tree', 'cat-file', 'merge-base', 'shortlog', 'reflog', 'diff', 'ls-files', 'blame', 'grep'])
+/** Rev 46 (A144, Fable 5, MEASURED 2026-11-08 in a temp repo with stat-dirty files): git's reads that never take
+ * index.lock (objects and refs only, and `ls-files`), and those that refresh the index under it when it is free
+ * (`status`, `diff`, `describe`, with or without `-c core.fsmonitor=`; `--no-optional-locks` stops them). */
+const LOCK_FREE_READS = new Set(['log', 'show', 'rev-parse', 'rev-list', 'ls-tree', 'cat-file', 'merge-base', 'shortlog', 'reflog', 'ls-files'])
+const REFRESHING_READS = new Set(['status', 'diff', 'describe'])
 /** writtenIn's question (a git that changes no file in the tree), not gitUse's (a git that takes no index.lock). */
-const GIT_READS = new Set([...PLAIN_READS, 'status', 'describe', 'fetch'])
+const GIT_READS = new Set([...LOCK_FREE_READS, ...REFRESHING_READS, 'blame', 'grep', 'fetch'])
 /** A143: an argv of A5R's own that runs git in the shared checkout (`git -C <dir under root> …`, the shape every A5R git
  * argv has). */
 export const isSharedGitArgv = (argv: readonly string[], root: string): boolean => argv[0] === 'git' && argv[1] === '-C' && under(argv[2] ?? '', root)
@@ -401,14 +401,15 @@ export const readsShared = (seg: Seg, root: string): boolean => seg.verb === 'gi
 /** A git command's subcommand from its place, past the global flags gitPlace leaves (`--no-pager`, …); '' when none. */
 export const gitSub = (p: GitPlace): string => (p.args.find(a => !a.startsWith('-')) ?? '').toLowerCase()
 /** Rev 46 (A143, A144): what a git command does in a repository, from its place: `none` (no repository: no subcommand,
- * version, help), `read` (a plain read, or `status` when quiet, as A144 counts the desktop app's short-lived panel
- * readers: a `diff` or quiet `status` may still refresh the index opportunistically, which the 2-min age of a stale lock
- * rules out), `locks` (anything else: a write, or a read that may take index.lock). */
-export type GitUse = 'none' | 'read' | 'locks'
+ * version, help), `read` (never takes index.lock: a lock-free read, or a refreshing one with --no-optional-locks),
+ * `refresh` (takes index.lock only when it is free, to write a refresh, and gives it back when it ends), `locks` (anything
+ * else: a write, or a read not measured). */
+export type GitUse = 'none' | 'read' | 'refresh' | 'locks'
 export const gitUse = (p: GitPlace): GitUse => {
   const sub = gitSub(p)
   if (sub === '' || sub === 'version' || sub === 'help') return 'none'
-  return PLAIN_READS.has(sub) || (sub === 'status' && p.isQuiet) ? 'read' : 'locks'
+  if (LOCK_FREE_READS.has(sub) || (REFRESHING_READS.has(sub) && p.isQuiet)) return 'read'
+  return REFRESHING_READS.has(sub) ? 'refresh' : 'locks'
 }
 
 /** 0.16.1 (A82): whether a segment may change files inside `root`: a redirection or tee target there (from any folder), or
