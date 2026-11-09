@@ -1,6 +1,6 @@
 # A5R hosts: work that moves to other machines
 
-- Rev: 4
+- Rev: 5
 - Status: draft (design)
 - Area: a5r
 - Owner: HaiHuynh
@@ -76,6 +76,7 @@ Nothing is specific to one person's setup: no machine names, no task-kind fields
 - D15 (rev 1): **A5R-less hosts are first class.** Without A5R the card is built by `probe`; the lane runs a plain runner (a script the host owner or agent installs, section 5.3) that writes the job file. A host with neither adapter ops nor A5R is a declaration only (L0 labels).
 - D16 (rev 1): **Reconnect storms are the origin's problem to cap.** Adapters declare `backoff` (min 5 s, max 15 min, factor 2) and `maxReconnectsPerHour`; A5R counts failures in `Saved/A5R/hosts/<id>/link.jsonl` and pauses the host (`state: link-storm`) past the cap, with the refusal `A5R · host <id> — link failed 12 times in 10 min → fix the link (C2), then /a5r host resume <id>`. Orphan leak (C5) is checked, not assumed.
 - D17 (rev 1): **Display is conditional.** A Hosts tile appears only when a host is declared or a hand-off is open. Queue rows gain a hint `fits <label> (RAM)` only when a suggestion exists. `status.json` gains `hosts` and `handoffs` (additive, `v` stays 1 with new optional keys).
+- D23 (rev 5, S-d brief from t6): **The L2 protocol as built.** (1) The host's status writer (the card's single writer, F-b6) is the only writer of `jobs/<id>.json` besides the job tool: on its minute it answers each new `inbox/<id>.json` with `accepted` or `declined` and a code, checked in this order: the secret scan (`SECRET`), `from` in `asHost.trust` or `*` (`NO_TRUST`), `wants` all in `asHost.roles` (`NO_ROLE`), availability `yes` now (`UNAVAILABLE`), no own sync freeze (`FROZEN`), running plus accepted jobs under `capacity.maxJobs`, default 1 (`BUSY`). A write by the wrong side is refused with an A5R refusal line. (2) A job gets a session only as the host owner said: `asHost.startCommand` (argv, `{packet}`, `{id}`, no shell) is run once at accept in the coordination root (`startedBy: "startCommand"`; it must return at once, F-d1); without it the job stays `accepted`, the host's tile says `job <id> waiting → /a5r job take <id>`, the card counts it in `jobs.queued`, and the job tool's `take` picks the first idle lane under `laneRoot` (none: `→ wait for a lane, or add one (C9)`). (3) Heartbeat: section 4. (4) The origin's status writer reads `<a5rRoot>/Saved/A5R/jobs/<id>.json` of each open hand-off whose adapter has `readFile` and keeps the one copy at `Saved/A5R/hosts/<host>/jobs/<id>.json`; the effective state comes from it; `declined`, `failed`, `returned`, `lost`, `preempt` give one notice to the creating session (`by`) and one compact line (F-d4), `done` a notice only. (5) Delivery: `handoff create` checks D7 and D13, writes the hand-off, then the inbox copy at once when the adapter has `writeFile` (the tick retries a failed write); `manual`: `handoff packet`, and `/a5r handoff result <id> <ref>` writes `<id>.manual-in.json` in the job's form (`source: manual`). (6) A done job's PR goes to the hand-off (`resultPr`) and is scored by the existing after-the-fact scorer (F-d5); `merged` only when the PR is merged (read at most once per 10 min per hand-off) and the score passed or `/a5r pass <id>` was given; a failing score stays at `done` with its lines in the tile; branch and report results: `/a5r handoff merged <id>`. (7) A lane's sessions use `asHost.coordinationRoot`'s Editor holder, queue, RAM gate and sync freeze; a probe-only host whose Editor state and lock cannot be read refuses a PIE or build hand-off with `NO_EDITOR_PROTOCOL`; an adapter with neither `writeFile` nor `manual` refuses with `NO_ADAPTER_OP`. (8) Adapters `herdr` (`hc … --on <target>`; `reach.options.hc`, `deliverTo`) and `command` (`reach.options.ops.<op>` argv templates, placeholders inside one element, `{argv}` a whole element). (9) Checks C3, C7, C8, C9, C11, C12, C13 as the S-d brief gives them; C12 runs only when named (F-d3). (10) Preemption and (11) sync interplay: slice S-d part 2.
 - D18 (rev 1): **Account sharing is shown, not enforced.** The card has `account: { shared: yes|no|unknown }`, filled by the host owner or a check that compares an opaque account id hash; the Hosts tile shows "shares usage limit" when yes. A5R never reads or stores account credentials.
 
 ## Data structures
@@ -104,6 +105,7 @@ asHost: {                         // inbound: this machine when it serves others
   roles: string[],                // free-form tags, empty by default
   availability: { state: "yes"|"no", reason?: string, windows?: [{ days: string[], from: "HH:MM", to: "HH:MM", tz: string }], until?: ms },
   trust: string[],                // origin ids accepted ("*" = any)
+  startCommand?: string[],        // rev 5: argv template ({packet}, {id}), no shell; run once at accept
   ephemeral?: boolean,
   account?: { shared: "yes"|"no"|"unknown" }
 },
@@ -163,7 +165,11 @@ An A5R host's own card is written by its status writer when the content changed,
   host: string,                         // host id, or "any" before accept
   lane?: string,                        // set once the host names it
   state: "proposed"|"cancelled"|"merged",      // origin-owned states only
-  note?: string, updatedAt }
+  note?: string, updatedAt,
+  by?: { id8, lane },                   // rev 5 (F-a2): the session that created it (its claims never block it; it is told)
+  via?: "adapter"|"manual", deliveredAt?: ms,   // rev 5: L2 delivery (D21); absent on an L0 record
+  resultPr?: number, scoreLines?: string[], scoredAt?: ms,   // rev 5: decision 6
+  noop?: true }                         // rev 5: C12's no-op job
 ```
 
 ### 4. Job file (host writer): `Saved/A5R/jobs/<id>.json` on the host (or the host dir of a probe-only host through its runner)
@@ -171,11 +177,13 @@ An A5R host's own card is written by its status writer when the content changed,
 ```
 { v:1, id: <same as hand-off>, receivedAt, state: "accepted"|"declined"|"running"|"parked"|"done"|"failed"|"returned",
   reason?: string,                      // required for declined/failed/returned: a code + free text
-  lane?: string, startedAt?, heartbeatAt?: ms,   // heartbeat every 30 s while running
+  lane?: string, session?: id8, startedAt?, startedBy?: "startCommand"|"take",
+  heartbeatAt?: ms,                     // rev 5: written by the host's minute (once a minute) while the job's session is alive
   progress?: string,                    // one line
   result?: { kind, ref: string, sha?: string },   // PR url / branch+sha / report path
   preempt?: { at, reason, deadline },   // written by host availability change (D8)
-  proofRead?: { cmd: string, line: string, ok: boolean } }
+  proofRead?: { cmd: string, line: string, ok: boolean },
+  source?: "manual", updatedAt }        // rev 5: a manual host's answer pasted on the origin (`<id>.manual-in.json`)
 ```
 
 ### 5. State machine
@@ -190,7 +198,7 @@ origin: done | returned -> merged      (after acceptance on the origin: PR merge
         failed   -> proposed (a new hand-off id; the old one stays failed)
 ```
 
-The effective state is computed: if the job file exists its host state wins, except `merged`/`cancelled` (origin). No job file after `staleHandoffMin` (default 30) with a reachable host = `unanswered` (shown, not a state); a running job with heartbeat older than 3 minutes = `silent`; 15 minutes = `lost` (shown, origin may `cancel` or `return`).
+The effective state is computed: if the job file exists its host state wins, except `merged`/`cancelled` (origin). No job file after `staleHandoffMin` (default 30) with a reachable host = `unanswered` (shown, not a state); a running job with heartbeat older than 3 minutes = `silent`; 15 minutes = `lost` (shown, origin may `cancel` or `return`). Rev 5: a hand-off delivered through an adapter with no inbox copy yet is `undelivered`; a preempted job past its deadline is `lost`.
 
 ### 5.3 The plain runner (host without A5R)
 
@@ -301,6 +309,7 @@ A15 closes every slice that changes code (a review per slice, one release per sl
 ## Changelog
 
 - Rev 1 (2026-11-09): first draft of the design.
+- Rev 5 (2026-11-10, slice S-d part 1, decisions from t6's brief): D23 records decisions 1-11 (who answers the inbox and the decline order, how a job gets a session with `asHost.startCommand`, the heartbeat, the origin's copy and notices, delivery, result and merged, the lane's Editor rules, the herdr and command adapters, the checks); section 1's `asHost` gains `startCommand`; section 3 gains `by` (F-a2), `via`, `deliveredAt`, `resultPr`, `scoreLines`, `scoredAt`, `noop`; section 4's heartbeat is once a minute by the host's tick (not every 30 s), and the job gains `session`, `startedBy`, `source`, `updatedAt`; section 5 gains `undelivered`. Findings F-d1 to F-d6.
 - Rev 4 (2026-11-09, slice S-c): section 2's card gains `acceptsFrom` (asHost.trust, needed for `NO_TRUST`) and `roles` (needed for `NO_ROLE`; F-c1), `editor.holder.end` may be null, the A5R card's heartbeat and the origin's read of it; D11 records the qualifying rule (IDLE only joins a host that already qualifies, never suggests alone), the need, the pick and trust-unknown for probe cards; section 1's `hostsOptions` gains `readOnlyWaitMin` (15); section 1b: the checks' declaration sum (`declSum`) covers only reach, repo and engine, so label, owner and assumed change without dropping the level (F-c4, t6).
 - Rev 3 (2026-11-09): C2 row (F-b4, decided by t6): `sort` gets CRLF on Windows and LF on POSIX; the hash of the 256 values on both sides is the byte-clean proof; the default shell is named as a possible cause, not a certain one. Sources S2 corrected: the `b a c` -> `???` reading was a Windows `sort` artifact, not proof of stdin corruption.
 - Rev 2 (2026-11-09): review-rev1.md applied. R1: options split into `hosts` (outbound) and `asHost` (inbound), host facts read from the card; R2: state moved to `state.json` per coordination root; R3: delivery always origin to host (D21), C12 without a reverse link; R4: a job obeys the host's Editor queue (D22); R5: decided as D19 (`asHost.coordinationRoot`), no F8; R6: Slices section and A# mapped; R7: result acceptance in A7; smaller: C8 declared and cached size, `LONG` is a suggestion threshold only. F1-F7 kept as accepted.

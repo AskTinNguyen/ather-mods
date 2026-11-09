@@ -8,7 +8,8 @@ type El = { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<strin
 /** One host's row: what it says, and its dot (ok: L1 or more; warn: L0; bad: storm or invalid). */
 export type HostRow = { id: string; text: string; dot: 'ok' | 'warn' | 'bad' }
 
-export const hostsBox = (el: El, rows: readonly HostRow[], open: readonly Handoff[], now: number, look: { ink: string; quiet: string }): unknown =>
+/** `states`: each open L2 hand-off's effective state (S-d); `waiting`: this host's accepted jobs that wait for a session. */
+export const hostsBox = (el: El, rows: readonly HostRow[], open: readonly Handoff[], now: number, look: { ink: string; quiet: string }, states: ReadonlyMap<string, string> = new Map(), waiting: readonly string[] = []): unknown =>
   el.Box({
     key: 'hai-hosts',
     flexDirection: 'column',
@@ -28,6 +29,7 @@ export const hostsBox = (el: El, rows: readonly HostRow[], open: readonly Handof
           ],
         }),
       ),
-      ...(open.length ? [handoffBox(el, open, now, look)] : []),
+      ...waiting.map(w => el.Box({ key: `hai-host-wait-${w}`, children: [el.Text({ color: STATUS.warn, wrap: 'truncate-end', children: w })] })),
+      ...(open.length ? [handoffBox(el, open, now, look, states)] : []),
     ],
   })

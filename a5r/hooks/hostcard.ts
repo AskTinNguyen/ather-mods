@@ -128,8 +128,8 @@ export const lanesOf = (porcelain: string, laneRoot: string): HostCard['lanes'] 
 }
 
 /** The card an A5R host writes about itself, from local truth only (A16's card part: the coordination root's Editor holder
- * and live queue), its availability evaluated now, its roles and the origins it accepts. Jobs are slice S-d's. */
-export const a5rCard = (now: number, as: AsHost, t: LocalTruth, lanes: HostCard['lanes']): HostCard => ({
+ * and live queue), its availability evaluated now, its roles and the origins it accepts, and its jobs (S-d). */
+export const a5rCard = (now: number, as: AsHost, t: LocalTruth, lanes: HostCard['lanes'], jobs: HostCard['jobs'] = { running: 0, queued: 0 }): HostCard => ({
   v: 1,
   at: now,
   source: 'a5r',
@@ -138,7 +138,7 @@ export const a5rCard = (now: number, as: AsHost, t: LocalTruth, lanes: HostCard[
   availability: availabilityNow(as.availability, now),
   freeze: t.sync?.isFrozen ? { kind: 'sync', until: t.sync.hardEnd } : null,
   lanes,
-  jobs: { running: 0, queued: 0 },
+  jobs,
   account: as.account ?? { shared: 'unknown' },
   skew: { ms: null },
   roles: as.roles,

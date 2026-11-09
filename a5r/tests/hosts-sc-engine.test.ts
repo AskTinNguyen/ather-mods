@@ -38,6 +38,8 @@ const memIo = (files: Map<string, string>, clock: { now: number }, proc: HostIo[
     proc,
     hostOpts: {},
     log: () => undefined,
+    start: async () => null,
+  sleep: async () => undefined,
   }
 }
 const truth = (over: Partial<LocalTruth> = {}): LocalTruth => ({ os: 'windows', freeGb: 30, diskGb: 100, running: false, holder: null, queue: 0, gates: { pieGb: 38, nopieGb: 28 }, sync: null, ...over })
@@ -49,7 +51,7 @@ test('S-c (A5, A16): engine: an A5R host writes Saved/A5R/card.json from local t
   const clock = { now: NOW }
   const io = memIo(files, clock, async () => null, { 'worktree list --porcelain': WORKTREES })
   const local = { t: truth(), writer: true }
-  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => local.writer, local: () => local.t })
+  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', alive: () => true, isWriter: () => local.writer, local: () => local.t })
   const CARD = 'E:/s2/Saved/A5R/card.json'
   const cardWrites = () => io.writes.filter(p => p === CARD).length
   // No asHost, or asHost off: no card.
@@ -111,7 +113,7 @@ test('S-c (A5): engine: the origin stores the host\'s own A5R card through the a
   const io = memIo(files, clock, a5rRemote(remote))
   io.originId = 'hai-1a2b3c4d'
   const local = { t: truth({ freeGb: 12 }) } // under the 28 GB gate here
-  const d = hostsDesk({ dir: () => 'E:/proj/Saved/A5R', root: () => 'E:/proj', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => local.t })
+  const d = hostsDesk({ dir: () => 'E:/proj/Saved/A5R', root: () => 'E:/proj', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', alive: () => true, isWriter: () => true, local: () => local.t })
   expect(await d.tool(io, { action: 'add', id: 'rig', reach: 'ssh:rig', label: 'night rig', options: { a5rRoot: 'E:/s2' } })).toContain('level L1.')
   const STORED = 'E:/proj/Saved/A5R/hosts/rig/card.json'
   expect((JSON.parse(files.get(STORED) ?? '{}') as HostCard).source).toBe('probe') // the add's own card
@@ -196,7 +198,7 @@ test('S-c (A12, A16): engine: the Editor request\'s reply, status and the queued
   // A host declared and checked (its probe card from the add: 29.6 GB free, its Editor unknown, no roles): the request
   // that wants a role it lacks gets no hint; without it, the hint.
   answers.UtcNow = { stdout: `${NOW + 2 * MIN}\r\n` } // the host's clock agrees (C4)
-  expect(await cmd($, 'host add f20 --reach ssh:f20 --label "second pc"')).toContain('5 checks run; level L1.')
+  expect(await cmd($, 'host add f20 --reach ssh:f20 --label "second pc"')).toContain('6 checks run; level L1.') // S-d: C13 joins the run (F-d2)
   expect(await call($, { ...request, wants: ['ue'] })).not.toContain('fits ')
   const hint = 'fits second pc (RAM) → /a5r handoff record label="second pc" branch=<branch> task="<one line>" to run it there, or hand it off later'
   const reply = await call($, request)
@@ -230,7 +232,7 @@ test('S-c (F-c4): engine: set label, owner or assumed keeps the level; a reach c
   const files = new Map<string, string>()
   const clock = { now: NOW }
   const io = memIo(files, clock, a5rRemote({ card: null }))
-  const d = hostsDesk({ dir: () => 'E:/proj/Saved/A5R', root: () => 'E:/proj', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => truth() })
+  const d = hostsDesk({ dir: () => 'E:/proj/Saved/A5R', root: () => 'E:/proj', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', alive: () => true, isWriter: () => true, local: () => truth() })
   expect(await d.command(io, 'host add rig --reach ssh:rig --label "night rig"')).toContain('level L1.')
   for (const set of [{ label: 'the rig' }, { owner: 'team' }, { assumed: { roles: ['ue'], availability: { state: 'no', reason: 'days' } } }]) {
     expect(await d.tool(io, { action: 'set', id: 'rig', ...set })).toBe('A5R · host rig changed (no check needed).')

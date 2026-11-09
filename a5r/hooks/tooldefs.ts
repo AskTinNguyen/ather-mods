@@ -3,6 +3,7 @@
 import { FOCUS_USAGE } from './focus.ts'
 import { HANDOFF_USAGE } from './handoff.ts'
 import { HOST_USAGE } from './hosts.ts'
+import { JOB_USAGE } from './jobs.ts'
 import { EDITOR_USAGE } from './order.ts'
 import { RULE_FORM } from './syncrules.ts'
 
@@ -68,15 +69,22 @@ export const HOST_TOOL_DEF = {
     '"status": this machine\'s level and what the next level needs; "list"; "set" (id; label, owner, assumed, or reach/options, which re-checks; or asHost: this machine when it serves others); "pause" (id, reason), "resume" (id: after a link storm too), "remove" (id). Declarations go to the machine-local hosts file; checks, level and link counts to Saved/A5R/hosts/<id>/state.json (never edit those by hand). ' +
     'Hand-offs (L0): action "handoff", op "create" records that a lane runs elsewhere (label: the machine, free text; branch; base: a ref pushed to the remote, optionally sha; claims: repo-relative paths or globs, "!" exclusive, "~" shared, binary assets exclusive by default; task: one line); ' +
     '"update" (id; label, task, note, claims, or state "merged" once a result is in), "cancel" (id), "result" (id, ref: the PR, branch or report where the work landed), "list". ' +
+    'Hand-offs (L2, to a declared host): "create" with host: <host id> (and wants, needs { ramGb, minutes, pie, build, readOnly }, proof) checks the base is pushed and the host can take it (NO_ADAPTER_OP, NO_EDITOR_PROTOCOL), writes it and delivers it to the host\'s inbox; the host answers with a job (accepted, or declined with SECRET, NO_TRUST, NO_ROLE, UNAVAILABLE, FROZEN or BUSY), and its state shows in the Hosts tile; "packet" (id): the readable packet of a manual host; "result" (id, ref) pastes a manual host\'s answer; "merged" (id): a branch or report result taken (a PR merges once merged and its score passed, or /a5r pass <id>). ' +
+    'Jobs (on a host: asHost.enabled): action "job", op "list", "take" (id: picks an idle lane, the session runs it), "progress" (id, text), "done" (id, ref), "fail" or "return" (id, code, text). ' +
     'While a hand-off is open its exclusive claims refuse other sessions\' edits of those paths here and fail rule 1 at A5R acceptance unless progress.md or findings.md names the path. ' +
     '"suggest" (minutes, pie, build, readOnly, needGb, wants, waitedMin): whether a declared host fits the work better than this machine, as JSON { suggestion: "none" | { host, label, reasons }, whyNot: [{ host, codes }] }; reasons RAM, LONG, READONLY_WAIT, FREEZE (IDLE joins a host that fits); why-not codes UNCHECKED, STALE_CARD, UNAVAILABLE, FROZEN, NO_ROLE, NO_TRUST, NO_RAM. It never creates a hand-off.',
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'status', 'add', 'set', 'check', 'pause', 'resume', 'remove', 'suggest', 'handoff'] },
-      op: { type: 'string', enum: ['create', 'update', 'cancel', 'result', 'list'], description: 'handoff: what to do (default list).' },
+      action: { type: 'string', enum: ['list', 'status', 'add', 'set', 'check', 'pause', 'resume', 'remove', 'suggest', 'handoff', 'job'] },
+      op: { type: 'string', enum: ['create', 'update', 'cancel', 'result', 'list', 'packet', 'merged', 'take', 'progress', 'done', 'fail', 'return'], description: 'handoff: create, update, cancel, result, list, packet, merged (default list). job: list, take, progress, done, fail, return.' },
+      host: { type: 'string', description: 'handoff create: a declared host id (L2: delivered to that host); without one, the hand-off is an L0 record.' },
+      needs: { type: 'object', description: 'handoff create (L2): { ramGb, minutes, pie, build, readOnly }.' },
+      proof: { type: 'string', description: 'handoff create (L2): the expected proof, a command or a named gate.' },
+      text: { type: 'string', description: 'job progress: one line. job fail, return: free text after the code.' },
+      code: { type: 'string', description: 'job fail, return: a reason code (one word).' },
       id: { type: 'string', description: 'add, set, check, pause, resume, remove: the host id. handoff update, cancel, result: the hand-off id.' },
-      reach: { type: 'string', description: 'add, set: "ssh:<host or ssh alias>" or "manual".' },
+      reach: { type: 'string', description: 'add, set: "ssh:<host or ssh alias>", "herdr:<machine>", "command:<target>" or "manual". The herdr client and the command templates are the person\'s (/a5r host add … --hc <client>, --ops <json>).' },
       options: { type: 'object', description: 'add, set: reach options for ssh: { config: an ssh config file, reverse: true when the host must wake this machine, laneRoot, a5rRoot: where writes may go on the host }. The ssh client program is the person\'s choice (/a5r host add … --ssh <client>); the tool refuses it.' },
       owner: { type: 'string', description: 'add, set: who answers for the host.' },
       assumed: { type: 'object', description: 'set: for a host without A5R, { roles?, availability?: { state: yes|no, reason? } }, shown as assumed.' },
@@ -90,7 +98,7 @@ export const HOST_TOOL_DEF = {
       sha: { type: 'string', description: 'handoff create: the base commit; it must be on the remote (D7).' },
       claims: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, exclusive: { type: 'boolean' } }, required: ['path'] }] }, description: 'handoff create, update: repo-relative paths, folders or globs the lane holds.' },
       task: { type: 'string', description: 'handoff create, update: what is done there, one line.' },
-      ref: { type: 'string', description: 'handoff result: where the work landed (#PR, a PR URL, a branch, a report path).' },
+      ref: { type: 'string', description: 'handoff result, job done: where the work landed (#PR, a PR URL, a branch, a report path).' },
       state: { type: 'string', enum: ['merged'], description: 'handoff update: merged, once the result is taken.' },
       note: { type: 'string', description: 'handoff create, update: one line.' },
       minutes: { type: 'number', description: 'suggest: how long the work needs (default 30).' },
@@ -98,7 +106,7 @@ export const HOST_TOOL_DEF = {
       build: { type: 'boolean', description: 'suggest: the work builds.' },
       readOnly: { type: 'boolean', description: 'suggest: the work only reads.' },
       needGb: { type: 'number', description: 'suggest: the free RAM it needs in GB (default: the launch gate in force).' },
-      wants: { type: 'array', items: { type: 'string' }, description: 'suggest: role tags the host must have (all of them).' },
+      wants: { type: 'array', items: { type: 'string' }, description: 'suggest, handoff create (L2): role tags the host must have (all of them).' },
       waitedMin: { type: 'number', description: 'suggest: how long a read-only request has waited for the Editor here.' },
     },
     required: ['action'],
@@ -125,7 +133,8 @@ export const A5R_HELP = [
   '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
   `${EDITOR_USAGE}: the person's own order of the Editor queue and time of a turn (the panel's row controls do the same; no tool can)`,
   `${FOCUS_USAGE}: the person gives one session the Editor for a milestone (the panel's Focus… and the EDITOR line's End / +30 / +60 do the same; no tool can); the focus session ends it with the editor tool's focus_done`,
-  `${HANDOFF_USAGE}: a lane that runs on another machine (L0 record); while it is open its exclusive claims refuse edits of those paths here`,
+  `${HANDOFF_USAGE}: a lane that runs on another machine (L0 record; with host=<declared id>, an L2 hand-off delivered to it); while it is open its exclusive claims refuse edits of those paths here`,
+  `${JOB_USAGE}: on a host (asHost.enabled), the jobs other machines handed off here`,
   `${HOST_USAGE}: other machines (L1): declare one, run its health checks (C1 reach, C2 byte-clean link, C4 clock, C5 orphan helpers, C10 RAM), pause or resume it`,
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',

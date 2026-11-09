@@ -34,7 +34,7 @@ import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
 import { A5R_HELP, A5R_TOOL_ERRORS, EDITOR_TOOL_DEF, HOST_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
-import { HOST_TOOL, hostsDesk, localTruthOf, type ClaimTouch, type HostIo } from './hostdesk.ts'
+import { HOST_TOOL, coordinationFor, hostsDesk, localTruthOf, type ClaimTouch, type HostIo } from './hostdesk.ts'
 import { freezeSteps } from './freezehost.ts'
 import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
@@ -237,7 +237,7 @@ type Found = { checkout: Checkout | null; miss: string; storeDir: string }
 async function findCheckout($: Engine, givenLock: string): Promise<Found> {
   const temp = (await $.env.get('TEMP').catch(() => undefined)) || (await $.env.get('TMPDIR').catch(() => undefined)) || '/tmp'
   const storeDir = `${norm(temp)}/a5r`
-  const found = givenLock ? { tree: rootOfLock(givenLock) } : await mainTreeHere($)
+  const found = givenLock ? { tree: rootOfLock(givenLock) } : await coordinationFor(await mainTreeHere($), p => $.fs.read(p).catch(() => null), norm((await $.env.get('USERPROFILE').catch(() => undefined)) ?? '')) // a5r-hosts D19: a lane under asHost.laneRoot uses asHost.coordinationRoot
   if (typeof found === 'string' || 'failed' in found) return { checkout: null, miss: noCheckoutWhy(found), storeDir }
   const c = checkoutOf(givenLock, found.tree, await $.fs.list(found.tree).catch(() => []))
   return { checkout: c, miss: c ? '' : noCheckoutWhy({ bare: found.tree }), storeDir }
@@ -1406,7 +1406,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   const window = freeWindowOf(lock, claimNow(now)) // A91: the free window, if the Editor is free
   await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
   if (me) await nudgeStep(wakeIo($, opts), { all: [{ ...me, agents: agentsNow ?? me.agents }, ...peers], lanes, now, window, queued: liveQueueNow(now).length, freeGb: probe?.freeGb ?? null }).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
-  await hosts.tick(deskIo($, opts), now).catch(err => $.ui.log(`a5r: hosts, hand-offs: ${String(err)}`, { to: 'debug' })) // a5r-hosts S-a, S-b: for the pane and status.json
+  for (const n of await hosts.tick(deskIo($, opts), now).catch(err => ($.ui.log(`a5r: hosts, hand-offs: ${String(err)}`, { to: 'debug' }), []))) push(n) // a5r-hosts S-a … S-d: for the pane and status.json; a hand-off's transitions to the session that created it
   await turns.tick(hostIo($, opts), now).then(() => freeze.tick(hostIo($, opts), now)).catch(err => $.ui.log(`a5r: git turn, freeze steps: ${String(err)}`, { to: 'debug' })) // A128-A134
   await syncStep($, opts, now)
   await orphanStep($, opts, now).catch(err => $.ui.log(`a5r: orphan: ${String(err)}`, { to: 'debug' })) // A123
@@ -2818,8 +2818,8 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
 const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, isMerging: now => freeze.isMerging(syncFile, now) || isMergeScriptAlive(probe?.procs ?? null) === true, dir: hfDir, root: s2Root })
 const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now), isMergeScript: () => isMergeScriptAlive(probe?.procs ?? null), handoffs: () => hosts.handoffs.status(), hosts: () => hosts.status() })
 const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8), sync: now => ({ sync: syncFile, phase: phaseOf(syncFile, now) }) })
-const hosts = hostsDesk({ dir: hfDir, root: s2Root, me8: () => me8, lane: () => me?.lane ?? me8, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), isWriter: now => takerOf(now) === me8, local: now => localTruthOf({ isWindows: Boolean(places.LOCALAPPDATA), probe, holder: queueView(grantInput(now)).holder, queue: liveQueueNow(now).length, gates, sync: syncFile, phase: phaseOf(syncFile, now) }) }) // a5r-hosts S-a, S-b, S-c: hand-offs, claims, hosts and cards (local: A16, the card's Editor part)
-const deskIo = ($: Engine, opts: Opts): HostIo => ({ ...hostIo($, opts), claimGlobs: opts.claimExclusiveGlobs, originId: opts.originId, secrets: () => load($).then(a => a.cfg.secret_regex), proc: (argv, init) => $.process.run(argv, init).catch(() => null), hostOpts: opts, log: note => $.ui.log(note, { to: 'debug' }) })
+const hosts = hostsDesk({ dir: hfDir, root: s2Root, me8: () => me8, lane: () => me?.lane ?? me8, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), isWriter: now => takerOf(now) === me8, alive: isLive, local: now => localTruthOf({ isWindows: Boolean(places.LOCALAPPDATA), probe, holder: queueView(grantInput(now)).holder, queue: liveQueueNow(now).length, gates, sync: syncFile, phase: phaseOf(syncFile, now) }) }) // a5r-hosts S-a … S-d: hand-offs, claims, hosts, cards (local: A16, the card's Editor part), jobs (alive: heartbeats)
+const deskIo = ($: Engine, opts: Opts): HostIo => ({ ...hostIo($, opts), claimGlobs: opts.claimExclusiveGlobs, originId: opts.originId, secrets: () => load($).then(a => a.cfg.secret_regex), proc: (argv, init) => $.process.run(argv, init).catch(() => null), hostOpts: opts, log: note => $.ui.log(note, { to: 'debug' }), start: (argv, cwd) => $.process.run(argv, { cwd, timeoutMs: 30_000 }).catch(() => null), sleep: ms => new Promise<void>(r => void $.clock.after(ms, () => r())), scorePr: async (n, slug) => { const r = await scorePr($, opts, await load($), s2Root(), slug, { n, repo: null }); return { state: r.state, ok: r.transient ? null : failed(r.scores).length === 0 && !r.problem, lines: failed(r.scores).map(b => `${b.rule} ${ruleName(b.rule)}`) } }, takePass: async keys => (await takePass($, opts, keys)) !== null }) // a5r-hosts S-d: a job's start (it returns at once), the hand-off's PR score (decision 6)
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   now: () => $.clock.now(),
@@ -3835,7 +3835,7 @@ export const register: Register = (on, options) => {
     if (/^editor\b/i.test(e.args.trim())) return { text: await personCommand($, opts, parseEditorCommand(e.args.trim().slice(6)), e.origin, { gate: ORDER_GATE, changes: 'changes the Editor queue', usage: EDITOR_USAGE, act: a => orderAction($, opts, a, 'command') }) }
     if (/^focus\b/i.test(e.args.trim())) return { text: await personCommand($, opts, parseFocusCommand(e.args.trim().slice(5)), e.origin, { gate: FOCUS_GATE, changes: 'gives, extends or ends a Focus', usage: FOCUS_USAGE, act: async a => (await focusAction($, opts, a, 'command')).text }) }
     if (/^help\b/i.test(e.args.trim())) return { text: A5R_HELP }
-    if (/^(handoff|host)\b/i.test(e.args.trim())) return { text: await hosts.command(deskIo($, opts), e.args.trim()) } // a5r-hosts S-a, S-b
+    if (/^(handoff|host|job)\b/i.test(e.args.trim())) return { text: await hosts.command(deskIo($, opts), e.args.trim()) } // a5r-hosts S-a … S-d
     // A29: `/a5r` with no words opens the A5R pane; `/a5r status` keeps the text reply below.
     if (e.args.trim() === '') return { text: await openA5Pane($) }
     const arg = e.args.trim().toLowerCase()

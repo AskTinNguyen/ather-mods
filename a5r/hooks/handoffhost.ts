@@ -17,8 +17,6 @@ export type DeskState = { dir: () => string; root: () => string; me8: () => stri
 /** One recorded action (acts.ts Recorded, before its time and session are added). */
 export type ClaimTouch = Omit<Recorded, 'at' | 'id8' | 'lane'> & { kind: 'claim-touch' }
 
-/** Actions a later slice adds: answered, never thrown. */
-export const NOT_YET = { packet: noticeText('host', 'not in this version', 'slice S-d adds the hand-off packet') }
 type El = { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }
 
 export const handoffDesk = (h: DeskState) => {
@@ -65,7 +63,8 @@ export const handoffDesk = (h: DeskState) => {
   const find = async (io: FileIo, id: string): Promise<Handoff | null> => (await read(io)).find(x => x.id === id.trim()) ?? null
   const missing = (id: string) => noticeText(HANDOFF_GATE, `no hand-off ${id} here`, 'list them (handoff list) and name one by its id')
 
-  const record = async (io: DeskIo, f: RecordFields): Promise<string> => {
+  /** A new hand-off from the fields once they and D7's base check pass (not written yet), or the refusal. */
+  const prepare = async (io: DeskIo, f: RecordFields): Promise<Handoff | string> => {
     const globs = exclusiveGlobs(io.claimGlobs)
     const bad = fieldsProblem(f, globs)
     if (bad) return noticeText(HANDOFF_GATE, ...bad)
@@ -76,7 +75,11 @@ export const handoffDesk = (h: DeskState) => {
     const ids = new Set((await read(io)).map(x => x.id))
     let n = 1
     while (ids.has(handoffId(from, now, n))) n += 1
-    const next = newHandoff(f, { id: handoffId(from, now, n), from, by: { id8: h.me8(), lane: h.lane() }, sha: base.sha, now, globs })
+    return newHandoff(f, { id: handoffId(from, now, n), from, by: { id8: h.me8(), lane: h.lane() }, sha: base.sha, now, globs })
+  }
+  const record = async (io: DeskIo, f: RecordFields): Promise<string> => {
+    const next = await prepare(io, f)
+    if (typeof next === 'string') return next
     return (await write(io, null, next)) ?? `A5R · hand-off recorded: ${handoffLine(next)}. Its claims hold for every session here until it is cancelled or merged.`
   }
 
@@ -109,7 +112,12 @@ export const handoffDesk = (h: DeskState) => {
 
   return {
     read,
+    prepare,
+    write,
+    find,
     origin: knownOrigin,
+    /** This machine's origin id, made once when there is none yet (C12, C13). */
+    originId,
     /** The open hand-offs as last read. */
     open: (): Handoff[] => all.filter(isOpen),
     /** `/a5r handoff …` */
@@ -119,6 +127,7 @@ export const handoffDesk = (h: DeskState) => {
       if (c.op === 'list') return list(io)
       if (c.op === 'cancel') return cancel(io, c.id)
       if (c.op === 'result') return result(io, c.id, c.ref)
+      if (c.op !== 'record') return noticeText(HANDOFF_GATE, `${c.op} is for a hand-off to a declared host`, HANDOFF_USAGE)
       return record(io, c.fields)
     },
     /** The host tool's action `handoff` (create, update, cancel, result, list); hostdesk.ts routes the other actions. */
@@ -129,7 +138,7 @@ export const handoffDesk = (h: DeskState) => {
       if (op === 'cancel') return cancel(io, String(e.id ?? ''))
       if (op === 'result') return result(io, String(e.id ?? ''), String(e.ref ?? ''))
       if (op === 'update') return update(io, e)
-      if (op === 'packet') return NOT_YET.packet
+      if (op === 'packet' || op === 'merged') return noticeText(HANDOFF_GATE, `${op} is for a hand-off to a declared host`, HANDOFF_USAGE)
       return noticeText(HANDOFF_GATE, `"${op}" is not a handoff op`, 'use create, update, cancel, result or list')
     },
     /** D9 at the edit: the shared checkout's repo-relative paths an edit writes. A hand-off file written by hand, or a
@@ -155,7 +164,7 @@ export const handoffDesk = (h: DeskState) => {
 const age = (ms: number): string => (ms < 60 * 60_000 ? `${Math.max(0, Math.round(ms / 60_000))}m` : ms < 48 * 60 * 60_000 ? `${Math.round(ms / (60 * 60_000))}h` : `${Math.round(ms / (24 * 60 * 60_000))}d`)
 
 /** D17 in S-a: one compact row group on the pane, only while a hand-off is open (no tile). */
-export const handoffBox = (el: El, open: readonly Handoff[], now: number, look: { ink: string; quiet: string }): unknown =>
+export const handoffBox = (el: El, open: readonly Handoff[], now: number, look: { ink: string; quiet: string }, states: ReadonlyMap<string, string> = new Map()): unknown =>
   el.Box({
     key: 'hai-handoffs',
     flexDirection: 'column',
@@ -171,7 +180,7 @@ export const handoffBox = (el: El, open: readonly Handoff[], now: number, look: 
           columnGap: 1,
           children: [
             el.Box({ key: `hai-handoff-${x.id}-dot`, flexShrink: 0, children: [el.Text({ color: x.claims.some(c => c.exclusive) ? STATUS.warn : STATUS.ok, children: '●' })] }),
-            el.Box({ key: `hai-handoff-${x.id}-what`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [el.Text({ color: look.ink, wrap: 'truncate-end', children: `${x.host} · ${x.intent.branch ?? x.base.ref} · ${claimsText(x.claims)}` })] }),
+            el.Box({ key: `hai-handoff-${x.id}-what`, flexShrink: 1, flexGrow: 1, minWidth: 0, children: [el.Text({ color: look.ink, wrap: 'truncate-end', children: [x.host, x.intent.branch ?? x.base.ref, claimsText(x.claims), states.get(x.id)].filter(Boolean).join(' · ') })] }),
             el.Box({ key: `hai-handoff-${x.id}-age`, flexShrink: 0, children: [el.Text({ color: look.quiet, children: age(now - x.createdAt) })] }),
           ],
         }),

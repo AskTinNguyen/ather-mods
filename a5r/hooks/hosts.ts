@@ -5,16 +5,18 @@
 // host tool write (`writeHosts`). Every entry is validated on read; one the tool did not write (an option, or a file
 // entry whose sum no longer matches) is flagged `edited-by-hand`. Pure: no `$`.
 import { isObj, isStrs } from './shape.ts'
+import { opsProblems, type CommandOps } from './adapters/command.ts'
 
 /** `/a5r host …` (the command and the help line). */
-export const HOST_USAGE = '/a5r host list · status · add <id> --reach ssh:<target>|manual [--label "<text>"] [--owner <who>] [--ssh <client>] [--config <ssh config>] · check <id> [C1 C2 …] [--paste <file>] · pause <id> [reason] · resume <id> · remove <id> · suggest [--minutes N] [--pie] [--build] [--readonly] [--need-gb N] [--wants a,b] [--waited N]'
+export const HOST_USAGE = '/a5r host list · status · add <id> --reach ssh:<target>|herdr:<machine>|command:<target>|manual [--label "<text>"] [--owner <who>] [--ssh <client>] [--config <ssh config>] [--hc <client>] [--ops <json>] [--deliver-to <terminal>] [--a5r-root <path>] [--lane-root <path>] · check <id> [C1 C2 …] [--paste <file>] · pause <id> [reason] · resume <id> · remove <id> · suggest [--minutes N] [--pie] [--build] [--readonly] [--need-gb N] [--wants a,b] [--waited N]'
 export const HOST_ID = /^[a-z0-9-]{1,32}$/
 export const REACH_KINDS = ['ssh', 'herdr', 'command', 'manual'] as const
 export type ReachKind = (typeof REACH_KINDS)[number]
 export type Availability = { state: 'yes' | 'no'; reason?: string }
 /** `reach.options`: the ssh client (an ssh executable) and its config file, the host's writable roots, and whether the
- * host must wake this machine (S6). */
-export type ReachOptions = { ssh?: string; config?: string; laneRoot?: string; a5rRoot?: string; reverse?: boolean }
+ * host must wake this machine (S6). S-d: the herdr client (`hc`) and the terminal its deliver rings (`deliverTo`); the
+ * command adapter's argv templates (`ops`) and the remote OS they run on (`os`). */
+export type ReachOptions = { ssh?: string; config?: string; laneRoot?: string; a5rRoot?: string; reverse?: boolean; hc?: string; deliverTo?: string; ops?: CommandOps; os?: 'windows' | 'posix' }
 export type HostDecl = {
   label: string
   owner: string
@@ -33,6 +35,9 @@ export type AsHost = {
   roles: string[]
   availability: Availability & { windows?: Window[]; until?: number }
   trust: string[]
+  /** S-d (rev 5): how an accepted job gets a session: an argv template (`{packet}` the inbox file, `{id}` the job id), no
+   * shell; absent: the job waits for `/a5r job take <id>`. */
+  startCommand?: string[]
   ephemeral?: boolean
   account?: { shared: 'yes' | 'no' | 'unknown' }
 }
@@ -81,11 +86,17 @@ export const idProblem = (id: string): string | null => (HOST_ID.test(id) ? null
 const SSH_CLIENT = /(^|[\\/])ssh(\.exe)?$/i
 /** An ssh target: a host, an alias or user@host; never something the client would read as an option. */
 const SSH_TARGET = /^(?!-)[\w.@:[\]-]+$/
+/** The herdr client must be an hc executable. */
+const HC_CLIENT = /(^|[\\/])hc(\.exe|\.cmd)?$/i
 /** reach.options only the person's own `/a5r host add` may set: they choose what runs on this machine. */
-export const PERSON_ONLY_OPTIONS = ['ssh', 'config'] as const
+export const PERSON_ONLY_OPTIONS = ['ssh', 'config', 'hc', 'ops'] as const
+const OPTION_KEYS = ['ssh', 'config', 'laneRoot', 'a5rRoot', 'reverse', 'hc', 'deliverTo', 'ops', 'os']
 const optionsProblems = (id: string, o: Record<string, unknown>): string[] => [
-  ...Object.keys(o).filter(k => !['ssh', 'config', 'laneRoot', 'a5rRoot', 'reverse'].includes(k)).map(k => `hosts.${id}.reach.options.${k} is not an option (ssh, config, laneRoot, a5rRoot, reverse)`),
-  ...(['ssh', 'config', 'laneRoot', 'a5rRoot'] as const).filter(k => o[k] !== undefined && typeof o[k] !== 'string').map(k => `hosts.${id}.reach.options.${k} must be a path`),
+  ...Object.keys(o).filter(k => !OPTION_KEYS.includes(k)).map(k => `hosts.${id}.reach.options.${k} is not an option (${OPTION_KEYS.join(', ')})`),
+  ...(['ssh', 'config', 'laneRoot', 'a5rRoot', 'hc', 'deliverTo'] as const).filter(k => o[k] !== undefined && typeof o[k] !== 'string').map(k => `hosts.${id}.reach.options.${k} must be text`),
+  ...(typeof o.hc === 'string' && !HC_CLIENT.test(o.hc) ? [`hosts.${id}.reach.options.hc must be the herdr client (hc, hc.exe or hc.cmd)`] : []),
+  ...(o.ops !== undefined ? opsProblems(o.ops).map(p => `hosts.${id}.${p}`) : []),
+  ...(o.os !== undefined && o.os !== 'windows' && o.os !== 'posix' ? [`hosts.${id}.reach.options.os must be "windows" or "posix"`] : []),
   ...(typeof o.ssh === 'string' && !SSH_CLIENT.test(o.ssh) ? [`hosts.${id}.reach.options.ssh must be an ssh client (ssh or ssh.exe)`] : []),
   ...(o.reverse !== undefined && typeof o.reverse !== 'boolean' ? [`hosts.${id}.reach.options.reverse must be true or false`] : []),
 ]
@@ -102,7 +113,7 @@ export const declProblems = (id: string, v: unknown): string[] => {
   if (!isObj(r) || !(REACH_KINDS as readonly string[]).includes(String(r.kind))) p.push(`hosts.${id}.reach.kind must be one of ${REACH_KINDS.join(', ')}`)
   else {
     if (typeof r.target !== 'string' || (r.kind !== 'manual' && !r.target.trim())) p.push(`hosts.${id}.reach.target must name the machine for ${String(r.kind)}`)
-    else if (r.kind === 'ssh' && !SSH_TARGET.test(r.target)) p.push(`hosts.${id}.reach.target must be a host name, an ssh alias or user@host (no leading -, no spaces)`)
+    else if ((r.kind === 'ssh' || r.kind === 'herdr') && !SSH_TARGET.test(r.target)) p.push(`hosts.${id}.reach.target must be a host name, an ssh alias or user@host (no leading -, no spaces)`)
     if (r.options !== undefined) p.push(...(isObj(r.options) ? optionsProblems(id, r.options) : [`hosts.${id}.reach.options must be an object`]))
   }
   if (v.repo !== undefined && !(isObj(v.repo) && typeof v.repo.url === 'string' && (v.repo.path === undefined || typeof v.repo.path === 'string'))) p.push(`hosts.${id}.repo must be { url, path? }`)
@@ -133,6 +144,7 @@ export const asHostProblems = (v: unknown): string[] => {
   for (const k of ['coordinationRoot', 'laneRoot'] as const) if (v[k] !== undefined && typeof v[k] !== 'string') p.push(`asHost.${k} must be a path`)
   if (!isStrs(v.roles ?? [])) p.push('asHost.roles must be a list of text')
   if (!isStrs(v.trust ?? [])) p.push('asHost.trust must be a list of origin ids ("*" = any)')
+  if (v.startCommand !== undefined && !(isStrs(v.startCommand) && v.startCommand.length > 0)) p.push('asHost.startCommand must be a non-empty argv list ({packet}, {id})')
   if (v.availability !== undefined) {
     p.push(...availProblems(v.availability, 'asHost.availability'))
     const w = isObj(v.availability) ? v.availability.windows : undefined
@@ -155,6 +167,7 @@ const asHostOf = (v: Record<string, unknown>): AsHost => {
     roles: isStrs(v.roles) ? v.roles : [],
     availability: { state: a.state === 'no' ? 'no' : 'yes', ...(text(a.reason) ? { reason: text(a.reason) } : {}), ...(Array.isArray(a.windows) ? { windows: a.windows as Window[] } : {}), ...(typeof a.until === 'number' ? { until: a.until } : {}) },
     trust: isStrs(v.trust) ? v.trust : [],
+    ...(isStrs(v.startCommand) && v.startCommand.length ? { startCommand: v.startCommand } : {}),
     ...(typeof v.ephemeral === 'boolean' ? { ephemeral: v.ephemeral } : {}),
     ...(isObj(v.account) ? { account: { shared: v.account.shared as 'yes' | 'no' | 'unknown' } } : {}),
   }
@@ -225,3 +238,15 @@ export const reachOf = (text: string): HostDecl['reach'] | null => {
   return m ? { kind: m[1] as ReachKind, target: (m[2] ?? '').trim() } : null
 }
 export const reachText = (r: HostDecl['reach']): string => (r.kind === 'manual' ? 'manual' : `${r.kind}:${r.target}`)
+
+/** D19, decision 7 (S-d): the tree a session coordinates through. A session whose own main tree lies under this
+ * machine's `asHost.laneRoot` (a lane, even a separate clone) uses `asHost.coordinationRoot` (the machine-local hosts
+ * file's) for its Editor holder, queue, RAM gate and sync freeze; any other tree is its own. A lane that is a worktree of
+ * the coordination root already resolves to it (its main tree). */
+export const coordinationFor = async <T>(found: T, read: (path: string) => Promise<string | null>, home: string): Promise<T | { tree: string }> => {
+  if (!isObj(found) || typeof found.tree !== 'string' || !home) return found
+  const slash = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const as = parseHostsFile(await read(`${slash(home)}/${HOSTS_FILE}`)).asHost
+  if (!isObj(as) || asHostProblems(as).length || typeof as.laneRoot !== 'string' || typeof as.coordinationRoot !== 'string') return found
+  return slash(found.tree).toLowerCase().startsWith(`${slash(as.laneRoot).toLowerCase()}/`) ? { tree: slash(as.coordinationRoot) } : found
+}

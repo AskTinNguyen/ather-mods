@@ -117,10 +117,12 @@ test('S-b (A3, A13): engine: dependency skips, checks not in this version, and t
   // A passed C1 on file (os known) lets C4 run alone.
   const prior: Checks = { C1: { status: 'pass', checkedAt: at }, C2: { status: 'fail', value: 'x', checkedAt: at } }
   expect((await runChecks(ctx(mocked('windows', GOOD), prior, { os: { os: 'windows', shell: 'cmd' } }), ['C4'], STALE)).checks.C4?.status).toBe('pass')
-  expect(planOf([], prior, NOW, STALE)).toEqual(['C2', 'C4', 'C5', 'C10'])
-  expect(planOf([], {}, NOW, STALE)).toEqual(ALL)
-  expect(planOf([], Object.fromEntries(ALL.map(id => [id, { status: 'pass', checkedAt: at }])), NOW, STALE)).toEqual(ALL) // all passed: a fresh full run
-  expect(planOf([], { ...prior, C2: { status: 'pass', checkedAt: NOW - 8 * DAY } }, NOW, STALE)).toEqual(['C2', 'C4', 'C5', 'C10']) // stale counts as not passed
+  // S-d (F-d2): the plan goes on to C13 (C12 runs only when named, F-d3).
+  expect(planOf([], prior, NOW, STALE)).toEqual(['C2', 'C4', 'C5', 'C10', 'C13'])
+  expect(planOf([], {}, NOW, STALE)).toEqual([...ALL, 'C13'])
+  expect(planOf([], Object.fromEntries(ALL.map(id => [id, { status: 'pass', checkedAt: at }])), NOW, STALE)).toEqual(['C13']) // L1's checks passed: it resumes at C13
+  expect(planOf([], Object.fromEntries([...ALL, 'C13'].map(id => [id, { status: 'pass', checkedAt: at }])), NOW, STALE)).toEqual([...ALL, 'C13']) // all passed: a fresh full run
+  expect(planOf([], { ...prior, C2: { status: 'pass', checkedAt: NOW - 8 * DAY } }, NOW, STALE)).toEqual(['C2', 'C4', 'C5', 'C10', 'C13']) // stale counts as not passed
   expect(planOf(['C10', 'C1'], prior, NOW, STALE)).toEqual(['C1', 'C10'])
   // Scenario 7 (manual): pasted lines fill C1, C4, C10; C2 and C5 need a link.
   const pasted = pastedChecks({ os: 'windows', osText: 'Windows_NT', epochMs: NOW - 30_000, ramKb: { total: 66270000, free: 31000000 } }, NOW, NOW)
@@ -139,6 +141,8 @@ const memIo = (files: Map<string, string>, clock: { now: number }, proc: HostIo[
   proc,
   hostOpts,
   log: () => undefined,
+  start: async () => null,
+  sleep: async () => undefined,
 })
 /** An ssh client to a clean Windows host, by the remote line; `down` makes every call a link failure (255). */
 const winRemote = (state: { down: boolean; sort?: string }) => async (argv: readonly string[], init: { stdin?: string }): Promise<RunOut | null> => {
@@ -158,11 +162,11 @@ test('S-b (A17): engine: two checkouts of one machine share one state and one li
   const clock = { now: NOW }
   const remote = { down: false }
   const io = memIo(files, clock, winRemote(remote))
-  const desk = (dir: string) => hostsDesk({ dir: () => dir, root: () => dir.replace('/Saved/A5R', ''), me8: () => ME.slice(0, 8), lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => LOCAL })
+  const desk = (dir: string) => hostsDesk({ dir: () => dir, root: () => dir.replace('/Saved/A5R', ''), me8: () => ME.slice(0, 8), lane: () => 'lane', home: () => 'C:/Users/u', alive: () => true, isWriter: () => true, local: () => LOCAL })
   const a = desk('E:/s2/Saved/A5R')
   const b = desk('E:/s2-wt/Saved/A5R')
   expect(await a.tool(io, { action: 'set', asHost: AS_HOST })).toBe('A5R · asHost written (this machine when it serves others).')
-  expect(await a.command(io, 'host add f20 --reach ssh:f20 --label "second pc" --owner hai')).toContain('A5R · host f20 added (ssh:f20): 5 checks run; level L1.')
+  expect(await a.command(io, 'host add f20 --reach ssh:f20 --label "second pc" --owner hai')).toContain('A5R · host f20 added (ssh:f20): 6 checks run; level L1.') // S-d: C13 joins the run (F-d2)
   // The second checkout reads the same state (its own Saved/A5R holds none).
   expect(await b.command(io, 'host list')).toMatch(/^Hosts declared here:\n- f20 · second pc · L1 · ssh:f20 · checked 0m ago$/)
   expect([...files.keys()].filter(p => p.includes('/hosts/')).sort()).toEqual(['E:/s2/Saved/A5R/hosts/f20/card.json', 'E:/s2/Saved/A5R/hosts/f20/state.json'])
@@ -183,7 +187,7 @@ test('S-b (A4, D16): engine: 12 link failures in 10 min pause the host with the 
   const clock = { now: NOW }
   const remote = { down: false }
   const io = memIo(files, clock, winRemote(remote))
-  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => LOCAL })
+  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', alive: () => true, isWriter: () => true, local: () => LOCAL })
   await d.command(io, 'host add f20 --reach ssh:f20')
   remote.down = true
   const said: string[] = []
@@ -213,7 +217,7 @@ test('S-b review: add keeps the declaration\'s other fields; only the person cho
   const clock = { now: NOW }
   const io = memIo(files, clock, winRemote({ down: false }))
   io.originId = 'team-pc1' // the plugin option, as register.ts hands it
-  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => LOCAL })
+  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', alive: () => true, isWriter: () => true, local: () => LOCAL })
   await d.command(io, 'host add f20 --reach ssh:f20 --label "second pc"')
   expect(await d.tool(io, { action: 'set', id: 'f20', assumed: { availability: { state: 'no', reason: 'nights only' } } })).toBe('A5R · host f20 changed (no check needed).')
   await d.tool(io, { action: 'add', id: 'f20', reach: 'ssh:f20.lan' })
@@ -227,7 +231,7 @@ test('S-b review: add keeps the declaration\'s other fields; only the person cho
   // A second add with only a new label applies it (and resumes the checks).
   expect(await d.command(io, 'host add f20 --label "the rig"')).toMatch(/^A5R · host f20 changed \(ssh:f20\.lan\): /)
   expect(await d.command(io, 'host add pc3 --reach ssh:pc3 --ssh C:/tools/evil.exe')).toContain('hosts.pc3.reach.options.ssh must be an ssh client (ssh or ssh.exe)')
-  expect(await d.tool(io, { action: 'add', id: 'pc3', reach: 'ssh:pc3', options: { args: ['-o', 'ProxyCommand=x'] } })).toContain('hosts.pc3.reach.options.args is not an option (ssh, config, laneRoot, a5rRoot, reverse)')
+  expect(await d.tool(io, { action: 'add', id: 'pc3', reach: 'ssh:pc3', options: { args: ['-o', 'ProxyCommand=x'] } })).toContain('hosts.pc3.reach.options.args is not an option (ssh, config, laneRoot, a5rRoot, reverse, hc, deliverTo, ops, os)') // S-d: the herdr and command options (F-d2)
   // status.json and the tile read one availability rule (the assumption here, marked assumed).
   await d.tick(io, clock.now)
   expect(d.status()?.[0]?.availability).toEqual({ state: 'no', reason: 'nights only', assumed: true })
@@ -262,12 +266,13 @@ test('S-b (A13): engine: /a5r host add runs C1, C2, C4, C5, C10 in order, stops 
   await $.session.start(START)
   const first = await cmd($, 'host add f20 --reach ssh:f20 --label "second pc" --ssh C:/Windows/System32/OpenSSH/ssh.exe --config C:/Users/hai.huynh/.ssh/config')
   expect(first.split('\n')).toEqual([
-    'A5R · host f20 added (ssh:f20): 5 checks run; level L0.',
+    'A5R · host f20 added (ssh:f20): 6 checks run; level L0.', // S-d: C13 joins the run (F-d2)
     'C1 pass · windows (cmd), 0 ms',
     `C2 fail · sort returned "???" for "b a c": the lines did not arrive as sent (possibly a default shell that is not the plain command shell, e.g. PowerShell) → ${FIX.C2}`,
     'C4 skip · not run: C2 failed',
     'C5 skip · not run: C2 failed',
     'C10 skip · not run: C2 failed',
+    'C13 skip · not run: C2 failed',
     'Next: fix C2 (above), then /a5r host check f20: it resumes at C2.',
   ].map((l, i) => (i === 1 ? first.split('\n')[1] ?? l : l)))
   expect(first.split('\n')[1]).toMatch(/^C1 pass · windows \(cmd\), \d+ ms$/)
@@ -277,8 +282,8 @@ test('S-b (A13): engine: /a5r host add runs C1, C2, C4, C5, C10 in order, stops 
   // The default shell is fixed on the host; the second add resumes at C2 (C1 is not run again).
   answers['f20 sort'] = { stdout: 'a\r\nb\r\nc\r\n' }
   const second = await cmd($, 'host add f20')
-  expect(second.split('\n')).toEqual(['A5R · host f20: 4 checks run; level L1.', 'C2 pass · sort a b c; 256 bytes in, same hash; stdout as sent', 'C4 pass · skew +0.0 s (limit 120 s)', 'C5 pass · helpers 1, 1, 1 over 3 probe cycles', 'C10 pass · total 63.2 GB, free 29.6 GB'])
-  expect(await cmd($, 'host status')).toMatch(/^This machine: L1\. .*\nNext: L2 needs an adapter that can run or deliver jobs and C3, C7, C8, C9, C12 passing: not in this version \(slice S-d\)\.\n- f20 · second pc · L1 · ssh:f20 · checked 0m ago\n  C1 pass/)
+  expect(second.split('\n')).toEqual(['A5R · host f20: 5 checks run; level L1.', 'C2 pass · sort a b c; 256 bytes in, same hash; stdout as sent', 'C4 pass · skew +0.0 s (limit 120 s)', 'C5 pass · helpers 1, 1, 1 over 3 probe cycles', 'C10 pass · total 63.2 GB, free 29.6 GB', 'C13 skip · no card read yet'])
+  expect(await cmd($, 'host status')).toMatch(/^This machine: L1\. .*\nNext: L2 needs an adapter that can write the host inbox \(ssh, herdr or command with reach\.options\.a5rRoot\) and C3, C7, C8, C9, C12 passing: \/a5r host check <id>\.\n- f20 · second pc · L1 · ssh:f20 · checked 0m ago\n  C1 pass/)
   // The host tool answers the same; a hand edit of the state files is refused (A17: written by the tool only).
   expect(String((await $.tool.call({ tool: 'mcp__a5r__host', action: 'list' } as never)).result)).toBe('Hosts declared here:\n- f20 · second pc · L1 · ssh:f20 · checked 0m ago')
   w.put('E:/s2/.git/HEAD', 'ref: refs/heads/HaiHuynh/20261005')

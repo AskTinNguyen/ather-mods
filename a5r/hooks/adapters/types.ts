@@ -13,7 +13,10 @@ export type RemoteOs = 'windows' | 'posix'
 export type RemoteShell = 'cmd' | 'sh' | 'other'
 export type Probed = { os: RemoteOs; shell: RemoteShell }
 export type RunOut = { exitCode: number; stdout: string; stderr: string }
-export type RunInit = { cwd?: string; stdin?: string; timeoutMs?: number }
+/** `bg`: start it and come back at once (S-d: a lane's creation, a job's start); its answer carries a `handle`. */
+export type RunInit = { cwd?: string; stdin?: string; timeoutMs?: number; bg?: boolean }
+/** A background run's state, read by `status` (S-d). */
+export type RunState = { running: boolean; exitCode: number | null }
 
 /** A local process run (no shell): its result, or null when it could not start or ran past its timeout. */
 export type Proc = (argv: readonly string[], init: { stdin?: string; timeoutMs: number }) => Promise<RunOut | null>
@@ -32,8 +35,14 @@ export type Adapter = {
   writeFile?: (path: string, text: string) => Promise<OpResult<null>>
   run?: (argv: readonly string[], init?: RunInit) => Promise<OpResult<RunOut>>
   envInfo?: () => Promise<OpResult<{ os: RemoteOs; shell: RemoteShell; user: string }>>
+  /** S-d: a background run's state by the handle `run` answered with `bg` (its stdout). */
+  status?: (handle: string) => Promise<OpResult<RunState>>
+  /** S-d: ring the other side's session (optional; polling is the fallback, D6). */
+  deliver?: (message: string) => Promise<OpResult<null>>
 }
-export type OpName = 'probe' | 'readFile' | 'writeFile' | 'run' | 'envInfo'
+export type OpName = 'probe' | 'readFile' | 'writeFile' | 'run' | 'envInfo' | 'status' | 'deliver'
+/** Every op an adapter may have, in the interface's order (the contract suite and D16's guard go over them). */
+export const OP_NAMES: readonly OpName[] = ['probe', 'readFile', 'writeFile', 'run', 'envInfo', 'status', 'deliver']
 
 /** The one way ops are called: a missing op is NO_ADAPTER_OP, a throw inside one is ADAPTER_ERROR. */
 export const callOp = async <K extends OpName>(a: Adapter, op: K, ...args: Parameters<NonNullable<Adapter[K]>>): Promise<Awaited<ReturnType<NonNullable<Adapter[K]>>>> => {

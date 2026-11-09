@@ -6,7 +6,7 @@
 import { rx } from './a5r.ts'
 import { claimsOf, claimsText, type Claim } from './claims.ts'
 import type { StatusHandoff } from './syncplan.ts'
-import { isObj } from './shape.ts'
+import { isObj, textOf } from './shape.ts'
 
 export const HANDOFF_GATE = 'handoff'
 export const HANDOFFS_DIR = 'handoffs'
@@ -16,7 +16,7 @@ export const HANDOFF_STATES = ['proposed', 'cancelled', 'merged'] as const
 export type HandoffState = (typeof HANDOFF_STATES)[number]
 export const RESULT_KINDS = ['pr', 'branch', 'report'] as const
 export type ResultKind = (typeof RESULT_KINDS)[number]
-const kindOf = (v: unknown): ResultKind => RESULT_KINDS.find(k => k === v) ?? 'pr'
+export const kindOf = (v: unknown): ResultKind => RESULT_KINDS.find(k => k === v) ?? 'pr'
 
 /** prompt.md "Data structures" 3, with L0's fields: `host` is a free-text machine label (no hosts option before S-b),
  * `by` the session that recorded it (its own claim never blocks it), `result.ref` where the answer landed. */
@@ -38,10 +38,20 @@ export type Handoff = {
   lane?: string
   state: HandoffState
   note?: string
+  /** S-d (L2): how it reaches the host (`adapter`: an inbox copy written through it; `manual`: a person carries the
+   * packet); absent for an L0 record. `deliveredAt`: when the inbox copy was written (the tick retries until then). */
+  via?: 'adapter' | 'manual'
+  deliveredAt?: number
+  /** S-d: the result PR's number (decision 6), its last score's failing lines, and when GitHub was last read. */
+  resultPr?: number
+  scoreLines?: string[]
+  scoredAt?: number
+  /** C12's no-op job: the host answers it and writes done at once. */
+  noop?: boolean
   updatedAt: number
 }
 
-const text = (v: unknown): string => (typeof v === 'string' ? v : '')
+const text = textOf
 
 /** A hand-off file as read, or null when it is not one (a half-written file, another kind of JSON). */
 export const parseHandoff = (raw: string | null): Handoff | null => {
@@ -67,14 +77,34 @@ export const parseHandoff = (raw: string | null): Handoff | null => {
     wants: Array.isArray(v.wants) ? v.wants.map(String) : [],
     base: { remote: text(v.base.remote) || 'origin', ref: text(v.base.ref), sha: text(v.base.sha) },
     claims,
-    needs: {}, // S-a reads no needs; a later slice validates them
+    needs: needsOf(v.needs),
     proof: text(v.proof),
     result: { kind: kindOf(result.kind), ...(text(result.target) ? { target: text(result.target) } : {}), ...(text(result.ref) ? { ref: text(result.ref) } : {}) },
     host: text(v.host),
     ...(text(v.lane) ? { lane: text(v.lane) } : {}),
     state: text(v.state) as HandoffState,
     ...(text(v.note) ? { note: text(v.note) } : {}),
+    ...(v.via === 'adapter' || v.via === 'manual' ? { via: v.via } : {}),
+    ...(typeof v.deliveredAt === 'number' ? { deliveredAt: v.deliveredAt } : {}),
+    ...(typeof v.resultPr === 'number' ? { resultPr: v.resultPr } : {}),
+    ...(Array.isArray(v.scoreLines) ? { scoreLines: v.scoreLines.map(String) } : {}),
+    ...(typeof v.scoredAt === 'number' ? { scoredAt: v.scoredAt } : {}),
+    ...(v.noop === true ? { noop: true } : {}),
     updatedAt: v.updatedAt,
+  }
+}
+
+/** Section 3's `needs`, typed field by field (unknown keys dropped). */
+export const needsOf = (v: unknown): Handoff['needs'] => {
+  if (!isObj(v)) return {}
+  const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x >= 0 ? x : undefined)
+  const b = (x: unknown) => x === true
+  return {
+    ...(n(v.ramGb) !== undefined ? { ramGb: n(v.ramGb) } : {}),
+    ...(n(v.minutes) !== undefined ? { minutes: n(v.minutes) } : {}),
+    ...(b(v.pie) ? { pie: true } : {}),
+    ...(b(v.build) ? { build: true } : {}),
+    ...(b(v.readOnly) ? { readOnly: true } : {}),
   }
 }
 
@@ -93,7 +123,12 @@ export const handoffId = (origin: string, now: number, n: number): string => {
 }
 
 /** Where a result landed, from its ref: a PR (`#12`, a pull URL), a report (a file path), else a branch. */
-export const resultKindOf = (ref: string): ResultKind => (/^#\d+$|\/pull\/\d+/.test(ref.trim()) ? 'pr' : /\.(md|txt|json|log|html)$/i.test(ref.trim()) ? 'report' : 'branch')
+export const resultKindOf = (ref: string): ResultKind => (prNumberOf(ref) !== null ? 'pr' : /\.(md|txt|json|log|html)$/i.test(ref.trim()) ? 'report' : 'branch')
+/** A PR number from a ref (`#12`, a pull URL), or null. */
+export const prNumberOf = (ref: string): number | null => {
+  const m = /^#(\d+)$/.exec(ref.trim()) ?? /\/pull\/(\d+)/.exec(ref)
+  return m ? Number(m[1]) : null
+}
 
 /** D13: whether a text holds a secret (the rules' secret_regex). */
 export const hasSecret = (body: string, patterns: readonly string[]): boolean => patterns.some(p => rx(p).test(body))
@@ -153,15 +188,15 @@ export const words = (args: string): { pos: string[]; keys: Record<string, strin
   return { pos, keys }
 }
 
-export const HANDOFF_USAGE = '/a5r handoff record label="<machine>" branch=<branch> [base=<ref>[@<sha>]] [claims="<path>,!<exclusive>,~<shared>"] task="<one line>" · /a5r handoff list · /a5r handoff cancel <id> · /a5r handoff result <id> <ref>'
+export const HANDOFF_USAGE = '/a5r handoff record label="<machine>" branch=<branch> [base=<ref>[@<sha>]] [claims="<path>,!<exclusive>,~<shared>"] task="<one line>" · /a5r handoff list · /a5r handoff cancel <id> · /a5r handoff result <id> <ref> · /a5r handoff packet <id> · /a5r handoff merged <id>'
 
 /** `/a5r handoff …` as typed: the sub-command and its fields; null for an unknown sub-command. */
-export type HandoffCommand = { op: 'list' } | { op: 'record'; fields: RecordFields } | { op: 'cancel'; id: string } | { op: 'result'; id: string; ref: string }
+export type HandoffCommand = { op: 'list' } | { op: 'record'; fields: RecordFields } | { op: 'cancel' | 'packet' | 'merged'; id: string } | { op: 'result'; id: string; ref: string }
 export const parseHandoffCommand = (args: string): HandoffCommand | null => {
   const { pos, keys } = words(args)
   const [sub = 'list', a = '', b = ''] = pos
   if (sub === 'list') return { op: 'list' }
-  if (sub === 'cancel') return a ? { op: 'cancel', id: a } : null
+  if (sub === 'cancel' || sub === 'packet' || sub === 'merged') return a ? { op: sub, id: a } : null
   if (sub === 'result') return a && b ? { op: 'result', id: a, ref: b } : null
   if (sub !== 'record') return null
   const [base = '', sha = ''] = (keys.base ?? '').split('@')

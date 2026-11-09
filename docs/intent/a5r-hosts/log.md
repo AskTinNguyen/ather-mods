@@ -29,3 +29,7 @@ Append-only.
 ## L-7 (2026-11-09) | class: decision
 
 > t6: fix F-c4 inside S-c: the declaration sum that gates the level covers only reach, repo and engine; label, owner and assumed change without dropping the level. Add one test and mark F-c4 resolved.
+
+## L-8 (2026-11-10) | class: build | slice S-d part 1 -> rev 5
+
+> Read the brief from t6 in full and implement slice S-d exactly as it says (part 1, then part 2): L2 hand-off over inbox and job files, the job tool, the herdr and command adapters, C12 and C13, A16, scenarios 1, 2, 3 and 7 in part 1; preemption, C3, C7, C8, C9, C11, sync interplay, scenarios 4 and 6 in part 2. Decisions 1-11 given; prompt.md rev 5; work only in this worktree; f20 read-only; report each part to t6 with hc send.

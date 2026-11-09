@@ -1,6 +1,7 @@
 // a5r-hosts S-b: the `ssh` adapter. probe, readFile (1 MiB cap), writeFile (only under the host's lane root or its
 // Saved/A5R), run (argv and cwd, written for the remote's OS and passed to the ssh client as ONE argument string, 30 s
 // default timeout) and envInfo; no deliver (polling is the fallback, D6). Pure: the local process runner is a closure.
+import { DIR } from '../coord.ts'
 import type { ReachOptions } from '../hosts.ts'
 import { DEFAULT_LINK, OP_TIMEOUT_MS, READ_CAP, errOf, okOf, type Adapter, type OpResult, type Probed, type Proc, type RemoteOs, type RemoteShell, type RunInit, type RunOut } from './types.ts'
 
@@ -25,11 +26,13 @@ export const osOf = (stdout: string): { os: RemoteOs; shell: RemoteShell } | nul
   return null
 }
 
+/** writeFile's roots (prompt.md: under the host's lane root or its Saved/A5R), from reach.options. */
+export const writableRoots = (o: { laneRoot?: string; a5rRoot?: string }): string[] => [o.laneRoot ?? '', o.a5rRoot ? `${o.a5rRoot.replace(/[\\/]+$/, '')}/${DIR}` : '']
 /** Whether a host path lies under one of the writable roots (no `..`; case-insensitive on Windows). */
 export const isUnder = (path: string, roots: readonly string[], os: RemoteOs): boolean => {
   const norm = (p: string) => (os === 'windows' ? p.replace(/\\/g, '/').toLowerCase() : p).replace(/\/+$/, '')
   const p = norm(path)
-  if (p.split('/').includes('..')) return false
+  if (path.split(/[\\/]/).includes('..')) return false // `..` either way, whatever the OS
   return roots.filter(Boolean).some(r => p.startsWith(`${norm(r)}/`))
 }
 
@@ -77,7 +80,7 @@ export const sshAdapter = (target: string, o: ReachOptions, proc: Proc, known?: 
     const os = await osNow()
     if (!os.ok) return os
     const win = os.value.os === 'windows'
-    const roots = [o.laneRoot ?? '', o.a5rRoot ? `${o.a5rRoot.replace(/[\\/]+$/, '')}/Saved/A5R` : '']
+    const roots = writableRoots(o)
     if (!isUnder(path, roots, os.value.os)) return errOf('PATH_NOT_ALLOWED', `${path} is not under the host's lane root or Saved/A5R (reach.options laneRoot, a5rRoot)`)
     const ps = `[Console]::InputEncoding=[Text.Encoding]::UTF8; [IO.File]::WriteAllText('${path.replace(/'/g, "''")}', [Console]::In.ReadToEnd())`
     const r = await remote(win ? remoteLine('windows', ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps]) : `cat > ${shQuote(path)}`, { stdin: text })

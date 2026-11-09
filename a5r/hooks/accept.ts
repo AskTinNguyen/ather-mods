@@ -3,6 +3,7 @@
 // diff against origin/main, the added lines, the intent's four files, Ather's proof, the touch files) and acts on the score.
 import { basename, globMatch, proofGap, proofProblems, rx, section, type A5RConfig, type Proof } from './a5r.ts'
 import { exclusiveHits, type Claiming } from './claims.ts'
+import { prNumberOf } from './handoff.ts'
 import { heredocs, prCalls, prRefs, type PrRefsRead } from './prcmd.ts'
 
 export type RuleId = 1 | 2 | 3 | 4 | 5
@@ -138,8 +139,9 @@ export const checklistFull = (checklist: string | undefined): boolean => {
 /** A57: what `/a5r pass` names: a PR (`#123`, `123`, a pull URL) as `#123`, or an intent slug; null when neither. */
 export const passKey = (arg: string): string | null => {
   const t = arg.trim()
-  const pr = /^#?(\d+)$/.exec(t) ?? /\/pull\/(\d+)/.exec(t)
-  if (pr) return `#${pr[1]}`
+  const pr = prNumberOf(t) ?? (/^\d+$/.test(t) ? Number(t) : null)
+  if (pr !== null) return `#${pr}`
+  if (/^[0-9a-z]{1,8}-\d{10}-\d+$/i.test(t)) return t.toLowerCase() // a5r-hosts S-d: a hand-off id (decision 6)
   return /^[\w.-]+$/.test(t) && !/^\d/.test(t) ? t.toLowerCase() : null
 }
 

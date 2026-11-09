@@ -6,9 +6,15 @@
 import { callOp, type Adapter, type Proc, type RemoteOs, type RemoteShell } from './adapters/types.ts'
 import type { Pasted } from './adapters/manual.ts'
 import { CHECK_IDS, passed, type CheckId, type CheckResult, type Checks } from './hoststate.ts'
+import { c12, c13, type L2Ctx } from './l2checks.ts'
 
 /** The checks this version runs; the rest answer NOT_YET. */
-export const BUILT: readonly CheckId[] = ['C1', 'C2', 'C4', 'C5', 'C10']
+/** L1's checks (S-b): a manual host's pasted lines fill them. */
+export const L1_CHECKS: readonly CheckId[] = ['C1', 'C2', 'C4', 'C5', 'C10']
+export const BUILT: readonly CheckId[] = [...L1_CHECKS, 'C12', 'C13']
+/** The checks a run with none named takes (A13's resume): C12 waits up to C12_WAIT_MS for the host's minute, so it runs
+ * only when named (`/a5r host check <id> C12`; F-d3). */
+export const AUTO: readonly CheckId[] = BUILT.filter(id => id !== 'C12')
 export const NOT_YET = 'not in this version'
 
 /** The fix line of each check (prompt.md's table), shown with a failure. */
@@ -47,6 +53,8 @@ export type CheckCtx = {
   os?: { os: RemoteOs; shell: RemoteShell }
   /** `reach.options.reverse`: the host must wake the origin (S6); not testable without deliver, so it only lowers deliver. */
   reverse?: boolean
+  /** S-d: what C12 and C13 read (absent: they skip). */
+  l2?: L2Ctx
 }
 export type RunReport = { checks: Checks; ran: CheckId[]; failed: CheckId | null; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram }
 type One = { status: CheckResult['status']; value: string; ms?: number; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram }
@@ -132,11 +140,22 @@ const c10 = async (x: CheckCtx, os: RemoteOs): Promise<One> => {
   return { status: 'pass', value: `total ${ram.totalGb} GB, free ${ram.freeGb ?? 'unknown'} GB`, ram }
 }
 
+/** The checks this version runs after C1 (which reads the OS), by id. */
+const noL2: One = { status: 'skip', value: 'no host context for the L2 checks' }
+const RUN = {
+  C2: c2,
+  C4: c4,
+  C5: c5,
+  C10: c10,
+  C12: async (x: CheckCtx): Promise<One> => (x.l2 ? c12(x.adapter, x.l2, x.now) : noL2),
+  C13: async (x: CheckCtx): Promise<One> => (x.l2 ? c13(x.l2) : noL2),
+} satisfies Partial<Record<CheckId, (x: CheckCtx, os: RemoteOs) => Promise<One>>>
+
 /** Which checks a run takes: the named ones, or (none named) from the first built check not standing as passed (A13). */
 export const planOf = (named: readonly CheckId[], prior: Checks, now: number, staleMs: number): CheckId[] => {
   if (named.length) return CHECK_IDS.filter(id => named.includes(id))
-  const from = BUILT.findIndex(id => !passed(prior, id, now, staleMs))
-  return from < 0 ? [...BUILT] : BUILT.slice(from)
+  const from = AUTO.findIndex(id => !passed(prior, id, now, staleMs))
+  return from < 0 ? [...AUTO] : AUTO.slice(from)
 }
 
 /** Runs the planned checks in order through the adapter: the first failure stops the run; a check whose C1 has not
@@ -163,7 +182,7 @@ export const runChecks = async (x: CheckCtx, plan: readonly CheckId[], staleMs: 
       set({ status: 'skip', value: 'needs C1' })
       continue
     }
-    const o = id === 'C1' ? await c1(x) : id === 'C2' ? await c2(x, os!.os) : id === 'C4' ? await c4(x, os!.os) : id === 'C5' ? await c5(x, os!.os) : await c10(x, os!.os)
+    const o = id === 'C1' ? await c1(x) : await RUN[id as keyof typeof RUN](x, os!.os)
     if (o.os) os = o.os
     if (o.ram) ram = o.ram
     set(o)
@@ -186,7 +205,7 @@ export const pastedChecks = (p: Pasted, now: number, pastedAt: number): RunRepor
     C10: ram ? r('pass', `total ${ram.totalGb} GB, free ${ram.freeGb ?? 'unknown'} GB (pasted)`) : r('fail', 'no a5r-ram line in the pasted file'),
   }
   const failed = (['C1', 'C4', 'C10'] as const).find(id => checks[id]?.status === 'fail') ?? null
-  return { checks, ran: [...BUILT], failed, ...(p.os ? { os: { os: p.os, shell: p.os === 'windows' ? ('cmd' as const) : ('sh' as const) } } : {}), ...(ram ? { ram } : {}) }
+  return { checks, ran: [...L1_CHECKS], failed, ...(p.os ? { os: { os: p.os, shell: p.os === 'windows' ? ('cmd' as const) : ('sh' as const) } } : {}), ...(ram ? { ram } : {}) }
 }
 
 /** One check as a line: `C2 fail · <value> → <fix>` (the fix only with a failure). */

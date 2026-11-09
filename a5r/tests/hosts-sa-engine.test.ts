@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession } from '../hooks/coord.ts'
-import { parseHandoff, type Handoff } from '../hooks/handoff.ts'
+import { HANDOFF_USAGE, parseHandoff, type Handoff } from '../hooks/handoff.ts'
 import { HOST_USAGE } from '../hooks/hosts.ts'
 import { A5RPANE, ME, NOW, PROJ, find, keys, opts, refused, still, text, world, type Rec } from './world.ts'
 
@@ -74,7 +74,7 @@ test('S-a: the host tool: handoff create/update/result/list/cancel; any other ac
   expect(out(await $.tool.call({ tool: HOST, action: 'status' } as never))).toContain('This machine: L0.')
   expect(out(await $.tool.call({ tool: HOST, action: 'add' } as never))).toBe(`A5R · host — host id "" must be 1-32 of a-z, 0-9 and - → ${HOST_USAGE}`)
   expect(JSON.parse(out(await $.tool.call({ tool: HOST, action: 'suggest' } as never)))).toEqual({ suggestion: 'none', whyNot: [] })
-  expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'packet' } as never))).toBe('A5R · host — not in this version → slice S-d adds the hand-off packet')
+  expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'packet' } as never))).toBe(`A5R · handoff — packet is for a hand-off to a declared host → ${HANDOFF_USAGE}`) // S-d answers it (F-d2)
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'creat' } as never))).toBe('A5R · handoff — "creat" is not a handoff op → use create, update, cancel, result or list')
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'list' } as never))).toContain('No hand-offs here.')
   const made = out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'create', label: 'rig', branch: 'intent/tail-vfx', claims: ['Content/S2/Tail/M_Glow.uasset', { path: 'Source/S2/Tail/', exclusive: true }], task: 'bake' } as never))

@@ -111,3 +111,39 @@ Raised while building slice S-a (2026-11-09). None blocks S-a; each names what i
 - A host whose link is paused or storming (D16) counts as `UNAVAILABLE` while its stored card is still fresh.
 - `READONLY_WAIT` reads the request's live wait (A125, `liveWaitMin`), as the rest of a5r does.
 - The origin reads a host's A5R card every minute when it declares `reach.options.a5rRoot` (on Windows two short ssh calls: the size, then the file); it writes its copy only when it changed. Without `a5rRoot` the probe card is refreshed only when stale, as in S-b.
+
+## F-d1: the engine has no detached start, so `asHost.startCommand` must return at once
+
+- What: decision 2 says the host tick starts an accepted job "once, detached". The engine's `$.process.run` waits for the command to exit (30 s here) and `$.process.spawn` ends the child with the loop or the module, so a5r cannot leave a process running by itself.
+- Taken: the tick runs `startCommand` once through `$.process.run` in the coordination root (30 s), records `startedBy: "startCommand"` and the start's result in `progress` whatever it said (a failing command is not run every minute). The command must detach itself, e.g. `hc run --bg --outlive-parent …` (README says so).
+- Proposal: keep it; a detached start in the engine would let a5r start a plain command.
+
+## F-d2: assertions changed by S-d part 1 (none removed)
+
+- `a5r/tests/hosts-sa-engine.test.ts` (`S-a: the host tool: …`): `op: "packet"` answered `A5R · host — not in this version → slice S-d adds the hand-off packet`; S-d answers it, so the test expects `A5R · handoff — packet is for a hand-off to a declared host → <HANDOFF_USAGE>` (an L0 record has no packet).
+- `a5r/tests/hosts-sb-engine.test.ts`: `planOf` now goes on to C13 (`['C2', 'C4', 'C5', 'C10', 'C13']`, a new row for "L1's checks passed: it resumes at C13"); `host add` reports `6 checks run` with a `C13 …` line (skip without a card, or `not run: C2 failed`); the second add `5 checks run` ending with `C13 skip · no card read yet`; the options list in the unknown-option problem names `hc, deliverTo, ops, os`; the L1 status's next step names the inbox adapters instead of "not in this version (slice S-d)".
+- `a5r/tests/hosts-sc-engine.test.ts` (`S-c (A12, A16)`): `6 checks run; level L1.` (C13 joins the run).
+- The S-b and S-c desk fixtures gained the new closures (`alive`, `start`, `sleep`), as S-c did with `local`.
+
+## F-d3: C12 runs only when named
+
+- What: C12 waits for the host's minute to answer (up to 150 s). Run inside `host add` (A13's C1-C13 in order), every add of an L2 host would block the tool call for up to 2.5 min, and the engine tests' simulated clock never fires the wait.
+- Taken: the resume plan (`AUTO` in `a5r/hooks/hostchecks.ts`) is every built check except C12; `/a5r host check <id> C12` runs it (and its result counts for L2). README says so.
+- Proposal: keep it, or make C12 two-phase (send now, read the answer at the next `check`).
+
+## F-d4: no compact line for a hand-off that needs a person (part 1)
+
+- What: decision 4 asks for one compact line on `declined`, `failed`, `returned`, `lost`, `preempt`. The compact line's parts are drawn in `register.ts`, which is over 1,000 lines and may not grow.
+- Taken in part 1: the notice goes to the session that created the hand-off once per transition, as an actionable notice (it wakes an idle session; `done` is not actionable), and the Hosts tile shows the effective state with its flag.
+- Proposal: part 2 moves the compact line's part list into a module of its own (so register.ts shrinks) and adds the hand-off part there; or Hải accepts notice + tile as enough.
+
+## F-d5: the hand-off's PR is scored by the existing scorer, called directly
+
+- What: decision 6 says the after-the-fact scorer scores the result PR "the way it scores an intent's `- PR:` line". That loop (`postHoc` in register.ts) reads only the tracked intent's PR lines and only at the end of its checklist, and writes the card's acceptance section.
+- Taken: the origin's minute calls the same per-PR scorer (`scorePr`, which also reads the PR's GitHub state) through the desk's io, at most once per 10 min per hand-off; `/a5r pass <hand-off id>` (passKey now takes a hand-off id) or `/a5r pass #<PR>` lets a failing score merge. The score is not shown in the acceptance card's section; its failing rules show on the hand-off's row.
+
+## F-d6: A16 in part 1, what was already there and what was added
+
+- Already there (read in `a5r/hooks/register.ts` `findCheckout` and `a5r/hooks/machine.ts`): a session in a lane that is a git worktree of the coordination root finds the main tree, so its Editor holder, queue, RAM gate and sync freeze are already the coordination root's (D19). The card's queue part came in S-c.
+- Added: a session whose own tree lies under `asHost.laneRoot` (a separate clone too) coordinates through `asHost.coordinationRoot` (`coordinationFor` in `a5r/hooks/hosts.ts`, read from the machine-local hosts file; the plugin option's `asHost` is not read there, because `findCheckout` runs before the options are parsed). NO_EDITOR_PROTOCOL at create (decision 7). A job's Editor request is an ordinary request in that queue, so "two Editors on one machine never run at once" is the existing lock.
+- Left for part 2: C10's "two declared coordination roots fail" (one machine-local hosts file holds one `asHost`; only an option `asHost` in another checkout could differ).

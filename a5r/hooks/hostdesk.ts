@@ -2,11 +2,17 @@
 // per call, as handoffhost.ts does). One action table serves the host tool and `/a5r host …` (handoff goes on to the
 // hand-off desk); D16's guard around every adapter op; the minute tick's cards (an A5R host's own, the hosts' copies);
 // suggest and its hint; status.json's `hosts`; the Hosts tile's rows.
-import { CUTOFF_MS, DIR, isOpenPhase, noticeText, unrealPids, type Phase, type Probe, type SessionFile, type SyncFile } from './coord.ts'
+import { CUTOFF_MS, DIR, isOpenPhase, noticeText, unrealPids, type Phase, type Notice, type Probe, type SessionFile, type SyncFile } from './coord.ts'
 import { manualAdapter, manualPacket, parsePaste } from './adapters/manual.ts'
+import { commandAdapter } from './adapters/command.ts'
+import { herdrAdapter } from './adapters/herdr.ts'
 import { sshAdapter } from './adapters/ssh.ts'
-import { DEFAULT_LINK, LINK_CODES, errOf, type Adapter, type OpResult, type Proc } from './adapters/types.ts'
+import { LINK_CODES, OP_NAMES, errOf, type Adapter, type OpResult, type Proc } from './adapters/types.ts'
+import { HANDOFF_GATE, fieldsOf, needsOf, parseHandoffCommand, words, type Handoff } from './handoff.ts'
 import { HOST_TOOL, handoffDesk, type DeskIo, type DeskState } from './handoffhost.ts'
+import { handoffLink, packetText, type LinkHost, type LinkIo } from './handofflink.ts'
+import { jobsDesk, type JobIo } from './jobdesk.ts'
+import { INBOX_DIR, JOBS_DIR, JOB_GATE, JOB_USAGE, jobCounts } from './jobs.ts'
 import { hostsBox, type HostRow } from './hostbox.ts'
 import { a5rCard, editorRunning, isStale, lanesOf, parseCard, probeCard, sameCard, type HostCard, type LocalTruth } from './hostcard.ts'
 import { BUILT, checkLine, pastedChecks, planOf, ramOf, runChecks, type RunReport } from './hostchecks.ts'
@@ -19,12 +25,14 @@ import { liveWaitMin } from './truth.ts'
 import type { StatusHost } from './syncplan.ts'
 
 export { HOST_TOOL }
+/** register.ts's checkout finder (D19); re-exported so register.ts keeps one import line (it may not grow). */
+export { coordinationFor } from './hosts.ts'
 export type { ClaimTouch, DeskIo } from './handoffhost.ts'
 /** A call's io for hosts: the hand-off io, the local process runner (with stdin), the plugin's host options, a debug log. */
-export type HostIo = DeskIo & { proc: Proc; hostOpts: HostOptionText; log: (note: string) => void }
+export type HostIo = DeskIo & LinkIo & Pick<JobIo, 'start'> & { proc: Proc; hostOpts: HostOptionText; log: (note: string) => void; sleep: (ms: number) => Promise<void> }
 /** This session's facts: the hand-off desk's, the home folder, whether this session writes the shared files now, and
  * this machine's local truth (S-c: its card as a host, and suggest's local side). */
-export type HostDeskState = DeskState & { home: () => string; isWriter: (now: number) => boolean; local: (now: number) => LocalTruth }
+export type HostDeskState = DeskState & { home: () => string; isWriter: (now: number) => boolean; local: (now: number) => LocalTruth; alive: (id8: string, now: number) => boolean }
 /** An A5R host's own card, beside its Saved/A5R files (prompt.md section 2). */
 export const CARD_FILE = 'card.json'
 /** register.ts's facts as the desk's local truth: the shared probe (free RAM and disk, an Unreal Editor running), the
@@ -80,7 +88,15 @@ export const commandInput = (args: string): HostInput => {
     else pos.push(t)
   }
   const [action = 'list', id = '', ...rest] = pos
-  return inputOf({ action, id, reach: f.reach, label: f.label, owner: f.owner, options: { ...(f.ssh ? { ssh: f.ssh } : {}), ...(f.config ? { config: f.config } : {}) }, checks: rest, paste: f.paste, reason: rest.join(' '), minutes: f.minutes, pie: f.pie, build: f.build, readOnly: f.readonly, needGb: f['need-gb'], wants: f.wants, waitedMin: f.waited }, true)
+  const ops = (() => {
+    try {
+      return f.ops ? (JSON.parse(f.ops) as unknown) : undefined
+    } catch {
+      return f.ops // not JSON: the declaration's check names it
+    }
+  })()
+  const options = { ssh: f.ssh, config: f.config, hc: f.hc, ops, deliverTo: f['deliver-to'], a5rRoot: f['a5r-root'], laneRoot: f['lane-root'] }
+  return inputOf({ action, id, reach: f.reach, label: f.label, owner: f.owner, options: Object.fromEntries(Object.entries(options).filter(([, v]) => v !== undefined)), checks: rest, paste: f.paste, reason: rest.join(' '), minutes: f.minutes, pie: f.pie, build: f.build, readOnly: f.readonly, needGb: f['need-gb'], wants: f.wants, waitedMin: f.waited }, true)
 }
 
 /** One host as last read: its declaration, state, link lines, card and adapter (D16's guard around it). */
@@ -88,11 +104,14 @@ type Seen = { entry: HostEntry; state: HostState; link: LinkLine[]; card: HostCa
 
 export const hostsDesk = (h: HostDeskState) => {
   const handoffs = handoffDesk(h)
+  const jobs = jobsDesk({ coord: () => coord(), coordRoot: () => coordRoot(), me8: h.me8 })
+  const link = handoffLink({ dir: h.dir, coord: () => coord(), me8: h.me8 }, handoffs)
   let declared: Declared | null = null
   let seen: Seen[] = []
   let probing = false
   let originId: string | null = null // this machine's origin id as last read (suggest's NO_TRUST)
   let tickAt = 0 // the last minute's time, for status.json (written by the freeze steps after the tick)
+  let states = new Map<string, string>() // S-d: each open L2 hand-off's effective state, as the last minute read it
   const filePath = () => `${h.home().replace(/[\\/]+$/, '')}/${HOSTS_FILE}`
   /** D19: the coordination root's Saved/A5R (asHost.coordinationRoot, else this checkout's). */
   const coordRoot = () => (declared?.asHost?.coordinationRoot ?? h.root()).replace(/[\\/]+$/, '')
@@ -130,12 +149,16 @@ export const hostsDesk = (h: HostDeskState) => {
         if (storm) await writeState(io, s, stormed(s.state, storm))
         return r
       })
-    return { ...a, probe: wrap('probe', a.probe), readFile: wrap('readFile', a.readFile), writeFile: wrap('writeFile', a.writeFile), run: wrap('run', a.run), envInfo: wrap('envInfo', a.envInfo) }
+    const out: Adapter = { ...a }
+    for (const op of OP_NAMES) Object.assign(out, { [op]: wrap(op, a[op] as ((...xs: unknown[]) => Promise<OpResult<unknown>>) | undefined) })
+    return out
   }
   const rawAdapter = (io: HostIo, entry: HostEntry, st: HostState): Adapter => {
     const r = entry.decl?.reach
     if (r?.kind === 'ssh') return sshAdapter(r.target, r.options ?? {}, io.proc, st.os)
-    return r && r.kind !== 'manual' ? { kind: r.kind, link: DEFAULT_LINK, helpers: () => null } : manualAdapter() // herdr, command: slice S-d
+    if (r?.kind === 'herdr') return herdrAdapter(r.target, r.options ?? {}, io.proc, st.os)
+    if (r?.kind === 'command') return commandAdapter(r.target, r.options ?? {}, io.proc)
+    return manualAdapter()
   }
 
   const readAll = async (io: HostIo): Promise<Seen[]> => {
@@ -183,7 +206,9 @@ export const hostsDesk = (h: HostDeskState) => {
       return report(s, rep, `A5R · host ${s.entry.id}: pasted lines read; level L${(await save(io, s, rep)).level}.`)
     }
     if (s.entry.decl.reach.kind === 'manual') return `A5R · host ${s.entry.id} is manual: nothing runs from here.\n${manualPacket(s.entry.id, s.entry.decl.label)}`
-    const rep = await runChecks({ adapter: s.adapter, local: io.proc, now: io.now, prior: s.state.checks, ...(s.state.os ? { os: s.state.os } : {}), reverse: s.entry.decl.reach.options?.reverse === true }, planOf(x.checks, s.state.checks, now, staleMs()), staleMs())
+    const a5rRoot = s.entry.decl.reach.options?.a5rRoot
+    const l2 = { hostId: s.entry.id, ...(a5rRoot ? { a5rRoot } : {}), originId: await handoffs.originId(io), card: s.card, sleep: io.sleep }
+    const rep = await runChecks({ adapter: s.adapter, local: io.proc, now: io.now, prior: s.state.checks, ...(s.state.os ? { os: s.state.os } : {}), reverse: s.entry.decl.reach.options?.reverse === true, l2 }, planOf(x.checks, s.state.checks, now, staleMs()), staleMs())
     const st = await save(io, s, rep)
     const after = phaseOf(s, await io.now())
     return [report(s, rep, `A5R · host ${s.entry.id}: ${rep.ran.length} check${rep.ran.length === 1 ? '' : 's'} run; level L${st.level}.`), ...(after.kind === 'storm' ? [after.text] : [])].join('\n')
@@ -282,7 +307,7 @@ export const hostsDesk = (h: HostDeskState) => {
     const level = Math.max(0, ...xs.map(s => levelFor(s.state, s.entry.decl, now)))
     const next =
       level > 0
-        ? 'L2 needs an adapter that can run or deliver jobs and C3, C7, C8, C9, C12 passing: not in this version (slice S-d).'
+        ? 'L2 needs an adapter that can write the host inbox (ssh, herdr or command with reach.options.a5rRoot) and C3, C7, C8, C9, C12 passing: /a5r host check <id>.'
         : xs.some(s => s.entry.decl?.reach.kind === 'ssh')
           ? 'L1 needs a host whose C1 and C2 pass: run /a5r host check <id> and fix the first failure it names.'
           : 'L1 needs a declared host with a probe-capable adapter whose C1 and C2 pass: /a5r host add <id> --reach ssh:<target>.'
@@ -340,7 +365,7 @@ export const hostsDesk = (h: HostDeskState) => {
     const prev = parseCard(await io.read(path))
     const listed = as.laneRoot ? await io.run(['git', '-C', coordRoot(), 'worktree', 'list', '--porcelain'], 30_000) : null
     const lanes = !as.laneRoot ? [] : listed?.exitCode === 0 ? lanesOf(listed.stdout, as.laneRoot) : (prev?.lanes ?? []) // unread (a sync's merge): as before
-    const card = a5rCard(now, as, h.local(now), lanes)
+    const card = a5rCard(now, as, h.local(now), lanes, jobCounts(await jobs.read(io)))
     if (prev && sameCard(prev, card) && now - prev.at < opts().staleCardMin * 30_000) return
     await io.write(path, JSON.stringify(card))
   }
@@ -354,6 +379,69 @@ export const hostsDesk = (h: HostDeskState) => {
     return { holder: t.holder, local, hosts }
   }
   type View = ReturnType<typeof viewNow>
+  /** The declared hosts as the hand-off link sees them. */
+  const linkHosts = (): LinkHost[] =>
+    seen.flatMap(s => {
+      const d = s.entry.decl
+      if (!d) return []
+      const a5rRoot = d.reach.options?.a5rRoot
+      return [{ id: s.entry.id, label: d.label, manual: d.reach.kind === 'manual', ...(a5rRoot ? { a5rRoot } : {}), ...(d.repo?.path ?? a5rRoot ? { lockRoot: d.repo?.path ?? a5rRoot } : {}), adapter: s.adapter, card: s.card }]
+    })
+  /** This machine as a host now (decision 1's facts): its asHost, own freeze, lanes (its card's) and session liveness. */
+  const hostNow = async (io: HostIo, as: AsHost, now: number) => {
+    const card = parseCard(await io.read(`${coord()}/${CARD_FILE}`))
+    return { asHost: as, now, frozen: Boolean(h.local(now).sync?.isFrozen), lanes: card?.lanes ?? [], alive: (id8: string) => h.alive(id8, now) }
+  }
+  const lists = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === 'string' ? v.split(',').map(x => x.trim()) : []).filter(Boolean)
+  /** A hand-off to a declared host (L2): the plain record's checks (fields, D7), then the host's own (decision 7). */
+  const toHost = async (io: HostIo, x: LinkHost, e: Record<string, unknown>): Promise<string> => {
+    const prepared = await handoffs.prepare(io, fieldsOf({ ...e, label: x.label }))
+    if (typeof prepared === 'string') return prepared
+    const ho: Handoff = { ...prepared, host: x.id, wants: lists(e.wants), needs: needsOf(e.needs), proof: typeof e.proof === 'string' ? e.proof : '' }
+    return link.create(io, ho, x)
+  }
+  /** The hand-off actions an L2 hand-off adds, each answered whole: create with an explicit `host` (a declared one),
+   * packet, merged, and a manual hand-off's result. null: the plain desk answers (an L0 record, its result, the rest). */
+  const l2 = async (io: HostIo, op: string, id: string, e: Record<string, unknown>): Promise<string | null> => {
+    if (op === 'create') {
+      if (typeof e.host !== 'string' || !e.host) return null
+      await readAll(io)
+      const x = linkHosts().find(s => s.id === e.host)
+      return x ? toHost(io, x, e) : missing(e.host)
+    }
+    if (op !== 'packet' && op !== 'merged' && op !== 'result') return null
+    const ho = await handoffs.find(io, id)
+    if (!ho?.via) return null
+    if (op === 'merged') return link.merged(io, ho)
+    if (op === 'result' && ho.via === 'manual' && !String(e.ref ?? '').trim()) return noticeText(HANDOFF_GATE, 'a result names where the work landed', `/a5r handoff result ${ho.id} <PR url | #N | branch | report path>`)
+    if (op === 'result') return ho.via === 'manual' ? link.pasteResult(io, ho, String(e.ref).trim()) : null
+    if (ho.via !== 'manual') return noticeText(HANDOFF_GATE, `hand-off ${ho.id} was delivered through its adapter`, 'a packet is for a manual host')
+    await readAll(io)
+    return packetText(ho, linkHosts().find(s => s.id === ho.host)?.label ?? ho.host)
+  }
+  /** `/a5r handoff …` with an L2 hand-off's actions first: `record host=<id>` is the tool's create to that host; the
+   * command's needs are typed here (its words are text). */
+  const handoffCommand = async (io: HostIo, args: string): Promise<string> => {
+    const c = parseHandoffCommand(args)
+    const { keys } = words(args)
+    const flag = (k: string) => keys[k] === 'true'
+    const needs = { ...(numOf(keys.ramgb) !== undefined ? { ramGb: numOf(keys.ramgb) } : {}), ...(numOf(keys.minutes) !== undefined ? { minutes: numOf(keys.minutes) } : {}), pie: flag('pie'), build: flag('build'), readOnly: flag('readonly') }
+    const e: Record<string, unknown> = c?.op === 'record' ? { ...c.fields, op: 'create', host: keys.host, wants: keys.wants, needs, proof: keys.proof } : c?.op === 'result' ? { ref: c.ref } : {}
+    const said = c ? await l2(io, c.op === 'record' ? 'create' : c.op, 'id' in c ? c.id : '', e) : null
+    return said ?? handoffs.command(io, args)
+  }
+  /** The job tool and `/a5r job …` (host side). */
+  const jobAct = async (io: HostIo, e: { op: string; id: string; text: string; ref: string; code: string }): Promise<string> => {
+    await readAll(io)
+    const as = declared?.asHost
+    if (!as?.enabled) return noticeText(JOB_GATE, 'this machine serves no one (asHost is not enabled)', 'jobs live on a host: /a5r host set --asHost …')
+    return jobs.act(io, await hostNow(io, as, await io.now()), e)
+  }
+  const jobInput = (args: string) => {
+    const { pos } = words(args)
+    const [op = 'list', id = '', ...rest] = pos
+    return { op, id, text: rest.join(' '), ref: rest[0] ?? '', code: rest[0] ?? '', ...(op === 'fail' || op === 'return' ? { text: rest.slice(1).join(' ') } : {}) }
+  }
   /** The hint is on (the option) and has a host to name: checked before suggest's view is read. */
   const isSuggesting = (): boolean => opts().suggest && seen.some(s => s.entry.decl)
   /** READONLY_WAIT's "the Editor is held by another session" (than `id8`). */
@@ -388,21 +476,29 @@ export const hostsDesk = (h: HostDeskState) => {
   return {
     handoffs,
     /** The minute: the hand-offs and the hosts read for the pane and status.json; stale probe cards refreshed. */
-    tick: async (io: HostIo, now: number): Promise<void> => {
+    tick: async (io: HostIo, now: number): Promise<Notice[]> => {
       tickAt = now
       await handoffs.read(io)
       const xs = await readAll(io)
       originId = await handoffs.origin(io)
       const as = declared?.asHost
-      if (as?.enabled && h.isWriter(now)) await publish(io, as, now).catch(err => io.log(`a5r: host card: ${String(err)}`))
-      if (probing || !xs.length || !h.isWriter(now)) return
+      if (as?.enabled && h.isWriter(now)) {
+        await jobs.tick(io, await hostNow(io, as, now)).catch(err => io.log(`a5r: host jobs: ${String(err)}`))
+        await publish(io, as, now).catch(err => io.log(`a5r: host card: ${String(err)}`))
+      }
+      const followed = await link.follow(io, linkHosts(), now, h.isWriter(now)).catch(err => (io.log(`a5r: hand-offs: ${String(err)}`), { notices: [] as Notice[], states }))
+      const notices = followed.notices
+      states = followed.states
+      if (probing || !xs.length || !h.isWriter(now)) return notices
       probing = true
       void probeCards(io, xs, now)
         .catch(err => io.log(`a5r: host probe cards: ${String(err)}`)) // tried again on a later minute
         .finally(() => (probing = false))
+      return notices
     },
     /** `/a5r host …` and `/a5r handoff …` (the words after /a5r). */
-    command: (io: HostIo, args: string): Promise<string> => (/^handoff\b/i.test(args) ? handoffs.command(io, args.slice(7)) : act(io, commandInput(args.replace(/^host\b/i, '')))),
+    command: (io: HostIo, args: string): Promise<string> =>
+      /^handoff\b/i.test(args) ? handoffCommand(io, args.slice(7)) : /^job\b/i.test(args) ? jobAct(io, jobInput(args.slice(3))) : act(io, commandInput(args.replace(/^host\b/i, ''))),
     /** D17: the Editor request's and status's line when this session's waiting request fits a host better ('' without). */
     hint: (f: SessionFile | null, now: number): string => {
       const p = isSuggesting() ? pickFor(viewNow(now), f, now) : null
@@ -420,13 +516,19 @@ export const hostsDesk = (h: HostDeskState) => {
       return out
     },
     /** The model tool `host`. */
-    tool: (io: HostIo, e: Record<string, unknown>): Promise<string> => (e.action === 'handoff' ? handoffs.tool(io, e) : act(io, inputOf(e, false))),
+    tool: async (io: HostIo, e: Record<string, unknown>): Promise<string> => {
+      if (e.action === 'job') return jobAct(io, { op: String(e.op ?? 'list'), id: String(e.id ?? ''), text: String(e.text ?? ''), ref: String(e.ref ?? ''), code: String(e.code ?? '') })
+      if (e.action !== 'handoff') return act(io, inputOf(e, false))
+      return (await l2(io, String(e.op ?? 'list'), String(e.id ?? ''), e)) ?? handoffs.tool(io, e)
+    },
     /** D9 and D20 at the edit: the hosts' state files are a5r's (one writer); then the hand-offs' claims. The edit check
      * sees the shared checkout's paths, so a coordination root outside it is guarded only by its own a5r. */
     touch: async (io: FileIo, rels: readonly string[]) => {
       const root = h.root().replace(/[\\/]+$/, '')
       const hostsRel = `${coord().startsWith(`${root}/`) ? coord().slice(root.length + 1) : DIR}/hosts/`.toLowerCase()
       if (rels.some(r => r.toLowerCase().startsWith(hostsRel))) return { deny: noticeText(HOST_GATE, `${DIR}/hosts is written by a5r alone (one writer)`, 'use /a5r host or the host tool'), shared: [] }
+      const jobRels = [INBOX_DIR, JOBS_DIR].map(d => `${hostsRel.slice(0, -'hosts/'.length)}${d}/`)
+      if (rels.some(r => jobRels.some(j => r.toLowerCase().startsWith(j)))) return { deny: noticeText(JOB_GATE, `${DIR}/${INBOX_DIR} and ${DIR}/${JOBS_DIR} are written by a5r alone (the origin's delivery, this host's answer)`, JOB_USAGE), shared: [] }
       return handoffs.touch(io, rels)
     },
     /** status.json's `hosts` (D17): only while one is declared; a card is copied without its lanes' branches (F6). */
@@ -450,7 +552,7 @@ export const hostsDesk = (h: HostDeskState) => {
         const parts = [s.entry.decl?.label ?? `${s.entry.id} (invalid)`, `L${level}`, c?.machine.freeRamGb != null ? `${c.machine.freeRamGb} GB free` : 'RAM unknown', `Editor ${editor}`, ...(c && isStale(c, now, staleMin) ? ['stale'] : []), ...(avail.state === 'no' ? [avail.reason || 'unavailable'] : []), ...(storm ? ['link-storm'] : [])]
         return { id: s.entry.id, text: parts.join(' · '), dot: storm || !s.entry.decl ? 'bad' : level >= 1 ? 'ok' : 'warn' }
       })
-      return [hostsBox(el, rows, open, now, look)]
+      return [hostsBox(el, rows, open, now, look, states, jobs.waiting())]
     },
   }
 }
