@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { blankSession } from '../hooks/coord.ts'
 import { parseHandoff, type Handoff } from '../hooks/handoff.ts'
+import { HOST_USAGE } from '../hooks/hosts.ts'
 import { A5RPANE, ME, NOW, PROJ, find, keys, opts, refused, still, text, world, type Rec } from './world.ts'
 
 // a5r-hosts S-a (L0) through the engine: /a5r handoff and the host tool write the hand-off file (D7 base check, D13
@@ -69,8 +70,10 @@ test('S-a (D7, D13): a base sha that is not on the remote, or a secret in the ta
 test('S-a: the host tool: handoff create/update/result/list/cancel; any other action answers that a later slice adds it (no throw)', opts(), async ($, on) => {
   const w = world(on, { git: LS })
   await $.session.start(START)
-  expect(out(await $.tool.call({ tool: HOST, action: 'status' } as never))).toBe('A5R · host — not in this version → slice S-b adds hosts')
-  expect(out(await $.tool.call({ tool: HOST, action: 'add' } as never))).toBe('A5R · host — not in this version → slice S-b adds hosts')
+  // S-b answers status and add (F-b3); suggest is still a later slice's.
+  expect(out(await $.tool.call({ tool: HOST, action: 'status' } as never))).toContain('This machine: L0.')
+  expect(out(await $.tool.call({ tool: HOST, action: 'add' } as never))).toBe(`A5R · host — host id "" must be 1-32 of a-z, 0-9 and - → ${HOST_USAGE}`)
+  expect(out(await $.tool.call({ tool: HOST, action: 'suggest' } as never))).toBe('A5R · host — not in this version → slice S-c adds suggest')
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'packet' } as never))).toBe('A5R · host — not in this version → slice S-d adds the hand-off packet')
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'creat' } as never))).toBe('A5R · handoff — "creat" is not a handoff op → use create, update, cancel, result or list')
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'list' } as never))).toContain('No hand-offs here.')

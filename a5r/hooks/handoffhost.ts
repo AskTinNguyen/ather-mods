@@ -10,15 +10,15 @@ import type { StatusHandoff } from './syncplan.ts'
 import { STATUS, V2 } from './theme.ts'
 
 export const HOST_TOOL = 'mcp__a5r__host'
-/** The calls' io: the engine's files and git, the claimExclusiveGlobs option and the rules' secret patterns. */
-export type DeskIo = FileIo & { claimGlobs?: string; secrets: () => Promise<readonly string[]> }
+/** The calls' io: the engine's files and git, the claimExclusiveGlobs and originId options and the rules' secret patterns. */
+export type DeskIo = FileIo & { claimGlobs?: string; originId?: string; secrets: () => Promise<readonly string[]> }
 /** This session's facts as register.ts last read them. */
 export type DeskState = { dir: () => string; root: () => string; me8: () => string; lane: () => string }
 /** One recorded action (acts.ts Recorded, before its time and session are added). */
 export type ClaimTouch = Omit<Recorded, 'at' | 'id8' | 'lane'> & { kind: 'claim-touch' }
 
 /** Actions a later slice adds: answered, never thrown. */
-export const NOT_YET = { hosts: noticeText('host', 'not in this version', 'slice S-b adds hosts'), packet: noticeText('host', 'not in this version', 'slice S-d adds the hand-off packet') }
+export const NOT_YET = { packet: noticeText('host', 'not in this version', 'slice S-d adds the hand-off packet') }
 type El = { Box: (p: Record<string, unknown>) => unknown; Text: (p: Record<string, unknown>) => unknown }
 
 export const handoffDesk = (h: DeskState) => {
@@ -33,15 +33,21 @@ export const handoffDesk = (h: DeskState) => {
     return all
   }
 
-  /** F4: this machine's origin id, generated once (8 hex) beside the hand-offs. */
-  const originId = async (io: FileIo): Promise<string> => {
-    const path = `${h.dir()}/${ORIGIN_FILE}`
+  /** F4: this machine's origin id: the option `originId` when set, else the one made once (8 hex) beside the hand-offs;
+   * null when neither exists yet. */
+  const knownOrigin = async (io: DeskIo): Promise<string | null> => {
+    if (io.originId?.trim()) return io.originId.trim()
     try {
-      const id = (JSON.parse((await io.read(path)) ?? '') as { originId?: unknown }).originId
-      if (typeof id === 'string' && /^[0-9a-f]{8}$/.test(id)) return id
+      const id = (JSON.parse((await io.read(`${h.dir()}/${ORIGIN_FILE}`)) ?? '') as { originId?: unknown }).originId
+      return typeof id === 'string' && /^[0-9a-f]{8}$/.test(id) ? id : null
     } catch {
-      // none yet
+      return null // none yet
     }
+  }
+  const originId = async (io: DeskIo): Promise<string> => {
+    const known = await knownOrigin(io)
+    if (known) return known
+    const path = `${h.dir()}/${ORIGIN_FILE}`
     const id = Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
     await io.write(path, JSON.stringify({ v: 1, originId: id }))
     return id
@@ -103,6 +109,7 @@ export const handoffDesk = (h: DeskState) => {
 
   return {
     read,
+    origin: knownOrigin,
     /** The open hand-offs as last read. */
     open: (): Handoff[] => all.filter(isOpen),
     /** `/a5r handoff …` */
@@ -114,9 +121,8 @@ export const handoffDesk = (h: DeskState) => {
       if (c.op === 'result') return result(io, c.id, c.ref)
       return record(io, c.fields)
     },
-    /** The model tool `host`: only `handoff` (create, update, cancel, result, list) in this slice. */
+    /** The host tool's action `handoff` (create, update, cancel, result, list); hostdesk.ts routes the other actions. */
     tool: async (io: DeskIo, e: Record<string, unknown>): Promise<string> => {
-      if (e.action !== 'handoff') return NOT_YET.hosts
       const op = String(e.op ?? 'list')
       if (op === 'list') return list(io)
       if (op === 'create') return record(io, fieldsOf(e))

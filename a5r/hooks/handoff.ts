@@ -6,6 +6,7 @@
 import { rx } from './a5r.ts'
 import { claimsOf, claimsText, type Claim } from './claims.ts'
 import type { StatusHandoff } from './syncplan.ts'
+import { isObj } from './shape.ts'
 
 export const HANDOFF_GATE = 'handoff'
 export const HANDOFFS_DIR = 'handoffs'
@@ -40,7 +41,6 @@ export type Handoff = {
   updatedAt: number
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const text = (v: unknown): string => (typeof v === 'string' ? v : '')
 
 /** A hand-off file as read, or null when it is not one (a half-written file, another kind of JSON). */

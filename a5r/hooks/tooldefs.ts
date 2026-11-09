@@ -2,6 +2,7 @@
 // host file can take rev 44's wiring without growing. Pure text: no `$`.
 import { FOCUS_USAGE } from './focus.ts'
 import { HANDOFF_USAGE } from './handoff.ts'
+import { HOST_USAGE } from './hosts.ts'
 import { EDITOR_USAGE } from './order.ts'
 import { RULE_FORM } from './syncrules.ts'
 
@@ -56,29 +57,38 @@ export const SYNC_TOOL_DEF = {
   },
 }
 
-/** a5r-hosts S-a: the host tool; this slice answers its handoff actions only (L0: record work that runs elsewhere). */
+/** a5r-hosts S-a, S-b: the host tool: hosts (L1: declare, check, pause) and hand-offs (L0 record). */
 export const HOST_TOOL_DEF = {
   name: 'host',
   description:
-    'a5r A5R hosts: work that runs on another machine. In this version only action "handoff" works (L0: a record, no transport): ' +
-    'op "create" records that a lane runs elsewhere (label: the machine, free text; branch; base: a ref pushed to the remote, optionally sha; claims: repo-relative paths or globs, "!" exclusive, "~" shared, binary assets exclusive by default; task: one line); ' +
+    'a5r A5R hosts: other machines work can move to. Hosts (L1): "add" declares one (id: a-z0-9-; reach: "ssh:<host or alias>" or "manual"; label, owner; options: { config, reverse, laneRoot, a5rRoot }; the local ssh client itself only by the person, /a5r host add --ssh) and runs its health checks at once, in order: C1 reach and the remote OS, C2 byte-clean stdin and stdout, C4 clock skew, C5 orphan helper processes, C10 RAM; the first failure stops the run with its fix line, and a second add or "check" (id; checks: ["C2", …] to name some; paste: a file of a manual host\'s pasted lines) resumes at the first check not passed. ' +
+    '"status": this machine\'s level and what the next level needs; "list"; "set" (id; label, owner, assumed, or reach/options, which re-checks; or asHost: this machine when it serves others); "pause" (id, reason), "resume" (id: after a link storm too), "remove" (id). Declarations go to the machine-local hosts file; checks, level and link counts to Saved/A5R/hosts/<id>/state.json (never edit those by hand). ' +
+    'Hand-offs (L0): action "handoff", op "create" records that a lane runs elsewhere (label: the machine, free text; branch; base: a ref pushed to the remote, optionally sha; claims: repo-relative paths or globs, "!" exclusive, "~" shared, binary assets exclusive by default; task: one line); ' +
     '"update" (id; label, task, note, claims, or state "merged" once a result is in), "cancel" (id), "result" (id, ref: the PR, branch or report where the work landed), "list". ' +
-    'While a hand-off is open its exclusive claims refuse other sessions\' edits of those paths here and fail rule 1 at A5R acceptance unless progress.md or findings.md names the path. Other actions answer that a later slice adds them.',
+    'While a hand-off is open its exclusive claims refuse other sessions\' edits of those paths here and fail rule 1 at A5R acceptance unless progress.md or findings.md names the path. "suggest" comes in a later slice.',
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['handoff'] },
+      action: { type: 'string', enum: ['list', 'status', 'add', 'set', 'check', 'pause', 'resume', 'remove', 'handoff'] },
       op: { type: 'string', enum: ['create', 'update', 'cancel', 'result', 'list'], description: 'handoff: what to do (default list).' },
-      id: { type: 'string', description: 'update, cancel, result: the hand-off id.' },
-      label: { type: 'string', description: 'create, update: the machine the lane runs on (free text).' },
-      branch: { type: 'string', description: 'create: the branch the work lands on (intent/<slug> names the intent).' },
-      base: { type: 'string', description: 'create: the pushed ref the work starts from (default: the branch, else main).' },
-      sha: { type: 'string', description: 'create: the base commit; it must be on the remote (D7).' },
-      claims: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, exclusive: { type: 'boolean' } }, required: ['path'] }] }, description: 'create, update: repo-relative paths, folders or globs the lane holds.' },
-      task: { type: 'string', description: 'create, update: what is done there, one line.' },
-      ref: { type: 'string', description: 'result: where the work landed (#PR, a PR URL, a branch, a report path).' },
-      state: { type: 'string', enum: ['merged'], description: 'update: merged, once the result is taken.' },
-      note: { type: 'string', description: 'create, update: one line.' },
+      id: { type: 'string', description: 'add, set, check, pause, resume, remove: the host id. handoff update, cancel, result: the hand-off id.' },
+      reach: { type: 'string', description: 'add, set: "ssh:<host or ssh alias>" or "manual".' },
+      options: { type: 'object', description: 'add, set: reach options for ssh: { config: an ssh config file, reverse: true when the host must wake this machine, laneRoot, a5rRoot: where writes may go on the host }. The ssh client program is the person\'s choice (/a5r host add … --ssh <client>); the tool refuses it.' },
+      owner: { type: 'string', description: 'add, set: who answers for the host.' },
+      assumed: { type: 'object', description: 'set: for a host without A5R, { roles?, availability?: { state: yes|no, reason? } }, shown as assumed.' },
+      asHost: { type: 'object', description: 'set: this machine when it serves others: { enabled, coordinationRoot?, laneRoot?, roles, availability, trust }.' },
+      checks: { type: 'array', items: { type: 'string' }, description: 'check: the checks to run (C1 … C13); none: resume at the first not passed.' },
+      paste: { type: 'string', description: 'check: a file holding the lines a manual host printed (see the add answer).' },
+      reason: { type: 'string', description: 'pause: one line.' },
+      label: { type: 'string', description: 'add, set: the host\'s label. handoff create, update: the machine the lane runs on (free text).' },
+      branch: { type: 'string', description: 'handoff create: the branch the work lands on (intent/<slug> names the intent).' },
+      base: { type: 'string', description: 'handoff create: the pushed ref the work starts from (default: the branch, else main).' },
+      sha: { type: 'string', description: 'handoff create: the base commit; it must be on the remote (D7).' },
+      claims: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, exclusive: { type: 'boolean' } }, required: ['path'] }] }, description: 'handoff create, update: repo-relative paths, folders or globs the lane holds.' },
+      task: { type: 'string', description: 'handoff create, update: what is done there, one line.' },
+      ref: { type: 'string', description: 'handoff result: where the work landed (#PR, a PR URL, a branch, a report path).' },
+      state: { type: 'string', enum: ['merged'], description: 'handoff update: merged, once the result is taken.' },
+      note: { type: 'string', description: 'handoff create, update: one line.' },
     },
     required: ['action'],
   },
@@ -88,7 +98,7 @@ export const HOST_TOOL_DEF = {
 export const A5R_TOOL_ERRORS: ReadonlyMap<string, (msg: string) => string> = new Map<string, (msg: string) => string>([
   ['mcp__a5r__editor', msg => `A5R · Editor — A5R hit an error reading the lock or the queue: ${msg} → retry the call; if it fails again, /a5r off and take Saved/EDITOR_OWNER.txt by hand (AGENTS.md)`],
   ['mcp__a5r__sync', msg => `A5R · Sync main — A5R hit an error in the sync tool: ${msg} → retry the call; if it fails again, use /a5r sync (or /a5r off and coordinate the merge by hand)`],
-  ['mcp__a5r__host', msg => `A5R · host — A5R hit an error in the host tool: ${msg} → retry the call; if it fails again, use /a5r handoff`],
+  ['mcp__a5r__host', msg => `A5R · host — A5R hit an error in the host tool: ${msg} → retry the call; if it fails again, use /a5r host or /a5r handoff`],
 ])
 
 /** A57: `/a5r help`. */
@@ -105,6 +115,7 @@ export const A5R_HELP = [
   `${EDITOR_USAGE}: the person's own order of the Editor queue and time of a turn (the panel's row controls do the same; no tool can)`,
   `${FOCUS_USAGE}: the person gives one session the Editor for a milestone (the panel's Focus… and the EDITOR line's End / +30 / +60 do the same; no tool can); the focus session ends it with the editor tool's focus_done`,
   `${HANDOFF_USAGE}: a lane that runs on another machine (L0 record); while it is open its exclusive claims refuse edits of those paths here`,
+  `${HOST_USAGE}: other machines (L1): declare one, run its health checks (C1 reach, C2 byte-clean link, C4 clock, C5 orphan helpers, C10 RAM), pause or resume it`,
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
 ].join('\n')

@@ -13,3 +13,7 @@ Append-only.
 ## L-3 (2026-11-09) | class: build | slice S-a
 
 > Implement slice S-a of intent a5r-hosts (L0: hand-off record + cross-machine claims) exactly as the brief from t6 says; work only in this worktree; report with hc send t6. Then (Hải): keep folder claims shared, finish and report to t6.
+
+## L-4 (2026-11-09) | class: build | slice S-b
+
+> Implement slice S-b of intent a5r-hosts (L1: declare a host, health checks C1, C2, C4, C5, C10, ssh and manual adapters, options and state.json, Hosts tile) exactly as the brief from t6 says; work only in this worktree; optional read-only live smoke against the second machine; report with hc send t6.

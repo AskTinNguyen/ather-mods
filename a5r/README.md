@@ -156,13 +156,14 @@ Mọi lần a5r từ chối đều cùng một dạng: `A5R · <cổng> — <vì
 - `/a5r status`: trạng thái, số lần theo từng điều, vị trí của a5r so với Ather, và Editor/RAM/Sync khi A5R bật.
 - `/a5r sync HH:MM [build] [for <id8|lane>]` · `/a5r sync move HH:MM` · `/a5r sync build on|off` · `/a5r sync cancel` · `/a5r sync done [ghi chú]` · `/a5r sync abort <lý do>` · `/a5r sync takeover` · `/a5r sync` (trạng thái, có khung freeze).
 - `/a5r handoff record label="<máy>" branch=<branch> [base=<ref>[@<sha>]] [claims="<path>,!<độc quyền>,~<dùng chung>"] task="<một dòng>"` · `/a5r handoff list` · `/a5r handoff cancel <id>` · `/a5r handoff result <id> <ref>` (a5r-hosts S-a, L0): ghi lại "lane này chạy ở máy khác" (xem mục Hand-off).
+- `/a5r host list | status | add <id> --reach ssh:<target>|manual [--label "<text>"] [--owner <ai>] [--ssh <client>] [--config <ssh config>] | check <id> [C1 C2 …] [--paste <file>] | pause <id> [lý do] | resume <id> | remove <id>` (a5r-hosts S-b, L1): khai báo máy khác và chạy kiểm tra sức khoẻ của nó (xem mục Hosts).
 - Muốn agent sửa mod: `/a5r off` trước (bảo vệ kit thuộc điều 1 của A5R).
 
 ## Tool cho model (chỉ đăng ký khi A5R bật)
 - `mcp__a5r__editor`: `request` (thêm `launch: false` cho slot không mở Editor; 0.23.0: yêu cầu như vậy có thể đi trước đầu hàng đang chờ RAM, tối đa 30 phút) · `release` · `extend` · `status`. Không có action sắp hàng hay cho thêm giờ (0.24.0: việc của người, A117); action lạ vẫn trả lời như `status`. `status` (0.24.0) đọc cùng lời với danh sách Editor trên pane (A116), kèm mã chờ (`wait held`, `wait ram`…) cho model và log.
 - `mcp__a5r__editor` `focus_done` (0.25.0, `note`: đạt được gì): chỉ session đang có Focus, khi đạt mốc: kết thúc Focus và trả Editor ngay; trong Focus `release` và `extend` giữ lock tới hết hộp.
 - `mcp__a5r__sync`: `plan` (`build`, `rules`) · `move` · `build` · `cancel` · `conflicts` (khi dry-run không chạy được) · `rules` (0.20.0, tới khi worker chạy) · `done` · `abort` · `status`.
-- `mcp__a5r__host` (a5r-hosts S-a): bản này chỉ có `action: "handoff"` với `op` `create` · `update` (label, task, note, claims, hay `state: "merged"` khi đã có result) · `cancel` · `result` · `list`. Action khác trả lời `A5R · host — not in this version → slice S-b adds hosts` (không throw).
+- `mcp__a5r__host` (a5r-hosts S-a, S-b): `list` · `status` · `add` (`id`, `reach`, `label`, `owner`, `options`) · `set` (`id` với `label`/`owner`/`assumed`, hay `reach`/`options` thì kiểm tra lại; hoặc `asHost`) · `check` (`id`, `checks`, `paste`) · `pause` (`id`, `reason`) · `resume` · `remove` · `handoff` với `op` `create` · `update` (label, task, note, claims, hay `state: "merged"` khi đã có result) · `cancel` · `result` · `list`. `suggest` trả lời `A5R · host — not in this version → slice S-c adds suggest` (không throw).
 - Agent type `a5r:sync` (sync worker): chỉ a5r khởi động, không hiện cho model.
 
 ## Tuỳ chọn (`pluginConfigs."a5r"` trong `~/.claude/settings.json`)
@@ -177,6 +178,7 @@ Mọi lần a5r từ chối đều cùng một dạng: `A5R · <cổng> — <vì
 - `autoSyncBuild` (0.26.0; mặc định `true` từ 0.26.1, Hai 2026-10-29: "Sync rồi phải build chứ … Không build sao biết không có lỗi?"): sync A5R tự lên lịch có build (freeze `syncBuildMinutes`); đặt `false` thì chỉ merge (`syncMergeMinutes`, 45).
 - `engineRoot` (theo từng máy, không bắt buộc, không có mặc định): engine root mà `Engine\Build\BatchFiles\Build.bat` của nó build checkout. Chưa đặt thì A5R lấy engine mà Editor của checkout chạy lần cuối (log trong `Saved/Logs`), rồi tới `EngineAssociation` trong registry (xem 0.22.0); root nào thiếu Build.bat thì bỏ qua. Được ghi thẳng vào script build của sync (`Saved/A5R/<sync id>-build.cmd`). A5R không kiểm tra root có đúng engine của checkout không: root sai mà vẫn có Build.bat thì build chạy với engine đó (task của worker ghi root và nguồn của nó; dòng `A5R build exit` cuối log ghi engine đã dùng).
 - `claimExclusiveGlobs` (a5r-hosts S-a, không bắt buộc): thêm glob (cách nhau dấu phẩy, vd. `*.fbx,*.png`) mà claim của hand-off mặc định là độc quyền, ngoài `*.uasset` và `*.umap`.
+- `hosts`, `asHost`, `hostsOptions`, `originId` (a5r-hosts S-b, không bắt buộc, JSON viết tay): khai báo host (gộp với `<home>/.claude/a5r/hosts.json` do `/a5r host` ghi; cùng id thì file thắng, mục viết tay hiện `edited-by-hand`), máy này khi phục vụ máy khác (`coordinationRoot`, `roles`, `availability`, `trust`), các ngưỡng (`staleCardMin` 10, `staleCheckDays` 7…) và id của máy này trong hand-off. Chỉ là khai báo: trạng thái không bao giờ nằm ở đây (xem mục Hosts).
 - File `rules/scope` (mỗi dòng một glob): sửa file ngoài scope vẫn chạy và được **ghi lại** (không hỏi, A75); nghiệm thu yêu cầu nêu lý do trong progress.md hoặc findings.md.
 
 ## File điều phối (trong `Saved/` của checkout S2, git-ignore, không bao giờ vào git hay `docs/intent/`)
@@ -214,7 +216,28 @@ Một lane chạy ở máy khác (máy thứ hai, rig, máy của đồng đội
 - Trong lúc hand-off còn mở (`proposed`), session khác sửa một file trong claim **độc quyền** thì bị từ chối: `A5R · claim — <path> is claimed by hand-off <id> on <label> → ask them to return it, or choose other paths`; trong claim **dùng chung** thì chạy và được ghi lại (`rule=claim-touch`, nghiệm thu điều 5 hỏi lý do như các việc được ghi lại khác). Session đã ghi hand-off không bị claim của chính nó chặn.
 - Nghiệm thu (A9): diff đụng claim độc quyền của hand-off **khác** đang mở (không phải của chính intent hay branch đó) làm trượt điều 1, trừ khi progress.md hay findings.md nêu đường dẫn đó kèm lý do.
 - `result <id> <ref>` ghi chỗ kết quả về (PR, branch, report); claim vẫn giữ tới khi `cancel` hay `merged` (tool `update` với `state: "merged"`, chỉ khi đã có result).
-- Không có hand-off nào mở thì không gì thay đổi (A1); có thì pane A5R có thêm một nhóm dòng HAND-OFFS và `status.json` có thêm `handoffs` (`v` vẫn là 1).
+- Không có hand-off nào mở thì không gì thay đổi (A1); có thì pane A5R có thêm một nhóm dòng HAND-OFFS (từ S-b nằm trong ô HOSTS) và `status.json` có thêm `handoffs` (`v` vẫn là 1).
+
+## Hosts (a5r-hosts S-b, L1)
+Khai báo một máy khác (host) mà máy này có thể gửi việc tới, và để agent tự kiểm tra nó. Không khai báo host nào thì không gì thay đổi (L0).
+- Khai báo nằm ở file riêng của máy `<home>/.claude/a5r/hosts.json` (ngoài mọi checkout, không vào git; F-b1), đọc gộp với tuỳ chọn `hosts` / `asHost` (JSON, viết tay); cùng id thì file thắng. Chỉ `/a5r host …` và tool `host` ghi file đó. Mục nào không do tool ghi (tuỳ chọn, hay file bị sửa tay) hiện `edited-by-hand`, và nếu khai báo đã khác lúc kiểm tra thì level về L0 tới khi `/a5r host check <id>`.
+- Trạng thái (kết quả kiểm tra, level, tạm dừng, đếm lỗi kết nối) nằm ở `<coordinationRoot>/Saved/A5R/hosts/<id>/state.json` (một bản cho cả máy, mọi checkout dùng chung; `asHost.coordinationRoot`, mặc định là checkout A5R đang chạy). Sửa tay các file trong `Saved/A5R/hosts/` bị từ chối.
+- `/a5r host add pc2 --reach ssh:pc2 --label "máy hai"` ghi khai báo rồi chạy kiểm tra ngay, theo thứ tự; gặp lỗi đầu tiên thì dừng, in dòng sửa (fix), các bước sau là `skip`. Kết quả mẫu:
+```
+A5R · host pc2 added (ssh:pc2): 5 checks run; level L0.
+C1 pass · windows (cmd), 85 ms
+C2 fail · sort returned "???" for "b a c": … → the host's SSH default shell mangles stdin (S2): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass
+C4 skip · not run: C2 failed
+…
+Next: fix C2 (above), then /a5r host check pc2: it resumes at C2.
+```
+- Gọi lại `add` (không `--reach`) hay `check <id>` thì chạy tiếp từ bước đầu tiên chưa đạt (A13); `check <id> C4 C10` chạy đúng các bước nêu tên.
+- Các bước của bản này: C1 kết nối và hệ điều hành bên kia (cmd hay sh; mọi lệnh sau viết cho đúng hệ đó), C2 stdin/stdout sạch byte (sort `b a c`, 256 giá trị 0–255 qua `git hash-object` hai bên, một chuỗi in ra), C4 lệch giờ dưới 120 s, C5 tiến trình phụ của ssh không tăng dần qua 3 vòng, C10 RAM tổng và trống. Các bước khác trả lời `skip · not in this version`. L1 = C1 và C2 đạt (thêm C4 nếu dùng khung giờ); kết quả cũ hơn `staleCheckDays` (7 ngày) không còn tính.
+- Adapter: `ssh` (lệnh đi qua ssh client thành MỘT chuỗi lệnh, mặc định 30 s; `--ssh` và `--config` chọn client và file config, cần trên Windows khi `~` của shell không phải thư mục nhà; client phải là `ssh`/`ssh.exe` và chỉ người chọn qua lệnh này, tool `host` từ chối `options.ssh`) và `manual` (không có đường truyền: `check <id>` in lệnh cho người chạy trên máy kia, rồi `check <id> --paste <file>` đọc kết quả dán về; host manual ở L0).
+- Kết nối hỏng: mỗi lỗi ghi vào `link.jsonl`, lần thử tự động sau chờ dần (5 s, 10 s … tối đa 15 phút); 12 lỗi trong 10 phút (hay quá mức mỗi giờ) thì host dừng: `A5R · host pc2 — link failed 12 times in 10 min → fix the link (C2), then /a5r host resume pc2`. `/a5r host pause <id> [lý do]` dừng tay.
+- `/a5r host status`: level của máy này, bước kế cần gì (D1), mỗi host với kết quả từng bước, `asHost`, origin id.
+- Mỗi phút, phiên ghi `status.json` làm mới thẻ của host (`Saved/A5R/hosts/<id>/card.json`, `source: "probe"`) khi thẻ cũ hơn `staleCardMin` (10 phút): RAM trống, Editor chạy/không/`unknown`; gì không đọc được là `null`.
+- Pane A5R có ô HOSTS chỉ khi có host khai báo hay hand-off đang mở: mỗi host một dòng (tên · level · RAM trống · Editor · `stale` khi thẻ cũ · lý do khi không sẵn sàng · `link-storm`), nhóm HAND-OFFS nằm dưới. `status.json` thêm `hosts` (`v` vẫn là 1).
 
 ## Một bộ luật cho hai engine
 `rules/config.json` cùng định dạng với plugin Hermes (`a5-kit-v2`, tên định dạng của Hermes, giữ nguyên). Sửa xong chạy, **trong một worktree của repo** (vd. `<thư mục worktree>/a5r`), không bao giờ trong thư mục mod đang nạp (`make_fixture.py` ghi fixture vào thư mục mod, nên A5R từ chối nó trên kit sống):

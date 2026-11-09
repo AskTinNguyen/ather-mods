@@ -73,6 +73,26 @@
       "title": "A5R hand-offs: more exclusive claim globs (optional)",
       "description": "Globs (comma-separated, for example *.fbx,*.png) whose claims in a hand-off default to exclusive, besides *.uasset and *.umap. An edit by another session inside an exclusive claim of an open hand-off (/a5r handoff record) is refused; inside a shared claim it runs and is recorded. Unset: only *.uasset and *.umap default exclusive; text files default shared."
     },
+    "hosts": {
+      "type": "string",
+      "title": "A5R hosts: machines this one sends work to (JSON, optional)",
+      "description": "Outbound host declarations as JSON, {\"<id>\": { label, owner, reach: { kind: ssh|herdr|command|manual, target, options? }, repo?, engine?, diskEstimateGb?, assumed? } }. Normally written by /a5r host add (into the machine-local <home>/.claude/a5r/hosts.json, which wins per host id); an entry here is read, validated and shown as edited-by-hand. Declarations only: checks, level, pause and link counts live in Saved/A5R/hosts/<id>/state.json."
+    },
+    "asHost": {
+      "type": "string",
+      "title": "A5R hosts: this machine when it serves others (JSON, optional)",
+      "description": "Inbound declaration as JSON: { enabled, coordinationRoot?, laneRoot?, capacity?, roles, availability: { state: yes|no, reason?, windows?, until? }, trust, ephemeral?, account? }. coordinationRoot (default: the checkout A5R runs in) is the one checkout whose Saved/A5R holds hosts' state, the Editor queue, RAM and the sync freeze for every checkout of this machine."
+    },
+    "hostsOptions": {
+      "type": "string",
+      "title": "A5R hosts: thresholds (JSON, optional)",
+      "description": "{ staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }: a probe card older than staleCardMin is refreshed on the minute; a check older than staleCheckDays no longer counts for the level."
+    },
+    "originId": {
+      "type": "string",
+      "title": "A5R hosts: this machine's origin id (optional)",
+      "description": "The id hand-offs carry as from (D12). Unset: the one a5r made at the first hand-off (Saved/A5R/origin.json); /a5r host status shows it."
+    },
     "engineRoot": {
       "type": "string",
       "title": "A5R Sync main: engine root for the sync's build (per machine, optional)",
