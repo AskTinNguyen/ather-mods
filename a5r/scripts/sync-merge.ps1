@@ -236,6 +236,15 @@ try {
   $ortNew = @{}
   foreach ($c in (Get-RawDiff $old $tree)) { $ortNew[$c.Path] = $c }
   $unmerged = Read-Stages (Split-Nul (Invoke-GitOk @('ls-files', '-u', '-z') $M).Out)
+  # Fable 3: whether a merge base holds the path, read from the bases themselves (one cat-file for all): with several
+  # bases read-tree leaves no stage 1 when HEAD matches one base and the target another.
+  $inBase = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $paths = @($unmerged.Keys)
+  if ($paths.Count -gt 0) {
+    $asks = @(foreach ($b in $bases) { foreach ($q in $paths) { "${b}:$q" } })
+    $found = (Invoke-GitOk @('cat-file', '--batch-check=%(objecttype)') '' ($enc.GetBytes(($asks -join "`n") + "`n"))).Out.Split("`n")
+    for ($k = 0; $k -lt $asks.Count; $k++) { if ($found[$k].Trim() -ne '' -and -not $found[$k].EndsWith('missing')) { [void]$inBase.Add($paths[$k % $paths.Count]) } }
+  }
   # A conflict: path -> @{ Kind; Stages (1 base, 2 HEAD, 3 target; a side without the path has no stage) }. Every kind is
   # resolved the same way: by a rule, else by rule 11, else refused.
   $conflicts = @{}
@@ -245,16 +254,16 @@ try {
     $kind = & $kindOf $p
     $isBoth = $s.ContainsKey('2') -and $s.ContainsKey('3')
     # Changed on both sides from a base: merge-tree's content merge stands when it merged it cleanly and paired it with
-    # nothing (a path in the base and on both sides is no rename's source or target). Unchanged by it from HEAD: HEAD's.
-    $isClean = $isBoth -and $s.ContainsKey('1') -and -not $stages.ContainsKey($p) -and -not $kind
+    # nothing (a path in a base and on both sides is no rename's source or target). Unchanged by it from HEAD: HEAD's.
+    $isClean = $isBoth -and $inBase.Contains($p) -and -not $stages.ContainsKey($p) -and -not $kind
     if ($isClean -and -not ($ortNew.ContainsKey($p) -and $ortNew[$p].Status -eq 'D')) {
       $lines += & $entry $p $(if ($ortNew.ContainsKey($p)) { @{ Mode = $ortNew[$p].NewMode; Oid = $ortNew[$p].NewOid } } else { $s['2'] })
       continue
     }
-    if (-not $kind) { $kind = $(if ($isBoth) { $(if ($s.ContainsKey('1')) { 'contents' } else { 'add/add' }) } elseif ($s.ContainsKey('1')) { 'modify/delete' } elseif ($s.ContainsKey('2')) { 'added by us' } else { 'added by them' }) }
+    if (-not $kind) { $kind = $(if ($isBoth) { $(if ($inBase.Contains($p)) { 'contents' } else { 'add/add' }) } elseif ($inBase.Contains($p)) { 'modify/delete' } elseif ($s.ContainsKey('2')) { 'added by us' } else { 'added by them' }) }
     $conflicts[$p] = @{ Kind = $kind; Stages = $s }
   }
-  foreach ($p in ($stages.Keys | Where-Object { -not $unmerged.ContainsKey($_) } | Sort-Object)) { Write-Log "renames off: $p is no conflict path by path (merge-tree said: $(& $kindOf $p))" }
+  foreach ($p in ($stages.Keys | Where-Object { -not $unmerged.ContainsKey($_) } | Sort-Object)) { Write-Log "settled path by path: $p (merge-tree conflicted, read-tree did not; merge-tree said: $(& $kindOf $p))" }
   $unresolved = @()
   foreach ($p in ($conflicts.Keys | Sort-Object)) {
     $c = $conflicts[$p]
@@ -269,13 +278,13 @@ try {
     if (-not $side) { $unresolved += "$p (no rule matches: $($c.Kind))"; continue }
     # theirs: main's side (a path main deleted stays deleted); ours: HEAD's.
     $lines += & $entry $p $c.Stages[$(if ($side -eq 'ours') { '2' } else { '3' })]
-    $resolved += "$p ($side, $why)"
+    $resolved += "$p ($side, $($c.Kind), $why)"
   }
   if ($unresolved.Count -gt 0) { Stop-Merge 'conflict' "$($unresolved.Count) conflicted path(s) that no rule resolves (nothing written)" $unresolved }
   if ($lines.Count -gt 0) { Invoke-GitOk @('update-index', '--index-info') $M ($enc.GetBytes(($lines -join "`n") + "`n")) | Out-Null }
   $merged = (Invoke-GitOk @('write-tree') $M).Out.Trim()
   foreach ($x in $resolved) { Write-Log "resolved $x" }
-  if ($merged -ne $tree) { Write-Log "renames off: the tree differs from merge-tree's $tree on $(@(Get-RawDiff $tree $merged).Count) path(s)" }
+  if ($merged -ne $tree) { Write-Log "path by path: the tree differs from merge-tree's $tree on $(@(Get-RawDiff $tree $merged).Count) path(s)" }
   $changes = @(Get-RawDiff $old $merged)
   Write-Log "merge tree ${merged}: $($changes.Count) path(s) change, $($conflicts.Count) conflicted, $($resolved.Count) resolved, $($bases.Count) merge base(s)"
 
