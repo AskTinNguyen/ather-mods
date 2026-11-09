@@ -10,7 +10,9 @@ import type { LinkPolicy } from './adapters/types.ts'
 export const HOSTS_DIR = 'hosts'
 export const CHECK_IDS = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13'] as const
 export type CheckId = (typeof CHECK_IDS)[number]
-export type CheckResult = { status: 'pass' | 'fail' | 'skip'; value?: string; checkedAt: number }
+/** `ms`: the number a check measured, kept beside its text (C4: the skew, host minus here; S-c reads it for card
+ * freshness, never the text). */
+export type CheckResult = { status: 'pass' | 'fail' | 'skip'; value?: string; checkedAt: number; ms?: number }
 export type Checks = Partial<Record<CheckId, CheckResult>>
 export type HostState = {
   v: 1
@@ -47,7 +49,7 @@ export const parseState = (raw: string | null): HostState => {
   if (isObj(v.checks))
     for (const id of CHECK_IDS) {
       const c = v.checks[id]
-      if (isObj(c) && (c.status === 'pass' || c.status === 'fail' || c.status === 'skip') && typeof c.checkedAt === 'number') checks[id] = { status: c.status, checkedAt: c.checkedAt, ...(typeof c.value === 'string' ? { value: c.value } : {}) }
+      if (isObj(c) && (c.status === 'pass' || c.status === 'fail' || c.status === 'skip') && typeof c.checkedAt === 'number') checks[id] = { status: c.status, checkedAt: c.checkedAt, ...(typeof c.value === 'string' ? { value: c.value } : {}), ...(typeof c.ms === 'number' && Number.isFinite(c.ms) ? { ms: c.ms } : {}) }
     }
   const link = isObj(v.link) ? v.link : {}
   const os = isObj(v.os) && (v.os.os === 'windows' || v.os.os === 'posix') && (v.os.shell === 'cmd' || v.os.shell === 'sh' || v.os.shell === 'other') ? ({ os: v.os.os, shell: v.os.shell } as NonNullable<HostState['os']>) : undefined

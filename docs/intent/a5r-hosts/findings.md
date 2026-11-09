@@ -80,3 +80,34 @@ Raised while building slice S-a (2026-11-09). None blocks S-a; each names what i
 ## F-b8: the local ssh client is the person's choice
 
 - Review 1 found that the model's host tool could pick the local program the ssh adapter runs (`options.ssh`, `options.args`). Now `reach.options` takes only `ssh`, `config`, `laneRoot`, `a5rRoot` and `reverse`; `ssh` must be an `ssh`/`ssh.exe` path; and the tool refuses `options.ssh` (`A5R · host — the local ssh client is the person's choice → /a5r host add <id> --reach ssh:<target> --ssh <client>`).
+
+## F-c1: the card carries `roles` (and `acceptsFrom`)
+
+- What: D2 says a host's roles are read from its card, and the S-c brief's `NO_ROLE` matches a request's `wants` against "card roles", but section 2's card had no roles field. The brief adds `acceptsFrom`; `roles` was needed the same way.
+- Taken: `roles?: string[]` on the card (an A5R card: `asHost.roles`; a probe card: the declaration's `assumed.roles`, absent without them). Both are optional, so the schema stays `v: 1`. prompt.md rev 4 adds both to section 2.
+
+## F-c2: an A5R host's card needs a heartbeat to stay fresh
+
+- What: decision 1 writes `card.json` "only when content changed, like status.json". A quiet host's card would then keep its old `at`, read as `STALE_CARD` on every origin after `staleCardMin`, and a live host would never be suggested.
+- Taken: written on a change, or when the last write is older than half of `staleCardMin` (5 min by default) with no change. prompt.md rev 4 says so under section 2.
+
+## F-c3: an S-a assertion changed again (none removed)
+
+- `a5r/tests/hosts-sa-engine.test.ts` (`S-a: the host tool: …`): `action: "suggest"` answered `A5R · host — not in this version → slice S-c adds suggest`; S-c answers it, so the test now expects `{ suggestion: "none", whyNot: [] }` (no host declared).
+- `a5r/tests/hosts-sb-engine.test.ts` (`S-b (A2): engine: a hand edit …`): a label renamed by hand expected `L0 · … · declaration changed since the checks`. Under F-c4's resolution a label keeps the level, so the test now expects `L1 · … · edited-by-hand` for the label, then changes `reach.options` by hand and expects the old `L0 · … · declaration changed since the checks` line (the assertion's intent kept). The S-b desks also get the new `local` closure (a fixed quiet machine).
+- `a5r/tests/rev40.test.ts` (`A117: person-only: …`): the editor tool's input names now include `needGb`, `readOnly` and `wants` (suggest's inputs, additive); the test's other checks (no order or resize field) are unchanged.
+
+## F-c4: `/a5r host set <id>` (label, owner, assumed) drops the host to L0 (S-b behaviour, not changed)
+
+- What: `set` answers `A5R · host <id> changed (no check needed).`, but the stored checks ran against the old declaration's sum, so `levelOf` reads the host as L0 until `/a5r host check <id>` (the S-b rule "a changed declaration is re-checked"). Seen in the S-c engine test (`UNCHECKED` next to `UNAVAILABLE` after `assumed.availability` changed).
+- Proposal: for fields that need no check (label, owner, assumed), keep `declSum` in step (or sum only reach, repo and engine), so `set` and the level agree.
+- Resolution (t6, 2026-11-09, in S-c): the sum that gates the level (`checkedSumOf` in `a5r/hooks/hosts.ts`, state.json `declSum`) covers only reach, repo and engine; label, owner and assumed change without dropping the level. The edited-by-hand sum still covers the whole entry. Test: `S-c (F-c4): engine: set label, owner or assumed keeps the level; a reach changed by hand drops it …`. A state.json written before this keeps a whole-entry sum and reads as changed once: `/a5r host check <id>` again.
+
+## F-c5: what S-c measures and what it leaves
+
+- An A5R host's `machine.totalRamGb` is null: the shared probe (`Saved/A5R/probe.json`) reads free RAM and disk only. `machine.engine` is not filled (no engine version string is known to a5r). Both are allowed by section 2 ("null when unreadable").
+- `NO_RAM` is said when the host's free RAM is unread (a probe card that could not read it), with the note `RAM unknown`: a suggestion never rests on a guess.
+- The hint is left out for a session that holds the Editor (its file's `holding`; a granted request needs no other machine), in the reply, the status and the rows alike. In `status` it is the JSON field `fits`; in the request's reply one more line.
+- A host whose link is paused or storming (D16) counts as `UNAVAILABLE` while its stored card is still fresh.
+- `READONLY_WAIT` reads the request's live wait (A125, `liveWaitMin`), as the rest of a5r does.
+- The origin reads a host's A5R card every minute when it declares `reach.options.a5rRoot` (on Windows two short ssh calls: the size, then the file); it writes its copy only when it changed. Without `a5rRoot` the probe card is refreshed only when stale, as in S-b.

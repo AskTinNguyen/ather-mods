@@ -28,6 +28,9 @@ export const EDITOR_TOOL_DEF = {
       pausable: { type: 'boolean', description: 'request: whether you can yield at a safe point (default true; false for a PIE request unless given).' },
       next_safe: { type: 'string', description: 'request: your next safe point, HH:MM or "after save".' },
       freeGb: { type: 'number', description: 'any action: free RAM in GB you read yourself, only when A5R said the RAM probe failed twice (used for 2 min, through the normal gates, logged).' },
+      needGb: { type: 'number', description: 'request: the free RAM the work needs in GB, when you know it (default: the launch gate). Used only to say whether another machine fits better.' },
+      readOnly: { type: 'boolean', description: 'request: the work only reads (no saves, no commits); a read-only request that has waited long for an Editor held by another may be told another machine fits.' },
+      wants: { type: 'array', items: { type: 'string' }, description: 'request: role tags another machine must have to fit (all of them).' },
       note: { type: 'string', description: 'release: one line for the lock note. focus_done: what was reached.' },
       dont_save: { type: 'array', items: { type: 'string' }, description: 'release: dirty packages to discard (Don\'t-Save), each confirmed by its owning lane.' },
       pie_stopped: { type: 'boolean', description: 'release: PIE this session started has ended (needed only when no stop was seen).' },
@@ -65,11 +68,12 @@ export const HOST_TOOL_DEF = {
     '"status": this machine\'s level and what the next level needs; "list"; "set" (id; label, owner, assumed, or reach/options, which re-checks; or asHost: this machine when it serves others); "pause" (id, reason), "resume" (id: after a link storm too), "remove" (id). Declarations go to the machine-local hosts file; checks, level and link counts to Saved/A5R/hosts/<id>/state.json (never edit those by hand). ' +
     'Hand-offs (L0): action "handoff", op "create" records that a lane runs elsewhere (label: the machine, free text; branch; base: a ref pushed to the remote, optionally sha; claims: repo-relative paths or globs, "!" exclusive, "~" shared, binary assets exclusive by default; task: one line); ' +
     '"update" (id; label, task, note, claims, or state "merged" once a result is in), "cancel" (id), "result" (id, ref: the PR, branch or report where the work landed), "list". ' +
-    'While a hand-off is open its exclusive claims refuse other sessions\' edits of those paths here and fail rule 1 at A5R acceptance unless progress.md or findings.md names the path. "suggest" comes in a later slice.',
+    'While a hand-off is open its exclusive claims refuse other sessions\' edits of those paths here and fail rule 1 at A5R acceptance unless progress.md or findings.md names the path. ' +
+    '"suggest" (minutes, pie, build, readOnly, needGb, wants, waitedMin): whether a declared host fits the work better than this machine, as JSON { suggestion: "none" | { host, label, reasons }, whyNot: [{ host, codes }] }; reasons RAM, LONG, READONLY_WAIT, FREEZE (IDLE joins a host that fits); why-not codes UNCHECKED, STALE_CARD, UNAVAILABLE, FROZEN, NO_ROLE, NO_TRUST, NO_RAM. It never creates a hand-off.',
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'status', 'add', 'set', 'check', 'pause', 'resume', 'remove', 'handoff'] },
+      action: { type: 'string', enum: ['list', 'status', 'add', 'set', 'check', 'pause', 'resume', 'remove', 'suggest', 'handoff'] },
       op: { type: 'string', enum: ['create', 'update', 'cancel', 'result', 'list'], description: 'handoff: what to do (default list).' },
       id: { type: 'string', description: 'add, set, check, pause, resume, remove: the host id. handoff update, cancel, result: the hand-off id.' },
       reach: { type: 'string', description: 'add, set: "ssh:<host or ssh alias>" or "manual".' },
@@ -89,6 +93,13 @@ export const HOST_TOOL_DEF = {
       ref: { type: 'string', description: 'handoff result: where the work landed (#PR, a PR URL, a branch, a report path).' },
       state: { type: 'string', enum: ['merged'], description: 'handoff update: merged, once the result is taken.' },
       note: { type: 'string', description: 'handoff create, update: one line.' },
+      minutes: { type: 'number', description: 'suggest: how long the work needs (default 30).' },
+      pie: { type: 'boolean', description: 'suggest: the work starts PIE (the higher launch gate is the RAM it needs).' },
+      build: { type: 'boolean', description: 'suggest: the work builds.' },
+      readOnly: { type: 'boolean', description: 'suggest: the work only reads.' },
+      needGb: { type: 'number', description: 'suggest: the free RAM it needs in GB (default: the launch gate in force).' },
+      wants: { type: 'array', items: { type: 'string' }, description: 'suggest: role tags the host must have (all of them).' },
+      waitedMin: { type: 'number', description: 'suggest: how long a read-only request has waited for the Editor here.' },
     },
     required: ['action'],
   },

@@ -1,6 +1,6 @@
 # A5R hosts: work that moves to other machines
 
-- Rev: 3
+- Rev: 4
 - Status: draft (design)
 - Area: a5r
 - Owner: HaiHuynh
@@ -69,7 +69,7 @@ Nothing is specific to one person's setup: no machine names, no task-kind fields
 - D8 (rev 2): **Availability and preemption.** The host owner sets `asHost.availability` (published in its card; R1). `availability = { state: yes|no, reason, windows[], until }`; `windows` is optional recurring text-free spans (`days`, `from`, `to`, host-local time zone named). The host owner (or its A5R) sets it. A change to `no`, or `until - warn`, writes `preempt` into each running job's file: the job's session gets a notice to reach a safe point, push a WIP branch, and `park`. Parked jobs can resume when availability returns or be `returned` to origin. Reason is shown only when state is no.
 - D9 (rev 1): **Claims are visible and checked at the action and at acceptance.** Open hand-offs' `claims` (paths, globs, asset sets) are read by every local session. A local edit to a claimed path is recorded (`rule=claim-touch`) at the hook and refused only for paths marked `exclusive` (binary assets default exclusive, text defaults shared); acceptance fails a diff that touches another open hand-off's exclusive claim without a reason in progress.md. Rule 1/3 text in the A5R intent is extended by reference, not rewritten.
 - D10 (rev 1): **Sync main stays per machine.** The local sync does not gate remote lanes (they branch from `origin/main` and PR). At the cutoff, A5R warns about open hand-offs whose `base` is not an ancestor-pushed ref or depends on local unpushed work (should not exist by D7, but a branch moved after creation is checked) and about hosts that report their own freeze (the card's `freeze` field). A host with its own sync freeze is `unavailable for new jobs` automatically.
-- D11 (rev 2): **Suggestion is a pure function** (`LONG`, default 120 min, is only a suggestion threshold; it never blocks or places anything) `suggest(request, local, cards, options) -> { suggestion: none | host(id, reasons[]) , whyNot: [{host, code}] }`. Reason codes: `RAM` (local free < need, host free >= need), `LONG` (minutes over `hosts.longMinutes`, default 120), `READONLY_WAIT` (read-only task, local Editor held), `FREEZE` (local sync freeze, host not frozen), `IDLE` (host offers capacity now). Why-not codes: `UNAVAILABLE`, `STALE_CARD`, `NO_ROLE`, `NO_TRUST`, `NO_RAM`, `FROZEN`, `UNCHECKED`, `NO_ADAPTER_OP`. Thresholds are options with defaults. It only suggests; a hand-off is always an explicit tool call or command.
+- D11 (rev 2): **Suggestion is a pure function** (`LONG`, default 120 min, is only a suggestion threshold; it never blocks or places anything) `suggest(request, local, cards, options) -> { suggestion: none | host(id, reasons[]) , whyNot: [{host, code}] }`. Reason codes: `RAM` (local free < need, host free >= need), `LONG` (minutes over `hosts.longMinutes`, default 120), `READONLY_WAIT` (read-only task, local Editor held), `FREEZE` (local sync freeze, host not frozen), `IDLE` (host offers capacity now). Why-not codes: `UNAVAILABLE`, `STALE_CARD`, `NO_ROLE`, `NO_TRUST`, `NO_RAM`, `FROZEN`, `UNCHECKED`, `NO_ADAPTER_OP`. Thresholds are options with defaults. It only suggests; a hand-off is always an explicit tool call or command. (rev 4, S-c) A host qualifies when it has no why-not code and at least one of `RAM`, `LONG`, `READONLY_WAIT` (read-only, the local Editor held by another session, waited at least `hostsOptions.readOnlyWaitMin`, default 15 min), `FREEZE` (a local sync cutoff or freeze overlaps the request window, the host card's `freeze` is null). `IDLE` (the host's Editor not running and its queue 0) is only added to the reasons of a host that already qualifies; it never suggests alone (no nagging). The need is the request's `needGb`, else the local launch gate in force (with PIE or without). The pick is the qualifying host with the most free RAM, ties by label. `NO_TRUST` is said only for a card with `acceptsFrom`; a probe card (none) skips the check and notes `trust unknown`. `NO_ADAPTER_OP` is S-d's (a hand-off), never said by suggest.
 - D12 (rev 2): **Trust is a host-side allow list.** A host accepts a job only if `from` (origin identity string = the origin's declared `owner` plus a stable machine id, no secret) is in `asHost.trust`, or `trust: ["*"]` (a bot). Origin identity is declared when the host is added; it proves nothing cryptographically, it names who to hold responsible; transport authentication (SSH key etc.) is the real gate. A job from an unknown origin is `declined` with reason `NO_TRUST`.
 - D13 (rev 1): **No secrets in jobs, ever.** Job and card files are scanned with the existing `secret_regex` on write; a match refuses the write. Credentials stay on each host (C3 checks they exist, never reads them).
 - D14 (rev 2): **Health checks are the setup.** Results are stored in state.json (D20), not in options. `host add` is a sequence of checks (section 7), each with id, pass/fail/skip, measured value, a fix line for an agent, and `checkedAt`. A host's level is derived from which checks passed. Stale checks (default 7 days, or a failing live probe) lower the level and re-run on the next `host check`.
@@ -107,7 +107,7 @@ asHost: {                         // inbound: this machine when it serves others
   ephemeral?: boolean,
   account?: { shared: "yes"|"no"|"unknown" }
 },
-hostsOptions: { staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }
+hostsOptions: { staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, readOnlyWaitMin: 15, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }   // readOnlyWaitMin: rev 4
 originId: string                 // this machine's identity for `from` (generated once: owner + random 8 hex)
 ```
 
@@ -118,6 +118,7 @@ The origin never copies `asHost` facts: it reads them from the host's card (sect
 ```
 { v:1, checks: { <checkId>: { status: "pass"|"fail"|"skip", value?: string, checkedAt: ms } },
   level: 0|1|2,                  // derived from checks, never edited
+  declSum?: string,              // rev 4: the sum of the reach, repo and engine the checks ran against (F-c4)
   engineDetected?: string, labSizeGb?: number,   // cached measurements (C8)
   pausedUntil?: ms, link: { failures: n, windowStart: ms, state?: "link-storm" } }
 ```
@@ -133,16 +134,19 @@ Writer: the host's own A5R tick (A5R host) or, for a probe-only host, the origin
 ```
 { v:1, at: ms, source: "a5r"|"probe", hostId?: string,
   machine: { label?, os?, freeRamGb|null, totalRamGb|null, freeDiskGb|null, engine?: string },
-  editor: { holder: {lane, end}|null, queue: n, running: boolean|"unknown" },
+  editor: { holder: {lane, end|null}|null, queue: n, running: boolean|"unknown" },   // queue: the coordination root's live queue (A16)
   availability: { state, reason?, until? },
   freeze: null | { kind: "sync", until?: ms },
   lanes: [{ id, slug, state: "idle"|"busy", branch? }],
   jobs: { running: n, queued: n },
   account: { shared: "yes"|"no"|"unknown" },
-  skew: { ms: number|null } }
+  skew: { ms: number|null },     // on the origin's copy of an A5R card: the skew C4 measured (host minus origin)
+  roles?: string[],              // rev 4: asHost.roles (a probe card: the declaration's assumed roles)
+  acceptsFrom?: string[] }       // rev 4: asHost.trust, the origin ids the host accepts ("*" = any); ids are not secrets.
+                                 //   Absent on a probe card: trust unknown (suggest does not say NO_TRUST)
 ```
 
-Probe-built cards mark fields `null` when unreadable. A card older than `staleCardMin` is `STALE_CARD`: used for display, never for a suggestion. `status.json` copies cards (without `lanes[].branch`).
+An A5R host's own card is written by its status writer when the content changed, or past half of `staleCardMin` with none (a heartbeat, so a quiet host stays fresh, rev 4). The origin reads it through the adapter at `<reach.options.a5rRoot>/Saved/A5R/card.json` and stores it as its copy with `source: "a5r"` while it is fresh (its `at` corrected by the measured skew), else falls back to the probe card. Probe-built cards mark fields `null` when unreadable. A card older than `staleCardMin` is `STALE_CARD`: used for display, never for a suggestion. `status.json` copies cards (without `lanes[].branch`).
 
 ### 3. Hand-off file (origin writer): `Saved/A5R/handoffs/<id>.json`
 
@@ -297,5 +301,6 @@ A15 closes every slice that changes code (a review per slice, one release per sl
 ## Changelog
 
 - Rev 1 (2026-11-09): first draft of the design.
+- Rev 4 (2026-11-09, slice S-c): section 2's card gains `acceptsFrom` (asHost.trust, needed for `NO_TRUST`) and `roles` (needed for `NO_ROLE`; F-c1), `editor.holder.end` may be null, the A5R card's heartbeat and the origin's read of it; D11 records the qualifying rule (IDLE only joins a host that already qualifies, never suggests alone), the need, the pick and trust-unknown for probe cards; section 1's `hostsOptions` gains `readOnlyWaitMin` (15); section 1b: the checks' declaration sum (`declSum`) covers only reach, repo and engine, so label, owner and assumed change without dropping the level (F-c4, t6).
 - Rev 3 (2026-11-09): C2 row (F-b4, decided by t6): `sort` gets CRLF on Windows and LF on POSIX; the hash of the 256 values on both sides is the byte-clean proof; the default shell is named as a possible cause, not a certain one. Sources S2 corrected: the `b a c` -> `???` reading was a Windows `sort` artifact, not proof of stdin corruption.
 - Rev 2 (2026-11-09): review-rev1.md applied. R1: options split into `hosts` (outbound) and `asHost` (inbound), host facts read from the card; R2: state moved to `state.json` per coordination root; R3: delivery always origin to host (D21), C12 without a reverse link; R4: a job obeys the host's Editor queue (D22); R5: decided as D19 (`asHost.coordinationRoot`), no F8; R6: Slices section and A# mapped; R7: result acceptance in A7; smaller: C8 declared and cached size, `LONG` is a suggestion threshold only. F1-F7 kept as accepted.

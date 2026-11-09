@@ -1,15 +1,16 @@
 # A5R hosts: Progress
 
-- Working under rev: 3
-- Current step: slices S-a (L0) and S-b (L1) built, on `intent/a5r-hosts`, not pushed, no release yet
-- Next step: S-c (cards from A5R hosts, suggest, the queue hint). F-b4 resolved by t6 (rev 3). Open: the A51 (desktop, slow) timing flake in the full suite (below). Findings F-a1 to F-a6 and F-b1 to F-b6 in findings.md (F-a3 resolved by Hải: folder claims stay shared).
+- Working under rev: 4
+- Current step: slices S-a (L0), S-b and S-c (L1) built on `intent/a5r-hosts` (pushed), no release yet
+- Next step: S-d (L2 hand-off). Findings F-a1 to F-a6, F-b1 to F-b8 and F-c1 to F-c5 in findings.md (F-a3 resolved by Hải; F-b4 and F-c4 resolved by t6).
 
 ## Checklist (slices from prompt.md)
 
 - [x] Slice S-a (L0): hand-off record, claims at the hook and at acceptance, pane rows and status.json `handoffs`
 - [x] Slice S-b (L1): `hosts`/`asHost` declarations, state.json, ssh and manual adapters, C1/C2/C4/C5/C10, add/resume, storm cap, probe cards, Hosts tile and status.json `hosts`
-- [ ] Slice S-c (cards, suggest) / S-d (L2) / S-e (runner)
-- [ ] A16 host Editor rules
+- [x] Slice S-c (L1): A5R host cards, the origin's a5r-card read with the probe fallback, suggest, the Editor hint, the host tool's suggest; F-c4 (the level's declaration sum)
+- [ ] Slice S-d (L2) / S-e (runner)
+- [ ] A16 host Editor rules (S-c: the card's queue part done)
 
 ## S-a: what was built
 
@@ -70,6 +71,28 @@
 - `node dev/check-size.mjs`: `size check: passed (150 code files changed).` register.ts 4,136 lines (unchanged); largest new file hostdesk.ts ≈350.
 - `node dev/test-all.mjs`: FAILED at the unit stage on `FAIL reading a checkout (A1) > origin/main’s intents …` (`72/73 passed`; the base failure F-a6), after `427/427 passed`; copies, paseo and type-check stages ran first. No new failure.
 
+## S-c: what was built
+
+- `a5r/hooks/suggest.ts` (new, pure): `suggest(request, local, hosts, options)` per D11 (rev 4): triggers RAM, LONG, READONLY_WAIT, FREEZE; IDLE only joins a host that qualifies; why-not UNCHECKED, STALE_CARD, UNAVAILABLE (also a paused or storming link), FROZEN, NO_ROLE, NO_TRUST (only with `acceptsFrom`; a probe card notes `trust unknown`), NO_RAM (also unread, noted `RAM unknown`); the pick by most free RAM, ties by label; `askFields`, the one parser of `needGb`, `readOnly`, `wants` (the Editor request and the host tool).
+- `a5r/hooks/hostcard.ts`: the card gains `roles` and `acceptsFrom` (F-c1); `isStale` corrects an A5R card's `at` by the skew C4 measured; `a5rCard` (local truth: the coordination root's holder and live queue, A16's card part), `availabilityNow`/`inWindow` (IANA zone, days, spans past midnight, `until`), `lanesOf` (`git worktree list --porcelain` under `laneRoot`), `sameCard`.
+- `a5r/hooks/hostdesk.ts`: an A5R host's own `card.json` by the status writer on a change or a heartbeat (F-c2); the origin reads `<a5rRoot>/Saved/A5R/card.json` through the adapter each minute and stores it (`source: "a5r"`, skew from C4's `ms`) while fresh, else the probe card; `localTruthOf`; the action `suggest`; `hint(session, now)` and `hinted(waits, files, now)` (none for a session holding the Editor; the option `suggest: false` turns them off).
+- `a5r/hooks/hostchecks.ts` / `hoststate.ts`: C4 keeps the skew as a number (`ms`) beside its text. `a5r/hooks/hosts.ts`: `readOnlyWaitMin` (15); `checkedSumOf` (F-c4). `a5r/hooks/lease.ts` / `coord.ts`: a request stores `needGb`, `readOnly`, `wants`. `a5r/hooks/tooldefs.ts`: the editor tool's three inputs, the host tool's `suggest`. `a5r/hooks/register.ts`: lines changed in place, still 4,136 (the desk's `local`, the reply's line, status's `fits` field, the Editor list's rows). README (Vietnamese) section "Thẻ host và gợi ý máy khác", `plugin.json` hostsOptions text, prompt.md rev 4.
+- Tests: `a5r/tests/hosts-sc.test.ts` (6 unit), `a5r/tests/hosts-sc-engine.test.ts` (4 engine). Changed assertions (none removed): F-c3.
+
+## S-c live check (2026-11-09, read-only, ssh alias of the second machine, no A5R there; scratch script, nothing written on the host)
+
+- Command: `node --experimental-strip-types sc-smoke.mts` (`sshAdapter` with the system OpenSSH client and `-F <ssh config>`, `probeCard`, then `suggest` with this machine's `Saved/A5R/probe.json` and the default gates 38/28).
+- `probe {"ok":true,"value":{"os":"windows","shell":"cmd"}} 1119 ms`; card `source: probe, freeRamGb 24.9, totalRamGb 63.7, editor running: true, availability unknown`; local free 6.5 GB.
+- `{"minutes":30,"pie":true}` -> `none`, whyNot `NO_RAM` (24.9 < 38), note `trust unknown`; `{"minutes":30,"needGb":4}` -> `none` (no trigger); `{"minutes":150,"needGb":4}` -> `fits rig (f20) (LONG)`; `{"wants":["mocap"]}` -> whyNot `NO_ROLE, NO_RAM`.
+
+## S-c gates (2026-11-09, worktree, the tree committed as is)
+
+- `npx -y -p typescript@5.6 tsc -p a5r`: exit 0, no output.
+- `claude plugin test a5r`: final run `864 pass` / `0 fail` / `Ran 864 tests across 80 files. [102.68s]`. The run before it: `863 pass / 1 fail` on `A117: person-only: …` (the editor tool's input names, F-c3), fixed, then the S-c, S-a, S-b and rev40 files alone `66 pass / 0 fail`, then the final full run. A51 (desktop, slow) passed in both full runs.
+- `claude plugin validate --strict a5r`: `✔ Validation passed` (the existing README install-line warning).
+- `node --experimental-strip-types a5r/tests/scan-old-names.mjs`: `0 decision-convention strings outside the exceptions, 5 of 5 exceptions in use`; `0 missing`; `0 outside a labelled example`. `build-script-smoke.mjs`: `… all as expected`; `merge-script-smoke.mjs`: `… all as expected`.
+- `node dev/check-size.mjs`: `size check: passed (153 code files changed).`; register.ts 4,136 lines (unchanged), hostdesk.ts ≈455.
+
 ## Acceptance
 
 | Item | Verdict | Evidence |
@@ -78,18 +101,18 @@
 | A2 | met (S-b) | unit `S-b (A2): unit: declarations are validated on read …`, `S-b (A2, A17): unit: writeHosts is the one writer …` (hand edit → `edited-by-hand`), `S-b (A2): unit: levelOf derives the level from checks only, for every class of combination` (13 rows); engine `S-b (A2): engine: a hand edit … flagged edited-by-hand and must be re-checked`. Options are written to the machine-local file (F-b1) |
 | A3 | met (S-b part: C1, C2, C4, C5, C10) | engine (mocked adapter): `S-b (A3): engine: C1, C2, C4, C5, C10 pass …`, `… C2 fails on the "b a c" -> "???" stdin case with its fix text verbatim …`, `… C1 fails with its fix line; C4 fails past 120 s; C5 fails on a rising count; C10 fails unread`, `S-b (A3, A13): engine: dependency skips …`. Live: C1, C4, C5, C10 pass; C2 failed under rev 2 (F-b4), passes under rev 3 (`C2 pass · sort a b c; 256 bytes in, same hash; stdout as sent`). C3, C6-C9, C11-C13: S-d |
 | A4 | met (S-b part: ssh, manual, storm cap) | unit `S-b (A4): unit: the adapter contract on a fake transport …` (NO_ADAPTER_OP, ADAPTER_ERROR), `… ssh: the remote command is ONE argument string …` (timeout 30 s, exit 255 = LINK), `… ssh readFile caps at 1 MiB; writeFile …`, `S-b (A4, D16): unit: the backoff … 12 failures in 10 min …`; engine `S-b (A4, D16): engine: 12 link failures in 10 min pause the host with the refusal verbatim; resume lets it run again` (sticky 2 h later). herdr, command: S-d |
-| A5 | open | S-c |
-| A6 | open | S-c |
+| A5 | met (S-c) | unit `S-c (A5, A16): unit: an A5R host card comes from local truth …`, `S-c (A5): unit: availability windows …`, `S-c (A5): unit: freshness uses the skew C4 measured …`; engine `S-c (A5, A16): engine: an A5R host writes Saved/A5R/card.json from local truth once per change, a heartbeat …` (one writer, only with asHost.enabled), `S-c (A5): engine: the origin stores the host's own A5R card … falls back to the probe card …`; a stale card is never used: `STALE_CARD` rows in A6. Full suite 864 pass 0 fail |
+| A6 | met (S-c) | unit `S-c (A6): unit: each reason triggers alone, at its boundary; IDLE … never suggests alone` (19 rows), `… every why-not code, alone and at its boundary …` (12 rows), `… no hosts, all stale, the pick …, thresholds from the options; suggest is pure`; no suggestion creates a hand-off (suggest writes nothing). Live: `fits rig (f20) (LONG)` and `NO_RAM` (above) |
 | A7 | open | S-d (S-a has the writer guard, D7 and D13 parts: unit tests `writer guard`, `D7`) |
 | A8 | open | S-d |
 | A9 | met (S-a parts: record, claim, acceptance) | unit `claimedBy …`, `claims: globs …`, `S-a (A9): unit: rule 1 …`; engine `S-a (D9): an edit inside another hand-off's exclusive claim is refused; inside a shared one it runs and is recorded …` and `S-a (A9): a PR whose diff holds a path … refused under rule 1; a reason line in findings.md lets it pass`: all pass in the 837-pass run |
 | A10 | open | S-d |
 | A11 | open | S-d, S-e (scenario 1 and 7's L0 record covered by the A1 test) |
-| A12 | met (S-b part: tile, status.json `hosts`) | engine `S-b (A12): engine: the Hosts tile and status.json's hosts appear only with a host declared …; terminal and desktop alike` (absent with no host and no hand-off; `Object.keys(status)` = before + `hosts`, `v` 1; stale, link-storm); S-a (A1) still passes with the hand-off rows under the tile. Queue hint: S-c |
+| A12 | met (S-b part: tile, status.json `hosts`) | engine `S-b (A12): engine: the Hosts tile and status.json's hosts appear only with a host declared …; terminal and desktop alike` (absent with no host and no hand-off; `Object.keys(status)` = before + `hosts`, `v` 1; stale, link-storm); S-a (A1) still passes with the hand-off rows under the tile. Queue hint (S-c): engine `S-c (A12, A16): engine: the Editor request's reply, status and the queued row carry "fits <label> (RAM)" only with a suggestion; terminal and desktop; status.json additive, v 1 …` (absent with no host, with a missing role and with the host unavailable; status's `fits` field) |
 | A13 | met (S-b checks) | engine `S-b (A13): engine: /a5r host add runs C1, C2, C4, C5, C10 in order, stops at the first failure with its fix line; a second add resumes at it`; unit `planOf`; README section "Hosts" states each command and its output. C3 … C13 join in S-d |
 | A14 | met (S-a) | new code in `claims.ts` (≈95 lines), `handoff.ts` (≈230), `handoffhost.ts` (≈180); register.ts 4148 -> 4136; `node dev/check-size.mjs`: `size check: passed`; `$` only in register.ts; `claude plugin validate --strict a5r`: `✔ Validation passed`; `node dev/test-all.mjs` fails only where the base fails (F-a6) |
 | A15 | open | review below; release with the slice's PR |
-| A16 | open | S-c, S-d |
+| A16 | met in part (S-c: the card's queue part) | the card's `editor.queue` is the coordination root's live queue and `holder` its lock's: unit `S-c (A5, A16): unit: …`, engine `S-c (A12, A16): …` (`editor.queue` 1 with this session waiting). Jobs in the queue, two Editors, NO_EDITOR_PROTOCOL, two roots: S-d |
 | A17 | met | unit `S-b (A2, A17): …` (state keys refused in declarations; the file holds `v, hosts, sums` only); engine `S-b (A17): engine: two checkouts of one machine share one state and one link record under the coordination root; options hold declarations only`; hand edits of `Saved/A5R/hosts/` refused (engine `S-b (A13)` …) |
 
 ## Thermo-nuclear review
@@ -102,5 +125,8 @@
 - S-b review 2: Verdict: block. Critical: an ssh target starting with `-` (`-oProxyCommand=…`) or a model-written `options.config` could still run a local command. Minors: add dropped a label-only change, a cast in parseState, comment placement, a placeholder adapter, a silent catch, the write rule's reach.
 - Fixed: target pattern and `--`; `PERSON_ONLY_OPTIONS` (ssh, config); add with no early return; parseState field by field; Seen built once; debug log; comments.
 - S-b review 3: Verdict: pass. Two minors, fixed: `%` dropped from the target pattern; a hand-written entry naming the ssh client or config is not probed until `/a5r host add <id>`. Accepted: section 1b's link field names (documented), the link.jsonl race (F-b7).
+- S-c review 1 (subagent, S-c diff against c8fa897): Verdict: block. Critical: the suggest inputs parsed in three places that disagreed (`needGb` ≤ 0 taken by one); C4's skew read back from its display text by a regex. Minors: option defaults as literals, local truth read 2N times per render, two "held by another" tests, two "holds the Editor" rules, the status hint after the JSON, a type-only guard, the wait clock, paused hosts suggested, two card comparisons, a 600-character line.
+- Fixed: `askFields` (one parser); C4's `ms`; `opts()`; `viewNow` once per answer; `heldByOther`; `hint(session)` with the `holding` rule; status's `fits` field; `judge` returns `room`; `liveWaitMin`; `isHeld` -> UNAVAILABLE; `sameCard`; `localTruthOf`. Then F-c4 (t6).
+- S-c review 2: Verdict: pass. Minors fixed: two formatting nits, the hint's early return before its view. Kept: `lease.ts` imports `askFields` from `suggest.ts` (it works; a move to a host-free module can come with S-d); a state.json from S-b reads as changed once under F-c4 (S-b not released: no Changes line).
 
 Verdict: pass

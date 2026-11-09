@@ -34,7 +34,7 @@ import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
 import { A5R_HELP, A5R_TOOL_ERRORS, EDITOR_TOOL_DEF, HOST_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
-import { HOST_TOOL, hostsDesk, type ClaimTouch, type HostIo } from './hostdesk.ts'
+import { HOST_TOOL, hostsDesk, localTruthOf, type ClaimTouch, type HostIo } from './hostdesk.ts'
 import { freezeSteps } from './freezehost.ts'
 import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
@@ -2818,7 +2818,7 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
 const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, isMerging: now => freeze.isMerging(syncFile, now) || isMergeScriptAlive(probe?.procs ?? null) === true, dir: hfDir, root: s2Root })
 const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now), isMergeScript: () => isMergeScriptAlive(probe?.procs ?? null), handoffs: () => hosts.handoffs.status(), hosts: () => hosts.status() })
 const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8), sync: now => ({ sync: syncFile, phase: phaseOf(syncFile, now) }) })
-const hosts = hostsDesk({ dir: hfDir, root: s2Root, me8: () => me8, lane: () => me?.lane ?? me8, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), isWriter: now => takerOf(now) === me8 }) // a5r-hosts S-a, S-b: hand-offs, claims and hosts
+const hosts = hostsDesk({ dir: hfDir, root: s2Root, me8: () => me8, lane: () => me?.lane ?? me8, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), isWriter: now => takerOf(now) === me8, local: now => localTruthOf({ isWindows: Boolean(places.LOCALAPPDATA), probe, holder: queueView(grantInput(now)).holder, queue: liveQueueNow(now).length, gates, sync: syncFile, phase: phaseOf(syncFile, now) }) }) // a5r-hosts S-a, S-b, S-c: hand-offs, claims, hosts and cards (local: A16, the card's Editor part)
 const deskIo = ($: Engine, opts: Opts): HostIo => ({ ...hostIo($, opts), claimGlobs: opts.claimExclusiveGlobs, originId: opts.originId, secrets: () => load($).then(a => a.cfg.secret_regex), proc: (argv, init) => $.process.run(argv, init).catch(() => null), hostOpts: opts, log: note => $.ui.log(note, { to: 'debug' }) })
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
@@ -3103,8 +3103,8 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
     if (answer) return answer
     showStatus($)
     $.ui.invalidate('ui.render')
-    const asked = me?.yieldAsks.find(a => a.at === now)
-    return tail(`${placeText(decision)}${convertNote ? ` · ${convertNote}` : ''}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5r)' : ''}` : ''}`)
+    const [asked, fits] = [me?.yieldAsks.find(a => a.at === now), hosts.hint(me, now)] // fits: a5r-hosts D17
+    return tail(`${placeText(decision)}${convertNote ? ` · ${convertNote}` : ''}${asked ? ` · the holder (session ${asked.holder}) was asked to yield at its next safe point${asked.via === 'send' ? ' (UE request line sent: it runs without a5r)' : ''}` : ''}${fits && `\n${fits}`}`)
   }
   if (action === 'release') {
     lockRaw = await $.fs.read(lockFile()).catch(() => null)
@@ -3161,7 +3161,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
   const files = me ? [me, ...peers] : peers
   const view = queueView(grantInput(now))
   const whatOf = (id8: string) => files.find(f => f.id8 === id8)?.want?.what ?? ''
-  const focus = claimNow(now)?.kind === 'focus' ? focusNow(now) : null
+  const [focus, fits] = [claimNow(now)?.kind === 'focus' ? focusNow(now) : null, hosts.hint(me, now)] // fits: a5r-hosts D17
   return tail(
     JSON.stringify(
       {
@@ -3172,7 +3172,7 @@ async function editorTool($: Engine, opts: Opts, e: Input): Promise<string> {
         leases24h: summaryLine(leaseSummary(leaseLog, now)),
         memory: probe ? { freeGb: probe.freeGb, launchGate: { withPie: gates.pieGb, withoutPie: gates.nopieGb, setOn: gates.source }, pie: 'start ≥ 5 GB, abort < 3 GB (fixed)', diskGb: probe.diskGb, cleanup: cleanupNote || 'none yet' } : 'probe did not answer',
         sync: syncFile ? { at: clockOf(syncFile.at), phase: phaseOf(syncFile, now), holder: syncFile.holder.lane } : 'none planned',
-        focus: focus ? focusHead(focus, appTitleOf(appNow(now))) : 'none runs',
+        focus: focus ? focusHead(focus, appTitleOf(appNow(now))) : 'none runs', ...(fits ? { fits } : {}),
       },
       null,
       1,
@@ -3258,7 +3258,7 @@ type ButtonEl = { Button: (p: Record<string, unknown>) => unknown }
 /** A31 / A116: what matches the sessions to the app's own list (their titles name the Editor list's rows). */
 const appNow = (now: number, id8 = me8): AppFacts => ({ me8: id8, meTitle: me?.title ?? '', files: filesNow(), clients, isS2Cwd: cwd => s2Cwds.get(cwd.toLowerCase()) ?? false, names: sessionNames, now })
 /** A116: the Editor list and the other sessions (panel.ts), from the queue every session computes and the app's titles. */
-const editorNow = (now: number, id8 = me8) => editorPanel({ wakeLine: wakes.line(now), waits: freeze.waitsNow(now).texts, grant: { ...grantInput(now), me8: id8 }, app: appNow(now, id8), phase: phaseOf(syncFile, now), summary: leaseSummary(leaseLog, now) })
+const editorNow = (now: number, id8 = me8) => editorPanel({ wakeLine: wakes.line(now), waits: hosts.hinted(freeze.waitsNow(now).texts, me ? [me, ...peers] : peers, now), grant: { ...grantInput(now), me8: id8 }, app: appNow(now, id8), phase: phaseOf(syncFile, now), summary: leaseSummary(leaseLog, now) })
 
 /** A117 / A118: one change of the person's (a press on the panel, or his own /a5r editor or /a5r focus command; A118: or a
  * focus session's own focus_done), made by this session's A5R wherever he pressed: the world read fresh in the Editor's own

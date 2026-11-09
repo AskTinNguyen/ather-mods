@@ -439,7 +439,7 @@ test('A117: person-only: the editor tool has no order or resize action, an unkno
   expect(tools.map(t => t.name)).toEqual(['editor', 'sync', 'host']) // a5r-hosts S-a: the host tool
   const editor = tools[0]?.inputSchema.properties ?? {}
   expect(editor.action?.enum).toEqual(['request', 'release', 'extend', 'status', 'focus_done']) // rev 41 (A118): the focus session's own report
-  expect(Object.keys(editor).sort()).toEqual(['action', 'build', 'dont_save', 'freeGb', 'lane', 'launch', 'minutes', 'mode', 'next_safe', 'note', 'pausable', 'pie', 'pie_stopped', 'what'])
+  expect(Object.keys(editor).sort()).toEqual(['action', 'build', 'dont_save', 'freeGb', 'lane', 'launch', 'minutes', 'mode', 'needGb', 'next_safe', 'note', 'pausable', 'pie', 'pie_stopped', 'readOnly', 'wants', 'what']) // a5r-hosts S-c: needGb, readOnly, wants (suggest's inputs)
   for (const t of tools) expect(JSON.stringify(t.inputSchema)).not.toMatch(/queue-order|"(up|down|top|reset|order|resize|who)"/)
   for (const action of ['top', 'up', 'order', 'time', 'resize']) await $.tool.call({ tool: EDITOR, action, who: 'cccccccc', minutes: 60 } as never)
   expect(w.read(ORDER)).toBe('')

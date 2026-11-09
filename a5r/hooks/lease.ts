@@ -3,6 +3,7 @@
 // A101 busy is not idle; A102 a retest extension; A104 a forced release keeps its place; A105 the queue as Hai sees it
 // (A116: in plain words; A117: in the person's order, a holder's resized end).
 import { liveWaitMin, waitStart } from './truth.ts'
+import { askFields } from './suggest.ts'
 import { IDLE_RELEASE_MS, LEASE_WARN_MS, NOTICES, PASS_MAX_MIN, YIELD_EVERY_MS, claimIn, decide, hhmm, holdsSyncSlot, isPlaced, isYieldMoment, livenessOf, lockTimes, noticeIds, noticeText, queueIn, type Claim, type Decision, type GrantInput, type Holding, type LockLine, type Notice, type SessionFile, type Want, type WaitCode, type YieldAsk } from './coord.ts'
 
 /** A100: the lease records, beside the other files in Saved/A5R, kept to the last 2,000 lines. */
@@ -167,6 +168,7 @@ export const wantOf = (me: Pick<SessionFile, 'want' | 'return'> | null, e: Recor
     ...placeOf(me, now),
     ...waitStart(me?.want, now),
     ...(e.launch === false ? { launch: false } : {}),
+    ...askFields(e), // a5r-hosts S-c: suggest's inputs (additive), stored for every session's hint
   }
 }
 

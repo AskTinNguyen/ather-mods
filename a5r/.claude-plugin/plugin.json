@@ -86,7 +86,7 @@
     "hostsOptions": {
       "type": "string",
       "title": "A5R hosts: thresholds (JSON, optional)",
-      "description": "{ staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }: a probe card older than staleCardMin is refreshed on the minute; a check older than staleCheckDays no longer counts for the level."
+      "description": "{ staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, readOnlyWaitMin: 15, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }: a probe card older than staleCardMin is refreshed on the minute (a stale card is never used to suggest); a check older than staleCheckDays no longer counts for the level; longMinutes and readOnlyWaitMin are suggest's LONG and READONLY_WAIT thresholds; suggest: false turns the Editor hint off."
     },
     "originId": {
       "type": "string",

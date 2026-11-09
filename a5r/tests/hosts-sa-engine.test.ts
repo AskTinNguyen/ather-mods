@@ -70,10 +70,10 @@ test('S-a (D7, D13): a base sha that is not on the remote, or a secret in the ta
 test('S-a: the host tool: handoff create/update/result/list/cancel; any other action answers that a later slice adds it (no throw)', opts(), async ($, on) => {
   const w = world(on, { git: LS })
   await $.session.start(START)
-  // S-b answers status and add (F-b3); suggest is still a later slice's.
+  // S-b answers status and add (F-b3); S-c answers suggest (F-c3): with no host declared, none and no why-not.
   expect(out(await $.tool.call({ tool: HOST, action: 'status' } as never))).toContain('This machine: L0.')
   expect(out(await $.tool.call({ tool: HOST, action: 'add' } as never))).toBe(`A5R · host — host id "" must be 1-32 of a-z, 0-9 and - → ${HOST_USAGE}`)
-  expect(out(await $.tool.call({ tool: HOST, action: 'suggest' } as never))).toBe('A5R · host — not in this version → slice S-c adds suggest')
+  expect(JSON.parse(out(await $.tool.call({ tool: HOST, action: 'suggest' } as never)))).toEqual({ suggestion: 'none', whyNot: [] })
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'packet' } as never))).toBe('A5R · host — not in this version → slice S-d adds the hand-off packet')
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'creat' } as never))).toBe('A5R · handoff — "creat" is not a handoff op → use create, update, cancel, result or list')
   expect(out(await $.tool.call({ tool: HOST, action: 'handoff', op: 'list' } as never))).toContain('No hand-offs here.')

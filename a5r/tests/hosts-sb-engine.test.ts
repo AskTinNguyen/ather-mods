@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { DEFAULT_LINK, errOf, okOf, type Adapter, type RunOut } from '../hooks/adapters/types.ts'
 import { blankSession } from '../hooks/coord.ts'
 import { ALL_BYTES, FIX, STDOUT_SEQ, checkLine, helperCount, pastedChecks, planOf, runChecks, type CheckCtx } from '../hooks/hostchecks.ts'
+import type { LocalTruth } from '../hooks/hostcard.ts'
 import { hostsDesk, type HostIo } from '../hooks/hostdesk.ts'
 import { HOST_USAGE } from '../hooks/hosts.ts'
 import type { CheckId, Checks } from '../hooks/hoststate.ts'
@@ -148,6 +149,8 @@ const winRemote = (state: { down: boolean; sort?: string }) => async (argv: read
   const hit = [[/^sort$/, () => out(state.sort ?? 'a\r\nb\r\nc\r\n')] as const, ...GOOD].find(([rx]) => rx.test(line))
   return hit ? hit[1](init.stdin) : out('')
 }
+/** S-c: this machine's local truth, which the desk now takes (a quiet machine; no sync). */
+const LOCAL: LocalTruth = { os: 'windows', freeGb: 30, diskGb: 100, running: false, holder: null, queue: 0, gates: { pieGb: 18, nopieGb: 12 }, sync: null }
 const AS_HOST = { enabled: false, roles: [], trust: [], availability: { state: 'yes' }, coordinationRoot: 'E:/s2' }
 
 test('S-b (A17): engine: two checkouts of one machine share one state and one link record under the coordination root; options hold declarations only', async () => {
@@ -155,7 +158,7 @@ test('S-b (A17): engine: two checkouts of one machine share one state and one li
   const clock = { now: NOW }
   const remote = { down: false }
   const io = memIo(files, clock, winRemote(remote))
-  const desk = (dir: string) => hostsDesk({ dir: () => dir, root: () => dir.replace('/Saved/A5R', ''), me8: () => ME.slice(0, 8), lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true })
+  const desk = (dir: string) => hostsDesk({ dir: () => dir, root: () => dir.replace('/Saved/A5R', ''), me8: () => ME.slice(0, 8), lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => LOCAL })
   const a = desk('E:/s2/Saved/A5R')
   const b = desk('E:/s2-wt/Saved/A5R')
   expect(await a.tool(io, { action: 'set', asHost: AS_HOST })).toBe('A5R · asHost written (this machine when it serves others).')
@@ -180,7 +183,7 @@ test('S-b (A4, D16): engine: 12 link failures in 10 min pause the host with the 
   const clock = { now: NOW }
   const remote = { down: false }
   const io = memIo(files, clock, winRemote(remote))
-  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true })
+  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => LOCAL })
   await d.command(io, 'host add f20 --reach ssh:f20')
   remote.down = true
   const said: string[] = []
@@ -210,7 +213,7 @@ test('S-b review: add keeps the declaration\'s other fields; only the person cho
   const clock = { now: NOW }
   const io = memIo(files, clock, winRemote({ down: false }))
   io.originId = 'team-pc1' // the plugin option, as register.ts hands it
-  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true })
+  const d = hostsDesk({ dir: () => 'E:/s2/Saved/A5R', root: () => 'E:/s2', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/u', isWriter: () => true, local: () => LOCAL })
   await d.command(io, 'host add f20 --reach ssh:f20 --label "second pc"')
   expect(await d.tool(io, { action: 'set', id: 'f20', assumed: { availability: { state: 'no', reason: 'nights only' } } })).toBe('A5R · host f20 changed (no check needed).')
   await d.tool(io, { action: 'add', id: 'f20', reach: 'ssh:f20.lan' })
@@ -287,7 +290,10 @@ test('S-b (A2): engine: a hand edit (of the hosts file, or an entry in the plugi
   await $.session.start(START)
   await cmd($, 'host add f20 --reach ssh:f20')
   const f = JSON.parse(w.read(HOSTS_JSON))
+  // F-c4 (S-c): a label changed by hand keeps the level (edited-by-hand only); a reach changed by hand is re-checked.
   w.put(HOSTS_JSON, JSON.stringify({ ...f, hosts: { f20: { ...f.hosts.f20, label: 'renamed by hand' } } }))
+  expect(await cmd($, 'host status')).toContain('- f20 · renamed by hand · L1 · ssh:f20 · checked 0m ago · edited-by-hand\n')
+  w.put(HOSTS_JSON, JSON.stringify({ ...f, hosts: { f20: { ...f.hosts.f20, label: 'renamed by hand', reach: { ...f.hosts.f20.reach, options: { reverse: true } } } } }))
   const status = await cmd($, 'host status')
   expect(status).toContain('- f20 · renamed by hand · L0 · ssh:f20 · checked 0m ago · edited-by-hand · declaration changed since the checks: /a5r host check f20')
   expect(status).toContain('- rig · night rig · L0 · manual · never checked · edited-by-hand')

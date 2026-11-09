@@ -7,7 +7,7 @@
 import { isObj, isStrs } from './shape.ts'
 
 /** `/a5r host …` (the command and the help line). */
-export const HOST_USAGE = '/a5r host list · status · add <id> --reach ssh:<target>|manual [--label "<text>"] [--owner <who>] [--ssh <client>] [--config <ssh config>] · check <id> [C1 C2 …] [--paste <file>] · pause <id> [reason] · resume <id> · remove <id>'
+export const HOST_USAGE = '/a5r host list · status · add <id> --reach ssh:<target>|manual [--label "<text>"] [--owner <who>] [--ssh <client>] [--config <ssh config>] · check <id> [C1 C2 …] [--paste <file>] · pause <id> [reason] · resume <id> · remove <id> · suggest [--minutes N] [--pie] [--build] [--readonly] [--need-gb N] [--wants a,b] [--waited N]'
 export const HOST_ID = /^[a-z0-9-]{1,32}$/
 export const REACH_KINDS = ['ssh', 'herdr', 'command', 'manual'] as const
 export type ReachKind = (typeof REACH_KINDS)[number]
@@ -36,8 +36,8 @@ export type AsHost = {
   ephemeral?: boolean
   account?: { shared: 'yes' | 'no' | 'unknown' }
 }
-export type HostsOptions = { staleCardMin: number; staleCheckDays: number; longMinutes: number; needGbDefault: number; suggest: boolean; warnBeforeUntilMin: number }
-export const HOSTS_OPTIONS: HostsOptions = { staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }
+export type HostsOptions = { staleCardMin: number; staleCheckDays: number; longMinutes: number; readOnlyWaitMin: number; needGbDefault: number; suggest: boolean; warnBeforeUntilMin: number }
+export const HOSTS_OPTIONS: HostsOptions = { staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, readOnlyWaitMin: 15, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }
 
 /** One host as read: its declaration (null when invalid), the problems found, and whether a hand wrote it. */
 export type HostEntry = { id: string; decl: HostDecl | null; problems: string[]; byHand: boolean; from: 'option' | 'file' }
@@ -68,6 +68,10 @@ export const sumOf = (v: unknown): string => {
   }
   return h.toString(16).padStart(8, '0')
 }
+
+/** The sum the checks ran against (state.json `declSum`): only what the checks depend on (reach, repo, engine), so a new
+ * label, owner or assumption keeps the level (F-c4). */
+export const checkedSumOf = (d: HostDecl): string => sumOf({ reach: d.reach, repo: d.repo, engine: d.engine })
 
 const availProblems = (v: unknown, at: string): string[] =>
   !isObj(v) ? [`${at} must be { state: "yes" | "no", reason? }`] : [...(v.state === 'yes' || v.state === 'no' ? [] : [`${at}.state must be "yes" or "no"`]), ...(v.reason === undefined || typeof v.reason === 'string' ? [] : [`${at}.reason must be text`])]

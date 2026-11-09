@@ -49,7 +49,7 @@ export type CheckCtx = {
   reverse?: boolean
 }
 export type RunReport = { checks: Checks; ran: CheckId[]; failed: CheckId | null; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram }
-type One = { status: CheckResult['status']; value: string; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram }
+type One = { status: CheckResult['status']; value: string; ms?: number; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram }
 
 const gb = (kb: number) => Math.round((kb / 1024 / 1024) * 10) / 10
 const lines = (s: string) => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
@@ -88,7 +88,8 @@ const c4 = async (x: CheckCtx, os: RemoteOs): Promise<One> => {
   if (!Number.isFinite(n) || n <= 0) return fail(`the host's clock could not be read: ${JSON.stringify(r.value.stdout.slice(0, 40))}`)
   return skewOne((os === 'windows' ? n : n * 1000) - (t0 + t1) / 2)
 }
-const skewOne = (skew: number): One => ({ status: Math.abs(skew) < SKEW_LIMIT_MS ? 'pass' : 'fail', value: `skew ${skew >= 0 ? '+' : '-'}${(Math.abs(skew) / 1000).toFixed(1)} s (limit 120 s)` })
+/** C4's result: the skew (host minus here) as its number `ms` and as text. */
+const skewOne = (skew: number): One => ({ status: Math.abs(skew) < SKEW_LIMIT_MS ? 'pass' : 'fail', value: `skew ${skew >= 0 ? '+' : '-'}${(Math.abs(skew) / 1000).toFixed(1)} s (limit 120 s)`, ms: Math.round(skew) })
 
 /** C5: the helper processes the remote user owns, counted over 3 probe cycles. */
 export const helperCount = (stdout: string, os: RemoteOs, pattern: RegExp): number =>
@@ -149,7 +150,7 @@ export const runChecks = async (x: CheckCtx, plan: readonly CheckId[], staleMs: 
   for (const id of plan) {
     const at = await x.now()
     ran.push(id)
-    const set = (o: One) => (checks[id] = { status: o.status, value: o.value, checkedAt: at })
+    const set = (o: One) => (checks[id] = { status: o.status, value: o.value, checkedAt: at, ...(o.ms !== undefined ? { ms: o.ms } : {}) })
     if (failed) {
       set({ status: 'skip', value: `not run: ${failed} failed` })
       continue
@@ -180,7 +181,7 @@ export const pastedChecks = (p: Pasted, now: number, pastedAt: number): RunRepor
   const checks: Checks = {
     C1: p.os ? r('pass', `${p.os} (pasted: ${p.osText})`) : r('fail', 'no a5r-os line in the pasted file'),
     C2: r('skip', 'manual: no link to test'),
-    C4: skew ? r(skew.status, `${skew.value}, against the pasted file's time`) : r('skip', 'no a5r-epoch line in the pasted file'),
+    C4: skew ? { ...r(skew.status, `${skew.value}, against the pasted file's time`), ms: skew.ms } : r('skip', 'no a5r-epoch line in the pasted file'),
     C5: r('skip', 'manual: no link to test'),
     C10: ram ? r('pass', `total ${ram.totalGb} GB, free ${ram.freeGb ?? 'unknown'} GB (pasted)`) : r('fail', 'no a5r-ram line in the pasted file'),
   }

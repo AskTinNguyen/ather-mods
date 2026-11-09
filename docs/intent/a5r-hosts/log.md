@@ -21,3 +21,11 @@ Append-only.
 ## L-5 (2026-11-09) | class: decision | -> rev 3
 
 > t6: F-b4 decided (engineering call, in scope): take the proposal. C2 (a) sends b CR LF a CR LF c CR LF to a Windows remote and b LF a LF c LF to POSIX; C2 (b) hash on both sides stays the byte-clean proof; fail text names the default shell as a possible cause. Update prompt.md's C2 row (rev 3, changelog), add the Resolution under F-b4, adjust tests, rerun the C2 live smoke (read-only) and the C2 tests; no full plugin test now (about 7 GB free RAM), note A51 as open. Addendum: in rev 3 also correct Sources S2 (the ??? reading was the sort artifact; measured: the multiplexer failed while DefaultShell was PowerShell and worked right after it was removed, one before/after, mechanism not proven).
+
+## L-6 (2026-11-09) | class: build | slice S-c -> rev 4
+
+> Implement slice S-c of intent a5r-hosts (L1: card publishing on A5R hosts, the origin reading them with the probe card as fallback, suggest and the queue hint, status.json) exactly as the brief from t6 says (decisions 1-5 given: acceptsFrom on the card, the origin's a5r-card read through reach.options.a5rRoot, suggest's reasons and why-not codes with IDLE never alone, the hint in the Editor request reply, status and queued row, the host tool's suggest action); work only in this worktree; optional read-only live check of suggest against the second machine; prompt.md rev 4; report with hc send t6.
+
+## L-7 (2026-11-09) | class: decision
+
+> t6: fix F-c4 inside S-c: the declaration sum that gates the level covers only reach, repo and engine; label, owner and assumed change without dropping the level. Add one test and mark F-c4 resolved.
