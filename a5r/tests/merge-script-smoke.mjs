@@ -239,16 +239,53 @@ try {
     expect(`criss-cross: merged with no rule: ${r.line}`, r.line.includes('A5R merge merged') && !r.line.includes('resolved:') && r.log.includes('2 merge base(s)') && r.log.includes('renames off: Content/Ene/Twinblades_Dead.uasset is no conflict path by path'))
     expect(`criss-cross: main's file added, the map gone, tree clean: ${git(dir, 'status', '--porcelain')}`, fs.readFileSync(path.join(dir, 'Content/Ene/Twinblades_Dead.uasset')).equals(map) && !fs.existsSync(path.join(dir, 'Content/Maps/L_Lab.umap')) && git(dir, 'status', '--porcelain') === '')
   }
+  // Every merge base counts (mutation S1): each side's first merge deleted a path the other base still has, and the lane
+  // adds both back. Against both bases main never touched them, so they are the lane's; against either base alone one of
+  // them is a modify/delete.
+  {
+    const dir = repo('criss cross readd', {
+      base: d => {
+        put(d, 'Content/z.uasset', Buffer.from([0, 1]))
+        put(d, 'Content/w.uasset', Buffer.from([0, 2]))
+      },
+      theirs: d => fs.rmSync(path.join(d, 'Content/z.uasset')),
+      ours: d => fs.rmSync(path.join(d, 'Content/w.uasset')),
+    })
+    const s1 = git(dir, 'rev-parse', 'origin/main')
+    const l1 = git(dir, 'rev-parse', 'HEAD')
+    git(dir, 'checkout', '-q', '-b', 'side', s1)
+    git(dir, 'merge', '-q', '--no-edit', '--no-ff', l1)
+    put(dir, 's.txt', 's\n')
+    git(dir, 'update-ref', 'refs/remotes/origin/main', commitAll(dir, 'theirs again'))
+    git(dir, 'checkout', '-q', 'lane')
+    git(dir, 'merge', '-q', '--no-edit', '--no-ff', s1)
+    put(dir, 'Content/z.uasset', Buffer.from([0, 7]))
+    put(dir, 'Content/w.uasset', Buffer.from([0, 8]))
+    commitAll(dir, 'ours again')
+    git(dir, 'branch', '-q', '-D', 'side')
+    const r = merge(dir, 's-ccreadd')
+    expect(`criss-cross re-added: merged with no rule: ${r.line}`, r.line.includes('A5R merge merged') && fs.readFileSync(path.join(dir, 'Content/z.uasset')).equals(Buffer.from([0, 7])) && fs.readFileSync(path.join(dir, 'Content/w.uasset')).equals(Buffer.from([0, 8])) && git(dir, 'status', '--porcelain') === '')
+  }
   // Review: a path both sides changed that merge-tree merges into HEAD's own blob (main's change is already in it): taken
   // as HEAD's, no conflict.
   {
     const dir = repo('subset', {
-      base: d => put(d, 'Source/s.cpp', 'a\nb\nc\n'),
-      theirs: d => put(d, 'Source/s.cpp', 'a\nB\nc\n'),
-      ours: d => put(d, 'Source/s.cpp', 'a\nB\nc\nd\n'),
+      base: d => {
+        put(d, 'Source/s.cpp', 'a\nb\nc\n')
+        put(d, 'Source/m.cpp', 'one\ntwo\nthree\nfour\nfive\n')
+      },
+      theirs: d => {
+        put(d, 'Source/s.cpp', 'a\nB\nc\n')
+        put(d, 'Source/m.cpp', 'ONE\ntwo\nthree\nfour\nfive\n')
+      },
+      ours: d => {
+        put(d, 'Source/s.cpp', 'a\nB\nc\nd\n')
+        put(d, 'Source/m.cpp', 'one\ntwo\nthree\nfour\nFIVE\n')
+      },
     })
     const r = merge(dir, 's-subset')
     expect(`subset: merged: ${r.line}`, r.line.includes('A5R merge merged') && read(dir, 'Source/s.cpp') === 'a\nB\nc\nd\n' && git(dir, 'status', '--porcelain') === '')
+    expect('subset: a path both sides changed apart is merge-tree\'s content merge', read(dir, 'Source/m.cpp') === 'ONE\ntwo\nthree\nfour\nFIVE\n')
   }
   // A145: a delete kind resolved by a rule. Main deletes a .uasset the lane changed (modify/delete).
   const modDel = {
@@ -289,7 +326,7 @@ try {
     })
     const before = snapshot(dir)
     const r = merge(dir, 's-renamed')
-    expect(`renamed: refused, the old path a modify/delete: ${r.line}`, r.line.includes('A5R merge refused conflict: 1 conflicted path(s)') && r.line.includes('Source/old.cpp (no rule matches: '))
+    expect(`renamed: refused, the old path a modify/delete: ${r.line}`, r.line.includes('A5R merge refused conflict: 1 conflicted path(s)') && r.line.includes('Source/old.cpp (no rule matches: modify/delete)'))
     expect('renamed: HEAD, index and tree exactly as before', snapshot(dir) === before)
   }
   // An unresolved conflict: a text file and a .uasset no rule names; nothing written.

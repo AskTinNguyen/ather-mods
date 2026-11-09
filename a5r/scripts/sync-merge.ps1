@@ -227,6 +227,7 @@ try {
   if ($mb.Code -gt 1) { Stop-Merge 'error' ('git merge-base exited ' + $mb.Code + ': ' + $mb.Err) }
   $bases = @($mb.Out -split '\s+' | Where-Object { $_ })
   if ($bases.Count -eq 0) { Stop-Merge 'error' "HEAD and $Target have no merge base (nothing written)" }
+  if ($bases.Count -gt 6) { Stop-Merge 'error' "HEAD and $Target have $($bases.Count) merge bases; git read-tree takes 6 at most (nothing written): merge by hand" }
   Invoke-GitOk (@('read-tree', '-m', '--aggressive', '-i') + $bases + @($old, $theirs)) $M | Out-Null
   # merge-tree's kinds for a path, bare (`contents, binary`), Auto-merging aside.
   $kindOf = { param($p) @($types[$p] | Where-Object { $_ -and $_ -ne 'Auto-merging' } | ForEach-Object { $_ -replace '^CONFLICT \((.*)\)$', '$1' }) -join ', ' }
