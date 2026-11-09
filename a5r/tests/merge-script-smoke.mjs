@@ -4,8 +4,10 @@
 // Each case builds a small repo in a temp folder whose path holds a space and an `&`: a lane branch checked out and a
 // `refs/remotes/origin/main` that moved on; a `*.up` filter (smudge: upper case) stands for LFS. A5R's script for it is
 // written by mergescript.ts and started by the worker's own command through PowerShell. Cases: a clean merge; conflicts
-// resolved by the holder's rules; an unresolved conflict (text, and a .uasset with no rule); dirty and untracked-in-the-way
-// paths; a split index refused; a refused index rename retried then installed; the script killed between update-ref and
+// resolved by the holder's rules; A145 (rev 47): a path both sides deleted that merge-ort pairs with a new file of main (clean
+// with rename detection off), a criss-cross (two merge bases: merge-tree's rename/delete refused, then resolved by theirs),
+// modify/delete resolved by theirs, by ours, and refused with no rule, a real rename on main not carried; an unresolved
+// conflict (text, and a .uasset with no rule); dirty and untracked-in-the-way paths; a split index refused; a refused index rename retried then installed; the script killed between update-ref and
 // the install (what it leaves, the wait command's ending line); a rename refused for good, rolled back. A failed case must leave
 // HEAD, the branch, the index (byte for byte) and the working tree exactly as before.
 // Exit 0: every case as expected (or not on Windows: skipped, said); else each failure is printed, exit 1.
@@ -13,7 +15,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { LOCK_MARK, MERGE_BODY, MERGE_END, NO_RESULT, mergeOutcome, mergeScriptText, mergeStartCommand, mergeWaitCommand, syncMergeLog, syncMergeScript } from '../hooks/mergescript.ts'
 
@@ -181,6 +183,108 @@ try {
     expect('rules: the .uasset is main\'s, the text file ours', fs.readFileSync(path.join(dir, 'Content/S2/x.uasset')).equals(Buffer.from([0, 9, 9, 9])) && read(dir, 't.txt') === 'lane\n')
     expect(`rules: tree clean: ${git(dir, 'status', '--porcelain')}`, git(dir, 'status', '--porcelain') === '')
   }
+  // A145, the 2026-11-09 shape: both sides delete the same lab map, and main adds an unrelated file with the same bytes, so
+  // merge-ort pairs the deletion with it ("CONFLICT (rename/delete)") whatever -X no-renames says (MEASURED, git 2.45.1).
+  // Path by path it is no conflict: the map stays deleted, main's file is added, no rule needed.
+  {
+    const map = Buffer.from('LABMAP\u0000\u0001\u0002 the same bytes in a new name, one two three four five six\n', 'latin1')
+    const dir = repo('both deleted', {
+      base: d => {
+        put(d, 'Content/Maps/L_Lab.umap', map)
+        put(d, 'k.txt', 'k\n')
+      },
+      theirs: d => {
+        fs.rmSync(path.join(d, 'Content/Maps/L_Lab.umap'))
+        put(d, 'Content/Ene/Twinblades_Dead.uasset', map)
+      },
+      ours: d => {
+        fs.rmSync(path.join(d, 'Content/Maps/L_Lab.umap'))
+        put(d, 'k.txt', 'k from the lane\n')
+      },
+    })
+    const ort = spawnSync('git', ['-C', dir, 'merge-tree', '--write-tree', '-X', 'no-renames', 'HEAD', 'origin/main'], { encoding: 'utf8' }).stdout ?? ''
+    expect(`both deleted: merge-tree itself still pairs them (else this case proves nothing): ${ort}`, ort.includes('CONFLICT (rename/delete)'))
+    const r = merge(dir, 's-bothdel')
+    expect(`both deleted: merged with no rule: ${r.line}`, r.line.includes('A5R merge merged') && !r.line.includes('resolved:'))
+    expect('both deleted: the map stays deleted, main\'s file is added', !fs.existsSync(path.join(dir, 'Content/Maps/L_Lab.umap')) && fs.readFileSync(path.join(dir, 'Content/Ene/Twinblades_Dead.uasset')).equals(map) && read(dir, 'k.txt') === 'k from the lane\n')
+    expect(`both deleted: the log says merge-tree's pairing was set aside: ${r.log.slice(-600)}`, r.log.includes('renames off: Content/Ene/Twinblades_Dead.uasset is no conflict path by path'))
+    expect(`both deleted: tree clean: ${git(dir, 'status', '--porcelain')}`, git(dir, 'status', '--porcelain') === '')
+  }
+  // A145, several merge bases (a criss-cross): read-tree takes one base, so merge-tree's tree stands, its pairing too; the
+  // rename/delete it reports is refused with no rule and resolved by a `theirs` rule (main's side: its file added).
+  {
+    const map = Buffer.from('LABMAP\u0000\u0001\u0002 criss-cross bytes, one two three four five six seven\n', 'latin1')
+    const dir = repo('criss cross', {
+      base: d => {
+        put(d, 'Content/Maps/L_Lab.umap', map)
+        put(d, 'k.txt', 'k\n')
+      },
+      theirs: d => put(d, 's.txt', 's\n'),
+      ours: d => put(d, 'l.txt', 'l\n'),
+    })
+    const s1 = git(dir, 'rev-parse', 'origin/main')
+    const l1 = git(dir, 'rev-parse', 'HEAD')
+    git(dir, 'checkout', '-q', '-b', 'side', s1)
+    git(dir, 'merge', '-q', '--no-edit', '--no-ff', l1)
+    fs.rmSync(path.join(dir, 'Content/Maps/L_Lab.umap'))
+    put(dir, 'Content/Ene/Twinblades_Dead.uasset', map)
+    git(dir, 'update-ref', 'refs/remotes/origin/main', commitAll(dir, 'theirs again'))
+    git(dir, 'checkout', '-q', 'lane')
+    git(dir, 'merge', '-q', '--no-edit', '--no-ff', s1)
+    fs.rmSync(path.join(dir, 'Content/Maps/L_Lab.umap'))
+    commitAll(dir, 'ours again')
+    git(dir, 'branch', '-q', '-D', 'side')
+    expect('criss-cross: two merge bases', git(dir, 'merge-base', '--all', 'HEAD', 'origin/main').split('\n').length === 2)
+    const before = snapshot(dir)
+    const refused = merge(dir, 's-cc-none')
+    expect(`criss-cross, no rule: the rename/delete refused: ${refused.line}`, refused.line.includes('Content/Ene/Twinblades_Dead.uasset (no rule matches: rename/delete)') && refused.log.includes('renames on: 2 merge bases'))
+    expect('criss-cross, no rule: HEAD, index and tree exactly as before', snapshot(dir) === before)
+    const r = merge(dir, 's-cc-theirs', [{ side: 'theirs', pattern: 'Content/**' }])
+    expect(`criss-cross, theirs: merged: ${r.line}`, r.line.includes('A5R merge merged') && r.line.includes('Content/Ene/Twinblades_Dead.uasset (theirs, rule: theirs Content/**)'))
+    expect(`criss-cross, theirs: main's file added, the map gone, tree clean: ${git(dir, 'status', '--porcelain')}`, fs.readFileSync(path.join(dir, 'Content/Ene/Twinblades_Dead.uasset')).equals(map) && !fs.existsSync(path.join(dir, 'Content/Maps/L_Lab.umap')) && git(dir, 'status', '--porcelain') === '')
+  }
+  // A145: a delete kind resolved by a rule. Main deletes a .uasset the lane changed (modify/delete).
+  const modDel = {
+    base: d => put(d, 'Content/m.uasset', Buffer.from([0, 1, 2])),
+    theirs: d => fs.rmSync(path.join(d, 'Content/m.uasset')),
+    ours: d => put(d, 'Content/m.uasset', Buffer.from([0, 7, 7])),
+  }
+  {
+    const dir = repo('moddel theirs', modDel)
+    const r = merge(dir, 's-mdtheirs', [{ side: 'theirs', pattern: 'Content/**' }])
+    expect(`modify/delete, theirs: merged: ${r.line}`, r.line.includes('A5R merge merged') && r.line.includes('Content/m.uasset (theirs, rule: theirs Content/**)'))
+    expect(`modify/delete, theirs: main's deletion, tree clean: ${git(dir, 'status', '--porcelain')}`, !fs.existsSync(path.join(dir, 'Content/m.uasset')) && git(dir, 'ls-tree', 'HEAD', 'Content/m.uasset') === '' && git(dir, 'status', '--porcelain') === '')
+  }
+  {
+    const dir = repo('moddel ours', modDel)
+    const r = merge(dir, 's-mdours', [{ side: 'ours', pattern: 'Content/*.uasset' }])
+    expect(`modify/delete, ours: merged: ${r.line}`, r.line.includes('A5R merge merged') && r.line.includes('Content/m.uasset (ours, rule: ours Content/*.uasset)'))
+    expect(`modify/delete, ours: HEAD's file kept, tree clean: ${git(dir, 'status', '--porcelain')}`, fs.readFileSync(path.join(dir, 'Content/m.uasset')).equals(Buffer.from([0, 7, 7])) && git(dir, 'status', '--porcelain') === '')
+  }
+  {
+    const dir = repo('moddel none', modDel)
+    const before = snapshot(dir)
+    const r = merge(dir, 's-mdnone', [{ side: 'theirs', pattern: 'Docs/**' }])
+    expect(`modify/delete, no rule: refused: ${r.line}`, r.line.includes('A5R merge refused conflict: 1 conflicted path(s)') && r.line.includes('Content/m.uasset (no rule matches: modify/delete)') && r.line.includes('HEAD, index and working tree are as before'))
+    expect('modify/delete, no rule: HEAD, index and tree exactly as before', snapshot(dir) === before)
+  }
+  // A145: a real rename on main is not carried either: main moves a file the lane edited, so the old path is modify/delete
+  // (refused with no rule, where merge-ort alone would have moved the lane's edit into main's new name).
+  {
+    const lines = Array.from({ length: 40 }, (_, n) => `line ${n}`)
+    const dir = repo('renamed', {
+      base: d => put(d, 'Source/old.cpp', `${lines.join('\n')}\n`),
+      theirs: d => {
+        fs.rmSync(path.join(d, 'Source/old.cpp'))
+        put(d, 'Source/new.cpp', `${lines.join('\n')}\n`)
+      },
+      ours: d => put(d, 'Source/old.cpp', `${lines.map(l => (l === 'line 20' ? 'line 20, the lane' : l)).join('\n')}\n`),
+    })
+    const before = snapshot(dir)
+    const r = merge(dir, 's-renamed')
+    expect(`renamed: refused, the old path a modify/delete: ${r.line}`, r.line.includes('A5R merge refused conflict: 1 conflicted path(s)') && r.line.includes('Source/old.cpp (no rule matches: '))
+    expect('renamed: HEAD, index and tree exactly as before', snapshot(dir) === before)
+  }
   // An unresolved conflict: a text file and a .uasset no rule names; nothing written.
   {
     const dir = repo('conflict', {
@@ -201,7 +305,7 @@ try {
     })
     const before = snapshot(dir)
     const r = merge(dir, 's-conflict', [{ side: 'ours', pattern: 'Docs/**' }])
-    expect(`conflict: refused with both paths: ${r.line}`, r.line.includes('A5R merge refused conflict: 2 conflicted path(s)') && r.line.includes('u.txt (no rule matches)') && r.line.includes('Content/y.uasset (no rule matches)'))
+    expect(`conflict: refused with both paths: ${r.line}`, r.line.includes('A5R merge refused conflict: 2 conflicted path(s)') && r.line.includes('u.txt (no rule matches: contents)') && r.line.includes('Content/y.uasset (no rule matches: binary, contents)'))
     expect('conflict: HEAD, index and tree exactly as before', snapshot(dir) === before)
     const refusal = mergeOutcome(r.log, false) // what the holder's A5R copies into orchestrate.log as rule=sync-merge
     expect(`conflict: the refusal read back with the git processes: ${JSON.stringify(refusal)}`, refusal.kind === 'refused' && refusal.note.startsWith('A5R merge refused conflict:') && Array.isArray(refusal.procs) && r.log.includes('rule=sync-merge git processes: '))
@@ -288,7 +392,7 @@ try {
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true })
 }
-console.log(`merge script smoke: ${failures.length ? `${failures.length} failed checks` : 'clean, rules, conflict, dirty, split index, stat-only, rename retry, killed mid-install and rollback all as expected'} (paths with a space and &; ${times.join(', ')})`)
+console.log(`merge script smoke: ${failures.length ? `${failures.length} failed checks` : 'clean, rules, both deleted (renames off), criss-cross rename/delete refused and by theirs, modify/delete by theirs, by ours and refused, a real rename not carried, conflict, dirty, split index, stat-only, rename retry, killed mid-install and rollback all as expected'} (paths with a space and &; ${times.join(', ')})`)
 console.log(`killed between update-ref and the index install leaves: ${killed}`)
 for (const f of failures) console.log(`FAIL ${f}`)
 process.exit(failures.length ? 1 : 0)

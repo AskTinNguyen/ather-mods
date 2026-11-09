@@ -1,7 +1,9 @@
 # A5R sync merge (A142, rev 46). A5R writes this file, with the param block above it, to Saved/A5R/<sync id>-merge.ps1
 # before the sync worker starts; the worker starts it detached with one command and waits for it. It merges $Target into
 # the shared checkout's branch the way sync-main proved by hand three times, never through `git merge`:
-#   1. git merge-tree --write-tree; conflicts resolved by the holder's rules (and rule 11) in a temporary index; write-tree.
+#   1. git merge-tree --write-tree for the content merges; each path decided by itself with rename detection off (A145:
+#      git read-tree -m --aggressive in a temporary index); conflicts of any kind resolved by the holder's rules (and
+#      rule 11) there; write-tree.
 #   2. git commit-tree <tree> -p HEAD -p <target>.
 #   3. The working tree written only for the paths the merge changes (git read-tree -m -u HEAD <new> on a copy of the
 #      index: git's own checkout, with LFS smudge, that refuses a dirty or untracked-in-the-way path before writing).
@@ -56,6 +58,29 @@ function Invoke-GitOk([string[]]$GitArgs, [string]$Index = '', [byte[]]$InputByt
   return $r
 }
 function Split-Nul([string]$Text) { return @($Text.Split([char]0) | Where-Object { $_ -ne '' }) }
+# `<mode> <oid> <stage>TAB<path>` entries (merge-tree's conflicted file info, ls-files -u) as path -> stage -> @{ Mode; Oid }.
+function Read-Stages([string[]]$Entries) {
+  $by = @{}
+  foreach ($e in $Entries) {
+    $tab = $e.IndexOf("`t")
+    $f = $e.Substring(0, $tab).Split(' ')
+    $p = $e.Substring($tab + 1)
+    if (-not $by.ContainsKey($p)) { $by[$p] = @{} }
+    $by[$p][$f[2]] = @{ Mode = $f[0]; Oid = $f[1] }
+  }
+  return $by
+}
+# diff-tree -r -z --no-renames --raw between two commits or trees: one object per changed path.
+function Get-RawDiff([string]$From, [string]$To) {
+  $raw = (Invoke-GitOk @('diff-tree', '-r', '-z', '--no-renames', '--raw', $From, $To)).Out.Split([char]0)
+  $list = New-Object System.Collections.ArrayList
+  for ($k = 0; $k + 1 -lt $raw.Length; $k += 2) {
+    if (-not $raw[$k].StartsWith(':')) { break }
+    $f = $raw[$k].Substring(1).Split(' ')
+    [void]$list.Add([pscustomobject]@{ OldMode = $f[0]; NewMode = $f[1]; OldOid = $f[2]; NewOid = $f[3]; Status = $f[4].Substring(0, 1); Path = $raw[$k + 1] })
+  }
+  return @($list)
+}
 # A repo path (forward slashes) as a full Windows path under the checkout.
 function Get-Full([string]$Path) { return Join-Path $Checkout $Path.Replace('/', [IO.Path]::DirectorySeparatorChar) }
 
@@ -170,22 +195,20 @@ try {
   if ((Invoke-Git @('merge-base', '--is-ancestor', $theirs, $old)).Code -eq 0) { Exit-Merge "A5R merge up-to-date $old ($Target $theirs is already in HEAD; nothing written)" 0 }
   Write-Log "HEAD $old on $branch; $Target $theirs"
 
-  # 1. The merge as a tree, with its conflicts resolved in a temporary index.
-  $mt = Invoke-Git @('merge-tree', '--write-tree', '-z', $old, $theirs)
+  # 1. The merge as a tree, with rename detection off and its conflicts resolved in a temporary index. A145 (rev 47):
+  # MEASURED 2026-11-09 on git 2.45.1, merge-tree (and git merge) accept `-X no-renames` and `-c merge.renames=false` and
+  # still pair a path deleted on both sides with an unrelated new file of main ("CONFLICT (rename/delete)"), and still
+  # carry an edit across a rename. So each path is decided by itself: git read-tree -m --aggressive (merge base, HEAD,
+  # target) never pairs two paths; merge-tree only merges the content of a path both sides changed. `-X no-renames` is
+  # passed too, for a git that honours it.
+  $mt = Invoke-Git @('merge-tree', '--write-tree', '-z', '-X', 'no-renames', $old, $theirs)
   if ($mt.Code -gt 1) { Stop-Merge 'error' ('git merge-tree exited ' + $mt.Code + ': ' + $mt.Err) }
   $tok = $mt.Out.Split([char]0)
   $tree = $tok[0]
   $zero = '0' * $tree.Length
-  $stages = @{}
   $i = 1
-  while ($i -lt $tok.Length -and $tok[$i] -ne '') {
-    $tab = $tok[$i].IndexOf("`t")
-    $f = $tok[$i].Substring(0, $tab).Split(' ')
-    $p = $tok[$i].Substring($tab + 1)
-    if (-not $stages.ContainsKey($p)) { $stages[$p] = @{} }
-    $stages[$p][$f[2]] = @{ Mode = $f[0]; Oid = $f[1] }
-    $i++
-  }
+  while ($i -lt $tok.Length -and $tok[$i] -ne '') { $i++ }
+  $stages = Read-Stages $(if ($i -gt 1) { $tok[1..($i - 1)] } else { @() })
   $i++
   $types = @{}
   while ($i -lt $tok.Length -and $tok[$i] -match '^\d+$') {
@@ -194,46 +217,63 @@ try {
     for ($j = 1; $j -le $n; $j++) { $types[$tok[$i + $j]] = @($types[$tok[$i + $j]]) + $kind }
     $i += $n + 3
   }
-  $merged = $tree
   $resolved = @()
   $tmp = Join-Path $gitDir "a5r-merge-$SyncId"
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-  if ($stages.Count -gt 0) {
-    $simple = @('Auto-merging', 'CONFLICT (contents)', 'CONFLICT (binary)', 'CONFLICT (modify/delete)')
-    $unresolved = @()
-    $lines = @()
-    foreach ($p in ($stages.Keys | Sort-Object)) {
-      $complex = @($types[$p] | Where-Object { $_ -and $simple -notcontains $_ })
-      if ($complex.Count -gt 0) { $unresolved += "$p ($($complex -join ', '): no rule resolves this kind)"; continue }
-      $side = $null
-      $why = ''
-      foreach ($r in $Rules) { if ([regex]::IsMatch($p, $r.Re, 'IgnoreCase')) { $side = $r.Side; $why = "rule: $($r.Side) $($r.Pattern)"; break } }
-      # Rule 11: main holds a blob of this branch's own history for the path (a self-conflict): ours. Text files only.
-      if (-not $side -and $p -notmatch '\.(uasset|umap)$' -and $stages[$p].ContainsKey('3')) {
-        $hist = (Invoke-Git @('log', '--format=', '--raw', '--no-abbrev', $old, '--', $p)).Out
-        if ($hist.Contains(' ' + $stages[$p]['3'].Oid + ' ')) { $side = 'ours'; $why = 'rule 11: main holds our own blob' }
-      }
-      if (-not $side) { $unresolved += "$p (no rule matches)"; continue }
-      $e = $stages[$p][$(if ($side -eq 'ours') { '2' } else { '3' })]
-      $lines += $(if ($e) { "$($e.Mode) $($e.Oid) 0`t$p" } else { "0 $zero`t$p" })
-      $resolved += "$p ($side, $why)"
+  $M = Join-Path $tmp 'merge.index'
+  # A conflict: path -> @{ Kind (merge-tree's words, or the path's own); Stages (1 base, 2 HEAD, 3 target; a side without
+  # the path has no stage) }. Every kind is resolved the same way: by a rule, else by rule 11, else refused.
+  $conflicts = @{}
+  $lines = @()
+  $bases = @(Split-Nul ((Invoke-Git @('merge-base', '--all', $old, $theirs)).Out -replace '\s+', [char]0))
+  $kindOf = { param($p) @($types[$p] | Where-Object { $_ -and $_ -ne 'Auto-merging' }) -join ', ' }
+  if ($bases.Count -eq 1) {
+    Invoke-GitOk @('read-tree', '-m', '--aggressive', '-i', $bases[0], $old, $theirs) $M | Out-Null
+    $ortNew = @{}
+    foreach ($c in (Get-RawDiff $old $tree)) { $ortNew[$c.Path] = @{ Mode = $c.NewMode; Oid = $c.NewOid; Status = $c.Status } }
+    $unmerged = Read-Stages (Split-Nul (Invoke-GitOk @('ls-files', '-u', '-z') $M).Out)
+    foreach ($p in $unmerged.Keys) {
+      $s = $unmerged[$p]
+      $kind = & $kindOf $p
+      $isBoth = $s.ContainsKey('2') -and $s.ContainsKey('3')
+      # Both sides changed the path: merge-tree's content merge stands when it merged it cleanly and paired it with nothing.
+      $e = $(if ($ortNew.ContainsKey($p)) { $ortNew[$p] } else { $s['2'] })
+      if ($isBoth -and -not $stages.ContainsKey($p) -and -not $kind -and $e.Status -ne 'D') { $lines += "0 $zero`t$p", "$($e.Mode) $($e.Oid) 0`t$p"; continue }
+      $conflicts[$p] = @{ Kind = $(if ($kind) { $kind } elseif ($isBoth) { 'CONFLICT (contents)' } else { 'CONFLICT (modify/delete)' }); Stages = $s }
     }
-    if ($unresolved.Count -gt 0) { Stop-Merge 'conflict' "$($unresolved.Count) conflicted path(s) that no rule resolves (nothing written)" $unresolved }
-    $M = Join-Path $tmp 'merge.index'
+    foreach ($p in ($stages.Keys | Where-Object { -not $unmerged.ContainsKey($_) } | Sort-Object)) { Write-Log "renames off: $p is no conflict path by path (merge-tree said: $(& $kindOf $p))" }
+  } else {
+    # Several merge bases (or none): read-tree takes one, so merge-tree's own tree stands, its pairings too.
+    Write-Log "renames on: $($bases.Count) merge bases, so merge-tree's own tree stands"
     Invoke-GitOk @('read-tree', $tree) $M | Out-Null
-    Invoke-GitOk @('update-index', '--index-info') $M ($enc.GetBytes(($lines -join "`n") + "`n")) | Out-Null
-    $merged = (Invoke-GitOk @('write-tree') $M).Out.Trim()
-    foreach ($x in $resolved) { Write-Log "resolved $x" }
+    foreach ($p in $stages.Keys) { $conflicts[$p] = @{ Kind = $(& $kindOf $p); Stages = $stages[$p] } }
   }
-  $raw = $(Invoke-GitOk @('diff-tree', '-r', '-z', '--no-renames', '--raw', $old, $merged)).Out.Split([char]0)
-  $list = New-Object System.Collections.ArrayList
-  for ($k = 0; $k + 1 -lt $raw.Length; $k += 2) {
-    if (-not $raw[$k].StartsWith(':')) { break }
-    $f = $raw[$k].Substring(1).Split(' ')
-    [void]$list.Add([pscustomobject]@{ OldMode = $f[0]; NewMode = $f[1]; OldOid = $f[2]; NewOid = $f[3]; Status = $f[4].Substring(0, 1); Path = $raw[$k + 1] })
+  $unresolved = @()
+  foreach ($p in ($conflicts.Keys | Sort-Object)) {
+    $c = $conflicts[$p]
+    $side = $null
+    $why = ''
+    foreach ($r in $Rules) { if ([regex]::IsMatch($p, $r.Re, 'IgnoreCase')) { $side = $r.Side; $why = "rule: $($r.Side) $($r.Pattern)"; break } }
+    # Rule 11: main holds a blob of this branch's own history for the path (a self-conflict): ours. Text files only.
+    if (-not $side -and $p -notmatch '\.(uasset|umap)$' -and $c.Stages.ContainsKey('3')) {
+      $hist = (Invoke-Git @('log', '--format=', '--raw', '--no-abbrev', $old, '--', $p)).Out
+      if ($hist.Contains(' ' + $c.Stages['3'].Oid + ' ')) { $side = 'ours'; $why = 'rule 11: main holds our own blob' }
+    }
+    $kind = $c.Kind -replace 'CONFLICT \(([^)]*)\)', '$1'
+    if (-not $side) { $unresolved += "$p (no rule matches: $kind)"; continue }
+    # theirs: main's side (a path main deleted stays deleted); ours: HEAD's.
+    $e = $c.Stages[$(if ($side -eq 'ours') { '2' } else { '3' })]
+    $lines += "0 $zero`t$p"
+    if ($e) { $lines += "$($e.Mode) $($e.Oid) 0`t$p" }
+    $resolved += "$p ($side, $why)"
   }
-  $changes = @($list)
-  Write-Log "merge tree ${merged}: $($changes.Count) path(s) change, $($stages.Count) conflicted, $($resolved.Count) resolved"
+  if ($unresolved.Count -gt 0) { Stop-Merge 'conflict' "$($unresolved.Count) conflicted path(s) that no rule resolves (nothing written)" $unresolved }
+  if ($lines.Count -gt 0) { Invoke-GitOk @('update-index', '--index-info') $M ($enc.GetBytes(($lines -join "`n") + "`n")) | Out-Null }
+  $merged = (Invoke-GitOk @('write-tree') $M).Out.Trim()
+  foreach ($x in $resolved) { Write-Log "resolved $x" }
+  if ($merged -ne $tree) { Write-Log "renames off: the tree differs from merge-tree's $tree on $(@(Get-RawDiff $tree $merged).Count) path(s)" }
+  $changes = @(Get-RawDiff $old $merged)
+  Write-Log "merge tree ${merged}: $($changes.Count) path(s) change, $($conflicts.Count) conflicted, $($resolved.Count) resolved"
 
   # The index lock, held from here to the install: no other git writes the index meanwhile.
   $index = Join-Path $gitDir 'index'
