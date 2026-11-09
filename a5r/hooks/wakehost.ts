@@ -131,9 +131,11 @@ export const conductor = (h: WakeState) => {
     }
     const overBudget = budgetHold(wake, s.why, now)
     if (overBudget) return hold(overBudget)
-    // A slow pass: another conductor may have taken over and started someone since this tick read the files.
+    // A slow pass: another conductor may have taken over and started someone since this tick read the files. A sync's start
+    // runs beside the start in flight (Fable 1: never starved by it), so only the same sync's start stops it.
     const latest = parseWake(await io.read(wakePath()))
-    if (parseConductor(await io.read(conductorPath()))?.id8 !== h.me8() || latest.current) return held('another conductor went on meanwhile')
+    const isTaken = s.syncId === undefined ? latest.current !== null : latest.syncWake?.id === s.syncId
+    if (parseConductor(await io.read(conductorPath()))?.id8 !== h.me8() || isTaken) return held('another conductor went on meanwhile')
     wake = latest
     await io.write(conductorPath(), JSON.stringify({ id8: h.me8(), at: await io.now() }))
     const record = desk.get(s.f.session.toLowerCase())?.row
@@ -166,7 +168,8 @@ export const conductor = (h: WakeState) => {
     }
     await io.log(event(s.f, 'woke', `${why}: ${result.kind === 'sent' ? `sent to ${record.local}, waiting for its heartbeat` : `the send reported "${result.reason}", waiting for its heartbeat anyway`}; ${wakes}`, now))
     const spent = [...wake.spent, { at: now, ...(result.kind === 'refused' ? { refused: true as const } : {}) }]
-    await keep({ ...wake, spent, current: { id8: s.f.id8, lane: s.f.lane, why: s.why, at: now, requestedAt: s.requestedAt, ...(s.syncId ? { syncId: s.syncId } : {}), ...(result.kind === 'refused' ? { refused: result.reason.slice(0, 200) } : {}) }, ...(result.kind === 'sent' ? { pausedSince: 0, pausedBy: undefined, pausedId: undefined, lastFailure: undefined } : {}), ...(s.why === 'turn' ? { turnAt: { ...wake.turnAt, [s.f.id8]: now } } : {}), triedAt }, true)
+    const current = s.syncId !== undefined ? wake.current : { id8: s.f.id8, lane: s.f.lane, why: s.why, at: now, requestedAt: s.requestedAt, ...(result.kind === 'refused' ? { refused: result.reason.slice(0, 200) } : {}) }
+    await keep({ ...wake, spent, current, ...(result.kind === 'sent' ? { pausedSince: 0, pausedBy: undefined, pausedId: undefined, lastFailure: undefined } : {}), ...(s.why === 'turn' ? { turnAt: { ...wake.turnAt, [s.f.id8]: now } } : {}), triedAt }, true)
     if (turn && result.kind === 'refused') await miss(io, turn, now, 'moved', 'refused', now) // it blocks nobody while the heartbeat decides; an answer undoes this
     return STARTED
   }
@@ -181,7 +184,7 @@ export const conductor = (h: WakeState) => {
     const isAnswered = Boolean(f && f.heartbeatAt > cur.at)
     if (!isAnswered && now - cur.at < WAKE_ANSWER_MS) return true
     const outcome: WakeOutcome = isAnswered ? 'answered' : 'no-answer'
-    await io.log(event(cur, 'woke', `${whyLabel(cur)}: ${outcome} ${Math.round((now - cur.at) / 60_000)} min after the start at ${hhmm(cur.at)}`, now))
+    await io.log(event(cur, 'woke', `${cur.why}: ${outcome} ${Math.round((now - cur.at) / 60_000)} min after the start at ${hhmm(cur.at)}`, now))
     const answers = isAnswered ? { spent: wake.spent.map(s => ({ at: s.at })), lastFailure: undefined } : {} // an answer: the route works
     await save(io, { ...withRow(wake, { at: now, id8: cur.id8, lane: cur.lane, why: cur.why, outcome }), ...answers, current: null, ...(!isAnswered && cur.refused ? { lastFailure: `the send was refused: ${cur.refused}` } : {}) }, now)
     if (!isAnswered && cur.requestedAt !== null) await miss(io, { id8: cur.id8, lane: cur.lane, requestedAt: cur.requestedAt }, cur.at, cur.refused === undefined ? 'real' : 'refused', 'no-answer', now)
@@ -253,19 +256,33 @@ export const conductor = (h: WakeState) => {
     const s = syncWakeDue({ ...h.sync(now), files: x.files, lanes: x.lanes, now, woke: wake.syncWake ?? null })
     if (!s) return NOTHING
     const f = x.files.find(o => o.id8 === s.holder.id8)
-    const record = (sent: boolean): Partial<WakeFile> => ({ syncWake: { id: s.id, at: now, sent } })
+    const record = (sent: boolean): Partial<WakeFile> => ({ syncWake: { id: s.id, at: now, sent, id8: s.holder.id8, lane: s.holder.lane } })
     if (f) return start(io, { f, why: 'sync', text: syncMessage(s), requestedAt: null, syncId: s.id, record }, now)
     await io.log(event(s.holder, 'woke', `sync ${s.id}: no A5R file for its holder, so nothing can start it`, now, false))
     await save(io, { ...wake, ...record(false) }, now)
     return held(`the sync's holder ${s.holder.lane} has no A5R file`)
   }
 
-  /** What the conductor does in its minute: one start at a time. `again`: A141's one more try, the wait before a retry aside. */
+  /** A146: the sync holder's start that went, settled beside the one in flight: answered (a heartbeat newer than it) or no answer
+   * after 5 min, logged once. */
+  const settleSync = async (io: WakeIo, x: GrantInput, now: number): Promise<void> => {
+    const w = wake.syncWake
+    if (!w?.sent || w.outcome) return
+    const isAnswered = Boolean(x.files.find(o => o.id8 === w.id8 && o.heartbeatAt > w.at))
+    if (!isAnswered && now - w.at < WAKE_ANSWER_MS) return
+    const outcome: WakeOutcome = isAnswered ? 'answered' : 'no-answer'
+    await io.log(event(w, 'woke', `sync ${w.id}: ${outcome} ${Math.round((now - w.at) / 60_000)} min after the start at ${hhmm(w.at)}`, now))
+    await save(io, { ...withRow(wake, { at: now, id8: w.id8, lane: w.lane, why: 'sync', outcome }), syncWake: { ...w, outcome } }, now)
+  }
+
+  /** What the conductor does in its minute: one start at a time, a sync holder's start aside (Fable 1: ahead of the one in flight,
+   * which never starves it). `again`: A141's one more try, the wait before a retry aside. */
   const act = async (io: WakeIo, x: GrantInput, now: number, again = false): Promise<Step> => {
-    const inFlight = wake.current
-    if (await settle(io, x, now)) return held(`${inFlight?.lane} was started at ${hhmm(inFlight?.at ?? now)} and has not asked yet`)
+    await settleSync(io, x, now)
     const synced = await syncStep(io, x, now)
     if (synced.kind !== 'nothing') return synced
+    const inFlight = wake.current
+    if (await settle(io, x, now)) return held(`${inFlight?.lane} was started at ${hhmm(inFlight?.at ?? now)} and has not asked yet`)
     const off = archived()
     const resting = (f: SessionFile): boolean => off.has(f.id8) || (f.want !== null && isStopped(f, x.files, x.lanes, now) && isResting(f.want, wake.triedAt[f.id8] ?? 0, now, again))
     for (const f of queueIn(x)) {

@@ -151,12 +151,13 @@ export const leaseSince = (leases: readonly LeaseRecord[], id8: string, at: numb
 // ---------- A136-A141: what the conductor keeps (Saved/A5R/wake.json, its one writer) ----------
 export type WakeWhy = 'turn' | 'git' | 'freeze' | 'sync'
 export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused'
-/** `refused`: what the send reported (the heartbeat still decides). `syncId`: the sync whose holder it starts (A146). */
-export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string; syncId?: string }
+/** `refused`: what the send reported (the heartbeat still decides). */
+export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string }
 /** A146: what a start is logged as (`rule=woke`): its reason, with the sync's id for a sync's holder. */
 export const whyLabel = (s: { why: WakeWhy; syncId?: string }): string => (s.syncId ? `sync ${s.syncId}` : s.why)
-/** A146: the one start of a sync's holder: when, and whether a send went (false: nothing could go, the old rule applies). */
-export type SyncWake = { id: string; at: number; sent: boolean }
+/** A146: the one start of a sync's holder (`id8`, `lane`): when, whether a send went (false: nothing could go, the old rule
+ * applies), and, once settled, whether it answered. It runs beside the one start in flight (`current`), never in its slot. */
+export type SyncWake = { id: string; at: number; sent: boolean; id8: string; lane: string; outcome?: WakeOutcome }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
 /** `triedAt`: when each session was last tried, whatever for: the one record of attempts. `spent`: the night's attempts (A138's
  * budget). `turnAt`, `idleStarts`: when each was last started for its turn, and how many of
@@ -191,7 +192,7 @@ export const parseWake = (text: string | null): WakeFile => {
     ...word('pausedBy'),
     ...word('pausedId'),
     ...word('lastFailure'),
-    ...(v.syncWake && typeof v.syncWake.id === 'string' && typeof v.syncWake.at === 'number' ? { syncWake: { id: v.syncWake.id, at: v.syncWake.at, sent: v.syncWake.sent === true } } : {}),
+    ...(v.syncWake && typeof v.syncWake.id === 'string' && typeof v.syncWake.at === 'number' ? { syncWake: { ...v.syncWake, sent: v.syncWake.sent === true, id8: String(v.syncWake.id8 ?? ''), lane: String(v.syncWake.lane ?? '') } } : {}),
   }
 }
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })

@@ -289,8 +289,7 @@ test('A124: unit: a planned sync whose holder is gone is handed to the conductor
   expect(autoSyncOf(x({}))).toMatchObject({ kind: 'take', holder: { id8: 'eeeeeeee' } }) // gone 35 min
   expect(autoSyncOf(x({ now: at(15, 45) })).kind).toBe('none') // gone 25 min: a reload may bring it back
   expect(autoSyncOf(x({ files: [gone] })).kind).toBe('none') // no conductor: a takeover by hand is still possible
-  expect(autoSyncOf(x({ files: [gone], now: at(16, 50), phase: 'cutoff' })).kind).toBe('none') // A146: its start is due first
-  const cancel = autoSyncOf(x({ files: [gone], now: at(16, 50), phase: 'cutoff', woke: { id: s.id, at: at(16, 31), sent: false } })) // A146: a start that could not go
+  const cancel = autoSyncOf(x({ files: [gone], now: at(16, 50), phase: 'cutoff' })) // A146 (Fable 2): T − 10 decides, whatever its start's state
   expect(cancel).toEqual({ kind: 'cancel', note: `${LOST_NOTE}lane-dddddddd (session dddddddd) is gone and no sync holder session is live` })
   expect(holderMissingText(cancel, at(16, 50))).toContain('the planned sync was cancelled: its lane-dddddddd (session dddddddd) is gone')
   const cancelled = endedSync(s, 'cancelled', cancel.kind === 'cancel' ? cancel.note : '', at(16, 50))

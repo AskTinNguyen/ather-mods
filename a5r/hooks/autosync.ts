@@ -35,7 +35,8 @@ export const syncHolderOf = (x: { files: readonly SessionFile[]; lanes: readonly
 /** A planned sync's holder is lost once it is gone (no heartbeat, no lane) for 30 min (a reload or a short gap keeps it), or
  * is gone when the Editor must be released for the sync (T − 10 min); after T the freeze rules (D8) apply. A lost holder's
  * sync is handed to a live sync holder session at once; with none it stays open to a takeover by hand until T − 10 min, and
- * is cancelled then (it would expire at T). A146: in the cutoff both wait for the holder's one start to be answered. */
+ * is cancelled then (it would expire at T). A146: in the cutoff the hand-over waits for the holder's one start to be
+ * answered until T − 10, never later. */
 export const HOLDER_LOST_MS = 30 * MIN
 const isLastCall = (s: SyncFile, now: number): boolean => now >= s.at - RELEASE_BEFORE_MS
 const isHolderLost = (s: SyncFile, x: Pick<AutoSyncInput, 'phase' | 'files' | 'lanes' | 'now'>): boolean =>
@@ -48,12 +49,12 @@ export const syncWakeDue = (x: Pick<AutoSyncInput, 'sync' | 'phase' | 'files' | 
   const s = x.sync
   return s && x.phase === 'cutoff' && x.woke?.id !== s.id && isQuietFor(s.holder.id8, x, 0) ? s : null
 }
-/** A146: the hand-over and the cancel wait for the holder's answer: while a start that went is answered within 5 min, or while
- * one is due and not yet tried (the conductor sends in its minute; at most 5 min past T − 10). A start that could not go (the
- * engine's loop guard, no route) waits for nothing: the old rule applies. */
+/** A146: before T − 10 the hand-over waits for the holder's answer: while a start that went is under 5 min old, or while one
+ * is due and not yet tried (the conductor sends in its minute). A start that could not go (the engine's loop guard, no route)
+ * waits for nothing. At T − 10 the hand-over or the cancel is decided, whatever the start's state (Fable 2: never later). */
 const isWakeAwaited = (s: SyncFile, x: AutoSyncInput): boolean => {
   const w = x.woke?.id === s.id ? x.woke : null
-  return w ? w.sent && x.now - w.at < WAKE_ANSWER_MS : syncWakeDue(x) !== null && x.now < s.at - RELEASE_BEFORE_MS + WAKE_ANSWER_MS
+  return !isLastCall(s, x.now) && (w ? w.sent && x.now - w.at < WAKE_ANSWER_MS : syncWakeDue(x) !== null)
 }
 
 export const inSyncHours = (at: number): boolean => {
