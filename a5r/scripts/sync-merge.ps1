@@ -241,9 +241,12 @@ try {
   $inBase = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   $paths = @($unmerged.Keys)
   if ($paths.Count -gt 0) {
+    # NUL-separated asks (a path may hold a newline), one answer line each; only a file or a submodule counts (a folder
+    # in a base is a directory/file pair, not this path).
     $asks = @(foreach ($b in $bases) { foreach ($q in $paths) { "${b}:$q" } })
-    $found = (Invoke-GitOk @('cat-file', '--batch-check=%(objecttype)') '' ($enc.GetBytes(($asks -join "`n") + "`n"))).Out.Split("`n")
-    for ($k = 0; $k -lt $asks.Count; $k++) { if ($found[$k].Trim() -ne '' -and -not $found[$k].EndsWith('missing')) { [void]$inBase.Add($paths[$k % $paths.Count]) } }
+    $found = @((Invoke-GitOk @('cat-file', '--batch-check=%(objecttype)', '-z') '' ($enc.GetBytes(($asks -join [char]0) + [char]0))).Out.TrimEnd("`n").Split("`n"))
+    if ($found.Count -ne $asks.Count) { throw "git cat-file answered $($found.Count) line(s) for $($asks.Count) path(s)" }
+    for ($k = 0; $k -lt $asks.Count; $k++) { if ($found[$k] -eq 'blob' -or $found[$k] -eq 'commit') { [void]$inBase.Add($paths[$k % $paths.Count]) } }
   }
   # A conflict: path -> @{ Kind; Stages (1 base, 2 HEAD, 3 target; a side without the path has no stage) }. Every kind is
   # resolved the same way: by a rule, else by rule 11, else refused.
@@ -251,17 +254,18 @@ try {
   $lines = @()
   foreach ($p in $unmerged.Keys) {
     $s = $unmerged[$p]
-    $kind = & $kindOf $p
+    $said = & $kindOf $p
     $isBoth = $s.ContainsKey('2') -and $s.ContainsKey('3')
     # Changed on both sides from a base: merge-tree's content merge stands when it merged it cleanly and paired it with
     # nothing (a path in a base and on both sides is no rename's source or target). Unchanged by it from HEAD: HEAD's.
-    $isClean = $isBoth -and $inBase.Contains($p) -and -not $stages.ContainsKey($p) -and -not $kind
+    $isClean = $isBoth -and $inBase.Contains($p) -and -not $stages.ContainsKey($p) -and -not $said
     if ($isClean -and -not ($ortNew.ContainsKey($p) -and $ortNew[$p].Status -eq 'D')) {
       $lines += & $entry $p $(if ($ortNew.ContainsKey($p)) { @{ Mode = $ortNew[$p].NewMode; Oid = $ortNew[$p].NewOid } } else { $s['2'] })
       continue
     }
-    if (-not $kind) { $kind = $(if ($isBoth) { $(if ($inBase.Contains($p)) { 'contents' } else { 'add/add' }) } elseif ($inBase.Contains($p)) { 'modify/delete' } elseif ($s.ContainsKey('2')) { 'added by us' } else { 'added by them' }) }
-    $conflicts[$p] = @{ Kind = $kind; Stages = $s }
+    # The kind is the path's own, from its stages and the bases; merge-tree's words (a rename it invented, say) only follow.
+    $kind = $(if ($isBoth) { $(if ($inBase.Contains($p)) { 'contents' } else { 'add/add' }) } elseif ($inBase.Contains($p)) { 'modify/delete' } elseif ($s.ContainsKey('2')) { 'added by us' } else { 'added by them' })
+    $conflicts[$p] = @{ Kind = $(if ($said -and $said -ne $kind) { "$kind; merge-tree said $said" } else { $kind }); Stages = $s }
   }
   foreach ($p in ($stages.Keys | Where-Object { -not $unmerged.ContainsKey($_) } | Sort-Object)) { Write-Log "settled path by path: $p (merge-tree conflicted, read-tree did not; merge-tree said: $(& $kindOf $p))" }
   $unresolved = @()

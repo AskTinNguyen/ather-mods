@@ -153,11 +153,13 @@ export type WakeWhy = 'turn' | 'git' | 'freeze' | 'sync'
 export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused'
 /** `refused`: what the send reported (the heartbeat still decides). */
 export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string }
-/** A146: what a start is logged as (`rule=woke`): its reason, with the sync's id for a sync's holder. */
-export const whyLabel = (s: { why: WakeWhy; syncId?: string }): string => (s.syncId ? `sync ${s.syncId}` : s.why)
-/** A146: the one start of a sync's holder (`id8`, `lane`): when, whether a send went (false: nothing could go, the old rule
- * applies), and, once settled, whether it answered. It runs beside the one start in flight (`current`), never in its slot. */
-export type SyncWake = { id: string; at: number; sent: boolean; id8: string; lane: string; outcome?: WakeOutcome }
+/** A start that went, once settled: answered (a heartbeat newer than it), no answer after WAKE_ANSWER_MS, or null while it is
+ * still waited for. */
+export const startOutcome = (s: { id8: string; at: number }, files: readonly SessionFile[], now: number): 'answered' | 'no-answer' | null =>
+  files.some(f => f.id8 === s.id8 && f.heartbeatAt > s.at) ? 'answered' : now - s.at >= WAKE_ANSWER_MS ? 'no-answer' : null
+/** A146: the one start of a sync's holder, in a slot of its own beside the start in flight (`current`): the sync's id, whether a
+ * send went (false: nothing could go, the old rule applies) and, once settled, its outcome. */
+export type SyncWake = Start & { id: string; sent: boolean; outcome?: WakeOutcome }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
 /** `triedAt`: when each session was last tried, whatever for: the one record of attempts. `spent`: the night's attempts (A138's
  * budget). `turnAt`, `idleStarts`: when each was last started for its turn, and how many of
@@ -192,9 +194,15 @@ export const parseWake = (text: string | null): WakeFile => {
     ...word('pausedBy'),
     ...word('pausedId'),
     ...word('lastFailure'),
-    ...(v.syncWake && typeof v.syncWake.id === 'string' && typeof v.syncWake.at === 'number' ? { syncWake: { ...v.syncWake, sent: v.syncWake.sent === true, id8: String(v.syncWake.id8 ?? ''), lane: String(v.syncWake.lane ?? '') } } : {}),
+    ...(syncWakeOf(v.syncWake) ? { syncWake: syncWakeOf(v.syncWake) as SyncWake } : {}),
   }
 }
+const OUTCOMES: readonly string[] = ['answered', 'no-answer', 'no-address', 'loop-paused'] satisfies WakeOutcome[]
+/** A stored sync start, checked field by field (null when it is not one: an `id8` is needed to see its answer). */
+const syncWakeOf = (v: Partial<SyncWake> | undefined): SyncWake | null =>
+  v && typeof v.id === 'string' && typeof v.at === 'number' && typeof v.id8 === 'string' && v.id8 !== '' && typeof v.lane === 'string'
+    ? { id8: v.id8, lane: v.lane, why: 'sync', at: v.at, requestedAt: null, id: v.id, sent: v.sent === true, ...(OUTCOMES.includes(String(v.outcome)) ? { outcome: v.outcome as WakeOutcome } : {}) }
+    : null
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })
 /** The next conductor: the first live A5R that conducts, those that can start a session (in the desktop app) first, then by id. */
 export const conductorOf = (files: readonly SessionFile[], now: number): string | null =>

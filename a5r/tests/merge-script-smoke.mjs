@@ -179,7 +179,7 @@ try {
       },
     })
     const r = merge(dir, 's-rules', [{ side: 'theirs', pattern: 'Content/**' }, { side: 'ours', pattern: 't.txt' }])
-    expect(`rules: merged: ${r.line}`, r.line.includes('A5R merge merged') && r.line.includes('Content/S2/x.uasset (theirs, binary, contents, rule: theirs Content/**)'))
+    expect(`rules: merged: ${r.line}`, r.line.includes('A5R merge merged') && r.line.includes('Content/S2/x.uasset (theirs, contents; merge-tree said binary, contents, rule: theirs Content/**)'))
     expect('rules: the .uasset is main\'s, the text file ours', fs.readFileSync(path.join(dir, 'Content/S2/x.uasset')).equals(Buffer.from([0, 9, 9, 9])) && read(dir, 't.txt') === 'lane\n')
     expect(`rules: tree clean: ${git(dir, 'status', '--porcelain')}`, git(dir, 'status', '--porcelain') === '')
   }
@@ -374,7 +374,7 @@ try {
     })
     const before = snapshot(dir)
     const r = merge(dir, 's-conflict', [{ side: 'ours', pattern: 'Docs/**' }])
-    expect(`conflict: refused with both paths: ${r.line}`, r.line.includes('A5R merge refused conflict: 2 conflicted path(s)') && r.line.includes('u.txt (no rule matches: contents)') && r.line.includes('Content/y.uasset (no rule matches: binary, contents)'))
+    expect(`conflict: refused with both paths: ${r.line}`, r.line.includes('A5R merge refused conflict: 2 conflicted path(s)') && r.line.includes('u.txt (no rule matches: contents)') && r.line.includes('Content/y.uasset (no rule matches: contents; merge-tree said binary, contents)'))
     expect('conflict: HEAD, index and tree exactly as before', snapshot(dir) === before)
     const refusal = mergeOutcome(r.log, false) // what the holder's A5R copies into orchestrate.log as rule=sync-merge
     expect(`conflict: the refusal read back with the git processes: ${JSON.stringify(refusal)}`, refusal.kind === 'refused' && refusal.note.startsWith('A5R merge refused conflict:') && Array.isArray(refusal.procs) && r.log.includes('rule=sync-merge git processes: '))

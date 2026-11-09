@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { autoSyncOf, syncWakeDue, type AutoSyncInput } from '../hooks/autosync.ts'
 import { newSync, parseSyncFile, type SyncFile } from '../hooks/coord.ts'
-import { NO_WAKE, WAKE_ANSWER_MS, budgetHold, parseWake, syncMessage, whyLabel, type SyncWake } from '../hooks/wake.ts'
+import { NO_WAKE, WAKE_ANSWER_MS, budgetHold, parseWake, startOutcome, syncMessage, type SyncWake } from '../hooks/wake.ts'
 import { conductor } from '../hooks/wakehost.ts'
 import { LOCK, ME, NOW, opts, world } from './world.ts'
 
@@ -36,7 +36,7 @@ test('A146: unit: a quiet holder in its cutoff is due one start; the hand-over a
   const s = planned()
   const gone = { ...file('cccccccc'), heartbeatAt: NOW - 3 * 60 * MIN }
   const x = (o: Partial<AutoSyncInput>): AutoSyncInput => ({ sync: s, phase: 'cutoff', files: [gone], lanes: [], now: T - 10 * MIN, titleOf: () => '', queued: 0, lockEnd: null, isFocusRunning: false, woke: null, ...o })
-  const woke = (at: number, sent = true): SyncWake => ({ id: s.id, at, sent, id8: 'cccccccc', lane: 'lane-cccccccc' })
+  const woke = (at: number, sent = true): SyncWake => ({ id: s.id, at, sent, id8: 'cccccccc', lane: 'lane-cccccccc', why: 'sync', requestedAt: null })
   expect(syncWakeDue(x({}))?.id).toBe(s.id)
   expect(syncWakeDue(x({ phase: 'planned', now: T - 40 * MIN }))).toBeNull() // before the cutoff: the 30-min rule only
   expect(syncWakeDue(x({ files: [{ ...gone, heartbeatAt: T - 10 * MIN }] }))).toBeNull() // live
@@ -56,7 +56,9 @@ test('A146: unit: a quiet holder in its cutoff is due one start; the hand-over a
   expect(autoSyncOf(y({ now: T - 10 * MIN }))).toMatchObject({ kind: 'take', holder: { id8: 'eeeeeeee' } })
   // The message, the log label, the budget (a sync's start is not held back for Editor turns), wake.json keeps it.
   expect(syncMessage(s)).toContain(`you hold the sync of main at 15:05 (${s.id}) and your session had stopped`)
-  expect(whyLabel({ why: 'sync', syncId: s.id })).toBe(`sync ${s.id}`)
+  expect([startOutcome({ id8: 'cccccccc', at: NOW }, [{ ...gone, heartbeatAt: NOW + 1 }], NOW + MIN), startOutcome({ id8: 'cccccccc', at: NOW }, [gone], NOW + WAKE_ANSWER_MS), startOutcome({ id8: 'cccccccc', at: NOW }, [gone], NOW + MIN)]).toEqual(['answered', 'no-answer', null])
+  expect(parseWake(JSON.stringify({ ...NO_WAKE, syncWake: { ...woke(NOW), id8: '', outcome: 'bogus' } })).syncWake).toBeUndefined() // no id8: its answer could never be seen
+  expect(parseWake(JSON.stringify({ ...NO_WAKE, syncWake: { ...woke(NOW), outcome: 'bogus' } })).syncWake).toEqual(woke(NOW))
   expect(budgetHold({ ...NO_WAKE, spent: Array.from({ length: 7 }, () => ({ at: NOW })) }, 'sync', NOW)).toBeNull()
   expect(parseWake(JSON.stringify({ ...NO_WAKE, syncWake: woke(NOW) })).syncWake).toEqual(woke(NOW))
 })
@@ -156,5 +158,16 @@ test('A146: a conductor paused by the loop guard sends nothing and records the s
   const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, holder], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: planned(), phase: 'cutoff' }) })
   await c.tick(fakeIo(a.disk, { ...a.o, call: async () => ((calls += 1), { text: SENT }) }))
   expect(calls).toBe(0)
-  expect(parseWake(a.disk.get('d/wake.json') ?? null).syncWake).toEqual({ id: planned().id, at: NOW, sent: false, id8: 'cccccccc', lane: 'lane-cccccccc' })
+  expect(parseWake(a.disk.get('d/wake.json') ?? null).syncWake).toEqual({ id: planned().id, at: NOW, sent: false, id8: 'cccccccc', lane: 'lane-cccccccc', why: 'sync', requestedAt: null })
+})
+
+test('A146: a conductor that cannot start a session (not in the desktop app) does not spend the one start of the sync', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const holder = stoppedFile('cccccccc', { want: null })
+  const disk = new Map<string, string>([['d/wake.json', JSON.stringify(NO_WAKE)]])
+  let calls = 0
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, holder], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: planned(), phase: 'cutoff' }) })
+  await c.tick(fakeIo(disk, { call: async () => ((calls += 1), { text: SENT }) }))
+  expect(calls).toBe(0)
+  expect(parseWake(disk.get('d/wake.json') ?? null).syncWake).toBeUndefined()
 })
