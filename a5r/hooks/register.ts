@@ -2837,7 +2837,7 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
 // Rev 44: gitturnhost.ts (A128-A130) and freezehost.ts (A131-A134): this session's state once, the engine per call.
 const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, isMerging: now => freeze.isMerging(syncFile, now) || isMergeScriptAlive(probe?.procs ?? null) === true, dir: hfDir, root: s2Root })
 const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now), isMergeScript: () => isMergeScriptAlive(probe?.procs ?? null) })
-const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8) })
+const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8), sync: now => ({ sync: syncFile, phase: phaseOf(syncFile, now) }) })
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   now: () => $.clock.now(),
@@ -3354,10 +3354,10 @@ async function orphanStep($: Engine, opts: Opts, now: number): Promise<void> {
 
 /** A124: the would-be holder plans the sync (or takes over one whose holder is lost: syncAction's takeover, which also takes
  * a merge, revert or cherry-pick a gone session left, as by hand) through the person's own sync path, once per proposed
- * time; with no live holder any one session cancels a lost holder's sync at T − 10 min, and the person is told (once a day
+ * time; with no live holder any one session cancels a lost holder's sync at T − 10 min once its one start (A146) went unanswered, and the person is told (once a day
  * when no holder is live at all). */
 async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: liveQueueNow(now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true })
+  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: liveQueueNow(now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true, woke: await wakes.syncWake(wakeIo($, opts)) })
   const log = (note: string) => orchestrateLog($, opts, actedEvent('auto-sync', note, now)).catch(() => undefined)
   const s = syncFile
   if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: opts.autoSyncBuild !== false })}`)

@@ -430,7 +430,7 @@ test('A141: unit: the alarm is a native notification when the engine can raise o
     const notes: string[] = []
     const disk = new Map<string, string>()
     const me = file(ME8, { heartbeatAt: NOW })
-    const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now, probe: { freeGb: 5, diskGb: 100, procs: [] } }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 5, titleOf: () => '' })
+    const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now, probe: { freeGb: 5, diskGb: 100, procs: [] } }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 5, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
     disk.set('d/idle-with-work.json', JSON.stringify({ ...NO_IDLE, run: 29, lastAt: NOW - MIN }))
     await c.tick(fakeIo(disk, { notify: async (t: string) => (notes.push(t), isSent), toast: (t: string) => void toasts.push(t) }))
     expect(notes.length).toBe(1)
@@ -521,7 +521,7 @@ test('Review 3: a conductor outside the app never withdraws a stopped request go
   const me = file(ME8, { heartbeatAt: NOW })
   const c1 = stoppedFile('cccccccc', { want: want(), heartbeatAt: NOW - 30 * MIN, misses: 1 } as never)
   const disk = new Map<string, string>([['d/editor/cccccccc.json', JSON.stringify({ ...c1, want: want({ misses: 1, movedBack: true }) })]])
-  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, { ...c1, want: want({ misses: 1, movedBack: true }) }], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, { ...c1, want: want({ misses: 1, movedBack: true }) }], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
   await c.tick(fakeIo(disk))
   expect((JSON.parse(disk.get('d/editor/cccccccc.json') ?? '') as SessionFile).want).not.toBeNull()
   expect(c.canSend()).toBe(false)
@@ -560,7 +560,7 @@ test('Review 2.1: a request that missed its start is behind every other request,
 test('A137: a retried refusal keeps its time', async () => {
   const disk = new Map<string, string>()
   const me = file(ME8, { heartbeatAt: NOW })
-  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
   await c.refused(fakeIo(disk), { kind: 'git', what: 'x' }, NOW)
   await c.refused(fakeIo(disk), { kind: 'git', what: 'x' }, NOW + MIN)
   expect((JSON.parse(disk.get(`d/refused/${ME8}.json`) ?? '') as { at: number }).at).toBe(NOW)
@@ -645,7 +645,7 @@ test('A136: a claim another A5R spent in the same minute sends nothing', async (
   const me = file(ME8, { heartbeatAt: NOW, session: ME })
   let calls = 0
   const row = JSON.stringify({ sessionId: 'local_c', cliSessionId: SID('cccccccc') })
-  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
   disk.set('app/Claude/claude-code-sessions/a/o/local_c.json', row)
   await c.tick(fakeIo(disk, { deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }), list: async () => [{ name: 'local_c.json', mtimeMs: 1 }], claimAlert: async () => false, call: async () => ((calls += 1), { text: SENT }) }))
   expect(calls).toBe(0)
@@ -657,7 +657,7 @@ test('Review 5.1: a conductor that lost its claim during a slow pass sends nothi
   const run = async (o: { other?: boolean; flight?: boolean }) => {
     const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row], ['app/Claude/claude-code-sessions/a/o/local_me.json', JSON.stringify({ sessionId: 'local_me', cliSessionId: ME })]])
     let calls = 0
-    const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+    const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc', { want: want() })], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
     let reads = 0
     await c.tick(fakeIo(disk, {
       deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }),
@@ -699,7 +699,7 @@ test('Review 6.2: a refusal is spent only by a start', async () => {
   const me = file(ME8, { heartbeatAt: NOW, session: ME })
   const row = JSON.stringify({ sessionId: 'local_c', cliSessionId: SID('cccccccc') })
   const disk = new Map<string, string>([['app/Claude/claude-code-sessions/a/o/local_c.json', row], ['app/Claude/claude-code-sessions/a/o/local_me.json', JSON.stringify({ sessionId: 'local_me', cliSessionId: ME })], ['d/refused/cccccccc.json', JSON.stringify({ v: 1, id8: 'cccccccc', kind: 'git', at: NOW - MIN, what: 'x' })]])
-  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc')], { now, lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }), leases: () => [], dir: () => 'd', freeWindow: () => null, freeGb: () => 40, titleOf: () => '' })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, stoppedFile('cccccccc')], { now, lock: parseLockLine(held('dddddddd', NOW, NOW + H)) }), leases: () => [], dir: () => 'd', freeWindow: () => null, freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
   const list = async (dir: string) => (dir.endsWith('refused') ? [{ name: 'cccccccc.json', mtimeMs: NOW }] : [{ name: 'local_c.json', mtimeMs: 1 }, { name: 'local_me.json', mtimeMs: 1 }])
   const place = async () => ({ appData: 'app', account: 'a', org: 'o' })
   await c.tick(fakeIo(disk, { deskPlace: place, list, claimAlert: async () => false }))

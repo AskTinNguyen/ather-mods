@@ -47,7 +47,7 @@ export const app = (extra: { name: string; row: Record<string, unknown> }[]) => 
   const disk = new Map(extra.map(e => [`app/Claude/claude-code-sessions/a/o/${e.name}`, JSON.stringify(e.row)]))
   return { disk, o: { deskPlace: async () => ({ appData: 'app', account: 'a', org: 'o' }), list: async () => extra.map(e => ({ name: e.name, mtimeMs: 1 })) } }
 }
-export const hostOf = (files: () => SessionFile[], me: SessionFile) => conductor({ me8: () => ME8, me: () => me, grantInput: now => grant(files(), { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+export const hostOf = (files: () => SessionFile[], me: SessionFile) => conductor({ me8: () => ME8, me: () => me, grantInput: now => grant(files(), { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
 
 export const long = { ...opts(), timeoutMs: 180_000 }
 export const logged = (w: ReturnType<typeof world>, what: string): string[] => w.read(LOG).split('\n').filter(l => l.includes(what))

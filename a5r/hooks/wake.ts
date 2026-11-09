@@ -107,6 +107,9 @@ export const pausedCause = (session: string): string => `paused until you type i
 // ---------- the messages ----------
 export const turnMessage = (w: Want, minutes: number, now: number): string =>
   `A5R · Editor — your turn has come: ${w.what} (${minutes} min). Your lease starts when this session answers and ends about ${hhmm(now + minutes * MIN)} → go on with that work; if you no longer need it, release it with the editor tool and request again when you do.`
+/** A146: the start of a sync's holder whose process stopped before its sync (the sync goes on if it answers). */
+export const syncMessage = (s: { id: string; at: number }): string =>
+  `A5R · Sync main — you hold the sync of main at ${hhmm(s.at)} (${s.id}) and your session had stopped → answer now and stay on: your A5R starts the sync worker at ${hhmm(s.at)}; if you cannot hold it, hand it over or cancel it with the sync tool.`
 export const refusalMessage = (r: Refusal): string =>
   `A5R · ${r.kind === 'git' ? 'Git' : 'Sync main'} — what refused you is free now (${r.what}) → run that again and go on; if you no longer need it, do nothing.`
 
@@ -146,22 +149,26 @@ export const leaseSince = (leases: readonly LeaseRecord[], id8: string, at: numb
 }
 
 // ---------- A136-A141: what the conductor keeps (Saved/A5R/wake.json, its one writer) ----------
-export type WakeWhy = 'turn' | 'git' | 'freeze'
+export type WakeWhy = 'turn' | 'git' | 'freeze' | 'sync'
 export type WakeOutcome = 'answered' | 'no-answer' | 'no-address' | 'loop-paused'
-/** `refused`: what the send reported (the heartbeat still decides). */
-export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string }
+/** `refused`: what the send reported (the heartbeat still decides). `syncId`: the sync whose holder it starts (A146). */
+export type Start = { id8: string; lane: string; why: WakeWhy; at: number; requestedAt: number | null; refused?: string; syncId?: string }
+/** A146: what a start is logged as (`rule=woke`): its reason, with the sync's id for a sync's holder. */
+export const whyLabel = (s: { why: WakeWhy; syncId?: string }): string => (s.syncId ? `sync ${s.syncId}` : s.why)
+/** A146: the one start of a sync's holder: when, and whether a send went (false: nothing could go, the old rule applies). */
+export type SyncWake = { id: string; at: number; sent: boolean }
 export type WakeRow = { at: number; id8: string; lane: string; why: WakeWhy; outcome: WakeOutcome }
 /** `triedAt`: when each session was last tried, whatever for: the one record of attempts. `spent`: the night's attempts (A138's
  * budget). `turnAt`, `idleStarts`: when each was last started for its turn, and how many of
  * those leases in a row ended idle (A136). `pausedBy`, `pausedId`: the name to type in, and its session. */
-export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; turnAt: Record<string, number>; idleStarts: Record<string, number>; spent: { at: number; refused?: true }[]; pausedUntil: number; pausedSince: number; pausedBy?: string; pausedId?: string; lastFailure?: string }
+export type WakeFile = { v: 1; current: Start | null; recent: WakeRow[]; triedAt: Record<string, number>; turnAt: Record<string, number>; idleStarts: Record<string, number>; spent: { at: number; refused?: true }[]; pausedUntil: number; pausedSince: number; pausedBy?: string; pausedId?: string; lastFailure?: string; syncWake?: SyncWake }
 export const NO_WAKE: WakeFile = { v: 1, current: null, recent: [], triedAt: {}, turnAt: {}, idleStarts: {}, spent: [], pausedUntil: 0, pausedSince: 0 }
 /** A138: why the night's budget holds this send (null: it does not). */
 export const budgetHold = (w: WakeFile, why: WakeWhy, now: number): string | null => {
   const spent = w.spent.filter(s => now - s.at < SEND_WINDOW_MS)
   const refused = spent.filter(s => s.refused).length
   if (refused >= REFUSED_MAX) return `${refused} sends refused with no answer: the route looks broken, nothing more goes until a session answers`
-  return why !== 'turn' && spent.length >= SPARE_FROM ? `${spent.length} sends tonight: what is left is kept for Editor turns` : null
+  return why !== 'turn' && why !== 'sync' && spent.length >= SPARE_FROM ? `${spent.length} sends tonight: what is left is kept for Editor turns` : null
 }
 /** A139 / A141: what status.json says of them. */
 export type WakeStatus = { stopped: number; idleWithWork: { run: number; days: Record<string, number>; nights: Record<string, number> }; starting: { lane: string; id8: string; why: WakeWhy; at: number } | null; pausedUntil: number | null }
@@ -184,6 +191,7 @@ export const parseWake = (text: string | null): WakeFile => {
     ...word('pausedBy'),
     ...word('pausedId'),
     ...word('lastFailure'),
+    ...(v.syncWake && typeof v.syncWake.id === 'string' && typeof v.syncWake.at === 'number' ? { syncWake: { id: v.syncWake.id, at: v.syncWake.at, sent: v.syncWake.sent === true } } : {}),
   }
 }
 export const withRow = (w: WakeFile, row: WakeRow): WakeFile => ({ ...w, recent: [...w.recent, row].slice(-RECENT_KEEP) })
@@ -250,7 +258,7 @@ export const oldLine = (files: readonly SessionFile[], now: number): string => {
   const old = files.filter(f => f.conducts !== true && now - f.heartbeatAt <= HEARTBEAT_STALE_MS).map(f => f.lane)
   return old.length > 0 ? `older A5R in ${old.join(', ')}: reload them (they withdraw stopped requests at 2 h)` : ''
 }
-const WHY_WORDS: Record<WakeWhy, string> = { turn: 'its turn', git: 'git free', freeze: 'freeze lifted' }
+const WHY_WORDS: Record<WakeWhy, string> = { turn: 'its turn', git: 'git free', freeze: 'freeze lifted', sync: 'its sync' }
 /** A139: what ran and what was started last night (the night running at `now` before 08:00, else the one that ended that morning); '' when nothing did. */
 export const nightLine = (w: WakeFile, leases: readonly LeaseRecord[], now: number): string => {
   const end = new Date(now)

@@ -168,7 +168,7 @@ test('Fable 9: a session started for its turn whose lease went idle with no Edit
   a.disk.set('d/editor/cccccccc.json', JSON.stringify(f))
   a.disk.set('d/wake.json', JSON.stringify({ ...NO_WAKE, turnAt: { cccccccc: NOW - H } }))
   let calls = 0
-  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, JSON.parse(a.disk.get('d/editor/cccccccc.json') ?? '') as SessionFile], { now }), leases: () => leases, dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '' })
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, JSON.parse(a.disk.get('d/editor/cccccccc.json') ?? '') as SessionFile], { now }), leases: () => leases, dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: null, phase: 'none' }) })
   await c.tick(fakeIo(a.disk, { ...a.o, call: async () => ((calls += 1), { text: SENT }) }))
   expect(calls).toBe(0)
   expect((JSON.parse(a.disk.get('d/editor/cccccccc.json') ?? '') as SessionFile).want?.misses).toBe(1)
