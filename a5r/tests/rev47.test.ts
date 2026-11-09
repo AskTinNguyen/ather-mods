@@ -129,3 +129,15 @@ test('A146: another conductor at it this minute: nothing sent and no start recor
   expect(calls).toBe(0)
   expect(a.disk.get('d/wake.json')).toBe(before)
 })
+
+test('A146: a conductor paused by the loop guard sends nothing and records the start as not sent (the old rule applies)', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const holder = stoppedFile('cccccccc', { want: null })
+  const a = app([{ name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }, { name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc') } }])
+  a.disk.set('d/wake.json', JSON.stringify({ ...NO_WAKE, pausedUntil: NOW + 30 * MIN, pausedSince: NOW - 30 * MIN }))
+  let calls = 0
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, holder], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: planned(), phase: 'cutoff' }) })
+  await c.tick(fakeIo(a.disk, { ...a.o, call: async () => ((calls += 1), { text: SENT }) }))
+  expect(calls).toBe(0)
+  expect(parseWake(a.disk.get('d/wake.json') ?? null).syncWake).toEqual({ id: planned().id, at: NOW, sent: false })
+})
