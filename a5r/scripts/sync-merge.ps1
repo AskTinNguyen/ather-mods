@@ -241,10 +241,10 @@ try {
   $inBase = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
   $paths = @($unmerged.Keys)
   if ($paths.Count -gt 0) {
-    # NUL-separated asks (a path may hold a newline), one answer line each; only a file or a submodule counts (a folder
-    # in a base is a directory/file pair, not this path).
+    # NUL-separated asks and answers (-Z, git 2.43+: a path may hold a newline); only a file or a submodule counts (a
+    # folder in a base is a directory/file pair, not this path).
     $asks = @(foreach ($b in $bases) { foreach ($q in $paths) { "${b}:$q" } })
-    $found = @((Invoke-GitOk @('cat-file', '--batch-check=%(objecttype)', '-z') '' ($enc.GetBytes(($asks -join [char]0) + [char]0))).Out.TrimEnd("`n").Split("`n"))
+    $found = @((Invoke-GitOk @('cat-file', '--batch-check=%(objecttype)', '-Z') '' ($enc.GetBytes(($asks -join [char]0) + [char]0))).Out.TrimEnd([char]0).Split([char]0))
     if ($found.Count -ne $asks.Count) { throw "git cat-file answered $($found.Count) line(s) for $($asks.Count) path(s)" }
     for ($k = 0; $k -lt $asks.Count; $k++) { if ($found[$k] -eq 'blob' -or $found[$k] -eq 'commit') { [void]$inBase.Add($paths[$k % $paths.Count]) } }
   }

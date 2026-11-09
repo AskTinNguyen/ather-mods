@@ -264,7 +264,7 @@ export const conductor = (h: WakeState) => {
     const w = wake.syncWake
     if (w?.sent && !w.outcome) await settleStart(io, x, now, w, `sync ${w.id}`, o => ({ syncWake: { ...w, outcome: o } }))
     const s = syncWakeDue({ ...h.sync(now), files: x.files, lanes: x.lanes, now, woke: wake.syncWake ?? null })
-    if (!s) return NOTHING
+    if (!s || !isDeskKnown) return NOTHING // from outside the desktop app nothing can go: a conductor that can send takes it
     const f = x.files.find(o => o.id8 === s.holder.id8)
     if (f) return start(io, { f, why: 'sync', text: syncMessage(s), requestedAt: null, sync: s }, now)
     await io.log(event(s.holder, 'woke', `sync ${s.id}: no A5R file for its holder, so nothing can start it`, now, false))

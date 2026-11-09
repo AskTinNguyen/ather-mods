@@ -291,6 +291,46 @@ try {
     const r = merge(dir, 's-ccbases')
     expect(`criss-cross bases: merged with no rule, merge-tree's content: ${r.line}`, r.line.includes('A5R merge merged') && read(dir, 'Source/f.cpp') === git(dir, 'show', 'HEAD:Source/f.cpp') + '\n' && !r.line.includes('resolved:') && git(dir, 'status', '--porcelain') === '')
   }
+  // The same split with edits that clash (mutation F8): refused, named by its own kind (a path both bases hold: contents),
+  // never add/add.
+  {
+    const dir = repo('criss cross clash', {
+      base: d => put(d, 'Source/g.cpp', '1\n2\n3\n4\n5\n'),
+      theirs: d => put(d, 'Source/g.cpp', '1\n2\nA\n4\n5\n'),
+      ours: d => put(d, 'Source/g.cpp', '1\n2\nB\n4\n5\n'),
+    })
+    const s1 = git(dir, 'rev-parse', 'origin/main')
+    const l1 = git(dir, 'rev-parse', 'HEAD')
+    git(dir, 'checkout', '-q', '-b', 'side', s1)
+    git(dir, 'merge', '-q', '--no-edit', '-s', 'ours', l1)
+    put(dir, 's.txt', 's\n')
+    git(dir, 'update-ref', 'refs/remotes/origin/main', commitAll(dir, 'theirs again'))
+    git(dir, 'checkout', '-q', 'lane')
+    git(dir, 'merge', '-q', '--no-edit', '-s', 'ours', s1)
+    put(dir, 'l.txt', 'l\n')
+    commitAll(dir, 'ours again')
+    git(dir, 'branch', '-q', '-D', 'side')
+    const before = snapshot(dir)
+    const r = merge(dir, 's-ccclash')
+    expect(`criss-cross clash: refused as contents: ${r.line}`, r.line.includes('Source/g.cpp (no rule matches: contents)') && snapshot(dir) === before)
+  }
+  // A folder in the base where both sides add a file of that name (mutation F15): an add/add, the folder is not the path.
+  {
+    const dir = repo('folder to file', {
+      base: d => put(d, 'Content/P/a.txt', 'a\n'),
+      theirs: d => {
+        fs.rmSync(path.join(d, 'Content/P'), { recursive: true })
+        put(d, 'Content/P', 'main\n')
+      },
+      ours: d => {
+        fs.rmSync(path.join(d, 'Content/P'), { recursive: true })
+        put(d, 'Content/P', 'lane\n')
+      },
+    })
+    const before = snapshot(dir)
+    const r = merge(dir, 's-dirfile')
+    expect(`folder to file: refused as add/add: ${r.line}`, r.line.includes('Content/P (no rule matches: add/add; merge-tree said contents)') && snapshot(dir) === before)
+  }
   // Review: a path both sides changed that merge-tree merges into HEAD's own blob (main's change is already in it): taken
   // as HEAD's, no conflict.
   {
@@ -461,7 +501,7 @@ try {
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true })
 }
-console.log(`merge script smoke: ${failures.length ? `${failures.length} failed checks` : 'clean, rules, both deleted (renames off), criss-cross clean, criss-cross bases split, a both-changed path merged into the lane blob, modify/delete by theirs, by ours and refused, a real rename not carried, conflict, dirty, split index, stat-only, rename retry, killed mid-install and rollback all as expected'} (paths with a space and &; ${times.join(', ')})`)
+console.log(`merge script smoke: ${failures.length ? `${failures.length} failed checks` : 'clean, rules, both deleted (renames off), criss-cross clean, criss-cross bases split and clash, folder to file, a both-changed path merged into the lane blob, modify/delete by theirs, by ours and refused, a real rename not carried, conflict, dirty, split index, stat-only, rename retry, killed mid-install and rollback all as expected'} (paths with a space and &; ${times.join(', ')})`)
 console.log(`killed between update-ref and the index install leaves: ${killed}`)
 for (const f of failures) console.log(`FAIL ${f}`)
 process.exit(failures.length ? 1 : 0)

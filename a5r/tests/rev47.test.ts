@@ -171,3 +171,17 @@ test('A146: a conductor that cannot start a session (not in the desktop app) doe
   expect(calls).toBe(0)
   expect(parseWake(disk.get('d/wake.json') ?? null).syncWake).toBeUndefined()
 })
+
+test('A146: start reads wake.json again before a hold writes it: a pause lifted since the tick read the file does not hold the sync start (mutation F18)', async () => {
+  const me = file(ME8, { heartbeatAt: NOW, session: ME })
+  const holder = stoppedFile('cccccccc', { want: null })
+  const a = app([{ name: 'local_me.json', row: { sessionId: 'local_me', cliSessionId: ME } }, { name: 'local_c.json', row: { sessionId: 'local_c', cliSessionId: SID('cccccccc') } }])
+  a.disk.set('d/wake.json', JSON.stringify(NO_WAKE))
+  const paused = JSON.stringify({ ...NO_WAKE, pausedUntil: NOW + 30 * MIN, pausedSince: NOW - 30 * MIN })
+  let reads = 0
+  let calls = 0
+  const c = conductor({ me8: () => ME8, me: () => me, grantInput: now => grant([me, holder], { now }), leases: () => [], dir: () => 'd', freeWindow: () => 'w', freeGb: () => 40, titleOf: () => '', sync: () => ({ sync: planned(), phase: 'cutoff' }) })
+  await c.tick(fakeIo(a.disk, { ...a.o, read: async (p: string) => (p === 'd/wake.json' && (reads += 1) === 1 ? paused : (a.disk.get(p) ?? null)), call: async () => ((calls += 1), { text: SENT }) }))
+  expect(calls).toBe(1)
+  expect(parseWake(a.disk.get('d/wake.json') ?? null).syncWake).toMatchObject({ id: planned().id, sent: true })
+})

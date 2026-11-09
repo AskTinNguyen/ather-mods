@@ -179,6 +179,7 @@ export const RECENT_KEEP = 40
 export const parseWake = (text: string | null): WakeFile => {
   const v = jsonOf<WakeFile>(text)
   if (!v) return NO_WAKE
+  const syncWake = syncWakeOf(v.syncWake)
   const map = (m: unknown): Record<string, number> => (m && typeof m === 'object' ? (m as Record<string, number>) : {})
   const word = (k: 'pausedBy' | 'pausedId' | 'lastFailure') => (typeof v[k] === 'string' ? { [k]: v[k] } : {})
   return {
@@ -194,7 +195,7 @@ export const parseWake = (text: string | null): WakeFile => {
     ...word('pausedBy'),
     ...word('pausedId'),
     ...word('lastFailure'),
-    ...(syncWakeOf(v.syncWake) ? { syncWake: syncWakeOf(v.syncWake) as SyncWake } : {}),
+    ...(syncWake ? { syncWake } : {}),
   }
 }
 const OUTCOMES: readonly string[] = ['answered', 'no-answer', 'no-address', 'loop-paused'] satisfies WakeOutcome[]
