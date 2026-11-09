@@ -1,8 +1,8 @@
 # A5R hosts: Progress
 
-- Working under rev: 2
+- Working under rev: 3
 - Current step: slices S-a (L0) and S-b (L1) built, on `intent/a5r-hosts`, not pushed, no release yet
-- Next step: Hải decides F-b4 (C2 (a) on Windows hosts), then S-c (cards from A5R hosts, suggest, the queue hint). Findings F-a1 to F-a6 and F-b1 to F-b6 in findings.md (F-a3 resolved by Hải: folder claims stay shared).
+- Next step: S-c (cards from A5R hosts, suggest, the queue hint). F-b4 resolved by t6 (rev 3). Open: the A51 (desktop, slow) timing flake in the full suite (below). Findings F-a1 to F-a6 and F-b1 to F-b6 in findings.md (F-a3 resolved by Hải: folder claims stay shared).
 
 ## Checklist (slices from prompt.md)
 
@@ -52,6 +52,13 @@
 - The same checks run alone (C1 on file): `C4 pass · skew +5.7 s (limit 120 s)`, `C5 pass · helpers 3, 3, 3 over 3 probe cycles`, `C10 pass · total 63.7 GB, free 42.7 GB`; editor running: false; 107 s (C5's tasklist is slow).
 - C2 (b) and (c) alone: the 256 values hashed `0a1c85f95c9a…` on the host and here (same); the stdout line came back as sent. `sort` with `b\r\na\r\nc\r\n` printed `a b c`. This machine's own `C:/Windows/System32/sort.exe` prints `???` for the LF-only 6 bytes too (F-b4).
 
+## S-b, F-b4 resolved (rev 3, 2026-11-09)
+
+- Change: C2 (a) sends CRLF to a Windows remote, LF to POSIX; fail texts and C2's fix line name the default shell as a possible cause; prompt.md rev 3 (C2 row, Sources S2 corrected, changelog). Tests: engine `S-b (A3): engine: C2 fails on the "b a c" -> "???" stdin case …` now also asserts the per-OS sort input and the fix line verbatim.
+- `npx -y -p typescript@5.6 tsc -p a5r`: exit 0, no output. The S-a and S-b test files: `32 pass / 0 fail / Ran 32 tests across 4 files`.
+- Live (read-only, the second machine, Windows, cmd default shell; scratch script, nothing written there): `C1 pass · windows (cmd), 1547 ms`, `C2 pass · sort a b c; 256 bytes in, same hash; stdout as sent`.
+- Full `claude plugin test a5r` not rerun (t6: about 7 GB free RAM on this machine). OPEN: `A51 (desktop, slow): the sync freeze sweep …` timed out at the 5 s cap in two full runs under load (6.1-6.7 s) and passes alone (653 ms); to be rerun when memory allows.
+
 ## S-b gates (2026-11-09, worktree, the tree committed as is)
 
 - `npx -y -p typescript@5.6 tsc -p a5r`: exit 0, no output.
@@ -69,7 +76,7 @@
 | --- | --- | --- |
 | A1 | met (S-a) | engine test `S-a (A1)`: no hand-off, or only cancelled/merged ones: the A5R pane's blocks and status.json keys unchanged, no `hai-handoffs`, no `handoffs` key; an open one adds both, `v` 1. `/a5r handoff record` works with no adapter (`S-a: /a5r handoff record writes one file…`). Full suite 837 pass 0 fail. "tools list" read as the pane's tools list (F-a1) |
 | A2 | met (S-b) | unit `S-b (A2): unit: declarations are validated on read …`, `S-b (A2, A17): unit: writeHosts is the one writer …` (hand edit → `edited-by-hand`), `S-b (A2): unit: levelOf derives the level from checks only, for every class of combination` (13 rows); engine `S-b (A2): engine: a hand edit … flagged edited-by-hand and must be re-checked`. Options are written to the machine-local file (F-b1) |
-| A3 | met (S-b part: C1, C2, C4, C5, C10) | engine (mocked adapter): `S-b (A3): engine: C1, C2, C4, C5, C10 pass …`, `… C2 fails on the "b a c" -> "???" stdin case with its fix text verbatim …`, `… C1 fails with its fix line; C4 fails past 120 s; C5 fails on a rising count; C10 fails unread`, `S-b (A3, A13): engine: dependency skips …`. Live: C1, C4, C5, C10 pass; C2 (a) FAILED on a clean Windows host (F-b4, design question). C3, C6-C9, C11-C13: S-d |
+| A3 | met (S-b part: C1, C2, C4, C5, C10) | engine (mocked adapter): `S-b (A3): engine: C1, C2, C4, C5, C10 pass …`, `… C2 fails on the "b a c" -> "???" stdin case with its fix text verbatim …`, `… C1 fails with its fix line; C4 fails past 120 s; C5 fails on a rising count; C10 fails unread`, `S-b (A3, A13): engine: dependency skips …`. Live: C1, C4, C5, C10 pass; C2 failed under rev 2 (F-b4), passes under rev 3 (`C2 pass · sort a b c; 256 bytes in, same hash; stdout as sent`). C3, C6-C9, C11-C13: S-d |
 | A4 | met (S-b part: ssh, manual, storm cap) | unit `S-b (A4): unit: the adapter contract on a fake transport …` (NO_ADAPTER_OP, ADAPTER_ERROR), `… ssh: the remote command is ONE argument string …` (timeout 30 s, exit 255 = LINK), `… ssh readFile caps at 1 MiB; writeFile …`, `S-b (A4, D16): unit: the backoff … 12 failures in 10 min …`; engine `S-b (A4, D16): engine: 12 link failures in 10 min pause the host with the refusal verbatim; resume lets it run again` (sticky 2 h later). herdr, command: S-d |
 | A5 | open | S-c |
 | A6 | open | S-c |

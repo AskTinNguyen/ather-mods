@@ -17,3 +17,7 @@ Append-only.
 ## L-4 (2026-11-09) | class: build | slice S-b
 
 > Implement slice S-b of intent a5r-hosts (L1: declare a host, health checks C1, C2, C4, C5, C10, ssh and manual adapters, options and state.json, Hosts tile) exactly as the brief from t6 says; work only in this worktree; optional read-only live smoke against the second machine; report with hc send t6.
+
+## L-5 (2026-11-09) | class: decision | -> rev 3
+
+> t6: F-b4 decided (engineering call, in scope): take the proposal. C2 (a) sends b CR LF a CR LF c CR LF to a Windows remote and b LF a LF c LF to POSIX; C2 (b) hash on both sides stays the byte-clean proof; fail text names the default shell as a possible cause. Update prompt.md's C2 row (rev 3, changelog), add the Resolution under F-b4, adjust tests, rerun the C2 live smoke (read-only) and the C2 tests; no full plugin test now (about 7 GB free RAM), note A51 as open. Addendum: in rev 3 also correct Sources S2 (the ??? reading was the sort artifact; measured: the multiplexer failed while DefaultShell was PowerShell and worked right after it was removed, one before/after, mechanism not proven).

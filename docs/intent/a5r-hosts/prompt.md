@@ -1,6 +1,6 @@
 # A5R hosts: work that moves to other machines
 
-- Rev: 2
+- Rev: 3
 - Status: draft (design)
 - Area: a5r
 - Owner: HaiHuynh
@@ -34,7 +34,7 @@ Nothing is specific to one person's setup: no machine names, no task-kind fields
 - Existing A5R decisions this keeps: one writer per file; files are the truth, notices are doorbells (D6 of the A5R intent); refusal format `A5R · <gate> — <why> → <next>`; per-machine options in `pluginConfigs."a5r"` (like `editorLock`, `engineRoot`); `Saved/A5R/status.json` for outside viewers (A134, A139, A141); the Editor request queue as a pure function of files (D3); acceptance (nghiệm thu) over the branch diff; A5R never asks or waits at a hook.
 - Failures measured 09/11 (each becomes a health check, section 7):
   - S1 An IT-pushed sshd `AllowGroups` blocked one direction while the other worked.
-  - S2 OpenSSH `DefaultShell = powershell.exe` on a Windows host corrupted stdin into that host (6 bytes `b a c` to `sort` came out `???`; stdout fine). The multiplexer's handshake never got an answer, it reconnected every ~48 s, each dropped session left an orphan process pair in session 0 (32 pairs, ~300 MB, 25 min, killable only elevated).
+  - S2 (corrected in rev 3) While OpenSSH `DefaultShell = powershell.exe` was set on a Windows host, the multiplexer from the second machine failed (`sent nothing for 45 s`) and it worked right after the value was removed: one before/after, the mechanism not proven. The `b a c` -> `???` reading taken then was a Windows `sort.exe` artifact (it reads LF-only input as UTF-16, with no shell involved; F-b4), not proof that stdin was corrupted. The multiplexer's handshake never got an answer, it reconnected every ~48 s, each dropped session left an orphan process pair in session 0 (32 pairs, ~300 MB, 25 min, killable only elevated).
   - S3 Credentials differ by logon: a plain SSH logon had no GitHub/LFS credential; the desktop logon (through the multiplexer) had them.
   - S4 A full lane worktree was ~632 GB / 770k files on plain NTFS; lanes are created once and reused, disk estimated first.
   - S5 Two machines can share one Claude account (one usage limit).
@@ -215,7 +215,7 @@ Each: id, what, pass, fix for the agent. Order matters: a failing check stops la
 | Id | Check | Pass | Fix on fail |
 | --- | --- | --- | --- |
 | C1 | **Reach, both ways that are needed** | `probe` ok; if the host must wake origin (S6), the reverse probe is tried and a failure only lowers `deliver`, never reach | name which direction failed; look for policy blocks on the failing side (S1: a group allow list on the SSH server); ask the host owner/IT; polling stays available |
-| C2 | **Byte-clean stdin/stdout** | 256 bytes of every value 0-255 sent through `run` to a byte counter come back identical in both directions; the `b a c` case through `sort` returns `a b c` | the host's SSH default shell mangles stdin (S2): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass |
+| C2 | **Byte-clean stdin/stdout** | (a) `b a c` through `sort` returns `a b c`, sent with the line ending the remote reads (CRLF to Windows, whose `sort.exe` reads LF-only input as UTF-16 and prints `???`; LF to POSIX); (b) the 256 values 0-255 hash the same through `git hash-object --stdin` on the host and here (the byte-clean proof); (c) a fixed line printed by the host comes back as sent | the link changes bytes; a possible cause is the host's SSH default shell (S2, e.g. a PowerShell default shell): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass |
 | C3 | **Logon and credentials** | commands run by the adapter see git credentials for the repo remote and LFS (a non-interactive `ls-remote` and one small LFS fetch with prompts disabled) | S3: the credential is stored for a different logon; run the one-time interactive login in the logon the adapter uses, or switch the adapter to the logon that has it; never copy secrets through A5R |
 | C4 | **Clock skew** | |skew| under 120 s (compare `now` through `run`) | sync time on the host; windows and heartbeats rely on it |
 | C5 | **Orphan leak** | process count of the transport's helper pairs does not rise across 3 probe cycles (adapter declares the process name pattern) | S2: kill leaked pairs (may need elevation: report to the host owner); do not declare until stable |
@@ -297,4 +297,5 @@ A15 closes every slice that changes code (a review per slice, one release per sl
 ## Changelog
 
 - Rev 1 (2026-11-09): first draft of the design.
+- Rev 3 (2026-11-09): C2 row (F-b4, decided by t6): `sort` gets CRLF on Windows and LF on POSIX; the hash of the 256 values on both sides is the byte-clean proof; the default shell is named as a possible cause, not a certain one. Sources S2 corrected: the `b a c` -> `???` reading was a Windows `sort` artifact, not proof of stdin corruption.
 - Rev 2 (2026-11-09): review-rev1.md applied. R1: options split into `hosts` (outbound) and `asHost` (inbound), host facts read from the card; R2: state moved to `state.json` per coordination root; R3: delivery always origin to host (D21), C12 without a reverse link; R4: a job obeys the host's Editor queue (D22); R5: decided as D19 (`asHost.coordinationRoot`), no F8; R6: Slices section and A# mapped; R7: result acceptance in A7; smaller: C8 declared and cached size, `LONG` is a suggestion threshold only. F1-F7 kept as accepted.

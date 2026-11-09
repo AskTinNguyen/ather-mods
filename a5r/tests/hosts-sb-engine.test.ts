@@ -35,7 +35,7 @@ const out = (stdout: string, exitCode = 0): RunOut => ({ exitCode, stdout, stder
 const HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4'
 const local = async () => out(`${HASH}\n`)
 const GOOD: [RegExp, (stdin?: string) => RunOut][] = [
-  [/^sort$/, () => out('a\r\nb\r\nc\r\n')],
+  [/^sort$/, s => out(s === 'b\r\na\r\nc\r\n' || s === 'b\na\nc\n' ? 'a\r\nb\r\nc\r\n' : '???\r\n')],
   [/hash-object/, s => out(s === ALL_BYTES ? `${HASH}\r\n` : 'other\r\n')],
   [/^echo A5R-BYTES/, () => out(`${STDOUT_SEQ}\r\n`)],
   [/ToUnixTimeMilliseconds/, () => out(`${NOW + 1_500}\r\n`)],
@@ -73,15 +73,22 @@ test('S-b (A3): engine: C2 fails on the "b a c" -> "???" stdin case with its fix
   const rep = await runChecks(ctx(pwsh), ALL, STALE)
   expect(ALL.map(id => checkLine(id, rep.checks[id]))).toEqual([
     'C1 pass · windows (cmd), 0 ms',
-    `C2 fail · sort returned "???" for "b a c": stdin into the host is not byte-clean (a default shell that is not the plain command shell rewrites it) → the host's SSH default shell mangles stdin (S2): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass`,
+    `C2 fail · sort returned "???" for "b a c": the lines did not arrive as sent (possibly a default shell that is not the plain command shell, e.g. PowerShell) → ${FIX.C2}`,
     'C4 skip · not run: C2 failed',
     'C5 skip · not run: C2 failed',
     'C10 skip · not run: C2 failed',
   ])
   expect(rep.failed).toBe('C2')
+  expect(FIX.C2).toBe("the link changes bytes; a possible cause is the host's SSH default shell (S2, e.g. a PowerShell default shell): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass")
+  // F-b4: sort gets CRLF on a Windows remote (its sort.exe reads LF-only input as UTF-16) and LF on POSIX.
+  for (const os of ['windows', 'posix'] as const) {
+    const sent: (string | undefined)[] = []
+    await runChecks(ctx(mocked(os, [[/^sort$/, stdin => (sent.push(stdin), out('a\nb\nc\n'))], ...GOOD])), ['C1', 'C2'], STALE)
+    expect([os, sent]).toEqual([os, [os === 'windows' ? 'b\r\na\r\nc\r\n' : 'b\na\nc\n']])
+  }
   // The other two parts of C2: bytes in (hash), bytes out (stdout).
   const hashed = await runChecks(ctx(mocked('windows', [[/hash-object/, () => out('0000000000000000\r\n')], ...GOOD])), ['C1', 'C2'], STALE)
-  expect(hashed.checks.C2?.value).toBe('the 256 values 0-255 hashed 000000000000 on the host, e3b0c44298fc here: stdin bytes changed on the way')
+  expect(hashed.checks.C2?.value).toBe('the 256 values 0-255 hashed 000000000000 on the host, e3b0c44298fc here: stdin bytes changed on the way (possibly a default shell that is not the plain command shell, e.g. PowerShell)')
   const echoed = await runChecks(ctx(mocked('windows', [[/^echo A5R-BYTES/, () => out('"A5R-BYTES"\r\n')], ...GOOD])), ['C1', 'C2'], STALE)
   expect(echoed.checks.C2?.status).toBe('fail')
   expect(echoed.checks.C2?.value).toMatch(/^stdout changed on the way:/)
@@ -254,7 +261,7 @@ test('S-b (A13): engine: /a5r host add runs C1, C2, C4, C5, C10 in order, stops 
   expect(first.split('\n')).toEqual([
     'A5R · host f20 added (ssh:f20): 5 checks run; level L0.',
     'C1 pass · windows (cmd), 0 ms',
-    `C2 fail · sort returned "???" for "b a c": stdin into the host is not byte-clean (a default shell that is not the plain command shell rewrites it) → ${FIX.C2}`,
+    `C2 fail · sort returned "???" for "b a c": the lines did not arrive as sent (possibly a default shell that is not the plain command shell, e.g. PowerShell) → ${FIX.C2}`,
     'C4 skip · not run: C2 failed',
     'C5 skip · not run: C2 failed',
     'C10 skip · not run: C2 failed',

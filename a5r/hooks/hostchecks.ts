@@ -14,7 +14,7 @@ export const NOT_YET = 'not in this version'
 /** The fix line of each check (prompt.md's table), shown with a failure. */
 export const FIX: Record<CheckId, string> = {
   C1: 'name which direction failed; look for policy blocks on the failing side (S1: a group allow list on the SSH server); ask the host owner/IT; polling stays available',
-  C2: "the host's SSH default shell mangles stdin (S2): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass",
+  C2: "the link changes bytes; a possible cause is the host's SSH default shell (S2, e.g. a PowerShell default shell): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass",
   C3: 'S3: the credential is stored for a different logon; run the one-time interactive login in the logon the adapter uses, or switch the adapter to the logon that has it; never copy secrets through A5R',
   C4: 'sync time on the host; windows and heartbeats rely on it',
   C5: 'S2: kill leaked pairs (may need elevation: report to the host owner); do not declare until stable',
@@ -31,6 +31,9 @@ export const FIX: Record<CheckId, string> = {
 export const SKEW_LIMIT_MS = 120_000
 /** C2 (c): printed by a plain echo on either OS; only characters neither cmd nor sh interprets or quotes. */
 export const STDOUT_SEQ = 'A5R-BYTES-0123456789-abcxyz-ABCXYZ-@+=:,./_'
+/** C2 (a): "b a c" with the line ending the remote's `sort` reads: Windows sort.exe reads LF-only input as UTF-16 and
+ * prints `???` with no shell involved (F-b4), so a Windows remote gets CRLF. */
+export const SORT_INPUT: Record<RemoteOs, string> = { windows: 'b\r\na\r\nc\r\n', posix: 'b\na\nc\n' }
 /** C2 (b): every value 0..255 as one character each (the engine's stdin is text: sent as UTF-8, F-b2). */
 export const ALL_BYTES = Array.from({ length: 256 }, (_, i) => String.fromCharCode(i)).join('')
 
@@ -61,18 +64,18 @@ const c1 = async (x: CheckCtx): Promise<One> => {
   return { status: 'pass', value: `${p.value.os} (${shell}), ${ms} ms${x.reverse ? '; host to origin: not tested in this version (deliver stays off, polling works)' : ''}`, os: { os: p.value.os, shell: p.value.shell } }
 }
 
-const c2 = async (x: CheckCtx): Promise<One> => {
-  const sorted = await callOp(x.adapter, 'run', ['sort'], { stdin: 'b\na\nc\n' })
+const c2 = async (x: CheckCtx, os: RemoteOs): Promise<One> => {
+  const sorted = await callOp(x.adapter, 'run', ['sort'], { stdin: SORT_INPUT[os] })
   if (!sorted.ok) return fail(`sort did not run: ${sorted.error.text}`)
   const got = lines(sorted.value.stdout)
-  if (got.join(' ') !== 'a b c') return fail(`sort returned ${JSON.stringify(got.join(' '))} for "b a c": stdin into the host is not byte-clean (a default shell that is not the plain command shell rewrites it)`)
+  if (got.join(' ') !== 'a b c') return fail(`sort returned ${JSON.stringify(got.join(' '))} for "b a c": the lines did not arrive as sent (possibly a default shell that is not the plain command shell, e.g. PowerShell)`)
   const [there, here] = await Promise.all([callOp(x.adapter, 'run', ['git', 'hash-object', '--stdin'], { stdin: ALL_BYTES }), x.local(['git', 'hash-object', '--stdin'], { stdin: ALL_BYTES, timeoutMs: 30_000 })])
   if (!there.ok || there.value.exitCode !== 0) return fail(`git hash-object did not run on the host (${there.ok ? `exit ${there.value.exitCode}` : there.error.text})`)
   if (!here || here.exitCode !== 0) return { status: 'skip', value: 'git hash-object did not run on this machine; stdin bytes not compared' }
-  if (there.value.stdout.trim() !== here.stdout.trim()) return fail(`the 256 values 0-255 hashed ${there.value.stdout.trim().slice(0, 12)} on the host, ${here.stdout.trim().slice(0, 12)} here: stdin bytes changed on the way`)
+  if (there.value.stdout.trim() !== here.stdout.trim()) return fail(`the 256 values 0-255 hashed ${there.value.stdout.trim().slice(0, 12)} on the host, ${here.stdout.trim().slice(0, 12)} here: stdin bytes changed on the way (possibly a default shell that is not the plain command shell, e.g. PowerShell)`)
   const echoed = await callOp(x.adapter, 'run', ['echo', STDOUT_SEQ])
   if (!echoed.ok) return fail(`echo did not run: ${echoed.error.text}`)
-  if (echoed.value.stdout.replace(/\r?\n$/, '').trimEnd() !== STDOUT_SEQ) return fail(`stdout changed on the way: ${JSON.stringify(echoed.value.stdout.slice(0, 60))} for ${STDOUT_SEQ}`)
+  if (echoed.value.stdout.replace(/\r?\n$/, '').trimEnd() !== STDOUT_SEQ) return fail(`stdout changed on the way: ${JSON.stringify(echoed.value.stdout.slice(0, 60))} for ${STDOUT_SEQ} (possibly a default shell that is not the plain command shell, e.g. PowerShell)`)
   return { status: 'pass', value: 'sort a b c; 256 bytes in, same hash; stdout as sent' }
 }
 
@@ -159,7 +162,7 @@ export const runChecks = async (x: CheckCtx, plan: readonly CheckId[], staleMs: 
       set({ status: 'skip', value: 'needs C1' })
       continue
     }
-    const o = id === 'C1' ? await c1(x) : id === 'C2' ? await c2(x) : id === 'C4' ? await c4(x, os!.os) : id === 'C5' ? await c5(x, os!.os) : await c10(x, os!.os)
+    const o = id === 'C1' ? await c1(x) : id === 'C2' ? await c2(x, os!.os) : id === 'C4' ? await c4(x, os!.os) : id === 'C5' ? await c5(x, os!.os) : await c10(x, os!.os)
     if (o.os) os = o.os
     if (o.ram) ram = o.ram
     set(o)

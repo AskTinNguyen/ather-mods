@@ -226,13 +226,13 @@ Khai báo một máy khác (host) mà máy này có thể gửi việc tới, v�
 ```
 A5R · host pc2 added (ssh:pc2): 5 checks run; level L0.
 C1 pass · windows (cmd), 85 ms
-C2 fail · sort returned "???" for "b a c": … → the host's SSH default shell mangles stdin (S2): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass
+C2 fail · the 256 values 0-255 hashed 3f1c… on the host, 0a1c… here: stdin bytes changed on the way (…) → the link changes bytes; a possible cause is the host's SSH default shell (S2, e.g. a PowerShell default shell): set the server's default shell to the plain command shell, retest; never use that link for adapters until pass
 C4 skip · not run: C2 failed
 …
 Next: fix C2 (above), then /a5r host check pc2: it resumes at C2.
 ```
 - Gọi lại `add` (không `--reach`) hay `check <id>` thì chạy tiếp từ bước đầu tiên chưa đạt (A13); `check <id> C4 C10` chạy đúng các bước nêu tên.
-- Các bước của bản này: C1 kết nối và hệ điều hành bên kia (cmd hay sh; mọi lệnh sau viết cho đúng hệ đó), C2 stdin/stdout sạch byte (sort `b a c`, 256 giá trị 0–255 qua `git hash-object` hai bên, một chuỗi in ra), C4 lệch giờ dưới 120 s, C5 tiến trình phụ của ssh không tăng dần qua 3 vòng, C10 RAM tổng và trống. Các bước khác trả lời `skip · not in this version`. L1 = C1 và C2 đạt (thêm C4 nếu dùng khung giờ); kết quả cũ hơn `staleCheckDays` (7 ngày) không còn tính.
+- Các bước của bản này: C1 kết nối và hệ điều hành bên kia (cmd hay sh; mọi lệnh sau viết cho đúng hệ đó), C2 stdin/stdout sạch byte (sort `b a c`, gửi CRLF cho Windows vì `sort.exe` đọc LF trơn thành UTF-16 và in `???`, LF cho POSIX; 256 giá trị 0–255 qua `git hash-object` hai bên là bằng chứng; một chuỗi in ra), C4 lệch giờ dưới 120 s, C5 tiến trình phụ của ssh không tăng dần qua 3 vòng, C10 RAM tổng và trống. Các bước khác trả lời `skip · not in this version`. L1 = C1 và C2 đạt (thêm C4 nếu dùng khung giờ); kết quả cũ hơn `staleCheckDays` (7 ngày) không còn tính.
 - Adapter: `ssh` (lệnh đi qua ssh client thành MỘT chuỗi lệnh, mặc định 30 s; `--ssh` và `--config` chọn client và file config, cần trên Windows khi `~` của shell không phải thư mục nhà; client phải là `ssh`/`ssh.exe` và chỉ người chọn qua lệnh này, tool `host` từ chối `options.ssh`) và `manual` (không có đường truyền: `check <id>` in lệnh cho người chạy trên máy kia, rồi `check <id> --paste <file>` đọc kết quả dán về; host manual ở L0).
 - Kết nối hỏng: mỗi lỗi ghi vào `link.jsonl`, lần thử tự động sau chờ dần (5 s, 10 s … tối đa 15 phút); 12 lỗi trong 10 phút (hay quá mức mỗi giờ) thì host dừng: `A5R · host pc2 — link failed 12 times in 10 min → fix the link (C2), then /a5r host resume pc2`. `/a5r host pause <id> [lý do]` dừng tay.
 - `/a5r host status`: level của máy này, bước kế cần gì (D1), mỗi host với kết quả từng bước, `asHost`, origin id.
