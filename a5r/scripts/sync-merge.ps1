@@ -198,7 +198,7 @@ try {
   # 1. The merge as a tree, with rename detection off and its conflicts resolved in a temporary index. A145 (rev 47):
   # MEASURED 2026-11-09 on git 2.45.1, merge-tree (and git merge) accept `-X no-renames` and `-c merge.renames=false` and
   # still pair a path deleted on both sides with an unrelated new file of main ("CONFLICT (rename/delete)"), and still
-  # carry an edit across a rename. So each path is decided by itself: git read-tree -m --aggressive (merge base, HEAD,
+  # carry an edit across a rename. So each path is decided by itself: git read-tree -m --aggressive (the merge bases, HEAD,
   # target) never pairs two paths; merge-tree only merges the content of a path both sides changed. `-X no-renames` is
   # passed too, for a git that honours it.
   $mt = Invoke-Git @('merge-tree', '--write-tree', '-z', '-X', 'no-renames', $old, $theirs)
@@ -221,33 +221,39 @@ try {
   $tmp = Join-Path $gitDir "a5r-merge-$SyncId"
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   $M = Join-Path $tmp 'merge.index'
-  # A conflict: path -> @{ Kind (merge-tree's words, or the path's own); Stages (1 base, 2 HEAD, 3 target; a side without
-  # the path has no stage) }. Every kind is resolved the same way: by a rule, else by rule 11, else refused.
+  # Every merge base goes to read-tree (all trees but the last two are ancestors to it; MEASURED 2026-11-09: a criss-cross
+  # with two bases decides the path merge-tree paired as rename/delete cleanly). No base: nothing to merge path by path.
+  $mb = Invoke-Git @('merge-base', '--all', $old, $theirs)
+  if ($mb.Code -gt 1) { Stop-Merge 'error' ('git merge-base exited ' + $mb.Code + ': ' + $mb.Err) }
+  $bases = @($mb.Out -split '\s+' | Where-Object { $_ })
+  if ($bases.Count -eq 0) { Stop-Merge 'error' "HEAD and $Target have no merge base (nothing written)" }
+  Invoke-GitOk (@('read-tree', '-m', '--aggressive', '-i') + $bases + @($old, $theirs)) $M | Out-Null
+  # merge-tree's kinds for a path, bare (`contents, binary`), Auto-merging aside.
+  $kindOf = { param($p) @($types[$p] | Where-Object { $_ -and $_ -ne 'Auto-merging' } | ForEach-Object { $_ -replace '^CONFLICT \((.*)\)$', '$1' }) -join ', ' }
+  # What --index-info is fed for a path: drop every stage, then the entry at stage 0 (none: the path is deleted).
+  $entry = { param($p, $e) "0 $zero`t$p"; if ($e) { "$($e.Mode) $($e.Oid) 0`t$p" } }
+  $ortNew = @{}
+  foreach ($c in (Get-RawDiff $old $tree)) { $ortNew[$c.Path] = $c }
+  $unmerged = Read-Stages (Split-Nul (Invoke-GitOk @('ls-files', '-u', '-z') $M).Out)
+  # A conflict: path -> @{ Kind; Stages (1 base, 2 HEAD, 3 target; a side without the path has no stage) }. Every kind is
+  # resolved the same way: by a rule, else by rule 11, else refused.
   $conflicts = @{}
   $lines = @()
-  $bases = @(Split-Nul ((Invoke-Git @('merge-base', '--all', $old, $theirs)).Out -replace '\s+', [char]0))
-  $kindOf = { param($p) @($types[$p] | Where-Object { $_ -and $_ -ne 'Auto-merging' }) -join ', ' }
-  if ($bases.Count -eq 1) {
-    Invoke-GitOk @('read-tree', '-m', '--aggressive', '-i', $bases[0], $old, $theirs) $M | Out-Null
-    $ortNew = @{}
-    foreach ($c in (Get-RawDiff $old $tree)) { $ortNew[$c.Path] = @{ Mode = $c.NewMode; Oid = $c.NewOid; Status = $c.Status } }
-    $unmerged = Read-Stages (Split-Nul (Invoke-GitOk @('ls-files', '-u', '-z') $M).Out)
-    foreach ($p in $unmerged.Keys) {
-      $s = $unmerged[$p]
-      $kind = & $kindOf $p
-      $isBoth = $s.ContainsKey('2') -and $s.ContainsKey('3')
-      # Both sides changed the path: merge-tree's content merge stands when it merged it cleanly and paired it with nothing.
-      $e = $(if ($ortNew.ContainsKey($p)) { $ortNew[$p] } else { $s['2'] })
-      if ($isBoth -and -not $stages.ContainsKey($p) -and -not $kind -and $e.Status -ne 'D') { $lines += "0 $zero`t$p", "$($e.Mode) $($e.Oid) 0`t$p"; continue }
-      $conflicts[$p] = @{ Kind = $(if ($kind) { $kind } elseif ($isBoth) { 'CONFLICT (contents)' } else { 'CONFLICT (modify/delete)' }); Stages = $s }
+  foreach ($p in $unmerged.Keys) {
+    $s = $unmerged[$p]
+    $kind = & $kindOf $p
+    $isBoth = $s.ContainsKey('2') -and $s.ContainsKey('3')
+    # Changed on both sides from a base: merge-tree's content merge stands when it merged it cleanly and paired it with
+    # nothing (a path in the base and on both sides is no rename's source or target). Unchanged by it from HEAD: HEAD's.
+    $isClean = $isBoth -and $s.ContainsKey('1') -and -not $stages.ContainsKey($p) -and -not $kind
+    if ($isClean -and -not ($ortNew.ContainsKey($p) -and $ortNew[$p].Status -eq 'D')) {
+      $lines += & $entry $p $(if ($ortNew.ContainsKey($p)) { @{ Mode = $ortNew[$p].NewMode; Oid = $ortNew[$p].NewOid } } else { $s['2'] })
+      continue
     }
-    foreach ($p in ($stages.Keys | Where-Object { -not $unmerged.ContainsKey($_) } | Sort-Object)) { Write-Log "renames off: $p is no conflict path by path (merge-tree said: $(& $kindOf $p))" }
-  } else {
-    # Several merge bases (or none): read-tree takes one, so merge-tree's own tree stands, its pairings too.
-    Write-Log "renames on: $($bases.Count) merge bases, so merge-tree's own tree stands"
-    Invoke-GitOk @('read-tree', $tree) $M | Out-Null
-    foreach ($p in $stages.Keys) { $conflicts[$p] = @{ Kind = $(& $kindOf $p); Stages = $stages[$p] } }
+    if (-not $kind) { $kind = $(if ($isBoth) { $(if ($s.ContainsKey('1')) { 'contents' } else { 'add/add' }) } elseif ($s.ContainsKey('1')) { 'modify/delete' } elseif ($s.ContainsKey('2')) { 'added by us' } else { 'added by them' }) }
+    $conflicts[$p] = @{ Kind = $kind; Stages = $s }
   }
+  foreach ($p in ($stages.Keys | Where-Object { -not $unmerged.ContainsKey($_) } | Sort-Object)) { Write-Log "renames off: $p is no conflict path by path (merge-tree said: $(& $kindOf $p))" }
   $unresolved = @()
   foreach ($p in ($conflicts.Keys | Sort-Object)) {
     $c = $conflicts[$p]
@@ -259,12 +265,9 @@ try {
       $hist = (Invoke-Git @('log', '--format=', '--raw', '--no-abbrev', $old, '--', $p)).Out
       if ($hist.Contains(' ' + $c.Stages['3'].Oid + ' ')) { $side = 'ours'; $why = 'rule 11: main holds our own blob' }
     }
-    $kind = $c.Kind -replace 'CONFLICT \(([^)]*)\)', '$1'
-    if (-not $side) { $unresolved += "$p (no rule matches: $kind)"; continue }
+    if (-not $side) { $unresolved += "$p (no rule matches: $($c.Kind))"; continue }
     # theirs: main's side (a path main deleted stays deleted); ours: HEAD's.
-    $e = $c.Stages[$(if ($side -eq 'ours') { '2' } else { '3' })]
-    $lines += "0 $zero`t$p"
-    if ($e) { $lines += "$($e.Mode) $($e.Oid) 0`t$p" }
+    $lines += & $entry $p $c.Stages[$(if ($side -eq 'ours') { '2' } else { '3' })]
     $resolved += "$p ($side, $why)"
   }
   if ($unresolved.Count -gt 0) { Stop-Merge 'conflict' "$($unresolved.Count) conflicted path(s) that no rule resolves (nothing written)" $unresolved }
@@ -273,7 +276,7 @@ try {
   foreach ($x in $resolved) { Write-Log "resolved $x" }
   if ($merged -ne $tree) { Write-Log "renames off: the tree differs from merge-tree's $tree on $(@(Get-RawDiff $tree $merged).Count) path(s)" }
   $changes = @(Get-RawDiff $old $merged)
-  Write-Log "merge tree ${merged}: $($changes.Count) path(s) change, $($conflicts.Count) conflicted, $($resolved.Count) resolved"
+  Write-Log "merge tree ${merged}: $($changes.Count) path(s) change, $($conflicts.Count) conflicted, $($resolved.Count) resolved, $($bases.Count) merge base(s)"
 
   # The index lock, held from here to the install: no other git writes the index meanwhile.
   $index = Join-Path $gitDir 'index'

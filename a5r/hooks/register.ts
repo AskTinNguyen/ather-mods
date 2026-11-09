@@ -3357,7 +3357,7 @@ async function orphanStep($: Engine, opts: Opts, now: number): Promise<void> {
  * time; with no live holder any one session cancels a lost holder's sync at T − 10 min once its one start (A146) went unanswered, and the person is told (once a day
  * when no holder is live at all). */
 async function autoSyncStep($: Engine, opts: Opts, now: number): Promise<void> {
-  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: liveQueueNow(now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true, woke: await wakes.syncWake(wakeIo($, opts)) })
+  const a = autoSyncOf({ sync: syncFile, phase: phaseOf(syncFile, now), files: filesNow(), lanes, now, titleOf: appTitleOf(appNow(now)), queued: liveQueueNow(now).length, lockEnd: lockTimes(lock, now)?.end ?? null, isFocusRunning: focusNow(now)?.isRunning === true, woke: phaseOf(syncFile, now) === 'cutoff' ? await wakes.syncWake(wakeIo($, opts)) : null })
   const log = (note: string) => orchestrateLog($, opts, actedEvent('auto-sync', note, now)).catch(() => undefined)
   const s = syncFile
   if (a.kind === 'plan' && a.holder.id8 === me8 && (await claimAlert($, opts, `auto-sync-${a.at}`))) await log(`planned by itself: ${await syncAction($, opts, 'plan', { at: clockOf(a.at), build: opts.autoSyncBuild !== false })}`)
