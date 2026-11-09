@@ -155,12 +155,14 @@ Mọi lần a5r từ chối đều cùng một dạng: `A5R · <cổng> — <vì
 - `/a5r`: mở pane A5R.
 - `/a5r status`: trạng thái, số lần theo từng điều, vị trí của a5r so với Ather, và Editor/RAM/Sync khi A5R bật.
 - `/a5r sync HH:MM [build] [for <id8|lane>]` · `/a5r sync move HH:MM` · `/a5r sync build on|off` · `/a5r sync cancel` · `/a5r sync done [ghi chú]` · `/a5r sync abort <lý do>` · `/a5r sync takeover` · `/a5r sync` (trạng thái, có khung freeze).
+- `/a5r handoff record label="<máy>" branch=<branch> [base=<ref>[@<sha>]] [claims="<path>,!<độc quyền>,~<dùng chung>"] task="<một dòng>"` · `/a5r handoff list` · `/a5r handoff cancel <id>` · `/a5r handoff result <id> <ref>` (a5r-hosts S-a, L0): ghi lại "lane này chạy ở máy khác" (xem mục Hand-off).
 - Muốn agent sửa mod: `/a5r off` trước (bảo vệ kit thuộc điều 1 của A5R).
 
 ## Tool cho model (chỉ đăng ký khi A5R bật)
 - `mcp__a5r__editor`: `request` (thêm `launch: false` cho slot không mở Editor; 0.23.0: yêu cầu như vậy có thể đi trước đầu hàng đang chờ RAM, tối đa 30 phút) · `release` · `extend` · `status`. Không có action sắp hàng hay cho thêm giờ (0.24.0: việc của người, A117); action lạ vẫn trả lời như `status`. `status` (0.24.0) đọc cùng lời với danh sách Editor trên pane (A116), kèm mã chờ (`wait held`, `wait ram`…) cho model và log.
 - `mcp__a5r__editor` `focus_done` (0.25.0, `note`: đạt được gì): chỉ session đang có Focus, khi đạt mốc: kết thúc Focus và trả Editor ngay; trong Focus `release` và `extend` giữ lock tới hết hộp.
 - `mcp__a5r__sync`: `plan` (`build`, `rules`) · `move` · `build` · `cancel` · `conflicts` (khi dry-run không chạy được) · `rules` (0.20.0, tới khi worker chạy) · `done` · `abort` · `status`.
+- `mcp__a5r__host` (a5r-hosts S-a): bản này chỉ có `action: "handoff"` với `op` `create` · `update` (label, task, note, claims, hay `state: "merged"` khi đã có result) · `cancel` · `result` · `list`. Action khác trả lời `A5R · host — not in this version → slice S-b adds hosts` (không throw).
 - Agent type `a5r:sync` (sync worker): chỉ a5r khởi động, không hiện cho model.
 
 ## Tuỳ chọn (`pluginConfigs."a5r"` trong `~/.claude/settings.json`)
@@ -174,6 +176,7 @@ Mọi lần a5r từ chối đều cùng một dạng: `A5R · <cổng> — <vì
 - `pieDrivers` (0.26.0, theo từng máy, không bắt buộc, không có mặc định): tên các script Python chơi PIE của chính bạn (vd. `lab.py`); máy thấy một script như vậy chạy với command line nêu checkout chung hay `.uproject` của nó thì lease ghi PIE (`pieAt`, PIE abort 3 GB) như với cửa sổ PIE của Unreal hay PIE qua MCP, và Editor không bao giờ bị đóng như mồ côi khi nó đang chạy.
 - `autoSyncBuild` (0.26.0; mặc định `true` từ 0.26.1, Hai 2026-10-29: "Sync rồi phải build chứ … Không build sao biết không có lỗi?"): sync A5R tự lên lịch có build (freeze `syncBuildMinutes`); đặt `false` thì chỉ merge (`syncMergeMinutes`, 45).
 - `engineRoot` (theo từng máy, không bắt buộc, không có mặc định): engine root mà `Engine\Build\BatchFiles\Build.bat` của nó build checkout. Chưa đặt thì A5R lấy engine mà Editor của checkout chạy lần cuối (log trong `Saved/Logs`), rồi tới `EngineAssociation` trong registry (xem 0.22.0); root nào thiếu Build.bat thì bỏ qua. Được ghi thẳng vào script build của sync (`Saved/A5R/<sync id>-build.cmd`). A5R không kiểm tra root có đúng engine của checkout không: root sai mà vẫn có Build.bat thì build chạy với engine đó (task của worker ghi root và nguồn của nó; dòng `A5R build exit` cuối log ghi engine đã dùng).
+- `claimExclusiveGlobs` (a5r-hosts S-a, không bắt buộc): thêm glob (cách nhau dấu phẩy, vd. `*.fbx,*.png`) mà claim của hand-off mặc định là độc quyền, ngoài `*.uasset` và `*.umap`.
 - File `rules/scope` (mỗi dòng một glob): sửa file ngoài scope vẫn chạy và được **ghi lại** (không hỏi, A75); nghiệm thu yêu cầu nêu lý do trong progress.md hoặc findings.md.
 
 ## File điều phối (trong `Saved/` của checkout S2, git-ignore, không bao giờ vào git hay `docs/intent/`)
@@ -199,9 +202,19 @@ Mọi lần a5r từ chối đều cùng một dạng: `A5R · <cổng> — <vì
 - `Saved/A5R/idle-with-work.json` (0.28.0, A141): số phút theo ngày và đêm (đêm: 20:00 đến 08:00, mang tên buổi tối), số phút liền, từ khi nào rảnh, đã báo động chưa.
 - `Saved/A5R/refused/<id8>.json` (0.28.0, A137): lần gần nhất session đó bị lượt git hay freeze từ chối; nó tự ghi ngay lúc đó, và ghi `null` khi đã rảnh hay đã khởi động (file nhỏ, mỗi session một file).
 - `Saved/A5R/probe.json`: lần đo máy gần nhất (RAM, ổ đĩa, tiến trình nặng), ai đo thì người đó ghi.
+- `Saved/A5R/handoffs/<id>.json` (a5r-hosts S-a): một hand-off, chỉ a5r của máy này ghi (lệnh `/a5r handoff` hay tool `host`); sửa tay bị từ chối. `Saved/A5R/origin.json`: id của máy này (8 hex), sinh một lần.
 - Đọc thêm: `Saved/EDITOR_OWNER.txt` (lock), `Saved/AtherAutomata/lanes/*.json` (heartbeat của Ather: session còn sống không).
 
 Session được coi là đã mất khi heartbeat của nó cũ hơn 3 phút (và không có lane Ather tươi nào bảo lãnh), hoặc lane Ather của nó báo `hasEnded` / cũ hơn 10 phút; từ 0.13.1 heartbeat A5R còn tươi (≤ 3 phút) thì session luôn còn sống, dù lane Ather nói gì. Có `.git/MERGE_HEAD` trong checkout chung thì không cấp Editor cho ai, dù sync.json nói gì. Lời nhắc đánh thức session đang rảnh mà bị từ chối, hay không mở được lượt nào trong 30 giây, không còn làm session câm: lần sau a5r gọi lại. Không có file nào thì là *chưa rõ*, không bao giờ là *mất*.
+
+## Hand-off (a5r-hosts S-a, L0)
+Một lane chạy ở máy khác (máy thứ hai, rig, máy của đồng đội) được **ghi lại** ở đây để mọi session trên máy này và nghiệm thu đều thấy. Không có host, không có đường truyền: chỉ là bản ghi (các slice sau thêm host, thẻ host, gửi việc).
+- Ghi: `/a5r handoff record label="night rig" branch=intent/tail-vfx claims="Content/S2/Tail/,!Source/S2/Tail/Glow.cpp" task="bake the tail, prove PIE"` (hay tool `host`, `op: "create"`). `base` mặc định là chính branch (không có branch thì `main`); base phải **đã có trên remote** (D7): `git ls-remote` đọc đầu của ref, sha cho trước phải là đầu đó hay tổ tiên của nó, nếu không thì `A5R · handoff — base abc1234 is not on origin → push the branch, then create the hand-off`. Hand-off không chứa secret (D13): có là bị từ chối.
+- Claim: đường dẫn tương đối trong repo, thư mục hay glob. `!` là độc quyền, `~` là dùng chung; không đánh dấu thì asset nhị phân (`*.uasset`, `*.umap`, cộng `claimExclusiveGlobs`) là độc quyền, còn lại dùng chung.
+- Trong lúc hand-off còn mở (`proposed`), session khác sửa một file trong claim **độc quyền** thì bị từ chối: `A5R · claim — <path> is claimed by hand-off <id> on <label> → ask them to return it, or choose other paths`; trong claim **dùng chung** thì chạy và được ghi lại (`rule=claim-touch`, nghiệm thu điều 5 hỏi lý do như các việc được ghi lại khác). Session đã ghi hand-off không bị claim của chính nó chặn.
+- Nghiệm thu (A9): diff đụng claim độc quyền của hand-off **khác** đang mở (không phải của chính intent hay branch đó) làm trượt điều 1, trừ khi progress.md hay findings.md nêu đường dẫn đó kèm lý do.
+- `result <id> <ref>` ghi chỗ kết quả về (PR, branch, report); claim vẫn giữ tới khi `cancel` hay `merged` (tool `update` với `state: "merged"`, chỉ khi đã có result).
+- Không có hand-off nào mở thì không gì thay đổi (A1); có thì pane A5R có thêm một nhóm dòng HAND-OFFS và `status.json` có thêm `handoffs` (`v` vẫn là 1).
 
 ## Một bộ luật cho hai engine
 `rules/config.json` cùng định dạng với plugin Hermes (`a5-kit-v2`, tên định dạng của Hermes, giữ nguyên). Sửa xong chạy, **trong một worktree của repo** (vd. `<thư mục worktree>/a5r`), không bao giờ trong thư mục mod đang nạp (`make_fixture.py` ghi fixture vào thư mục mod, nên A5R từ chối nó trên kit sống):

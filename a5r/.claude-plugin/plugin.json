@@ -68,6 +68,11 @@
       "description": "Whether a sync A5R plans by itself (when none ran for 6 h) includes the build, with the longer freeze (syncBuildMinutes). On by default (Hai, 2026-10-29: a sync must build, or nobody knows it has no errors); off: an auto-planned sync is merge-only (syncMergeMinutes, 45). A sync planned by hand chooses for itself as before.",
       "default": true
     },
+    "claimExclusiveGlobs": {
+      "type": "string",
+      "title": "A5R hand-offs: more exclusive claim globs (optional)",
+      "description": "Globs (comma-separated, for example *.fbx,*.png) whose claims in a hand-off default to exclusive, besides *.uasset and *.umap. An edit by another session inside an exclusive claim of an open hand-off (/a5r handoff record) is refused; inside a shared claim it runs and is recorded. Unset: only *.uasset and *.umap default exclusive; text files default shared."
+    },
     "engineRoot": {
       "type": "string",
       "title": "A5R Sync main: engine root for the sync's build (per machine, optional)",

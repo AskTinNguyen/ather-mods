@@ -1,6 +1,7 @@
 // A73 / A75 (rev 27; moved out of register.ts in rev 43): what a rule-1 match does at the action, and what a recorded
 // action is about. Pure: no `$`.
 import { commandVerb, deleteTargets, tokenize, type Decision } from './a5r.ts'
+import type { FileIo } from './hostio.ts'
 
 /** A73: what a rule-1 match does at the action. Nothing asks and nothing waits: a call is refused only with an alternative
  * the agent can carry out itself (`refuse`), runs after a check of the facts (`check`, A74: git that can discard work in
@@ -37,4 +38,31 @@ export const recordTarget = (kind: string, command: string): string => {
   if (kind === 'delete') return deleteTargets(args).join(' ') || command.slice(0, 120)
   if (kind === 'git-config-global') return /--global\s+(?:--\S+\s+)*(\S+)/.exec(command)?.[1] ?? command.slice(0, 120)
   return args.filter(a => !a.startsWith('-')).slice(-1)[0] ?? command.slice(0, 120)
+}
+
+/** A75: appends one recorded action to a session's file (the last 300 kept); moved out of register.ts with a5r-hosts S-a. */
+export const addRecorded = async (io: Pick<FileIo, 'read' | 'write'>, path: string, entry: Recorded): Promise<void> => {
+  let entries: Recorded[] = []
+  try {
+    const v = JSON.parse((await io.read(path)) ?? '') as { entries?: Recorded[] }
+    entries = Array.isArray(v.entries) ? v.entries : []
+  } catch {
+    entries = []
+  }
+  await io.write(path, JSON.stringify({ v: 1, entries: [...entries, entry].slice(-300) }))
+}
+
+/** A75: every session's recorded actions in a folder (for nghiem thu); a half-written file is read next time. */
+export const readAllRecorded = async (io: Pick<FileIo, 'read' | 'list'>, dir: string): Promise<Recorded[]> => {
+  const out: Recorded[] = []
+  for (const f of await io.list(dir)) {
+    if (!f.name.endsWith('.json')) continue
+    try {
+      const v = JSON.parse((await io.read(`${dir}/${f.name}`)) ?? '') as { entries?: Recorded[] }
+      if (Array.isArray(v.entries)) out.push(...v.entries)
+    } catch {
+      // a half-written file: the next read has it
+    }
+  }
+  return out
 }

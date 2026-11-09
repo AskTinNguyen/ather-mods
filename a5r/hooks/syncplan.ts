@@ -239,9 +239,12 @@ export type StatusFile = {
   focus: { lane: string; id8: string; end: number } | null
   /** A139 / A141: how many queued sessions have stopped, the start in flight, and the idle-with-work minutes. */
   wake?: WakeStatus
+  /** a5r-hosts D17 (S-a): the open hand-offs, only while one is open (v stays 1). */
+  handoffs?: StatusHandoff[]
 }
+export type StatusHandoff = { id: string; state: string; host: string; claims: { path: string; exclusive: boolean }[]; updatedAt: number }
 /** A134: the state the minute tick writes for outside viewers. */
-export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null; wake?: WakeStatus }): StatusFile => {
+export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; step: FreezeStep | null; times: SyncTimes; holder: { lane: string; id8: string; end: number | null } | null; queue: readonly StatusQueueRow[]; focus: { lane: string; id8: string; end: number } | null; wake?: WakeStatus; handoffs?: StatusHandoff[] }): StatusFile => {
   const s = x.sync && (x.phase === 'planned' || x.phase === 'cutoff' || x.phase === 'frozen') ? x.sync : null
   const a = s ? aheadOf(s, x.step, x.times, x.now) : null
   const step = x.step
@@ -254,5 +257,6 @@ export const statusOf = (x: { now: number; sync: SyncFile | null; phase: Phase; 
     editor: { holder: x.holder, queue: x.queue },
     focus: x.focus,
     ...(x.wake ? { wake: x.wake } : {}),
+    ...(x.handoffs ? { handoffs: x.handoffs } : {}),
   }
 }

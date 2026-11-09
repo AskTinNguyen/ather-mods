@@ -50,7 +50,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(uncovered([...drawn, ...said, ...sections.map(s => JSON.stringify(s))].join('\n'))).toEqual([])
     // The A5R names themselves.
     expect((w.calls['command.register'] ?? []).map(e => (e as Rec).name)).toEqual(['a5r'])
-    expect((w.calls['tool.register'] ?? []).map(e => (e as Rec).name)).toEqual(['editor', 'sync']) // mcp__a5r__editor, mcp__a5r__sync
+    expect((w.calls['tool.register'] ?? []).map(e => (e as Rec).name)).toEqual(['editor', 'sync', 'host']) // mcp__a5r__editor, mcp__a5r__sync, mcp__a5r__host (a5r-hosts S-a)
     expect((w.calls['ui.open'] ?? [])[0]).toEqual({ id: 'a5r', title: 'A5R' })
     expect(sections.map(s => s.id)).toEqual(['a5r:rules'])
     expect(said.some(s => s.includes('A5R · '))).toBe(true)

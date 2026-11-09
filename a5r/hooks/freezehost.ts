@@ -5,7 +5,7 @@
 // wait waits for. A134: the band, the prompt's line and toast, Saved/A5R/status.json. The rules are syncplan.ts's.
 import { claimIn, type GrantInput, type Notice, type Phase, type SessionFile, type SyncFile } from './coord.ts'
 import { STOPPED_WORDS, appendCapped, queueTimes, queueView } from './lease.ts'
-import { STATUS_FILE, SYNC_TIMES_FILE, NO_TIMES, aheadOf, holdsReads, bandLine, buildMsOf, editorWaits, freesAny, freezeStepOf, isMoved, parseSyncTimes, promptLine, shortLine, statusAtOf, statusOf, stepNotice, timelineLine, timesLine, toastText, type FreezeStep, type Need } from './syncplan.ts'
+import { STATUS_FILE, SYNC_TIMES_FILE, NO_TIMES, aheadOf, holdsReads, bandLine, buildMsOf, editorWaits, freesAny, freezeStepOf, isMoved, parseSyncTimes, promptLine, shortLine, statusAtOf, statusOf, stepNotice, timelineLine, timesLine, toastText, type FreezeStep, type Need, type StatusHandoff } from './syncplan.ts'
 import { readBuildLog, type BuildLogRead } from './syncstage.ts'
 import type { FileIo } from './hostio.ts'
 import type { WakeStatus } from './wake.ts'
@@ -26,6 +26,8 @@ export type FreezeState = {
   wakeStatus: (now: number) => WakeStatus
   /** A143: a merge script runs now (mergescript.ts isMergeScriptAlive; null: unread) */
   isMergeScript: () => boolean | null
+  /** a5r-hosts D17: status.json's open hand-offs (undefined: none open, the key stays out) */
+  handoffs: () => StatusHandoff[] | undefined
 }
 
 export const freezeSteps = (h: FreezeState) => {
@@ -92,7 +94,7 @@ export const freezeSteps = (h: FreezeState) => {
     const w = waitsNow(now)
     const claim = claimIn(x)
     const s = h.sync()
-    const body = statusOf({ now, sync: s, phase: h.phaseOf(s, now), step: await stepNow(io, s, now), times, holder: view.holder && { lane: view.holder.lane, id8: view.holder.id8, end: view.holder.end }, queue: view.rows.map(r => ({ place: r.place, lane: r.lane, id8: r.id8, startsAt: w.starts.get(r.id8) ?? null, waitsFor: (r.isStopped ? STOPPED_WORDS : w.texts.get(r.id8)) ?? '', ...(r.isStopped ? { stopped: true as const } : {}) })), focus: claim?.kind === 'focus' ? { lane: claim.lane, id8: claim.id8, end: claim.end } : null, wake: h.wakeStatus(now) })
+    const body = statusOf({ now, sync: s, phase: h.phaseOf(s, now), step: await stepNow(io, s, now), times, holder: view.holder && { lane: view.holder.lane, id8: view.holder.id8, end: view.holder.end }, queue: view.rows.map(r => ({ place: r.place, lane: r.lane, id8: r.id8, startsAt: w.starts.get(r.id8) ?? null, waitsFor: (r.isStopped ? STOPPED_WORDS : w.texts.get(r.id8)) ?? '', ...(r.isStopped ? { stopped: true as const } : {}) })), focus: claim?.kind === 'focus' ? { lane: claim.lane, id8: claim.id8, end: claim.end } : null, wake: h.wakeStatus(now), handoffs: h.handoffs() })
     const path = `${h.dir()}/${STATUS_FILE}`
     const cur = await io.read(path)
     if (cur !== JSON.stringify({ ...body, at: statusAtOf(cur) })) await io.write(path, JSON.stringify(body))

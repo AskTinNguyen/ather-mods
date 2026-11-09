@@ -2,6 +2,7 @@
 // intent closes, never per turn. Pure: no `$`; register.ts gathers the inputs cheaply and path-scoped (the branch
 // diff against origin/main, the added lines, the intent's four files, Ather's proof, the touch files) and acts on the score.
 import { basename, globMatch, proofGap, proofProblems, rx, section, type A5RConfig, type Proof } from './a5r.ts'
+import { exclusiveHits, type Claiming } from './claims.ts'
 import { heredocs, prCalls, prRefs, type PrRefsRead } from './prcmd.ts'
 
 export type RuleId = 1 | 2 | 3 | 4 | 5
@@ -59,6 +60,8 @@ export type AcceptInput = {
   /** A75: actions that ran at the tool call and were recorded (kind: `tests` for removed assertions, `shared:…` for
    * shared config, `delete`, …), with the repository-relative path and who did it when. */
   recorded?: { kind: string; path: string; target?: string; at: number; lane: string; mine?: boolean }[]
+  /** a5r-hosts A9: the hand-offs recorded here (open ones claim paths); the branch's or intent's own never count. */
+  handoffs?: (Claiming & { intent?: { slug?: string; branch?: string } })[]
 }
 
 const lower = (s: string) => s.replace(/\\/g, '/').toLowerCase()
@@ -141,7 +144,7 @@ export const passKey = (arg: string): string | null => {
 }
 
 /** A75: how nghiem thu names a recorded action. */
-const RECORD_LABEL: Record<string, string> = { delete: 'a recursive delete', 'git-config-global': 'a global git config change', 'p4-destructive': 'a Perforce revert or delete', scope: 'an edit outside the scope file', tests: 'removed test assertions' }
+const RECORD_LABEL: Record<string, string> = { delete: 'a recursive delete', 'git-config-global': 'a global git config change', 'p4-destructive': 'a Perforce revert or delete', scope: 'an edit outside the scope file', tests: 'removed test assertions', 'claim-touch': 'an edit inside a shared hand-off claim' }
 
 /** Every rule – with why the diff could not be read (nothing scored). */
 export const unscored = (why: string): RuleScore[] => RULES5.map(([rule]) => ({ rule, state: 'na' as const, line: unreadLine(why), issues: [] }))
@@ -162,6 +165,10 @@ export const score = (x: AcceptInput): RuleScore[] => {
     const o = x.otherIntents.find(i => inScope(f, i.names))
     if (o && !(x.slug && inScope(f, own))) r1.push({ file: f, what: `intent ${o.slug} names it`, todo: 'leave it to that intent, or record the overlap in findings.md', group: `named by intent ${o.slug}` })
   }
+  // a5r-hosts A9 (D9): a path inside another open hand-off's exclusive claim, unless progress.md or findings.md names it.
+  const isOwn = (h: { intent?: { slug?: string; branch?: string } }) => Boolean((x.slug && h.intent?.slug === x.slug) || (x.branch && h.intent?.branch === x.branch))
+  for (const { file, hit } of exclusiveHits(x.files, x.handoffs ?? [], isOwn))
+    if (!mentions(x.progress, file) && !mentions(x.findings, file)) r1.push({ file, what: `claimed by hand-off ${hit.id} on ${hit.host} (exclusive)`, todo: 'leave it to that lane, or say why in progress.md or findings.md', group: `claimed by hand-off ${hit.id}` })
   scores.push(mk(1, r1, 'no other session\'s or intent\'s paths; not on main'))
 
   // 2 Study well, work well: every row met with evidence, Ather's proof complete, new TODOs recorded.

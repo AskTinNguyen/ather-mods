@@ -436,7 +436,7 @@ test('A117: person-only: the editor tool has no order or resize action, an unkno
   machine(w)
   await $.session.start(START)
   const tools = (w.calls['tool.register'] ?? []) as { name: string; inputSchema: { properties: Record<string, { enum?: string[] }> } }[]
-  expect(tools.map(t => t.name)).toEqual(['editor', 'sync'])
+  expect(tools.map(t => t.name)).toEqual(['editor', 'sync', 'host']) // a5r-hosts S-a: the host tool
   const editor = tools[0]?.inputSchema.properties ?? {}
   expect(editor.action?.enum).toEqual(['request', 'release', 'extend', 'status', 'focus_done']) // rev 41 (A118): the focus session's own report
   expect(Object.keys(editor).sort()).toEqual(['action', 'build', 'dont_save', 'freeGb', 'lane', 'launch', 'minutes', 'mode', 'next_safe', 'note', 'pausable', 'pie', 'pie_stopped', 'what'])

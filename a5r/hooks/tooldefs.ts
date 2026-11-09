@@ -1,6 +1,7 @@
 // The A5R model tools' definitions (the editor and sync tools) and `/a5r help`, moved out of register.ts (rev 44) so the
 // host file can take rev 44's wiring without growing. Pure text: no `$`.
 import { FOCUS_USAGE } from './focus.ts'
+import { HANDOFF_USAGE } from './handoff.ts'
 import { EDITOR_USAGE } from './order.ts'
 import { RULE_FORM } from './syncrules.ts'
 
@@ -55,6 +56,41 @@ export const SYNC_TOOL_DEF = {
   },
 }
 
+/** a5r-hosts S-a: the host tool; this slice answers its handoff actions only (L0: record work that runs elsewhere). */
+export const HOST_TOOL_DEF = {
+  name: 'host',
+  description:
+    'a5r A5R hosts: work that runs on another machine. In this version only action "handoff" works (L0: a record, no transport): ' +
+    'op "create" records that a lane runs elsewhere (label: the machine, free text; branch; base: a ref pushed to the remote, optionally sha; claims: repo-relative paths or globs, "!" exclusive, "~" shared, binary assets exclusive by default; task: one line); ' +
+    '"update" (id; label, task, note, claims, or state "merged" once a result is in), "cancel" (id), "result" (id, ref: the PR, branch or report where the work landed), "list". ' +
+    'While a hand-off is open its exclusive claims refuse other sessions\' edits of those paths here and fail rule 1 at A5R acceptance unless progress.md or findings.md names the path. Other actions answer that a later slice adds them.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['handoff'] },
+      op: { type: 'string', enum: ['create', 'update', 'cancel', 'result', 'list'], description: 'handoff: what to do (default list).' },
+      id: { type: 'string', description: 'update, cancel, result: the hand-off id.' },
+      label: { type: 'string', description: 'create, update: the machine the lane runs on (free text).' },
+      branch: { type: 'string', description: 'create: the branch the work lands on (intent/<slug> names the intent).' },
+      base: { type: 'string', description: 'create: the pushed ref the work starts from (default: the branch, else main).' },
+      sha: { type: 'string', description: 'create: the base commit; it must be on the remote (D7).' },
+      claims: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, exclusive: { type: 'boolean' } }, required: ['path'] }] }, description: 'create, update: repo-relative paths, folders or globs the lane holds.' },
+      task: { type: 'string', description: 'create, update: what is done there, one line.' },
+      ref: { type: 'string', description: 'result: where the work landed (#PR, a PR URL, a branch, a report path).' },
+      state: { type: 'string', enum: ['merged'], description: 'update: merged, once the result is taken.' },
+      note: { type: 'string', description: 'create, update: one line.' },
+    },
+    required: ['action'],
+  },
+}
+
+/** Every A5R model tool by its full name, with the answer when its run fails (hotfix 0.18.2: never a throw). */
+export const A5R_TOOL_ERRORS: ReadonlyMap<string, (msg: string) => string> = new Map<string, (msg: string) => string>([
+  ['mcp__a5r__editor', msg => `A5R · Editor — A5R hit an error reading the lock or the queue: ${msg} → retry the call; if it fails again, /a5r off and take Saved/EDITOR_OWNER.txt by hand (AGENTS.md)`],
+  ['mcp__a5r__sync', msg => `A5R · Sync main — A5R hit an error in the sync tool: ${msg} → retry the call; if it fails again, use /a5r sync (or /a5r off and coordinate the merge by hand)`],
+  ['mcp__a5r__host', msg => `A5R · host — A5R hit an error in the host tool: ${msg} → retry the call; if it fails again, use /a5r handoff`],
+])
+
 /** A57: `/a5r help`. */
 export const A5R_HELP = [
   'A5R commands:',
@@ -68,6 +104,7 @@ export const A5R_HELP = [
   '/a5r gate <with PIE GB> <without PIE GB> | reset · the launch gate',
   `${EDITOR_USAGE}: the person's own order of the Editor queue and time of a turn (the panel's row controls do the same; no tool can)`,
   `${FOCUS_USAGE}: the person gives one session the Editor for a milestone (the panel's Focus… and the EDITOR line's End / +30 / +60 do the same; no tool can); the focus session ends it with the editor tool's focus_done`,
+  `${HANDOFF_USAGE}: a lane that runs on another machine (L0 record); while it is open its exclusive claims refuse edits of those paths here`,
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
 ].join('\n')

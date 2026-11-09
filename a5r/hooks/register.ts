@@ -21,7 +21,7 @@ import { nudges as nudgeSteps, type NudgeIo } from './nudgehost.ts'
 import { conductor, isSentBy, type WakeIo } from './wakehost.ts'
 import { answered } from './wake.ts'
 import { overviewLine, overviewOf, withoutModOf } from './overview.ts'
-import { actOf, recordTarget, type Recorded } from './acts.ts'
+import { actOf, addRecorded, readAllRecorded, recordTarget, type Recorded } from './acts.ts'
 import { isMemoryNoteDue, lastMemoryNote, waitLogOf, waitNote, type WaitLogged } from './waits.ts'
 import { RULE_FORM, conflictLabel, parseRules, rulesLabel, type SyncRule } from './syncrules.ts'
 import { CLASSIFY_BUDGET_MS, FETCH_ENV, FETCH_MS, FETCH_RETRY_MS, dryKey, dryStep, fetchArgv, fetchWhy, shaOf, staleOf, withDryRun, withDryRunFailed, type DryJob, type DryRound } from './dryrun.ts'
@@ -33,7 +33,8 @@ import { SYNC_WORKER_PROMPT, syncWorkerTask } from './syncworker.ts'
 import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG_MS, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, type Miss, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
-import { A5R_HELP, EDITOR_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
+import { A5R_HELP, A5R_TOOL_ERRORS, EDITOR_TOOL_DEF, HOST_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
+import { HOST_TOOL, handoffBox, handoffDesk, type ClaimTouch, type DeskIo } from './handoffhost.ts'
 import { freezeSteps } from './freezehost.ts'
 import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
@@ -69,7 +70,7 @@ import { PIE_START_GB, acceptCard, ago, compactLine, editorBox, lookBox, session
 // Module variables are this session's (one process per session); a reload starts them over, and what must
 // survive one (the request, the lease, delivered notice ids) lives in this session's own file.
 
-type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string; editorDrivers?: string; pieDrivers?: string; autoSyncBuild?: boolean }
+type Opts = { a5rWhenPresent: string; editorLock: string; motion: string; launchGatePieGb?: number; launchGateGb?: number; syncMergeMinutes?: number; syncBuildMinutes?: number; engineRoot?: string; editorLaunchers?: string; editorDrivers?: string; pieDrivers?: string; autoSyncBuild?: boolean; claimExclusiveGlobs?: string }
 type Input = Record<string, unknown>
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -642,32 +643,10 @@ async function pruneTouched($: Engine, opts: Opts): Promise<void> {
 async function recordAction($: Engine, opts: Opts, r: Omit<Recorded, 'at' | 'id8' | 'lane'>): Promise<void> {
   if (!(await isCheckoutHere($))) return
   const id8 = me8 || (await $.session.id()).slice(0, 8).toLowerCase()
-  const path = `${hfDir()}/recorded/${id8}.json`
-  let entries: Recorded[] = []
-  try {
-    const v = JSON.parse((await readJson($, path)) ?? '') as { entries?: Recorded[] }
-    entries = Array.isArray(v.entries) ? v.entries : []
-  } catch {
-    entries = []
-  }
-  entries.push({ ...r, at: await $.clock.now(), id8, lane: me?.lane ?? id8 })
-  await $.fs.write(path, JSON.stringify({ v: 1, entries: entries.slice(-300) })).catch(() => undefined)
+  await addRecorded(hostIo($, opts), `${hfDir()}/recorded/${id8}.json`, { ...r, at: await $.clock.now(), id8, lane: me?.lane ?? id8 })
 }
 /** A75: every session's recorded actions (for nghiem thu). */
-async function readRecorded($: Engine, opts: Opts): Promise<Recorded[]> {
-  const dir = `${hfDir()}/recorded`
-  const out: Recorded[] = []
-  for (const f of await $.fs.list(dir).catch(() => [])) {
-    if (f.kind !== 'file' || !f.name.endsWith('.json')) continue
-    try {
-      const v = JSON.parse((await readJson($, `${dir}/${f.name}`)) ?? '') as { entries?: Recorded[] }
-      if (Array.isArray(v.entries)) out.push(...v.entries)
-    } catch {
-      // a half-written file: the next read has it
-    }
-  }
-  return out
-}
+const readRecorded = ($: Engine, opts: Opts): Promise<Recorded[]> => readAllRecorded(hostIo($, opts), `${hfDir()}/recorded`)
 
 /** A tool call made by the mod itself (the desktop app's session tools); '' when refused or missing. */
 async function callTool($: Engine, input: Input): Promise<string> {
@@ -686,8 +665,6 @@ async function sessionTitle($: Engine): Promise<string> {
 async function retitle($: Engine, text: string): Promise<string> {
   return callTool($, { tool: 'mcp__ccd_session_mgmt__set_session_title', session_id: 'self', title: text })
 }
-
-
 
 /** The line under the prompt says only what the pane would not tell at a glance: ★ A5R while it is on, and
  * an Editor lease run over or RAM under the PIE gate. The normal state is silence (the pane has it). */
@@ -1013,6 +990,7 @@ async function ensureTools($: Engine): Promise<void> {
   hasTools = true
   await $.tool.register(EDITOR_TOOL_DEF).catch(err => $.ui.log(`a5r: editor tool not registered: ${String(err)}`, { to: 'debug' }))
   await $.tool.register(SYNC_TOOL_DEF).catch(err => $.ui.log(`a5r: sync tool not registered: ${String(err)}`, { to: 'debug' }))
+  await $.tool.register(HOST_TOOL_DEF).catch(err => $.ui.log(`a5r: host tool not registered: ${String(err)}`, { to: 'debug' })) // a5r-hosts S-a
   // D7: the sync worker's agent type, spawned by this mod at the sync time and hidden from the model (agent.offer).
   await $.agent.register({ name: 'sync', description: 'a5r sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by a5r only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`a5r: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
   // A65: the advisory judge, read-only (Read and Grep only), a small model, a few turns, no CLAUDE.md; started by a5r only.
@@ -1428,6 +1406,7 @@ async function tick($: Engine, opts: Opts): Promise<void> {
   const window = freeWindowOf(lock, claimNow(now)) // A91: the free window, if the Editor is free
   await nudgeInbox($, opts, window).catch(err => $.ui.log(`a5r: nudge inbox: ${String(err)}`, { to: 'debug' }))
   if (me) await nudgeStep(wakeIo($, opts), { all: [{ ...me, agents: agentsNow ?? me.agents }, ...peers], lanes, now, window, queued: liveQueueNow(now).length, freeGb: probe?.freeGb ?? null }).catch(err => $.ui.log(`a5r: nudge: ${String(err)}`, { to: 'debug' }))
+  await desk.read(hostIo($, opts)).catch(err => $.ui.log(`a5r: hand-offs: ${String(err)}`, { to: 'debug' })) // a5r-hosts S-a: for the pane and status.json
   await turns.tick(hostIo($, opts), now).then(() => freeze.tick(hostIo($, opts), now)).catch(err => $.ui.log(`a5r: git turn, freeze steps: ${String(err)}`, { to: 'debug' })) // A128-A134
   await syncStep($, opts, now)
   await orphanStep($, opts, now).catch(err => $.ui.log(`a5r: orphan: ${String(err)}`, { to: 'debug' })) // A123
@@ -2536,6 +2515,7 @@ async function gatherAccept($: Engine, opts: Opts, a5r: A5R, start: string, slug
     runningAgents,
     cfg: a5r.cfg,
     kitDirs: kitDirsIn(root),
+    handoffs: isS2Repo ? await desk.read(hostIo($, opts)) : [], // a5r-hosts A9
     // A75: the actions recorded at the tool call in this repository (shared config, removed assertions, ...).
     recorded: (await readRecorded($, opts)).filter(r => !r.root || sameRoot(r.root, root)).map(r => ({ kind: r.kind, path: r.path, target: r.target ?? r.path, at: r.at, lane: r.lane, mine: r.id8 === me8 })),
   }
@@ -2836,8 +2816,10 @@ const mergeGuardAlt = (h: HeadFile, owner: Owner | null, now: number): string =>
 
 // Rev 44: gitturnhost.ts (A128-A130) and freezehost.ts (A131-A134): this session's state once, the engine per call.
 const turns = gitTurns({ push, home: () => (places.USERPROFILE ?? '').replace(/\\/g, '/'), me: () => me, me8: () => me8, sync: () => syncFile, probe: () => probe, isLive, phaseOf, isSyncCommand: isSyncCommandOnly, isMerging: now => freeze.isMerging(syncFile, now) || isMergeScriptAlive(probe?.procs ?? null) === true, dir: hfDir, root: s2Root })
-const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now), isMergeScript: () => isMergeScriptAlive(probe?.procs ?? null) })
+const freeze = freezeSteps({ push, me: () => me, me8: () => me8, sync: () => syncFile, phaseOf, grantInput, dir: hfDir, root: s2Root, isStatusWriter: now => takerOf(now) === me8, wakeStatus: now => wakes.status(now), isMergeScript: () => isMergeScriptAlive(probe?.procs ?? null), handoffs: () => desk.status() })
 const wakes = conductor({ me8: () => me8, me: () => me, grantInput, leases: () => leaseLog, dir: hfDir, freeWindow: now => freeWindowOf(lock, claimNow(now)), freeGb: () => probe?.freeGb ?? null, titleOf: id8 => appTitleOf(appNow(nowMs))(id8), sync: now => ({ sync: syncFile, phase: phaseOf(syncFile, now) }) })
+const desk = handoffDesk({ dir: hfDir, root: s2Root, me8: () => me8, lane: () => me?.lane ?? me8 }) // a5r-hosts S-a: hand-offs and claims
+const deskIo = ($: Engine, opts: Opts): DeskIo => ({ ...hostIo($, opts), claimGlobs: opts.claimExclusiveGlobs, secrets: () => load($).then(a => a.cfg.secret_regex) })
 /** The hosts' reads and writes for one call, through this call's engine. */
 const hostIo = ($: Engine, opts: Opts): TurnIo => ({
   now: () => $.clock.now(),
@@ -3081,9 +3063,7 @@ async function convertHandLock($: Engine, opts: Opts, now: number): Promise<stri
 function toolErrorText($: Engine, tool: string, err: unknown): string {
   const msg = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').slice(0, 300)
   $.ui.log(`a5r: ${tool} failed: ${msg}`, { to: 'debug' })
-  return tool === EDITOR_TOOL
-    ? `A5R · Editor — A5R hit an error reading the lock or the queue: ${msg} → retry the call; if it fails again, /a5r off and take Saved/EDITOR_OWNER.txt by hand (AGENTS.md)`
-    : `A5R · Sync main — A5R hit an error in the sync tool: ${msg} → retry the call; if it fails again, use /a5r sync (or /a5r off and coordinate the merge by hand)`
+  return (A5R_TOOL_ERRORS.get(tool) ?? String)(msg)
 }
 
 /** The `editor` tool: request, release, extend, status (the only writer of the lock under A5R). */
@@ -3743,6 +3723,7 @@ async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { 
     const { list, others } = editorNow(now, id8)
     if (list.rows.length > 0 || list.today || list.isFocus) kids.push(editorBox(el, list, { picked, onPick: pick => ((picked = picked === pick ? null : pick), $.ui.invalidate('ui.render')), onControl: (row, c: Control) => void orderAction($, opts, c.action(row), 'panel').then(text => answerPress($, opts, text)), onFocus: row => void focusPress($, opts, row), onFocusControl: a => void focusAction($, opts, a, 'panel').then(r => answerPress($, opts, r.text)) }, PANE_INK()))
     kids.push(sessionsBox(el, others, isDesktop, PANE_INK()))
+    if (desk.open().length > 0) kids.push(handoffBox(el, desk.open(), now, PANE_INK())) // a5r-hosts D17: only while one is open
     // A31: every live session's record title, to match it to the app's open list (and to title it without that list).
     const live = [...new Set([...lanes.filter(l => !l.hasEnded && now - l.mtimeMs <= LANE_STALE_MS).map(l => l.sessionId.slice(0, 8).toLowerCase()), ...peers.filter(p => now - p.heartbeatAt <= HEARTBEAT_STALE_MS).map(p => p.id8)])].filter(id => id && id !== id8)
     if (live.length > 0 && !isNaming && live.some(id => now - (namesAt.get(id) ?? 0) > NAME_TTL_MS)) $.clock.after(10, () => void refreshNames($, opts, live))
@@ -3820,8 +3801,8 @@ export const register: Register = (on, options) => {
     await readTheme($) // A40
     await $.command.register({
       name: 'a5r',
-      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r pass <PR or slug> (let one through once) · /a5r help · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r editor [up|down|top <name> | time <name> <±minutes> | order reset] (the person\'s order of the Editor queue) · /a5r focus [<name> <2h|3h>: <milestone> | end | +30 | +60] (the person gives one session the Editor for a milestone) · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance at the end of the checklist; Editor holder, RAM and Sync main)',
-      argumentHint: 'on | off | status | accept | pass <PR or slug> | gate <pie> <nopie> | editor … | focus … | sync HH:MM | help',
+      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r pass <PR or slug> (let one through once) · /a5r help · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r editor [up|down|top <name> | time <name> <±minutes> | order reset] (the person\'s order of the Editor queue) · /a5r focus [<name> <2h|3h>: <milestone> | end | +30 | +60] (the person gives one session the Editor for a milestone) · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · /a5r handoff record | list | cancel <id> | result <id> <ref> (a lane on another machine) (on: the five rules, checked at the action and at A5R acceptance at the end of the checklist; Editor holder, RAM and Sync main)',
+      argumentHint: 'on | off | status | accept | pass <PR or slug> | gate <pie> <nopie> | editor … | focus … | sync HH:MM | handoff … | help',
     })
     await readA5R($)
     a5rFlipAt = 0 // a session that starts with A5R already on does not stamp the seal
@@ -3854,6 +3835,7 @@ export const register: Register = (on, options) => {
     if (/^editor\b/i.test(e.args.trim())) return { text: await personCommand($, opts, parseEditorCommand(e.args.trim().slice(6)), e.origin, { gate: ORDER_GATE, changes: 'changes the Editor queue', usage: EDITOR_USAGE, act: a => orderAction($, opts, a, 'command') }) }
     if (/^focus\b/i.test(e.args.trim())) return { text: await personCommand($, opts, parseFocusCommand(e.args.trim().slice(5)), e.origin, { gate: FOCUS_GATE, changes: 'gives, extends or ends a Focus', usage: FOCUS_USAGE, act: async a => (await focusAction($, opts, a, 'command')).text }) }
     if (/^help\b/i.test(e.args.trim())) return { text: A5R_HELP }
+    if (/^handoff\b/i.test(e.args.trim())) return { text: await desk.command(deskIo($, opts), e.args.trim().slice(7)) } // a5r-hosts S-a
     // A29: `/a5r` with no words opens the A5R pane; `/a5r status` keeps the text reply below.
     if (e.args.trim() === '') return { text: await openA5Pane($) }
     const arg = e.args.trim().toLowerCase()
@@ -3892,9 +3874,10 @@ export const register: Register = (on, options) => {
     if (isMain) await signalTurn($) // A55 / A59: the main loop runs
     // Hotfix 0.18.2: A5R's own tools always answer: an error inside is the call's result (named, with a step), never a
     // throw that leaves the call unanswered ("no tool.call hook answered this call", MEASURED in b4f33d56 at 15:00:43).
-    if (tool === EDITOR_TOOL || tool === SYNC_TOOL) {
+    if (A5R_TOOL_ERRORS.has(tool)) {
       try {
         if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
+        if (tool === HOST_TOOL) return { result: await desk.tool(deskIo($, opts), input) } // a5r-hosts S-a
         const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
         const rules = Array.isArray(input.rules) ? input.rules.map(String) : typeof input.rules === 'string' ? input.rules : undefined
         const text = await syncAction($, opts, str(input.action), { at: str(input.at), holder: str(input.holder), note: str(input.note), paths, build: typeof input.build === 'boolean' ? input.build : undefined, rules })
@@ -3924,6 +3907,7 @@ export const register: Register = (on, options) => {
     let parts: [string, string, string][] = []
     const locs: Located[] = []
     let dLoc: Located | null = null // A75: the edit the decision is about
+    let claimTouches: ClaimTouch[] = [] // a5r-hosts D9: shared claims the edit writes, recorded once it ran
     if (SHELL_TOOLS.has(tool)) {
       what = str(input.command)
       if (isOn) {
@@ -3948,6 +3932,9 @@ export const register: Register = (on, options) => {
       }
       const touch = isOn ? await focusTouchProblem($, locs) : null // A120
       if (touch) return { deny: touch }
+      const claim = isOn ? await desk.touch(hostIo($, opts), await sharedRels($, locs)) : null // a5r-hosts D9: a hand-off's claims
+      if (claim?.deny) return { deny: claim.deny }
+      claimTouches = claim?.shared ?? []
     }
     // A74: git in the shared checkout, read on facts segment by segment (every form, whatever rule 1's patterns match);
     // the sync's own commands in its frozen phase pass (A15).
@@ -4018,6 +4005,7 @@ export const register: Register = (on, options) => {
       }
       if (text && PIE_STOP.test(text)) isPieRunning = false
       if (EDIT_TOOLS.has(tool) && isS2) await recordTouch($, await sharedRels($, locs))
+      for (const r of claimTouches) await recordAction($, opts, r).catch(() => undefined) // a5r-hosts D9: it ran
       // A74 (review 5): a commit in the shared checkout takes its committed paths out of this session's touch set.
       if (isS2 && SHELL_TOOLS.has(tool) && /\bgit\b[^\n]*\bcommit\b/.test(what)) await pruneTouched($, opts).catch(() => undefined)
       for (const a of addsChecked.get(what) ?? []) await recordTouch($, ((await stagedIn($, a.root, a.rels)) ?? []).filter(p => a.rels.some(r => samePath(r, p))))
@@ -4049,7 +4037,7 @@ export const register: Register = (on, options) => {
     // any other call goes on as if A5R were not there (replay-safe: a call already made is not made again).
     const tool = String(e.tool)
     const why = `${next.error.kind}${next.error.message ? `: ${next.error.message}` : ''}`
-    if (tool === EDITOR_TOOL || tool === SYNC_TOOL) return { result: toolErrorText($, tool, why) }
+    if (A5R_TOOL_ERRORS.has(tool)) return { result: toolErrorText($, tool, why) }
     $.ui.log(`a5r: the tool.call hook failed (${why}) on ${tool}; the call went on unchecked`, { to: 'debug' })
     return next(e)
   })
