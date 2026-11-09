@@ -1,6 +1,6 @@
 # A5R hosts: work that moves to other machines
 
-- Rev: 1
+- Rev: 2
 - Status: draft (design)
 - Area: a5r
 - Owner: HaiHuynh
@@ -56,19 +56,23 @@ Nothing is specific to one person's setup: no machine names, no task-kind fields
 ## Decisions
 
 - D1 (rev 1): **Three levels, additive.** A level's features appear only when its inputs exist: L0 needs nothing, L1 needs a declared host and an adapter with `probe`, L2 needs an adapter with `run` or `deliver`. A missing level is never an error; `/a5r host status` says which level this machine is at and what the next level needs.
-- D2 (rev 1): **Host registry is a plugin option written by A5R.** `pluginConfigs."a5r".hosts` is an object keyed by host id. Only `/a5r host add|set|pause|resume|remove` and the `host` tool write it, and only after the health checks the change needs pass (section 7). Hand edits are read but flagged `edited-by-hand` in `host status` and re-checked. Machine-local, never in git.
+- D2 (rev 2, R1, R2): **Two option blocks, declarations only.** `pluginConfigs."a5r".hosts` (outbound: machines this one sends to) holds only what the origin decides: id, label, owner, reach, repo, engine rule, and for a probe-only host an `assumed: { roles, availability }` clearly marked assumed. `pluginConfigs."a5r".asHost` (inbound: this machine when it serves others) holds what the host owner decides: roles, laneRoot, capacity, availability, trust, ephemeral, maxJobs, coordinationRoot (D19). The origin never stores a host's `asHost` facts: it reads them from that host's card. Only `/a5r host ...` and the `host` tool write either block, after the checks the change needs pass; hand edits are read, flagged `edited-by-hand`, and re-checked. Machine-local, never in git. Options hold no state (D20).
+- D19 (rev 2, R5): **One coordination root per machine.** A lane on a host is a second checkout on the same RAM and Editor capacity. Every session of a job (and every local session) uses the Editor holder, RAM gate and sync freeze of the machine's primary checkout, named in `asHost.coordinationRoot` (default: the checkout A5R runs in; `host check` fails C10 if two roots are declared for one machine). A lane's sessions read and write the Editor queue under `<coordinationRoot>/Saved/A5R/`, not under the lane's own `Saved/`. R5 is therefore decided here, not left open.
+- D20 (rev 2, R2): **State lives in files, not options.** Checks with `checkedAt`, derived `level`, `pausedUntil` and link-storm counts go to `<coordinationRoot>/Saved/A5R/hosts/<id>/state.json`, one writer (the origin's `host` tool). The rule is per coordination root, which is per machine (D19), not per checkout, so several checkouts of one machine share one state and one `link.jsonl`.
+- D21 (rev 2, R3): **Delivery is always origin to host.** The origin writes a copy of its own hand-off into the host's `Saved/A5R/inbox/<id>.json` with `writeFile` (the origin is still the only writer of that file); the host writes `jobs/<id>.json`; the origin reads it with `readFile` on its tick. Every L2 flow needs only the origin-to-host direction. The host's `deliver` doorbell to the origin session is optional. C12 runs the round trip with the reverse direction absent and must pass.
+- D22 (rev 2, R4): **A job obeys the host's Editor rules.** A job runs as a session on the host and requests the host's Editor through that host's own queue (D19), RAM gate and sync freeze like any local session; the card lists it in `editor.queue`. On a probe-only host the job holds the plain `Saved/EDITOR_OWNER.txt` protocol that host uses; if that cannot be read, a job that needs the Editor is declined (`NO_EDITOR_PROTOCOL`).
 - D3 (rev 1): **No machine-specific fields.** `roles` is a free-form list of strings the user chooses (A5R only matches them exactly against a job's `wants`); `label` is free text; `availability.reason` is free text. A5R has no built-in role names. Defaults are empty.
 - D4 (rev 1): **The adapter is a small interface** (section 6) with four stock kinds (`ssh`, `herdr`, `command`, `manual`). `command` is a template with named placeholders, which is how any other transport (cloud CLI, queue client) plugs in without code. A5R depends on none; `manual` always works.
-- D5 (rev 1): **One writer per file, both sides.** The origin side writes `Saved/A5R/handoffs/<id>.json` (the ask); the host side writes `Saved/A5R/jobs/<id>.json` on the host (the answer and progress). Each reads the other through the adapter (`readFile`) or, for `manual`, from what the human pasted into a file the reading side owns (`Saved/A5R/handoffs/<id>.manual-in.json`, written by the origin's own tool). Changes are new fields, never overwrites of the other side's file.
+- D5 (rev 2): **One writer per file, both sides.** The origin side writes `Saved/A5R/handoffs/<id>.json` (the ask); the host side writes `Saved/A5R/jobs/<id>.json` on the host (the answer and progress). The ask reaches the host by D21 (an inbox copy); the host's answer is read by the origin through `readFile`; for `manual`, what the human carries back is pasted into a file the origin's tool owns (`Saved/A5R/handoffs/<id>.manual-in.json`). Changes are new fields, never overwrites of the other side's file.
 - D6 (rev 1): **Files are the truth, notices are doorbells, polling always works.** `deliver` may ring the other side's session; if it cannot (no reverse link, S6), the receiving side finds the change by reading on its minute tick. No state exists only in a message.
 - D7 (rev 1): **A job's base is pushed.** `base` is a remote ref and sha. Creating a hand-off with a base the remote does not have is refused (`A5R · handoff — base abc1234 is not on origin → push the branch, then create the hand-off`). Uncommitted or unpushed local work is never part of a job.
-- D8 (rev 1): **Availability and preemption.** `availability = { state: yes|no, reason, windows[], until }`; `windows` is optional recurring text-free spans (`days`, `from`, `to`, host-local time zone named). The host owner (or its A5R) sets it. A change to `no`, or `until - warn`, writes `preempt` into each running job's file: the job's session gets a notice to reach a safe point, push a WIP branch, and `park`. Parked jobs can resume when availability returns or be `returned` to origin. Reason is shown only when state is no.
+- D8 (rev 2): **Availability and preemption.** The host owner sets `asHost.availability` (published in its card; R1). `availability = { state: yes|no, reason, windows[], until }`; `windows` is optional recurring text-free spans (`days`, `from`, `to`, host-local time zone named). The host owner (or its A5R) sets it. A change to `no`, or `until - warn`, writes `preempt` into each running job's file: the job's session gets a notice to reach a safe point, push a WIP branch, and `park`. Parked jobs can resume when availability returns or be `returned` to origin. Reason is shown only when state is no.
 - D9 (rev 1): **Claims are visible and checked at the action and at acceptance.** Open hand-offs' `claims` (paths, globs, asset sets) are read by every local session. A local edit to a claimed path is recorded (`rule=claim-touch`) at the hook and refused only for paths marked `exclusive` (binary assets default exclusive, text defaults shared); acceptance fails a diff that touches another open hand-off's exclusive claim without a reason in progress.md. Rule 1/3 text in the A5R intent is extended by reference, not rewritten.
 - D10 (rev 1): **Sync main stays per machine.** The local sync does not gate remote lanes (they branch from `origin/main` and PR). At the cutoff, A5R warns about open hand-offs whose `base` is not an ancestor-pushed ref or depends on local unpushed work (should not exist by D7, but a branch moved after creation is checked) and about hosts that report their own freeze (the card's `freeze` field). A host with its own sync freeze is `unavailable for new jobs` automatically.
-- D11 (rev 1): **Suggestion is a pure function** `suggest(request, local, cards, options) -> { suggestion: none | host(id, reasons[]) , whyNot: [{host, code}] }`. Reason codes: `RAM` (local free < need, host free >= need), `LONG` (minutes over `hosts.longMinutes`, default 120), `READONLY_WAIT` (read-only task, local Editor held), `FREEZE` (local sync freeze, host not frozen), `IDLE` (host offers capacity now). Why-not codes: `UNAVAILABLE`, `STALE_CARD`, `NO_ROLE`, `NO_TRUST`, `NO_RAM`, `FROZEN`, `UNCHECKED`, `NO_ADAPTER_OP`. Thresholds are options with defaults. It only suggests; a hand-off is always an explicit tool call or command.
-- D12 (rev 1): **Trust is a host-side allow list.** A host accepts a job only if `from` (origin identity string = the origin's declared `owner` plus a stable machine id, no secret) is in the host's `trust` list, or `trust: ["*"]` (a bot). Origin identity is declared when the host is added; it proves nothing cryptographically, it names who to hold responsible; transport authentication (SSH key etc.) is the real gate. A job from an unknown origin is `declined` with reason `NO_TRUST`.
+- D11 (rev 2): **Suggestion is a pure function** (`LONG`, default 120 min, is only a suggestion threshold; it never blocks or places anything) `suggest(request, local, cards, options) -> { suggestion: none | host(id, reasons[]) , whyNot: [{host, code}] }`. Reason codes: `RAM` (local free < need, host free >= need), `LONG` (minutes over `hosts.longMinutes`, default 120), `READONLY_WAIT` (read-only task, local Editor held), `FREEZE` (local sync freeze, host not frozen), `IDLE` (host offers capacity now). Why-not codes: `UNAVAILABLE`, `STALE_CARD`, `NO_ROLE`, `NO_TRUST`, `NO_RAM`, `FROZEN`, `UNCHECKED`, `NO_ADAPTER_OP`. Thresholds are options with defaults. It only suggests; a hand-off is always an explicit tool call or command.
+- D12 (rev 2): **Trust is a host-side allow list.** A host accepts a job only if `from` (origin identity string = the origin's declared `owner` plus a stable machine id, no secret) is in `asHost.trust`, or `trust: ["*"]` (a bot). Origin identity is declared when the host is added; it proves nothing cryptographically, it names who to hold responsible; transport authentication (SSH key etc.) is the real gate. A job from an unknown origin is `declined` with reason `NO_TRUST`.
 - D13 (rev 1): **No secrets in jobs, ever.** Job and card files are scanned with the existing `secret_regex` on write; a match refuses the write. Credentials stay on each host (C3 checks they exist, never reads them).
-- D14 (rev 1): **Health checks are the setup.** `host add` is a sequence of checks (section 7), each with id, pass/fail/skip, measured value, a fix line for an agent, and `checkedAt`. A host's level is derived from which checks passed. Stale checks (default 7 days, or a failing live probe) lower the level and re-run on the next `host check`.
+- D14 (rev 2): **Health checks are the setup.** Results are stored in state.json (D20), not in options. `host add` is a sequence of checks (section 7), each with id, pass/fail/skip, measured value, a fix line for an agent, and `checkedAt`. A host's level is derived from which checks passed. Stale checks (default 7 days, or a failing live probe) lower the level and re-run on the next `host check`.
 - D15 (rev 1): **A5R-less hosts are first class.** Without A5R the card is built by `probe`; the lane runs a plain runner (a script the host owner or agent installs, section 5.3) that writes the job file. A host with neither adapter ops nor A5R is a declaration only (L0 labels).
 - D16 (rev 1): **Reconnect storms are the origin's problem to cap.** Adapters declare `backoff` (min 5 s, max 15 min, factor 2) and `maxReconnectsPerHour`; A5R counts failures in `Saved/A5R/hosts/<id>/link.jsonl` and pauses the host (`state: link-storm`) past the cap, with the refusal `A5R · host <id> — link failed 12 times in 10 min → fix the link (C2), then /a5r host resume <id>`. Orphan leak (C5) is checked, not assumed.
 - D17 (rev 1): **Display is conditional.** A Hosts tile appears only when a host is declared or a hand-off is open. Queue rows gain a hint `fits <label> (RAM)` only when a suggestion exists. `status.json` gains `hosts` and `handoffs` (additive, `v` stays 1 with new optional keys).
@@ -81,32 +85,48 @@ All files are JSON, UTF-8, LF, one writer. Times are ms since epoch plus an IANA
 ### 1. Option schema (`pluginConfigs."a5r"`)
 
 ```
-hosts: {
-  "<id>": {                       // id: [a-z0-9-]{1,32}, chosen by the user or agent
+hosts: {                          // outbound: machines this one sends to (origin decides)
+  "<id>": {                       // id: [a-z0-9-]{1,32}
     label: string,                // free text, shown
     owner: string,                // free text, who answers for it
     reach: { kind: "ssh"|"herdr"|"command"|"manual", target: string, options?: object },
-    laneRoot?: string,            // where lanes live on the host (host path)
-    repo?: { url: string, path?: string },   // what to clone; path = existing checkout on the host
-    engine?: { detected: string, rule: "same"|"any" },   // detected by C-checks; "same" default
-    capacity?: { ramGb: number, maxEditors: number, diskGb?: number },   // measured, can be overridden
-    roles: string[],              // free-form tags, empty by default
-    availability: { state: "yes"|"no", reason?: string, windows?: [{ days: string[], from: "HH:MM", to: "HH:MM", tz: string }], until?: ms },
-    trust: string[],              // origin ids this host accepts from ("*" = any)
-    ephemeral?: boolean,
-    account?: { shared: "yes"|"no"|"unknown" },
-    checks: { <checkId>: { status: "pass"|"fail"|"skip", value?: string, checkedAt: ms } },
-    level: 0|1|2,                 // derived, never edited
-    pausedUntil?: ms
+    repo?: { url: string, path?: string },
+    engine?: { rule: "same"|"any" },              // "same" default; the detected value is state (D20)
+    diskEstimateGb?: number,                      // declared size of one lane; else measured and cached in state (C8)
+    assumed?: { roles?: string[], availability?: { state: "yes"|"no", reason?: string } }   // probe-only hosts; shown as assumed
   }
+},
+asHost: {                         // inbound: this machine when it serves others (host owner decides)
+  enabled: boolean,
+  coordinationRoot?: string,      // D19: primary checkout whose Saved/A5R holds Editor/RAM/freeze for all lanes
+  laneRoot?: string,
+  capacity?: { ramGb: number, maxEditors: number, maxJobs: number, diskGb?: number },   // measured, can be overridden
+  roles: string[],                // free-form tags, empty by default
+  availability: { state: "yes"|"no", reason?: string, windows?: [{ days: string[], from: "HH:MM", to: "HH:MM", tz: string }], until?: ms },
+  trust: string[],                // origin ids accepted ("*" = any)
+  ephemeral?: boolean,
+  account?: { shared: "yes"|"no"|"unknown" }
 },
 hostsOptions: { staleCardMin: 10, staleCheckDays: 7, longMinutes: 120, needGbDefault: 0, suggest: true, warnBeforeUntilMin: 15 }
 originId: string                 // this machine's identity for `from` (generated once: owner + random 8 hex)
 ```
 
+The origin never copies `asHost` facts: it reads them from the host's card (section 2).
+
+### 1b. State (`<coordinationRoot>/Saved/A5R/hosts/<id>/state.json`, D20)
+
+```
+{ v:1, checks: { <checkId>: { status: "pass"|"fail"|"skip", value?: string, checkedAt: ms } },
+  level: 0|1|2,                  // derived from checks, never edited
+  engineDetected?: string, labSizeGb?: number,   // cached measurements (C8)
+  pausedUntil?: ms, link: { failures: n, windowStart: ms, state?: "link-storm" } }
+```
+
+Writer: the origin's `host` tool only.
+
 Defaults: no `hosts` key = L0. Every threshold is an option; none is a constant in code beyond its default.
 
-### 2. Host card (`Saved/A5R/hosts/<id>/card.json` on the origin; `Saved/A5R/card.json` on a host that runs A5R)
+### 2. Host card, the only place a host's own facts (roles, availability, capacity, trust summary) are read from (`Saved/A5R/hosts/<id>/card.json` on the origin; `Saved/A5R/card.json` on a host that runs A5R)
 
 Writer: the host's own A5R tick (A5R host) or, for a probe-only host, the origin's probe into its own `Saved/A5R/hosts/<id>/card.json`. Never the same file by two writers.
 
@@ -201,11 +221,11 @@ Each: id, what, pass, fix for the agent. Order matters: a failing check stops la
 | C5 | **Orphan leak** | process count of the transport's helper pairs does not rise across 3 probe cycles (adapter declares the process name pattern) | S2: kill leaked pairs (may need elevation: report to the host owner); do not declare until stable |
 | C6 | **A5R present?** | `Saved/A5R/status.json` or `card.json` fresh on the host (tick within 2 min) | none needed: mark `source: probe`; offer to install the plugin |
 | C7 | **Repo and engine** | repo reachable at `repo.url` or `path`; engine detected on the host matches `engine.rule` (same version string by default) | install or select the matching engine; set `engine.rule: any` only if the task kinds do not need a build |
-| C8 | **Disk estimate** | free disk >= `ceil(sizeOfCheckoutOnOrigin * 1.2)` for the first lane; the estimate reads the origin's lane size and file count; filesystem kind recorded (plain, block-cloning) | S4: free space, use a cloning volume if available, or use `readOnly`-only roles; never create the lane before this passes |
+| C8 | **Disk estimate** | free disk >= `ceil(sizeOfCheckoutOnOrigin * 1.2)` for the first lane; the estimate is `hosts.<id>.diskEstimateGb` when declared, else the origin's measured lane size, which is slow for a huge checkout (~770k files) and therefore measured once in the background and cached in state.json (`labSizeGb`, re-measured only on request or when the repo's file count changes by 10 %); filesystem kind recorded (plain, block-cloning) | S4: free space, use a cloning volume if available, or use `readOnly`-only roles; never create the lane before this passes |
 | C9 | **Lane create or reuse** | one lane exists at `laneRoot` for the repo at the base sha (created once, then reused per job); creation is run in the background with progress, never over a short SSH call | resume a partial lane; do not start a second full copy |
-| C10 | **RAM** | `totalRamGb` read; `capacity.ramGb` set; free RAM read | record measured value; adjust `maxEditors` |
+| C10 | **RAM and one coordination root** | `totalRamGb` read; `asHost.capacity.ramGb` set; free RAM read; exactly one `coordinationRoot` per machine (D19) | record measured value; adjust `maxEditors` |
 | C11 | **First build read by its own result line** | a build (if the repo has one) run in the lane ends with the build tool's own `Result:` line read through `readFile`; a missing line is a fail whatever the exit code | fix the build; exit code 0 is not proof |
-| C12 | **Round trip** | a no-op hand-off (a read-only job that writes `progress` and `done`) goes `proposed -> accepted -> done` through the real adapter | read which file or transition stalled; usually C2/C3 |
+| C12 | **Round trip** | a no-op hand-off (a read-only job that writes `progress` and `done`) goes `proposed -> accepted -> done` through the real adapter using only the origin-to-host direction (inbox write, job read; D21), with the reverse direction absent | read which file or transition stalled; usually C2/C3 |
 | C13 | **Trust** | the host's `trust` list contains this origin's id | add it host-side (host owner) |
 
 Level derived: L1 needs C1 and C2 (and C4 if windows are used); L2 additionally C3, C7, C8, C9, C12 (C11 when the roles include a build). A re-run after `staleCheckDays` or after a link failure re-evaluates, lowering the level without deleting the host.
@@ -233,17 +253,31 @@ Model tool `mcp__a5r__host` (actions): `list`, `status` (levels and next step), 
 - A4: Adapter interface: `ssh`, `herdr`, `command`, `manual` pass a shared contract suite on a fake transport; a missing op yields `NO_ADAPTER_OP` not a throw; timeouts, backoff and `maxReconnectsPerHour` pause a host (D16) with the refusal text. Proof: gate: contract tests; a storm test with 12 failures in 10 minutes.
 - A5: Host card: an A5R host's `card.json` is written by one writer on the minute tick; a probe-built card marks unreadable fields `null`; a stale card is never used by `suggest`. Proof: gate: unit tests on card building and staleness.
 - A6: `suggest` is pure and covers every reason code and why-not code; thresholds come from options; no suggestion ever creates a hand-off. Proof: gate: table-driven unit tests (each row of D11's codes, boundary values, no hosts, all stale).
-- A7: Hand-off and job schemas and the state machine (section 5) are enforced: one writer per file (a write by the wrong side is refused), D7 base check, D12 trust decline, D13 secret scan, `unanswered/silent/lost` computed from time. Proof: gate: unit tests per transition including illegal ones; an engine test of the full path `proposed -> accepted -> running -> done -> merged` with a mocked adapter and of `manual`.
+- A7: Hand-off and job schemas and the state machine (section 5) are enforced: one writer per file (a write by the wrong side is refused), D7 base check, D12 trust decline, D13 secret scan, `unanswered/silent/lost` computed from time; D21 delivery (inbox copy written by the origin, job read by the origin, no reverse link needed). Result return: a result PR opened on the host is scored after the fact through the intent's `- PR:` line (the existing A5R feature); the hand-off reaches `merged` only after that score passes or the person passes it (`/a5r pass`). Proof: gate: unit tests per transition including illegal ones; an engine test of the full path `proposed -> accepted -> running -> done -> merged` with a mocked adapter and of `manual`; a test where a result PR scores failing keeps the hand-off at `done` and out of `merged`; a test of the full path with the reverse direction cut.
 - A8: Preemption: availability to `no` or `until - warn` writes `preempt`; the running job gets the notice, parks with a pushed WIP branch, resumes or returns; a job with no answer by `deadline` is `lost` on the origin. Proof: gate: engine tests with a simulated clock.
 - A9: Claims: `claimedBy` over open hand-offs; hook records and refuses per exclusive rule; acceptance fails a diff that touches another open hand-off's exclusive claim without a reason, and passes it with one. Proof: gate: engine tests in the accept harness (as A-accept tests today).
 - A10: Sync interplay: at the cutoff a hand-off whose base moved off a pushed ref is warned; a host card with `freeze` makes the host `FROZEN`; the local sync never refuses a remote lane. Proof: gate: engine tests with a planned sync and mocked cards.
 - A11: Scenarios 1-7 each have an end-to-end test or a recorded manual check, named in progress.md, at the level the Scenarios table gives. Proof: gate: the tests above plus, for scenarios 4 and 5, a fake-queue/fake-ephemeral adapter test; scenario 7 by a `manual` packet round trip.
 - A12: Display: Hosts tile only per D17; queue hint only with a suggestion; `status.json` keys additive with `v` 1. Proof: gate: tree snapshot tests on terminal and desktop.
 - A13: Setup is agent-runnable: `host add` on a mocked remote runs C1-C13 in order, stores results, stops at the first blocking failure with the fix line, and a second run resumes at the failed check. Proof: gate: engine test of the add/resume flow; an agent-facing doc under `a5r/README.md` states each command and its expected output.
+- A16: Host Editor rules (D19, D22): a job's Editor/PIE/build request goes through the machine's coordination-root queue, RAM gate and sync freeze and appears in the card's `editor.queue`; two Editors on one machine never run at once; a probe-only host's job follows the plain lock or is declined `NO_EDITOR_PROTOCOL`; two declared coordination roots fail C10. Proof: gate: engine tests with mocked host state and queue.
+- A17: State and options (D2, D20): `hosts` and `asHost` hold no state; checks, level, pause and link counts are only in `state.json`, written only by the `host` tool; options written by hand are flagged; one state per coordination root with several checkouts. Proof: gate: unit tests on option/state separation and a two-checkout test.
 - A14: Files stay under 1,000 lines each (`node dev/check-size.mjs`); new work goes in new modules (`hosts.ts`, `hostcard.ts`, `handoff.ts`, `suggest.ts`, `adapters/*.ts`, `hostchecks.ts`); `$` stays in the host files. Proof: gate: `node dev/test-all.mjs`; `claude plugin validate --strict a5r`.
 - A15: Thermo-nuclear review of the branch diff against `origin/main` records `Verdict: pass`; release follows the `release` skill. Proof: review section in progress.md.
 
-## Open questions (findings for Hải, with a recommendation each)
+## Slices (build order; each ships alone and is useful)
+
+| Slice | Content | Level | Acceptance rows |
+| --- | --- | --- | --- |
+| S-a | `handoff record` (L0), claims visible to sessions, claim check at the hook and at acceptance, no adapters, no hosts option | L0 | A1, A9 (record, claim, acceptance parts), A14 |
+| S-b | `host add` with C1, C2, C4, C5, C10 on the `ssh` and `manual` adapters, `hosts` and `asHost` options (D2), `state.json` (D20), Hosts tile | L1 | A2, A3 (C1, C2, C4, C5, C10), A4 (ssh, manual, storm cap), A13, A17, A12 (tile) |
+| S-c | Card publishing on A5R hosts, probe-built cards, `suggest` and the queue hint, `status.json` additions | L1 | A5, A6, A12 (hint, status.json), A16 (card queue part) |
+| S-d | L2 hand-off over inbox and job files (D21), preemption, C3, C7, C8, C9, C11, C12, C13, `herdr` and `command` adapters, result acceptance, sync interplay, host Editor rules (D22) | L2 | A3 (rest), A4 (herdr, command), A7, A8, A10, A11 (1-4, 6, 7), A16 |
+| S-e | Reference runner for A5R-less hosts (F2) and the fake-queue / ephemeral scenarios | L2 | A11 (5, 6 end to end) |
+
+A15 closes every slice that changes code (a review per slice, one release per slice).
+
+## Open questions (findings for Hải; F1-F7 accepted by Hải as written; R5 is decided in D19, so no F8)
 
 - F1: Is the origin's `from` id enough for trust, or should hand-offs be signed? Recommendation: ids only for now; the transport (SSH key, multiplexer) is the gate; revisit when a bot accepts `*` from the internet.
 - F2: Should a host without A5R need the reference runner, or is "agent on the host reads the packet" enough for L2? Recommendation: ship the reference runner as a later step; the job file format is the contract; test with a fake runner.
@@ -263,3 +297,4 @@ Model tool `mcp__a5r__host` (actions): `list`, `status` (levels and next step), 
 ## Changelog
 
 - Rev 1 (2026-11-09): first draft of the design.
+- Rev 2 (2026-11-09): review-rev1.md applied. R1: options split into `hosts` (outbound) and `asHost` (inbound), host facts read from the card; R2: state moved to `state.json` per coordination root; R3: delivery always origin to host (D21), C12 without a reverse link; R4: a job obeys the host's Editor queue (D22); R5: decided as D19 (`asHost.coordinationRoot`), no F8; R6: Slices section and A# mapped; R7: result acceptance in A7; smaller: C8 declared and cached size, `LONG` is a suggestion threshold only. F1-F7 kept as accepted.
