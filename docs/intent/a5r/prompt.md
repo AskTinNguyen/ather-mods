@@ -1,6 +1,6 @@
 # A5R (Agent 5 Rules): the five rules, Editor holder, RAM and Sync main holder
 
-- Rev: 46
+- Rev: 47
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -300,6 +300,12 @@ The three share one clock and one message channel: hai-flow notices, delivered b
   - A claim that has lapsed because its session is gone is cleared (written null by read-compare-write), so a person or tool reading `git-turn/` is not misled.
   - Also MEASURED: the stale locks left behind are partial index writes (42–69 MB of a ~104 MB index: 11-03, 11-04, 11-05, 11-06, 11-08). A process died mid-write without git's own cleanup, which looks like a kill. So A142's script also never runs under a tool timeout that could kill it; it runs detached, like the build.
   Proof: engine tests (the desktop app's `git -c core.fsmonitor= … diff --numstat` without `-C`, started after the lock, does not block a move; the same started before it does; an untargeted `git commit` still does; a gone session's claim is cleared and a live one is not).
+- A145 (rev 47): A rename the merge invents never stops it. MEASURED 2026-11-09 (sync-main): A142's script refused "CONFLICT (rename/delete): no rule resolves this kind" on 2 paths. Both sides had deleted the same lab maps, and merge-ort paired main's deletion with unrelated new main files (Twinblades_Dead.uasset, HMS_0583.uasset) as renames; a `theirs <path>` rule did not apply. The holder finished by hand (merge-tree, temp index, commit-tree, mixed reset). Fixes:
+  - The script merges with rename detection off (merge-tree `-X no-renames`, or `-c merge.renames=false` if merge-tree on this git refuses `-X`; MEASURE which works on the installed git). In an Unreal checkout a rename between binary assets is guesswork, and with it off a path deleted on both sides is clean.
+  - A rule also resolves the delete kinds (modify/delete, rename/delete, and any kind whose paths the rule matches): `theirs` takes main's side (deleted stays deleted, added stays added), `ours` keeps HEAD's. A conflict no rule matches is still refused before any write.
+  Proof: merge-script smoke cases (both sides delete a path that main also "renames" by content: merges clean; modify/delete with a `theirs` rule: main's deletion; with an `ours` rule: HEAD's file; with no rule: refused, nothing written).
+- A146 (rev 47): The sync holder is woken, not dropped. MEASURED 2026-11-09: the 07:00 sync was cancelled at 06:50 because its holder (the sync-main desktop session) had lost its claude.exe process while idle; A136/A138 already start a stopped session with one SendMessage to its `local_` id. Fix: when a planned sync's holder is quiet at its ln (T − 30) or at T − 10, the holder's A5R is not there to act, so any live A5R (one writer, read-compare-write in `wake.json`) starts the holder by the A138 route with one message naming the sync and what to do; the hand-over to another live conductor and the cancel at T − 10 wait for its answer. If it answers (a heartbeat), the sync goes on. If it does not answer by T − 10, the old rule applies (hand to a live conductor, else cancel). One wake per sync; `loop-paused` is respected (no retry around it); logged as `rule=woke` with the sync id.
+  Proof: engine tests (a quiet holder at the ln gets one wake and no cancel; it answers: the sync stays; it does not: cancelled at T − 10 as before; a second session does not send a second wake; a loop-paused send is not retried).
 - A8: Release: version bump, README (what A5 adds, the three tools, notices, options), loading from `D:/Projects/ather-mods/hai-flow` documented for Hai to switch `CLAUDE_CODE_PLUGIN_DIRS`. Proof: review.
 
 ## Constraints
@@ -313,6 +319,7 @@ The three share one clock and one message channel: hai-flow notices, delivered b
 ## Changelog
 
 - rev 1 (2026-10-06): created from L-1, L-2.
+- rev 47 (2026-11-09): L-52 (sync-main, sync 09/11): A145 a rename the merge invents never stops it, A146 the sync holder is woken, not dropped.
 - rev 46 (2026-11-08): L-51 (sync-main, at Hai's request: the worker's merge dies writing .git/index): A142 the merge runs as A5R's script and never leaves a half-merged tree, A143 A5R keeps out of the index during the merge step, A144 a stale index.lock is moved again. Same day, after Fable's review of the build: A144's lock-free list corrected from a measurement (a refresh only cannot own a lock written before it started), A143 covers the holder's own A5R reads too.
 - rev 45 (2026-11-04, A138's route after measuring): the guarded SendMessage route with the `local_` id; `loop-paused` is an outcome.
 - rev 45 (2026-11-04): L-49 (Hai: no session worked last night): A135 a stopped session keeps its place, A136 started when its turn comes, A137 the same for git and freeze waits, A138 how a session is reached, A139 Hai can see it, A140 A5R answers for the machine's schedule, A141 the failure is seen and raised. A125 changes: 2 h no longer withdraws.
