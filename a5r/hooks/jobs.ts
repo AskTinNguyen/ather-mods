@@ -10,7 +10,7 @@ import { hasSecret, kindOf, type Handoff, type ResultKind } from './handoff.ts'
 import { isObj, textOf } from './shape.ts'
 
 export const JOB_GATE = 'job'
-export const JOB_USAGE = '/a5r job list · take <id> · progress <id> "<one line>" · done <id> <ref> · fail <id> <CODE> [text] · return <id> <CODE> [text]'
+export const JOB_USAGE = '/a5r job list · take <id> · progress <id> "<one line>" · done <id> <ref> · park <id> <pushed branch> · fail <id> <CODE> [text] · return <id> <CODE> [text]'
 export const INBOX_DIR = 'inbox'
 export const JOBS_DIR = 'jobs'
 export const MANUAL_IN = '.manual-in.json'
@@ -22,6 +22,8 @@ export const a5rDirOf = (root: string): string => `${root.replace(/[\\/]+$/, '')
 export const inboxPath = (a5rDir: string, id: string): string => `${a5rDir}/${INBOX_DIR}/${id}.json`
 export const jobPath = (a5rDir: string, id: string): string => `${a5rDir}/${JOBS_DIR}/${id}.json`
 export const beatPath = (a5rDir: string, id: string): string => `${a5rDir}/${JOBS_DIR}/${id}.beat`
+/** The preemption the host's minute writes for a running job (decision 10; a file of its own, like the beat). */
+export const preemptPath = (a5rDir: string, id: string): string => `${a5rDir}/${JOBS_DIR}/${id}.preempt`
 /** The start record of a job started by asHost.startCommand (the host's minute; once). */
 export const startPath = (a5rDir: string, id: string): string => `${a5rDir}/${JOBS_DIR}/${id}.start`
 export const JOB_STATES = ['accepted', 'declined', 'running', 'parked', 'done', 'failed', 'returned'] as const
@@ -47,6 +49,10 @@ export type Job = {
   progress?: string
   result?: { kind: ResultKind; ref: string; sha?: string }
   preempt?: { at: number; reason: string; deadline: number }
+  /** When a parked job was taken again: a preemption written before it no longer holds. */
+  resumedAt?: number
+  /** The pushed WIP branch a parked job waits on (decision 10). */
+  wip?: string
   proofRead?: { cmd: string; line: string; ok: boolean }
   /** A manual host's answer, pasted on the origin (`/a5r handoff result`). */
   source?: 'manual'
@@ -80,6 +86,8 @@ export const parseJob = (raw: string | null): Job | null => {
     ...(text(v.progress) ? { progress: text(v.progress) } : {}),
     ...(r ? { result: { kind: kindOf(r.kind), ref: text(r.ref), ...(text(r.sha) ? { sha: text(r.sha) } : {}) } } : {}),
     ...(p ? { preempt: { at: num(p.at) ?? 0, reason: text(p.reason), deadline: num(p.deadline) ?? 0 } } : {}),
+    ...(num(v.resumedAt) !== undefined ? { resumedAt: num(v.resumedAt) } : {}),
+    ...(text(v.wip) ? { wip: text(v.wip) } : {}),
     ...(v.source === 'manual' ? { source: 'manual' as const } : {}),
     updatedAt: num(v.updatedAt) ?? num(v.receivedAt) ?? 0,
   }
@@ -163,6 +171,27 @@ export const needsPerson = (key: NoticeKey): boolean => key !== 'done'
 export const beatOf = (raw: string | null): number | undefined => {
   const n = Number((raw ?? '').trim())
   return raw !== null && Number.isFinite(n) && n > 0 ? n : undefined
+}
+export type Preempt = NonNullable<Job['preempt']>
+/** A preempt file's content, or null. */
+export const preemptOf = (raw: string | null): Preempt | null => {
+  try {
+    const v = JSON.parse(raw ?? '') as unknown
+    return isObj(v) && typeof v.at === 'number' && typeof v.deadline === 'number' ? { at: v.at, reason: textOf(v.reason), deadline: v.deadline } : null
+  } catch {
+    return null
+  }
+}
+/** A job with the minute's preemption folded in: only while it runs or is parked, and only one written since it last
+ * started or resumed. */
+export const withPreempt = (j: Job, p: Preempt | null): Job => (p && (j.state === 'running' || j.state === 'parked') && p.at >= (j.resumedAt ?? j.startedAt ?? 0) ? { ...j, preempt: p } : j)
+/** Decision 10: the preemption a running job gets now, or null: availability gone `no` (deadline now + warn), or within
+ * `warn` of its `until` (deadline until). */
+export const preemptNow = (as: AsHost, now: number, warnMs: number): Preempt | null => {
+  const a = availabilityNow(as.availability, now)
+  const until = as.availability.until
+  if (until !== undefined && now >= until - warnMs) return { at: now, reason: `the host is available until ${new Date(until).toISOString()}`, deadline: until }
+  return a.state === 'no' ? { at: now, reason: a.reason ?? 'the host is not available now', deadline: now + warnMs } : null
 }
 /** A job with its beat folded in (the later of the two). */
 export const withBeat = (j: Job, beat: number | undefined): Job => (beat !== undefined && beat > (j.heartbeatAt ?? 0) ? { ...j, heartbeatAt: beat } : j)

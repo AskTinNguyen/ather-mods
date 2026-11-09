@@ -21,10 +21,13 @@ export type HostDecl = {
   label: string
   owner: string
   reach: { kind: ReachKind; target: string; options?: ReachOptions }
-  repo?: { url: string; path?: string }
+  /** `lfsProbe`: one small LFS file C3 fetches when the repo uses LFS. */
+  repo?: { url: string; path?: string; lfsProbe?: string }
   engine?: { rule: 'same' | 'any' }
   diskEstimateGb?: number
   assumed?: { roles?: string[]; availability?: Availability }
+  /** S-d (C11): the host's build, run in a lane; passes only by the literal success line in its log. */
+  build?: { argv: string[]; log: string; success: string }
 }
 export type Window = { days: string[]; from: string; to: string; tz: string }
 export type AsHost = {
@@ -116,7 +119,9 @@ export const declProblems = (id: string, v: unknown): string[] => {
     else if ((r.kind === 'ssh' || r.kind === 'herdr') && !SSH_TARGET.test(r.target)) p.push(`hosts.${id}.reach.target must be a host name, an ssh alias or user@host (no leading -, no spaces)`)
     if (r.options !== undefined) p.push(...(isObj(r.options) ? optionsProblems(id, r.options) : [`hosts.${id}.reach.options must be an object`]))
   }
-  if (v.repo !== undefined && !(isObj(v.repo) && typeof v.repo.url === 'string' && (v.repo.path === undefined || typeof v.repo.path === 'string'))) p.push(`hosts.${id}.repo must be { url, path? }`)
+  const repo = v.repo
+  if (repo !== undefined && !(isObj(repo) && typeof repo.url === 'string' && ['path', 'lfsProbe'].every(k => repo[k] === undefined || typeof repo[k] === 'string'))) p.push(`hosts.${id}.repo must be { url, path?, lfsProbe? }`)
+  if (v.build !== undefined && !(isObj(v.build) && isStrs(v.build.argv) && v.build.argv.length > 0 && typeof v.build.log === 'string' && typeof v.build.success === 'string' && v.build.success.trim() !== '')) p.push(`hosts.${id}.build must be { argv: [..], log: "<path>", success: "<line>" }`)
   if (v.engine !== undefined && !(isObj(v.engine) && (v.engine.rule === 'same' || v.engine.rule === 'any'))) p.push(`hosts.${id}.engine.rule must be "same" or "any"`)
   if (v.diskEstimateGb !== undefined && !(typeof v.diskEstimateGb === 'number' && v.diskEstimateGb > 0)) p.push(`hosts.${id}.diskEstimateGb must be a positive number`)
   if (v.assumed !== undefined) {

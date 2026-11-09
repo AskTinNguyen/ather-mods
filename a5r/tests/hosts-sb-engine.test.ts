@@ -111,9 +111,9 @@ test('S-b (A3): engine: C1 fails with its fix line; C4 fails past 120 s; C5 fail
 
 test('S-b (A3, A13): engine: dependency skips, checks not in this version, and the resume plan', async () => {
   const at = NOW - MIN
-  // C4 alone with C1 never passed: skipped as needing C1; C3 answers not in this version.
-  const alone = await runChecks(ctx(mocked('windows', GOOD)), ['C3', 'C4'], STALE)
-  expect([checkLine('C3', alone.checks.C3), checkLine('C4', alone.checks.C4)]).toEqual(['C3 skip · not in this version', 'C4 skip · needs C1'])
+  // C4 alone with C1 never passed: skipped as needing C1; C6 answers not in this version (S-d built C3; F-d7).
+  const alone = await runChecks(ctx(mocked('windows', GOOD)), ['C4', 'C6'], STALE)
+  expect([checkLine('C6', alone.checks.C6), checkLine('C4', alone.checks.C4)]).toEqual(['C6 skip · not in this version', 'C4 skip · needs C1'])
   // A passed C1 on file (os known) lets C4 run alone.
   const prior: Checks = { C1: { status: 'pass', checkedAt: at }, C2: { status: 'fail', value: 'x', checkedAt: at } }
   expect((await runChecks(ctx(mocked('windows', GOOD), prior, { os: { os: 'windows', shell: 'cmd' } }), ['C4'], STALE)).checks.C4?.status).toBe('pass')

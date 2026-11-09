@@ -35,6 +35,7 @@ import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isU
 import { editorPanel, listText, needsLook } from './panel.ts'
 import { A5R_HELP, A5R_TOOL_ERRORS, EDITOR_TOOL_DEF, HOST_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
 import { HOST_TOOL, coordinationFor, hostsDesk, localTruthOf, type ClaimTouch, type HostIo } from './hostdesk.ts'
+import { lineParts as linePartsOf } from './lineparts.ts'
 import { freezeSteps } from './freezehost.ts'
 import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
@@ -3555,33 +3556,11 @@ async function openA5Pane($: Engine): Promise<string> {
   return `A5R pane not placed: ${why}`
 }
 
-/** A28: the compact line's three parts and their attention marks. */
+/** A28: the compact line's parts (lineparts.ts): this render's facts, and its icons drawn here. */
 function lineParts(el: Parameters<typeof icon>[0], opts: Opts, isDesktop: boolean, now: number): LinePart[] {
-  const t = editorTile({ lock: lockView, me8, nowMin, place: placeShort(decision), waiting: 0 })
   const isMine = holdsLock()
-  const isOver = t.dot === STATUS.bad
-  const justGranted = isMine && me?.holding !== null && me?.holding !== undefined && now - me.holding.since < 5 * 60_000
-  const l = lockView
-  // A30: values only: the holder (★ for this session) and until; "free"; "?" for a missing lock.
-  const editorName = !l || l.isMissing || l.isFree ? undefined : isMine ? '★' : (l.who ?? 'held')
-  const stopped = wakes.stoppedCount(now)
-  const editorValue = `${!l || l.isMissing ? '?' : l.isFree ? 'free' : l.until ? ` →${l.until}` : ''}${stopped > 0 ? ` · ${stopped} stopped` : ''}` // A139
-  const editorWarn = isOver || justGranted || !l || l.isMissing
-  const free = vitals?.freeGb
-  const under = free !== undefined && (free < gates.nopieGb || ramBand(free) !== 'ok')
-  const memText = free === undefined ? '? GB' : `${free} GB${under ? ' ⚠' : ''}`
-  const phase = phaseOf(syncFile, now)
-  const open = syncFile && isOpenPhase(phase) ? syncFile : null
-  // A30: main's behind count as −N (0 when level), or the planned sync's time (❄ in its freeze, ⚠ at its cutoff).
-  const syncText = open ? `${clockOf(open.at)}${phase === 'frozen' ? ' ❄' : phase === 'cutoff' ? ' ⚠' : ''}${phase === 'planned' ? '' : ` ${freeze.shortNow(open, now)}`}` : sync ? (sync.behind === null ? '?' : sync.behind > 0 ? `−${sync.behind}` : '0') : '…'
-  const syncWarn = Boolean(open && (phase === 'cutoff' || phase === 'frozen'))
-  const tint = (warn: boolean, base: string) => (warn ? STATUS.warn : base)
-  const still: Motion = { kind: 'still' }
-  return [
-    { key: 'editor', icon: icon(el, 'editor', tint(editorWarn, t.dot ?? INK()), opts.motion === 'off' ? still : motionFor('editor', `${t.value}|${t.dot}`, t.dot ?? INK(), now, false, opts), isDesktop), ...(editorName ? { name: editorName } : {}), value: editorValue, isWarn: editorWarn },
-    { key: 'memory', icon: icon(el, 'memory', tint(under, STATUS.ok), still, isDesktop), value: memText, isWarn: under },
-    { key: 'main', icon: icon(el, 'branch', tint(syncWarn, INK()), opts.motion === 'off' ? still : motionFor('main', syncText, INK(), now, phase === 'frozen', opts), isDesktop), value: syncText, isWarn: syncWarn },
-  ]
+  const facts = { lock: lockView, me8, nowMin, place: placeShort(decision), isMine, justGranted: isMine && me?.holding != null && now - me.holding.since < 5 * 60_000, stopped: wakes.stoppedCount(now), freeGb: vitals?.freeGb, nopieGb: gates.nopieGb, syncFile, phase: phaseOf(syncFile, now), shortNow: (s: SyncFile) => freeze.shortNow(s, now), behind: sync ? sync.behind : undefined, ink: INK(), handoffs: hosts.handoffAttention() }
+  return linePartsOf(facts, (name, color, m) => icon(el, name, color, !m || opts.motion === 'off' ? { kind: 'still' } : motionFor(m.key, m.sig, m.color, now, m.running, opts), isDesktop))
 }
 
 /** Ather's pane as Ather drew it. With A5R on: one compact A5R line right under Ather's own summary strip (A28), the

@@ -8,13 +8,14 @@ import { commandAdapter } from './adapters/command.ts'
 import { herdrAdapter } from './adapters/herdr.ts'
 import { sshAdapter } from './adapters/ssh.ts'
 import { LINK_CODES, OP_NAMES, errOf, type Adapter, type OpResult, type Proc } from './adapters/types.ts'
-import { HANDOFF_GATE, fieldsOf, needsOf, parseHandoffCommand, words, type Handoff } from './handoff.ts'
+import { HANDOFF_GATE, checkBase, fieldsOf, needsOf, parseHandoffCommand, words, type Handoff } from './handoff.ts'
 import { HOST_TOOL, handoffDesk, type DeskIo, type DeskState } from './handoffhost.ts'
 import { handoffLink, packetText, type LinkHost, type LinkIo } from './handofflink.ts'
 import { jobsDesk, type JobIo } from './jobdesk.ts'
-import { INBOX_DIR, JOBS_DIR, JOB_GATE, JOB_USAGE, jobCounts } from './jobs.ts'
+import { INBOX_DIR, JOBS_DIR, JOB_GATE, JOB_USAGE, jobCounts, type NoticeKey } from './jobs.ts'
 import { hostsBox, type HostRow } from './hostbox.ts'
 import { a5rCard, editorRunning, isStale, lanesOf, parseCard, probeCard, sameCard, type HostCard, type LocalTruth } from './hostcard.ts'
+import { engineOf } from './l2setup.ts'
 import { BUILT, checkLine, pastedChecks, planOf, ramOf, runChecks, type RunReport } from './hostchecks.ts'
 import { HOSTS_FILE, HOSTS_OPTIONS, HOST_USAGE, PERSON_ONLY_OPTIONS, checkedSumOf, idProblem, reachOf, reachText, readHosts, sumOf, writeHosts, type AsHost, type Declared, type HostDecl, type HostEntry, type HostOptionText } from './hosts.ts'
 import { CHECK_IDS, UNTIL_RESUMED, cardPath, hostPhase, levelOf, linkNow, linkPath, linkText, parseLink, parseState, statePath, stormed, type CheckId, type HostState, type LinkLine } from './hoststate.ts'
@@ -112,6 +113,7 @@ export const hostsDesk = (h: HostDeskState) => {
   let originId: string | null = null // this machine's origin id as last read (suggest's NO_TRUST)
   let tickAt = 0 // the last minute's time, for status.json (written by the freeze steps after the tick)
   let states = new Map<string, string>() // S-d: each open L2 hand-off's effective state, as the last minute read it
+  let attention: NoticeKey[] = [] // S-d (F-d4): this session's hand-offs that need a person, for the compact line
   const filePath = () => `${h.home().replace(/[\\/]+$/, '')}/${HOSTS_FILE}`
   /** D19: the coordination root's Saved/A5R (asHost.coordinationRoot, else this checkout's). */
   const coordRoot = () => (declared?.asHost?.coordinationRoot ?? h.root()).replace(/[\\/]+$/, '')
@@ -120,7 +122,7 @@ export const hostsDesk = (h: HostDeskState) => {
   const staleMs = () => opts().staleCheckDays * 24 * 60 * 60_000
   const phaseOf = (s: Seen, now: number) => hostPhase(s.entry.id, s.state, s.link, now, s.adapter.link)
   /** The level, the one rule for state.json and every reader: the checks, against the declaration they ran on. */
-  const levelFor = (st: HostState, decl: HostDecl | null, now: number): 0 | 1 | 2 => (decl ? levelOf(st.checks, { now, staleMs: staleMs(), fresh: st.declSum === checkedSumOf(decl) }) : 0)
+  const levelFor = (st: HostState, decl: HostDecl | null, now: number): 0 | 1 | 2 => (decl ? levelOf(st.checks, { now, staleMs: staleMs(), fresh: st.declSum === checkedSumOf(decl), builds: decl.build !== undefined }) : 0)
   const writeState = async (io: HostIo, s: Omit<Seen, 'adapter'>, st: HostState) => {
     s.state = st
     await io.write(statePath(coord(), s.entry.id), JSON.stringify(st))
@@ -176,10 +178,16 @@ export const hostsDesk = (h: HostDeskState) => {
   const missing = (id: string) => noticeText(HOST_GATE, `no host ${id || '(no id)'} is declared here`, 'list them (/a5r host list), or add one: /a5r host add <id> --reach ssh:<target>')
   const invalid = (s: Seen) => noticeText(HOST_GATE, `host ${s.entry.id} is not valid: ${s.entry.problems.join('; ')}`, `fix it with /a5r host add ${s.entry.id} … (it rewrites the declaration), or in pluginConfigs."a5r".hosts`)
 
+  /** C7: this machine's engine, the EngineAssociation of the .uproject at this checkout's root (null: none or unread). */
+  const engineHere = async (io: HostIo): Promise<string | null> => {
+    const r = await io.run(['git', '-C', h.root(), 'ls-files', '--', ':(glob)*.uproject'], 30_000)
+    const first = r?.exitCode === 0 ? r.stdout.split(/\r?\n/).map(l => l.trim()).find(Boolean) : undefined
+    return first ? engineOf((await io.read(`${h.root()}/${first}`)) ?? '') : null
+  }
   /** Saves a run's checks with the declaration they ran against; the level is derived by levelFor. */
   const save = async (io: HostIo, s: Seen, rep: RunReport): Promise<HostState> => {
     const now = await io.now()
-    const next: HostState = { ...s.state, checks: rep.checks, ...(s.entry.decl ? { declSum: checkedSumOf(s.entry.decl) } : {}), ...(rep.os ? { os: rep.os } : {}) }
+    const next: HostState = { ...s.state, checks: rep.checks, ...(s.entry.decl ? { declSum: checkedSumOf(s.entry.decl) } : {}), ...(rep.os ? { os: rep.os } : {}), ...(rep.engine ? { engineDetected: rep.engine } : {}) }
     next.level = levelFor(next, s.entry.decl, now)
     await writeState(io, s, next)
     if (rep.ram && s.entry.decl) {
@@ -208,7 +216,8 @@ export const hostsDesk = (h: HostDeskState) => {
     if (s.entry.decl.reach.kind === 'manual') return `A5R · host ${s.entry.id} is manual: nothing runs from here.\n${manualPacket(s.entry.id, s.entry.decl.label)}`
     const a5rRoot = s.entry.decl.reach.options?.a5rRoot
     const l2 = { hostId: s.entry.id, ...(a5rRoot ? { a5rRoot } : {}), originId: await handoffs.originId(io), card: s.card, sleep: io.sleep }
-    const rep = await runChecks({ adapter: s.adapter, local: io.proc, now: io.now, prior: s.state.checks, ...(s.state.os ? { os: s.state.os } : {}), reverse: s.entry.decl.reach.options?.reverse === true, l2 }, planOf(x.checks, s.state.checks, now, staleMs()), staleMs())
+    const setup = { hostId: s.entry.id, decl: s.entry.decl, engineHere: await engineHere(io), ...(s.state.labSizeGb !== undefined ? { labSizeGb: s.state.labSizeGb } : {}) }
+    const rep = await runChecks({ adapter: s.adapter, local: io.proc, now: io.now, prior: s.state.checks, ...(s.state.os ? { os: s.state.os } : {}), reverse: s.entry.decl.reach.options?.reverse === true, l2, setup }, planOf(x.checks, s.state.checks, now, staleMs(), s.entry.decl.repo !== undefined), staleMs())
     const st = await save(io, s, rep)
     const after = phaseOf(s, await io.now())
     return [report(s, rep, `A5R · host ${s.entry.id}: ${rep.ran.length} check${rep.ran.length === 1 ? '' : 's'} run; level L${st.level}.`), ...(after.kind === 'storm' ? [after.text] : [])].join('\n')
@@ -390,7 +399,7 @@ export const hostsDesk = (h: HostDeskState) => {
   /** This machine as a host now (decision 1's facts): its asHost, own freeze, lanes (its card's) and session liveness. */
   const hostNow = async (io: HostIo, as: AsHost, now: number) => {
     const card = parseCard(await io.read(`${coord()}/${CARD_FILE}`))
-    return { asHost: as, now, frozen: Boolean(h.local(now).sync?.isFrozen), lanes: card?.lanes ?? [], alive: (id8: string) => h.alive(id8, now) }
+    return { asHost: as, now, frozen: Boolean(h.local(now).sync?.isFrozen), lanes: card?.lanes ?? [], alive: (id8: string) => h.alive(id8, now), warnMs: opts().warnBeforeUntilMin * 60_000 }
   }
   const lists = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === 'string' ? v.split(',').map(x => x.trim()) : []).filter(Boolean)
   /** A hand-off to a declared host (L2): the plain record's checks (fields, D7), then the host's own (decision 7). */
@@ -429,6 +438,20 @@ export const hostsDesk = (h: HostDeskState) => {
     const e: Record<string, unknown> = c?.op === 'record' ? { ...c.fields, op: 'create', host: keys.host, wants: keys.wants, needs, proof: keys.proof } : c?.op === 'result' ? { ref: c.ref } : {}
     const said = c ? await l2(io, c.op === 'record' ? 'create' : c.op, 'id' in c ? c.id : '', e) : null
     return said ?? handoffs.command(io, args)
+  }
+  /** A10 (D10): at this machine's sync cutoff, each open hand-off this session created whose base sha is no longer
+   * reachable from its pushed ref gets one warning (per hand-off and sync). The sync itself never waits on a remote lane. */
+  const warnedBase = new Set<string>()
+  const baseWarnings = async (io: HostIo, now: number): Promise<Notice[]> => {
+    const sync = h.local(now).sync
+    if (!sync || now < sync.at - CUTOFF_MS) return []
+    const out: Notice[] = []
+    for (const ho of handoffs.open().filter(x => x.by?.id8 === h.me8() && !warnedBase.has(`${x.id}@${sync.at}`))) {
+      warnedBase.add(`${ho.id}@${sync.at}`)
+      const r = await checkBase(args => io.run(['git', '-C', h.root(), ...args], 30_000), ho.base)
+      if ('why' in r) out.push({ id: `handoff:${ho.id}:base:${sync.at}`, text: noticeText(`hand-off ${ho.id}`, `at the sync cutoff its base ${ho.base.sha.slice(0, 7)} is no longer reachable from ${ho.base.remote}/${ho.base.ref}`, 'the lane on the host goes on (the sync never waits on it); push the base again, or cancel and hand it off from the new base'), isActionable: true })
+    }
+    return out
   }
   /** The job tool and `/a5r job …` (host side). */
   const jobAct = async (io: HostIo, e: { op: string; id: string; text: string; ref: string; code: string }): Promise<string> => {
@@ -485,10 +508,11 @@ export const hostsDesk = (h: HostDeskState) => {
       if (as?.enabled && h.isWriter(now)) {
         await jobs.tick(io, await hostNow(io, as, now)).catch(err => io.log(`a5r: host jobs: ${String(err)}`))
         await publish(io, as, now).catch(err => io.log(`a5r: host card: ${String(err)}`))
-      }
-      const followed = await link.follow(io, linkHosts(), now, h.isWriter(now)).catch(err => (io.log(`a5r: hand-offs: ${String(err)}`), { notices: [] as Notice[], states }))
-      const notices = followed.notices
+      } else if (as?.enabled) await jobs.read(io) // decision 10: every session on the host sees its own job's preemption
+      const followed = await link.follow(io, linkHosts(), now, h.isWriter(now)).catch(err => (io.log(`a5r: hand-offs: ${String(err)}`), { notices: [] as Notice[], states, attention }))
+      const notices = [...followed.notices, ...(as?.enabled ? jobs.told() : []), ...(await baseWarnings(io, now).catch(() => []))]
       states = followed.states
+      attention = followed.attention
       if (probing || !xs.length || !h.isWriter(now)) return notices
       probing = true
       void probeCards(io, xs, now)
@@ -515,6 +539,8 @@ export const hostsDesk = (h: HostDeskState) => {
       }
       return out
     },
+    /** F-d4: the compact line's hand-off value (`1 lost`, `2 need you`), '' when none needs a person. */
+    handoffAttention: (): string => (attention.length === 0 ? '' : attention.length === 1 ? `1 ${attention[0]}` : `${attention.length} need you`),
     /** The model tool `host`. */
     tool: async (io: HostIo, e: Record<string, unknown>): Promise<string> => {
       if (e.action === 'job') return jobAct(io, { op: String(e.op ?? 'list'), id: String(e.id ?? ''), text: String(e.text ?? ''), ref: String(e.ref ?? ''), code: String(e.code ?? '') })

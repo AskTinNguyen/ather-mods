@@ -92,6 +92,7 @@ export const commandAdapter = (target: string, o: CommandOptions, proc: Proc): A
   return {
     kind: 'command',
     link: DEFAULT_LINK,
+    canBg: has('runBg'),
     helpers: () => null,
     ...(has('probe') ? { probe } : {}),
     ...(has('readFile') ? { readFile } : {}),

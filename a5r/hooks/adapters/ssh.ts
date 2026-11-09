@@ -10,9 +10,11 @@ export const winQuote = (a: string): string => (a !== '' && /^[\w@+=:,./\\-]+$/.
 /** sh: an argument with anything but plain characters is single-quoted (`'` as `'\''`). */
 export const shQuote = (a: string): string => (a !== '' && /^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)
 /** The one command string the remote runs: the argv quoted for its OS, after a `cd` when a cwd is given. */
-export const remoteLine = (os: RemoteOs, argv: readonly string[], cwd?: string): string => {
+export const remoteLine = (os: RemoteOs, argv: readonly string[], cwd?: string, env: Record<string, string> = {}): string => {
   const q = os === 'windows' ? winQuote : shQuote
-  const line = argv.map(q).join(' ')
+  const vars = Object.entries(env).filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+  // S-d (C3): variables set for this one command (cmd: `set K=V&&`, no space before &&; sh: `K=V cmd`).
+  const line = os === 'windows' ? `${vars.map(([k, v]) => `set ${k}=${v.replace(/[&|<>^%"]/g, '')}&& `).join('')}${argv.map(q).join(' ')}` : [...vars.map(([k, v]) => `${k}=${shQuote(v)}`), ...argv.map(q)].join(' ')
   return cwd ? `${os === 'windows' ? 'cd /d' : 'cd'} ${q(cwd)} && ${line}` : line
 }
 
@@ -61,18 +63,20 @@ export const sshAdapter = (target: string, o: ReachOptions, proc: Proc, known?: 
   const run = async (argv: readonly string[], init: RunInit = {}): Promise<OpResult<RunOut>> => {
     const os = await osNow()
     if (!os.ok) return os
-    return remote(remoteLine(os.value.os, argv, init.cwd), init)
+    return remote(remoteLine(os.value.os, argv, init.cwd, init.env), init)
   }
   const readFile = async (path: string): Promise<OpResult<string>> => {
     const os = await osNow()
     if (!os.ok) return os
     const win = os.value.os === 'windows'
-    const size = await remote(win ? `for %I in (${winQuote(path)}) do @echo %~zI` : `wc -c < ${shQuote(path)}`)
+    // cmd's `type` refuses forward slashes ("The syntax of the command is incorrect"; MEASURED S-d, F-d8): backslashes.
+    const wpath = path.replace(/\//g, '\\')
+    const size = await remote(win ? `for %I in (${winQuote(wpath)}) do @echo %~zI` : `wc -c < ${shQuote(path)}`)
     if (!size.ok) return size
     const bytes = Number(size.value.stdout.trim())
     if (size.value.exitCode !== 0 || !Number.isFinite(bytes) || size.value.stdout.trim() === '') return errOf('NOT_FOUND', `${path} could not be read on ${target}`)
     if (bytes > READ_CAP) return errOf('TOO_BIG', `${path} is ${bytes} bytes (cap ${READ_CAP})`)
-    const r = await remote(win ? `type ${winQuote(path)}` : `cat ${shQuote(path)}`)
+    const r = await remote(win ? `type ${winQuote(wpath)}` : `cat ${shQuote(path)}`)
     if (!r.ok) return r
     return r.value.exitCode === 0 ? okOf(r.value.stdout) : errOf('NOT_FOUND', `${path} could not be read on ${target}`)
   }

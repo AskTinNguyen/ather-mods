@@ -7,14 +7,18 @@ import { callOp, type Adapter, type Proc, type RemoteOs, type RemoteShell } from
 import type { Pasted } from './adapters/manual.ts'
 import { CHECK_IDS, passed, type CheckId, type CheckResult, type Checks } from './hoststate.ts'
 import { c12, c13, type L2Ctx } from './l2checks.ts'
+import { c11, c3, c7, c8, c9, type SetupCtx } from './l2setup.ts'
 
 /** The checks this version runs; the rest answer NOT_YET. */
 /** L1's checks (S-b): a manual host's pasted lines fill them. */
 export const L1_CHECKS: readonly CheckId[] = ['C1', 'C2', 'C4', 'C5', 'C10']
-export const BUILT: readonly CheckId[] = [...L1_CHECKS, 'C12', 'C13']
-/** The checks a run with none named takes (A13's resume): C12 waits up to C12_WAIT_MS for the host's minute, so it runs
- * only when named (`/a5r host check <id> C12`; F-d3). */
-export const AUTO: readonly CheckId[] = BUILT.filter(id => id !== 'C12')
+/** Every check this version runs (C6 is the card's source, read by the card itself), in prompt.md's order. */
+export const BUILT: readonly CheckId[] = CHECK_IDS.filter(id => id !== 'C6')
+/** The L2 setup checks a run with none named takes for a host that declares a repo (part 2). */
+const SETUP_AUTO: readonly CheckId[] = ['C3', 'C7', 'C8', 'C9']
+/** The checks a run with none named takes (A13's resume): L1's, the setup checks for a host with a repo, and C13. C11 and
+ * C12 wait for a build or for the host's minute, so they run only when named (`/a5r host check <id> C11|C12`; F-d3). */
+export const autoPlan = (withRepo: boolean): CheckId[] => CHECK_IDS.filter(id => L1_CHECKS.includes(id) || id === 'C13' || (withRepo && SETUP_AUTO.includes(id)))
 export const NOT_YET = 'not in this version'
 
 /** The fix line of each check (prompt.md's table), shown with a failure. */
@@ -55,9 +59,11 @@ export type CheckCtx = {
   reverse?: boolean
   /** S-d: what C12 and C13 read (absent: they skip). */
   l2?: L2Ctx
+  /** S-d part 2: what C3, C7, C8, C9 and C11 read (absent: they skip). */
+  setup?: Omit<SetupCtx, 'os' | 'now' | 'sleep'>
 }
-export type RunReport = { checks: Checks; ran: CheckId[]; failed: CheckId | null; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram }
-type One = { status: CheckResult['status']; value: string; ms?: number; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram }
+export type RunReport = { checks: Checks; ran: CheckId[]; failed: CheckId | null; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram; engine?: string }
+type One = { status: CheckResult['status']; value: string; ms?: number; os?: { os: RemoteOs; shell: RemoteShell }; ram?: Ram; engine?: string }
 
 const gb = (kb: number) => Math.round((kb / 1024 / 1024) * 10) / 10
 const lines = (s: string) => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
@@ -142,20 +148,29 @@ const c10 = async (x: CheckCtx, os: RemoteOs): Promise<One> => {
 
 /** The checks this version runs after C1 (which reads the OS), by id. */
 const noL2: One = { status: 'skip', value: 'no host context for the L2 checks' }
+/** A setup check with its context (the OS C1 read, the clock and wait of the run). */
+const setup = (f: (a: Adapter, s: SetupCtx, checks: Checks) => Promise<One>) => async (x: CheckCtx, os: RemoteOs, checks: Checks): Promise<One> =>
+  x.setup ? f(x.adapter, { ...x.setup, os, now: x.now, sleep: x.l2?.sleep ?? (async () => undefined) }, checks) : noL2
 const RUN = {
   C2: c2,
+  C3: setup(c3),
+  C7: setup(c7),
+  C8: setup(c8),
+  C9: setup((a, s, checks) => c9(a, s, checks.C8?.status === 'pass')),
+  C11: setup(c11),
   C4: c4,
   C5: c5,
   C10: c10,
   C12: async (x: CheckCtx): Promise<One> => (x.l2 ? c12(x.adapter, x.l2, x.now) : noL2),
   C13: async (x: CheckCtx): Promise<One> => (x.l2 ? c13(x.l2) : noL2),
-} satisfies Partial<Record<CheckId, (x: CheckCtx, os: RemoteOs) => Promise<One>>>
+} satisfies Partial<Record<CheckId, (x: CheckCtx, os: RemoteOs, checks: Checks) => Promise<One>>>
 
 /** Which checks a run takes: the named ones, or (none named) from the first built check not standing as passed (A13). */
-export const planOf = (named: readonly CheckId[], prior: Checks, now: number, staleMs: number): CheckId[] => {
+export const planOf = (named: readonly CheckId[], prior: Checks, now: number, staleMs: number, withRepo = false): CheckId[] => {
   if (named.length) return CHECK_IDS.filter(id => named.includes(id))
-  const from = AUTO.findIndex(id => !passed(prior, id, now, staleMs))
-  return from < 0 ? [...AUTO] : AUTO.slice(from)
+  const auto = autoPlan(withRepo)
+  const from = auto.findIndex(id => !passed(prior, id, now, staleMs))
+  return from < 0 ? auto : auto.slice(from)
 }
 
 /** Runs the planned checks in order through the adapter: the first failure stops the run; a check whose C1 has not
@@ -166,6 +181,7 @@ export const runChecks = async (x: CheckCtx, plan: readonly CheckId[], staleMs: 
   let failed: CheckId | null = null
   let os = x.os
   let ram: Ram | undefined
+  let engine: string | undefined
   for (const id of plan) {
     const at = await x.now()
     ran.push(id)
@@ -182,13 +198,14 @@ export const runChecks = async (x: CheckCtx, plan: readonly CheckId[], staleMs: 
       set({ status: 'skip', value: 'needs C1' })
       continue
     }
-    const o = id === 'C1' ? await c1(x) : await RUN[id as keyof typeof RUN](x, os!.os)
+    const o = id === 'C1' ? await c1(x) : await RUN[id as keyof typeof RUN](x, os!.os, checks)
     if (o.os) os = o.os
     if (o.ram) ram = o.ram
+    if (o.engine) engine = o.engine
     set(o)
     if (o.status === 'fail') failed = id
   }
-  return { checks, ran, failed, ...(os ? { os } : {}), ...(ram ? { ram } : {}) }
+  return { checks, ran, failed, ...(os ? { os } : {}), ...(ram ? { ram } : {}), ...(engine ? { engine } : {}) }
 }
 
 /** Scenario 7: a manual host's pasted lines fill C1, C4 and C10; C2 and C5 need a link (skip). `pastedAt` is when the

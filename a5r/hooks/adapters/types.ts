@@ -14,7 +14,7 @@ export type RemoteShell = 'cmd' | 'sh' | 'other'
 export type Probed = { os: RemoteOs; shell: RemoteShell }
 export type RunOut = { exitCode: number; stdout: string; stderr: string }
 /** `bg`: start it and come back at once (S-d: a lane's creation, a job's start); its answer carries a `handle`. */
-export type RunInit = { cwd?: string; stdin?: string; timeoutMs?: number; bg?: boolean }
+export type RunInit = { cwd?: string; stdin?: string; timeoutMs?: number; bg?: boolean; env?: Record<string, string> }
 /** A background run's state, read by `status` (S-d). */
 export type RunState = { running: boolean; exitCode: number | null }
 
@@ -28,6 +28,8 @@ export const DEFAULT_LINK: LinkPolicy = { minMs: 5_000, maxMs: 15 * 60_000, fact
 export type Adapter = {
   kind: string
   link: LinkPolicy
+  /** S-d: whether `run` honours `bg` (C9 and C11 never start a long run in a short call). */
+  canBg?: boolean
   /** C5: the process names of this transport's server-side helpers, per remote OS. */
   helpers: (os: RemoteOs) => RegExp | null
   probe?: () => Promise<OpResult<Probed>>

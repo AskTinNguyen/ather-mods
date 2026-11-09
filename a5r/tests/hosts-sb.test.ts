@@ -150,7 +150,7 @@ test('S-b (A4): unit: ssh readFile caps at 1 MiB; writeFile writes only under th
   const win = fakeSsh({
     os: 'windows',
     answer: line => {
-      const size = /^for %I in \(([^)]+)\) do @echo %~zI$/.exec(line)?.[1]
+      const size = /^for %I in \(([^)]+)\) do @echo %~zI$/.exec(line)?.[1]?.replace(/\\/g, '/') // S-d (F-d8): the path goes as backslashes
       if (size) return { exitCode: sizes[size] ? 0 : 1, stdout: sizes[size] ? `${sizes[size]}\r\n` : '', stderr: '' }
       if (line.startsWith('type ')) return { exitCode: 0, stdout: '{"v":1}', stderr: '' }
       if (line === 'echo %USERNAME%') return { exitCode: 0, stdout: 'administrator\r\n', stderr: '' }

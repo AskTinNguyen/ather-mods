@@ -147,3 +147,28 @@ Raised while building slice S-a (2026-11-09). None blocks S-a; each names what i
 - Already there (read in `a5r/hooks/register.ts` `findCheckout` and `a5r/hooks/machine.ts`): a session in a lane that is a git worktree of the coordination root finds the main tree, so its Editor holder, queue, RAM gate and sync freeze are already the coordination root's (D19). The card's queue part came in S-c.
 - Added: a session whose own tree lies under `asHost.laneRoot` (a separate clone too) coordinates through `asHost.coordinationRoot` (`coordinationFor` in `a5r/hooks/hosts.ts`, read from the machine-local hosts file; the plugin option's `asHost` is not read there, because `findCheckout` runs before the options are parsed). NO_EDITOR_PROTOCOL at create (decision 7). A job's Editor request is an ordinary request in that queue, so "two Editors on one machine never run at once" is the existing lock.
 - Left for part 2: C10's "two declared coordination roots fail" (one machine-local hosts file holds one `asHost`; only an option `asHost` in another checkout could differ).
+
+## F-d4: resolution (t6, 2026-11-10)
+
+- t6: move the compact line's part list into a module of its own and add the hand-off part. Done in part 2: `a5r/hooks/lineparts.ts` (register.ts 4,136 -> 4,115 lines); the part appears only while a hand-off this session created needs a person (`1 lost`, `2 need you`).
+
+## F-d7: assertions changed by S-d part 2 (none removed)
+
+- `a5r/tests/hosts-sb-engine.test.ts` (`S-b (A3, A13): …`): "a check not in this version" was shown with C3, which S-d builds; it now uses C6 (`C6 skip · not in this version`).
+- `a5r/tests/hosts-sb.test.ts` (`S-b (A4): unit: ssh readFile …`): the fake ssh server reads the size line's path with backslashes turned back to slashes (F-d8).
+- `a5r/tests/hosts-sd-engine.test.ts`: the job usage line is the `JOB_USAGE` constant (it gained `park`); the two-machine harness moved to `a5r/tests/hostpair.fixture.ts`, shared with the part 2 tests.
+
+## F-d8: the ssh adapter's readFile failed on Windows for every forward-slash path (S-b bug, MEASURED, fixed)
+
+- What: read-only live C7 on the second machine answered `the engine in S2.uproject could not be read on the host`; `readFile('C:/s2-lanes/lane-a/S2.uproject')` returned NOT_FOUND. cmd's `type` refuses forward slashes. INFERRED: every Windows readFile with `/` paths failed the same way (the S-c A5R-card read through `a5rRoot` included; not measured).
+- Fixed: the Windows size and `type` lines use backslashes. Test `S-d (F-d8): unit: …`. Live after the fix: `C7 pass · engine {792825A5-…} on both`.
+
+## F-d9: how part 2 reads decisions 9 and 10
+
+- Preemption is written to `jobs/<id>.preempt`, not into the job file: part 1's review made the job file the job session's alone (a minute write could undo a take or a done), so the preemption is a file of its own like the beat, folded in by both sides (`withPreempt`); it no longer holds once the job is taken again (`resumedAt`).
+- C3's "one small lfs fetch of one path" needs a path: it is declared as `hosts.<id>.repo.lfsProbe`. A repo with LFS and no probe path fails C3 with what to declare. The fetch writes a scratch store under `repo.path` and removes it; it was not run live (f20 is read-only).
+- Per-command env (C3's prompts off) goes through ssh (`set K=V&&`, `K=V`) and herdr (`--env`); the command adapter's templates take no env, so a `command` host's C3 runs with whatever its template sets.
+- C9 reports a lane being created in the background as `fail` with its progress handle (later checks wait); a second check reuses it once git lists it. A lane folder git does not list is called partial and never copied again.
+- C11 waits for the background build up to 60 min, so it runs only when named, like C12 (F-d3). The setup checks C3, C7, C8, C9 join the resume plan only for a host that declares `repo`.
+- C10's "two declared coordination roots fail" is not checked: one machine-local hosts file holds one `asHost`, and an origin cannot see another machine's roots. Proposal: drop it from A16, or check the plugin option's `asHost` against the file's when both are set.
+- C11 reads the build log through `readFile` (1 MiB cap): a longer log fails C11 with "could not be read" (a safe failure, never a false pass). Proposal (review 2 of part 2): read only the log's end through `run` (`Get-Content -Tail`, `tail -c`) and keep the length mark.

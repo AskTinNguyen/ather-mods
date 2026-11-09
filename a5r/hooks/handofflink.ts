@@ -12,7 +12,7 @@ import type { DeskIo } from './handoffhost.ts'
 import type { HostCard } from './hostcard.ts'
 import type { FileIo } from './hostio.ts'
 import { HOSTS_DIR } from './hoststate.ts'
-import { JOBS_DIR, MANUAL_IN, a5rDirOf, beatOf, beatPath, effectiveOf, effectiveText, inboxPath, jobPath, needsPerson, noticeKey, parseJob, withBeat, type Job } from './jobs.ts'
+import { JOBS_DIR, MANUAL_IN, a5rDirOf, beatOf, beatPath, effectiveOf, effectiveText, inboxPath, jobPath, needsPerson, noticeKey, parseJob, preemptOf, preemptPath, withBeat, withPreempt, type Job, type NoticeKey } from './jobs.ts'
 
 /** A declared host as the link sees it: its id, label, whether it is manual, its roots, its (guarded) adapter and card. */
 export type LinkHost = { id: string; label: string; manual: boolean; a5rRoot?: string; lockRoot?: string; adapter: Adapter; card: HostCard | null }
@@ -122,8 +122,9 @@ export const handoffLink = (h: { dir: () => string; coord: () => string; me8: ()
     const r = await x.adapter.readFile(jobPath(dir, ho.id))
     const got = r.ok ? parseJob(r.value) : null
     if (!got || got.id !== ho.id) return sent
-    const beat = got.state === 'running' ? await x.adapter.readFile(beatPath(dir, ho.id)) : null
-    const job = withBeat(got, beatOf(beat?.ok ? beat.value : null))
+    const live = got.state === 'running' || got.state === 'parked'
+    const [beat, pre] = live ? [await x.adapter.readFile(beatPath(dir, ho.id)), await x.adapter.readFile(preemptPath(dir, ho.id))] : [null, null]
+    const job = withPreempt(withBeat(got, beatOf(beat?.ok ? beat.value : null)), preemptOf(pre?.ok ? pre.value : null))
     if (JSON.stringify(job) !== JSON.stringify(parseJob(await io.read(copyPath(ho.host, ho.id))))) await io.write(copyPath(ho.host, ho.id), JSON.stringify(job))
     return sent
   }
@@ -132,8 +133,9 @@ export const handoffLink = (h: { dir: () => string; coord: () => string; me8: ()
   const said = new Map<string, string>()
   /** The minute, one pass: the status writer delivers, copies and settles (decisions 4 to 6); every session tells its own
    * hand-offs' transitions and gets each open L2 hand-off's effective state for the tile. */
-  const follow = async (io: LinkIo, hosts: readonly LinkHost[], now: number, isWriter: boolean): Promise<{ notices: Notice[]; states: Map<string, string> }> => {
+  const follow = async (io: LinkIo, hosts: readonly LinkHost[], now: number, isWriter: boolean): Promise<{ notices: Notice[]; states: Map<string, string>; attention: NoticeKey[] }> => {
     const notices: Notice[] = []
+    const attention: NoticeKey[] = [] // this session's hand-offs that need a person now (the compact line, F-d4)
     const states = new Map<string, string>()
     for (let ho of (await files.read(io)).filter(x => isOpen(x) && x.via)) {
       const x = hosts.find(s => s.id === ho.host)
@@ -142,6 +144,7 @@ export const handoffLink = (h: { dir: () => string; coord: () => string; me8: ()
       const e = effectiveOf(ho, job, now) // before settle: a job done and merged in one minute is still told done
       if (isWriter) ho = await settle(io, ho, job, now)
       const key = noticeKey(e, job)
+      if (ho.by?.id8 === h.me8() && key && needsPerson(key) && isOpen(ho)) attention.push(key)
       if (ho.by?.id8 === h.me8() && key && said.get(ho.id) !== key) {
         said.set(ho.id, key)
         const why = job?.reason ?? job?.result?.ref
@@ -150,7 +153,7 @@ export const handoffLink = (h: { dir: () => string; coord: () => string; me8: ()
       }
       if (isOpen(ho)) states.set(ho.id, [effectiveText(effectiveOf(ho, job, now)), ...(ho.scoreLines?.length ? [`score: ${ho.scoreLines.join('; ')}`] : [])].join(' · '))
     }
-    return { notices, states }
+    return { notices, states, attention }
   }
 
   return { create, merged, pasteResult, follow }

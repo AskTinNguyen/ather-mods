@@ -1,13 +1,11 @@
 import { expect, test } from 'claude-code/testing'
-import type { Proc, RunOut } from '../hooks/adapters/types.ts'
-import { HANDOFF_USAGE, parseHandoff, type Handoff } from '../hooks/handoff.ts'
-import type { LocalTruth } from '../hooks/hostcard.ts'
+import { HANDOFF_USAGE, parseHandoff } from '../hooks/handoff.ts'
 import { FIX, checkLine, runChecks } from '../hooks/hostchecks.ts'
-import { hostsDesk, type HostIo } from '../hooks/hostdesk.ts'
-import type { PrScore } from '../hooks/handofflink.ts'
+import { hostsDesk } from '../hooks/hostdesk.ts'
 import { commandAdapter } from '../hooks/adapters/command.ts'
 import { jobsDesk } from '../hooks/jobdesk.ts'
-import { parseJob } from '../hooks/jobs.ts'
+import { JOB_USAGE, parseJob } from '../hooks/jobs.ts'
+import { AS_HOST, MIN, OPS, ORIGIN, create, ho, idOf, minute, pair, truth } from './hostpair.fixture.ts'
 import { NOW } from './world.ts'
 
 // a5r-hosts S-d (L2), part 1, through the desks of two machines: the origin hands off to a declared host over the real
@@ -16,72 +14,6 @@ import { NOW } from './world.ts'
 // origin's minute follows it to done, takes the PR and merges it once the PR is merged and scored (A7, D21). The same over
 // manual (scenario 7); a failing score that keeps it at done; declines (scenario 3); startCommand and heartbeats
 // (decisions 2, 3); NO_ADAPTER_OP and NO_EDITOR_PROTOCOL (decision 7, A16); C12 through the real file path.
-const MIN = 60_000
-const SHA = 'abc1234def5678abc1234def5678abc1234def56'
-const ORIGIN = 'hai-1a2b3c4d'
-type Machine = { files: Map<string, string>; clock: { now: number }; started: string[][] }
-
-/** One machine's io over in-memory files; `proc` is the local process runner (the origin's reaches the host through it). */
-const memIo = (m: Machine, proc: Proc, extra: Partial<HostIo> = {}, runs: Record<string, string> = {}): HostIo => ({
-  now: async () => m.clock.now,
-  read: async p => m.files.get(p) ?? null,
-  write: async (p, t) => void m.files.set(p, t),
-  stat: async p => (m.files.has(p) ? { mtimeMs: m.clock.now } : null),
-  list: async dir => [...m.files.keys()].filter(k => k.startsWith(`${dir}/`) && !k.slice(dir.length + 1).includes('/')).map(k => ({ name: k.slice(dir.length + 1), mtimeMs: m.clock.now })),
-  run: async argv => {
-    const hit = Object.entries(runs).find(([needle]) => argv.join(' ').includes(needle))
-    return hit ? { exitCode: 0, stdout: hit[1] } : null
-  },
-  secrets: async () => ['ghp_[A-Za-z0-9]{10}'],
-  proc,
-  hostOpts: {},
-  log: () => undefined,
-  start: async argv => (m.started.push([...argv]), { exitCode: 0 }),
-  sleep: async () => undefined,
-  ...extra,
-})
-const out = (stdout: string, exitCode = 0): RunOut => ({ exitCode, stdout, stderr: '' })
-const truth = (over: Partial<LocalTruth> = {}): LocalTruth => ({ os: 'windows', freeGb: 40, diskGb: 500, running: false, holder: null, queue: 0, gates: { pieGb: 38, nopieGb: 28 }, sync: null, ...over })
-const LS_REMOTE = { 'ls-remote': `${SHA}\trefs/heads/intent/x\n` }
-const LANES = { 'worktree list --porcelain': 'worktree D:/h\nHEAD 1\nbranch refs/heads/main\n\nworktree D:/lanes/l1\nHEAD 2\ndetached\n' }
-/** The command adapter's templates: `cat`/`put` reach the host's files (through `toHost`), no deliver. */
-const OPS = JSON.stringify({ probe: ['q', 'ping', '{target}'], readFile: ['q', 'cat', '{path}'], writeFile: ['q', 'put', '{path}'] })
-const AS_HOST = { enabled: true, roles: ['ue'], trust: [ORIGIN], availability: { state: 'yes' }, laneRoot: 'D:/lanes', coordinationRoot: 'D:/h' }
-
-/** Two machines: the origin (E:/o) with a declared host `rig` (command adapter, a5rRoot D:/h) and the host (D:/h, A5R on). */
-const pair = async (o: { asHost?: Record<string, unknown>; scores?: PrScore[]; pass?: boolean; manual?: boolean } = {}) => {
-  const clock = { now: NOW }
-  const origin: Machine = { files: new Map(), clock, started: [] }
-  const host: Machine = { files: new Map(), clock, started: [] }
-  const reached: string[] = []
-  const toHost: Proc = async (argv, init) => {
-    reached.push(argv.join(' '))
-    if (argv[1] === 'ping') return out('a5r Windows_NT\r\n')
-    if (argv[1] === 'cat') return host.files.has(argv[2] ?? '') ? out(host.files.get(argv[2] ?? '') ?? '') : out('', 1)
-    if (argv[1] === 'put') return (host.files.set(argv[2] ?? '', init.stdin ?? ''), out(''))
-    return out('', 1)
-  }
-  const scores = [...(o.scores ?? [])]
-  const scored: number[] = []
-  const passes: string[][] = []
-  const oio = memIo(origin, toHost, { originId: ORIGIN, scorePr: async n => (scored.push(n), scores.shift() ?? { state: 'OPEN', ok: null, lines: [] }), takePass: async keys => (passes.push([...keys]), o.pass === true) }, LS_REMOTE)
-  const hio = memIo(host, async () => null, {}, LANES)
-  const od = hostsDesk({ dir: () => 'E:/o/Saved/A5R', root: () => 'E:/o', me8: () => 'ab12cd34', lane: () => 'lane', home: () => 'C:/Users/o', isWriter: () => true, alive: () => true, local: () => truth() })
-  const hd = hostsDesk({ dir: () => 'D:/h/Saved/A5R', root: () => 'D:/h', me8: () => 'cd56ef78', lane: () => 'hostlane', home: () => 'C:/Users/h', isWriter: () => true, alive: () => true, local: () => truth() })
-  await hd.tool(hio, { action: 'set', asHost: { ...AS_HOST, ...o.asHost } })
-  const add = o.manual ? 'host add rig --reach manual --label Rig' : `host add rig --reach command:rig --label Rig --ops '${OPS}' --a5r-root D:/h`
-  await od.command(oio, add)
-  return { clock, origin, host, oio, hio, od, hd, reached, scored, passes }
-}
-type Pair = Awaited<ReturnType<typeof pair>>
-const create = (p: Pair, more: Record<string, unknown> = {}) => p.od.tool(p.oio, { action: 'handoff', op: 'create', host: 'rig', branch: 'intent/x', task: 'do x', claims: ['Content/A.uasset'], wants: ['ue'], ...more })
-const idOf = (said: string) => /hand-off (\S+) for/.exec(said)?.[1] ?? ''
-const ho = (p: Pair, id: string): Handoff | null => parseHandoff(p.origin.files.get(`E:/o/Saved/A5R/handoffs/${id}.json`) ?? null)
-const minute = async (p: Pair, ms = MIN) => {
-  p.clock.now += ms
-  await p.hd.tick(p.hio, p.clock.now)
-  return p.od.tick(p.oio, p.clock.now)
-}
 
 test('S-d (A7, D21, A11 scenario 2): engine: proposed -> accepted -> running -> done -> merged over the command adapter with the reverse direction cut', async () => {
   const p = await pair({ scores: [{ state: 'OPEN', ok: true, lines: [] }, { state: 'MERGED', ok: true, lines: [] }] })
@@ -195,8 +127,8 @@ test('S-d (decisions 2, 3, A16): engine: startCommand starts an accepted job onc
   const other = hostsDesk({ dir: () => 'D:/h/Saved/A5R', root: () => 'D:/h', me8: () => 'ffff0000', lane: () => 'x', home: () => 'C:/Users/h', isWriter: () => false, alive: () => true, local: () => truth() })
   expect(await other.command(p.hio, `job done ${id} #1`)).toBe(`A5R · job — job ${id} is run by session cd56ef78 → only that session reports it; or /a5r job take ${id} once it is parked`)
   expect(await p.od.command(p.oio, `job done ${id} #1`)).toBe('A5R · job — this machine serves no one (asHost is not enabled) → jobs live on a host: /a5r host set --asHost …')
-  expect(await p.hd.command(p.hio, `job fail ${id}`)).toBe(`A5R · job — failed needs a reason (a code, then text) → /a5r job list · take <id> · progress <id> "<one line>" · done <id> <ref> · fail <id> <CODE> [text] · return <id> <CODE> [text]`)
-  expect((await p.hd.touch(p.hio, [`Saved/A5R/jobs/${id}.json`])).deny).toBe('A5R · job — Saved/A5R/inbox and Saved/A5R/jobs are written by a5r alone (the origin\'s delivery, this host\'s answer) → /a5r job list · take <id> · progress <id> "<one line>" · done <id> <ref> · fail <id> <CODE> [text] · return <id> <CODE> [text]')
+  expect(await p.hd.command(p.hio, `job fail ${id}`)).toBe(`A5R · job — failed needs a reason (a code, then text) → ${JOB_USAGE}`)
+  expect((await p.hd.touch(p.hio, [`Saved/A5R/jobs/${id}.json`])).deny).toBe(`A5R · job — Saved/A5R/inbox and Saved/A5R/jobs are written by a5r alone (the origin's delivery, this host's answer) → ${JOB_USAGE}`)
   // Its session gone: no heartbeat; the origin shows silent, then lost (told once).
   const q = await pair()
   const id2 = idOf(await create(q))
@@ -235,7 +167,7 @@ test('S-d (A3): engine: C12 sends a no-op hand-off through the real file path (i
   // The host's minute runs while C12 waits (the simulated clock moves with each wait).
   const answering = async (ms: number) => {
     p.clock.now += ms
-    await host.tick(p.hio, { asHost: { ...AS_HOST, availability: { state: 'yes' } } as never, now: p.clock.now, frozen: false, lanes: [], alive: () => true })
+    await host.tick(p.hio, { asHost: { ...AS_HOST, availability: { state: 'yes' } } as never, now: p.clock.now, frozen: false, lanes: [], alive: () => true, warnMs: 15 * MIN })
   }
   const ctx = (sleep: (ms: number) => Promise<void>, a5rRoot?: string, waitMs?: number) => ({ adapter, local: async () => null, now: async () => p.clock.now, prior: { C1: { status: 'pass' as const, checkedAt: p.clock.now } }, os: { os: 'windows' as const, shell: 'cmd' as const }, l2: l2(sleep, a5rRoot, waitMs) })
   const ok = await runChecks(ctx(answering), ['C12'], 7 * 24 * 60 * MIN)

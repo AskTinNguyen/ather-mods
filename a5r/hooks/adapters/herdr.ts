@@ -46,7 +46,7 @@ export const herdrAdapter = (target: string, o: ReachOptions, proc: Proc, known?
   }
   const secs = (ms?: number) => String(Math.max(1, Math.min(600, Math.round((ms ?? OP_TIMEOUT_MS) / 1000))))
   const exec = (argv: readonly string[], init: RunInit = {}) =>
-    call(['exec', '--on', target, '--timeout', secs(init.timeoutMs), ...(init.cwd ? ['--cwd', init.cwd] : []), ...(init.stdin !== undefined ? ['-i'] : []), '--', ...argv], init)
+    call(['exec', '--on', target, '--timeout', secs(init.timeoutMs), ...(init.cwd ? ['--cwd', init.cwd] : []), ...Object.entries(init.env ?? {}).flatMap(([k, v]) => ['--env', `${k}=${v}`]), ...(init.stdin !== undefined ? ['-i'] : []), '--', ...argv], init)
   const probe = async (): Promise<OpResult<Probed>> => {
     const win = await exec(['cmd', '/c', 'echo', 'a5r', '%OS%'])
     if (!win.ok) return errOf('LINK', win.error.text)
@@ -99,5 +99,5 @@ export const herdrAdapter = (target: string, o: ReachOptions, proc: Proc, known?
         return r.value.exitCode === 0 ? okOf(null) : errOf('NOT_DELIVERED', `${hc} send ${deliverTo} exited ${r.value.exitCode}`)
       }
     : undefined
-  return { kind: 'herdr', link: DEFAULT_LINK, helpers: (r: RemoteOs) => (r === 'windows' ? /^herdr-core(\.exe)?$/i : /^herdr-core$/), probe, readFile, writeFile, run, status, envInfo, ...(deliver ? { deliver } : {}) }
+  return { kind: 'herdr', link: DEFAULT_LINK, canBg: true, helpers: (r: RemoteOs) => (r === 'windows' ? /^herdr-core(\.exe)?$/i : /^herdr-core$/), probe, readFile, writeFile, run, status, envInfo, ...(deliver ? { deliver } : {}) }
 }
