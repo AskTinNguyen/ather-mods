@@ -122,7 +122,7 @@ export const conductor = (h: WakeState) => {
     const keep = (w: WakeFile, sent: Start | null = null): Promise<void> =>
       save(io, { ...w, ...(s.sync ? { syncWake: { ...(sent ?? slot), id: s.sync.id, sent: sent !== null } } : sent ? { current: sent } : {}) }, now)
     /** Nothing can go: the request is moved so it blocks nobody, and it spends nothing; a sync's start is kept as not sent
-     * unless `isKept` (written already) or it is a conductor's own limit. */
+     * unless `isKept` (written already). (A sync's start is never tried from outside the desktop app: syncStep.) */
     const hold = async (cause: string, isKept = false): Promise<Step> => {
       if (turn) await miss(io, turn, now, 'moved', cause, now)
       if (s.sync && !isKept) await keep(wake)
@@ -137,7 +137,7 @@ export const conductor = (h: WakeState) => {
     if (wake.pausedUntil > now) return hold(pausedCause(wake.pausedBy ?? myName()))
     if (!isDeskKnown) {
       if (await io.claimAlert(`cannot-start-${s.f.id8}-${Math.floor(now / PAUSE_MS)}`)) await io.log(event(s.f, 'woke', `${why}: cannot start from here: this session is not in the desktop app's list; its request is kept`, now, false))
-      return hold('this conductor cannot start a session from here', true)
+      return hold('this conductor cannot start a session from here')
     }
     const overBudget = budgetHold(wake, s.why, now)
     if (overBudget) return hold(overBudget)
