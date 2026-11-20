@@ -1,6 +1,6 @@
 # Progress: a5r-superfocus
 
-- PR: (opening)
+- PR: https://github.com/AskTinNguyen/ather-mods/pull/93
 - Rev: 2
 - Worker: the session itself (no background worker)
 
