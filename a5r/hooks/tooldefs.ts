@@ -2,6 +2,7 @@
 // host file can take rev 44's wiring without growing. Pure text: no `$`.
 import { FOCUS_USAGE } from './focus.ts'
 import { EDITOR_USAGE } from './order.ts'
+import { SUPERFOCUS_USAGE } from './superfocus.ts'
 import { RULE_FORM } from './syncrules.ts'
 
 export const EDITOR_TOOL_DEF = {
@@ -55,6 +56,23 @@ export const SYNC_TOOL_DEF = {
   },
 }
 
+/** Intent a5r-superfocus: a listed session's own report that it parked, and the state. */
+export const SUPERFOCUS_TOOL_DEF = {
+  name: 'superfocus',
+  description:
+    'a5r A5R Super Focus: when the person parks every session (A5R · Super Focus message), report here once you have committed your own paths to your park branch, restored them in the shared tree, written your resume note, released the Editor and stopped your background work. "parked" (branch, sha, note; branch "none" when you had nothing to park), "status". Only the person starts, chooses, restores or cancels a Super Focus (/a5r superfocus).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['parked', 'status'] },
+      branch: { type: 'string', description: 'parked: the park branch you made (park/<id8>/<yyyymmdd>), or "none".' },
+      sha: { type: 'string', description: 'parked: the commit that branch points at.' },
+      note: { type: 'string', description: 'parked: one line, where you stopped.' },
+    },
+    required: ['action'],
+  },
+}
+
 /** A57: `/a5r help`. */
 export const A5R_HELP = [
   'A5R commands:',
@@ -69,5 +87,6 @@ export const A5R_HELP = [
   `${EDITOR_USAGE}: the person's own order of the Editor queue and time of a turn (the panel's row controls do the same; no tool can)`,
   `${FOCUS_USAGE}: the person gives one session the Editor for a milestone (the panel's Focus… and the EDITOR line's End / +30 / +60 do the same; no tool can); the focus session ends it with the editor tool's focus_done`,
   '/a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover · Sync main',
+  `${SUPERFOCUS_USAGE}: the person parks every other session, works with one, then restores them (no tool can)`,
   'A5R acceptance steps in only at the end of the tracked intent\'s checklist (every row met or waived), at Ather\'s Ship prompt and when an intent closes; a PR before that runs unscored.',
 ].join('\n')

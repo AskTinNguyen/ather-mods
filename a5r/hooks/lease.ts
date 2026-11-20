@@ -153,6 +153,7 @@ export const placeOf = (me: Pick<SessionFile, 'want' | 'return'> | null, now: nu
 
 /** A string field of a tool's input ('' when it is no string). */
 export const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+export const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 /** A request's slot as a session's file keeps it, from the editor tool's input (the sync's own request, A79, alike): asking
  * again keeps the place in the queue (A104: so does a forced release, once, 60 min) and, A125, the live wait so far. */
 export const wantOf = (me: Pick<SessionFile, 'want' | 'return'> | null, e: Record<string, unknown>, now: number): Want => {

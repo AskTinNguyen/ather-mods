@@ -7,7 +7,7 @@
 import { CUTOFF_MS, FOCUS_NOTE, FREE_RAM_READ, hhmm, livenessOf, lockTimes, noticeText, oneLine, ordinal, ownersOf, samePath, type Claim, type FocusLease, type Gates, type GrantInput, type LaneBeat, type LookRow, type Notice, type Phase, type SessionFile, type SyncFile, type Touch, type Want } from './coord.ts'
 import { norm } from './a5r.ts'
 import { isUnrealBuild, projectsOf, type EditorKind } from './editor.ts'
-import { expectedStarts } from './lease.ts'
+import { expectedStarts, isNum } from './lease.ts'
 import { pickByName, type Parsed, type Who } from './order.ts'
 
 export const FOCUS_FILE = 'editor-focus.json'
@@ -32,7 +32,6 @@ const MIN = 60_000
 export type FocusEnd = { at: number; how: 'done' | 'ended'; by: string }
 export type Focus = { v: 1; id8: string; session: string; lane: string; milestone: string; startedAt: number; endsAt: number; setBy: string; extensions: { at: number; add: number; by: string }[]; ended: FocusEnd | null }
 
-const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 /** The file as written, field by field (a half write or another version's file is no Focus). */
 export const parseFocus = (text: string | null): Focus | null => {
   try {

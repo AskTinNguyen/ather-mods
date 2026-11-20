@@ -156,3 +156,17 @@ export const sweepSvg = (color: string, reverse: boolean, ms = 900, cols = 120, 
     }
   return `${svgOpen(`width="${cols * 20}" height="${rows * 12}" shape-rendering="crispEdges"`)}${cells.join('')}</svg>`
 }
+
+/** A37/A38: a pixel curtain laid over a block: an absolute box spanning it (painted over what it holds, clipped to
+ * it) holding one SVG whose cells clear or fill in Bayer order. The block becomes the curtain's positioning parent. */
+export function withCurtain(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, c: Curtain): unknown {
+  return withOverlay(el, block, key, curtainSvg(c))
+}
+
+/** A37/A38: any one-shot SVG laid over a block the same way (an absolute box spanning it, clipped to it). */
+export function withOverlay(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, source: string): unknown {
+  if (!el.Svg) return block
+  const b = block as { props?: Record<string, unknown>; children?: unknown[] }
+  const over = el.Box({ key, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', children: [el.Svg({ source, alt: '', width: 2400, height: 480, isInteractive: true })] })
+  return { ...b, props: { ...(b.props ?? {}), position: 'relative' }, children: [...(b.children ?? []), over] }
+}
