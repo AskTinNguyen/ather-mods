@@ -4,6 +4,7 @@
 // A33 (rev 9, Hai's approved mockup): the A5R pane in seal red, gold, pale gold and ivory; Ather's pane keeps only the
 // seal, the gold accent and the red "★ A5R ›" button. Contrast (dataviz contrast()): pale gold on seal red ≈ 4.6:1,
 // gold and ivory on the pane's near-black well above 7:1. Pure: no `$`.
+import type { RenderElement } from 'claude-code'
 
 // A40: two palettes, one per app theme; the shared colour objects below are switched to the theme in force
 // (`applyTheme`), so every draw reads the right one. Text ≥ 4.5:1 and marks ≥ 3:1 against the theme's pane background
@@ -11,7 +12,7 @@
 // backgrounds and stay the same in both themes.
 /** The band's star sits on the band red in both themes, so it keeps the bright gold (6.4:1 on #7A1712). */
 export const BAND_GOLD = '#F2C14E'
-import { FRAME_STYLE, svgOpen } from './icons.ts'
+import { FRAME_STYLE, entranceCurtains, svgOpen, type Curtain } from './icons.ts'
 
 export type ThemeName = 'dark' | 'light'
 export const PALETTES = {
@@ -291,3 +292,20 @@ export const scarfAvatars = <T>(node: T): T => {
   const children = Array.isArray(n.children) ? n.children.map(scarfAvatars) : n.children
   return { ...n, ...(props ? { props } : {}), ...(children ? { children } : {}) } as unknown as T
 }
+
+/** A35 (mockup v2): the A5R pane's frame: the band at full width, then every block on one gutter, one gap between blocks.
+ * A49: a block on the gutter drops its own `width: '100%'` and stretches instead: a width of 100% is the pane's whole
+ * width, and the gutter margins sit outside it, so the block ran 2 columns past the pane's right edge and the edge cut
+ * the ends of its lines (a session row's "· 2m" read "· 2"). Stretched, its width is the pane's minus both margins. */
+export function paneOf(el: { Box: (p: Record<string, unknown>) => unknown }, kids: unknown[]): RenderElement {
+  const [band, ...blocks] = kids as { props?: Record<string, unknown> }[]
+  const onGutter = blocks.map(b => {
+    const { width: _full, ...props } = b.props ?? {}
+    return { ...b, props: { ...props, marginX: V2.gutter, marginTop: 0 } }
+  })
+  return el.Box({ key: 'hai-a5r-pane', flexDirection: 'column', alignItems: 'stretch', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
+}
+
+/** A37: the entrance: each block in turn (band, tools, sessions, card, rules) dithers in from seal-red pixels, the
+ * whole sequence ending within 300 ms × pace (A51: ten times slower with motion slow); the cells take 4 ms × pace. */
+export const entrance = (n: number, pace = 1): Curtain[] => entranceCurtains(n, A5R_LOOK.sealBg, pace)

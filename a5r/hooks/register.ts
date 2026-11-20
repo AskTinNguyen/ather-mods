@@ -33,7 +33,10 @@ import { SYNC_WORKER_PROMPT, syncWorkerTask } from './syncworker.ts'
 import { FIND_GIT_MS, FIND_LOG_MS, FS_READ_MAX, LOGS_READ, NO_CHECKOUT_NEXT, REG_MS, baseDirArgv, buildBatOf, checkoutOf, commonDirArgv, editorLogs, engineAssociation, engineOfLog, mainTreeOf, mainTreeOfGitFile, noCheckoutWhy, pickEngine, type Miss, registryQueries, registryRoot, rootOfLock, type Checkout, type EngineFind, type EngineSource } from './machine.ts'
 import { EDITOR_USAGE, ORDER_FILE, ORDER_GATE, NO_ORDER, applyOrder, isShow, isUsage, type Parsed, isPersonPath, writesPersonFile, isPersonOrigin, manualOf, noticesFor, parseEditorCommand, parseOrder, type Control, type OrderAction, type QueueOrder } from './order.ts'
 import { editorPanel, listText, needsLook } from './panel.ts'
-import { A5R_HELP, EDITOR_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
+import { A5R_HELP, EDITOR_TOOL_DEF, SUPERFOCUS_TOOL_DEF, SYNC_TOOL_DEF } from './tooldefs.ts'
+import { superFocusCommand, superFocusTool, type SfCommandIo } from './superfocushost.ts'
+import type { PersonChange } from './hostio.ts'
+import { SUPERFOCUS_FILE, SUPERFOCUS_GATE, SUPERFOCUS_USAGE } from './superfocus.ts'
 import { freezeSteps } from './freezehost.ts'
 import { gitTurns, type TurnIo } from './gitturnhost.ts'
 import { isLockFailure } from './gitturn.ts'
@@ -44,8 +47,8 @@ import { ORPHAN_FILE, askLook, closeAnswer, closeArgv, idleArgv, orphanLook, orp
 import { autoSyncOf, holderMissingText } from './autosync.ts'
 import { isNoEditorLease, isSyncConcerned, liveWait, pieSeen, pruneArgv, prunable, staleWants, type Shared } from './truth.ts'
 import { JUDGE_SYSTEM, defaultRecommendation, digestOf, hintOf, judgePrompt, parseTail, parseVerdict, type JudgeFacts, type VerdictRow } from './judge.ts'
-import { curtainSvg, entranceCurtains, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, type Curtain, type Motion } from './icons.ts'
-import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
+import { curtainSvg, entranceLife, fxLife, icon, paceOf, scoreCurtain, sealSvg, stampSvg, sweepSvg, withCurtain, withOverlay, type Curtain, type Motion } from './icons.ts'
+import { A5R_LOOK, ATHER, STATUS, V2, a5rBand, entrance, paneOf, applyTheme, currentTheme, themeOf, noHits, recolor, replaceKeyed, ruleCards, rulesChips, RULE_SHORT, scarfAvatars, withSeal, type RuleHits } from './theme.ts'
 import { PIE_START_GB, acceptCard, ago, compactLine, editorBox, lookBox, sessionsBox, editorTile, type LinePart, lockLine, mainTile, memoryTile, parseLockView, ramBand, tilesRow, toMin, type LockView, type Sync, type SyncData, type Vitals } from './watch.ts'
 
 // Hai's S2 flow beside Ather Automata, which it never changes. With A5R off it draws nothing into Ather's
@@ -122,6 +125,8 @@ let chain: string[] | null = null // the plugins beneath this one on a tool call
 // A5R's coordination: what this session last read from the files and the machine (coord.ts decides).
 const EDITOR_TOOL = 'mcp__a5r__editor'
 const SYNC_TOOL = 'mcp__a5r__sync'
+const SUPERFOCUS_TOOL = 'mcp__a5r__superfocus'
+const A5R_TOOLS: ReadonlySet<string> = new Set([EDITOR_TOOL, SYNC_TOOL, SUPERFOCUS_TOOL])
 const SYNC_AGENT = 'a5r:sync' // D7: the sync worker's agent type
 const JUDGE_AGENT = 'a5r:judge' // A65: the advisory judge's agent type
 const A5R_AGENTS = new Set<string>([SYNC_AGENT, JUDGE_AGENT]) // A86: A5R's own agents, never "a background agent still running" at a PR
@@ -1013,6 +1018,7 @@ async function ensureTools($: Engine): Promise<void> {
   hasTools = true
   await $.tool.register(EDITOR_TOOL_DEF).catch(err => $.ui.log(`a5r: editor tool not registered: ${String(err)}`, { to: 'debug' }))
   await $.tool.register(SYNC_TOOL_DEF).catch(err => $.ui.log(`a5r: sync tool not registered: ${String(err)}`, { to: 'debug' }))
+  await $.tool.register(SUPERFOCUS_TOOL_DEF).catch(err => $.ui.log(`a5r: superfocus tool not registered: ${String(err)}`, { to: 'debug' }))
   // D7: the sync worker's agent type, spawned by this mod at the sync time and hidden from the model (agent.offer).
   await $.agent.register({ name: 'sync', description: 'a5r sync worker: runs the planned merge of origin/main into the shared S2 checkout at the sync time and ends it with done or abort. Started by a5r only.', prompt: SYNC_WORKER_PROMPT, background: true }).catch(err => $.ui.log(`a5r: sync worker type not registered: ${String(err)}`, { to: 'debug' }))
   // A65: the advisory judge, read-only (Read and Grep only), a small model, a few turns, no CLAUDE.md; started by a5r only.
@@ -3284,21 +3290,22 @@ const editorNow = (now: number, id8 = me8) => editorPanel({ wakeLine: wakes.line
  * focus session's own focus_done), made by this session's A5R wherever he pressed: the world read fresh in the Editor's own
  * pass, the change decided by its pure module (`plan`), one shared file written by read-compare-write, logged; the sessions
  * it concerns tell themselves at their next minute. */
-type PersonChange = { refusal: string } | { write: () => Promise<boolean>; what: string; rule: 'manual' | 'focus'; note: string; text: string; next: string }
-async function personChange($: Engine, opts: Opts, gate: string, plan: (now: number) => PersonChange): Promise<{ text: string; isWritten: boolean }> {
+async function personChange($: Engine, opts: Opts, gate: string, plan: (now: number) => PersonChange | Promise<PersonChange>): Promise<{ text: string; isWritten: boolean }> {
   const no = (text: string) => ({ text, isWritten: false })
   if (!(await readA5R($))) return no(blocked(gate, 'A5R is off', 'turn it on with /a5r on'))
   if (!(await isCheckoutHere($))) return no(noCheckout(gate))
   await restoreMe($, opts)
   const now = await $.clock.now()
-  return editorSerial(async () => {
+  const r = await editorSerial(async (): Promise<{ text: string; isWritten: boolean; after?: () => Promise<string> }> => {
     await readWorld($, opts)
-    const c = plan(now)
+    const c = await plan(now)
     if ('refusal' in c) return no(c.refusal)
-    if (!(await c.write())) return no(blocked(gate, `${c.what} changed at the same moment (another press, or its own session's write)`, 'look at the list again and press once more'))
+    const w = await c.write()
+    if (w !== true) return no(typeof w === 'string' ? w : blocked(gate, `${c.what} changed at the same moment (another press, or its own session's write)`, 'look at the list again and press once more'))
     await orchestrateLog($, opts, actedEvent(c.rule, c.note, now)).catch(() => undefined)
-    return { text: noticeText(gate, c.text, c.next), isWritten: true }
+    return { text: noticeText(gate, c.text, c.next), isWritten: true, after: c.after }
   })
+  return { text: [r.text, r.after ? await r.after() : ''].filter(Boolean).join('\n'), isWritten: r.isWritten } // after the queue is let go
 }
 const by = (via: string) => `the person (${via} in ${me?.lane ?? me8})`
 /** An acted orchestrate.log line about one session (this one by default): its lane, liveness, last turn and agents. */
@@ -3328,6 +3335,22 @@ const focusAction = ($: Engine, opts: Opts, a: FocusAction, via: string) =>
     const r = applyFocus({ focus: focusFile, me8, files: filesNow(), lanes, now, sync: syncFile, phase: phaseOf(syncFile, now), titleOf: appTitleOf(appNow(now)) }, a, a.kind === 'done' ? (me?.lane ?? me8) : by(via))
     return 'refusal' in r ? r : { write: () => writeFocus($, r.focus), what: 'the Focus', rule: 'focus', note: r.text, text: r.text, next: a.kind === 'done' ? 'the queue runs on in its order' : 'every session reads it at its next minute; the sessions it concerns are told' }
   })
+
+/** Intent a5r-superfocus: the engine's calls, this session's state and its person-change path for superfocushost.ts. */
+const sfIo = ($: Engine, opts: Opts, origin?: { kind: string }): SfCommandIo => ({
+  read: () => readJson($, `${hfDir()}/${SUPERFOCUS_FILE}`),
+  write: (expected, text) => writeChecked($, `${hfDir()}/${SUPERFOCUS_FILE}`, expected, text),
+  send: async (session, text) => (await $.session.send({ to: { sessionId: session }, text }).catch(() => ({ isDelivered: false }))).isDelivered === true,
+  prompt: async text => void (await $.prompt.submit({ text })),
+  now: () => $.clock.now(),
+  me8: () => me8,
+  writeFocus: f => writeFocus($, f),
+  world: now => ({ me8, files: filesNow(), lanes, touches, now, sync: syncFile, phase: phaseOf(syncFile, now), isMerging: conflictHead !== null || freeze.isMerging(syncFile, now), titleOf: appTitleOf(appNow(now)) }),
+  focus: () => focusFile,
+  by: () => by('command'),
+  personCommand: (c, act, show) => personCommand($, opts, c, origin, { gate: SUPERFOCUS_GATE, changes: 'starts, chooses, restores or cancels a Super Focus', usage: SUPERFOCUS_USAGE, act, show, next: 'report your own park with the superfocus tool (action parked), or read it (action status)' }),
+  personChange: async plan => (await personChange($, opts, SUPERFOCUS_GATE, plan)).text,
+})
 
 /** A121 / A122: a NEEDS A LOOK press, the person's own (as a row's): a Focus of 2 h, or the release of a holder past its end. */
 const lookPress = async ($: Engine, opts: Opts, p: LookPress): Promise<void> =>
@@ -3437,13 +3460,10 @@ async function answerPress($: Engine, opts: Opts, text: string): Promise<void> {
 
 /** A117 / A118: the person's own command (`/a5r editor …`, `/a5r focus …`): the Editor list, or his change, made by `act`;
  * never a plugin's, a peer's or a schedule's run. */
-async function personCommand<A extends object>($: Engine, opts: Opts, c: Parsed<A>, origin: { kind: string } | undefined, x: { gate: string; changes: string; usage: string; act: (a: A) => Promise<string> }): Promise<string> {
+async function personCommand<A extends object>($: Engine, opts: Opts, c: Parsed<A>, origin: { kind: string } | undefined, x: { gate: string; changes: string; usage: string; act: (a: A) => Promise<string>; show?: () => Promise<string>; next?: string }): Promise<string> {
   if (isUsage(c)) return c.usage
-  if (isShow(c)) {
-    await runTick($, opts)
-    return listText(editorNow(await $.clock.now()).list, x.usage)
-  }
-  if (!isPersonOrigin(origin)) return blocked(x.gate, `only the person ${x.changes}, and this command came from ${origin?.kind ?? 'elsewhere'}`, 'request the Editor with the editor tool (action request) and wait for your turn')
+  if (isShow(c)) return x.show ? x.show() : listText(editorNow(await runTick($, opts).then(() => $.clock.now())).list, x.usage)
+  if (!isPersonOrigin(origin)) return blocked(x.gate, `only the person ${x.changes}, and this command came from ${origin?.kind ?? 'elsewhere'}`, x.next ?? 'request the Editor with the editor tool (action request) and wait for your turn')
   return x.act(c)
 }
 
@@ -3645,37 +3665,6 @@ async function drawPane($: Engine, opts: Opts, e: { surface: string; props: { bo
   return recolor(scarfAvatars({ ...(tree as object), children: kids } as unknown as RenderElement))
 }
 
-/** A37/A38: a pixel curtain laid over a block: an absolute box spanning it (painted over what it holds, clipped to
- * it) holding one SVG whose cells clear or fill in Bayer order. The block becomes the curtain's positioning parent. */
-function withCurtain(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, c: Curtain): unknown {
-  return withOverlay(el, block, key, curtainSvg(c))
-}
-
-/** A37/A38: any one-shot SVG laid over a block the same way (an absolute box spanning it, clipped to it). */
-function withOverlay(el: { Box: (p: Record<string, unknown>) => unknown; Svg?: (p: Record<string, unknown>) => unknown }, block: unknown, key: string, source: string): unknown {
-  if (!el.Svg) return block
-  const b = block as { props?: Record<string, unknown>; children?: unknown[] }
-  const over = el.Box({ key, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden', children: [el.Svg({ source, alt: '', width: 2400, height: 480, isInteractive: true })] })
-  return { ...b, props: { ...(b.props ?? {}), position: 'relative' }, children: [...(b.children ?? []), over] }
-}
-
-/** A37: the entrance: each block in turn (band, tools, sessions, card, rules) dithers in from seal-red pixels, the
- * whole sequence ending within 300 ms × pace (A51: ten times slower with motion slow); the cells take 4 ms × pace. */
-const entrance = (n: number, pace = 1): Curtain[] => entranceCurtains(n, A5R_LOOK.sealBg, pace)
-
-/** A35 (mockup v2): the A5R pane's frame: the band at full width, then every block on one gutter, one gap between blocks.
- * A49: a block on the gutter drops its own `width: '100%'` and stretches instead: a width of 100% is the pane's whole
- * width, and the gutter margins sit outside it, so the block ran 2 columns past the pane's right edge and the edge cut
- * the ends of its lines (a session row's "· 2m" read "· 2"). Stretched, its width is the pane's minus both margins. */
-function paneOf(el: { Box: (p: Record<string, unknown>) => unknown }, kids: unknown[]): RenderElement {
-  const [band, ...blocks] = kids as { props?: Record<string, unknown> }[]
-  const onGutter = blocks.map(b => {
-    const { width: _full, ...props } = b.props ?? {}
-    return { ...b, props: { ...props, marginX: V2.gutter, marginTop: 0 } }
-  })
-  return el.Box({ key: 'hai-a5r-pane', flexDirection: 'column', alignItems: 'stretch', width: '100%', rowGap: 1, children: [band, ...onGutter] }) as unknown as RenderElement
-}
-
 /** A29: the A5R pane: the three tool rows (A25), the sessions list (A26), the Nghiệm thu card (A19), and the five
  * rules as its last block (A27). With A5R off it says how to turn it on; outside the S2 checkout it has no tools. */
 async function drawA5Pane($: Engine, opts: Opts, e: { surface: string; props: { bodyColumns?: number } }): Promise<RenderElement> {
@@ -3820,8 +3809,8 @@ export const register: Register = (on, options) => {
     await readTheme($) // A40
     await $.command.register({
       name: 'a5r',
-      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r pass <PR or slug> (let one through once) · /a5r help · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r editor [up|down|top <name> | time <name> <±minutes> | order reset] (the person\'s order of the Editor queue) · /a5r focus [<name> <2h|3h>: <milestone> | end | +30 | +60] (the person gives one session the Editor for a milestone) · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance at the end of the checklist; Editor holder, RAM and Sync main)',
-      argumentHint: 'on | off | status | accept | pass <PR or slug> | gate <pie> <nopie> | editor … | focus … | sync HH:MM | help',
+      description: 'A5R: /a5r (opens the A5R pane) · /a5r on · /a5r off · /a5r status · /a5r accept (A5R acceptance now) · /a5r pass <PR or slug> (let one through once) · /a5r help · /a5r gate <with PIE GB> <without PIE GB> | reset · /a5r editor [up|down|top <name> | time <name> <±minutes> | order reset] (the person\'s order of the Editor queue) · /a5r focus [<name> <2h|3h>: <milestone> | end | +30 | +60] (the person gives one session the Editor for a milestone) · /a5r superfocus [start | <name>[!] | restore | cancel] (the person parks every other session, works with one, restores them) · /a5r sync HH:MM [build] [for <session>] | move HH:MM | build on|off | cancel | done | abort | takeover (on: the five rules, checked at the action and at A5R acceptance at the end of the checklist; Editor holder, RAM and Sync main)',
+      argumentHint: 'on | off | status | accept | pass <PR or slug> | gate <pie> <nopie> | editor … | focus … | superfocus … | sync HH:MM | help',
     })
     await readA5R($)
     a5rFlipAt = 0 // a session that starts with A5R already on does not stamp the seal
@@ -3852,6 +3841,7 @@ export const register: Register = (on, options) => {
     if (/^gate\b/i.test(e.args.trim())) return { text: await gateCommand($, opts, e.args.trim().slice(4)) }
     if (/^pass\b/i.test(e.args.trim())) return { text: await passCommand($, opts, e.args.trim().slice(4)) }
     if (/^editor\b/i.test(e.args.trim())) return { text: await personCommand($, opts, parseEditorCommand(e.args.trim().slice(6)), e.origin, { gate: ORDER_GATE, changes: 'changes the Editor queue', usage: EDITOR_USAGE, act: a => orderAction($, opts, a, 'command') }) }
+    if (/^superfocus\b/i.test(e.args.trim())) return { text: await superFocusCommand(sfIo($, opts, e.origin), e.args.trim().slice(10)) }
     if (/^focus\b/i.test(e.args.trim())) return { text: await personCommand($, opts, parseFocusCommand(e.args.trim().slice(5)), e.origin, { gate: FOCUS_GATE, changes: 'gives, extends or ends a Focus', usage: FOCUS_USAGE, act: async a => (await focusAction($, opts, a, 'command')).text }) }
     if (/^help\b/i.test(e.args.trim())) return { text: A5R_HELP }
     // A29: `/a5r` with no words opens the A5R pane; `/a5r status` keeps the text reply below.
@@ -3892,9 +3882,10 @@ export const register: Register = (on, options) => {
     if (isMain) await signalTurn($) // A55 / A59: the main loop runs
     // Hotfix 0.18.2: A5R's own tools always answer: an error inside is the call's result (named, with a step), never a
     // throw that leaves the call unanswered ("no tool.call hook answered this call", MEASURED in b4f33d56 at 15:00:43).
-    if (tool === EDITOR_TOOL || tool === SYNC_TOOL) {
+    if (A5R_TOOLS.has(tool)) {
       try {
         if (tool === EDITOR_TOOL) return { result: await editorTool($, opts, input) }
+        if (tool === SUPERFOCUS_TOOL) return { result: await superFocusTool(sfIo($, opts), { action: str(input.action), branch: str(input.branch), sha: str(input.sha), note: str(input.note) }) }
         const paths = Array.isArray(input.paths) ? input.paths.map(String) : []
         const rules = Array.isArray(input.rules) ? input.rules.map(String) : typeof input.rules === 'string' ? input.rules : undefined
         const text = await syncAction($, opts, str(input.action), { at: str(input.at), holder: str(input.holder), note: str(input.note), paths, build: typeof input.build === 'boolean' ? input.build : undefined, rules })
@@ -4049,7 +4040,7 @@ export const register: Register = (on, options) => {
     // any other call goes on as if A5R were not there (replay-safe: a call already made is not made again).
     const tool = String(e.tool)
     const why = `${next.error.kind}${next.error.message ? `: ${next.error.message}` : ''}`
-    if (tool === EDITOR_TOOL || tool === SYNC_TOOL) return { result: toolErrorText($, tool, why) }
+    if (A5R_TOOLS.has(tool)) return { result: toolErrorText($, tool, why) }
     $.ui.log(`a5r: the tool.call hook failed (${why}) on ${tool}; the call went on unchecked`, { to: 'debug' })
     return next(e)
   })

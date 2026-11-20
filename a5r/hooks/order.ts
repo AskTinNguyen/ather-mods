@@ -6,7 +6,7 @@
 // no `$`.
 import { READERS, isAbs, isDotNetWrite, norm, placeTracker, programs, writeDestinations, writesFiles } from './a5r.ts'
 import { claimIn, freeLine, hash, heldLineAt, hhmm, isStandardHeld, livenessOf, noticeText, oneLine, phaseIn, queueOf, syncLimit, type GrantInput, type ManualOrder, type Notice, type SessionFile, type Want } from './coord.ts'
-import { queueView, type HolderRow } from './lease.ts'
+import { queueView, type HolderRow, isNum } from './lease.ts'
 
 export const ORDER_FILE = 'queue-order.json'
 /** An entry lasts at most this long, whatever its request does. */
@@ -32,7 +32,6 @@ export type QueueOrder = { v: 1; placed: Placed[]; sized: Sized[]; changes: Orde
 export const NO_ORDER: QueueOrder = { v: 1, placed: [], sized: [], changes: [] }
 type Entries = Pick<QueueOrder, 'placed' | 'sized'>
 
-const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const turnFrom = (v: Record<string, unknown>): Placed | null =>
   typeof v.id8 === 'string' && isNum(v.requestedAt) && isNum(v.at) ? { id8: v.id8.toLowerCase(), requestedAt: v.requestedAt, isKept: v.isKept === true, at: v.at, by: String(v.by ?? '') } : null
 
@@ -199,7 +198,10 @@ export const noticesFor = (o: QueueOrder, me8: string, now: number): Notice[] =>
     .map(c => ({ id: `editor:manual:${c.at}:${hash(c.what)}`, text: noticeText(ORDER_GATE, `${c.what}, set by ${c.by} at ${hhmm(c.at)}`, 'nothing to do: A5R grants in that order (it lasts until that turn ends); keep working as before'), isActionable: false }))
 
 // ---------- A117 (Fable review D1): only the person writes his files (A118: the queue order and the Focus) ----------
-const ORDER_NAME = /(?<![\w.-])(?:queue-order|editor-focus)\.json(?![\w.-])/i
+/** The person's own files in Saved/A5R: only his command or press (and a focus session's done, a listed session's
+ * parked report) writes them. */
+const PERSON_FILES = 'queue-order|editor-focus|superfocus'
+const ORDER_NAME = new RegExp(`(?<![\\w.-])(?:${PERSON_FILES})\\.json(?![\\w.-])`, 'i')
 const A5R_DIR = /saved\/+a5r(?![\w.-])/i // the folder itself, not Saved/A5Rx or Saved/A5R.bak
 /** Interpreters whose one-liner may write any file: refused when it names the order file or the Saved/A5R folder. */
 const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'deno', 'bun', 'ruby', 'perl', 'php', 'powershell', 'pwsh'])
@@ -208,7 +210,8 @@ const inA5R = (t: string): boolean => A5R_DIR.test(`${norm(t).replace(/\/+$/, ''
 
 /** An Edit/Write path that is one of the person's files: the queue order or (A118) the Focus (Saved/A5R/queue-order.json,
  * Saved/A5R/editor-focus.json; `.` and `..` resolved). */
-export const isPersonPath = (path: string): boolean => /(^|\/)Saved\/A5R\/(queue-order|editor-focus)\.json$/i.test(norm(path ?? ''))
+const PERSON_PATH = new RegExp(`(^|/)Saved/A5R/(${PERSON_FILES})\\.json$`, 'i')
+export const isPersonPath = (path: string): boolean => PERSON_PATH.test(norm(path ?? ''))
 
 /** A shell command that may write one of the person's files, guarded the other way round from the lock's writer list: a
  * segment that names the file is refused unless its verb only reads (a5r.ts READERS, and jq, diff, a git read) and it does
