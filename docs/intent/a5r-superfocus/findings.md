@@ -16,3 +16,10 @@ Super Focus stops and archives real sessions. Its first live run should happen w
 
 `scripts/devdrive/guard-worktree-add.ps1` in S2 refuses every `git … worktree add`, also for this repository. This work
 lives in a plain clone at `D:/Projects/ather-mods-wt/a5r-superfocus` instead (origin set to GitHub).
+
+## F-4 (note): overlap with intent a5r
+
+Intent `a5r` (rev 47, the umbrella of the mod) names `a5r/hooks/` and `a5r/tests/` too. This intent changes 11 files in
+`a5r/hooks/` and 4 in `a5r/tests/` (listed in prompt.md, Paths); no other session works on intent a5r now (its last
+commit, ad3ac22, is this branch's base). The overlap is the feature itself plus helper moves that keep register.ts from
+growing; it lands as its own PR into `intent/a5r`, and intent a5r's next rev should name Super Focus in its list.

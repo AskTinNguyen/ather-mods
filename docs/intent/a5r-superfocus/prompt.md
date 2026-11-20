@@ -1,6 +1,6 @@
 # A5R Super Focus: park every other session, work with one, restore them after
 
-- Rev: 1
+- Rev: 2
 - Status: active
 - Area: a5r
 - Owner: HaiHuynh
@@ -51,6 +51,15 @@ written into the S2 repository.
 - D3 The session the person typed in is the conductor: it parks its own paths like the others but is never archived.
 - D4 One Super Focus at a time; a new start is refused until the last one is restored or cancelled.
 
+## Paths
+
+- New: `a5r/hooks/superfocus.ts`, `a5r/hooks/superfocushost.ts`, `a5r/tests/superfocus.test.ts`.
+- Wiring: `a5r/hooks/register.ts`, `a5r/hooks/tooldefs.ts`, `a5r/hooks/order.ts` (superfocus.json person-only),
+  `a5r/hooks/hostio.ts` (the shared PersonChange type), `a5r/hooks/coord.ts` (the log rule).
+- Moves that keep register.ts from growing and share helpers: `a5r/hooks/theme.ts`, `a5r/hooks/icons.ts`,
+  `a5r/hooks/lease.ts`, `a5r/hooks/focus.ts`.
+- Tests that pin a5r's tool list: `a5r/tests/old-names.test.ts`, `a5r/tests/coord-engine.test.ts`, `a5r/tests/rev40.test.ts`.
+
 ## Acceptance
 
 | Id | Done when | Proof |
@@ -67,3 +76,4 @@ written into the S2 repository.
 ## Changelog
 
 - Rev 1 (2026-11-20): from Hải's Super Focus Mode prompt and the plan agreed in the session.
+- Rev 2 (2026-11-20): the Paths section, naming every file the change touches (A5R acceptance, rule 3).

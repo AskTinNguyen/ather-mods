@@ -1,7 +1,7 @@
 # Progress: a5r-superfocus
 
 - PR: (opening)
-- Rev: 1
+- Rev: 2
 - Worker: the session itself (no background worker)
 
 ## Acceptance
@@ -38,3 +38,10 @@ Left open (minor): `str` and `isNum` live in lease.ts beside each other until a 
 
 - Hải reviews and merges the PR; the live plugin changes only when intent/a5r is fast-forwarded in the live folder.
 - F-2: the first live run with Hải watching, no sync planned within the hour.
+
+## Recorded actions
+
+- Recursive deletes (4): only scratch copies in this session's scratchpad (outside every repository): `a5r_out/` (the
+  S2 docs rewrite of the earlier task), `sftest/hooks/`, `base/` and `cur/` (copies of a5r used to run single test files
+  on the base and on this branch). Nothing in this repository or the live plugin was deleted.
+- `git checkout -- a5r/hooks/theme.ts` once in this clone, to undo a half-applied script edit of my own before redoing it.
