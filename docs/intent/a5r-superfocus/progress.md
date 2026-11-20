@@ -41,7 +41,11 @@ Left open (minor): `str` and `isNum` live in lease.ts beside each other until a 
 
 ## Recorded actions
 
-- Recursive deletes (4): only scratch copies in this session's scratchpad (outside every repository): `a5r_out/` (the
-  S2 docs rewrite of the earlier task), `sftest/hooks/`, `base/` and `cur/` (copies of a5r used to run single test files
-  on the base and on this branch). Nothing in this repository or the live plugin was deleted.
+- Recursive deletes: only scratch copies in this session's scratchpad (`$S` below, outside every repository); nothing in
+  this repository or the live plugin was deleted.
+  - before 17:00: `rm -rf $S/a5r_out` (twice), the output folder of the earlier S2 docs rewrite, rebuilt each run.
+  - 18:00: `rm -rf $S/sftest/hooks`, a copy of a5r/hooks used to run superfocus.test.ts alone, refreshed with the new code.
+  - 18:03: `rm -rf $S/base $S/cur`, two copies of a5r (origin/intent/a5r and this branch) used to run the four failing
+    test files on both and compare.
+  - 18:04: `rm -rf $S/cur/a5r/hooks`, the same copy refreshed with this branch's hooks after the tool-list fix.
 - `git checkout -- a5r/hooks/theme.ts` once in this clone, to undo a half-applied script edit of my own before redoing it.

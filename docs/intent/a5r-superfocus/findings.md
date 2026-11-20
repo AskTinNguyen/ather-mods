@@ -23,3 +23,11 @@ Intent `a5r` (rev 47, the umbrella of the mod) names `a5r/hooks/` and `a5r/tests
 `a5r/hooks/` and 4 in `a5r/tests/` (listed in prompt.md, Paths); no other session works on intent a5r now (its last
 commit, ad3ac22, is this branch's base). The overlap is the feature itself plus helper moves that keep register.ts from
 growing; it lands as its own PR into `intent/a5r`, and intent a5r's next rev should name Super Focus in its list.
+
+## F-5 (open, for Hải): Ather's core pack does not read `claude plugin test` as tests
+
+A5R acceptance rule 2 asks for Ather's test proof. This checkout's Ather pack is `core` with no gates, and it reads no
+pass count from `claude plugin test a5r` (831 pass, 0 fail, run in the foreground at 18:4x and read back in full), so
+the proof stays `none`. Running some other test command only to satisfy it would prove nothing about this change.
+Proposed: Hải lets this PR through once (`/a5r pass a5r-superfocus`), and the `claude plugin test` summary
+(` N pass` / ` N fail`) becomes a gate Ather's packs read, in its own PR to ather-automata.
