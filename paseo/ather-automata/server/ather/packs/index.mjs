@@ -34,6 +34,7 @@ import { makeWebPack } from './web.mjs'
  *   localDir: string, debriefPath: (slug: string) => string,
  *   lockFile: string | null, parseLock: (raw: string | null, nowMinutes: number) => import('./unreal.mjs').EditorLock, lockRoles: readonly string[],
  *   lockLine?: (command: string, raw: string) => string,
+ *   tour: { prompt: string, toast: string } | null,
  *   ownCheck: { role: string, after: string, rung: string, label: string, hint: string, proveHint: string, detail: string, reply: string } | null,
  *   traps: readonly PackTrap[],
  *   held: { labels: Record<string, string>, nouns: Record<string, string>, kinds: readonly string[], defaults: readonly string[] },
@@ -44,12 +45,13 @@ import { makeWebPack } from './web.mjs'
  *   mcpKind: (input: string) => 'write' | 'read' | 'pie' | null, binaryAssets: RegExp | null, briefPaths: RegExp,
  *   skillGroups: readonly { group: string, names: readonly string[] }[], createGroups: readonly { group: string, items: readonly CreateItem[] }[],
  *   createOrder: Record<string, readonly string[]>, createTitle: string, createMeta: (editor: EditorState) => string, createPrompt: (verb: string, name: string, editor: EditorState) => string,
- *   prompts: { brief: (role: string, slug: string) => string, prove: (role: string, slug: string) => string, ship: (role: string, slug: string) => string, shipHint: (role: string) => string, briefHint: string, tour: string, tourToast: string, ask: (question: string) => string },
+ *   prompts: { brief: (role: string, slug: string) => string, prove: (role: string, slug: string) => string, ship: (role: string, slug: string) => string, shipHint: (role: string) => string, briefHint: string, ask: (question: string) => string },
  *   mandate: { flags: string, allowed: string, merge: string, away: string, pane: string, panes: string },
  *   statusWhat: string, notHere: string, gates: readonly Gate[], production: Production | null, scripts?: Record<string, string>,
  *   teams?: Readonly<Record<string, string>>, names?: import('../worklist.mjs').NameRules,
  *   [key: string]: unknown
- * }} Pack
+ * }} Pack `tour`: a newcomer's first step and the toast that offers it; null where the repository has none, and a
+ *   newcomer is asked their role instead
  */
 
 /**

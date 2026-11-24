@@ -5,7 +5,7 @@ Working the S2 way with Claude Code: what needs you, what to do next, and a safe
 ## In 30 seconds
 
 - **Type `/ather`** whenever you wonder what to do. What needs you comes first, then the next step for your work, ready to send.
-- **New here?** `/ather tour` walks you through it in six short steps and ends with your first piece of work started. In a hurry, skip it; Ather just asks your role.
+- **New here?** `/ather tour` walks you through it in six short steps and ends with your first piece of work started. In a hurry, skip it; Ather just asks your role. The tour is per repository: S2 has none, so there Ather just asks your role.
 - **Leaving?** `/away tonight` (or `8h`, `until 9am`, `until done`). The session keeps working; merges wait for you. When you are back, `/ather` → **I'm back: see what happened**.
 - **Too much on the pane?** Press `v` on Home (or **Simple view** at its foot) for just what needs you and what is next. `/ather advanced` brings everything back; Ather remembers your choice.
 - **Your branch fell behind?** When a teammate's change on `main` touches the lines your branch changes, Needs you says so before the merge does: **Bring origin/main into feat/x**, with who changed them and where (▲ above the prompt too). A press hands the session the merge to do in your worktree, resolved and shown to you before anything is committed or pushed.
@@ -67,7 +67,7 @@ Ather reads evidence from tool output, never from what the session says: an S2Ed
 | Command | Does |
 |---|---|
 | `/ather` | What needs you and what is next |
-| `/ather tour`, `/ather skip` | The tour, or skip it and just say your role |
+| `/ather tour`, `/ather skip` | The tour, or skip it and just say your role (not in S2, which has no tour) |
 | `/ather pick [words]`, `/ather intent <name>` | Everything open; an exact intent name works on it here, other words show the intent they match |
 | `/ather untrack` | Stop tracking this session's intent (not while an away window runs) |
 | `/ather simple`, `/ather advanced` | Home in Simple view (what needs you and Next) or Advanced (everything); remembered for you |
@@ -192,6 +192,7 @@ Tests: `tests/ather.test.mjs`, `tests/acceptance.test.mjs`, `tests/handoff.test.
 
 ## Changes
 
+- **0.7.1** S2 has no newcomer tour any more: a newcomer is asked their role instead, and Ather no longer offers `/ather tour` or `/ather skip` there (typing `/ather tour` asks your role). Other repositories keep their tour.
 - **0.7.0** A session now tracks the intent it works on by itself: writing any file in the intent's folder (you or a worker), or committing with a message that starts `intent(<name>)`. A toast says so, and `/ather untrack` stops it. It never takes an intent another live session tracks, moves to another intent only after 30 minutes with no work on this one, and lets an intent go once it is completed or parked, bringing back the one you had chosen (one you chose yourself stays). Answering a decision from Needs you does not count as work.
 - **0.6.8** **Go to session ›** opens the session in the desktop app. There it is now a press that hands the session's own app link to the system's opener (`start` on Windows, `open` on macOS, `xdg-open` elsewhere; shared with Ather Board), because the desktop pane does not open a `claude://` link itself; nothing is sent and no turn starts. If it cannot open it, the row says `could not open it; open "<title>" from the sidebar`. In the terminal it stays a link. Only the app's own `claude://` links are offered. A best guess is a real guess: of the sessions the transcript search finds for an untracked intent, the guess is the most recently active one whose title carries most of the intent's folder-name words as whole words, or whose transcript snippet shows the intent's branch (`intent/<slug>`), its folder, or its prompt.md, progress.md, log.md or findings.md; a session that is the top hit for three or more of the untracked intents in one read (a sync or review thread that reads them all) is nobody's guess. Without such a hit the row says `no session tracks it`.
 - **0.6.7** No change to what you see. The Paseo plugin type-checks again: Needs you on Paseo starts from the same fresh answers as the mod, so a new field no longer breaks it (Paseo 0.6.7).

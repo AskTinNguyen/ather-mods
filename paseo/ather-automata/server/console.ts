@@ -3,7 +3,7 @@
 // as a message. Where the original asked a question dialog, the panel lists the choices.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
-import { HOME_PARTS, NEW_INTENT_PROMPT, VIEW_LABELS, askPrompt, batchPrompt, buildHome, heldByLine, isShownIn, otherView, parseWeek, proofLine, skillFolder, standsLines, untrackText, viewText } from "./ather/home.mjs";
+import { HOME_PARTS, NEW_INTENT_PROMPT, VIEW_LABELS, askPrompt, batchPrompt, buildHome, commandWords, welcome, heldByLine, isShownIn, otherView, parseWeek, proofLine, skillFolder, standsLines, untrackText, viewText } from "./ather/home.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
@@ -293,7 +293,7 @@ export async function homeView(agentId: string, cwd: string, force = false): Pro
     away: { phase: away.phase, until: away.phase === "off" ? "" : windowEndText(away, tz), ledger, parked: away.parked.map((one: Any) => `${one.id}: ${one.command}`) },
     needs: needsOf(agentId, built),
     next: next
-      ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isTour ? "tour" : next.work ? "work" : next.action ?? "step" }
+      ? { id: next.id, label: next.label, hint: next.hint, ...(next.isDraft ? { draft: next.prompt } : {}), kind: next.isWelcome ? "tour" : next.work ? "work" : next.action ?? "step" }
       : null,
     // Other work: never the intent already tracked, nor the one Next already offers.
     workList: await workListOf(
@@ -405,12 +405,13 @@ export type Band = { label: string; urgent: boolean; kind: "away" | "review" | "
 export async function bandOf(agentId: string, cwd: string): Promise<Band | null> {
   if (!(await governedRoot(cwd))) return null;
   const ctx = ctxOf(knownAgents().find((one) => one.id === agentId) ?? { id: agentId, cwd, provider: "", workspaceId: null, parentAgentId: null, title: null });
-  if (!(await laneOf(ctx)).isS2) return null;
+  const { isS2, pack } = await laneOf(ctx);
+  if (!isS2) return null;
   const built = await model(ctx);
   const { header } = built;
   if (header.stage === "Away") return { label: `Away ${header.progress}`, urgent: false, kind: "away" };
   if (built.open.some((one: Any) => one.kind === "review")) return { label: "Review away window", urgent: true, kind: "review" };
-  if (built.isNewcomer) return { label: "New here? Tour", urgent: false, kind: "tour" };
+  if (built.isNewcomer) return { label: `New here? ${welcome(pack).next.label}`, urgent: false, kind: "tour" };
   if (built.open.length > 0) return { label: `${built.open.length} need${built.open.length === 1 ? "s" : ""} you`, urgent: true, kind: "needs" };
   return { label: header.pill || "Ather", urgent: false, kind: "stage" };
 }
@@ -464,8 +465,10 @@ async function startWork(ctx: Ctx, work: Any): Promise<string> {
 
 async function doNext(ctx: Ctx, next: Any): Promise<string> {
   const { me, pack } = await laneOf(ctx);
-  if (next.isTour) {
-    await handOff(ctx, ["next:tour"], pack.prompts.tour, () => state.setProfile(ctx.io as never, me, { tourDone: true }));
+  if (next.isWelcome) {
+    // A pack without a tour asks the role instead, as skipping one does.
+    if (!pack.tour) return atherCommand(ctx, "skip");
+    await handOff(ctx, ["next:tour"], pack.tour.prompt, () => state.setProfile(ctx.io as never, me, { tourDone: true }));
     return "Starting the Ather tour.";
   }
   if (next.work) return startWork(ctx, next.work);
@@ -566,7 +569,7 @@ async function track(ctx: Ctx, text: string) {
   // Tracking sends nothing to the agent, so the reply says what comes next.
   stale(ctx.agent.id);
   const { next } = await model(ctx);
-  return `Now tracking ${slug}.${next && !next.isTour && !next.work ? ` Next: ${next.label}.` : ""}`;
+  return `Now tracking ${slug}.${next && !next.isWelcome && !next.work ? ` Next: ${next.label}.` : ""}`;
 }
 
 async function startAway(ctx: Ctx, choice: { hours: number; untilDone: boolean; goal?: string }) {
@@ -597,8 +600,8 @@ async function typed(ctx: Ctx, text: string) {
   return "Sent your question to the agent.";
 }
 
-// What /ather understands after its name; a typo of one of these is read as it.
-const COMMAND_WORDS = ["tour", "skip", "pick", "issues", "issue", "intent", "role", "checked", "untrack", "simple", "advanced"];
+// What /ather understands after its name besides the tour's two (commandWords adds those where the pack has a tour).
+const COMMAND_WORDS = ["pick", "issues", "issue", "intent", "role", "checked", "untrack", "simple", "advanced"];
 
 // Home's Simple or Advanced view, kept for the person (simple-view): the panel draws the parts it shows.
 async function pickView(ctx: Ctx, view: "simple" | "advanced") {
@@ -612,10 +615,10 @@ async function atherCommand(ctx: Ctx, args: string): Promise<string> {
   const { me, pack } = await laneOf(ctx);
   const word = args.split(/\s+/)[0]?.toLowerCase() ?? "";
   const rest = args.slice(word.length).trim();
-  if (word === "tour" || word === "tours") return doNext(ctx, { isTour: true });
+  if (word === "tour" || word === "tours") return doNext(ctx, { isWelcome: true });
   if (word === "skip") {
     await state.setProfile(io, me, { tourDone: true });
-    return `Tour skipped (/ather tour brings it back). ${pack.roleHelp}`;
+    return `${pack.tour ? "Tour skipped (/ather tour brings it back). " : ""}${pack.roleHelp}`;
   }
   if (word === "untrack" && rest === "") return untrackHere(ctx);
   if ((word === "simple" || word === "advanced") && rest === "") return pickView(ctx, word);
@@ -641,7 +644,7 @@ async function atherCommand(ctx: Ctx, args: string): Promise<string> {
   }
   if (word === "pick") return "Your intents and issues are under Work in the Ather panel.";
   const { intents } = await refreshRoot(ctx);
-  const meant = rest === "" ? closestWord(word, COMMAND_WORDS) : null;
+  const meant = rest === "" ? closestWord(word, commandWords(pack, COMMAND_WORDS)) : null;
   if (meant && searchIntents(intents, word).length === 0) return `Did you mean /ather ${meant}?`;
   if (word !== "") return typed(ctx, args);
   return "";

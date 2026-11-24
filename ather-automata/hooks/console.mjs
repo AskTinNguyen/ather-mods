@@ -10,7 +10,7 @@
 // spelled literally, and helpers that take $ are top-level functions.
 
 import { AWAY_PRESETS, awayMessage, awaySessions, isStopWord, parseAwayArgs, pickedSessions, windowEndText } from './away.mjs'
-import { VIEW_LABELS, isShownIn, otherView, viewText, skillFolder, askPrompt, batchPrompt, buildHome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
+import { VIEW_LABELS, isShownIn, otherView, viewText, skillFolder, askPrompt, atherHint, batchPrompt, buildHome, commandWords, welcome, heldByLine, intentStands, parseWeek, proofLine, standsLines, trackConsequence, untrackText, dimColour, filterWork, personColours } from './home.mjs'
 import { issueId, issueLink, issueOrder, issuePrompt, parseIssues } from './issues.mjs'
 import { parsePrState, prsToRead } from './prs.mjs'
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, cutWords, directorCalls, localMinutes, nextStep, otherRoot, parseIntent, plural, searchIntents } from './model.mjs'
@@ -562,7 +562,7 @@ async function openConsole($, folder) {
   createOpen.clear()
   cwd = folder
   for (const command of [
-    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: '[pick | find <words> | issues | issue <number> | tour | skip | role <role> | checked | intent <name> | untrack]' },
+    { name: 'ather', description: 'Ather Automata: what needs you, and what is next', argumentHint: atherHint((await laneOf($).catch(() => null))?.pack ?? pack) },
     { name: 'away', description: 'Ather Automata: going away? hand over with full autonomy, decisions recorded', argumentHint: '[tonight | 8h | 30m | until 9am | until done] [all | in <session>, <session> [only]:] [goal] | stop' },
   ]) {
     // One refused command must not take the other, or anything after, with it.
@@ -571,7 +571,7 @@ async function openConsole($, folder) {
 }
 
 // Once someone is there (a REPL start, the first draw, the first command): read intents and
-// issues, keep them fresh, and tell a newcomer about the tour. Runs once per session.
+// issues, keep them fresh, and tell a newcomer about the pack's tour. Runs once per session.
 /** @param {Engine} $ @returns {Promise<void>} */
 function wake($) {
   if (!isAwake) isAwake = startConsoleWork($).catch(error => $.ui.log(`Ather console: start failed: ${String(error)}`, { to: 'debug' }))
@@ -599,8 +599,9 @@ async function startConsoleWork($) {
   $.clock.after(1500, () => void refresh($).catch(() => undefined))
   void refreshIssues($).catch(() => undefined)
   $.clock.every(ISSUES_EVERY_MS, () => void refreshIssues($).catch(() => undefined))
-  if ((await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
-    $.ui.toast(pack.prompts.tourToast, { timeoutMs: 12000 })
+  const { tour } = pack
+  if (tour && (await home($)).isNewcomer && !(await state.readProfile(io($), me)).isNudged) {
+    $.ui.toast(tour.toast, { timeoutMs: 12000 })
     await state.setProfile(io($), me, { isNudged: true })
   }
 }
@@ -988,7 +989,7 @@ function bandHint(model) {
   if (queued > 0) return `⏳ ${queued === 1 ? 'Your press is' : `${queued} presses are`} queued until this turn ends · /ather`
   const collide = model.open.find(one => one.kind === 'collide')
   if (collide) return `▲ ${collide.question} · /ather`
-  if (model.isNewcomer) return '◆ New here? Take the tour'
+  if (model.isNewcomer) return `◆ New here? ${welcome(pack).next.label}`
   if (model.open.length > 0) return `◆ ${header.title} · ${model.open.length} need${model.open.length === 1 ? 's' : ''} you · /ather`
   return ''
 }
@@ -1268,7 +1269,7 @@ async function typeAnswer($, one, answers, hasInput) {
 
 /** @param {Engine} $ @param {Next} next */
 async function doNext($, next) {
-  if (next.isTour) return startTour($)
+  if (next.isWelcome) return startTour($)
   if (next.work) return startWork($, next.work)
   if (next.action === 'checked') return atherCommand($, 'checked')
   // A step that only reads where the intent stands: its files answer it, so nothing goes to the session.
@@ -1280,9 +1281,10 @@ async function doNext($, next) {
   return toldText(handOff($, [next.id], next.prompt), 'Sent to the session.')
 }
 
+// A pack without a tour asks the role instead, as skipping one does.
 /** @param {Engine} $ */
 async function startTour($) {
-  return toldText(handOff($, ['next:tour'], pack.prompts.tour, () => state.setProfile(io($), me, { tourDone: true })), 'Starting the Ather tour.')
+  return pack.tour ? toldText(handOff($, ['next:tour'], pack.tour.prompt, () => state.setProfile(io($), me, { tourDone: true })), 'Starting the Ather tour.') : skipTour($)
 }
 
 /** @param {Engine} $ @param {Work} work */
@@ -1338,7 +1340,7 @@ async function trackSlug($, slug, at) {
   // Its key names the checkout when it is another's: "web/login". Tracking sends nothing to the session,
   // so the reply says what comes next.
   const { next } = await home($)
-  const then = next && !next.isTour && !next.work ? ` Next: ${next.label}.` : ''
+  const then = next && !next.isWelcome && !next.work ? ` Next: ${next.label}.` : ''
   return `Now tracking ${(await trackedKey($)) || slug}.${then}`
 }
 
@@ -1520,15 +1522,12 @@ async function skipTour($) {
   await state.setProfile(io($), me, { tourDone: true })
   return ask($, {
     header: 'Your role',
-    question: 'Tour skipped (/ather tour brings it back). What kind of work do you do? It decides what proof Ather asks for.',
+    question: `${pack.tour ? 'Tour skipped (/ather tour brings it back). ' : ''}What kind of work do you do? It decides what proof Ather asks for.`,
     choices: pack.roles.map(role => ({ label: pack.roleLabels[role] ?? role, description: pack.roleDescriptions[role] ?? '', run: () => atherCommand($, `role ${role}`) })),
     fallback: pack.roleFallback,
     onTyped: text => atherCommand($, `role ${text}`),
   })
 }
-
-// What /ather understands after its name; a typo of one of these ("tuor", "isue") is read as it.
-const COMMAND_WORDS = ['tour', 'skip', 'pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'simple', 'advanced']
 
 /** @param {Engine} $ @param {string} args */
 async function atherCommand($, args) {
@@ -1566,7 +1565,7 @@ async function atherCommand($, args) {
   }
   if (word === 'pick') return (await hasPane($)) ? openPane($, 'pick') : workQuestion($)
   // "/ather tuor": a typo of a command word is pointed out, never run ("ship" is one letter from "skip").
-  const meant = rest === '' ? closestWord(word, COMMAND_WORDS) : null
+  const meant = rest === '' ? closestWord(word, commandWords(pack)) : null
   if (meant && searchIntents(intents, word).length === 0) return `Did you mean /ather ${meant}?`
   if (word !== '') return typed($, args, false)
   // /ather also brings back a band closed with ✕.
@@ -1646,11 +1645,11 @@ async function menuQuestion($) {
   /** @type {Choice[]} */
   const choices = []
   const next = model.next
-  if (next?.isTour) {
-    choices.push({ label: 'Take the tour (Recommended)', description: next.hint, run: () => doNext($, next) })
+  if (next?.isWelcome) {
+    choices.push({ label: `${next.label} (Recommended)`, description: next.hint, run: () => doNext($, next) })
     const [mine] = model.work.filter(one => one.isMine)
     if (mine) choices.push({ label: cutWords(mine.kind === 'issue' ? `Start #${mine.issue.number} ${mine.issue.name}` : `Pick up ${mine.key}`, 40), description: mine.hint, run: () => startWork($, mine) })
-    choices.push({ label: 'Skip the tour', description: 'You know your way around; Ather asks your role instead.', run: () => skipTour($) })
+    if (pack.tour) choices.push({ label: 'Skip the tour', description: 'You know your way around; Ather asks your role instead.', run: () => skipTour($) })
   }
   // What happened while the person was away is reviewed on its own, before anything else.
   const review = model.open.find(one => one.kind === 'review' || one.kind === 'away-end')
@@ -1659,7 +1658,7 @@ async function menuQuestion($) {
   const [only] = rest
   if (rest.length === 1 && only) choices.push({ label: only.label, description: only.question, run: () => act($, only) })
   else if (rest.length > 1) choices.push({ label: `Go through ${rest.length} things`, description: cutWords(rest.map(one => one.question).join(' · '), 200), run: () => actAll($, rest) })
-  if (next && !next.isTour && !sent.has(next.id)) choices.push({ label: cutWords(next.work?.kind === 'intent' || next.action ? next.label : `Next: ${next.label}`, 40), description: next.hint, run: () => doNext($, next) })
+  if (next && !next.isWelcome && !sent.has(next.id)) choices.push({ label: cutWords(next.work?.kind === 'intent' || next.action ? next.label : `Next: ${next.label}`, 40), description: next.hint, run: () => doNext($, next) })
   if (model.offerAway) choices.push({ label: 'Heading off?', description: 'Hand over until done, for 8 or 4 hours.', run: () => presetQuestion($, '') })
   choices.push({ label: model.header.title === 'Ather' ? 'Pick something to work on' : 'Switch to other work', description: 'Your intents and GitHub issues first.', run: () => workQuestion($) })
   const { header } = model
@@ -1670,7 +1669,7 @@ async function menuQuestion($) {
       : review
         ? `Welcome back. ${review.question}.`
         : model.isNewcomer
-          ? `${me ? `Hi ${me.split(/\s+/)[0]}, new` : 'New'} to Ather? Start with the tour.`
+          ? `${me ? `Hi ${me.split(/\s+/)[0]}, new` : 'New'} to Ather? ${welcome(pack).lead}`
           : header.title === 'Ather'
             ? model.work.some(one => one.kind === 'intent' && one.isMine)
               ? 'Nothing tracked in this session.'

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { awayMessage, awayReason, awaySessions, isStopWord, ledgerWithWindow, mandateText, newWindow, nextLedgerId, nextParkId, parseAwayArgs, pickedSessions, sideKind, windowDecisions } from '../hooks/away.mjs'
 import { automationResult, briefIssues, buildResult, countGotcha, explainGuard, heldShell, isAssetSave, isBuildCommand, isEditorBuild, isLogRead, isMergeCommand, isSearchCommand, mcpKind, mcpServer, recurringGotchas } from '../hooks/guards.mjs'
-import { PEOPLE_COLOURS, WORK_GROUPS, buildHome, dimColour, filterWork, heldByLine, intentStands, SIMPLE_SHOWS, VIEW_LABELS, isShownIn, otherView, paneViewOf, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
+import { COMMAND_WORDS, PEOPLE_COLOURS, WORK_GROUPS, atherHint, buildHome, commandWords, welcome, dimColour, filterWork, heldByLine, intentStands, SIMPLE_SHOWS, VIEW_LABELS, isShownIn, otherView, paneViewOf, parseWeek, personColours, proofLine, standsLines, trackConsequence, trackedByLine, untrackText, weekText, workGroup, workList } from '../hooks/home.mjs'
 import { areaFromLabels, issueId, issueLabel, issueName, issueOtherRoot, issuePrompt, parseIssues } from '../hooks/issues.mjs'
 import { aboutIntentPrompt, closestWord, personId, isReadyToClose, prKey, prStatusList, currentStage, emptyEvidence, isEvening, isSamePerson, nextStep, intentLabel, optionLabel, parseEditorLock, parseFindings, parseIntent, parseOptions, parseRole, pickCandidates, searchIntents, sessionTitle, shortTitle, waitingCalls } from '../hooks/model.mjs'
 import { NO_PLACE } from '../hooks/handoff.mjs'
@@ -20,6 +20,7 @@ import { resetTranscripts, sessionName } from '../hooks/transcripts.mjs'
 import { intentChanges, intentFileOf } from '../hooks/changes.mjs'
 import { selectStringPs } from '../hooks/transcripts.mjs'
 import { editorLockLine, readShell, unreal } from '../hooks/packs/unreal.mjs'
+import { core } from '../hooks/packs/core.mjs'
 import { EMPTY_CACHE, FETCH_ARGS, FETCH_EVERY_MS, GIT_ENV, NO_SYNC, baseOf, canFetchNow, fetchArgs, fetchMain, isFetchDue, localWins, lockOf, parseBatch, parseLog, parseStatus, parseTree, readTeam, syncError, syncSummary, syncText } from '../hooks/team.mjs'
 import { FOLD_OVER, GROUP_LABELS, LEGEND, blocksOf, ageText, callBlocks, countText, groupByOf, listStage, miniBar, needsAttention, nextGroup, nextSort, ownerName, rowCells, rowColumns, sortWork, splitParked, stageBlocks, subGroups, tidyName } from '../hooks/worklist.mjs'
 
@@ -689,7 +690,7 @@ describe('home', () => {
   })
 
   test('a newcomer gets the tour as Next and no hand-over offer, even in the evening', () => {
-    const model = home({ me: 'Minh Tran', role: '', pinned: null, tourDone: false, now: EVENING })
+    const model = home({ me: 'Minh Tran', role: '', pinned: null, tourDone: false, now: EVENING, pack: core })
     expect(model.isNewcomer).toBe(true)
     // The tour asks the role and is said once, by Next: the header repeats neither.
     expect(model.header.role).toBe('')
@@ -700,8 +701,29 @@ describe('home', () => {
     expect(home({ me: 'Lan Vo', role: '', pinned: null, tourDone: true }).header.role).toBe('Role not set · /ather role')
     // Saying a role is enough to stop being new.
     expect(home({ me: 'Minh Tran', role: 'engineer', pinned: null, tourDone: false }).isNewcomer).toBe(false)
-    expect(model.next?.isTour).toBe(true)
+    expect(model.next?.isWelcome).toBe(true)
+    expect(model.next?.prompt).toBe(core.tour?.prompt)
     expect(model.offerAway).toBe(false)
+  })
+
+  test('S2 has no tour: a newcomer is asked their role as Next, and /ather offers neither tour nor skip', () => {
+    expect(unreal.tour).toBe(null)
+    const model = home({ me: 'Minh Tran', role: '', pinned: null, tourDone: false, now: EVENING, pack: unreal })
+    expect(model.isNewcomer).toBe(true)
+    expect(model.next).toEqual({ id: 'next:role', label: 'Say your role', hint: 'It decides what proof Ather asks for.', prompt: '', isWelcome: true })
+    expect(welcome(unreal).lead).toBe('Start by saying your role.')
+    expect(model.offerAway).toBe(false)
+    // Saying a role ends being new, as in a pack with a tour.
+    expect(home({ me: 'Minh Tran', role: 'designer', pinned: null, tourDone: false, pack: unreal }).isNewcomer).toBe(false)
+    expect(commandWords(unreal)).toEqual(COMMAND_WORDS)
+    expect(closestWord('tuor', commandWords(unreal))).toBe(null)
+    expect(atherHint(unreal)).not.toMatch(/tour|skip/)
+    // Nothing S2 says points at the tour.
+    expect(JSON.stringify([unreal.roleFallback, unreal.prompts.ask('?')])).not.toMatch(/tour/i)
+    // A pack with a tour keeps both words, in the hint too.
+    expect(commandWords(core).slice(0, 2)).toEqual(['tour', 'skip'])
+    expect(closestWord('tuor', commandWords(core))).toBe('tour')
+    expect(atherHint(core)).toMatch(/ tour | skip | /)
   })
 
   test('someone who owns intents is never a newcomer; Next picks up their best one; evening offers a hand-over', () => {
