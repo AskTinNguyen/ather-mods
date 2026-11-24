@@ -49,8 +49,13 @@ const sandbox = () => {
 // `ownFindingsOnly`: the copied intents come without their findings, so the only decisions that wait are the
 // ones a block writes itself. Needs you draws nine rows, and a checkout whose person has that many open
 // decisions would leave a block's own rows undrawn.
-const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env, ownFindingsOnly = false } = {}) => {
+// `pack`: a profile naming another pack, which wins over the S2.uproject marker (core: a pack with a tour).
+const boot = async ({ surfaces = [], user = 'Tin Nguyen', hour = 12, store = {}, ghIssues, ghPrs, env, ownFindingsOnly = false, pack } = {}) => {
   const root = sandbox()
+  if (pack) {
+    fs.mkdirSync(path.join(root, '.ather'), { recursive: true })
+    fs.writeFileSync(path.join(root, '.ather/profile.json'), JSON.stringify({ version: 1, pack }))
+  }
   if (ownFindingsOnly) for (const entry of fs.readdirSync(path.join(root, 'docs/intent'), { withFileTypes: true })) if (entry.isDirectory()) fs.rmSync(path.join(root, 'docs/intent', entry.name, 'findings.md'), { force: true })
   const engine = createEngine({ root, surfaces: [...surfaces], user, ghIssues, ghPrs, env })
   for (const [key, value] of Object.entries({ tz: tzFor(hour), ...store })) engine.store.set(key, value)
@@ -233,8 +238,9 @@ const pressIn = (tree, label) => {
   expect('/ather checked records your own Editor check', evidenceOf(engine)?.editor?.state === 'pass')
   await run(engine, [], 'ather', 'intent box-scale-tool')
   expect('/ather intent tracks by name', engine.store.get('pinned:harness-session-0001') === 'box-scale-tool')
-  const tour = await run(engine, [], 'ather', 'tour')
-  expect('/ather tour hands the tour to the session and its skill', tour.sent.length === 1 && /\.agents\/skills\/ather-tour\/SKILL\.md/.test(tour.sent[0] ?? ''), tour.sent)
+  const tour = await run(engine, [dismiss], 'ather', 'tour')
+  expect('S2 has no tour: /ather tour sends nothing and asks the role instead', tour.sent.length === 0 && tour.dialogs[0]?.header === 'Your role' && !/tour/i.test(tour.dialogs[0]?.question ?? '') && !/tour/i.test(tour.out), [tour.dialogs, tour.out])
+  expect('S2 has no tour: the /ather hint offers neither tour nor skip', typeof engine.record.hints.ather === 'string' && !/tour|skip/.test(engine.record.hints.ather), engine.record.hints.ather)
   expect('no command hook threw on the desktop path', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }
@@ -242,21 +248,42 @@ const pressIn = (tree, label) => {
 // ---------------------------------------------------------------- newcomer
 
 {
+  // S2 has no tour (its pack's `tour` is null): a newcomer is asked their role first.
   const { engine, done } = await boot({ user: 'Minh Tran', hour: 21 })
-  expect('a newcomer is told about the tour when the session starts', engine.record.toasts.some(text => /new here\? Type \/ather tour/.test(text)), engine.record.toasts)
-  const first = await run(engine, [pick('Take the tour')])
+  expect('S2 has no tour: no tour toast when a newcomer starts a session', !engine.record.toasts.some(text => /tour/i.test(text)), engine.record.toasts)
+  const first = await run(engine, [pick('Say your role'), pick('Tech artist')])
   screens.push(['Desktop · newcomer /ather', `${dialogText(first.dialogs)}\n  → output: ${first.out}\n  → sent: ${first.sent[0] ?? '(nothing)'}`])
   const menu = first.dialogs[0]
-  expect('the newcomer question welcomes them by name with the tour first', /^Hi Minh, new to Ather\?/.test(menu?.question ?? '') && menu?.options[0]?.label === 'Take the tour (Recommended)', menu?.options.map(o => o.label))
+  expect('the newcomer question welcomes them by name and asks their role first, with no tour', /^Hi Minh, new to Ather\? Start by saying your role\./.test(menu?.question ?? '') && menu?.options[0]?.label === 'Say your role (Recommended)' && !(menu?.options ?? []).some(o => /tour/i.test(o.label)), menu?.options.map(o => o.label))
   expect('a newcomer is not offered a hand-over in the evening', !(menu?.options ?? []).some(o => o.label === 'Heading off?'), menu?.options.map(o => o.label))
-  expect('the newcomer can skip the tour or pick something to work on', (menu?.options ?? []).some(o => o.label === 'Skip the tour') && (menu?.options ?? []).some(o => o.label === 'Pick something to work on'), menu?.options.map(o => o.label))
-  expect('taking the tour sends it to the session and marks it taken for this person', first.sent.length === 1 && engine.store.get('tour:minhtran')?.isDone === true, first.sent)
+  expect('the newcomer can pick something to work on', (menu?.options ?? []).some(o => o.label === 'Pick something to work on'), menu?.options.map(o => o.label))
+  expect('saying the role sends nothing and keeps the role for this person', first.sent.length === 0 && first.dialogs[1]?.header === 'Your role' && !/tour/i.test(first.dialogs[1]?.question ?? '') && engine.store.get('role:minhtran') === 'techart', [first.dialogs[1], first.sent])
   const after = await run(engine, [dismiss])
-  expect('after the tour, /ather no longer leads with it', !(after.dialogs[0]?.options ?? []).some(o => /tour/i.test(o.label)), after.dialogs[0]?.options.map(o => o.label))
-  const profile = await engine.modelTool({ tool: 'mcp__ather-automata__profile', role: 'techart', track: 'actor-io' })
-  expect('the tour records the role and a followed intent through the profile tool', engine.store.get('role:minhtran') === 'techart' && engine.store.get('pinned:harness-session-0001') === 'actor-io', profile.result)
+  expect('with the role said, /ather no longer welcomes them as new', !/new to Ather/.test(after.dialogs[0]?.question ?? '') && !(after.dialogs[0]?.options ?? []).some(o => /Say your role/.test(o.label)), after.dialogs[0]?.question)
+  const profile = await engine.modelTool({ tool: 'mcp__ather-automata__profile', role: 'designer', track: 'actor-io' })
+  expect('the profile tool records the role and a followed intent', engine.store.get('role:minhtran') === 'designer' && engine.store.get('pinned:harness-session-0001') === 'actor-io', profile.result)
   const bad = await engine.modelTool({ tool: 'mcp__ather-automata__profile', track: 'no-such-intent' })
   expect('the profile tool refuses an intent that does not exist', /No intent named/.test(bad.result), bad.result)
+  done()
+}
+
+{
+  // A pack with a tour (core, by profile) keeps it: the toast, the tour first, Skip the tour, /ather tour.
+  const { engine, done } = await boot({ user: 'Minh Tran', hour: 21, pack: 'core' })
+  expect('a pack with a tour: a newcomer is told about it when the session starts', engine.record.toasts.some(text => /new here\? Type \/ather tour/.test(text)), engine.record.toasts)
+  expect('a pack with a tour: the /ather hint offers tour and skip', / tour \| skip \| /.test(engine.record.hints.ather ?? ''), engine.record.hints.ather)
+  const first = await run(engine, [pick('Take the tour')])
+  const menu = first.dialogs[0]
+  expect('a pack with a tour: the newcomer question welcomes them by name with the tour first', /^Hi Minh, new to Ather\? Start with the tour\./.test(menu?.question ?? '') && menu?.options[0]?.label === 'Take the tour (Recommended)', menu?.options.map(o => o.label))
+  expect('a pack with a tour: the newcomer can skip the tour or pick something to work on', (menu?.options ?? []).some(o => o.label === 'Skip the tour') && (menu?.options ?? []).some(o => o.label === 'Pick something to work on'), menu?.options.map(o => o.label))
+  expect('a pack with a tour: taking it sends its prompt to the session and marks it taken for this person', first.sent.length === 1 && /short tour of how this repository runs features as intents/.test(first.sent[0] ?? '') && engine.store.get('tour:minhtran')?.isDone === true, first.sent)
+  const after = await run(engine, [dismiss])
+  expect('a pack with a tour: after it, /ather no longer leads with it', !(after.dialogs[0]?.options ?? []).some(o => /tour/i.test(o.label)), after.dialogs[0]?.options.map(o => o.label))
+  const tour = await run(engine, [], 'ather', 'tour')
+  expect('a pack with a tour: /ather tour hands it to the session', tour.sent.length === 1 && /short tour/.test(tour.sent[0] ?? ''), tour.sent)
+  const typo = await run(engine, [], 'ather', 'tuor')
+  expect('a pack with a tour: "/ather tuor" suggests /ather tour instead of running it', /Did you mean \/ather tour\?/.test(typo.out) && typo.sent.length === 0, typo.out)
+  expect('no hook threw in the pack with a tour', engine.record.hookErrors.length === 0, engine.record.hookErrors)
   done()
 }
 
@@ -459,13 +486,13 @@ const pressIn = (tree, label) => {
   const role = await run(engine, [], 'ather', 'role game designer')
   expect('"/ather role game designer" is understood, and a role ends being new', engine.store.get('role:minhtran') === 'designer' && /Designer/.test(role.out), role.out)
   const after = await run(engine, [dismiss])
-  expect('with a role set, /ather no longer leads with the tour', !/new to Ather/.test(after.dialogs[0]?.question ?? ''), after.dialogs[0]?.question)
+  expect('with a role set, /ather no longer welcomes them as new', !/new to Ather/.test(after.dialogs[0]?.question ?? ''), after.dialogs[0]?.question)
   done()
 }
 
 {
-  // Lan skips the tour; the welcome toast is said once, not every session.
-  const { engine, done } = await boot({ user: 'Lan Vo' })
+  // Lan skips the tour in a pack that has one; the welcome toast is said once, not every session.
+  const { engine, done } = await boot({ user: 'Lan Vo', pack: 'core' })
   const first = await run(engine, [pick('Skip the tour')])
   expect('a newcomer can skip the tour from the first question', engine.store.get('tour:lanvo')?.isDone === true && /Tour skipped/.test(first.out), first.out)
   engine.record.toasts.length = 0
@@ -716,18 +743,18 @@ const GH_ISSUES = [
 }
 
 {
-  // A newcomer with an issue sees it beside the tour; skipping the tour asks the role.
+  // A newcomer with an issue sees it beside the role question, which S2 asks instead of a tour.
   const issues = [{ number: 32401, title: 'Bear slash timing feels late', url: 'u', labels: [{ name: 'combat' }, { name: 'priority:high' }], updatedAt: new Date().toISOString() }]
   const { engine, done } = await boot({ user: 'Minh Tran', ghIssues: issues })
   await new Promise(resolve => setTimeout(resolve, 300))
-  const menu = await run(engine, [pick('Skip the tour'), pick('Designer')])
-  screens.push(['Desktop · newcomer with an assigned issue, skipping the tour', `${dialogText(menu.dialogs)}\n  → output: ${menu.out}`])
-  expect("a newcomer's first question offers their own issue beside the tour", (menu.dialogs[0]?.options ?? []).some(o => /^Start #32401 Bear slash/.test(o.label)), menu.dialogs[0]?.options.map(o => o.label))
-  expect('skipping the tour asks the role, and the answer is kept', menu.dialogs[1]?.header === 'Your role' && engine.store.get('role:minhtran') === 'designer', menu.dialogs[1]?.question)
+  const menu = await run(engine, [pick('Say your role'), pick('Designer')])
+  screens.push(['Desktop · newcomer with an assigned issue, saying their role', `${dialogText(menu.dialogs)}\n  → output: ${menu.out}`])
+  expect("a newcomer's first question offers their own issue beside the role question", (menu.dialogs[0]?.options ?? []).some(o => /^Start #32401 Bear slash/.test(o.label)), menu.dialogs[0]?.options.map(o => o.label))
+  expect('the role question keeps the answer', menu.dialogs[1]?.header === 'Your role' && engine.store.get('role:minhtran') === 'designer', menu.dialogs[1]?.question)
   const two = await run(engine, [typed('2')])
   expect('"2" under Other picks the second option', two.dialogs.length >= 1 && !/I asked Ather: "2"/.test(two.sent[0] ?? ''), two.sent)
   const typo = await run(engine, [], 'ather', 'tuor')
-  expect('"/ather tuor" suggests /ather tour instead of running it', /Did you mean \/ather tour\?/.test(typo.out) && typo.sent.length === 0, typo.out)
+  expect('S2 has no tour: "/ather tuor" is not read as /ather tour', !/Did you mean \/ather tour/.test(typo.out), typo.out)
   const ship = await run(engine, [typed('ship it')])
   expect('"ship it" under Other goes to the session as words, not as the skip command', ship.sent.some(text => /I asked Ather: "ship it"/.test(text)), ship.sent)
   done()
@@ -1086,7 +1113,7 @@ const hasFocus = tree => {
 {
   const { engine, done } = await boot({ surfaces: ['terminal'], user: 'Minh Tran' })
   const band = check(await engine.render('AbovePrompt', { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 110 }, 'band'), 110)
-  expect('a newcomer band points at the tour', /New here\? Take the tour/.test(band.lines.join('')), band.lines)
+  expect('S2 has no tour: a newcomer band asks for their role', /New here\? Say your role/.test(band.lines.join('')) && !/tour/i.test(band.lines.join('')), band.lines)
   await run(engine, [])
   const pane = check(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 72)
   screens.push(['Terminal · newcomer /ather (72 columns)', pane.lines.join('\n')])
@@ -1097,7 +1124,13 @@ const hasFocus = tree => {
   const issuesNow = await run(engine, [], 'ather', 'issues')
   expect('/ather issues reads them on the spot and says why when it cannot, or that there are none', /Could not read your GitHub issues|No open GitHub issues are assigned to you|N E X T|Pick/.test(issuesNow.out + issuesNow.dialogs.map(one => one.question).join(' ')) , issuesNow.out)
   expect('the desktop pane carries the Ather mark, is clicked (no hotkeys drawn) and lays out cleanly; the terminal draws no mark', find(desk, 'Svg')?.props.alt === 'Ather' && deskPane.problems.length === 0 && !/\b[a-z0-9]: /.test(deskPane.lines.join('\n')) && !find(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'Svg'), deskPane.problems)
-  expect("a newcomer's pane leads with the tour and offers teammates' intents", /N E X T\nn: Take the tour\n *Six short steps/.test(pane.lines.join('\n')) && /T E A M M A T E S '   I N T E N T S   ·   \d( \d)*\nRead-only/.test(pane.lines.join('\n')) && (pane.lines.join('\n').match(/tour/gi) ?? []).length === 1 && pane.problems.length === 0, pane.problems)
+  expect("S2 has no tour: a newcomer's pane leads with their role and offers teammates' intents", /N E X T\nn: Say your role\n *It decides what proof Ather asks for/.test(pane.lines.join('\n')) && /T E A M M A T E S '   I N T E N T S   ·   \d( \d)*\nRead-only/.test(pane.lines.join('\n')) && !/tour/i.test(pane.lines.join('\n')) && pane.problems.length === 0, pane.problems)
+  engine.script.length = 0
+  engine.script.push(pick('Engineer'))
+  const asked = engine.record.dialogs.length
+  const pressed = pressKey(await engine.render('Pane', { bodyColumns: 72 }, 'ather'), 'next')
+  await engine.flush()
+  expect('S2 has no tour: pressing Next on the pane asks the role, and the answer is kept', pressed && engine.record.dialogs.slice(asked).some(one => one.header === 'Your role') && engine.store.get('role:minhtran') === 'engineer', engine.record.dialogs.slice(asked))
   done()
 }
 

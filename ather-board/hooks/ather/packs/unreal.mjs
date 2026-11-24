@@ -268,11 +268,9 @@ const shipPrompt = (role, slug) =>
     ? `Summarise intent ${slug} for an owner to land: what changed, the evidence for each checklist item, and what is still owed.`
     : `Prepare intent ${slug} for landing: extract the change onto a clean branch in its own worktree, audit the diff and every binary asset for lost edits, open the PR from .github/pull_request_template.md, then wait for my go before merging.`
 
-export const TOUR_PROMPT = 'Give me the Ather tour: follow .agents/skills/ather-tour/SKILL.md step by step.'
-
 /** @param {string} question */
 const askPrompt = question =>
-  `I asked Ather: "${question}" Answer briefly in plain words. Ather is this studio's Claude Code mod (docs/design-docs/s2-director-kit.md, section 5): /ather shows what needs me and the next step, /ather tour walks a newcomer through the workflow, /away hands over while I am away. If the question is about my work instead, answer from this checkout.`
+  `I asked Ather: "${question}" Answer briefly in plain words. Ather is this studio's Claude Code mod (docs/design-docs/s2-director-kit.md, section 5): /ather shows what needs me and the next step, /away hands over while I am away. If the question is about my work instead, answer from this checkout.`
 
 /** @type {Pack} */
 export const unreal = {
@@ -282,7 +280,7 @@ export const unreal = {
   roleDescriptions: { engineer: 'Builds and automation tests.', techart: 'A PIE proof and your own Editor check.', designer: 'A PIE proof.' },
   roleWords: 'designer, tech artist or engineer',
   roleHelp: 'Which role? /ather role designer, /ather role tech artist or /ather role engineer.',
-  roleFallback: 'Tour skipped. Say your role any time with /ather role designer, tech artist or engineer.',
+  roleFallback: 'Say your role any time with /ather role designer, tech artist or engineer.',
   roleKey: '',
   parseRole,
   owners: OWNERS,
@@ -308,6 +306,8 @@ export const unreal = {
   parseLock: parseEditorLock,
   lockLine: editorLockLine,
   lockRoles: ['techart', 'designer'],
+  // No tour: S2 dropped its tour skill, so a newcomer is asked their role instead.
+  tour: null,
   ownCheck: { role: 'techart', after: 'pie', rung: 'editor', label: 'I checked it in the Editor', hint: 'PIE proof ✓ · your own Editor check is the last proof.', proveHint: ' After your own Editor check, type /ather checked.', detail: 'checked by you in the Editor', reply: 'Recorded: you checked it in the Editor.' },
   traps: GOTCHAS,
   held: { labels: HELD_LABELS, nouns: HELD_NOUNS, kinds: ['editor-restart', 'asset-save'], defaults: ['merge', 'push-main'] },
@@ -330,8 +330,6 @@ export const unreal = {
     ship: shipPrompt,
     shipHint: role => (role === 'designer' ? 'Summarises the work so an owner can land it.' : 'A clean PR; nothing merges without your go.'),
     briefHint: 'A background agent does the work, briefed the studio way for your role.',
-    tour: TOUR_PROMPT,
-    tourToast: 'Ather: new here? Type /ather tour for a six-step tour of how S2 works with Claude Code.',
     ask: askPrompt,
   },
   mandate: {

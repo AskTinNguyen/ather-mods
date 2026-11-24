@@ -32,7 +32,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
   const panesUp = new Set()
   const hooks = []
   const timers = []
-  const record = { sends: [], aborts: [], ghRuns: [], ghAt: [], gitRuns: [], handlerRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], forks: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
+  const record = { sends: [], aborts: [], ghRuns: [], ghAt: [], gitRuns: [], handlerRuns: [], copies: [], hookErrors: [], toasts: [], afters: [], status: [], forks: [], submits: [], fills: [], dialogs: [], opens: [], closes: [], logs: [], commands: [], hints: {}, tools: [], registeredTools: [], toolSpecs: new Map(), invalidations: 0 }
   const script = []
   let holding = 0
   let isPlaced = true
@@ -292,6 +292,7 @@ export const createEngine = ({ root, surfaces, user, ghIssues, ghPrs, ghAt, env,
     command: {
       register: async spec => {
         record.commands.push(spec.name)
+        record.hints[spec.name] = spec.argumentHint
         return { command: spec.name }
       },
       run: async input => (holdingTurn('command.run'), dispatch('command.run', { command: input.command, args: input.args ?? '', origin: { kind: 'plugin' }, presentation: {} }, () => ({ text: '' }), 'ather-automata')),

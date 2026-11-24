@@ -61,6 +61,10 @@ export const core = {
   parseLock: noLock,
   lockRoles: [],
   ownCheck: null,
+  tour: {
+    prompt: 'Give me a short tour of how this repository runs features as intents: read .agents/skills/intent/SKILL.md (or docs/intent/README.md) and explain it in six short steps, ending with my first intent started.',
+    toast: 'Ather: new here? Type /ather tour for a short tour of how this repository works with Claude Code.',
+  },
   traps: [],
   held: { labels: {}, nouns: {}, kinds: [], defaults: ['merge', 'push-main'] },
   heldSegment: () => null,
@@ -82,8 +86,6 @@ export const core = {
     ship: (_role, slug) => `Prepare intent ${slug} for landing: open the PR from a clean branch, list the evidence for each checklist item, then wait for my go before merging.`,
     shipHint: () => 'A clean PR; nothing merges without your go.',
     briefHint: 'A background agent does the work in its own worktree.',
-    tour: 'Give me a short tour of how this repository runs features as intents: read .agents/skills/intent/SKILL.md (or docs/intent/README.md) and explain it in six short steps, ending with my first intent started.',
-    tourToast: 'Ather: new here? Type /ather tour for a short tour of how this repository works with Claude Code.',
     ask: question => `I asked Ather: "${question}" Answer briefly in plain words. Ather is a Claude Code mod: /ather shows what needs me and the next step, /away hands over while I am away. If the question is about my work instead, answer from this checkout.`,
   },
   mandate: {

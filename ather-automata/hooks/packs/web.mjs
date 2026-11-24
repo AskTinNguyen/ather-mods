@@ -556,6 +556,10 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
     parseLock: () => ({ state: 'unknown', holder: '', until: '', isStale: false, raw: '', session: '' }),
     lockRoles: [],
     ownCheck: null,
+    tour: {
+      prompt: 'Give me the Ather tour for this repository: read AGENTS.md, .ather/profile.json and .agents/skills/intent/SKILL.md, then explain in six short steps how a feature runs here as an intent (Plan, Build, Prove with the gates the profile names, Ship), ending with my first intent started.',
+      toast: 'Ather: new here? Type /ather tour for a six-step tour of how this repository works with Claude Code.',
+    },
     traps: WEB_TRAPS,
     held: {
       labels: baseBranch ? { ...HELD_LABELS, 'push-main': `Pushes to ${baseBranch} and main` } : HELD_LABELS,
@@ -595,8 +599,6 @@ export const makeWebPack = (profile, packageJson, found = {}) => {
             : `Prepare intent ${slug} for landing: open the PR from its branch${into} with the evidence for each checklist item, then wait for my go before merging.`,
       shipHint: role => (role === 'product' ? 'Summarises the work and checks production once it lands.' : withProof ? `Merges once ${mergeGates || 'every gate'} passed; then checks production.` : 'A clean PR; nothing merges without your go.'),
       briefHint: 'A background agent does the work in its own worktree, proved with the repository gates.',
-      tour: 'Give me the Ather tour for this repository: read AGENTS.md, .ather/profile.json and .agents/skills/intent/SKILL.md, then explain in six short steps how a feature runs here as an intent (Plan, Build, Prove with the gates the profile names, Ship), ending with my first intent started.',
-      tourToast: 'Ather: new here? Type /ather tour for a six-step tour of how this repository works with Claude Code.',
       ask: question => `I asked Ather: "${question}" Answer briefly in plain words. Ather is a Claude Code mod: /ather shows what needs me and the next step, /ather tour walks a newcomer through the workflow, /away hands over while I am away. The repository's gates are in .ather/profile.json. If the question is about my work instead, answer from this checkout.`,
     },
     mandate: {

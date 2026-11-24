@@ -12,7 +12,7 @@ import { PLAN_GLYPH, SHIPPED_GLYPH, STAGE_GLYPHS, ageText, isParkedBare, listSta
 /** @typedef {import('./packs/index.mjs').Pack} Pack */
 
 // The Unreal pack's lists and words, kept here for the modules and tests that read them from home.
-export { CREATE_GROUPS, SKILL_GROUPS, TOUR_PROMPT } from './packs/unreal.mjs'
+export { CREATE_GROUPS, SKILL_GROUPS } from './packs/unreal.mjs'
 
 /** @typedef {import('./model.mjs').Intent} Intent */
 /** @typedef {import('./away.mjs').Away} Away */
@@ -78,6 +78,25 @@ const skillPrompt = (name, target) =>
 
 /** @param {string} question @param {Pack} [pack] */
 export const askPrompt = (question, pack = unreal) => pack.prompts.ask(question)
+
+// A newcomer's first step, and the words the first question leads with: the pack's tour, or where it has none
+// (packs/index.mjs `tour`) the role question a tour ends with.
+/** @param {Pack} pack @returns {{ next: Next, lead: string }} */
+export const welcome = pack =>
+  pack.tour
+    ? { next: { id: 'next:tour', label: 'Take the tour', hint: 'Six short steps. Ends with your first intent started.', prompt: pack.tour.prompt, isWelcome: true }, lead: 'Start with the tour.' }
+    : { next: { id: 'next:role', label: 'Say your role', hint: 'It decides what proof Ather asks for.', prompt: '', isWelcome: true }, lead: 'Start by saying your role.' }
+
+// What /ather understands after its name in Claude Code (Paseo keeps its own list: it has no find).
+export const COMMAND_WORDS = ['pick', 'find', 'issues', 'issue', 'intent', 'role', 'checked', 'untrack', 'simple', 'advanced']
+
+// A host's command words, with the tour's two only where the pack has a tour; a typo of one ("tuor", "isue") is read as it.
+/** @param {Pack} pack @param {readonly string[]} [words] */
+export const commandWords = (pack, words = COMMAND_WORDS) => (pack.tour ? ['tour', 'skip', ...words] : words)
+
+// The argument hint /ather is registered with in Claude Code.
+/** @param {Pack} pack */
+export const atherHint = pack => `[pick | find <words> | issues | issue <number> | ${pack.tour ? 'tour | skip | ' : ''}role <role> | checked | intent <name> | untrack]`
 
 // What working on an intent in this session means, said wherever a press tracks one without a view (D5).
 /** @param {Pack} [pack] */
@@ -151,8 +170,8 @@ const stagePill = (stage, isPlanned, label, intent) =>
   `${isPlanned ? PLAN_GLYPH : PILL_GLYPHS[stage]} ${label}${intent.acceptanceTotal > 0 && stage !== 'shipped' ? ` ${intent.acceptanceDone}/${intent.acceptanceTotal}` : ''} · ${intent.key}`
 
 /**
- * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isTour?: boolean, work?: Work, action?: 'checked', isLook?: boolean, look?: string }} Next
- * `look`: the key of the intent whose view answers a step that only reads (model.mjs's `isLook`).
+ * @typedef {{ id: string, label: string, hint: string, prompt: string, isDraft?: boolean, isWelcome?: boolean, work?: Work, action?: 'checked', isLook?: boolean, look?: string }} Next
+ * `isWelcome`: a newcomer's first step (welcome). `look`: the key of the intent whose view answers a step that only reads (model.mjs's `isLook`).
  * Something to work on: an open intent to track, or an assigned GitHub issue to start an intent from.
  * An intent's `owner` is its Owner line as written (people are matched on it), `who` the name shown,
  * `stage` where it stands in the list, `source` where it was read (origin/main, or only this checkout), `key` its name
@@ -365,7 +384,7 @@ export const buildHome = input => {
   const own = pack.ownCheck
   const isLostOpen = open.some(one => one.kind === 'lost')
   if (isLostOpen) next = undefined
-  else if (isNewcomer && !intent) next = { id: 'next:tour', label: 'Take the tour', hint: 'Six short steps. Ends with your first intent started.', prompt: pack.prompts.tour, isTour: true }
+  else if (isNewcomer && !intent) next = welcome(pack).next
   // A tech artist with PIE proven has one proof left that only they can give: their own Editor check.
   else if (intent && stage === 'prove' && own && role === own.role && evidence[own.after]?.state === 'pass' && evidence[own.rung]?.state !== 'pass') next = { id: `next:${intent.key}:checked`, label: own.label, hint: own.hint, prompt: '', action: 'checked' }
   else if (intent && step) next = { id: `next:${intent.key}:${step.key}`, ...step, ...(step.isLook ? { look: intent.key } : {}) }
