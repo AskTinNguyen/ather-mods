@@ -3,7 +3,7 @@
 // as a message. Where the original asked a question dialog, the panel lists the choices.
 
 import { AWAY_PRESETS, isStopWord, parseAwayArgs, windowEndText } from "./ather/away.mjs";
-import { HOME_PARTS, NEW_INTENT_PROMPT, VIEW_LABELS, askPrompt, batchPrompt, buildHome, commandWords, welcome, heldByLine, isShownIn, otherView, parseWeek, proofLine, skillFolder, standsLines, untrackText, viewText } from "./ather/home.mjs";
+import { HOME_PARTS, NEW_INTENT_PROMPT, VIEW_LABELS, askPrompt, batchPrompt, buildHome, commandWords, heldByLine, isShownIn, otherView, parseWeek, proofLine, skillFolder, standsLines, untrackText, viewText } from "./ather/home.mjs";
 import { issuePrompt, parseIssues } from "./ather/issues.mjs";
 import { parsePrState, prsToRead } from "./ather/prs.mjs";
 import { STAGE_LABELS, aboutIntentPrompt, clockText, closestWord, currentStage, localMinutes, parseIntent, searchIntents, sessionTitle } from "./ather/model.mjs";
@@ -411,7 +411,7 @@ export async function bandOf(agentId: string, cwd: string): Promise<Band | null>
   const { header } = built;
   if (header.stage === "Away") return { label: `Away ${header.progress}`, urgent: false, kind: "away" };
   if (built.open.some((one: Any) => one.kind === "review")) return { label: "Review away window", urgent: true, kind: "review" };
-  if (built.isNewcomer) return { label: `New here? ${welcome(pack).next.label}`, urgent: false, kind: "tour" };
+  if (built.isNewcomer) return { label: `New here? ${pack.tour ? "Tour" : "Your role"}`, urgent: false, kind: "tour" };
   if (built.open.length > 0) return { label: `${built.open.length} need${built.open.length === 1 ? "s" : ""} you`, urgent: true, kind: "needs" };
   return { label: header.pill || "Ather", urgent: false, kind: "stage" };
 }

@@ -71,4 +71,4 @@ Restart your sessions afterwards.
 
 For `week-calendar/`, run `node --test "week-calendar/scripts/test/*.test.mjs"`, `claude plugin test week-calendar` and `claude plugin validate week-calendar`, then bump its version in the same two places and note the change in its README. After any change to its scripts, run `npm run embed` in `paseo/week-calendar`.
 
-The mod depends on S2 repository pieces that ship with S2 itself: the `ather-tour` skill and the `Area`, `Owner` and `Issue` lines of intent prompts. Some end-to-end checks name real S2 intents, so they follow the checkout's state.
+The mod depends on S2 repository pieces that ship with S2 itself: the `Area`, `Owner` and `Issue` lines of intent prompts. Some end-to-end checks name real S2 intents, so they follow the checkout's state.
